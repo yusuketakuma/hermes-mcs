@@ -1,0 +1,10 @@
+# Patient data, session state, and secrets never enter the repo.
+data/
+chrome-profile/
+token_cache.json
+config.json
+.env
+.env.*
+*.log
+__pycache__/
+*.pyc
