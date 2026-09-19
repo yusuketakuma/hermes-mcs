@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""MCS initial data import — bulk-fetch recent history for all active patients.
+
+Enumerates GET /projects (ordered by last_message recency), keeps projects
+active within --days, and walks each timeline back to the cutoff via
+fetch_history. Full thread replies are fetched for every message that has
+replies. Attachment metadata is queued for the scheduled --download-files
+drain; binaries are not fetched here.
+
+Safety: read-only (all GETs), no mark-as-read, NO Discord notifications —
+historical imports never enter the notify_outbox. Progress prints ids/counts
+only, never patient names or bodies.
+
+Resumable: patients.history_floor records the deepest completed cutoff;
+re-running skips patients already floored at/below --since.
+"""
+import argparse
+import fcntl
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mcs_adapter import MCSAdapter, MCSError, SessionExpired, SchemaError
+from ledger import Ledger
+from job_ops import merge_full_replies
+
+HOME = os.path.expanduser("~/.mcs")
+DB = os.path.join(HOME, "data", "ledger.db")
+CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
+LOCKFILE = os.path.join(HOME, "data", "run.lock")
+CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
+CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--days", type=int, default=14)
+    ap.add_argument("--since", type=int, default=0,
+                    help="epoch cutoff (overrides --days)")
+    ap.add_argument("--pages", type=int, default=40,
+                    help="max timeline pages per patient per run")
+    ap.add_argument("--chunk", type=int, default=10,
+                    help="pages per fetch/save batch (cursor advances per chunk)")
+    ap.add_argument("--delay", type=float, default=0.15,
+                    help="politeness sleep between API calls")
+    ap.add_argument("--deadline", type=int, default=1800)
+    ap.add_argument("--project", type=int, action="append", default=[],
+                    help="restrict to specific project id(s)")
+    args = ap.parse_args()
+    if (args.days < 1 or args.pages < 1 or args.chunk < 1
+            or args.delay < 0 or args.deadline < 1
+            or any(pid <= 0 for pid in args.project)):
+        ap.error("days/pages/chunk/deadline/project must be positive; delay >= 0")
+
+    since = args.since or int(time.time() - args.days * 86400)
+    deadline = time.monotonic() + args.deadline
+
+    lock_fd = os.open(LOCKFILE, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock_fd)
+        print(json.dumps({"ok": False, "error": "lock_held"}))
+        return 3
+
+    adapter = MCSAdapter(token_cache=CACHE)
+    ledger = Ledger(DB)
+    stats = {"errors": [], "threads": 0, "deadline": False}
+
+    try:
+        projects = adapter.list_projects()
+    except SessionExpired:
+        state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                   chrome_bin=CHROME_BIN)
+        if state != "ok":
+            print(json.dumps({"ok": False, "error": f"auto_login={state}"}))
+            ledger.close()
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+            return 2
+        projects = adapter.list_projects()
+    except MCSError as e:
+        print(json.dumps({"ok": False, "error": e.kind}))
+        ledger.close()
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        return 1
+
+    if args.project:
+        wanted = set(args.project)
+        active = [p for p in projects if p.project_id in wanted]
+    else:
+        active = [p for p in projects
+                  if p.last_activity and p.last_activity >= since]
+
+    result = {"ok": True, "since": since,
+              "projects_total": len(projects), "projects_active": len(active),
+              "done": 0, "skipped_floored": 0, "messages_new": 0,
+              "threads_fetched": 0, "errors": stats["errors"]}
+    print(json.dumps({"plan": result["projects_active"],
+                      "since": since}, ensure_ascii=False))
+
+    for i, p in enumerate(active):
+        if time.monotonic() > deadline:
+            stats["errors"].append("deadline_exceeded")
+            break
+        ledger.ensure_patient(p.project_id)
+        floor = ledger.history_floor(p.project_id)
+        if floor and floor <= since:
+            result["skipped_floored"] += 1
+            continue
+        # Resume only continues the SAME target: a deeper `since` starts a
+        # new walk at page 1 (numbering is relative to newest posts), while
+        # an interrupted walk for the same cutoff resumes its cursor —
+        # finished floors never re-trigger a restart (Oracle B09).
+        if ledger.history_target(p.project_id) != since:
+            ledger.reset_history_cursor(p.project_id, since)
+        cursor = ledger.history_cursor(p.project_id) or 1
+        pages_left = args.pages
+        total_new = 0
+        reached = False
+        replies_pending = False
+        # incremental walk: each chunk is fetched->replies->saved->cursor
+        # advances, so deadline/crash resumes from the last stored page
+        while pages_left > 0 and not reached:
+            if time.monotonic() > deadline:
+                stats["deadline"] = True
+                break
+            n_pages = min(args.chunk, pages_left)
+            sp = cursor if n_pages <= 1 else max(1, cursor - 1)
+            try:
+                batch = adapter.fetch_history(
+                    p.project_id, since, max_pages=n_pages, start_page=sp)
+            except SessionExpired:
+                state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                           chrome_bin=CHROME_BIN)
+                if state != "ok":
+                    stats["errors"].append("session_expired")
+                    stats["deadline"] = True
+                    break
+                batch = adapter.fetch_history(
+                    p.project_id, since, max_pages=n_pages, start_page=sp)
+            except MCSError as e:
+                stats["errors"].append(f"history {p.project_id}: {e.kind}")
+                break
+            hist = batch.messages
+            merged = merge_full_replies(
+                adapter, hist, args.delay, deadline, stats, ledger=ledger)
+            try:
+                ledger.upsert_patient_info(p)
+                new_ids = ledger.save_messages(hist)
+            except Exception:
+                stats["errors"].append(f"db {p.project_id}: write_failed")
+                break
+            total_new += len(new_ids)
+            pages_used = batch.pages
+            if merged.checkpoint_safe:
+                cursor = sp + pages_used
+            pages_left -= pages_used
+            ledger.set_history_cursor(p.project_id, cursor)
+            # floor requires: full walk to cutoff AND no failed/missing
+            # replies AND no mid-merge deadline hit (Oracle B08)
+            replies_pending = ledger.pending_reply_jobs(p.project_id) > 0
+            if batch.reached and not batch.error and merged.checkpoint_safe \
+                    and not replies_pending and not merged.deadline:
+                ledger.set_history_floor(p.project_id, since)
+                reached = True
+            elif batch.reached:
+                reached = True  # walk done but floor withheld — replies pending
+            if batch.error:
+                stats["errors"].append(
+                    f"history {p.project_id}: {batch.error.kind}")
+                if isinstance(batch.error, SessionExpired):
+                    stats["deadline"] = True
+                break
+            if merged.error:
+                stats["errors"].append("session_expired")
+                stats["deadline"] = True
+                break
+            if pages_used < n_pages:
+                break  # short page = end of timeline
+            time.sleep(args.delay)
+        result["messages_new"] += total_new
+        result["threads_fetched"] = stats["threads"]
+        result["done"] += 1
+        floor = ledger.history_floor(p.project_id)
+        print(json.dumps({"i": i + 1, "of": len(active),
+                          "pid": p.project_id, "new": total_new,
+                          "cursor": cursor,
+                          "floored": bool(floor and floor <= since)},
+                         ensure_ascii=False))
+        time.sleep(args.delay)
+
+    result["ok"] = not stats["deadline"] and not stats["errors"]
+    print(json.dumps(result, ensure_ascii=False))
+    try:
+        ledger.close()
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
