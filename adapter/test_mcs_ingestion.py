@@ -1697,3 +1697,34 @@ def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
     assert res["sent"] == 0 and res["failed"] == 2
     assert calls == [True, True]  # never retried without files
     db.close()
+
+
+def test_run_lock_excludes_second_writer(tmp_path):
+    """FIX-R00-01: one flock per run — a second writer must be refused,
+    and closing the fd must release it for the next holder."""
+    import mcs_util
+    lock = tmp_path / "run.lock"
+    fd = mcs_util.acquire_run_lock(str(lock))
+    assert fd is not None
+    second = mcs_util.acquire_run_lock(str(lock))
+    assert second is None
+    os.close(fd)
+    third = mcs_util.acquire_run_lock(str(lock))
+    assert third is not None
+    os.close(third)
+
+
+def test_cli_writer_holds_run_lock(tmp_path, monkeypatch):
+    """A manual write CLI must refuse to run while a tick holds the lock —
+    the shared queue is drained by exactly one writer at a time."""
+    import mcs_util
+    lock = tmp_path / "run.lock"
+    held = mcs_util.acquire_run_lock(str(lock))
+    assert held is not None
+    monkeypatch.setattr(mcs_util, "RUN_LOCK", str(lock))
+    monkeypatch.setattr(extract_llm, "DB", str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(sys, "argv", ["extract_llm", "--limit", "1"])
+    assert extract_llm.main() == 3
+    os.close(held)
+    # free lock -> the CLI proceeds against the throwaway DB
+    assert extract_llm.main() == 0

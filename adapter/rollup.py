@@ -24,6 +24,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger
+from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -240,12 +241,22 @@ def main() -> int:
     ap.add_argument("--project", type=int, action="append", default=[])
     ap.add_argument("--all", action="store_true")
     args = ap.parse_args()
-    l = Ledger(DB)
+    # same single-writer lock as the scheduled tick
+    lock_fd = acquire_run_lock()
+    if lock_fd is None:
+        print(json.dumps({"ok": False, "error": "lock_held"}))
+        return 3
+    try:
+        l = Ledger(DB)
+    except Exception:
+        os.close(lock_fd)
+        raise
     ids = args.project or [r["project_id"] for r in
                            l.db.execute("SELECT project_id FROM patients")]
     n = rebuild_many(l, ids)
     print(json.dumps({"rollups": n}, ensure_ascii=False))
     l.close()
+    os.close(lock_fd)
     return 0
 
 

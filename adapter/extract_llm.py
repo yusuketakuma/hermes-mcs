@@ -23,7 +23,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger
-from mcs_util import NoRedirect, no_proxy_opener
+from mcs_util import NoRedirect, acquire_run_lock, no_proxy_opener
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -280,7 +280,17 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="drain the whole backlog (ignores budget pacing)")
     args = ap.parse_args()
-    l = Ledger(DB)
+    # same single-writer lock as the scheduled tick — run_pending() writes
+    # artifacts and a concurrent tick must not double-process the backlog
+    lock_fd = acquire_run_lock()
+    if lock_fd is None:
+        print(json.dumps({"ok": False, "error": "lock_held"}))
+        return 3
+    try:
+        l = Ledger(DB)
+    except Exception:
+        os.close(lock_fd)
+        raise
     if args.all:
         total = {"done": 0, "failed": 0, "left": 0}
         while True:
@@ -295,6 +305,7 @@ def main() -> int:
         print(json.dumps(run_pending(l, args.limit, args.budget),
                          ensure_ascii=False))
     l.close()
+    os.close(lock_fd)
     return 0
 
 

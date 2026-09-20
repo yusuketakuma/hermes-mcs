@@ -23,6 +23,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger, LedgerReader
+from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -285,7 +286,20 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
-    l = LedgerReader(DB) if args.stats else Ledger(DB)
+    # writers must hold the same run lock as the scheduled tick — a manual
+    # extract running concurrently could double-process pending rows
+    lock_fd = None
+    if not args.stats:
+        lock_fd = acquire_run_lock()
+        if lock_fd is None:
+            print(json.dumps({"ok": False, "error": "lock_held"}))
+            return 3
+    try:
+        l = LedgerReader(DB) if args.stats else Ledger(DB)
+    except Exception:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise
     q = """SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
                   m.content_hash
            FROM messages m WHERE m.body_text IS NOT NULL
@@ -337,6 +351,8 @@ def main() -> int:
     print(json.dumps({"field_coverage": dict(keys),
                       "events": dict(events)}, ensure_ascii=False, indent=1))
     l.close()
+    if lock_fd is not None:
+        os.close(lock_fd)
     return 0
 
 
