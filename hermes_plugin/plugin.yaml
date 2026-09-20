@@ -1,0 +1,30 @@
+name: mcs-discord-commands
+version: 0.1.0
+description: >
+  Read the configured MCS snapshot and queue only explicitly confirmed
+  human Discord request commands.
+author: Hermes Agent
+kind: standalone
+platforms:
+  - discord
+config_schema:
+  snapshot:
+    type: str
+    required: true
+    description: Published read-only MCS snapshot path.
+  inbox:
+    type: str
+    required: true
+    description: Existing MCS command inbox directory.
+  allowed_user_ids:
+    type: list
+    required: true
+    description: Discord user IDs allowed to use this command.
+  allowed_chat_ids:
+    type: list
+    required: true
+    description: Discord chat or channel IDs allowed to use this command.
+  project_ids:
+    type: list
+    required: true
+    description: MCS project IDs visible to this command.
