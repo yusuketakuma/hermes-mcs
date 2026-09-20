@@ -1,0 +1,12 @@
+{
+  "target": "/Users/yusuke/.hermes/profiles/cco/config.yaml",
+  "target_sha256_before_approval": "11522c9f3e0523f8a311f8ebd7177c3c1748d754239abd4e6ad1138692c7bf67",
+  "candidate": "/Users/yusuke/.codex/worktrees/mcs-20260920-continuation/deployment/cco-terminal.candidate.yaml",
+  "candidate_sha256": "f6868eba20fc20e0c1abb63a55dfda4b71f37da088736da90266e6d1366139e3",
+  "status": "applied_config_only",
+  "scope": "terminal section only; no restart, deployment, or external message",
+  "validation": "real Hermes configured Docker with synthetic canaries passed",
+  "target_sha256_after": "cf5795b2aac0f8cbf7ed78d03dc0c5ad16a1e22d4c7acf4d8c5342c23400c136",
+  "backup": "/Users/yusuke/.hermes/profiles/cco/config.yaml.before-mcs-terminal-20260921",
+  "verification": "other configuration unchanged; effective terminal scope docker/network=false/mounts match; no restart"
+}

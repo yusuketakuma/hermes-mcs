@@ -1,0 +1,15 @@
+# Candidate only: merge terminal section into the CCO profile after review.
+# This restricts terminal/file tools; host-side plugins and other tools are separate.
+terminal:
+  backend: docker
+  # Verified local image ID; must exist on the deployment host.
+  docker_image: sha256:8f958bdc1b4a422bfafd97cab4f69836401f616ae985d4b57a53d254f5bcb038
+  cwd: /workspace
+  docker_mount_cwd_to_workspace: false
+  docker_network: false
+  docker_forward_env: []
+  docker_env: {}
+  docker_extra_args: []
+  docker_volumes:
+    - /Users/yusuke/.mcs/data/snapshots:/mcs/snapshots:ro
+    - /Users/yusuke/.mcs/data/cmd:/mcs/cmd:rw
