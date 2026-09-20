@@ -251,7 +251,8 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
 
 # ---------- job drains ----------
 
-def run_reply_jobs(adapter, ledger, result, deadline):
+def run_reply_jobs(adapter, ledger, result, deadline,
+                   semantic: bool = False):
     """Retry fetching full bodies for replies the thread API missed."""
     # self-heal: replies persisted outside a merge (unread path,
     # sibling saves) carry no retry reservation and would stay
@@ -293,7 +294,8 @@ def run_reply_jobs(adapter, ledger, result, deadline):
             for m in replies:
                 m.parent_id = job["parent_id"]
             ledger.save_thread_replies(replies, job["project_id"],
-                                       notify={"source": "reply_job"})
+                                       notify={"source": "reply_job"},
+                                       semantic=semantic)
             ledger.job_done(job["job_id"])
         else:
             ledger.job_retry(job["job_id"])

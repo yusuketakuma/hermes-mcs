@@ -1,6 +1,6 @@
 # Phase R Record — MCS全体リファクタリング記録 (spec MCS-REFACTOR-FIRST-20260920)
 
-Status: **RF-CODE 判定済み** / RF-OPS 未完了項目あり / Phase J (Jev) 未着手
+Status: **RF-CODE 判定済み** / RF-OPS 未完了項目あり / Phase J (Jev) 実装済み — `docs/phase-j-record.md` 参照（mode=off 既定、実API評価 G2 未実施）
 Recorded: 2026-09-20
 
 ## 1. 対象ツリーと基準
@@ -31,7 +31,7 @@ Recorded: 2026-09-20
 
 - **REF** `9d2c6d1` — `mcs_util.py` 新設と7ファイルの重複排除。動作変更なし（中間状態でbaseline 86件全パスを確認）
 - **FIX** `46cffb0` — 手動writer CLIの単一writer規約違反修復 + 特性テスト2件追加
-- **FEAT** — なし（Phase J未着手。Jev client/DB/評価job/Open LoopはRF-CODE前に実装していない）
+- **FEAT** — なし（この時点ではPhase J未着手。Jev client/DB/評価job/Open LoopはRF-CODE前に実装していない。Phase J実装は別記録 `phase-j-record.md`）
 
 ## 4. 検証証拠
 
@@ -60,7 +60,7 @@ Recorded: 2026-09-20
 
 - 未実施の検証: `auto_login` Keychain経路の実実行（今回session有効で未発動。コードパス自体はdedupのみで未変更）。`--mark-read` 実run（意図的に未実行 — 検証目的で既読化しない方針）
 - 既存lint指摘16件（E702/E741/F401）はbaseline由来として残置 — Phase Rでは意図的に触らず（純粋整形は別変更とする分離方針）
-- FEAT/Jev: 未着手（下記ゲート後に開始）
+- FEAT/Jev: RF-CODE通過後に `phase-j-record.md` として実装済み（OFF既定・実API評価未実施）
 
 ## 7. RF-CODE 判定: **PASS**
 
@@ -85,4 +85,4 @@ Recorded: 2026-09-20
 
 ## 10. Blocker
 
-なし。RF-CODEは通過。Phase Jは OFF 状態実装から開始可能。
+なし。RF-CODEは通過。Phase Jは OFF 既定実装として `phase-j-record.md` に記録済み。

@@ -467,11 +467,14 @@ class Ledger:
               now, now, now))
         return cur.lastrowid
 
-    def save_patient(self, p, notify: dict | None = None) -> list:
+    def save_patient(self, p, notify: dict | None = None,
+                     semantic: bool = False) -> list:
         """Whole patient block + optional notify intent in ONE transaction —
         a crash between message save and outbox insert must not be able to
         lose the notification (Oracle B11). notify is a payload template;
-        message_ids is filled with the new ids."""
+        message_ids is filled with the new ids. semantic=True also seeds
+        durable semantic-eval jobs for the same messages in the SAME
+        commit (INV-06)."""
         now = time.time()
         new_ids = []
         with self.db:  # commit on success, rollback on exception
@@ -517,8 +520,14 @@ class Ledger:
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
-                    self._outbox_insert("new_messages", p.project_id, pl)
+                    ev_id = self._outbox_insert("new_messages",
+                                                p.project_id, pl)
                     self._mark_notified(notify_ids, now)
+                    if semantic:
+                        self._semantic_seed_tx(p.project_id, notify_ids,
+                                               {"source": notify.get(
+                                                   "source"),
+                                                "event_id": ev_id})
         return new_ids
 
     def _unnotified(self, ids: list) -> list:
@@ -685,7 +694,8 @@ class Ledger:
             """, (target, project_id))
 
     def save_messages(self, msgs, project_id: int | None = None,
-                      notify: dict | None = None) -> list:
+                      notify: dict | None = None,
+                      semantic: bool = False) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages."""
@@ -707,12 +717,19 @@ class Ledger:
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
-                    self._outbox_insert("new_messages", project_id, pl)
+                    ev_id = self._outbox_insert("new_messages",
+                                                project_id, pl)
                     self._mark_notified(notify_ids, now)
+                    if semantic:
+                        self._semantic_seed_tx(project_id, notify_ids,
+                                               {"source": notify.get(
+                                                   "source"),
+                                                "event_id": ev_id})
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
-                            notify: dict | None = None) -> list:
+                            notify: dict | None = None,
+                            semantic: bool = False) -> list:
         """Reply-job drain path: persist a fetched thread's replies AND
         reconcile their reply-job states in the SAME commit (Oracle F05).
         A reply whose body is now terminal retires its queued job (a
@@ -747,8 +764,14 @@ class Ledger:
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
-                    self._outbox_insert("new_messages", project_id, pl)
+                    ev_id = self._outbox_insert("new_messages",
+                                                project_id, pl)
                     self._mark_notified(notify_ids, now)
+                    if semantic:
+                        self._semantic_seed_tx(project_id, notify_ids,
+                                               {"source": notify.get(
+                                                   "source"),
+                                                "event_id": ev_id})
         return new_ids
 
     def _upsert_message(self, m) -> int:
@@ -1005,6 +1028,55 @@ class Ledger:
         """, (kind, project_id, message_id)).fetchone()
         return dict(r) if r else None
 
+    def _semantic_seed_tx(self, project_id: int, message_ids: list,
+                          origin: dict):
+        """Durable semantic-eval seeding — caller holds `with self.db` so
+        job creation commits (or rolls back) with the message and notify
+        intent that triggered it (INV-06, spec §18.1). Keyed by thread
+        ROOT so one job covers a post plus its replies; a new arrival on
+        an evaluated thread revives the job as a new input generation."""
+        if not message_ids:
+            return
+        q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
+             "FROM messages WHERE message_id IN ("
+             + ",".join("?" * len(message_ids)) + ")")
+        roots: dict[int, list] = {}
+        for r in self.db.execute(q, list(message_ids)):
+            roots.setdefault(r["r"], []).append(r["message_id"])
+        now = time.time()
+        for root, ids in roots.items():
+            pend = self.db.execute("""
+              SELECT job_id,payload FROM fetch_jobs
+              WHERE kind='semantic' AND project_id=? AND message_id=?
+                AND state='pending'
+            """, (project_id, root)).fetchone()
+            if pend is not None:
+                try:
+                    pl = json.loads(pend["payload"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    pl = {}
+                if not isinstance(pl.get("targets"), list):
+                    pl["targets"] = []
+                pl["targets"] = sorted(set(pl["targets"]) | set(ids))
+                pl["origin"] = origin
+                self.db.execute(
+                    "UPDATE fetch_jobs SET payload=?,updated_at=? "
+                    "WHERE job_id=?",
+                    (json.dumps(pl, ensure_ascii=False), now,
+                     pend["job_id"]))
+            else:
+                self._job_add_tx(
+                    "semantic", project_id, root,
+                    payload={"targets": sorted(set(ids)),
+                             "origin": origin})
+
+    def semantic_seed(self, project_id: int, message_ids: list,
+                      origin: dict):
+        """Standalone seed for explicit replay — same job shape as the
+        ingest path, committed on its own (spec §18.5)."""
+        with self.db:
+            self._semantic_seed_tx(project_id, message_ids, origin)
+
     def pending_reply_jobs(self, project_id: int) -> int:
         """Live reply-fetch work only. 'failed' rows are terminal
         give-ups — merge revives them to 'pending' when a later walk
@@ -1252,16 +1324,26 @@ class Ledger:
           ORDER BY posted_at_ts ASC
         """, (parent_id,)).fetchall()
 
-    def artifact_add(self, kind: str, content: str, project_id: int = None,
-                     message_id: int = None, model: str = "",
-                     meta: dict | None = None) -> int:
+    def artifact_add_tx(self, kind: str, content: str,
+                        project_id: int = None, message_id: int = None,
+                        model: str = "", meta: dict | None = None) -> int:
+        """artifact_add's INSERT without the commit — callers holding
+        `with self.db` can commit artifacts together with the job state
+        transition they belong to (spec §18.3, INV-16)."""
         cur = self.db.execute("""
           INSERT INTO artifacts(kind,project_id,message_id,content,model,
             meta,created_at) VALUES(?,?,?,?,?,?,?)
         """, (kind, project_id, message_id, content, model,
               json.dumps(meta or {}, ensure_ascii=False), time.time()))
-        self.db.commit()
         return cur.lastrowid
+
+    def artifact_add(self, kind: str, content: str, project_id: int = None,
+                     message_id: int = None, model: str = "",
+                     meta: dict | None = None) -> int:
+        rid = self.artifact_add_tx(kind, content, project_id, message_id,
+                                   model, meta)
+        self.db.commit()
+        return rid
 
     def artifacts(self, kind: str, project_id: int = None,
                   message_id: int = None) -> list:

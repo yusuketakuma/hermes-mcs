@@ -266,6 +266,14 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
+    if ev["kind"] == "semantic_notice":
+        # audited/degraded semantic notice — the payload carries the
+        # final text frozen at enqueue time; the sender never
+        # re-derives it (INV-14)
+        text = payload.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError("payload_invalid")
+        return text, []
     ids = payload.get("message_ids") or []
     if (not isinstance(ids, list)
             or any(type(mid) is not int or mid <= 0 for mid in ids)):
@@ -327,10 +335,45 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                     f"{indent}{body or '(本文なし)'}{att_line}")
         return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"
 
+    def _sem_block(r):
+        """Enforce-mode: audited summary section appended to this post.
+        Only the newest semantic_summary with audit_status PASS on the
+        CURRENT generation qualifies — stale/failed/unaudited ones are
+        silently absent, and in shadow/assist/off the notification stays
+        byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
+        try:
+            cfg = _config().get("semantic")
+            if not isinstance(cfg, dict) or cfg.get("mode") != "enforce":
+                return ""
+            art = ledger.db.execute(
+                "SELECT content,meta FROM artifacts "
+                "WHERE kind='semantic_summary' AND message_id=? "
+                "ORDER BY artifact_id DESC LIMIT 1",
+                (r["message_id"],)).fetchone()
+            if not art:
+                return ""
+            meta = json.loads(art["meta"] or "{}")
+            if meta.get("audit_status") != "PASS" or meta.get("stale"):
+                return ""
+            summ = json.loads(art["content"])
+            lines = [str(c.get("text", ""))[:160]
+                     for c in summ.get("claims", [])
+                     if isinstance(c, dict) and c.get("text")][:6]
+            if not lines:
+                return ""
+            body = "\n".join(f"・{x}" for x in lines)
+            lims = [str(x)[:80] for x in (summ.get("limitations") or [])
+                    if isinstance(x, str)]
+            if lims:
+                body += "\n・（原文確認）" + "；".join(lims[:2])
+            return f"\n───── 要約（自動検査済） ─────\n{body}"
+        except Exception:
+            return ""   # never let a summary render break delivery
+
     out = []
     order = []
     for r in parents:
-        out.append(_fmt(r))
+        out.append(_fmt(r) + _sem_block(r))
         order.append(r["message_id"])
         for k in sorted(kids.get(r["message_id"], []),
                         key=lambda x: x["posted_at"]):

@@ -236,6 +236,75 @@ class View:
             item["error"] = _reason(item["error"])
         return result
 
+    def _semantic(self, pid, mid):
+        """Phase-J artifacts for one message: bundle, proposition
+        verdicts, verified fact candidates, audited summary, notify
+        plan. Whatever generation exists is returned as-is — the
+        snapshot is already immutable (schema §22.4)."""
+        self._message(pid, mid)
+        row = self.db.execute(
+            "SELECT parent_id FROM messages WHERE message_id=?",
+            (mid,)).fetchone()
+        keys = [mid] + ([row["parent_id"]] if row and row["parent_id"]
+                        else [])
+        out = {}
+        for kind in ("semantic_bundle", "semantic_assess",
+                     "semantic_facts", "semantic_summary",
+                     "semantic_audit", "notify_plan"):
+            marks = ",".join("?" * len(keys))
+            items = []
+            for r in self.db.execute(
+                    f"SELECT artifact_id,message_id,content,model,meta,"
+                    f"created_at FROM artifacts WHERE kind=? AND "
+                    f"message_id IN ({marks}) AND project_id=? "
+                    f"ORDER BY artifact_id DESC LIMIT 5",
+                    (kind, *keys, pid)):
+                try:
+                    meta = json.loads(r["meta"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                try:
+                    content = json.loads(r["content"])
+                except (json.JSONDecodeError, TypeError):
+                    content = None
+                items.append({"artifact_id": r["artifact_id"],
+                              "message_id": r["message_id"],
+                              "model": r["model"], "meta": meta,
+                              "content": content,
+                              "created_at": r["created_at"]})
+            out[kind] = items
+        return {"semantic": out}
+
+    def _loops(self, pid, limit):
+        """Open-Loop candidates + their relation events. Candidates are
+        advisory only — promotion to a formal request goes through the
+        human-confirmed request path, never automatic (INV-11)."""
+        items = []
+        for r in self.db.execute(
+                "SELECT artifact_id,message_id,content,meta,created_at "
+                "FROM artifacts WHERE kind='loop_candidate' "
+                "AND project_id=? ORDER BY artifact_id DESC LIMIT ?",
+                (pid, max(1, min(limit, 200)))):
+            try:
+                cand = json.loads(r["content"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            events = []
+            for e in self.db.execute(
+                    "SELECT content FROM artifacts "
+                    "WHERE kind='loop_event' AND project_id=? "
+                    "ORDER BY artifact_id DESC LIMIT 20", (pid,)):
+                try:
+                    ev = json.loads(e["content"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if ev.get("loop_origin_id") == r["message_id"]:
+                    events.append(ev)
+            cand["relation_events"] = events[:5]
+            cand["artifact_id"] = r["artifact_id"]
+            items.append(cand)
+        return {"items": items, "scope": "loop_candidates"}
+
     def _receipt(self, project, command_id, payload_hash):
         if not requests.valid_uuid(command_id) or not requests.valid_hash(payload_hash):
             raise ValueError("bad_receipt_identity")
@@ -262,6 +331,8 @@ class View:
             "attachments": lambda: self._attachments(project, message_id, limit, cursor),
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
+            "semantic": lambda: self._semantic(project, message_id),
+            "loops": lambda: self._loops(project, limit),
         }
         if kind not in handlers:
             raise ValueError("unknown_view")
@@ -283,7 +354,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "loops"):
         sub = subs.add_parser(kind)
         if kind == "requests":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -305,7 +376,7 @@ def _parser():
         if kind in ("search", "timeline", "thread", "candidates"):
             sub.add_argument("--since", type=int, help="Inclusive epoch seconds; excludes unknown posting times")
             sub.add_argument("--until", type=int, help="Inclusive epoch seconds")
-        if kind in ("evidence", "thread", "attachments"):
+        if kind in ("evidence", "thread", "attachments", "semantic"):
             sub.add_argument("--message-id", type=int, required=True)
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)

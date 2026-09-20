@@ -66,7 +66,8 @@ def _config() -> dict:
 
 # ---------- stage: unread pipeline ----------
 
-def stage_unread(adapter, ledger, args, result, deadline, run_id):
+def stage_unread(adapter, ledger, args, result, deadline, run_id,
+                 semantic: bool = False):
     """list_unread -> per-patient unread fetch -> reply merge -> save
     (notify intent in the same tx) -> optional gated mark-read.
     Returns the snapshot for downstream stages."""
@@ -144,7 +145,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id):
         try:
             new_ids = ledger.save_patient(p, notify={
                 "run_id": run_id, "source": "unread",
-                "snapshot_ts": snap.timestamp})
+                "snapshot_ts": snap.timestamp}, semantic=semantic)
         except Exception as e:
             ledger.patient_fetch_failed(p.project_id, type(e).__name__)
             result["errors"].append(
@@ -176,7 +177,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id):
 
 # ---------- stage: coverage backfill ----------
 
-def stage_backfill(adapter, ledger, result, deadline, run_id):
+def stage_backfill(adapter, ledger, result, deadline, run_id,
+                   semantic: bool = False):
     """Catch posts the unread API misses (e.g. read by another human).
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
@@ -205,7 +207,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id):
         merged = job_ops.merge_full_replies(
             adapter, hist, 0, deadline, result, ledger=ledger)
         new_ids = ledger.save_messages(hist, project_id=pid, notify={
-            "run_id": run_id, "source": "history"})
+            "run_id": run_id, "source": "history"}, semantic=semantic)
         if new_ids:
             result["backfilled"] += len(new_ids)
         if merged.error:
@@ -327,13 +329,20 @@ def main() -> int:
               "new_messages": 0, "backfilled": 0, "incomplete": [],
               "marked_read": [], "notify": {}, "errors": []}
     cfg = _config()
+    try:
+        import semantic as _sem
+        sem_on = _sem.semantic_config(cfg)[0]["mode"] != "off"
+    except Exception:
+        sem_on = False   # config/module trouble -> semantic stays OFF
 
     try:
         # -- priority fetch work -------------------------------------
         if not args.jobs_only:
-            stage_unread(adapter, ledger, args, result, deadline, run_id)
+            stage_unread(adapter, ledger, args, result, deadline, run_id,
+                         semantic=sem_on)
             if not args.no_backfill:
-                stage_backfill(adapter, ledger, result, deadline, run_id)
+                stage_backfill(adapter, ledger, result, deadline, run_id,
+                               semantic=sem_on)
         else:
             result["jobs_only"] = True
 
@@ -348,7 +357,8 @@ def main() -> int:
             discover_archived = False
         job_ops.run_discovery(adapter, ledger, result, deadline,
                               include_archived=discover_archived)
-        job_ops.run_reply_jobs(adapter, ledger, result, deadline)
+        job_ops.run_reply_jobs(adapter, ledger, result, deadline,
+                               semantic=sem_on)
         job_ops.run_history_jobs(adapter, ledger, result, deadline,
                                  trickle=False)
 
@@ -382,6 +392,19 @@ def main() -> int:
 
         # -- derived data ----------------------------------------------
         stage_derive(ledger, result, deadline)
+
+        # -- semantic layer (Phase J, feature-gated) --------------------
+        # drains durable 'semantic' jobs on the same lock + deadline;
+        # OFF is a no-op here AND disables seeding above, so the flag
+        # truly stops communication rather than only hiding output
+        if sem_on:
+            try:
+                import semantic
+                result["semantic"] = semantic.run_due(
+                    ledger, cfg, result, deadline, cfg_path=CONF_PATH)
+            except Exception as e:
+                result["errors"].append(
+                    f"semantic: {type(e).__name__}")
 
         # -- delivery ----------------------------------------------------
         if not args.no_notify:
