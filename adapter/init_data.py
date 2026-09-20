@@ -162,8 +162,10 @@ def main() -> int:
             ledger.set_history_cursor(p.project_id, cursor)
             # floor requires: full walk to cutoff AND no failed/missing
             # replies AND no mid-merge deadline hit (Oracle B08);
-            # non-terminal parent bodies already forced
-            # checkpoint_safe=False inside merge (Oracle R3/F9)
+            # 'snippet' parent bodies already forced
+            # checkpoint_safe=False inside merge (Oracle R3/F9) —
+            # 'unknown' parents are body-less post types the API never
+            # resolves, so they do not block
             replies_pending = ledger.pending_reply_jobs(p.project_id) > 0
             if batch.reached and not batch.error and merged.checkpoint_safe \
                     and not replies_pending and not merged.deadline:

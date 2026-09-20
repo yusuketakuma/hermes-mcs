@@ -33,7 +33,8 @@ class View:
         try:
             self.db.execute("BEGIN")
             # reader declares the schema generations it understands —
-            # v6 added patients.is_archived (additive, read-compatible)
+            # v6 added patients.is_archived, v7 messages.notified_at
+            # (both additive, read-compatible)
             if self.db.execute("PRAGMA user_version").fetchone()[0] \
                     not in (5, 6, 7):
                 raise ValueError("snapshot_upgrade_required")

@@ -183,10 +183,19 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
             result.deadline = True
             result.checkpoint_safe = False
             return result
-        # a parent whose own body is snippet/unknown must block cursor
-        # advancement AND the floor — not just this batch's completion
-        # flag — otherwise earlier pages certify around it (Oracle R3)
-        if m.body_state not in TERMINAL_BODY_STATES:
+        # a parent whose own body is 'snippet' (truncated by the list
+        # API) must block cursor advancement AND the floor — not just
+        # this batch's completion flag — otherwise earlier pages
+        # certify around it (Oracle R3). 'unknown' parents do NOT
+        # block: the list response is the only body-bearing surface
+        # for parents (threads return replies only — verified against
+        # the live API), so 'unknown' means "this post has no text
+        # body" (file/stamp/system posts), i.e. terminal-in-effect —
+        # blocking on it would defer the job forever with no recovery
+        # path. A later fetch that DOES return a body upgrades the
+        # stored row via upsert regardless.
+        if (m.body_state not in TERMINAL_BODY_STATES
+                and m.body_state != "unknown"):
             result.checkpoint_safe = False
         if not m.replies and not m.reply_count:
             continue
@@ -244,6 +253,13 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
 
 def run_reply_jobs(adapter, ledger, result, deadline):
     """Retry fetching full bodies for replies the thread API missed."""
+    # self-heal: replies persisted outside a merge (unread path,
+    # sibling saves) carry no retry reservation and would stay
+    # 'snippet'/'unknown' forever — seed a durable job for each
+    # never-queued one (bounded; resolved rows are never re-seeded)
+    for r in ledger.replies_without_job():
+        ledger.job_add("reply", r["project_id"], r["message_id"],
+                       parent_id=r["parent_id"])
     for job in ledger.job_due(limit=REPLY_JOB_LIMIT, kind="reply"):
         if time.monotonic() > deadline - 20:
             break

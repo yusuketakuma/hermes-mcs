@@ -727,18 +727,34 @@ class MCSAdapter:
                 "pages_exceeded", f"messages[{project_id}]", retryable=True)
         return MessageBatch(msgs, pages, reached, error)
 
-    def fetch_thread(self, project_id: int, message_id: int) -> list[Message]:
-        r = self._get(f"/projects/{project_id}/messages/{message_id}/messages",
-                      {"keep_read_status": 1})
-        if "paginate" in r:
-            pag = r["paginate"]
-            if not isinstance(pag, dict):
-                raise SchemaError("thread: paginate invalid")
-            if _has_next(pag, "thread"):
-                # Do not certify a truncated thread before its paging contract
-                # is verified. Callers retain their durable retry work.
-                raise MCSError("thread_incomplete", retryable=True)
-        return _norm_threads(r.get("messages"), project_id, message_id)
+    def fetch_thread(self, project_id: int, message_id: int,
+                     max_pages: int = 10) -> list[Message]:
+        """All replies in the thread — the endpoint paginates (10/page)
+        and page 1 alone truncated any thread beyond that, leaving
+        reply jobs to burn out permanently. A thread still reporting
+        has_next after max_pages raises thread_incomplete rather than
+        certify a truncated result — callers keep their durable retry."""
+        out: list[Message] = []
+        seen: set[int] = set()
+        for page in range(1, max_pages + 1):
+            r = self._get(
+                f"/projects/{project_id}/messages/{message_id}/messages",
+                {"keep_read_status": 1, "page": page})
+            if "paginate" in r:
+                pag = r["paginate"]
+                if not isinstance(pag, dict):
+                    raise SchemaError("thread: paginate invalid")
+                has_next = _has_next(pag, "thread")
+            else:
+                has_next = False
+            for m in _norm_threads(r.get("messages"), project_id,
+                                   message_id):
+                if m.message_id not in seen:
+                    seen.add(m.message_id)
+                    out.append(m)
+            if not has_next:
+                return out
+        raise MCSError("thread_incomplete", retryable=True)
 
     def fetch_unread_replies(self, msg: Message) -> ReplyBatch:
         """Full bodies for replies flagged is_unread (list gives snippets only).

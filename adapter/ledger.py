@@ -1012,11 +1012,31 @@ class Ledger:
         return dict(r) if r else None
 
     def pending_reply_jobs(self, project_id: int) -> int:
+        """Live reply-fetch work only. 'failed' rows are terminal
+        give-ups — merge revives them to 'pending' when a later walk
+        re-encounters the incomplete reply, so counting them here
+        would block floor certification forever on a burnt-out job."""
         r = self.db.execute("""
           SELECT COUNT(*) c FROM fetch_jobs
-          WHERE kind='reply' AND project_id=? AND state!='done'
+          WHERE kind='reply' AND project_id=? AND state='pending'
         """, (project_id,)).fetchone()
         return r["c"]
+
+    def replies_without_job(self, limit: int = 50) -> list:
+        """Stored non-terminal replies with NO reply fetch_job in any
+        state — replies saved outside a merge (unread path, sibling
+        saves) never got a retry reservation and would stay
+        'snippet'/'unknown' forever. A 'done' or burnt-out 'failed'
+        row counts as reconciled — only the never-queued get seeded."""
+        return self.db.execute("""
+          SELECT m.message_id,m.project_id,m.parent_id FROM messages m
+          WHERE m.parent_id IS NOT NULL
+            AND m.body_state NOT IN ('full','deleted')
+            AND NOT EXISTS(SELECT 1 FROM fetch_jobs j
+              WHERE j.kind='reply' AND j.project_id=m.project_id
+                AND j.message_id=m.message_id)
+          LIMIT ?
+        """, (limit,)).fetchall()
 
     def attachment_saved(self, attachment_id: int, path: str,
                          nbytes: int, sha256: str):

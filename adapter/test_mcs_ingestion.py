@@ -1354,16 +1354,16 @@ def test_reply_drain_enqueues_incomplete_sibling(tmp_path):
     db.close()
 
 
-def test_head_job_blocked_by_unresolved_reply_then_unblocks(tmp_path):
-    """F01+F05: a head sync must not certify while a reply job is
-    unresolved — even a failed one — and completing it via the drain
-    lets the next head pass finish."""
+def test_head_job_blocked_only_by_live_reply_work(tmp_path):
+    """Floor/head certification waits on LIVE reply work. A burnt-out
+    'failed' job is a bounded give-up — it stays recorded for audit
+    but cannot stall the walk forever (permanently body-less replies
+    exist: stamps/system posts). Merge revives failed jobs whenever
+    the reply is re-encountered, so transient failures still heal."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     db.upsert_patient_info(_unread_patient(1), is_archived=True)
     db.job_add("reply", 1, message_id=11, parent_id=10)
-    j11 = db.job_pending("reply", 1, message_id=11)["job_id"]
-    db.job_fail(j11)                       # failed job still blocks
 
     class HAdapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
@@ -1377,18 +1377,12 @@ def test_head_job_blocked_by_unresolved_reply_then_unblocks(tmp_path):
     result = {"errors": []}
     job_ops.run_history_jobs(HAdapter(), db, result,
                              time.monotonic() + 300, trickle=True)
-    assert db.job_state("history_head", 1) == "pending"   # NOT done
+    assert db.job_state("history_head", 1) == "pending"  # live job blocks
 
-    # the reply-job drain now delivers the full body -> job retired
-    class RAdapter:
-        def fetch_thread(self, pid, mid):
-            return [_message(mid=11, project_id=1)]
-
-    db.job_add("reply", 1, message_id=11, parent_id=10)   # revive
-    job_ops.run_reply_jobs(RAdapter(), db, result,
-                           time.monotonic() + 60)
-    assert db.job_state("reply", 1, message_id=11) == "done"
-
+    # burn the job out -> it stops blocking and the head completes;
+    # the failed row remains as the give-up receipt
+    j11 = db.job_pending("reply", 1, message_id=11)["job_id"]
+    db.job_fail(j11)
     db.db.execute("UPDATE fetch_jobs SET next_try=0 "
                   "WHERE kind='history_head'")
     db.db.commit()
@@ -1396,6 +1390,61 @@ def test_head_job_blocked_by_unresolved_reply_then_unblocks(tmp_path):
                              time.monotonic() + 300, trickle=True)
     assert db.job_state("history_head", 1) == "done"
     db.close()
+
+
+def test_orphan_reply_gets_durable_job(tmp_path):
+    """Replies stored outside a merge (unread path, sibling saves) with
+    no fetch_job in any state get a durable reservation — otherwise
+    they stay 'snippet'/'unknown' forever."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=21, project_id=1, parent_id=20,
+                               state="snippet")], project_id=1)
+    assert db.job_state("reply", 1, message_id=21) is None
+
+    class Adapter:
+        def fetch_thread(self, pid, mid):
+            return [_message(mid=21, project_id=1)]
+
+    result = {"errors": []}
+    job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
+    assert db.job_state("reply", 1, message_id=21) == "done"
+    # resolved rows are never re-seeded
+    assert db.replies_without_job() == []
+    db.close()
+
+
+class _PagedThreadAdapter(mcs_adapter.MCSAdapter):
+    def __init__(self, pages):
+        self.pages = pages
+        self.calls = []
+
+    def _get(self, path, params=None, extend_session=True):
+        page = (params or {}).get("page", 1)
+        self.calls.append(page)
+        msgs, has_next = self.pages.get(page, ([], False))
+        return {"messages": [
+            {"id": mid, "user": {"id": 1, "type": "medical"},
+             "created_at": "2026-09-19T00:00:00+09:00",
+             "comment": "body", "count": {}}
+            for mid in msgs],
+            "paginate": {"has_next": has_next}}
+
+
+def test_fetch_thread_paginates_to_completion():
+    """Threads beyond one page were previously truncated/failed
+    forever — every page is now walked until has_next is false."""
+    a = _PagedThreadAdapter({1: ([11, 12], True), 2: ([13], False)})
+    out = a.fetch_thread(1, 10)
+    assert [m.message_id for m in out] == [11, 12, 13]
+    assert a.calls == [1, 2]
+
+    # a thread that never terminates raises rather than certify
+    b = _PagedThreadAdapter({p: ([p], True) for p in range(1, 12)})
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        b.fetch_thread(1, 10, max_pages=5)
+    assert e.value.kind == "thread_incomplete"
+    assert b.calls == [1, 2, 3, 4, 5]
 
 
 def test_rearchive_resets_pending_head_cursor(tmp_path):
