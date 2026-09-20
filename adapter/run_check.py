@@ -27,7 +27,6 @@ snapshot timestamp returned by list_unread(). A response that fails to
 parse records status='unknown', never 'confirmed'.
 """
 import argparse
-import fcntl
 import json
 import os
 import sys
@@ -36,6 +35,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired, SchemaError)
 from ledger import Ledger
+from mcs_util import acquire_run_lock, load_config
 import job_ops
 import maintenance
 import notifier
@@ -61,12 +61,7 @@ def _err_str(e: Exception) -> str:
 
 
 def _config() -> dict:
-    try:
-        with open(CONF_PATH, encoding="utf-8") as f:
-            raw = json.load(f)
-        return raw if isinstance(raw, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return load_config(CONF_PATH)
 
 
 # ---------- stage: unread pipeline ----------
@@ -312,11 +307,8 @@ def main() -> int:
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
     os.makedirs(ATTACH_DIR, exist_ok=True)
 
-    lock_fd = os.open(LOCKFILE, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(lock_fd)
+    lock_fd = acquire_run_lock(LOCKFILE)
+    if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3
 
@@ -325,7 +317,6 @@ def main() -> int:
     try:
         ledger = Ledger(DB)
     except Exception:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
@@ -472,7 +463,6 @@ def main() -> int:
         try:
             ledger.close()
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
     result["elapsed_s"] = round(time.time() - started, 1)

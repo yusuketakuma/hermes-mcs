@@ -18,14 +18,14 @@ Transactions: save_patient()/save_messages() run inside `with self.db` —
 a mid-write failure rolls back the whole block.
 """
 import hashlib
-import html
 import json
 import os
-import re
 import sqlite3
 import time
 import uuid
 from pathlib import Path
+
+from mcs_util import html_to_text
 
 
 SCHEMA_VERSION = 7
@@ -41,12 +41,6 @@ TERMINAL_BODY_STATES = ("full", "deleted")
 
 class MigrationError(RuntimeError):
     """Fail closed when an existing schema cannot be migrated losslessly."""
-
-
-def _html_to_text(h: str) -> str:
-    h = re.sub(r"<br\s*/?>", "\n", h or "")
-    h = re.sub(r"</(p|div|li)>", "\n", h)
-    return html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
 
 
 def _posted_epoch(posted_at: str) -> int | None:
@@ -392,7 +386,7 @@ class Ledger:
                 "UPDATE messages SET posted_at_ts=CASE WHEN posted_at_ts IS NULL OR posted_at_ts=0 "
                 "THEN ? ELSE posted_at_ts END,"
                 " body_text=COALESCE(body_text,?) WHERE message_id=?",
-                (_posted_epoch(r["posted_at"]), _html_to_text(r["body_html"]),
+                (_posted_epoch(r["posted_at"]), html_to_text(r["body_html"]),
                  r["message_id"]))
         if self._fts:
             self.db.execute("""
@@ -765,7 +759,7 @@ class Ledger:
         existed = self.db.execute(
             "SELECT 1 FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone() is not None
-        body_text = _html_to_text(m.body_html)
+        body_text = html_to_text(m.body_html)
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
         posted_ts = _posted_epoch(m.posted_at)

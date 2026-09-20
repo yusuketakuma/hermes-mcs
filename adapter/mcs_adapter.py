@@ -37,6 +37,8 @@ import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
 
+from mcs_util import NoRedirect, load_config, no_proxy_opener
+
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
 LS_TOKEN_KEY = "ngStorage-lastSessionToken"
@@ -71,11 +73,6 @@ class SchemaError(MCSError):
 class BootstrapError(MCSError):
     def __init__(self, detail: str):
         super().__init__("bootstrap_error", detail)
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
 
 
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
@@ -287,10 +284,8 @@ class MCSAdapter:
         self.timeout = timeout
         self._token: str | None = None
         self._token_cache = token_cache
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoRedirect)
-        self._dl_opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _SameHostRedirect)
+        self._opener = no_proxy_opener(NoRedirect)
+        self._dl_opener = no_proxy_opener(_SameHostRedirect)
 
     # ---------- session ----------
 
@@ -492,13 +487,7 @@ class MCSAdapter:
         return None
 
     def _config(self) -> dict:
-        try:
-            with open(os.path.expanduser("~/.mcs/config.json"),
-                      encoding="utf-8") as f:
-                raw = json.load(f)
-            return raw if isinstance(raw, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
+        return load_config()
 
     def auto_login(self, profile_dir: str = "", chrome_bin: str = "",
                    wait_s: int = 45) -> str:

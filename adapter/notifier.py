@@ -10,7 +10,6 @@ back to DISCORD_HOME_CHANNEL in ~/.hermes/.env.
 Events carry message_ids; message content is looked up in the local ledger
 at send time so the outbox payload itself stays tiny.
 """
-import html
 import hashlib
 import json
 import math
@@ -21,6 +20,8 @@ import time
 import urllib.request
 import urllib.error
 import uuid
+
+from mcs_util import NoRedirect, html_to_text, load_config, no_proxy_opener
 
 ENV_PATH = os.path.expanduser("~/.hermes/.env")
 CONF_PATH = os.path.expanduser("~/.mcs/config.json")
@@ -48,12 +49,7 @@ _PROFILE_ENV = os.path.expanduser("~/.hermes/profiles/{}/.env")
 
 
 def _config() -> dict:
-    try:
-        with open(CONF_PATH, encoding="utf-8") as f:
-            raw = json.load(f)
-        return raw if isinstance(raw, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return load_config(CONF_PATH)
 
 
 def _token() -> str | None:
@@ -72,24 +68,13 @@ def _channel_id(kind: str) -> str | None:
     """Patient-content events ONLY go to the explicitly configured MCS
     channel — a missing config must never spill bodies into a fallback
     channel (Oracle B15). System alerts may use the home channel."""
-    try:
-        with open(CONF_PATH, encoding="utf-8") as f:
-            raw = json.load(f)
-        cid = raw.get("discord_channel_id") if isinstance(raw, dict) else None
-        if cid and str(cid).isdigit():
-            return str(cid)
-    except (OSError, json.JSONDecodeError):
-        pass
+    cid = _config().get("discord_channel_id")
+    if cid and str(cid).isdigit():
+        return str(cid)
     if kind in ("session_expired", "run_failed"):
         cid = _env("DISCORD_HOME_CHANNEL")
         return cid if cid and cid.isdigit() else None
     return None
-
-
-def _html_to_text(h: str) -> str:
-    h = re.sub(r"<br\s*/?>", "\n", h or "")
-    h = re.sub(r"</(p|div|li)>", "\n", h)
-    return html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
 
 
 def _artifact(ledger, kind: str, mid: int) -> dict | None:
@@ -309,7 +294,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     def _fmt(r, indent=""):
         s_lines = _structured_lines(ledger, r["message_id"])
         urg = _urgency(ledger, r["message_id"])
-        body = _html_to_text(r["body_html"])
+        body = html_to_text(r["body_html"])
         cap = 500 if s_lines else 600
         if len(body) > cap:
             body = body[:cap] + "…"
@@ -356,16 +341,11 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             _collect_files(att_map, order))
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """The bot token rides the Authorization header — a redirect anywhere
-    (even same-host path change is unneeded for this API) must never be
-    followed with credentials attached (Oracle B16)."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_OPENER = urllib.request.build_opener(
-    _NoRedirect, urllib.request.ProxyHandler({}))
+# The bot token rides the Authorization header — a redirect anywhere
+# (even same-host path change is unneeded for this API) must never be
+# followed with credentials attached (Oracle B16). NoRedirect + the
+# no-proxy opener come from mcs_util.
+_OPENER = no_proxy_opener(NoRedirect)
 
 
 def _multipart(payload: dict, files: list[tuple[str, str]]) -> tuple[bytes, str]:

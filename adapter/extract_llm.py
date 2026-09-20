@@ -23,6 +23,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger
+from mcs_util import NoRedirect, no_proxy_opener
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -50,14 +51,8 @@ _PROMPT = """あなたは在宅医療の多職種チャット記録を構造化�
 >>>
 JSON:"""
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 # loopback-only opener: no proxy and no redirect may route message bodies.
-_OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}), _NoRedirect)
+_OPENER = no_proxy_opener(NoRedirect)
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}

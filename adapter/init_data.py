@@ -15,7 +15,6 @@ Resumable: patients.history_floor records the deepest completed cutoff;
 re-running skips patients already floored at/below --since.
 """
 import argparse
-import fcntl
 import json
 import os
 import sys
@@ -25,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcs_adapter import MCSAdapter, MCSError, SessionExpired, SchemaError
 from ledger import Ledger
 from job_ops import merge_full_replies
+from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -57,11 +57,8 @@ def main() -> int:
     since = args.since or int(time.time() - args.days * 86400)
     deadline = time.monotonic() + args.deadline
 
-    lock_fd = os.open(LOCKFILE, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(lock_fd)
+    lock_fd = acquire_run_lock(LOCKFILE)
+    if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3
 
@@ -77,14 +74,12 @@ def main() -> int:
         if state != "ok":
             print(json.dumps({"ok": False, "error": f"auto_login={state}"}))
             ledger.close()
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
             return 2
         projects = adapter.list_projects()
     except MCSError as e:
         print(json.dumps({"ok": False, "error": e.kind}))
         ledger.close()
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
         return 1
 
@@ -208,7 +203,6 @@ def main() -> int:
     try:
         ledger.close()
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
     return 0 if result["ok"] else 1
 
