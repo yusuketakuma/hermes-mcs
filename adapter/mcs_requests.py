@@ -109,6 +109,20 @@ def _fields(fields):
     return None
 
 
+def _request_extras(req):
+    if "reason" in req and not _text(req["reason"], 2000):
+        return "bad_reason"
+    if "loop_ref" not in req:
+        return None
+    from request_loops import validate_loop_ref
+    error = validate_loop_ref(req["loop_ref"])
+    if error:
+        return error
+    if "reason" not in req:
+        return "loop_reason_required"
+    return None
+
+
 def validate(req):
     if not isinstance(req, dict):
         return "bad_command"
@@ -123,23 +137,34 @@ def validate(req):
         return "bad_actor"
     if not positive(req.get("project_id")):
         return "bad_project_id"
+    if isinstance(req.get("cmd"), str) and req["cmd"].startswith("ops."):
+        # Keep the identity boundary in this module; operation payload rules
+        # must not be able to bypass the shared human-confirmed envelope.
+        from mcs_operations import validate_ops
+        return validate_ops(req, common)
     if req.get("cmd") == "request.create":
-        allowed = common | {"source_message_id", "source_hash", "title", "assignee", "due_date"}
+        allowed = common | {"source_message_id", "source_hash", "title", "assignee", "due_date", "reason", "loop_ref"}
         if req.keys() - allowed:
             return "unknown_field"
         if not positive(req.get("source_message_id")):
             return "bad_source_message_id"
         if not valid_hash(req.get("source_hash")):
             return "bad_source_hash"
+        extra_error = _request_extras(req)
+        if extra_error:
+            return extra_error
         return _fields({k: req[k] for k in ("title", "assignee", "due_date") if k in req}) \
             if "title" in req else "bad_title"
     if req.get("cmd") == "request.update":
-        if req.keys() - (common | {"request_id", "expected_revision", "expected_source_hash", "patch"}):
+        if req.keys() - (common | {"request_id", "expected_revision", "expected_source_hash", "patch", "reason", "loop_ref"}):
             return "unknown_field"
         if not positive(req.get("request_id")) or not positive(req.get("expected_revision")):
             return "bad_revision_or_id"
         if not valid_hash(req.get("expected_source_hash")):
             return "bad_source_hash"
+        extra_error = _request_extras(req)
+        if extra_error:
+            return extra_error
         return _fields(req.get("patch"))
     return "unknown_cmd"
 
@@ -168,7 +193,19 @@ def apply_command(ledger, req):
         pid = req.get("project_id") if positive(req.get("project_id")) else None
         rid = None
         now = time.time()
-        if not error:
+        extra = {}
+        loop_candidate = None
+        receipt_loop_ref = None
+        if req.get("cmd") in ("request.create", "request.update") \
+                and isinstance(req.get("loop_ref"), dict):
+            from request_loops import validate_loop_ref
+            if validate_loop_ref(req["loop_ref"]) is None:
+                receipt_loop_ref = req["loop_ref"]
+        if not error and isinstance(req.get("cmd"), str) \
+                and req["cmd"].startswith("ops."):
+            from mcs_operations import apply_tx
+            error, extra = apply_tx(db, req, now=now)
+        elif not error:
             if req["cmd"] == "request.update":
                 row = db.execute("SELECT * FROM requests WHERE request_id=? AND project_id=?",
                                  (req["request_id"], pid)).fetchone()
@@ -189,30 +226,73 @@ def apply_command(ledger, req):
                     error = "source_incomplete"
                 elif source["content_hash"] != expected:
                     error = "source_changed"
-                elif req["cmd"] == "request.create":
-                    rid = db.execute("""
-                      INSERT INTO requests(project_id,source_message_id,source_hash,title,
-                        assignee,due_date,status,revision,created_at,updated_at)
-                      VALUES(?,?,?,?,?,?,'open',1,?,?)
-                    """, (pid, mid, expected, req["title"], req.get("assignee"),
-                          req.get("due_date"), now, now)).lastrowid
-                else:
-                    rid = before["request_id"]
-                    fields = req["patch"]
-                    changed = db.execute(
-                        "UPDATE requests SET " + ",".join(f"{k}=?" for k in fields)
-                        + ",revision=revision+1,updated_at=? WHERE request_id=? AND revision=?",
-                        (*fields.values(), now, rid, req["expected_revision"]))
-                    if changed.rowcount != 1:
-                        raise RuntimeError("request_revision_changed")
+                if not error and "loop_ref" in req:
+                    from request_loops import current_candidate
+                    try:
+                        loop_candidate = current_candidate(
+                            db, pid, req["loop_ref"]["artifact_id"], mid)
+                    except ValueError as exc:
+                        error = str(exc)
+                    else:
+                        ref = req["loop_ref"]
+                        if (ref["artifact_id"] != loop_candidate["artifact_id"]
+                                or ref["source_fingerprint"]
+                                != loop_candidate["source_fingerprint"]
+                                or ref["policy_fingerprint"]
+                                != loop_candidate["policy_fingerprint"]):
+                            error = "loop_ref_stale"
                 if not error:
+                    if req["cmd"] == "request.create":
+                        rid = db.execute("""
+                          INSERT INTO requests(project_id,source_message_id,source_hash,title,
+                            assignee,due_date,status,revision,created_at,updated_at)
+                          VALUES(?,?,?,?,?,?,'open',1,?,?)
+                        """, (pid, mid, expected, req["title"], req.get("assignee"),
+                              req.get("due_date"), now, now)).lastrowid
+                    else:
+                        rid = before["request_id"]
+                        fields = req["patch"]
+                        changed = db.execute(
+                            "UPDATE requests SET " + ",".join(f"{k}=?" for k in fields)
+                            + ",revision=revision+1,updated_at=? WHERE request_id=? AND revision=?",
+                            (*fields.values(), now, rid, req["expected_revision"]))
+                        if changed.rowcount != 1:
+                            raise RuntimeError("request_revision_changed")
                     after = dict(db.execute("SELECT * FROM requests WHERE request_id=?", (rid,)).fetchone())
+                    if loop_candidate is not None:
+                        link = {
+                            "request_id": rid,
+                            "loop_artifact_id": loop_candidate["artifact_id"],
+                            "source_fingerprint": loop_candidate["source_fingerprint"],
+                            "policy_fingerprint": loop_candidate["policy_fingerprint"],
+                            "command_id": req["command_id"],
+                            "actor": req["actor"],
+                            "reason": req["reason"],
+                        }
+                        db.execute(
+                            "INSERT INTO artifacts(kind,project_id,message_id,"
+                            "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
+                            ("request_loop_link", pid, mid,
+                             json.dumps(link, ensure_ascii=False, sort_keys=True,
+                                        separators=(",", ":"), allow_nan=False),
+                             "human", json.dumps({
+                                 "command_id": req["command_id"],
+                                 "actor": req["actor"]}, ensure_ascii=False,
+                                 sort_keys=True, separators=(",", ":")), now),
+                        )
         receipt = {"command_id": req["command_id"], "payload_hash": digest,
                    "project_id": pid, "request_id": rid,
                    "outcome": "rejected" if error else "applied", "error": error,
                    "actor": req.get("actor") if _text(req.get("actor"), 120) else None,
+                   "reason": (req.get("reason")
+                              if (req.get("cmd") in ("request.create", "request.update")
+                                  and _text(req.get("reason"), 2000))
+                              else None),
+                   "loop_ref": receipt_loop_ref,
                    "revision": after["revision"] if after else None,
                    "before": before, "after": after, "processed_at": now}
+        if extra:
+            receipt.update(extra)
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, pid, rid, receipt["outcome"],
                     canonical(receipt).decode(), now))

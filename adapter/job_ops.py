@@ -102,7 +102,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # consume a request until it is complete enough to validate.
             continue
         if isinstance(req, dict) and isinstance(req.get("cmd"), str) \
-                and req["cmd"].startswith("request."):
+                and (req["cmd"].startswith("request.")
+                     or req["cmd"].startswith("ops.")):
             try:
                 if not mcs_requests.valid_uuid(req.get("command_id")):
                     raise ValueError("bad_command_id")
@@ -119,7 +120,10 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 os.unlink(path)
             except OSError:
                 pass  # Receipt makes the next drain idempotent.
-            result["request_commands"] = result.get("request_commands", 0) + 1
+            result["command_commands"] = result.get("command_commands", 0) + 1
+            bucket = ("request_commands" if req["cmd"].startswith("request.")
+                      else "ops_commands")
+            result[bucket] = result.get(bucket, 0) + 1
             continue
         ok, reason = _valid_cmd(req)
         if ok:

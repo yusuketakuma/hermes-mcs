@@ -443,6 +443,50 @@ class Ledger:
             self._save_attachments(r, now)
             self._retire_reply_job(r, now)
 
+    def _semantic_generation_snapshot(self, messages) -> dict:
+        """Capture touched rows and their thread generation before a batch."""
+        keys = set()
+        for message in messages:
+            rows = [message, *(getattr(message, "replies", None) or [])]
+            for row in rows:
+                project_id = getattr(row, "project_id", None)
+                message_id = getattr(row, "message_id", None)
+                parent_id = getattr(row, "parent_id", None)
+                root = message_id if parent_id is None else parent_id
+                if project_id is not None and root is not None:
+                    keys.add((project_id, message_id, root))
+        snapshot = {}
+        generations = {}
+        for project_id, message_id, root in keys:
+            thread_key = (project_id, root)
+            if thread_key not in generations:
+                generations[thread_key] = self._semantic_source_generation(
+                    project_id, root)
+            snapshot[(project_id, message_id)] = (
+                root,
+                generations[thread_key],
+                self._semantic_message_fingerprint(project_id, message_id),
+            )
+        return snapshot
+
+    def _semantic_changed_ids(self, before: dict) -> dict[int, list[int]]:
+        """Return touched message IDs whose thread input actually changed."""
+        changed: dict[int, list[int]] = {}
+        generations = {}
+        for (project_id, message_id), (root, previous, row_before) \
+                in before.items():
+            thread_key = (project_id, root)
+            if thread_key not in generations:
+                generations[thread_key] = self._semantic_source_generation(
+                    project_id, root)
+            current = generations[thread_key]
+            row_after = self._semantic_message_fingerprint(project_id, message_id)
+            if current != previous and row_after != row_before:
+                changed.setdefault(project_id, []).append(message_id)
+        for ids in changed.values():
+            ids.sort()
+        return changed
+
     def _retire_reply_job(self, m, now: float):
         """A terminal body landing in the ledger retires any queued reply
         job for it — same commit as the save, so a burnt-out or pending
@@ -477,6 +521,8 @@ class Ledger:
         commit (INV-06)."""
         now = time.time()
         new_ids = []
+        before_semantic = (self._semantic_generation_snapshot(p.messages)
+                           if semantic else {})
         with self.db:  # commit on success, rollback on exception
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
@@ -503,6 +549,8 @@ class Ledger:
                   now, now))
             for m in p.messages:
                 self._save_tree(m, new_ids, now)
+            changed_semantic = (self._semantic_changed_ids(before_semantic)
+                                if semantic else {})
             if notify and not self.is_archived(p.project_id):
                 # new_ids: every newly stored message is notification-
                 # worthy in the unread path; PLUS messages THIS fetch
@@ -517,23 +565,32 @@ class Ledger:
                     if t.is_unread]
                 notify_ids = list(dict.fromkeys(
                     new_ids + self._unnotified(fresh_unread)))
+                ev_id = None
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
                     ev_id = self._outbox_insert("new_messages",
                                                 p.project_id, pl)
                     self._mark_notified(notify_ids, now)
-                    if semantic:
-                        self._semantic_seed_tx(p.project_id, notify_ids,
-                                               {"source": notify.get(
-                                                   "source"),
-                                                "event_id": ev_id})
+                if semantic:
+                    seed_ids = sorted(set(new_ids) | set(notify_ids)
+                                      | set(changed_semantic.get(
+                                          p.project_id, [])))
+                    if seed_ids:
+                        origin = {"source": notify.get("source")}
+                        if ev_id is not None:
+                            origin["event_id"] = ev_id
+                        self._semantic_seed_tx(p.project_id, seed_ids,
+                                               origin)
             elif semantic and not self.is_archived(p.project_id):
                 # notify-less path: same coverage rule as save_messages —
                 # every newly stored message is evaluation input with no
                 # notification eligibility (INV-20)
-                self._semantic_seed_tx(p.project_id, new_ids,
-                                       {"source": "history_import"})
+                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
+                    p.project_id, [])))
+                if seed_ids:
+                    self._semantic_seed_tx(p.project_id, seed_ids,
+                                           {"source": "history_import"})
         return new_ids
 
     def _unnotified(self, ids: list) -> list:
@@ -707,9 +764,13 @@ class Ledger:
         same transaction. Returns ids of newly-inserted messages."""
         new_ids = []
         now = time.time()
+        before_semantic = (self._semantic_generation_snapshot(msgs)
+                           if semantic else {})
         with self.db:
             for m in msgs:
                 self._save_tree(m, new_ids, now)
+            changed_semantic = (self._semantic_changed_ids(before_semantic)
+                                if semantic else {})
             if notify and project_id \
                     and not self.is_archived(project_id):
                 # backfill/reply-job context: "new to the ledger" is NOT
@@ -736,7 +797,9 @@ class Ledger:
                     # derived at drain time from stored origin events
                     # (INV-20): a read-arrival seed can produce
                     # artifacts but never a notice.
-                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    seed_ids = sorted(set(new_ids) | set(notify_ids)
+                                      | set(changed_semantic.get(
+                                          project_id, [])))
                     if seed_ids:
                         origin = {"source": notify.get("source")}
                         if ev_id is not None:
@@ -750,8 +813,11 @@ class Ledger:
                 # open-loop/pending items in imported history are real
                 # findings, not just notification triggers. These jobs
                 # are drained AFTER arrival seeds (run_due ordering).
-                self._semantic_seed_tx(project_id, new_ids,
-                                       {"source": "history_import"})
+                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
+                    project_id, [])))
+                if seed_ids:
+                    self._semantic_seed_tx(project_id, seed_ids,
+                                           {"source": "history_import"})
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -764,6 +830,8 @@ class Ledger:
         a still-incomplete reply reserves a durable retry."""
         new_ids = []
         now = time.time()
+        before_semantic = (self._semantic_generation_snapshot(replies)
+                           if semantic else {})
         with self.db:
             for m in replies:
                 self._save_tree(m, new_ids, now)
@@ -785,6 +853,8 @@ class Ledger:
                 else:
                     self._job_add_tx("reply", project_id, m.message_id,
                                      parent_id=m.parent_id)
+            changed_semantic = (self._semantic_changed_ids(before_semantic)
+                                if semantic else {})
             if notify and not self.is_archived(project_id):
                 notify_ids = self._unnotified(
                     [m.message_id for m in replies if m.is_unread])
@@ -799,13 +869,21 @@ class Ledger:
                     # widened like save_messages: a reply persisted
                     # already-read is still evaluation input — its
                     # facts and open-loop candidates are real findings
-                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    seed_ids = sorted(set(new_ids) | set(notify_ids)
+                                      | set(changed_semantic.get(
+                                          project_id, [])))
                     if seed_ids:
                         origin = {"source": notify.get("source")}
                         if ev_id is not None:
                             origin["event_id"] = ev_id
                         self._semantic_seed_tx(project_id, seed_ids,
                                                origin)
+            elif semantic and not self.is_archived(project_id):
+                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
+                    project_id, [])))
+                if seed_ids:
+                    self._semantic_seed_tx(project_id, seed_ids,
+                                           {"source": "history_import"})
         return new_ids
 
     def _upsert_message(self, m) -> int:
@@ -827,6 +905,22 @@ class Ledger:
             content_hash,reply_count,first_seen,updated_seen)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(message_id) DO UPDATE SET
+            -- history/snippet responses may omit metadata; keep the
+            -- authoritative values already hydrated in the ledger.
+            parent_id=COALESCE(excluded.parent_id, messages.parent_id),
+            sender_id=COALESCE(excluded.sender_id, messages.sender_id),
+            sender_name=CASE
+              WHEN excluded.sender_name != '' THEN excluded.sender_name
+              ELSE messages.sender_name END,
+            sender_type=CASE
+              WHEN excluded.sender_type != '' THEN excluded.sender_type
+              ELSE messages.sender_type END,
+            profession=CASE
+              WHEN excluded.profession != '' THEN excluded.profession
+              ELSE messages.profession END,
+            organization=CASE
+              WHEN excluded.organization != '' THEN excluded.organization
+              ELSE messages.organization END,
             posted_at=CASE
               WHEN excluded.posted_at_ts IS NOT NULL THEN excluded.posted_at
               ELSE messages.posted_at END,
@@ -1062,6 +1156,82 @@ class Ledger:
         """, (kind, project_id, message_id)).fetchone()
         return dict(r) if r else None
 
+    def _semantic_attachments(self, message_id: int) -> list:
+        return [dict(row) for row in self.db.execute(
+            "SELECT attachment_id,file_id,name,bytes,sha256,state FROM attachments "
+            "WHERE message_id=? ORDER BY attachment_id", (message_id,))]
+
+    def _semantic_source_generation(self, project_id: int, root: int) -> str:
+        """Digest the stored thread input used by a semantic seed.
+
+        This is deliberately semantic-specific.  Generic fetch jobs retain
+        their existing revive/reset contract; semantic retries need a stable
+        input generation so replaying the same input cannot silently erase
+        its accumulated attempts.
+        """
+        rows = self.db.execute(
+            "SELECT message_id,parent_id,content_hash,body_state,body_text,"
+            "reply_count,sender_id,sender_name,sender_type,profession,"
+            "organization,posted_at FROM messages WHERE project_id=? "
+            "AND (message_id=? OR parent_id=?) "
+            "ORDER BY posted_at_ts,message_id", (project_id, root, root))
+        members = []
+        for row in rows:
+            body = row["body_text"] or ""
+            revision = row["content_hash"]
+            if not revision:
+                revision = hashlib.sha256(body.encode()).hexdigest()
+            members.append({
+                "message_id": row["message_id"],
+                "parent_id": row["parent_id"],
+                "revision": revision,
+                "body_state": row["body_state"] or "unknown",
+                "reply_count": row["reply_count"] or 0,
+                "sender_id": row["sender_id"],
+                "sender_name": row["sender_name"] or "",
+                "sender_type": row["sender_type"] or "",
+                "profession": row["profession"] or "",
+                "organization": row["organization"] or "",
+                "posted_at": row["posted_at"] or "",
+                "attachments": self._semantic_attachments(row["message_id"]),
+            })
+        return hashlib.sha256(json.dumps(
+            members, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+
+    def _semantic_message_fingerprint(self, project_id: int,
+                                      message_id: int) -> str | None:
+        """Digest one touched row using the thread input fields."""
+        row = self.db.execute(
+            "SELECT message_id,parent_id,content_hash,body_state,body_text,"
+            "reply_count,sender_id,sender_name,sender_type,profession,"
+            "organization,posted_at FROM messages "
+            "WHERE project_id=? AND message_id=?",
+            (project_id, message_id)).fetchone()
+        if row is None:
+            return None
+        body = row["body_text"] or ""
+        revision = row["content_hash"]
+        if not revision:
+            revision = hashlib.sha256(body.encode()).hexdigest()
+        member = {
+            "message_id": row["message_id"],
+            "parent_id": row["parent_id"],
+            "revision": revision,
+            "body_state": row["body_state"] or "unknown",
+            "reply_count": row["reply_count"] or 0,
+            "sender_id": row["sender_id"],
+            "sender_name": row["sender_name"] or "",
+            "sender_type": row["sender_type"] or "",
+            "profession": row["profession"] or "",
+            "organization": row["organization"] or "",
+            "posted_at": row["posted_at"] or "",
+            "attachments": self._semantic_attachments(row["message_id"]),
+        }
+        return hashlib.sha256(json.dumps(
+            member, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+
     def _semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict):
         """Durable semantic-eval seeding — caller holds `with self.db` so
@@ -1069,31 +1239,42 @@ class Ledger:
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
+        # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
         q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
-             "FROM messages WHERE message_id IN ("
+             "FROM messages WHERE project_id=? AND message_id IN ("
              + ",".join("?" * len(message_ids)) + ")")
         roots: dict[int, list] = {}
-        for r in self.db.execute(q, list(message_ids)):
+        for r in self.db.execute(q, [project_id, *message_ids]):
             roots.setdefault(r["r"], []).append(r["message_id"])
         now = time.time()
         for root, ids in roots.items():
-            pend = self.db.execute("""
-              SELECT job_id,payload FROM fetch_jobs
+            existing = self.db.execute("""
+              SELECT job_id,state,attempts,payload FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
-                AND state='pending'
             """, (project_id, root)).fetchone()
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
-            if pend is not None:
+            notification_free = isinstance(origin, dict) \
+                and origin.get("notification_free") is True
+            source_generation = self._semantic_source_generation(
+                project_id, root)
+            if existing is not None:
                 try:
-                    pl = json.loads(pend["payload"] or "{}")
+                    old_pl = json.loads(existing["payload"] or "{}")
                 except (json.JSONDecodeError, TypeError):
-                    pl = {}
-                if not isinstance(pl.get("targets"), list):
-                    pl["targets"] = []
-                pl["targets"] = sorted(set(pl["targets"]) | set(ids))
+                    old_pl = {}
+                old_pl = old_pl if isinstance(old_pl, dict) else {}
+                stored_targets = old_pl.get("targets")
+                old_targets = ({x for x in stored_targets if type(x) is int}
+                               if isinstance(stored_targets, list) else set())
+                old_origin = old_pl.get("origin")
+                old_eligible = bool(old_pl.get("eligible"))
+                old_notification_free = bool(old_pl.get(
+                    "notification_free"))
+                pl = dict(old_pl)
+                pl["targets"] = sorted(old_targets | set(ids))
                 # once a job descends from a notify intent it keeps that
                 # provenance — a later history/replay merge must not
                 # demote its drain priority nor erase which arrival
@@ -1106,18 +1287,69 @@ class Ledger:
                     pl["origin"] = origin
                 if eligible:
                     pl["eligible"] = True
+                    # An actual arrival event is the explicit opt-in for a
+                    # notification.  It supersedes a replay's suppression
+                    # marker, even when the old origin is being replaced.
+                    pl.pop("notification_free", None)
+                elif notification_free:
+                    # Keep this marker at the payload level as well as in
+                    # the incoming origin: a prior eligible origin may be
+                    # retained for provenance, but this seed must still be
+                    # ineligible for notification generation.
+                    pl["notification_free"] = True
+                input_changed = (old_targets != set(pl["targets"])
+                                 or pl.get("source_generation")
+                                 != source_generation)
+                payload_changed = (input_changed
+                                   or old_origin != pl.get("origin")
+                                   or old_eligible != bool(pl.get("eligible"))
+                                   or old_notification_free
+                                   != bool(pl.get("notification_free")))
+                # A missing generation is a legacy row.  Add one before any
+                # worker can observe it, so old and new payloads are never
+                # confused by an ID-only check.
+                if payload_changed or existing["state"] != "pending" \
+                        or not isinstance(pl.get("generation"), str):
+                    pl["generation"] = uuid.uuid4().hex
+                pl["source_generation"] = source_generation
+                attempts = (0 if input_changed
+                             else int(existing["attempts"] or 0))
+                if input_changed:
+                    # A source edit is a new budget and may not inherit a
+                    # human retry extension or the command token that
+                    # invalidated the prior worker.
+                    pl.pop("manual_attempt_limit", None)
+                    pl.pop("retry_command_id", None)
+                    state = "pending"
+                else:
+                    from semantic_runtime import attempt_limit
+                    state = "pending"
+                    if (existing["state"] in {"failed", "pending"}
+                            and attempts >= attempt_limit(pl)):
+                        # Re-seeding the same exhausted input must not revive
+                        # a job that only an explicit human retry may extend.
+                        state = "failed"
                 self.db.execute(
-                    "UPDATE fetch_jobs SET payload=?,updated_at=? "
-                    "WHERE job_id=?",
-                    (json.dumps(pl, ensure_ascii=False), now,
-                     pend["job_id"]))
+                    "UPDATE fetch_jobs SET state=?,payload=?,"
+                    "attempts=?,next_try=?,updated_at=? WHERE job_id=?",
+                    (state, json.dumps(pl, ensure_ascii=False, sort_keys=True),
+                     attempts, now, now, existing["job_id"]))
             else:
-                self._job_add_tx(
-                    "semantic", project_id, root,
-                    payload={"targets": sorted(set(ids)),
-                             "origin": origin,
-                             **({"eligible": True} if eligible
-                                else {})})
+                payload = {"targets": sorted(set(ids)),
+                           "origin": origin,
+                           "generation": uuid.uuid4().hex,
+                           "source_generation": source_generation}
+                if eligible:
+                    payload["eligible"] = True
+                elif notification_free:
+                    payload["notification_free"] = True
+                self.db.execute("""
+                  INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
+                    payload,state,next_try,created_at,updated_at)
+                  VALUES(?,?,?,?,?,'pending',?,?,?)
+                """, ("semantic", project_id, root, None,
+                      json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                      now, now, now))
 
     def semantic_seed(self, project_id: int, message_ids: list,
                       origin: dict):
@@ -1154,24 +1386,43 @@ class Ledger:
         """, (limit,)).fetchall()
 
     def attachment_saved(self, attachment_id: int, path: str,
-                         nbytes: int, sha256: str):
-        self.db.execute("""
-          UPDATE attachments SET local_path=?,bytes=?,sha256=?,
-            state='downloaded',downloaded_at=?,error=NULL
-          WHERE attachment_id=?
-        """, (path, nbytes, sha256, time.time(), attachment_id))
-        self.db.commit()
+                         nbytes: int, sha256: str, semantic: bool = False):
+        with self.db:
+            source = self.db.execute(
+                "SELECT m.project_id,m.message_id FROM attachments a "
+                "JOIN messages m ON m.message_id=a.message_id WHERE attachment_id=?",
+                (attachment_id,)).fetchone() if semantic else None
+            before = self._semantic_message_fingerprint(*source) if source else None
+            self.db.execute("""
+              UPDATE attachments SET local_path=?,bytes=?,sha256=?,
+                state='downloaded',downloaded_at=?,error=NULL
+              WHERE attachment_id=?
+            """, (path, nbytes, sha256, time.time(), attachment_id))
+            if source and before != self._semantic_message_fingerprint(*source):
+                self._semantic_seed_tx(source["project_id"], [source["message_id"]],
+                                       {"source": "attachment"})
 
     def attachment_failed(self, attachment_id: int, kind: str,
-                          retry_in: float = 900, max_attempts: int = 6):
+                          retry_in: float = 900, max_attempts: int = 6,
+                          semantic: bool = False):
         """Retryable failure -> backoff; attempts exhausted -> 'failed'
         (quarantined out of the pending queue instead of retrying forever)."""
-        self.db.execute("""
-          UPDATE attachments SET attempts=attempts+1,next_try=?,error=?,
-            state=CASE WHEN attempts+1>=? THEN 'failed' ELSE 'pending' END
-          WHERE attachment_id=?
-        """, (time.time() + retry_in, kind[:80], max_attempts, attachment_id))
-        self.db.commit()
+        with self.db:
+            source = self.db.execute(
+                "SELECT m.project_id,m.message_id,a.state FROM attachments a "
+                "JOIN messages m ON m.message_id=a.message_id WHERE attachment_id=?",
+                (attachment_id,)).fetchone() if semantic else None
+            self.db.execute("""
+              UPDATE attachments SET attempts=attempts+1,next_try=?,error=?,
+                state=CASE WHEN attempts+1>=? THEN 'failed' ELSE 'pending' END
+              WHERE attachment_id=?
+            """, (time.time() + retry_in, kind[:80], max_attempts, attachment_id))
+            if source:
+                state = self.db.execute("SELECT state FROM attachments WHERE attachment_id=?",
+                                        (attachment_id,)).fetchone()[0]
+                if state != source["state"]:
+                    self._semantic_seed_tx(source["project_id"], [source["message_id"]],
+                                           {"source": "attachment"})
 
     def attachments_due(self, limit: int = 50,
                         priority_mids: list[int] | None = None) -> list:

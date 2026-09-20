@@ -160,6 +160,8 @@ class View:
         for row in page["items"]:
             pid = row["project_id"]
             row["fetch_reason"] = _reason(row["fetch_reason"])
+            from mcs_operations import paused
+            row["semantic_paused"] = paused(self.db, pid)
             floor = row["history_floor"]
             row["history_record"] = "natural_end_recorded" if floor == -1 else \
                 "cutoff_recorded" if floor and floor > 0 else "no_completion_record"
@@ -208,6 +210,27 @@ class View:
                     for key in ("since", "page", "pages")}})
         return page
 
+    def _operations(self, pid, limit, cursor):
+        from mcs_operations import paused
+        from semantic_runtime import attempt_limit
+        page = self._page(
+            "SELECT j.job_id AS _key,j.job_id,j.kind,j.state,j.attempts,j.next_try,j.payload "
+            "FROM fetch_jobs j WHERE j.project_id=? AND j.kind IN ('semantic','history')",
+            [pid], ["j.job_id"], ["operations", pid], limit, cursor)
+        for row in page["items"]:
+            raw = row.pop("payload")
+            try:
+                payload = json.loads(raw or "{}")
+                if not isinstance(payload, dict):
+                    raise ValueError("bad_payload")
+                row["payload_hash"] = requests.payload_hash(payload)
+                if row["kind"] == "semantic":
+                    row["attempt_limit"] = attempt_limit(payload)
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                row["payload_hash"] = None
+            row["payload_valid"] = row["payload_hash"] is not None
+        return {**page, "semantic_paused": paused(self.db, pid)}
+
     def _requests(self, pid, request_id, status, limit, cursor):
         if status is not None and status not in requests.STATUSES:
             raise ValueError("bad_status")
@@ -225,7 +248,30 @@ class View:
         if status is not None:
             sql += " AND r.status=?"
             params.append(status)
-        return self._page(sql, params, ["r.request_id"], ["requests", pid, request_id, status], limit, cursor)
+        result = self._page(sql, params, ["r.request_id"], ["requests", pid, request_id, status], limit, cursor)
+        for row in result["items"]:
+            row["loop_links"] = self._loop_links(pid, request_id=row["request_id"])
+        return result
+
+    def _loop_links(self, pid, *, request_id=None, loop_id=None):
+        # The request row is the authority; link artifacts contain no task state.
+        rows = self.db.execute("""
+          SELECT a.artifact_id,a.created_at,a.content,r.request_id,r.status,r.revision,r.title
+          FROM artifacts a JOIN requests r ON r.project_id=a.project_id
+            AND r.request_id=CASE WHEN json_valid(a.content)
+              THEN json_extract(a.content,'$.request_id') END
+          WHERE a.kind='request_loop_link' AND a.project_id=?
+            AND (? IS NULL OR r.request_id=?)
+            AND (? IS NULL OR CASE WHEN json_valid(a.content)
+              THEN json_extract(a.content,'$.loop_artifact_id') END=?)
+          ORDER BY a.artifact_id DESC
+        """, (pid, request_id, request_id, loop_id, loop_id))
+        links = []
+        for row in rows:
+            item = dict(row)
+            item["link"] = json.loads(item.pop("content"))
+            links.append(item)
+        return links
 
     def _attachments(self, project, message_id, limit, cursor):
         self._message(project, message_id)
@@ -239,18 +285,26 @@ class View:
     def _semantic(self, pid, mid):
         """Phase-J artifacts for one message: bundle, proposition
         verdicts, verified fact candidates, audited summary, notify
-        plan. Whatever generation exists is returned as-is — the
-        snapshot is already immutable (schema §22.4)."""
+        plan. Preserve history but label its validity against the source
+        generation in this snapshot, including same-thread context."""
+        from semantic import thread_bundle
+
         self._message(pid, mid)
         row = self.db.execute(
             "SELECT parent_id FROM messages WHERE message_id=?",
             (mid,)).fetchone()
         keys = [mid] + ([row["parent_id"]] if row and row["parent_id"]
                         else [])
+        bundle = thread_bundle(self, pid, row["parent_id"] or mid)
+        fingerprint = bundle["source_fingerprint"] if bundle else None
+        policy_row = self.db.execute(
+            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        policy = policy_row["content"] if policy_row else None
         out = {}
         for kind in ("semantic_bundle", "semantic_assess",
                      "semantic_facts", "semantic_summary",
-                     "semantic_audit", "notify_plan"):
+                     "semantic_audit", "semantic_coverage", "notify_plan"):
             marks = ",".join("?" * len(keys))
             items = []
             for r in self.db.execute(
@@ -267,19 +321,38 @@ class View:
                     content = json.loads(r["content"])
                 except (json.JSONDecodeError, TypeError):
                     content = None
+                current = bool(fingerprint and meta.get("fingerprint") == fingerprint)
+                if kind in ("semantic_assess", "semantic_summary", "semantic_audit", "semantic_coverage"):
+                    current = current and bool(policy and meta.get("policy_fingerprint") == policy)
+                effective = (meta.get("audit_status") or meta.get("technical_status")) \
+                    if current else "STALE"
                 items.append({"artifact_id": r["artifact_id"],
                               "message_id": r["message_id"],
                               "model": r["model"], "meta": meta,
                               "content": content,
+                              "current": current, "effective_status": effective,
                               "created_at": r["created_at"]})
             out[kind] = items
         return {"semantic": out}
+
+    def _comparison(self, pid, mid):
+        from summary_review import comparison
+        self._message(pid, mid)
+        return comparison(self.db, pid, mid)
 
     def _loops(self, pid, limit):
         """Open-Loop candidates + their relation events. Candidates are
         advisory only — promotion to a formal request goes through the
         human-confirmed request path, never automatic (INV-11)."""
+        from semantic import thread_bundle
+        from request_loops import valid_origin_evidence
+
         items = []
+        policy_row = self.db.execute(
+            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        policy = policy_row["content"] if policy_row else None
+        bundles = {}
         for r in self.db.execute(
                 "SELECT artifact_id,message_id,content,meta,created_at "
                 "FROM artifacts WHERE kind='loop_candidate' "
@@ -291,13 +364,45 @@ class View:
                 continue
             if not isinstance(cand, dict):
                 continue
+            origin = cand.get("origin") or {}
+            try:
+                candidate_meta = json.loads(r["meta"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                candidate_meta = {}
+            if not isinstance(candidate_meta, dict):
+                candidate_meta = {}
+            source = self.db.execute(
+                "SELECT content_hash,COALESCE(parent_id,message_id) root "
+                "FROM messages WHERE project_id=? AND message_id=?",
+                (pid, r["message_id"])).fetchone()
+            root = source["root"] if source else None
+            if root not in bundles:
+                bundles[root] = thread_bundle(self, pid, root) if root else None
+            bundle = bundles[root]
+            candidate_fp = candidate_meta.get(
+                "source_fingerprint", candidate_meta.get("fingerprint"))
+            current = bool(
+                source and bundle
+                and origin.get("revision") == source["content_hash"]
+                and candidate_fp == bundle["source_fingerprint"]
+                and policy
+                and candidate_meta.get("policy_fingerprint") == policy)
+            members = {m["message_id"]: m for m in bundle["members"]} if bundle else {}
+            cand["adoption_eligible"] = current and valid_origin_evidence(
+                origin, members.get(r["message_id"]))
             events = []                       # (created_at, event)
             for e in self.db.execute(
-                    "SELECT content,created_at FROM artifacts "
+                    "SELECT content,meta,created_at FROM artifacts "
                     "WHERE kind='loop_event' AND project_id=? "
-                    "ORDER BY artifact_id DESC LIMIT 50", (pid,)):
+                    "AND CASE WHEN json_valid(content) THEN "
+                    "json_extract(content,'$.loop_artifact_id')=? OR "
+                    "(json_extract(content,'$.loop_artifact_id') IS NULL AND "
+                    "json_extract(content,'$.loop_origin_id')=?) ELSE 0 END "
+                    "ORDER BY artifact_id DESC LIMIT 50",
+                    (pid, r["artifact_id"], r["message_id"])):
                 try:
                     ev = json.loads(e["content"])
+                    meta = json.loads(e["meta"] or "{}")
                 except (json.JSONDecodeError, TypeError):
                     continue
                 if not isinstance(ev, dict):
@@ -306,6 +411,15 @@ class View:
                 # not user-facing relations — hide them
                 if ev.get("relation") == "unrelated":
                     continue
+                trigger = members.get(ev.get("trigger_message_id"))
+                ev["stale"] = not (
+                    current and bundle and trigger and isinstance(meta, dict)
+                    and meta.get("source_fingerprint", meta.get("fingerprint"))
+                    == bundle["source_fingerprint"]
+                    and policy
+                    and meta.get("policy_fingerprint") == policy
+                    and ev.get("origin_revision") == origin.get("revision")
+                    and ev.get("trigger_revision") == trigger["revision"])
                 if ev.get("loop_artifact_id") == r["artifact_id"] or (
                         ev.get("loop_artifact_id") is None
                         and ev.get("loop_origin_id") == r["message_id"]):
@@ -318,7 +432,7 @@ class View:
             # later transitions live in relation events.
             history = list(cand.get("history") or [])
             for ts, e in reversed(events):
-                if e.get("relation") in ("completion_report",
+                if not e["stale"] and e.get("relation") in ("completion_report",
                                          "cancellation_report"):
                     history.append({
                         "state": "RESOLUTION_CANDIDATE", "at": ts,
@@ -326,13 +440,15 @@ class View:
                             e.get("trigger_message_id"),
                         "relation": e.get("relation")})
             cand["history"] = history
-            cand["effective_state"] = (
+            cand["current"] = current
+            cand["effective_state"] = "STALE" if not current else (
                 "RESOLUTION_CANDIDATE"
-                if any(e.get("relation") in ("completion_report",
+                if any(not e["stale"] and e.get("relation") in ("completion_report",
                                              "cancellation_report")
                        for _, e in events)
                 else cand.get("state"))
             cand["artifact_id"] = r["artifact_id"]
+            cand["linked_requests"] = self._loop_links(pid, loop_id=r["artifact_id"])
             items.append(cand)
         return {"items": items, "scope": "loop_candidates"}
 
@@ -363,7 +479,9 @@ class View:
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
+            "comparison": lambda: self._comparison(project, message_id),
             "loops": lambda: self._loops(project, limit),
+            "operations": lambda: self._operations(project, limit, cursor),
         }
         if kind not in handlers:
             raise ValueError("unknown_view")
@@ -385,9 +503,15 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "loops"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control"):
         sub = subs.add_parser(kind)
-        if kind == "requests":
+        if kind == "control":
+            actions = sub.add_subparsers(dest="action", required=True)
+            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary")]
+            for write in parsers:
+                write.add_argument("--confirm-human", action="store_true", required=True,
+                                   help="Queue an exact human-approved operation from JSON stdin.")
+        elif kind == "requests":
             actions = sub.add_subparsers(dest="action", required=True)
             parsers = [actions.add_parser(action) for action in ("list", "show", "create", "update")]
             parsers[0].add_argument("--status", choices=requests.STATUSES)
@@ -399,7 +523,7 @@ def _parser():
             parsers = [sub]
         for index, child in enumerate(parsers):
             child.add_argument("--project", type=int, required=kind != "status")
-            if kind not in ("evidence", "receipt") and (kind != "requests" or index == 0):
+            if kind not in ("evidence", "receipt", "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 child.add_argument("--cursor")
         if kind == "search":
@@ -407,7 +531,7 @@ def _parser():
         if kind in ("search", "timeline", "thread", "candidates"):
             sub.add_argument("--since", type=int, help="Inclusive epoch seconds; excludes unknown posting times")
             sub.add_argument("--until", type=int, help="Inclusive epoch seconds")
-        if kind in ("evidence", "thread", "attachments", "semantic"):
+        if kind in ("evidence", "thread", "attachments", "semantic", "comparison"):
             sub.add_argument("--message-id", type=int, required=True)
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)
@@ -423,11 +547,14 @@ def main(argv=None):
     view = None
     try:
         view = View(snapshot)  # Gate commands on an upgraded, published snapshot; never open the live writer DB.
-        if action in ("create", "update"):
+        if action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))
             if not isinstance(req, dict) or req.keys() & {"cmd", "version", "project_id", "human_confirmed"}:
                 raise ValueError("bad_command_envelope")
-            req = {**req, "cmd": "request." + action, "version": 1,
+            command = ("ops." if args["kind"] == "control" else "request.") + action
+            if command.startswith("request.") and "reason" not in req:
+                raise ValueError("reason_required")
+            req = {**req, "cmd": command, "version": 1,
                    "project_id": args["project"], "human_confirmed": confirmed}
             result = requests.enqueue(req, cmd_dir)
         else:
