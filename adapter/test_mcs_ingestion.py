@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import time
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -190,12 +191,13 @@ def test_attachment_destination_uses_ledger_identity(tmp_path, monkeypatch):
         download=lambda url, dest: seen.append(dest) or {"bytes": 1, "sha256": "x"}
     )
     db = SimpleNamespace(
-        attachments_due=lambda limit: [
+        attachments_due=lambda limit, priority_mids=None: [
             {"attachment_id": 1, "file_id": "same", "url": "u1"},
             {"attachment_id": 2, "file_id": "same", "url": "u2"},
         ],
         attachment_saved=lambda *a: None,
         attachment_failed=lambda *a: None,
+        pending_notify_message_ids=lambda: [],
     )
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
     run_check.stage_attachments(adapter, db, {"errors": []},
@@ -1537,4 +1539,112 @@ def test_discovery_repairs_archived_without_work(tmp_path):
     # pending deep walk already covers patient 4 — no duplicate head
     assert db.job_pending("history_head", 4) is None
     assert json.loads(db.job_pending("history", 4)["payload"])["page"] == 2
+    db.close()
+
+
+def test_notify_pending_attachments_jump_download_queue(tmp_path,
+                                                        monkeypatch):
+    """Attachments referenced by an unsent notify event must be
+    downloaded before older backlog — otherwise flush() posts the event
+    without files and an accepted event never re-sends them."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(1))
+    # deep backlog of older pending attachments
+    for i in range(10):
+        db.db.execute(
+            "INSERT INTO attachments(message_id,file_id,name,url,"
+            "created_at) VALUES(?,?,?,?,?)",
+            (100 + i, f"old{i}", "old.bin", "u_old", time.time()))
+    # the newly-notified message's attachment sits at the back (FIFO)
+    db.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,url,"
+        "created_at) VALUES(?,?,?,?,?)",
+        (999, "new", "new.bin", "u_new", time.time()))
+    db.db.commit()
+    db.outbox_add("new_messages", 1, {"message_ids": [999]})
+
+    # priority ordering: the notify-referenced attachment comes first
+    due = db.attachments_due(
+        limit=30, priority_mids=db.pending_notify_message_ids())
+    assert due[0]["message_id"] == 999
+    assert [r["message_id"] for r in db.attachments_due(limit=30)][0] == 100
+
+    # accepted events no longer claim priority — queue falls back to FIFO
+    db.outbox_mark(db.db.execute(
+        "SELECT event_id FROM notify_outbox").fetchone()[0], "accepted")
+    assert db.pending_notify_message_ids() == []
+    assert db.attachments_due(limit=30)[0]["message_id"] == 100
+
+    # stage-level: re-queue the event — its attachment is downloaded
+    # inside the same tick, before flush()
+    db.db.execute("UPDATE notify_outbox SET state='pending'")
+    db.db.commit()
+    seen = []
+    adapter = SimpleNamespace(
+        download=lambda url, dest: seen.append(url)
+        or {"bytes": 1, "sha256": "x"})
+    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    run_check.stage_attachments(adapter, db, {"errors": []},
+                                time.monotonic() + 60)
+    assert seen[0] == "u_new"
+    db.close()
+
+
+def _http_error(code):
+    return urllib.error.HTTPError("u", code, "err", {}, None)
+
+
+def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
+    """A definitive rejection of the file-bearing post (Discord 4xx or
+    a local body-build error) must not sink the notification — drop the
+    files and retry the chunk text-only."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(70))
+    f = tmp_path / "f.txt"
+    f.write_bytes(b"x")
+    db.outbox_add("new_messages", 70, {"message_ids": [1]})
+    monkeypatch.setattr(notifier, "_token", lambda: "t")
+    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
+    monkeypatch.setattr(notifier, "_format_event",
+                        lambda l, ev: ("body text", [("f.txt", str(f))]))
+    calls = []
+
+    def fake_post(token, channel, content, files=None):
+        calls.append(bool(files))
+        if files:
+            raise _http_error(403)
+        return "mid1"
+
+    monkeypatch.setattr(notifier, "_post", fake_post)
+    res = notifier.flush(db)
+    assert res["sent"] == 1
+    assert calls == [True, False]
+    assert db.db.execute(
+        "SELECT state FROM notify_outbox").fetchone()[0] == "accepted"
+    db.close()
+
+
+def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
+    """5xx/network/429 and post-send ValueError mean acceptance is
+    unknown — retrying text-only could duplicate, so no fallback."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(71))
+    f = tmp_path / "f.txt"
+    f.write_bytes(b"x")
+    db.outbox_add("new_messages", 71, {"message_ids": [1]})
+    db.outbox_add("new_messages", 71, {"message_ids": [2]})
+    monkeypatch.setattr(notifier, "_token", lambda: "t")
+    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
+    monkeypatch.setattr(notifier, "_format_event",
+                        lambda l, ev: ("body text", [("f.txt", str(f))]))
+    calls = []
+
+    def fake_post(token, channel, content, files=None):
+        calls.append(bool(files))
+        raise _http_error(500)
+
+    monkeypatch.setattr(notifier, "_post", fake_post)
+    res = notifier.flush(db)
+    assert res["sent"] == 0 and res["failed"] == 2
+    assert calls == [True, True]  # never retried without files
     db.close()

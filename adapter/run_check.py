@@ -233,7 +233,11 @@ def stage_backfill(adapter, ledger, result, deadline, run_id):
 # ---------- stage: attachments ----------
 
 def stage_attachments(adapter, ledger, result, deadline):
-    for a in ledger.attachments_due(limit=30):
+    # attachments referenced by queued notify events jump the queue —
+    # otherwise a deep backlog leaves new-message files undownloaded
+    # when flush() posts the event, and accepted events never re-send
+    priority = ledger.pending_notify_message_ids()
+    for a in ledger.attachments_due(limit=30, priority_mids=priority):
         if time.monotonic() > deadline - 20:
             break
         dest = os.path.join(ATTACH_DIR, str(a["attachment_id"]))

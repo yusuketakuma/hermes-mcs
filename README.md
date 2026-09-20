@@ -25,7 +25,9 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
                               完了後のみ確定、通知・既読化なし)
 - `adapter/notifier.py`     — Discord outbox drain (2段構成:構造化→原文、
                               chunk receipt+送信表現fingerprint、429対応、宛先固定、
-                              DL済み添付を multipart で同梱 ≤10件/24MiB)
+                              DL済み添付を multipart で同梱 ≤10件/24MiB。
+                              未送信イベント参照の添付はDLキューで優先化され、
+                              添付投稿の確定的拒否時は本文のみにフォールバック)
 - `chrome-profile/`         — 専用 Chrome user-data-dir (CDP :9333)
 - `data/ledger.db`          — 取得済みレコード (WAL)
 - `data/snapshots/`         — read-only スナップショット (CCO/コンテナ向け、

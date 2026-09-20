@@ -1038,13 +1038,44 @@ class Ledger:
         """, (time.time() + retry_in, kind[:80], max_attempts, attachment_id))
         self.db.commit()
 
-    def attachments_due(self, limit: int = 50) -> list:
-        return self.db.execute("""
+    def attachments_due(self, limit: int = 50,
+                        priority_mids: list[int] | None = None) -> list:
+        """priority_mids: message_ids whose attachments jump the queue —
+        unsent notify events need their files before flush() posts."""
+        prio = [m for m in (priority_mids or []) if type(m) is int][:500]
+        if not prio:
+            return self.db.execute("""
+              SELECT attachment_id,message_id,file_id,name,url FROM attachments
+              WHERE state='pending' AND url != ''
+                AND COALESCE(next_try,0) <= ?
+              ORDER BY attachment_id LIMIT ?
+            """, (time.time(), limit)).fetchall()
+        ph = ",".join("?" * len(prio))
+        return self.db.execute(f"""
           SELECT attachment_id,message_id,file_id,name,url FROM attachments
           WHERE state='pending' AND url != ''
             AND COALESCE(next_try,0) <= ?
-          ORDER BY attachment_id LIMIT ?
-        """, (time.time(), limit)).fetchall()
+          ORDER BY CASE WHEN message_id IN ({ph}) THEN 0 ELSE 1 END,
+            attachment_id LIMIT ?
+        """, (time.time(), *prio, limit)).fetchall()
+
+    def pending_notify_message_ids(self) -> list[int]:
+        """message_ids referenced by unsent notify events — their
+        attachments jump the download queue so flush() can attach them."""
+        out = []
+        for r in self.db.execute("""
+          SELECT payload FROM notify_outbox
+          WHERE kind='new_messages' AND state IN ('pending','failed')
+            AND next_try IS NOT NULL
+        """):
+            try:
+                p = json.loads(r["payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            ids = p.get("message_ids") if isinstance(p, dict) else None
+            if isinstance(ids, list):
+                out.extend(m for m in ids if type(m) is int)
+        return out
 
     def pending_attachments(self) -> list:
         return self.db.execute("""

@@ -508,14 +508,36 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             if not start:
                 ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
             mid = ""
+            post_files = files
             for i in range(start, len(chunks)):
                 if deadline is not None and time.monotonic() >= deadline:
                     res["skipped"] += len(due) - event_index
                     return res
                 # files ride the FIRST post only; on resume (start>0) they
-                # were already delivered with chunk 0
-                mid = _post(token, channel, chunks[i],
-                            files if i == 0 else None)
+                # were already delivered with chunk 0. A definitive
+                # rejection of the file-bearing post (local size/format
+                # error, or Discord 4xx — never 429/5xx/network where
+                # acceptance is unknown) drops the files and retries
+                # text-only so a bad attachment can never sink the
+                # notification itself
+                try:
+                    mid = _post(token, channel, chunks[i],
+                                post_files if i == 0 else None)
+                except ValueError as e:
+                    # only errors raised while BUILDING the body — a
+                    # post-send ValueError (receipt_invalid) may mean
+                    # the message already reached Discord
+                    if (i != 0 or not post_files or str(e) not in
+                            ("file_too_large", "multipart_too_large")):
+                        raise
+                    post_files = None
+                    mid = _post(token, channel, chunks[i])
+                except urllib.error.HTTPError as e:
+                    if (i != 0 or not post_files or e.code == 429
+                            or e.code < 400 or e.code >= 500):
+                        raise
+                    post_files = None
+                    mid = _post(token, channel, chunks[i])
                 sent_ids.append(mid)
                 ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                        fingerprint)
