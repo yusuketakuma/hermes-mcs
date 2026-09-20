@@ -8,12 +8,12 @@ Recorded: 2026-09-20
 | WP | 内容 | 実装 |
 |---|---|---|
 | WP-00/01 | config契約・データ契約 | `adapter/semantic.py`: `semantic_config()`（fail-closed検証）、bundle/Fact/Claim/Audit validators・fingerprint |
-| WP-02 | durable job生成 | `ledger._semantic_seed_tx` — `save_patient`/`save_messages`/`save_thread_replies` の `semantic=` flagで通知意図と同一Tx内に `fetch_jobs(kind='semantic')` を生成。通知経路seedは `payload.eligible=true` を持ち、mergeで消えない（drain優先度用） |
+| WP-02 | durable job生成 | `ledger._semantic_seed_tx` — `save_patient`/`save_messages`/`save_thread_replies` の `semantic=` flagで通知意図と同一Tx内に `fetch_jobs(kind='semantic')` を生成。**新規保存された全messageが評価対象**（既読到着・backfill・reply-job分を含む — 通知資格とは分離、INV-20）。通知経路seedは `payload.eligible=true` を持ち、mergeで消えない（drain優先度用） |
 | WP-03 | Jev client | `adapter/semantic_jev.py`: `JevClient`（固定model `jev-1.13.0`、注入可能 `post_fn`）、P01–P12 proposition registry、`validate_answers` 厳格検証 |
 | WP-04 | fact/evidence候補 + summary | `semantic.extract_facts`（local LLM + quote→codepoint span照合）、`summarize`（共通Claim schema） |
 | WP-05 | claim監査・coverage監査・repair | `audit_code`（参照整合性・span一致・coverage）+ `audit_claims`（Jev per-claim choice）+ 1回限りrepair |
 | WP-06 | Open Loop候補 | `update_loops` — `loop_candidate`/`loop_event` artifacts。正式requestへの昇格は既存 `mcs_requests` の human_confirmed 経路のみ |
-| WP-07 | renderer + degraded notice | `render_notice`（§20.1形式）/ `render_degraded`（§19.3 minimal）。shadowでは `notify_plan` artifactのみ、enforceのみ outbox `semantic_notice` |
+| WP-07 | renderer + degraded notice | `render_notice`（§20.1形式、複数対象のgenerationは `要約対象` 行で当該postを明示）/ `render_degraded`（§19.3 minimal）。shadowでは `notify_plan` artifactのみ、enforceのみ outbox `semantic_notice`（**監査PASS対象ごとに1件**、per-target delivery_key で冪等） |
 | WP-08 | 評価scaffold | `semantic.py --status`（job集計・audit status分布・loop候補数・日次Jev使用量） |
 | WP-09 | runbook/rollback | 本ドキュメント §6–8 |
 
@@ -39,13 +39,13 @@ Recorded: 2026-09-20
 | INV-06 同一Tx | `_semantic_seed_tx` は save_* の `with self.db` 内で実行 |
 | INV-07 証拠必須 | `audit_code`: reported_fact claimの `evidence_refs` 空 → `claim_without_evidence`、span不一致→`evidence_span_mismatch`、revision差→`evidence_revision_mismatch` |
 | INV-08 未検証の提示禁止 | unverified quoteは `validation_status='unverified'`（span無し=裏付け無しとして記録）。audit PASS外は通知に載らない |
-| INV-10 repair 1回限り | `semantic_audit.meta.repair_count` が世代を跨いで永続化 — 再起動後も1回を超えない |
+| INV-10 repair 1回限り | `semantic_audit.meta.repair_count` が世代を跨いで永続化 — 再起動後も1回を超えない。job途中defer時も完了済み対象のsummary+auditを先行commitするため再評価・再repairにリセットされない |
 | INV-11/19 loop→request自動化禁止 | `loop_candidate` は advisory artifactのみ。正式requestは `mcs_requests` の既存人為確認経路 |
 | INV-13 local LLM隔離 | `llm_chat` は loopback固定・`no_proxy_opener(NoRedirect)`・tool無し |
 | INV-14 確定payload | `semantic_notice` payloadに最終テキストを凍結格納。senderは再生成しない |
 | INV-15 fingerprint | `bundle_fingerprint` = canonical(member revisions + model + registry + schema + policy)。`_current` はfp一致artifactのみ現行扱い |
 | INV-16 shadow非干渉 | artifact kindは `semantic_*`/`loop_*`/`notify_plan` のみ — 既存readerのkind選択に混入しない。outboxはenforceのみ |
-| INV-20 通知資格と起点の分離 | `semantic_notice` のenqueue条件は `_notify_src_event` が outbox 内の保存済み `new_messages` event被覆を確認すること（§20.3「保存済み起点eventから決める」）。history_import／replay等の起点を持たないjobはartifactのみ。送信時にもnotifierが `src_event_id` の生存・非suppressを再検査 |
+| INV-20 通知資格と起点の分離 | `semantic_notice` のenqueue条件は `_notify_src_event` が**対象messageごとに** outbox 内の保存済み `new_messages` event被覆を確認すること（§20.3「保存済み起点eventから決める」）。history_import／replay・既読到着のみで保存されたmessageはartifactのみ。送信時にもnotifierが `src_event_id` の生存・非suppressを再検査 |
 | INV-21 stale昇格禁止 | commit直前にbundle fp再計算+job行生存確認。不一致→全出力 `STALE` 記録+job defer（再評価） |
 
 ## 4. AT対応テストマップ
@@ -76,14 +76,15 @@ Recorded: 2026-09-20
 | INV-14 | `test_notifier_semantic_notice_render` |
 | INV-15 | `test_fingerprint_covers_revisions` |
 | INV-16 | `test_shadow_full_pipeline`（全kind存在+outbox未接触） |
+| — 第2レビュー修正 | `test_enforce_enqueues_notice_per_target`（複数対象のclaimが全て届く）/ `test_backfill_seeds_read_arrivals` / `test_reply_save_seeds_read_replies`（既読・import分も全coverage対象）/ `test_oversized_response_fails_fast`（非retryable即中断）/ `test_quantity_untraced_needs_quote`（AT-025/026厳格化）/ `test_deferred_run_preserves_completed_results`（defer時の部分commit+repair budget永続化）/ `test_project_filter_defers_not_starves`（queue公平性）/ `test_loop_candidate_records_history`（§17.3 history導出+occurred_at） |
 
 ## 5. 検証証拠
 
 | 検証 | 結果 |
 |---|---|
-| 全テスト | **138 passed**（`pytest test_mcs_semantic.py test_mcs_ingestion.py test_mcs_features.py -q`、うちsemantic系50件） |
-| lint | 新規コード0件（残7件は全てbaseline E702/F401 — `git stash` で baseline=7 errors を対照確認済み） |
-| OFF regression | `mode:"off"` で job生成0・drain即return・既存119件中88件のPhase R系テスト全パス |
+| 全テスト | **145 passed**（`pytest test_mcs_semantic.py test_mcs_ingestion.py test_mcs_features.py -q`、うちsemantic系57件） |
+| lint | 新規コード0件（16件全てbaseline E702/E741/F401 — `git stash` で baseline と完全一致を確認済み） |
+| OFF regression | `mode:"off"` で job生成0・drain即return・非semantic系88件のPhase R系テスト全パス |
 
 ## 6. 未実施・前提（正直な記録）
 

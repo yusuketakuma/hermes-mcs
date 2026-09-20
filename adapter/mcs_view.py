@@ -291,9 +291,9 @@ class View:
                 continue
             if not isinstance(cand, dict):
                 continue
-            events = []
+            events = []                       # (created_at, event)
             for e in self.db.execute(
-                    "SELECT content FROM artifacts "
+                    "SELECT content,created_at FROM artifacts "
                     "WHERE kind='loop_event' AND project_id=? "
                     "ORDER BY artifact_id DESC LIMIT 50", (pid,)):
                 try:
@@ -309,16 +309,28 @@ class View:
                 if ev.get("loop_artifact_id") == r["artifact_id"] or (
                         ev.get("loop_artifact_id") is None
                         and ev.get("loop_origin_id") == r["message_id"]):
-                    events.append(ev)
-            cand["relation_events"] = events[:5]
+                    events.append((e["created_at"], ev))
+            cand["relation_events"] = [ev for _, ev in events[:5]]
             # a completion/cancellation report relation promotes the
             # candidate to RESOLUTION_CANDIDATE for display — the stored
-            # artifact stays immutable (§17.3)
+            # artifact stays immutable (§17.3). History is derived the
+            # same way: the stored record only logs its creation entry,
+            # later transitions live in relation events.
+            history = list(cand.get("history") or [])
+            for ts, e in reversed(events):
+                if e.get("relation") in ("completion_report",
+                                         "cancellation_report"):
+                    history.append({
+                        "state": "RESOLUTION_CANDIDATE", "at": ts,
+                        "trigger_message_id":
+                            e.get("trigger_message_id"),
+                        "relation": e.get("relation")})
+            cand["history"] = history
             cand["effective_state"] = (
                 "RESOLUTION_CANDIDATE"
                 if any(e.get("relation") in ("completion_report",
                                              "cancellation_report")
-                       for e in events)
+                       for _, e in events)
                 else cand.get("state"))
             cand["artifact_id"] = r["artifact_id"]
             items.append(cand)

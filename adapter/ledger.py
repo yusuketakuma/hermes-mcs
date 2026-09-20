@@ -528,6 +528,12 @@ class Ledger:
                                                {"source": notify.get(
                                                    "source"),
                                                 "event_id": ev_id})
+            elif semantic and not self.is_archived(p.project_id):
+                # notify-less path: same coverage rule as save_messages —
+                # every newly stored message is evaluation input with no
+                # notification eligibility (INV-20)
+                self._semantic_seed_tx(p.project_id, new_ids,
+                                       {"source": "history_import"})
         return new_ids
 
     def _unnotified(self, ids: list) -> list:
@@ -714,17 +720,29 @@ class Ledger:
                     t.message_id for m in msgs for t in m.replies
                     if t.is_unread]
                 notify_ids = self._unnotified(fresh_unread)
+                ev_id = None
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
                     ev_id = self._outbox_insert("new_messages",
                                                 project_id, pl)
                     self._mark_notified(notify_ids, now)
-                    if semantic:
-                        self._semantic_seed_tx(project_id, notify_ids,
-                                               {"source": notify.get(
-                                                   "source"),
-                                                "event_id": ev_id})
+                if semantic:
+                    # semantic coverage is wider than notification
+                    # coverage: EVERY newly stored message — including
+                    # posts that arrived already-read, which are exactly
+                    # what this path exists to catch — is evaluation
+                    # input. Notification eligibility stays separate,
+                    # derived at drain time from stored origin events
+                    # (INV-20): a read-arrival seed can produce
+                    # artifacts but never a notice.
+                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    if seed_ids:
+                        origin = {"source": notify.get("source")}
+                        if ev_id is not None:
+                            origin["event_id"] = ev_id
+                        self._semantic_seed_tx(project_id, seed_ids,
+                                               origin)
             elif semantic and project_id \
                     and not self.is_archived(project_id):
                 # history-import path (no notify intent): every newly
@@ -770,17 +788,24 @@ class Ledger:
             if notify and not self.is_archived(project_id):
                 notify_ids = self._unnotified(
                     [m.message_id for m in replies if m.is_unread])
+                ev_id = None
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
                     ev_id = self._outbox_insert("new_messages",
                                                 project_id, pl)
                     self._mark_notified(notify_ids, now)
-                    if semantic:
-                        self._semantic_seed_tx(project_id, notify_ids,
-                                               {"source": notify.get(
-                                                   "source"),
-                                                "event_id": ev_id})
+                if semantic:
+                    # widened like save_messages: a reply persisted
+                    # already-read is still evaluation input — its
+                    # facts and open-loop candidates are real findings
+                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    if seed_ids:
+                        origin = {"source": notify.get("source")}
+                        if ev_id is not None:
+                            origin["event_id"] = ev_id
+                        self._semantic_seed_tx(project_id, seed_ids,
+                                               origin)
         return new_ids
 
     def _upsert_message(self, m) -> int:

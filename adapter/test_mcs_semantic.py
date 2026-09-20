@@ -19,7 +19,7 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
   INV-10  repair at most once     -> test_repair_once_then_needs_review
   INV-11  loops never auto-request-> test_loop_candidate_no_request_write
   INV-15  fingerprint discipline  -> test_fingerprint_covers_revisions
-  INV-16  shadow artifact kinds   -> test_shadow_writes_shadow_kinds
+  INV-16  shadow artifact kinds   -> test_shadow_full_pipeline
   AT-065  snapshot readers intact -> test_snapshot_view_semantic
 """
 import json
@@ -347,7 +347,7 @@ def test_off_no_seed_no_drain(tmp_path):
     out = semantic.run_due(db, {"semantic": {"mode": "off"}}, res,
                            time.monotonic() + 60)
     assert out == {"mode": "off", "done": 0, "deferred": 0,
-                   "failed": 0, "left": None}
+                   "failed": 0, "left": None, "budget_exhausted": False}
     assert db.job_pending("semantic", 1, 1)["state"] == "pending"
     db.close()
 
@@ -383,7 +383,11 @@ def test_shadow_full_pipeline(tmp_path):
     db.close()
 
 
-def test_enforce_enqueues_notice_once(tmp_path):
+def test_enforce_enqueues_notice_per_target(tmp_path):
+    """A PASS generation covering two posts must emit one notice PER
+    audited target — a shared (root, fp) delivery key used to dedup
+    every later target's claims out of the notice entirely, while the
+    header still claimed them."""
     db = _seeded(tmp_path)
     res = {"errors": []}
     out = semantic.run_due(db, _cfg("enforce"), res,
@@ -392,15 +396,20 @@ def test_enforce_enqueues_notice_once(tmp_path):
     assert out["done"] == 1
     rows = db.db.execute("SELECT payload FROM notify_outbox "
                          "WHERE kind='semantic_notice'").fetchall()
-    assert len(rows) == 1
-    pl = json.loads(rows[0]["payload"])
-    assert "要約" in pl["text"] and "medical-care.net" in pl["text"]
-    # replay same generation -> deduped delivery key, no second intent
+    assert len(rows) == 2
+    pls = [json.loads(r["payload"]) for r in rows]
+    assert {p["target_message_id"] for p in pls} == {1, 2}
+    assert len({p["delivery_key"] for p in pls}) == 2
+    for p in pls:
+        # multi-target notices name which covered post they report on
+        assert "要約対象" in p["text"]
+        assert "要約" in p["text"] and "medical-care.net" in p["text"]
+    # replay same generation -> deduped delivery keys, no second intents
     db.semantic_seed(1, [1], {"origin": "replay"})
     semantic.run_due(db, _cfg("enforce"), res, time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.db.execute("SELECT count(*) FROM notify_outbox "
-                         "WHERE kind='semantic_notice'").fetchone()[0] == 1
+                         "WHERE kind='semantic_notice'").fetchone()[0] == 2
     db.close()
 
 
@@ -555,13 +564,13 @@ def test_evidence_span_locate():
     assert semantic._locate_quote(BODY, "カロナール300mg") == (4, 14)
     assert semantic._locate_quote(BODY, "存在しない文") is None
     assert semantic._locate_quote("aa aa", "aa") is None   # ambiguous
-    f, ok = semantic.extract_facts(
+    f, ok, dropped = semantic.extract_facts(
         lambda p: json.dumps({"facts": [{
             "statement": "x", "kind": "other", "status": "not_stated",
             "polarity": "affirmed", "time_text": None, "quantity": None,
             "evidence_quote": "存在しない引用"}]}),
         {"message_id": 1, "revision": "r", "body_original": BODY})
-    assert ok
+    assert ok and dropped == 0
     assert f[0]["validation_status"] == "unverified"
     assert f[0]["evidence_refs"] == []
 
@@ -575,6 +584,7 @@ def test_daily_budget_exhausted(tmp_path):
                            time.monotonic() + 60,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 0
+    assert out["budget_exhausted"] is True
     assert "semantic: daily_budget_exhausted" in res["errors"]
     db.close()
 
@@ -954,7 +964,7 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
                      jev_client=_FakeJev(), llm_fn=_llm)
     n = db.db.execute("SELECT COUNT(*) c FROM notify_outbox "
                       "WHERE kind='semantic_notice'").fetchone()["c"]
-    assert n == 1
+    assert n == 2          # one queued intent per audited target
     import notifier
     monkeypatch.setattr(
         notifier, "_config",
@@ -1078,7 +1088,8 @@ def test_replay_of_imported_message_no_notice(tmp_path):
 def test_arrival_merge_keeps_eligibility(tmp_path):
     """A pending arrival-seeded job merged with a history re-seed must
     still notify — eligibility lives in the stored origin event, not
-    the overwritten payload origin."""
+    the overwritten payload origin. Per-target: the history-merged
+    post itself produces artifacts but no notice (INV-20)."""
     db = _seeded(tmp_path)   # notify-path seed for messages 1,2
     db.save_messages([_message(3, parent=1, body="取り込み追加分")],
                      project_id=1, semantic=True)   # history merge
@@ -1090,10 +1101,15 @@ def test_arrival_merge_keeps_eligibility(tmp_path):
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
-    ev = db.db.execute("SELECT payload FROM notify_outbox "
-                       "WHERE kind='semantic_notice'").fetchone()
-    assert ev is not None
-    assert json.loads(ev["payload"])["src_event_id"] is not None
+    rows = db.db.execute("SELECT payload FROM notify_outbox "
+                         "WHERE kind='semantic_notice'").fetchall()
+    notified = {json.loads(r["payload"])["target_message_id"]
+                for r in rows}
+    assert notified == {1, 2}   # only the arrival-covered posts notify
+    assert all(json.loads(r["payload"])["src_event_id"] is not None
+               for r in rows)
+    # the merged history post was still fully evaluated
+    assert db.artifacts("semantic_audit", message_id=3)
     db.close()
 
 
@@ -1198,4 +1214,235 @@ def test_daily_budget_binds_inside_job(tmp_path):
     job = db.db.execute("SELECT state,attempts FROM fetch_jobs "
                         "WHERE kind='semantic'").fetchone()
     assert job["state"] == "pending"        # audit unfinished -> retry
+    db.close()
+
+
+# ---------- review-fix regressions (second pass) ----------
+
+def test_oversized_response_fails_fast():
+    """A deterministic non-retryable failure (response_too_large) must
+    stop after ONE post — looping the identical request would only
+    burn the daily budget on an input that can never succeed."""
+    calls = []
+
+    def post(body, timeout):
+        calls.append(1)
+        return 200, {}, b"x" * (jev.MAX_RESPONSE_BYTES + 1)
+
+    c = jev.JevClient(api_key="k", post_fn=post, max_attempts=3)
+    with pytest.raises(jev.JevError) as ei:
+        c.evaluate({}, {"a": jev.noul_question("i", "t", "f")},
+                   time.monotonic() + 30)
+    assert ei.value.detail == "response_too_large"
+    assert len(calls) == 1                  # one request, not three
+
+
+def test_backfill_seeds_read_arrivals(tmp_path):
+    """WP-02 coverage: the notify path must seed EVERY newly stored
+    message — including posts that arrived already-read, which are
+    exactly what backfill exists to catch. Notification eligibility
+    stays separate (INV-20): the read-arrival produces artifacts but
+    never a notice."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    new = db.save_messages(
+        [_message(60, unread=False), _message(61, unread=True)],
+        project_id=1, notify={"source": "history"}, semantic=True)
+    assert set(new) == {60, 61}
+    covered = set()
+    for r in db.db.execute(
+            "SELECT payload FROM fetch_jobs WHERE kind='semantic'"):
+        covered.update(json.loads(r["payload"])["targets"])
+    assert covered == {60, 61}
+    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 2
+    assert db.artifacts("semantic_audit", message_id=60)
+    notified = {json.loads(r["payload"])["target_message_id"]
+                for r in db.db.execute(
+                    "SELECT payload FROM notify_outbox "
+                    "WHERE kind='semantic_notice'")}
+    assert notified == {61}     # only the arrival-covered post notifies
+    db.close()
+
+
+def test_reply_save_seeds_read_replies(tmp_path):
+    """The reply-job path has the same widened coverage — a reply
+    persisted already-read is still evaluation input."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(70)], project_id=1)
+    db.save_thread_replies(
+        [_message(71, parent=70, unread=False),
+         _message(72, parent=70, unread=True)],
+        project_id=1, notify={"source": "reply_job"}, semantic=True)
+    covered = set()
+    for r in db.db.execute(
+            "SELECT payload FROM fetch_jobs WHERE kind='semantic'"):
+        covered.update(json.loads(r["payload"])["targets"])
+    assert covered == {71, 72}
+    db.close()
+
+
+def test_quantity_untraced_needs_quote():
+    """AT-025/026: a quantity that appears only ELSEWHERE in the post —
+    not inside the fact's own evidence quote — is untraced, even
+    though it exists verbatim in the body."""
+    body = "血圧は120を記録。カロナール300mgを1日3回に変更します。"
+    member = {"message_id": 1, "revision": "r1", "body_original": body}
+    quote = "血圧は120を記録"
+    s = body.index(quote)
+    facts = [{
+        "fact_id": "fact_1_0", "kind": "observation",
+        "statement": "血圧値の記載", "subject_ref": "m1",
+        "drug_ref": None, "status": "not_stated", "polarity": "affirmed",
+        "quantity": "300mg", "time_text": None, "occurred_at": None,
+        "evidence_refs": ["ev_1_0"], "validation_status": "candidate",
+        "_evidence": {"evidence_id": "ev_1_0", "message_id": 1,
+                      "revision_id": "r1", "start_codepoint": s,
+                      "end_codepoint": s + len(quote),
+                      "quote": quote}}]
+    findings = semantic.audit_code(
+        {"members": [member]}, facts, {"claims": [], "limitations": []})
+    assert any(f["code"] == "quantity_untraced" for f in findings)
+    # a quantity inside its own quote still traces fine
+    quote2 = "カロナール300mgを1日3回に変更"
+    s = body.index(quote2)
+    facts[0]["_evidence"]["quote"] = quote2
+    facts[0]["_evidence"]["start_codepoint"] = s
+    facts[0]["_evidence"]["end_codepoint"] = s + len(quote2)
+    findings = semantic.audit_code(
+        {"members": [member]}, facts, {"claims": [], "limitations": []})
+    assert not any(f["code"] == "quantity_untraced" for f in findings)
+
+
+def test_deferred_run_preserves_completed_results(tmp_path):
+    """A mid-job deferral must still commit each completed target's
+    outcome — otherwise the next run re-spends Jev calls AND silently
+    resets the one-shot repair budget, which lives on the audit
+    artifact (INV-10, §18.2)."""
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1)]
+    p.messages[0].replies = [_message(2, parent=1, body="別の本文")]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    fixed = {"v": False}
+    calls = {"bad": 0, "good": 0}
+
+    def llm(prompt):
+        if "要約器" in prompt:
+            target = prompt.split("対象投稿:\n<<<\n")[1].split("\n>>>")[0]
+            if "別の本文" in target:
+                if not fixed["v"]:
+                    return None          # mid-2's writer is down
+                calls["good"] += 1
+                return _llm(prompt)
+            calls["bad"] += 1
+            # reported_fact with no evidence -> repair -> still bad
+            return json.dumps({"claims": [{
+                "section": "medication", "text": "無根拠の断定",
+                "claim_kind": "reported_fact", "fact_refs": []}],
+                "limitations": []})
+        return _llm(prompt)
+
+    res = {"errors": []}
+    out = semantic.run_due(db, _cfg("enforce"), res,
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=llm)
+    assert out["deferred"] == 1
+    audits = db.artifacts("semantic_audit", message_id=1)
+    assert len(audits) == 1
+    meta = json.loads(audits[0]["meta"])
+    assert meta["audit_status"] == "NEEDS_REVIEW"
+    assert meta["repair_count"] == 1      # budget spent, durably
+    # writer back -> rerun completes WITHOUT re-auditing mid-1
+    fixed["v"] = True
+    db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                  "WHERE kind='semantic'")
+    db.db.commit()
+    out2 = semantic.run_due(db, _cfg("enforce"), res,
+                            time.monotonic() + 300,
+                            jev_client=_FakeJev(), llm_fn=llm)
+    assert out2["done"] == 1
+    assert calls["bad"] == 2   # initial + one repair, never re-run
+    assert len(db.artifacts("semantic_audit", message_id=1)) == 1
+    assert len(db.artifacts("semantic_summary", message_id=1)) == 1
+    db.close()
+
+
+def test_project_filter_defers_not_starves(tmp_path):
+    """Out-of-scope jobs must not occupy every drain window — they are
+    deferred so an in-scope job queued behind them still runs, while
+    staying pending for a later project_ids change."""
+    db = _ledger(tmp_path)
+    for pid in range(2, 8):            # 6 out-of-scope projects
+        px = _patient(db, pid=pid)
+        px.messages = [_message(pid * 100, pid=pid)]
+        db.save_patient(px, notify={"source": "unread"}, semantic=True)
+    p1 = _patient(db, pid=1)
+    p1.messages = [_message(100, pid=1)]
+    db.save_patient(p1, notify={"source": "unread"}, semantic=True)
+    cfg = _cfg("shadow", project_ids=[1])
+    res = {"errors": []}
+    # first window: the 4 lowest-id jobs are out of scope -> deferred
+    semantic.run_due(db, cfg, res, time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm, max_jobs=4)
+    out = semantic.run_due(db, cfg, res, time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm,
+                           max_jobs=4)
+    assert out["done"] == 1
+    row = db.db.execute(
+        "SELECT state FROM fetch_jobs WHERE kind='semantic' "
+        "AND project_id=1").fetchone()
+    assert row["state"] == "done"
+    left = db.db.execute(
+        "SELECT COUNT(*) c FROM fetch_jobs WHERE kind='semantic' "
+        "AND state='pending'").fetchone()["c"]
+    assert left == 6              # filtered jobs stay pending/resumable
+    db.close()
+
+
+def test_loop_candidate_records_history(tmp_path):
+    """A created candidate carries its PROPOSED history entry, the
+    snapshot view derives later transitions from relation events
+    (§17.3), and an already-absolute time_text populates occurred_at."""
+    db = _seeded(tmp_path)
+
+    def llm(prompt):
+        if "事実候補抽出器" in prompt:
+            return json.dumps({"facts": [{
+                "statement": "確認依頼が未回答", "kind": "pending_item",
+                "status": "not_stated", "polarity": "affirmed",
+                "time_text": "2026-09-20", "quantity": None,
+                "evidence_quote": "確認お願いします"}]})
+        return _llm(prompt)
+
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=llm)
+    assert out["done"] == 1
+    cands = db.artifacts("loop_candidate", project_id=1)
+    assert cands
+    cand = json.loads(cands[0]["content"])
+    assert cand["history"] and cand["history"][0]["state"] == "PROPOSED"
+    assert cand["history"][0]["trigger_message_id"] in (1, 2)
+    facts = json.loads(
+        db.artifacts("semantic_facts", message_id=1)[-1]["content"])
+    assert facts["facts"][0]["occurred_at"] == "2026-09-20"
+    # a completion_report relation derives the RESOLUTION_CANDIDATE
+    # transition in the view — the stored artifact stays immutable
+    db.artifact_add("loop_event", json.dumps({
+        "loop_artifact_id": cands[0]["artifact_id"],
+        "trigger_message_id": 2,
+        "relation": "completion_report"}), project_id=1, message_id=2)
+    snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
+                                   str(tmp_path / "snaps"))
+    view = mcs_view.View(snap)
+    res = view.read("loops", project=1)
+    item = next(i for i in res["items"]
+                if i["artifact_id"] == cands[0]["artifact_id"])
+    assert item["effective_state"] == "RESOLUTION_CANDIDATE"
+    assert [h["state"] for h in item["history"]] == [
+        "PROPOSED", "RESOLUTION_CANDIDATE"]
     db.close()

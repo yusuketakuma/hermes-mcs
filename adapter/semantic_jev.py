@@ -268,8 +268,12 @@ class JevClient:
                     else:
                         return validate_answers(parsed, questions,
                                                 self.model)
-            if attempt + 1 < self.max_attempts and last is not None \
-                    and last.retryable:
+            if last is not None and not last.retryable:
+                # deterministic failure (oversized/malformed response) —
+                # re-issuing the identical request can only burn budget;
+                # surface it to the job-level bound instead of looping
+                raise last
+            if attempt + 1 < self.max_attempts and last is not None:
                 backoff = min(2.0 ** attempt + random.uniform(0, 0.5),
                               max(0.0, deadline - time.monotonic()))
                 if backoff > 0:

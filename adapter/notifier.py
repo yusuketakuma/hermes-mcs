@@ -312,7 +312,12 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 "AND kind='new_messages'", (src,)).fetchone()
             if srow is None or srow["state"] == "suppressed":
                 raise _StaleSend("src_event_ineligible")
-            import semantic as _sem
+            try:
+                import semantic as _sem
+            except Exception:
+                # a queued intent whose renderer cannot load is parked,
+                # not dropped — flush() must keep serving other events
+                raise _DeferredSend("semantic_import_failed")
             b = _sem.thread_bundle(ledger, ev["project_id"], root)
             if b is None or b["source_fingerprint"] != fp:
                 raise _StaleSend("stale_generation")

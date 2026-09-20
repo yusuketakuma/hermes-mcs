@@ -35,6 +35,7 @@ generation (INV-10), Open Loop candidates never mutate formal requests
 publishing them (INV-15/21).
 """
 import argparse
+import http.client
 import json
 import math
 import os
@@ -322,7 +323,8 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
     try:
         with LLM_OPENER.open(req, timeout=timeout) as r:
             out = json.load(r)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+    except (OSError, urllib.error.URLError, json.JSONDecodeError,
+            http.client.HTTPException):
         return None
     try:
         text = out["choices"][0]["message"]["content"]
@@ -362,6 +364,21 @@ _FACT_PROMPT = """あなたは在宅医療チャット記録の事実候補抽�
 %s
 >>>
 JSON:"""
+
+
+def _iso_date(text: str) -> str | None:
+    """occurred_at only when the original expression already carries an
+    absolute date — relative/ambiguous text stays null and the raw
+    time_text preserves it (spec §15.2)."""
+    if not isinstance(text, str):
+        return None
+    m = re.match(r"^\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
+    if not m:
+        return None
+    y, mo, d = int(m[1]), int(m[2]), int(m[3])
+    if not (2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
 def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
@@ -405,27 +422,33 @@ def _chunks(text: str, size: int = 3000) -> list:
 
 
 def extract_facts(llm_fn, member: dict,
-                  deadline: float | None = None) -> tuple[list, bool]:
+                  deadline: float | None = None) -> tuple[list, bool, int]:
     """Fact candidates with verified evidence spans, extracted across
     the WHOLE body in bounded chunks — a long tail is never silently
-    dropped (§12.3, AT-017). Returns (facts, complete): complete=False
-    means the deadline hit mid-extraction OR a chunk's response was
-    missing/unparseable — the caller must defer; the member is NOT
-    'processed' and no partial artifact is recorded, so a failed chunk
-    can never silently narrow the extraction for this generation
-    (§16.2 chunk ledger). Unlocatable or ambiguous quotes stay
+    dropped (§12.3, AT-017). Returns (facts, complete, dropped):
+    complete=False means the deadline hit mid-extraction OR a chunk's
+    response was missing/unparseable — the caller must defer; the
+    member is NOT 'processed' and no partial artifact is recorded, so a
+    failed chunk can never silently narrow the extraction for this
+    generation (§16.2 chunk ledger). dropped counts valid items lost to
+    the fact cap so the artifact meta records the truncation instead of
+    hiding it (§16.2). Unlocatable or ambiguous quotes stay
     'unverified' — never silently promoted (INV-07/08)."""
     body = member["body_original"]
     facts = []
+    dropped = 0
     for ch in _chunks(body):
         if deadline is not None and time.monotonic() > deadline:
-            return facts, False
+            return facts, False, dropped
         raw = _json_block(llm_fn(_FACT_PROMPT % ch) or "")
         items = raw.get("facts") if isinstance(raw, dict) else None
         if not isinstance(items, list):
-            return facts, False
+            return facts, False, dropped
         for it in items:
-            if len(facts) >= 40 or not isinstance(it, dict):
+            if not isinstance(it, dict):
+                continue
+            if len(facts) >= 40:
+                dropped += 1
                 continue
             stmt = it.get("statement")
             if not isinstance(stmt, str) or not stmt.strip():
@@ -448,7 +471,7 @@ def extract_facts(llm_fn, member: dict,
                           else "not_stated",
                 "polarity": polarity if polarity in POLARITIES
                             else "uncertain",
-                "occurred_at": None,
+                "occurred_at": _iso_date(it.get("time_text")),
                 "time_text": it.get("time_text")
                              if isinstance(it.get("time_text"), str)
                              else None,
@@ -465,7 +488,7 @@ def extract_facts(llm_fn, member: dict,
                               "end_codepoint": span[1],
                               "quote": quote} if span else None,
             })
-    return facts, True
+    return facts, True, dropped
 
 
 _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器です。対象投稿と同一スレッド文脈、
@@ -583,6 +606,11 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
                         in POLARITIES else "uncertain"})
     limitations = [str(x)[:200] for x in
                    (raw.get("limitations") or []) if isinstance(x, str)]
+    # cap truncation is a finding, not a silent drop — the auditor and
+    # the notice reader must see that claims were left out (§16.2)
+    if len(claims_in) > 30:
+        limitations = [f"claim数が上限を超えたため"
+                       f"{len(claims_in) - 30}件省略"] + limitations
     return {"summary_id": f"sum_{bundle['bundle_id']}",
             "input_bundle_id": bundle["bundle_id"],
             "schema_version": SCHEMA_VERSION,
@@ -619,11 +647,9 @@ def audit_code(bundle: dict, facts: list, summary: dict) -> list:
                 or src["body_original"][s:e] != ev["quote"]:
             findings.append({"code": "evidence_span_mismatch",
                              "fact": f["fact_id"]})
-        # numbers/units in a fact must trace to its quote, not merely
-        # appear somewhere in the post (AT-025/026)
-        if ev and f.get("quantity") and \
-                f["quantity"] not in ev["quote"] \
-                and f["quantity"] not in src["body_original"]:
+        # numbers/units in a fact must trace to ITS quote — appearing
+        # somewhere else in the post is not tracing (AT-025/026)
+        if f.get("quantity") and f["quantity"] not in ev["quote"]:
             findings.append({"code": "quantity_untraced",
                              "fact": f["fact_id"]})
     covered = set()
@@ -787,7 +813,11 @@ def update_loops(ledger, project_id: int, bundle: dict,
                             "assignee_text": None,
                             "due_text": f.get("time_text"),
                             "state": "PROPOSED",
-                            "history": []}, ensure_ascii=False),
+                            "history": [{
+                                "state": "PROPOSED",
+                                "at": int(time.time()),
+                                "trigger_message_id": target_id}]},
+                           ensure_ascii=False),
                 project_id=project_id, message_id=target_id,
                 model=jev.JEV_MODEL,
                 meta={"fingerprint": bundle["source_fingerprint"],
@@ -886,12 +916,15 @@ _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
 def render_notice(ledger, project_id: int, root_id: int,
                   summary: dict, audit_status: str,
                   targets: list | None = None,
-                  quality: str | None = None) -> str:
+                  quality: str | None = None,
+                  focus_mid: int | None = None) -> str:
     """The §20.1 block. Patient label + coverage/audit status lines are
     code-generated; claim text comes from the audited summary. The MCS
     link is the stored patient URL — never a guessed permalink.
     対象新着 counts only THIS generation's target posts — the rest of
-    the thread is context, not arrivals."""
+    the thread is context, not arrivals. A multi-target generation
+    emits one notice per target; focus_mid names WHICH covered post
+    this notice's claims belong to."""
     pat = ledger.db.execute(
         "SELECT patient_name,url FROM patients WHERE project_id=?",
         (project_id,)).fetchone()
@@ -911,6 +944,14 @@ def render_notice(ledger, project_id: int, root_id: int,
              f"｜対象投稿の最終時刻：{latest} JST",
              f"取得：{'完全' if quality == 'full' else '一部未取得'}",
              f"要約：{'自動検査完了' if audit_status == 'PASS' else '要確認'}"]
+    if focus_mid is not None and len(ids) > 1:
+        trow = ledger.db.execute(
+            "SELECT posted_at FROM messages WHERE project_id=? "
+            "AND message_id=?", (project_id, focus_mid)).fetchone()
+        stamp = ((trow["posted_at"] or "")[:16].replace("T", " ")
+                 .replace("-", "/")) if trow else ""
+        lines.append(f"要約対象：{stamp} の投稿" if stamp
+                     else f"要約対象：投稿#{focus_mid}")
     by_sec: dict[str, list] = {}
     for c in summary.get("claims", []):
         by_sec.setdefault(c["section"], []).append(c)
@@ -1017,6 +1058,9 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             ids = json.loads(ev["payload"]).get("message_ids") or []
         except (json.JSONDecodeError, TypeError):
             continue
+        if not isinstance(ids, list):
+            continue
+        ids = ids[:500]      # a malformed fat payload must not wedge the scan
         pid = ev["project_id"]
         if scfg["project_ids"] is not None and pid not in \
                 scfg["project_ids"]:
@@ -1092,6 +1136,33 @@ def _plan_exists(ledger, message_id: int, fp: str,
     return False
 
 
+def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
+                  members: dict, final_status: str) -> None:
+    """Summary + audit artifact pair for one evaluated target — the
+    durable record of this generation's outcome. The repair_count meta
+    is the INV-10 budget: it survives restarts AND mid-job deferrals
+    because it lives on this artifact, not in process memory."""
+    ledger.artifact_add_tx(
+        KIND_SUMMARY,
+        json.dumps({k: v for k, v in r["summary"].items()
+                    if not k.startswith("_")}, ensure_ascii=False),
+        project_id=pid, message_id=mid, model=LLM_MODEL,
+        meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+              "audit_status": final_status,
+              "stale": final_status == "STALE",
+              "target_revision": members[mid]["revision"]})
+    ledger.artifact_add_tx(
+        KIND_AUDIT,
+        json.dumps({"status": final_status,
+                    "findings": r["findings"],
+                    "target_message_id": mid}, ensure_ascii=False),
+        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+              "audit_status": final_status,
+              "repair_count": 1 if r["repaired"] else 0,
+              "jev_requests": r.get("jev_requests", 0)})
+
+
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'retry'|'failed'."""
@@ -1111,6 +1182,12 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
         ledger.job_done(job["job_id"])
         return "done"
     fp = bundle["source_fingerprint"]
+    # provenance on the recorded bundle (spec §12.1): which stored
+    # origin event / capture path this evaluation descends from
+    origin = pl.get("origin") if isinstance(pl.get("origin"), dict) \
+        else {}
+    bundle["origin_event_id"] = origin.get("event_id")
+    bundle["capture_origin"] = origin.get("source")
     if _current(ledger, KIND_BUNDLE, root, fp) is None:
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
@@ -1220,8 +1297,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             if time.monotonic() > deadline - 5:
                 incomplete = True
                 break
-            facts, f_complete = extract_facts(llm_fn, member,
-                                              deadline - 5)
+            facts, f_complete, f_dropped = extract_facts(
+                llm_fn, member, deadline - 5)
             if not f_complete:
                 incomplete = True
                 break
@@ -1235,7 +1312,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                 project_id=pid, message_id=mid, model=LLM_MODEL,
                 meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
                       "chunks_total": len(_chunks(
-                          member["body_original"]))})
+                          member["body_original"])),
+                      "dropped_by_cap": f_dropped})
         facts_by_target[mid] = facts
     if incomplete:
         if hard_fail:
@@ -1328,6 +1406,16 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                         "jev_requests": (jev_client.requests_made - req0)
                         if jev_client else 0}
     if incomplete:
+        if results:
+            # commit each completed target's outcome NOW — dropping it
+            # would re-spend Jev calls on an identical input next run
+            # AND silently reset the one-shot repair budget, whose
+            # counter lives on these artifacts (INV-10, §18.2)
+            with ledger.db:
+                for mid, r in results.items():
+                    if r["fresh"]:
+                        _write_result(ledger, pid, mid, r, fp, members,
+                                      r["status"])
         if hard_fail:
             ledger.job_retry(job["job_id"], retry_in=300,
                              max_attempts=6)
@@ -1354,34 +1442,15 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                                      facts_by_target, jev_client,
                                      scfg, deadline)
     # notification eligibility is derived from the stored origin event,
-    # not from this job's seed provenance (INV-20, §20.3): a covering
-    # new_messages intent must exist for at least one evaluated target.
-    src_ev = _notify_src_event(ledger, pid, all_targets)
+    # not from this job's seed provenance (INV-20, §20.3) — evaluated
+    # per target below: a covering new_messages intent must exist for
+    # the message a notice reports on.
     with ledger.db:
         for mid, r in results.items():
             final_status = "STALE" if stale else r["status"]
             if r["fresh"]:
-                ledger.artifact_add_tx(
-                    KIND_SUMMARY,
-                    json.dumps({k: v for k, v in r["summary"].items()
-                                if not k.startswith("_")},
-                               ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=LLM_MODEL,
-                    meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
-                          "audit_status": final_status, "stale": stale,
-                          "target_revision":
-                              members[mid]["revision"]})
-                ledger.artifact_add_tx(
-                    KIND_AUDIT,
-                    json.dumps({"status": final_status,
-                                "findings": r["findings"],
-                                "target_message_id": mid},
-                               ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
-                          "audit_status": final_status,
-                          "repair_count": 1 if r["repaired"] else 0,
-                          "jev_requests": r.get("jev_requests", 0)})
+                _write_result(ledger, pid, mid, r, fp, members,
+                              final_status)
             if stale:
                 continue
             # notification plan + outbox intent commit in the SAME
@@ -1397,20 +1466,29 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                              if not k.startswith("_")}
             text = render_notice(ledger, pid, root, summary_clean,
                                  final_status, targets=all_targets,
-                                 quality=bundle["content_quality"])
+                                 quality=bundle["content_quality"],
+                                 focus_mid=mid)
             enqueued = False
             if scfg["mode"] == "enforce" and final_status == "PASS":
+                # per-target delivery key — one generation emits one
+                # notice PER audited target; a shared (root, fp) key
+                # would dedup every later target's claims out of the
+                # notice while the header still claims them
                 dkey = payload_hash({"kind": "semantic_notice",
-                                     "root": root, "fp": fp})
-                # src_ev=None means no stored origin intent — a PASS on
-                # imported/replayed input stays an artifact, never a
-                # notification (INV-20, AT-055)
-                if src_ev is not None \
+                                     "root": root, "fp": fp,
+                                     "mid": mid})
+                # per-target eligibility: THIS message must be covered
+                # by a stored new_messages intent — a target that only
+                # ever arrived via import/replay produces artifacts but
+                # no notice, even when a sibling target was notified
+                # (INV-20, AT-055)
+                src_mid = _notify_src_event(ledger, pid, [mid])
+                if src_mid is not None \
                         and not _outbox_has_delivery(ledger, dkey):
                     ledger.outbox_add_tx("semantic_notice", pid, {
                         "delivery_key": dkey, "root_id": root,
                         "target_message_id": mid,
-                        "src_event_id": src_ev, "text": text,
+                        "src_event_id": src_mid, "text": text,
                         "fingerprint": fp,
                         "policy_version": POLICY_VERSION})
                     enqueued = True
@@ -1463,7 +1541,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         if e not in result["errors"]:
             result["errors"].append(e)
     out = {"mode": scfg["mode"], "done": 0, "deferred": 0,
-           "failed": 0, "left": None}
+           "failed": 0, "left": None, "budget_exhausted": False}
     if scfg["mode"] == "off":
         return out
     if llm_fn is None:
@@ -1502,6 +1580,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             break
         if scfg["project_ids"] is not None \
                 and job["project_id"] not in scfg["project_ids"]:
+            # outside the rollout scope — defer instead of leaving it
+            # due-now, so a backlog of out-of-scope rows cannot fill
+            # the whole max_jobs window and starve in-scope work. The
+            # row stays pending: a later project_ids change resumes it.
+            ledger.job_defer(job["job_id"], 300)
+            out["deferred"] += 1
             continue
         if jev_client is not None:
             # the daily cap binds at REQUEST granularity, not just job
@@ -1512,6 +1596,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if remaining <= 0:
                 result["errors"].append(
                     "semantic: daily_budget_exhausted")
+                out["budget_exhausted"] = True
                 break
             jev_client.request_cap = (jev_client.requests_made
                                       + remaining)
