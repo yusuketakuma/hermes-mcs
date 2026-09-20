@@ -1175,7 +1175,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     raw_targets = pl.get("targets")
     targets = [t for t in raw_targets if type(t) is int] \
         if isinstance(raw_targets, list) else []
-    bundle = thread_bundle(ledger, pid, root, targets or None)
+    bundle = thread_bundle(ledger, pid, root, targets or [root])
     if bundle is None:
         # source vanished — nothing to preserve for it; mark done so
         # the row does not re-run as a no-op on every drain
@@ -1425,7 +1425,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     # generation guard: the bundle must still be current at commit, and
     # this job row must still be the live pending one — an older worker
     # result must never overwrite a newer generation (AT-035/057)
-    fresh = thread_bundle(ledger, pid, root, targets or None)
+    fresh = thread_bundle(ledger, pid, root, targets or [root])
     live = ledger.job_pending(JOB_KIND, pid, root)
     stale = (fresh is None
              or fresh["source_fingerprint"] != fp
@@ -1560,7 +1560,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     due = ledger.db.execute("""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind=?
-      ORDER BY CASE WHEN payload LIKE '%"eligible": true%'
+      ORDER BY CASE WHEN json_valid(payload)
+                    AND json_extract(payload, '$.eligible') = 1
                     THEN 0 ELSE 1 END, job_id
       LIMIT ?
     """, (time.time(), JOB_KIND, max_jobs)).fetchall()
@@ -1656,7 +1657,7 @@ def seed(ledger, message_id: int, origin: str = "replay",
     if row is None:
         return None
     ledger.semantic_seed(row["project_id"], [message_id],
-                         {"origin": origin})
+                         {"source": origin})
     return row["r"]
 
 

@@ -1446,3 +1446,77 @@ def test_loop_candidate_records_history(tmp_path):
     assert [h["state"] for h in item["history"]] == [
         "PROPOSED", "RESOLUTION_CANDIDATE"]
     db.close()
+
+
+def test_replay_seed_records_source(tmp_path):
+    """seed() must store provenance in the same shape ingest seeds use
+    ({"source": ...}) — a nested {"origin": ...} wrapper silently
+    dropped the replay label, making the job's descent uninspectable."""
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1)]
+    db.save_patient(p)               # bare store: no notify, no seed
+    root = semantic.seed(db, 1, cfg_path=_cfg_path(tmp_path, "shadow"))
+    assert root == 1
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic'")
+        .fetchone()["payload"])
+    assert pl["origin"] == {"source": "replay"}
+    assert "eligible" not in pl      # replay is never notify-eligible
+    db.close()
+
+
+def test_eligible_priority_survives_compact_payload(tmp_path):
+    """Drain ordering must not depend on json.dumps whitespace — a
+    payload serialised with compact separators still ranks an
+    arrival-descended job ahead of import/replay seeds."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(10), _message(20)], project_id=1)
+    db.job_add("semantic", 1, 10, payload={
+        "targets": [10], "origin": {"source": "history_import"}})
+    now = time.time()
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,"
+        "payload,state,next_try,created_at,updated_at) "
+        "VALUES('semantic',1,20,NULL,?,'pending',0,?,?)",
+        (json.dumps({"targets": [20],
+                     "origin": {"source": "unread", "event_id": 1},
+                     "eligible": True}, separators=(",", ":")),
+         now, now))
+    db.db.commit()
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm,
+                           max_jobs=1)
+    assert out["done"] == 1
+    rows = {r["message_id"]: r["state"] for r in db.db.execute(
+        "SELECT message_id,state FROM fetch_jobs WHERE kind='semantic'")}
+    assert rows[20] == "done" and rows[10] == "pending"
+    db.close()
+
+
+def test_empty_targets_root_is_target(tmp_path):
+    """A job row without payload.targets still evaluates the root as a
+    target — including the loop-relation pass, which keys on member
+    role and was silently skipped for this edge."""
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1)]
+    db.save_patient(p)
+    db.artifact_add("loop_candidate", json.dumps({
+        "loop_id": "loop_x", "project_id": 1, "kind": "pending_item",
+        "description": "確認依頼が未回答",
+        "origin": {"message_id": 9}, "assignee_text": None,
+        "due_text": None, "state": "PROPOSED", "history": []}),
+        project_id=1, message_id=9)
+    db.job_add("semantic", 1, 1, payload={})   # no "targets" key
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    assert db.artifacts("semantic_summary", message_id=1)
+    evs = db.artifacts("loop_event", project_id=1)
+    assert evs and json.loads(
+        evs[0]["content"])["trigger_message_id"] == 1
+    db.close()

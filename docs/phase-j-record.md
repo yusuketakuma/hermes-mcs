@@ -88,11 +88,12 @@ Recorded: 2026-09-20
 
 ## 6. 未実施・前提（正直な記録）
 
-- **G2 実API評価 未実施**: wire shape `{"model","state","questions"}→{"model","answers":{qid:{...}}}` は mock のみで検証。実TypeSafe Jev APIの契約は `semantic_jev` 冒頭に assumption として明記。`JevClient.models()` は alias listingのみ — 固定versionの利用可否は承認済み synthetic-input smoke call で確認すること（alias自動切替は行わない）。
+- **G2 実API評価 未実施**: wire shape `{"model","state","questions"}→{"model","answers":{qid:{...}}}` は mock のみで検証。実TypeSafe Jev APIの契約は `semantic_jev` 冒頭に assumption として明記。`JevClient.models()` は alias listingのみ — 固定versionの利用可否は承認済み synthetic-input smoke call で確認すること（alias自動切替は行わない）。検証ハーネスは `python semantic_jev.py --smoke --live`（合成文1リクエストを実 `evaluate()` 経路で送信し応答を厳格検証・model echo確認・/v1/models一覧を報告）。`TYPESAFE_API_KEY` 未配置のため現在未実行 — キー配置と予算承認後に1コマンドで実施可能。
 - **LLM prompt品質**: 抽出・要約promptは構造検証済みだが実モデル（Qwen3.5-9B等）での品質は未評価 — shadow観察で人間が audit分布を確認してから assist/enforce へ。
 - **degraded/audit notifyの二重送信**: degraded送出後に遅れて PASS した場合、監査済み通知も別 delivery_key で送信され得る（両方とも正確・重複は新着通知とは別eventとして識別される）。
 - **tick内 mid-run OFF**: job境界で config reload（`cfg_path` 指定時のみ）。ジョブ内部の外部呼出し途中でのOFF検知は次のjobまで遅延する。
-- **RF-OPS残項**（phase-r-record §8 引継ぎ）: 複数tick観察・lock競合実演・rollback実演・長期log観察は本番運用で実施予定。
+- **RF-OPS**（phase-r-record §8）: 複数tick観察・lock競合・snapshot読取・rollback実演は2026-09-20に実演済み。残るのは長期log/backup観察のみ（機構稼働中・傾向は継続確認）。
+- **レビュー第3ラウンド修正**（2026-09-20）: `seed()` の origin を `{"source": ...}` 形に統一（replay由来が payload で識別可能に）。drain優先順位を `payload LIKE` 文字列一致から `json_extract` へ変更（区切り whitespace に非依存）。`payload.targets` 欠落時の root が `target` role を得るよう修正（loop-relation pass が黙って skip されていたedge）。回帰テスト3件追加、計148件パス。
 
 ## 7. 有効化手順（OFF→shadow→assist→enforce）
 

@@ -1,6 +1,6 @@
 # Phase R Record — MCS全体リファクタリング記録 (spec MCS-REFACTOR-FIRST-20260920)
 
-Status: **RF-CODE 判定済み** / RF-OPS 未完了項目あり / Phase J (Jev) 実装済み — `docs/phase-j-record.md` 参照（mode=off 既定、実API評価 G2 未実施）
+Status: **RF-CODE 判定済み** / RF-OPS 実演項目済み（長期観察のみ継続） / Phase J (Jev) 実装済み — `docs/phase-j-record.md` 参照（mode=off 既定、実API評価 G2 未実施）
 Recorded: 2026-09-20
 
 ## 1. 対象ツリーと基準
@@ -68,13 +68,13 @@ Recorded: 2026-09-20
 
 対象ツリー: **`46cffb0`**（= baseline `a8896ec` + `9d2c6d1` REF + `46cffb0` FIX）
 
-## 8. RF-OPS（本番運用ゲート）未完了項目
+## 8. RF-OPS（本番運用ゲート）
 
-- [ ] 複数tick連続観察（launchd 15分間隔×数回のrun結果確認）
-- [ ] lock競合の実発生確認（tick実行中の手動CLI → lock_held動作）
-- [ ] snapshot→mcs_view読取の手動確認
-- [ ] rollback手順の実演（下記9）
-- [ ] run.log/backup rotation の長期観察
+- [x] 複数tick連続観察 — 現行 run.log ローテーション内で 176/181 tick が `ok:true`（launchd 15分間隔、2026-09-20 実測。非致命エラーは `attach download_too_large` 等の既知項目のみ）。Phase J tree deploy 後も正常継続中
+- [x] lock競合の実発生確認 — run.log に有機発生 `lock_held` 4件 + 制御実演（2026-09-20: lock保持中に `semantic.py --drain` / `rollup.py` / `extract.py` がすべて `{"ok":false,"error":"lock_held"}` rc=3 で拒否、DB非接触で終了）
+- [x] snapshot→mcs_view読取の手動確認 — `mcs_view.py status`/`loops` が `snapshots/ledger-snapshot.db`（tick毎再生成、generation `132635ac…`）を正常読取（2026-09-20）
+- [x] rollback手順の実演（下記9） — baseline `a8896ec` worktree で86テスト全パス。同一コードが本番DB複製（schema v7、15,375 messages）を Ledger 経由でそのまま読取可能 — schema変更なしのため revert で完全に戻ることを確認（2026-09-20）
+- [ ] run.log/backup rotation の長期観察 — 機構は稼働中（日次 verified backup `ledger-20260919/20260920.db` 生成済み、run.log は >5MB で `run.log.1` へ単世代rotate）。長期傾向は運用継続で確認
 
 ## 9. 展開・有効化・停止・rollback
 

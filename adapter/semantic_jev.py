@@ -26,9 +26,12 @@ Assumed wire shape (verified only against mocks — real API evaluation is
 gate G2 and needs the approved budget): request {"model","state",
 "questions"} -> response {"model","answers":{qid: {...}}}.
 """
+import argparse
 import json
 import math
+import os
 import random
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -464,3 +467,93 @@ LOOP_RELATION_OPTIONS = {
     "contradiction": "the new text contradicts the item's premise",
     "unclear": "the relation cannot be determined",
 }
+
+
+# ---------- G2 wire-contract smoke (opt-in live check) ----------
+
+_SMOKE_TOKEN = "SMOKE_TOKEN_A1B2"
+
+
+def _env(key: str) -> str | None:
+    """API key lookup — same search order as semantic.py: process env,
+    then ~/.mcs/.env, then ~/.hermes/.env."""
+    if os.environ.get(key):
+        return os.environ[key]
+    for path in (os.path.expanduser("~/.mcs/.env"),
+                 os.path.expanduser("~/.hermes/.env")):
+        try:
+            for line in open(path, encoding="utf-8"):
+                if line.startswith(key + "="):
+                    return line.split("=", 1)[1] \
+                        .strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return None
+
+
+def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
+    """G2 check: ONE synthetic request through the real evaluate() path
+    — transport, strict answer validation, and the fixed-model echo all
+    exercise production code, so a returned result means the wire
+    contract conforms. The input is a fixed nonsense fixture; no ledger
+    or message data is ever sent. The reported `noul` is informational
+    only — the gate is contract conformance, not the model's answer."""
+    target = {"id": "smoke", "role": "target",
+              "posted_at": "2026-01-01T00:00:00",
+              "sender": {"type": "synthetic", "profession": ""},
+              "text": "これは配線検証用の合成文です。"
+                      f"{_SMOKE_TOKEN} を含みます。"}
+    client = JevClient(api_key=api_key, attempt_timeout=timeout)
+    out = client.evaluate(
+        {"target": target, "context": []},
+        {"smoke": noul_question(
+            "Does state.target.text contain the literal token "
+            f"{_SMOKE_TOKEN}? Judge the reported text only.",
+            f"The token {_SMOKE_TOKEN} appears verbatim in the text.",
+            "The token does not appear.")},
+        time.monotonic() + timeout + 10)
+    result = {"ok": True, "model_echo": out["model"],
+              "noul": out["answers"]["smoke"]["noul"],
+              "requests": client.requests_made}
+    try:
+        models = client.models()
+        result["fixed_model_listed"] = JEV_MODEL in models
+        result["models"] = models[:20]
+    except JevError as e:
+        result["models_error"] = f"{e.kind}:{e.detail}"
+    return result
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="TypeSafe Jev client — wire-contract smoke check")
+    ap.add_argument("--smoke", action="store_true",
+                    help="G2: validate the live wire contract with one "
+                         "synthetic request")
+    ap.add_argument("--live", action="store_true",
+                    help="required acknowledgement that a real API "
+                         "request (and its budget) is spent")
+    args = ap.parse_args()
+    if not args.smoke:
+        ap.print_help()
+        return 2
+    if not args.live:
+        print(json.dumps({"ok": False,
+                          "error": "refused_without_--live"}))
+        return 2
+    key = _env("TYPESAFE_API_KEY")
+    if not key:
+        print(json.dumps({"ok": False, "error": "no_api_key"}))
+        return 2
+    try:
+        print(json.dumps(wire_smoke(key), ensure_ascii=False))
+        return 0
+    except JevError as e:
+        print(json.dumps({"ok": False, "kind": e.kind,
+                          "detail": e.detail, "status": e.status},
+                         ensure_ascii=False))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
