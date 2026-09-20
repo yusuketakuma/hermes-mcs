@@ -725,6 +725,15 @@ class Ledger:
                                                {"source": notify.get(
                                                    "source"),
                                                 "event_id": ev_id})
+            elif semantic and project_id \
+                    and not self.is_archived(project_id):
+                # history-import path (no notify intent): every newly
+                # stored message still gets durable semantic coverage —
+                # open-loop/pending items in imported history are real
+                # findings, not just notification triggers. These jobs
+                # are drained AFTER arrival seeds (run_due ordering).
+                self._semantic_seed_tx(project_id, new_ids,
+                                       {"source": "history_import"})
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -1171,16 +1180,17 @@ class Ledger:
 
     # ---------- notify outbox ----------
 
+    def outbox_add_tx(self, kind: str, project_id: int | None,
+                      payload: dict) -> int:
+        """outbox_add's INSERT without the commit — callers holding
+        `with self.db` can land a notification intent in the same
+        transaction as the artifacts that justify it (spec §18.3)."""
+        return self._outbox_insert(kind, project_id, payload)
+
     def outbox_add(self, kind: str, project_id: int | None, payload: dict) -> int:
-        now = time.time()
-        cur = self.db.execute("""
-          INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
-            created_at,updated_at)
-          VALUES(?,?,?,'pending',?,?,?)
-        """, (kind, project_id, json.dumps(payload, ensure_ascii=False),
-              now, now, now))
+        rid = self.outbox_add_tx(kind, project_id, payload)
         self.db.commit()
-        return cur.lastrowid
+        return rid
 
     def outbox_due(self, limit: int = 20) -> list:
         return self.db.execute("""

@@ -360,7 +360,7 @@ def main() -> int:
         job_ops.run_reply_jobs(adapter, ledger, result, deadline,
                                semantic=sem_on)
         job_ops.run_history_jobs(adapter, ledger, result, deadline,
-                                 trickle=False)
+                                 trickle=False, semantic=sem_on)
 
         if args.download_files:
             stage_attachments(adapter, ledger, result, deadline)
@@ -388,15 +388,28 @@ def main() -> int:
             adapter, ledger, result, deadline, trickle=True,
             trickle_pages=trickle_pages,
             max_jobs=8 if args.jobs_only else None,
-            min_margin=30 if args.jobs_only else None)
+            min_margin=30 if args.jobs_only else None,
+            semantic=sem_on)
 
         # -- derived data ----------------------------------------------
         stage_derive(ledger, result, deadline)
 
+        # -- delivery ----------------------------------------------------
+        # existing notification sends run BEFORE the semantic drain —
+        # §19.1 prioritizes committed work over new analysis, and an
+        # enforce-mode semantic_notice enqueued below simply sends on a
+        # later tick
+        if not args.no_notify:
+            try:
+                result["notify"] = notifier.flush(ledger, deadline=deadline)
+            except Exception as e:
+                result["errors"].append(f"notify: {type(e).__name__}")
+
         # -- semantic layer (Phase J, feature-gated) --------------------
-        # drains durable 'semantic' jobs on the same lock + deadline;
-        # OFF is a no-op here AND disables seeding above, so the flag
-        # truly stops communication rather than only hiding output
+        # drains durable 'semantic' jobs on the same lock + remaining
+        # deadline; OFF is a no-op here AND disables seeding above, so
+        # the flag truly stops communication rather than only hiding
+        # output
         if sem_on:
             try:
                 import semantic
@@ -405,13 +418,6 @@ def main() -> int:
             except Exception as e:
                 result["errors"].append(
                     f"semantic: {type(e).__name__}")
-
-        # -- delivery ----------------------------------------------------
-        if not args.no_notify:
-            try:
-                result["notify"] = notifier.flush(ledger, deadline=deadline)
-            except Exception as e:
-                result["errors"].append(f"notify: {type(e).__name__}")
 
         # -- housekeeping ------------------------------------------------
         try:

@@ -48,6 +48,17 @@ def _env(key: str, path: str = ENV_PATH) -> str | None:
 _PROFILE_ENV = os.path.expanduser("~/.hermes/profiles/{}/.env")
 
 
+class _DeferredSend(Exception):
+    """Not deliverable under CURRENT policy (e.g. semantic mode left
+    enforce) — the committed intent stays pending for a later flush;
+    it is not destroyed (INV-23) and never sent past its gate."""
+
+
+class _StaleSend(Exception):
+    """The source generation this intent was built for has moved on —
+    suppress terminally instead of publishing stale results (§18.4)."""
+
+
 def _config() -> dict:
     return load_config(CONF_PATH)
 
@@ -268,8 +279,33 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
     if ev["kind"] == "semantic_notice":
         # audited/degraded semantic notice — the payload carries the
-        # final text frozen at enqueue time; the sender never
-        # re-derives it (INV-14)
+        # final text frozen at enqueue time; the sender never re-derives
+        # it (INV-14). Two gates are re-checked at the last moment
+        # (§18.4/§22.1): mode must still be enforce, and the audited
+        # notice's input fingerprint must still be live — a degraded
+        # notice is instead suppressed if its base event has since
+        # delivered.
+        cfg = _config().get("semantic")
+        if not isinstance(cfg, dict) or cfg.get("mode") != "enforce":
+            raise _DeferredSend("semantic_not_enforce")
+        if payload.get("degraded"):
+            src = payload.get("src_event_id")
+            if type(src) is int:
+                row = ledger.db.execute(
+                    "SELECT state FROM notify_outbox WHERE event_id=?",
+                    (src,)).fetchone()
+                if row is None or row["state"] in ("accepted",
+                                                   "suppressed"):
+                    raise _StaleSend("base_delivered")
+        else:
+            fp = payload.get("fingerprint")
+            root = payload.get("root_id")
+            if not isinstance(fp, str) or type(root) is not int:
+                raise ValueError("payload_invalid")
+            import semantic as _sem
+            b = _sem.thread_bundle(ledger, ev["project_id"], root)
+            if b is None or b["source_fingerprint"] != fp:
+                raise _StaleSend("stale_generation")
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
@@ -354,6 +390,11 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 return ""
             meta = json.loads(art["meta"] or "{}")
             if meta.get("audit_status") != "PASS" or meta.get("stale"):
+                return ""
+            # the audited summary must describe THIS revision — a body
+            # edit after PASS leaves the old artifact on record but it
+            # may no longer be attached (INV-15)
+            if meta.get("target_revision") != r["content_hash"]:
                 return ""
             summ = json.loads(art["content"])
             lines = [str(c.get("text", ""))[:160]
@@ -567,6 +608,19 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "accepted",
                                sent_ids[-1] if sent_ids else "")
             res["sent"] += 1
+        except _DeferredSend:
+            # stays pending but re-checks hourly, not every flush — a
+            # parked enforce intent must not report notify_incomplete
+            # on every tick while the mode gate is down
+            ledger.db.execute(
+                "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                "WHERE event_id=?",
+                (time.time() + 3600, time.time(), ev["event_id"]))
+            ledger.db.commit()
+            res["skipped"] += 1
+        except _StaleSend:
+            ledger.outbox_suppress(ev["event_id"])
+            res["suppressed"] += 1
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 retry = _retry_after(e)

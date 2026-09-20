@@ -548,19 +548,20 @@ def test_evidence_span_locate():
     assert semantic._locate_quote(BODY, "カロナール300mg") == (4, 14)
     assert semantic._locate_quote(BODY, "存在しない文") is None
     assert semantic._locate_quote("aa aa", "aa") is None   # ambiguous
-    f = semantic.extract_facts(
+    f, ok = semantic.extract_facts(
         lambda p: json.dumps({"facts": [{
             "statement": "x", "kind": "other", "status": "not_stated",
             "polarity": "affirmed", "time_text": None, "quantity": None,
             "evidence_quote": "存在しない引用"}]}),
         {"message_id": 1, "revision": "r", "body_original": BODY})
+    assert ok
     assert f[0]["validation_status"] == "unverified"
     assert f[0]["evidence_refs"] == []
 
 
 def test_daily_budget_exhausted(tmp_path):
     db = _seeded(tmp_path)
-    db.artifact_add("semantic_assess", "{}", project_id=1, message_id=1,
+    db.artifact_add("semantic_usage", "{}", project_id=1, message_id=1,
                     meta={"jev_requests": 5})
     res = {"errors": []}
     out = semantic.run_due(db, _cfg("shadow", budget=5), res,
@@ -645,17 +646,23 @@ def test_off_flip_mid_drain(tmp_path):
     db.close()
 
 
-def test_notifier_semantic_notice_render(tmp_path):
+def test_notifier_semantic_notice_render(tmp_path, monkeypatch):
     """The sender renders the frozen payload text — no re-derivation,
-    no patient lookups at send time (INV-14)."""
+    no patient lookups at send time (INV-14). The send-time gates
+    (enforce mode + live fingerprint) pass on the live generation."""
     db = _seeded(tmp_path)
-    ev_id = db.outbox_add("semantic_notice", 1,
-                          {"delivery_key": "k", "text": "固定文面"})
-    ev = db.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
-                       (ev_id,)).fetchone()
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    ev = db.db.execute("SELECT * FROM notify_outbox "
+                       "WHERE kind='semantic_notice'").fetchone()
+    assert ev is not None
+    frozen = json.loads(ev["payload"])["text"]
     import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"semantic": {"mode": "enforce"}})
     content, files = notifier._format_event(db, ev)
-    assert content == "固定文面" and files == []
+    assert content == frozen and files == []
     db.close()
 
 
@@ -674,3 +681,351 @@ def test_snapshot_view_semantic(tmp_path):
     assert res["semantic"]["semantic_audit"][0]["meta"][
         "audit_status"] == "PASS"
     db.close()
+
+
+# ---------- review-fix regressions ----------
+
+def test_degraded_skips_delivered_history(tmp_path):
+    """§19.3: degraded fallback covers only events whose base notice is
+    STILL undelivered — an accepted/suppressed historical row must
+    never spawn a '新着取得' notice."""
+    db = _seeded(tmp_path)
+    # the seeding left one pending new_messages event; add a second,
+    # long-delivered one and age everything past the delay
+    db.outbox_add("new_messages", 1, {"message_ids": [1]})
+    old = db.db.execute(
+        "SELECT event_id FROM notify_outbox WHERE kind='new_messages' "
+        "ORDER BY event_id DESC").fetchone()["event_id"]
+    db.outbox_mark(old, "accepted")
+    db.db.execute("UPDATE notify_outbox SET created_at=?",
+                  (time.time() - 7200,))
+    db.db.commit()
+    scfg = semantic.semantic_config(
+        _cfg("enforce", delayed_notice_seconds=900))[0]
+    assert semantic._emit_degraded(db, scfg) == 1   # only the pending one
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox "
+        "WHERE kind='semantic_notice'").fetchall()
+    assert len(rows) == 1
+    pl = json.loads(rows[0]["payload"])
+    assert pl["degraded"] is True
+    assert pl["src_event_id"] != old   # not the delivered event
+    # idempotent — a second scan adds nothing
+    assert semantic._emit_degraded(db, scfg) == 0
+    db.close()
+
+
+def test_replay_heals_missing_notify_intent(tmp_path):
+    """§18.3 regression: a run that committed summary+audit but lost
+    the plan/outbox rows (the old crash window) must recreate both on
+    the next run instead of marking done with the intent gone."""
+    db = _seeded(tmp_path)
+    res = {"errors": []}
+    out = semantic.run_due(db, _cfg("enforce"), res,
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    # simulate the pre-fix crash state
+    db.db.execute("DELETE FROM artifacts WHERE kind='notify_plan'")
+    db.db.execute("DELETE FROM notify_outbox "
+                  "WHERE kind='semantic_notice'")
+    db.db.commit()
+    db.semantic_seed(1, [1], {"origin": "replay"})
+    out2 = semantic.run_due(db, _cfg("enforce"), res,
+                            time.monotonic() + 300,
+                            jev_client=_FakeJev(), llm_fn=_llm)
+    assert out2["done"] == 1
+    assert db.artifacts("notify_plan", message_id=1)
+    assert db.db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'"
+    ).fetchone()
+    db.close()
+
+
+def test_pending_audit_retries_then_passes(tmp_path):
+    """AT-058 regression: a mid-audit Jev outage must leave the job
+    retryable — never 'done' on a PENDING audit — and the next run
+    re-audits the stored summary to a terminal status."""
+    db = _seeded(tmp_path)
+
+    class AuditDown(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            if all(str(k).startswith("claim_") for k in questions):
+                raise jev.JevError("http_500", retryable=True)
+            return super().evaluate(state, questions, deadline)
+
+    res = {"errors": []}
+    out = semantic.run_due(db, _cfg("enforce"), res,
+                           time.monotonic() + 300,
+                           jev_client=AuditDown(), llm_fn=_llm)
+    assert out["done"] == 0 and out["deferred"] == 1
+    job = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()
+    assert job["state"] == "pending" and job["attempts"] == 1
+    audits = db.artifacts("semantic_audit", message_id=1)
+    assert json.loads(audits[-1]["meta"])["audit_status"] == "PENDING"
+    # Jev back — force the retry due and re-run: re-audit, not skip
+    db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                  "WHERE kind='semantic'")
+    db.db.commit()
+    out2 = semantic.run_due(db, _cfg("enforce"), res,
+                            time.monotonic() + 300,
+                            jev_client=_FakeJev(), llm_fn=_llm)
+    assert out2["done"] == 1
+    meta = json.loads(db.artifacts("semantic_audit",
+                                   message_id=1)[-1]["meta"])
+    assert meta["audit_status"] == "PASS"
+    # and the PASS notice enqueued despite the earlier PENDING plan row
+    assert db.db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'"
+    ).fetchone()
+    db.close()
+
+
+def test_long_body_chunked_fully(tmp_path):
+    """§12.3/AT-017: a body past the old silent 4000-char cap must be
+    fully processed — extractor chunks cover the tail, the summary
+    prompt gets the whole body, and the ledger records chunk count."""
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    tail = "中止指示の記載"
+    body = "冒頭の本文。" + "あ" * 4000 + "\n" + tail
+    p.messages = [_message(1, body=body)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    seen = []
+
+    def llm(prompt):
+        seen.append(prompt)
+        return _llm(prompt)
+
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=llm)
+    assert out["done"] == 1
+    fact_prompts = [x for x in seen if "事実候補抽出器" in x]
+    assert len(fact_prompts) >= 2
+    assert any(tail in x for x in fact_prompts)
+    assert any(tail in x for x in seen if "要約器" in x)
+    meta = json.loads(
+        db.artifacts("semantic_facts", message_id=1)[-1]["meta"])
+    assert meta["chunks_total"] >= 2
+    db.close()
+
+
+def test_claim_audit_sees_surrounding_context(tmp_path):
+    """AT-028: the support check must see the quote's surrounding
+    window, not just the bare quote — a neighboring negation or
+    condition has to be visible to the auditor."""
+    db = _seeded(tmp_path)
+    captured = []
+
+    class Cap(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            if all(str(k).startswith("claim_") for k in questions):
+                captured.append(state)
+            return super().evaluate(state, questions, deadline)
+
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=Cap(), llm_fn=_llm)
+    assert out["done"] == 1 and captured
+    ctx = captured[0]["context"]
+    roles = {c["role"] for c in ctx}
+    assert "evidence_quote" in roles and "evidence_context" in roles
+    win = next(c["text"] for c in ctx if c["role"] == "evidence_context")
+    assert "確認お願いします" in win    # outside the bare quote
+    db.close()
+
+
+def test_loop_scan_not_capped(tmp_path):
+    """§17.2 regression: every open candidate is evaluated against new
+    targets — not just the newest 10 — and re-runs add no duplicates."""
+    db = _seeded(tmp_path)
+    for i in range(20, 32):          # 12 pre-existing open candidates
+        db.artifact_add("loop_candidate", json.dumps({
+            "loop_id": f"loop_{i}", "project_id": 1,
+            "kind": "pending_item", "description": f"item{i}",
+            "origin": {"message_id": i, "revision": "r",
+                       "evidence_refs": []},
+            "assignee_text": None, "due_text": None,
+            "state": "PROPOSED", "history": []}),
+            project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}"})
+    res = {"errors": []}
+    out = semantic.run_due(db, _cfg("shadow"), res,
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    evs = db.db.execute(
+        "SELECT content FROM artifacts WHERE kind='loop_event'"
+    ).fetchall()
+    origins = {json.loads(e["content"])["loop_origin_id"] for e in evs}
+    assert origins == set(range(20, 32))
+    n0 = len(evs)
+    # replay on the same generation: pair dedup -> zero new events
+    db.semantic_seed(1, [1], {"origin": "replay"})
+    semantic.run_due(db, _cfg("shadow"), res,
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    assert db.db.execute(
+        "SELECT COUNT(*) c FROM artifacts WHERE kind='loop_event'"
+    ).fetchone()["c"] == n0
+    db.close()
+
+
+def test_nonretryable_jev_error_fails_bounded(tmp_path):
+    """A non-retryable Jev failure must consume attempts — deferring
+    forever would burn a call every tick on an input that can never
+    pass. Six attempts later the job is terminally failed and visible
+    in status_report."""
+    db = _seeded(tmp_path)
+    fake = _FakeJev(error=jev.JevError("protocol_error",
+                                     retryable=False))
+    res = {"errors": []}
+    for _ in range(6):
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                      "WHERE kind='semantic'")
+        db.db.commit()
+        semantic.run_due(db, _cfg("shadow"), res,
+                         time.monotonic() + 300,
+                         jev_client=fake, llm_fn=_llm)
+    job = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()
+    assert job["state"] == "failed"
+    db.close()
+
+
+def test_jev_usage_deltas_exact(tmp_path):
+    """The daily budget ledger sums per-attempt deltas — it must equal
+    the client's real request count including claim-audit and loop
+    calls, not a cumulative counter snapshotted per artifact."""
+    db = _seeded(tmp_path)
+    fake = _FakeJev()
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=fake, llm_fn=_llm)
+    assert fake.requests_made > 0
+    assert semantic.jev_usage_today(db) == fake.requests_made
+    db.close()
+
+
+def test_sem_block_drops_stale_revision(tmp_path, monkeypatch):
+    """INV-15: a PASS summary describes one revision — after a body
+    edit the audited block must not attach to the new revision."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    import notifier
+    monkeypatch.setattr(
+        notifier, "_config",
+        lambda: {"semantic": {"mode": "enforce"}})
+    ev = db.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='new_messages'"
+    ).fetchone()
+    content, _ = notifier._format_event(db, ev)
+    assert "要約（自動検査済）" in content
+    # edit the parent body -> new content_hash -> block must drop
+    p = _patient(db)
+    p.messages = [_message(1, body=BODY + "（追記あり）", unread=False)]
+    db.save_patient(p)
+    ev = db.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='new_messages'"
+    ).fetchone()
+    content, _ = notifier._format_event(db, ev)
+    assert "要約（自動検査済）" not in content
+    db.close()
+
+
+def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
+    """§22.1: an enforce notice committed before an OFF flip must never
+    send — the intent stays queued for a later enforce flush."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    n = db.db.execute("SELECT COUNT(*) c FROM notify_outbox "
+                      "WHERE kind='semantic_notice'").fetchone()["c"]
+    assert n == 1
+    import notifier
+    monkeypatch.setattr(
+        notifier, "_config",
+        lambda: {"semantic": {"mode": "off"},
+                 "discord_channel_id": "123"})
+    monkeypatch.setattr(notifier, "_token", lambda: "tok")
+    calls = []
+    monkeypatch.setattr(notifier, "_post",
+                        lambda *a, **k: calls.append(a) or "1")
+    notifier.flush(db)
+    # the base new_messages notice sends; the semantic_notice must not
+    assert not any("要約" in str(c[2]) for c in calls)
+    row = db.db.execute(
+        "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
+    ).fetchone()
+    assert row["state"] == "pending"   # parked, not destroyed
+    db.close()
+
+
+def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
+    """§18.4: a PASS notice enqueued for fingerprint fp must suppress
+    terminally once the thread's live fingerprint has moved on."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    p = _patient(db)
+    p.messages = [_message(1, body=BODY + "（編集）", unread=False)]
+    db.save_patient(p)                 # fingerprint moves
+    import notifier
+    monkeypatch.setattr(
+        notifier, "_config",
+        lambda: {"semantic": {"mode": "enforce"},
+                 "discord_channel_id": "123"})
+    monkeypatch.setattr(notifier, "_token", lambda: "tok")
+    calls = []
+    monkeypatch.setattr(notifier, "_post",
+                        lambda *a, **k: calls.append(a) or "1")
+    notifier.flush(db)
+    assert not any("要約" in str(c[2]) for c in calls)
+    row = db.db.execute(
+        "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
+    ).fetchone()
+    assert row["state"] == "suppressed"
+    db.close()
+
+
+def test_history_import_seeds_semantic(tmp_path):
+    """History-imported messages enter the semantic queue like every
+    other ingestion path (INV-06) — a backfill must not silently skip
+    evaluation."""
+    import job_ops
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.job_add("history", 1, payload={"since": 0, "pages": 1})
+
+    class Adapter:
+        def fetch_history(self, *a, **k):
+            return mcs_adapter.MessageBatch(
+                [_message(5)], pages=1, reached=True)
+
+        def fetch_thread(self, *a, **k):
+            return []
+
+    res = {"errors": []}
+    job_ops.run_history_jobs(Adapter(), db, res,
+                             time.monotonic() + 60, semantic=True)
+    row = db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()
+    assert row and 5 in json.loads(row["payload"])["targets"]
+    # and without the flag it stays silent
+    db2 = ledger.Ledger(str(tmp_path / "ledger2.db"))
+    _patient(db2)
+    db2.job_add("history", 1, payload={"since": 0, "pages": 1})
+    job_ops.run_history_jobs(Adapter(), db2, {"errors": []},
+                             time.monotonic() + 60, semantic=False)
+    assert db2.db.execute("SELECT COUNT(*) c FROM fetch_jobs "
+                          "WHERE kind='semantic'").fetchone()["c"] == 0
+    db.close()
+    db2.close()

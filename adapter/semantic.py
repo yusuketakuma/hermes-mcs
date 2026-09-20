@@ -67,8 +67,10 @@ KIND_AUDIT = "semantic_audit"
 KIND_LOOP = "loop_candidate"
 KIND_LOOP_EVENT = "loop_event"
 KIND_PLAN = "notify_plan"
+KIND_USAGE = "semantic_usage"
 SEMANTIC_KINDS = (KIND_BUNDLE, KIND_ASSESS, KIND_FACTS, KIND_SUMMARY,
-                  KIND_AUDIT, KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN)
+                  KIND_AUDIT, KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN,
+                  KIND_USAGE)
 
 MODES = ("off", "shadow", "assist", "enforce")
 TECH_STATUSES = ("complete", "partial", "pending", "retry_wait",
@@ -284,12 +286,16 @@ def _current(ledger, kind: str, message_id: int, fp: str):
 
 def jev_usage_today(ledger) -> int:
     """Durable daily Jev request count — shadow traffic spends real API
-    budget too, so it is never unbounded (§13.5, AT-067)."""
+    budget too, so it is never unbounded (§13.5, AT-067). Counts the
+    per-attempt semantic_usage rows written by run_due — one row per job
+    attempt carrying that attempt's request DELTA, so every external
+    call (primary, detail, claim-audit, loop-relation, failed) is
+    counted exactly once."""
     day = time.time() - (time.time() % 86400)
     total = 0
     for r in ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
-            (KIND_ASSESS, day)):
+            (KIND_USAGE, day)):
         try:
             total += int(json.loads(r["meta"] or "{}")
                          .get("jev_requests", 0))
@@ -369,53 +375,94 @@ def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
     return (first, first + len(quote))
 
 
-def extract_facts(llm_fn, member: dict) -> list:
-    """Fact candidates with verified evidence spans. Unlocatable or
-    ambiguous quotes stay 'unverified' — never silently promoted
-    (INV-07/08)."""
-    body = member["body_original"]
-    raw = _json_block(llm_fn(_FACT_PROMPT % body[:4000]) or "")
-    items = raw.get("facts") if raw else None
-    if not isinstance(items, list):
+def _chunks(text: str, size: int = 3000) -> list:
+    """Split into <=size chunks at line/sentence boundaries, hard-
+    splitting only as a last resort. The concatenation of all chunks is
+    the original text — full coverage, never head-only processing
+    (§12.3, AT-017)."""
+    if not text:
         return []
+    if len(text) <= size:
+        return [text]
+    out, buf = [], ""
+    for seg in re.split(r"(?<=\n)", text):
+        if len(buf) + len(seg) <= size:
+            buf += seg
+            continue
+        if buf:
+            out.append(buf)
+            buf = ""
+        while len(seg) > size:
+            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size))
+            if cut <= 0:
+                cut = size
+            out.append(seg[:cut])
+            seg = seg[cut:]
+        buf = seg
+    if buf:
+        out.append(buf)
+    return out
+
+
+def extract_facts(llm_fn, member: dict,
+                  deadline: float | None = None) -> tuple[list, bool]:
+    """Fact candidates with verified evidence spans, extracted across
+    the WHOLE body in bounded chunks — a long tail is never silently
+    dropped (§12.3, AT-017). Returns (facts, complete): complete=False
+    means the deadline hit mid-extraction and the caller must defer —
+    the member is NOT 'processed'. Unlocatable or ambiguous quotes stay
+    'unverified' — never silently promoted (INV-07/08)."""
+    body = member["body_original"]
     facts = []
-    for i, it in enumerate(items[:20]):
-        if not isinstance(it, dict):
+    for ch in _chunks(body):
+        if deadline is not None and time.monotonic() > deadline:
+            return facts, False
+        raw = _json_block(llm_fn(_FACT_PROMPT % ch) or "")
+        items = raw.get("facts") if raw else None
+        if not isinstance(items, list):
             continue
-        stmt = it.get("statement")
-        if not isinstance(stmt, str) or not stmt.strip():
-            continue
-        quote = it.get("evidence_quote")
-        span = _locate_quote(body, quote) \
-            if isinstance(quote, str) else None
-        ev_id = f"ev_{member['message_id']}_{i}"
-        status = it.get("status")
-        polarity = it.get("polarity")
-        facts.append({
-            "fact_id": f"fact_{member['message_id']}_{i}",
-            "kind": it.get("kind") if it.get("kind") in FACT_KINDS
-                    else "other",
-            "statement": stmt.strip()[:200],
-            "subject_ref": f"m{member['message_id']}",
-            "drug_ref": None,
-            "status": status if status in FACT_STATUSES else "not_stated",
-            "polarity": polarity if polarity in POLARITIES
-                        else "uncertain",
-            "occurred_at": None,
-            "time_text": it.get("time_text")
-                         if isinstance(it.get("time_text"), str) else None,
-            "quantity": it.get("quantity")
-                        if isinstance(it.get("quantity"), str) else None,
-            "evidence_refs": [ev_id] if span else [],
-            "validation_status": "candidate" if span else "unverified",
-            "_evidence": {"evidence_id": ev_id,
-                          "message_id": member["message_id"],
-                          "revision_id": member["revision"],
-                          "start_codepoint": span[0] if span else None,
-                          "end_codepoint": span[1] if span else None,
-                          "quote": quote} if span else None,
-        })
-    return facts
+        for it in items:
+            if len(facts) >= 40 or not isinstance(it, dict):
+                continue
+            stmt = it.get("statement")
+            if not isinstance(stmt, str) or not stmt.strip():
+                continue
+            quote = it.get("evidence_quote")
+            span = _locate_quote(body, quote) \
+                if isinstance(quote, str) else None
+            i = len(facts)
+            ev_id = f"ev_{member['message_id']}_{i}"
+            status = it.get("status")
+            polarity = it.get("polarity")
+            facts.append({
+                "fact_id": f"fact_{member['message_id']}_{i}",
+                "kind": it.get("kind") if it.get("kind") in FACT_KINDS
+                        else "other",
+                "statement": stmt.strip()[:200],
+                "subject_ref": f"m{member['message_id']}",
+                "drug_ref": None,
+                "status": status if status in FACT_STATUSES
+                          else "not_stated",
+                "polarity": polarity if polarity in POLARITIES
+                            else "uncertain",
+                "occurred_at": None,
+                "time_text": it.get("time_text")
+                             if isinstance(it.get("time_text"), str)
+                             else None,
+                "quantity": it.get("quantity")
+                            if isinstance(it.get("quantity"), str)
+                            else None,
+                "evidence_refs": [ev_id] if span else [],
+                "validation_status": "candidate" if span
+                                     else "unverified",
+                "_evidence": {"evidence_id": ev_id,
+                              "message_id": member["message_id"],
+                              "revision_id": member["revision"],
+                              "start_codepoint": span[0],
+                              "end_codepoint": span[1],
+                              "quote": quote} if span else None,
+            })
+    return facts, True
 
 
 _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器です。対象投稿と同一スレッド文脈、
@@ -461,21 +508,40 @@ def _facts_brief(facts: list) -> str:
     return "\n".join(lines) or "(なし)"
 
 
+# Safety ceiling for one local-LLM prompt. Above it the model's context
+# window could silently drop input — an oversize target is flagged
+# input_oversize -> NEEDS_REVIEW instead of being chopped (§12.3).
+PROMPT_CHAR_LIMIT = 28000
+
+
 def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
               verdicts: dict, feedback: list | None = None) -> dict | None:
     """Local-LLM summary in the common Claim schema. Jev verdicts are
-    context for the writer, never forced truth (§15.3)."""
+    context for the writer, never forced truth (§15.3). The FULL target
+    body and thread context are passed untruncated; if the prompt would
+    exceed PROMPT_CHAR_LIMIT no model call is made and the result is a
+    stub flagged _input_oversize (audit forces NEEDS_REVIEW — never a
+    silent partial PASS)."""
     target = next((m for m in bundle["members"]
                    if m["message_id"] == target_id), None)
     if target is None:
         return None
     ctx = "\n".join(m["body_original"] for m in bundle["members"]
                     if m["message_id"] != target_id
-                    and m["body_original"])[:2000]
-    prompt = _SUMMARY_PROMPT % (target["body_original"][:4000],
+                    and m["body_original"])
+    prompt = _SUMMARY_PROMPT % (target["body_original"],
                                 ctx, _facts_brief(facts))
     if feedback:
         prompt += _REPAIR_SUFFIX % "\n".join(feedback[:10])
+    if len(prompt) > PROMPT_CHAR_LIMIT:
+        return {"summary_id": f"sum_{bundle['bundle_id']}",
+                "input_bundle_id": bundle["bundle_id"],
+                "schema_version": SCHEMA_VERSION,
+                "target_message_id": target_id,
+                "claims": [],
+                "limitations": ["対象投稿または文脈が大きすぎるため"
+                                "要約を生成できませんでした"],
+                "audit_status": "pending", "_input_oversize": True}
     raw = _json_block(llm_fn(prompt) or "")
     if raw is None:
         return None
@@ -529,6 +595,8 @@ def audit_code(bundle: dict, facts: list, summary: dict) -> list:
     structural enums, fact->claim coverage. Returns findings list —
     [] means the code side found no blocker (model check still runs)."""
     findings = []
+    if summary.get("_input_oversize"):
+        findings.append({"code": "input_oversize"})
     members = {m["message_id"]: m for m in bundle["members"]}
     for f in facts:
         ev = f.get("_evidence")
@@ -587,20 +655,43 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
     for c in claims:
         questions[c["claim_id"]] = jev.choice_question(
             "Does the claim in state.target.text follow from the "
-            "provided source spans in state.context? Judge target, "
-            "value, polarity and tense together — a same-topic claim "
-            "with different drug/dose does not match (AT-024/025).",
+            "provided source spans in state.context? Each evidence "
+            "entry pairs the exact quote (role=evidence_quote) with its "
+            "surrounding original-text window (role=evidence_context) — "
+            "a verbatim quote negated or conditioned by neighboring "
+            "text does NOT support the claim. Judge target, value, "
+            "polarity and tense together — a same-topic claim with "
+            "different drug/dose does not match (AT-024/025/028).",
             jev.CLAIM_SUPPORT_OPTIONS)
-    ev_quotes = {}
+    members = {m["message_id"]: m for m in bundle["members"]}
+    ev_ctx = {}
     for f in summary.get("_facts", []):
-        if f.get("_evidence"):
-            ev_quotes[f["_evidence"]["evidence_id"]] = \
-                f["_evidence"]["quote"]
+        ev = f.get("_evidence")
+        if not ev:
+            continue
+        quote = ev["quote"]
+        src = members.get(ev["message_id"])
+        body = src["body_original"] if src else ""
+        s, e = ev["start_codepoint"], ev["end_codepoint"]
+        # the claim's support is judged against the quote PLUS its
+        # surrounding原文 window — a bare quote cannot reveal a
+        # negation or condition sitting next to it (§16.2, AT-028)
+        if type(s) is int and type(e) is int and 0 <= s < e <= len(body):
+            win = body[max(0, s - 250):min(len(body), e + 250)]
+        else:
+            win = ""
+        ev_ctx[ev["evidence_id"]] = (quote, win)
     for c in claims:
+        ctx = []
+        for ev in c["evidence_refs"]:
+            quote, win = ev_ctx.get(ev, ("", ""))
+            ctx.append({"id": ev, "role": "evidence_quote",
+                        "text": quote})
+            if win and win != quote:
+                ctx.append({"id": f"{ev}_ctx",
+                            "role": "evidence_context", "text": win})
         state = {"target": {"id": c["claim_id"], "text": c["text"]},
-                 "context": [{"id": ev, "role": "evidence",
-                              "text": ev_quotes.get(ev, "")}
-                             for ev in c["evidence_refs"]]}
+                 "context": ctx}
         try:
             out = jev_client.evaluate(
                 state, {c["claim_id"]: questions[c["claim_id"]]},
@@ -627,7 +718,8 @@ def audit_status_for(code_findings: list, jev_findings: list,
     blocking = [f for f in code_findings
                 if f["code"] in ("evidence_missing",
                                  "evidence_revision_mismatch",
-                                 "evidence_span_mismatch")]
+                                 "evidence_span_mismatch",
+                                 "input_oversize")]
     if blocking:
         return "NEEDS_REVIEW"
     repairable = [f for f in code_findings + jev_findings
@@ -647,8 +739,11 @@ def audit_status_for(code_findings: list, jev_findings: list,
 
 def update_loops(ledger, project_id: int, bundle: dict,
                  facts_by_target: dict, jev_client, scfg: dict,
-                 deadline: float) -> int:
-    """Candidate creation is automatic; promotion to a formal request is
+                 deadline: float) -> tuple[int, bool]:
+    """Returns (candidates_created, complete). complete=False means the
+    pair budget/deadline/a Jev error cut the relation pass short — the
+    caller must reschedule so the remainder is carried forward (§17.2).
+    Candidate creation is automatic; promotion to a formal request is
     NOT — that stays behind mcs_requests' human_confirmed contract
     (INV-11/19, AT-051)."""
     created = 0
@@ -697,26 +792,50 @@ def update_loops(ledger, project_id: int, bundle: dict,
                       "registry": jev.REGISTRY_VERSION})
             created += 1
     if jev_client is None:
-        return created
-    # relate new arrivals to open candidates — bounded, one choice call
-    # per (candidate, target) pair, rest deferred to the next job
+        return created, True
+    # relate new arrivals to open candidates. EVERY open candidate is
+    # eligible (no LIMIT — the spec forbids dropping the remainder,
+    # §17.2); evaluated (candidate, target) pairs are deduped via their
+    # recorded loop_event so re-runs only evaluate new pairs, and a
+    # per-job pair budget carries the remainder to the next run of the
+    # same job instead of truncating it.
+    seen = set()
+    for r in ledger.db.execute(
+            "SELECT content FROM artifacts WHERE kind=? AND project_id=?",
+            (KIND_LOOP_EVENT, project_id)):
+        try:
+            ev = json.loads(r["content"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(ev, dict):
+            # loop_artifact_id identifies the candidate — two candidates
+            # can share an origin message, so the bare origin id is not
+            # a safe dedup key (legacy rows fall back to it)
+            seen.add((ev.get("loop_artifact_id")
+                      or ev.get("loop_origin_id"),
+                      ev.get("trigger_message_id")))
     open_loops = ledger.db.execute("""
-      SELECT message_id, content FROM artifacts
-      WHERE kind=? AND project_id=? ORDER BY artifact_id DESC LIMIT 10
+      SELECT artifact_id, message_id, content FROM artifacts
+      WHERE kind=? AND project_id=? ORDER BY artifact_id DESC
     """, (KIND_LOOP, project_id)).fetchall()
     targets = [m for m in bundle["members"] if m["role"] == "target"]
+    pairs = 0
     for row in open_loops:
         try:
             cand = json.loads(row["content"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if cand.get("state") not in ("PROPOSED", "RESOLUTION_CANDIDATE"):
+        if not isinstance(cand, dict) or cand.get("state") not in \
+                ("PROPOSED", "RESOLUTION_CANDIDATE"):
             continue
         for m in targets:
-            if m["message_id"] == row["message_id"]:
+            if row["message_id"] == m["message_id"]:
                 continue  # a candidate never relates to its own origin
-            if time.monotonic() > deadline:
-                return created
+            key = (row["artifact_id"], m["message_id"])
+            if key in seen:
+                continue
+            if pairs >= 40 or time.monotonic() > deadline:
+                return created, False   # remainder -> next run
             qid = f"rel_{row['message_id']}_{m['message_id']}"
             q = jev.choice_question(
                 "state.context[0] is an open follow-up item recorded "
@@ -731,15 +850,15 @@ def update_loops(ledger, project_id: int, bundle: dict,
                                   "text": cand.get("description", "")}]},
                     {qid: q}, deadline)
             except jev.JevError:
-                return created
-            rel = out["answers"][qid]["choice"]
-            if rel in ("unrelated",):
-                continue
+                return created, False
+            pairs += 1
+            seen.add(key)
             ledger.artifact_add(
                 KIND_LOOP_EVENT,
                 json.dumps({"loop_origin_id": row["message_id"],
+                            "loop_artifact_id": row["artifact_id"],
                             "trigger_message_id": m["message_id"],
-                            "relation": rel,
+                            "relation": out["answers"][qid]["choice"],
                             "confidence": out["answers"][qid]
                             .get("confidence"),
                             "candidate_state": cand.get("state")},
@@ -747,8 +866,9 @@ def update_loops(ledger, project_id: int, bundle: dict,
                 project_id=project_id, message_id=m["message_id"],
                 model=jev.JEV_MODEL,
                 meta={"fingerprint": bundle["source_fingerprint"],
-                      "registry": jev.REGISTRY_VERSION})
-    return created
+                      "registry": jev.REGISTRY_VERSION,
+                      "jev_requests": 1})
+    return created, True
 
 
 # ---------- notification render (spec §20, §19.3) ----------
@@ -839,9 +959,15 @@ def _emit_degraded(ledger, scfg: dict) -> int:
     Each (root, fingerprint) pair dedupes via delivery_key."""
     cutoff = time.time() - scfg["delayed_notice_seconds"]
     sent = 0
+    # Only events still undelivered qualify — a base notification that
+    # already reached Discord (accepted) or was dropped (suppressed)
+    # must never get an extra "新着取得" degraded notice (§19.3). A
+    # pending/failed event this old means delivery is genuinely stuck,
+    # so the minimal code-generated notice covers the silence.
     events = ledger.db.execute(
-        "SELECT project_id,payload FROM notify_outbox "
-        "WHERE kind='new_messages' AND created_at<?", (cutoff,))
+        "SELECT event_id,project_id,payload FROM notify_outbox "
+        "WHERE kind='new_messages' AND state IN ('pending','failed') "
+        "AND created_at<?", (cutoff,))
     for ev in events:
         try:
             ids = json.loads(ev["payload"]).get("message_ids") or []
@@ -880,7 +1006,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
                 continue
             ledger.outbox_add("semantic_notice", pid, {
                 "delivery_key": dkey, "root_id": root,
-                "degraded": True,
+                "degraded": True, "src_event_id": ev["event_id"],
                 "text": render_degraded(ledger, pid),
                 "policy_version": POLICY_VERSION})
             sent += 1
@@ -888,6 +1014,39 @@ def _emit_degraded(ledger, scfg: dict) -> int:
 
 
 # ---------- drain ----------
+
+def _eval_chunked(jev_client, state: dict, questions: dict,
+                  deadline: float, limit: int) -> dict:
+    """evaluate() with the question set split into
+    max_questions_per_request-sized chunks — the configured bound is
+    enforced, not just validated (§13.4)."""
+    keys = list(questions)
+    merged = {"answers": {}}
+    for i in range(0, len(keys), max(1, limit)):
+        part = {k: questions[k] for k in keys[i:i + limit]}
+        out = jev_client.evaluate(state, part, deadline)
+        merged["answers"].update(out["answers"])
+    return merged
+
+
+def _plan_exists(ledger, message_id: int, fp: str,
+                 status: str) -> bool:
+    """A notify_plan for THIS (generation, audit outcome) already
+    recorded — replay and crash-retry must not stack duplicate plan
+    rows. Keyed on status too: a plan left by a PENDING run does not
+    satisfy a later PASS on the same fingerprint."""
+    for r in ledger.db.execute(
+            "SELECT meta FROM artifacts WHERE kind=? AND message_id=?",
+            (KIND_PLAN, message_id)):
+        try:
+            m = json.loads(r["meta"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if m.get("fingerprint") == fp \
+                and m.get("audit_status") == status:
+            return True
+    return False
+
 
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     """One semantic job -> durable artifacts + job state transition.
@@ -903,21 +1062,26 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
         if isinstance(raw_targets, list) else []
     bundle = thread_bundle(ledger, pid, root, targets or None)
     if bundle is None:
-        return "done"   # source vanished — nothing to preserve for it
+        # source vanished — nothing to preserve for it; mark done so
+        # the row does not re-run as a no-op on every drain
+        ledger.job_done(job["job_id"])
+        return "done"
     fp = bundle["source_fingerprint"]
-    ledger.artifact_add(
-        KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
-        project_id=pid, message_id=root, model=jev.JEV_MODEL,
-        meta={"fingerprint": fp, "schema": SCHEMA_VERSION})
+    if _current(ledger, KIND_BUNDLE, root, fp) is None:
+        ledger.artifact_add(
+            KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
+            project_id=pid, message_id=root, model=jev.JEV_MODEL,
+            meta={"fingerprint": fp, "schema": SCHEMA_VERSION})
     all_targets = [t for t in (targets or [root])
                    if any(m["message_id"] == t
                           for m in bundle["members"])]
+    members = {m["message_id"]: m for m in bundle["members"]}
     facts_by_target: dict[int, list] = {}
     verdicts: dict[int, dict] = {}
     incomplete = False
+    hard_fail = False   # non-retryable Jev error — bound the retries
     for mid in all_targets:
-        member = next(m for m in bundle["members"]
-                      if m["message_id"] == mid)
+        member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
         prev = _current(ledger, KIND_ASSESS, mid, fp)
@@ -932,17 +1096,24 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                          "registry": jev.REGISTRY_VERSION,
                          "schema": SCHEMA_VERSION}
             answers = None
+            req0 = jev_client.requests_made if jev_client else 0
             if jev_client is not None and state is not None:
                 qs = {k: jev.noul_question(p["instructions"], p["true"],
                                            p["false"])
                       for k, p in jev.PROPOSITIONS.items()}
                 try:
-                    out = jev_client.evaluate(state, qs, deadline)
+                    out = _eval_chunked(
+                        jev_client, state, qs, deadline,
+                        scfg["max_questions_per_request"])
                     answers = out["answers"]
                 except jev.JevError as e:
                     meta_base["technical_status"] = (
                         "retry_wait" if e.retryable else "error")
                     meta_base["error_kind"] = e.kind
+                    if not e.retryable:
+                        hard_fail = True
+            meta_base["jev_requests"] = (
+                jev_client.requests_made - req0) if jev_client else 0
             if answers is None:
                 meta_base.setdefault("technical_status", "pending")
                 meta_base.setdefault("error_kind", "jev_unavailable")
@@ -951,9 +1122,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                                              "verdicts": {}},
                                             ensure_ascii=False),
                     project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                    meta={**meta_base,
-                          "jev_requests": jev_client.requests_made
-                          if jev_client else 0})
+                    meta=meta_base)
                 incomplete = True
                 continue
             verdicts[mid] = {k: {"noul": a["noul"],
@@ -961,11 +1130,13 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                                      a["noul"], scfg["match_threshold"],
                                      scfg["nomatch_threshold"])}
                              for k, a in answers.items()}
-            # conditional drill-down: only where the primary pass did
-            # not return NO_MATCH — source text is never dropped
+            # conditional drill-down: only when the medication-change
+            # proposition did not return NO_MATCH — the detail questions
+            # are medication-specific, so unrelated hits never spend the
+            # extra calls (§14.3)
             detail = {}
-            if any(v["verdict"] != "NO_MATCH"
-                   for v in verdicts[mid].values()):
+            if verdicts[mid].get("P01", {}).get("verdict") \
+                    != "NO_MATCH":
                 for dim, (instr, options) in \
                         jev.MED_DETAIL_QUESTIONS.items():
                     if time.monotonic() > deadline - 5:
@@ -978,14 +1149,15 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                         detail[dim] = d_out["answers"][dim]["choice"]
                     except jev.JevError:
                         detail[dim] = None
+            meta_base["jev_requests"] = (
+                jev_client.requests_made - req0) if jev_client else 0
             ledger.artifact_add(
                 KIND_ASSESS,
                 json.dumps({"target_message_id": mid,
                             "verdicts": verdicts[mid],
                             "detail": detail}, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={**meta_base, "technical_status": "complete",
-                      "jev_requests": jev_client.requests_made})
+                meta={**meta_base, "technical_status": "complete"})
         # facts: reuse a stored set for this fingerprint, else extract
         prev_f = _current(ledger, KIND_FACTS, mid, fp)
         if prev_f is not None:
@@ -994,7 +1166,11 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             if time.monotonic() > deadline - 5:
                 incomplete = True
                 break
-            facts = extract_facts(llm_fn, member)
+            facts, f_complete = extract_facts(llm_fn, member,
+                                              deadline - 5)
+            if not f_complete:
+                incomplete = True
+                break
             ledger.artifact_add(
                 KIND_FACTS,
                 json.dumps({"facts": facts,
@@ -1003,24 +1179,46 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                                          if f.get("_evidence")}},
                            ensure_ascii=False),
                 project_id=pid, message_id=mid, model=LLM_MODEL,
-                meta={"fingerprint": fp, "schema": SCHEMA_VERSION})
+                meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+                      "chunks_total": len(_chunks(
+                          member["body_original"]))})
         facts_by_target[mid] = facts
     if incomplete:
+        if hard_fail:
+            # deterministic failure (e.g. protocol_error, oversized
+            # payload) — deferring forever would burn a Jev call every
+            # tick on an input that can never pass; bounded retry ends
+            # 'failed' where status_report can surface it
+            ledger.job_retry(job["job_id"], retry_in=300,
+                             max_attempts=6)
+            return "retry"
         return "deferred"
 
-    # summary + audit for targets lacking a current audited summary —
-    # a prior crash after assess/facts resumes here, not from scratch
-    audit_results = {}
+    # summary + audit. A TERMINAL audit (PASS/NEEDS_REVIEW) for THIS
+    # fingerprint is reused — its notification intent was already
+    # committed atomically below. A PENDING one is NOT final: the
+    # stored summary is re-audited so a mid-audit outage can never
+    # wedge the thread on a stale PENDING marker (AT-058).
+    results = {}
     for mid, facts in facts_by_target.items():
         existing = _current(ledger, KIND_SUMMARY, mid, fp)
         prev_audit = _current(ledger, KIND_AUDIT, mid, fp)
-        if existing is not None and prev_audit is not None:
+        prev_status = (prev_audit["meta"].get("audit_status")
+                       if prev_audit else None)
+        if existing is not None and prev_status in ("PASS",
+                                                    "NEEDS_REVIEW"):
+            results[mid] = {"summary": existing["content"],
+                            "status": prev_status, "findings": [],
+                            "repaired": False, "fresh": False}
             continue
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
-        summary = summarize(llm_fn, bundle, mid, facts,
-                            verdicts.get(mid, {}))
+        if existing is not None:
+            summary = existing["content"]
+        else:
+            summary = summarize(llm_fn, bundle, mid, facts,
+                                verdicts.get(mid, {}))
         if summary is None:
             ledger.artifact_add(
                 KIND_AUDIT,
@@ -1038,6 +1236,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
         repaired = bool(prev_audit
                         and prev_audit["meta"].get("repair_count", 0) >= 1)
         summary["_facts"] = facts   # evidence context for the Jev audit
+        req0 = jev_client.requests_made if jev_client else 0
         findings = []
         status = "PENDING"
         for _attempt in range(2):      # initial + at most one repair
@@ -1060,8 +1259,16 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
                     continue
             break
         summary["audit_status"] = status
-        audit_results[mid] = (summary, status, findings, repaired)
+        results[mid] = {"summary": summary, "status": status,
+                        "findings": findings, "repaired": repaired,
+                        "fresh": True,
+                        "jev_requests": (jev_client.requests_made - req0)
+                        if jev_client else 0}
     if incomplete:
+        if hard_fail:
+            ledger.job_retry(job["job_id"], retry_in=300,
+                             max_attempts=6)
+            return "retry"
         return "deferred"
 
     # generation guard: the bundle must still be current at commit, and
@@ -1072,55 +1279,100 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     stale = (fresh is None
              or fresh["source_fingerprint"] != fp
              or live is None or live["job_id"] != job["job_id"])
+    pending = not stale and any(r["status"] == "PENDING"
+                                for r in results.values())
+    loops_done = True
+    if not stale:
+        # loop candidates/relation events for the LIVE generation —
+        # kept OUT of the commit tx because matching makes Jev calls
+        # (no network inside a DB transaction, §6.2); replay-safe via
+        # candidate_fp and pair dedup.
+        _, loops_done = update_loops(ledger, pid, bundle,
+                                     facts_by_target, jev_client,
+                                     scfg, deadline)
     with ledger.db:
-        for mid, (summary, status, findings, repaired) \
-                in audit_results.items():
-            final_status = "STALE" if stale else status
-            ledger.artifact_add_tx(
-                KIND_SUMMARY,
-                json.dumps({k: v for k, v in summary.items()
-                            if k != "_facts"}, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=LLM_MODEL,
-                meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
-                      "audit_status": final_status, "stale": stale})
-            ledger.artifact_add_tx(
-                KIND_AUDIT,
-                json.dumps({"status": final_status,
-                            "findings": findings,
-                            "target_message_id": mid},
-                           ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
-                      "audit_status": final_status,
-                      "repair_count": 1 if repaired else 0})
+        for mid, r in results.items():
+            final_status = "STALE" if stale else r["status"]
+            if r["fresh"]:
+                ledger.artifact_add_tx(
+                    KIND_SUMMARY,
+                    json.dumps({k: v for k, v in r["summary"].items()
+                                if not k.startswith("_")},
+                               ensure_ascii=False),
+                    project_id=pid, message_id=mid, model=LLM_MODEL,
+                    meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+                          "audit_status": final_status, "stale": stale,
+                          "target_revision":
+                              members[mid]["revision"]})
+                ledger.artifact_add_tx(
+                    KIND_AUDIT,
+                    json.dumps({"status": final_status,
+                                "findings": r["findings"],
+                                "target_message_id": mid},
+                               ensure_ascii=False),
+                    project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                    meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+                          "audit_status": final_status,
+                          "repair_count": 1 if r["repaired"] else 0,
+                          "jev_requests": r.get("jev_requests", 0)})
+            if stale:
+                continue
+            # notification plan + outbox intent commit in the SAME
+            # transaction as the analysis result — a crash can never
+            # leave a saved summary without its notification intent
+            # (§18.3). Reused results re-enter here so an intent lost
+            # by an older crash is recreated on the next run. The two
+            # dedupes are independent: the plan row keys on
+            # (fingerprint, audit_status), the outbox row on its
+            # delivery_key — a plan written by an earlier PENDING/shadow
+            # run must not block a now-PASS enforce enqueue.
+            summary_clean = {k: v for k, v in r["summary"].items()
+                             if not k.startswith("_")}
+            text = render_notice(ledger, pid, root, summary_clean,
+                                 final_status)
+            enqueued = False
+            if scfg["mode"] == "enforce" and final_status == "PASS":
+                dkey = payload_hash({"kind": "semantic_notice",
+                                     "root": root, "fp": fp})
+                if not _outbox_has_delivery(ledger, dkey):
+                    ledger.outbox_add_tx("semantic_notice", pid, {
+                        "delivery_key": dkey, "root_id": root,
+                        "target_message_id": mid, "text": text,
+                        "fingerprint": fp,
+                        "policy_version": POLICY_VERSION})
+                    enqueued = True
+            if not _plan_exists(ledger, mid, fp, final_status):
+                plan_meta = {"fingerprint": fp,
+                             "audit_status": final_status,
+                             "mode": scfg["mode"],
+                             "origin": pl.get("origin")}
+                if enqueued:
+                    plan_meta["enqueued"] = True
+                ledger.artifact_add_tx(KIND_PLAN, json.dumps(
+                    {"root_id": root, "target_message_id": mid,
+                     "text": text}, ensure_ascii=False),
+                    project_id=pid, message_id=mid,
+                    meta=plan_meta)
+        if not stale and not pending and loops_done:
+            ledger.db.execute(
+                "UPDATE fetch_jobs SET state='done',updated_at=? "
+                "WHERE job_id=?", (time.time(), job["job_id"]))
     if stale:
         ledger.job_defer(job["job_id"], 0)   # re-run against new input
         return "deferred"
-
-    update_loops(ledger, pid, bundle, facts_by_target,
-                 jev_client, scfg, deadline)
-
-    # notification path — shadow records the plan only; enforce may queue
-    # a real outbox intent through the existing sender (INV-14/16)
-    for mid, (summary, status, _f, _r) in audit_results.items():
-        text = render_notice(ledger, pid, root, summary, status)
-        plan_meta = {"fingerprint": fp, "audit_status": status,
-                     "mode": scfg["mode"], "origin": pl.get("origin")}
-        if scfg["mode"] == "enforce" and status == "PASS":
-            dkey = payload_hash({"kind": "semantic_notice",
-                                 "root": root, "fp": fp})
-            if not _outbox_has_delivery(ledger, dkey):
-                ledger.outbox_add("semantic_notice", pid, {
-                    "delivery_key": dkey, "root_id": root,
-                    "target_message_id": mid, "text": text,
-                    "policy_version": POLICY_VERSION})
-                plan_meta["enqueued"] = True
-        ledger.artifact_add(KIND_PLAN, json.dumps(
-            {"root_id": root, "target_message_id": mid,
-             "text": text}, ensure_ascii=False),
-            project_id=pid, message_id=mid,
-            meta=plan_meta)
-    ledger.job_done(job["job_id"])
+    if pending:
+        # evaluation incomplete (e.g. Jev outage mid-audit) — the job
+        # must not sit 'done' on an unfinished audit; consume a bounded
+        # retry attempt so a persistent outage eventually fails rather
+        # than busy-loops (AT-058)
+        ledger.job_retry(job["job_id"], retry_in=300, max_attempts=6)
+        return "retry"
+    if not loops_done:
+        # relation pass truncated by the pair budget/deadline — the
+        # results committed above stand; the job re-runs to evaluate
+        # the remaining (candidate, target) pairs (§17.2 持ち越し)
+        ledger.job_defer(job["job_id"], 0)
+        return "deferred"
     return "done"
 
 
@@ -1149,7 +1401,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])
-    due = ledger.job_due(limit=max_jobs, kind=JOB_KIND)
+    # arrival seeds outrank history-import seeds: a deep backfill must
+    # never starve a fresh notification's evaluation (§19.1's existing-
+    # work-first ordering applied inside the queue too)
+    due = ledger.db.execute("""
+      SELECT * FROM fetch_jobs
+      WHERE state='pending' AND next_try <= ? AND kind=?
+      ORDER BY CASE WHEN payload LIKE '%"history_import"%'
+                    THEN 1 ELSE 0 END, job_id
+      LIMIT ?
+    """, (time.time(), JOB_KIND, max_jobs)).fetchall()
     for job in due:
         if cfg_path is not None:
             scfg, errs = semantic_config(load_config(cfg_path))
@@ -1171,6 +1432,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 jev_usage_today(ledger) >= scfg["daily_request_budget"]:
             result["errors"].append("semantic: daily_budget_exhausted")
             break
+        req0 = jev_client.requests_made if jev_client is not None else 0
         try:
             status = _process_job(ledger, scfg, job, jev_client,
                                   llm_fn, deadline)
@@ -1180,12 +1442,27 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             result["errors"].append(
                 f"semantic {job['message_id']}: {type(e).__name__}")
             out["failed"] += 1
+            status = None
+        # durable per-attempt request delta — the daily budget ledger
+        # (jev_usage_today) is exact and covers claim-audit and loop
+        # calls, not just the primary assessment
+        used = (jev_client.requests_made - req0) \
+            if jev_client is not None else 0
+        if used:
+            ledger.artifact_add(
+                KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
+                project_id=job["project_id"],
+                message_id=job["message_id"], model=jev.JEV_MODEL,
+                meta={"jev_requests": used})
+        if status is None:
             continue
         if status == "done":
             out["done"] += 1
         elif status == "deferred":
             out["deferred"] += 1
             ledger.job_defer(job["job_id"], 60)
+        elif status == "retry":
+            out["deferred"] += 1   # job_retry already rescheduled it
         else:
             out["failed"] += 1
     if scfg["mode"] == "enforce":

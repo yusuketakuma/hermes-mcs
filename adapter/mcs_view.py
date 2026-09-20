@@ -289,18 +289,37 @@ class View:
                 cand = json.loads(r["content"])
             except (json.JSONDecodeError, TypeError):
                 continue
+            if not isinstance(cand, dict):
+                continue
             events = []
             for e in self.db.execute(
                     "SELECT content FROM artifacts "
                     "WHERE kind='loop_event' AND project_id=? "
-                    "ORDER BY artifact_id DESC LIMIT 20", (pid,)):
+                    "ORDER BY artifact_id DESC LIMIT 50", (pid,)):
                 try:
                     ev = json.loads(e["content"])
                 except (json.JSONDecodeError, TypeError):
                     continue
-                if ev.get("loop_origin_id") == r["message_id"]:
+                if not isinstance(ev, dict):
+                    continue
+                # 'unrelated' evaluations are recorded for dedup but are
+                # not user-facing relations — hide them
+                if ev.get("relation") == "unrelated":
+                    continue
+                if ev.get("loop_artifact_id") == r["artifact_id"] or (
+                        ev.get("loop_artifact_id") is None
+                        and ev.get("loop_origin_id") == r["message_id"]):
                     events.append(ev)
             cand["relation_events"] = events[:5]
+            # a completion/cancellation report relation promotes the
+            # candidate to RESOLUTION_CANDIDATE for display — the stored
+            # artifact stays immutable (§17.3)
+            cand["effective_state"] = (
+                "RESOLUTION_CANDIDATE"
+                if any(e.get("relation") in ("completion_report",
+                                             "cancellation_report")
+                       for e in events)
+                else cand.get("state"))
             cand["artifact_id"] = r["artifact_id"]
             items.append(cand)
         return {"items": items, "scope": "loop_candidates"}

@@ -311,7 +311,8 @@ def _due_history_jobs(ledger):
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
-                     min_margin: float | None = None):
+                     min_margin: float | None = None,
+                     semantic: bool = False):
     """Work the durable history-import queue.
 
     trickle=False drains user-requested/cmd jobs (payload pages cap).
@@ -359,7 +360,8 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             result["errors"].append(
                 f"import {pid} replies: {type(e).__name__}")
             merged = MergeResult(checkpoint_safe=False)
-        new_ids = ledger.save_messages(hist, project_id=pid)
+        new_ids = ledger.save_messages(hist, project_id=pid,
+                                       semantic=semantic)
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
         floored = False
