@@ -409,8 +409,11 @@ def extract_facts(llm_fn, member: dict,
     """Fact candidates with verified evidence spans, extracted across
     the WHOLE body in bounded chunks — a long tail is never silently
     dropped (§12.3, AT-017). Returns (facts, complete): complete=False
-    means the deadline hit mid-extraction and the caller must defer —
-    the member is NOT 'processed'. Unlocatable or ambiguous quotes stay
+    means the deadline hit mid-extraction OR a chunk's response was
+    missing/unparseable — the caller must defer; the member is NOT
+    'processed' and no partial artifact is recorded, so a failed chunk
+    can never silently narrow the extraction for this generation
+    (§16.2 chunk ledger). Unlocatable or ambiguous quotes stay
     'unverified' — never silently promoted (INV-07/08)."""
     body = member["body_original"]
     facts = []
@@ -418,9 +421,9 @@ def extract_facts(llm_fn, member: dict,
         if deadline is not None and time.monotonic() > deadline:
             return facts, False
         raw = _json_block(llm_fn(_FACT_PROMPT % ch) or "")
-        items = raw.get("facts") if raw else None
+        items = raw.get("facts") if isinstance(raw, dict) else None
         if not isinstance(items, list):
-            continue
+            return facts, False
         for it in items:
             if len(facts) >= 40 or not isinstance(it, dict):
                 continue
@@ -881,22 +884,32 @@ _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
 
 
 def render_notice(ledger, project_id: int, root_id: int,
-                  summary: dict, audit_status: str) -> str:
+                  summary: dict, audit_status: str,
+                  targets: list | None = None,
+                  quality: str | None = None) -> str:
     """The §20.1 block. Patient label + coverage/audit status lines are
     code-generated; claim text comes from the audited summary. The MCS
-    link is the stored patient URL — never a guessed permalink."""
+    link is the stored patient URL — never a guessed permalink.
+    対象新着 counts only THIS generation's target posts — the rest of
+    the thread is context, not arrivals."""
     pat = ledger.db.execute(
         "SELECT patient_name,url FROM patients WHERE project_id=?",
         (project_id,)).fetchone()
     name = (pat["patient_name"] if pat else None) or str(project_id)
     url = (pat["url"] if pat else None) or ""
-    members = ledger.db.execute("""
-      SELECT COUNT(*) c, MAX(posted_at) latest FROM messages
-      WHERE project_id=? AND (message_id=? OR parent_id=?)
-    """, (project_id, root_id, root_id)).fetchone()
+    ids = [t for t in (targets or [root_id]) if type(t) is int] \
+        or [root_id]
+    marks = ",".join("?" * len(ids))
+    members = ledger.db.execute(
+        f"SELECT COUNT(*) c, MAX(posted_at) latest FROM messages "
+        f"WHERE project_id=? AND message_id IN ({marks})",
+        (project_id, *ids)).fetchone()
+    latest = (members["latest"] or "")[:16].replace("T", " ") \
+        .replace("-", "/")
     lines = [f"【{name}】",
              f"対象新着：{members['c']}投稿"
-             f"｜対象投稿の最終時刻：{(members['latest'] or '')[:16]}",
+             f"｜対象投稿の最終時刻：{latest} JST",
+             f"取得：{'完全' if quality == 'full' else '一部未取得'}",
              f"要約：{'自動検査完了' if audit_status == 'PASS' else '要確認'}"]
     by_sec: dict[str, list] = {}
     for c in summary.get("claims", []):
@@ -949,6 +962,37 @@ def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
         except (json.JSONDecodeError, TypeError, AttributeError):
             continue
     return False
+
+
+def _notify_src_event(ledger, project_id: int,
+                      message_ids: list) -> int | None:
+    """The newest new_messages outbox intent covering any of these
+    message ids — the stored origin event this evaluation descends
+    from. Notification eligibility is decided by the recorded origin
+    event, never by the semantic pipeline (INV-20, §20.3): a history
+    import, archive-suppressed path, replay, or after-the-fact seed
+    whose targets were never in a real arrival intent returns None and
+    can produce artifacts only — no notice is generated (AT-055).
+    A suppressed origin (archived/retracted arrival) counts as no
+    origin — the send-time gate in notifier re-checks the same
+    condition in case suppression lands after enqueue. Replay of a
+    genuinely notified thread re-derives the same eligibility, which
+    is what lets a crash-lost intent heal."""
+    if not message_ids:
+        return None
+    want = set(message_ids)
+    for r in ledger.db.execute(
+            "SELECT event_id,payload FROM notify_outbox "
+            "WHERE kind='new_messages' AND project_id=? "
+            "AND state != 'suppressed' "
+            "ORDER BY event_id DESC", (project_id,)):
+        try:
+            ids = json.loads(r["payload"]).get("message_ids") or []
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(ids, list) and want.intersection(ids):
+            return r["event_id"]
+    return None
 
 
 def _emit_degraded(ledger, scfg: dict) -> int:
@@ -1117,12 +1161,22 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             if answers is None:
                 meta_base.setdefault("technical_status", "pending")
                 meta_base.setdefault("error_kind", "jev_unavailable")
-                ledger.artifact_add(
-                    KIND_ASSESS, json.dumps({"target_message_id": mid,
-                                             "verdicts": {}},
-                                            ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                    meta=meta_base)
+                # an identical wait/error record adds no information —
+                # only a status CHANGE earns a new row, so a durable
+                # resource wait (Jev down, no key, budget hold) does not
+                # append one artifact per drain forever
+                if prev is None or (
+                        prev["meta"].get("technical_status"),
+                        prev["meta"].get("error_kind")) != (
+                        meta_base["technical_status"],
+                        meta_base.get("error_kind")):
+                    ledger.artifact_add(
+                        KIND_ASSESS,
+                        json.dumps({"target_message_id": mid,
+                                    "verdicts": {}},
+                                   ensure_ascii=False),
+                        project_id=pid, message_id=mid,
+                        model=jev.JEV_MODEL, meta=meta_base)
                 incomplete = True
                 continue
             verdicts[mid] = {k: {"noul": a["noul"],
@@ -1220,15 +1274,24 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             summary = summarize(llm_fn, bundle, mid, facts,
                                 verdicts.get(mid, {}))
         if summary is None:
-            ledger.artifact_add(
-                KIND_AUDIT,
-                json.dumps({"status": "PENDING",
-                            "findings": [{"code": "summary_unavailable"}],
-                            "target_message_id": mid},
-                           ensure_ascii=False),
-                project_id=pid, message_id=mid, model=LLM_MODEL,
-                meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
-                      "technical_status": "pending"})
+            # same dedup as the assess wait-state above: a persistent
+            # local-LLM outage defers without stacking identical
+            # PENDING rows on every drain
+            prev_a = _current(ledger, KIND_AUDIT, mid, fp)
+            if not (prev_a
+                    and prev_a["meta"].get("technical_status")
+                    == "pending"
+                    and prev_a["content"].get("status") == "PENDING"):
+                ledger.artifact_add(
+                    KIND_AUDIT,
+                    json.dumps({"status": "PENDING",
+                                "findings":
+                                    [{"code": "summary_unavailable"}],
+                                "target_message_id": mid},
+                               ensure_ascii=False),
+                    project_id=pid, message_id=mid, model=LLM_MODEL,
+                    meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
+                          "technical_status": "pending"})
             incomplete = True
             continue
         # at most one repair per input generation — the count survives
@@ -1290,6 +1353,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
         _, loops_done = update_loops(ledger, pid, bundle,
                                      facts_by_target, jev_client,
                                      scfg, deadline)
+    # notification eligibility is derived from the stored origin event,
+    # not from this job's seed provenance (INV-20, §20.3): a covering
+    # new_messages intent must exist for at least one evaluated target.
+    src_ev = _notify_src_event(ledger, pid, all_targets)
     with ledger.db:
         for mid, r in results.items():
             final_status = "STALE" if stale else r["status"]
@@ -1329,15 +1396,21 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             summary_clean = {k: v for k, v in r["summary"].items()
                              if not k.startswith("_")}
             text = render_notice(ledger, pid, root, summary_clean,
-                                 final_status)
+                                 final_status, targets=all_targets,
+                                 quality=bundle["content_quality"])
             enqueued = False
             if scfg["mode"] == "enforce" and final_status == "PASS":
                 dkey = payload_hash({"kind": "semantic_notice",
                                      "root": root, "fp": fp})
-                if not _outbox_has_delivery(ledger, dkey):
+                # src_ev=None means no stored origin intent — a PASS on
+                # imported/replayed input stays an artifact, never a
+                # notification (INV-20, AT-055)
+                if src_ev is not None \
+                        and not _outbox_has_delivery(ledger, dkey):
                     ledger.outbox_add_tx("semantic_notice", pid, {
                         "delivery_key": dkey, "root_id": root,
-                        "target_message_id": mid, "text": text,
+                        "target_message_id": mid,
+                        "src_event_id": src_ev, "text": text,
                         "fingerprint": fp,
                         "policy_version": POLICY_VERSION})
                     enqueued = True
@@ -1401,14 +1474,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])
-    # arrival seeds outrank history-import seeds: a deep backfill must
-    # never starve a fresh notification's evaluation (§19.1's existing-
-    # work-first ordering applied inside the queue too)
+    # arrival-descended seeds outrank import/replay seeds: a deep
+    # backfill must never starve a fresh notification's evaluation
+    # (§19.1's existing-work-first ordering applied inside the queue
+    # too). 'eligible' is set at seed time and survives payload merges,
+    # so a merged arrival+history job keeps its priority.
     due = ledger.db.execute("""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind=?
-      ORDER BY CASE WHEN payload LIKE '%"history_import"%'
-                    THEN 1 ELSE 0 END, job_id
+      ORDER BY CASE WHEN payload LIKE '%"eligible": true%'
+                    THEN 0 ELSE 1 END, job_id
       LIMIT ?
     """, (time.time(), JOB_KIND, max_jobs)).fetchall()
     for job in due:
@@ -1428,10 +1503,18 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         if scfg["project_ids"] is not None \
                 and job["project_id"] not in scfg["project_ids"]:
             continue
-        if jev_client is not None and \
-                jev_usage_today(ledger) >= scfg["daily_request_budget"]:
-            result["errors"].append("semantic: daily_budget_exhausted")
-            break
+        if jev_client is not None:
+            # the daily cap binds at REQUEST granularity, not just job
+            # granularity — one job's claim-audit + loop-relation calls
+            # must not overshoot it mid-flight (§13.5)
+            remaining = (scfg["daily_request_budget"]
+                         - jev_usage_today(ledger))
+            if remaining <= 0:
+                result["errors"].append(
+                    "semantic: daily_budget_exhausted")
+                break
+            jev_client.request_cap = (jev_client.requests_made
+                                      + remaining)
         req0 = jev_client.requests_made if jev_client is not None else 0
         try:
             status = _process_job(ledger, scfg, job, jev_client,

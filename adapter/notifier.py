@@ -300,8 +300,18 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         else:
             fp = payload.get("fingerprint")
             root = payload.get("root_id")
-            if not isinstance(fp, str) or type(root) is not int:
+            src = payload.get("src_event_id")
+            if not isinstance(fp, str) or type(root) is not int \
+                    or type(src) is not int:
                 raise ValueError("payload_invalid")
+            # the notice descends from a stored arrival intent — if that
+            # origin event was suppressed or no longer exists, the
+            # follow-up must not deliver either (INV-20, AT-055)
+            srow = ledger.db.execute(
+                "SELECT state FROM notify_outbox WHERE event_id=? "
+                "AND kind='new_messages'", (src,)).fetchone()
+            if srow is None or srow["state"] == "suppressed":
+                raise _StaleSend("src_event_ineligible")
             import semantic as _sem
             b = _sem.thread_bundle(ledger, ev["project_id"], root)
             if b is None or b["source_fingerprint"] != fp:

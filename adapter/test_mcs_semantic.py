@@ -72,6 +72,13 @@ def _cfg(mode="shadow", **kw):
                          **kw}}
 
 
+def _cfg_path(tmp_path, mode):
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"semantic": {"mode": mode,
+                                          "daily_request_budget": 50}}))
+    return str(p)
+
+
 class _FakeJev:
     """Deterministic evaluate(): noul=0.9, choice=first option."""
     def __init__(self, noul=0.9, choice_map=None, error=None):
@@ -1029,3 +1036,166 @@ def test_history_import_seeds_semantic(tmp_path):
                           "WHERE kind='semantic'").fetchone()["c"] == 0
     db.close()
     db2.close()
+
+
+# ---------- notification eligibility (INV-20 / AT-055) ----------
+
+def test_history_import_never_notifies(tmp_path):
+    """AT-055: a PASS-audited summary on history-imported input is an
+    artifact, never a notification — imports must not mint arrival
+    eligibility (INV-20)."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(50)], project_id=1, semantic=True)
+    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    assert json.loads(db.artifacts("semantic_audit", message_id=50)[-1]
+                      ["meta"])["audit_status"] == "PASS"
+    assert db.db.execute("SELECT COUNT(*) c FROM notify_outbox "
+                         "WHERE kind='semantic_notice'"
+                         ).fetchone()["c"] == 0
+    db.close()
+
+
+def test_replay_of_imported_message_no_notice(tmp_path):
+    """AT-055: replaying a thread that was never in a new_messages
+    intent re-evaluates but cannot create notification eligibility."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(50)], project_id=1, semantic=False)
+    semantic.seed(db, 50, cfg_path=_cfg_path(tmp_path, "enforce"))
+    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    assert db.db.execute("SELECT COUNT(*) c FROM notify_outbox"
+                         ).fetchone()["c"] == 0
+    db.close()
+
+
+def test_arrival_merge_keeps_eligibility(tmp_path):
+    """A pending arrival-seeded job merged with a history re-seed must
+    still notify — eligibility lives in the stored origin event, not
+    the overwritten payload origin."""
+    db = _seeded(tmp_path)   # notify-path seed for messages 1,2
+    db.save_messages([_message(3, parent=1, body="取り込み追加分")],
+                     project_id=1, semantic=True)   # history merge
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()["payload"])
+    assert pl.get("eligible") is True
+    out = semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 1
+    ev = db.db.execute("SELECT payload FROM notify_outbox "
+                       "WHERE kind='semantic_notice'").fetchone()
+    assert ev is not None
+    assert json.loads(ev["payload"])["src_event_id"] is not None
+    db.close()
+
+
+def test_notice_suppressed_when_src_event_suppressed(tmp_path,
+                                                   monkeypatch):
+    """Send-time gate: if the origin arrival intent was suppressed
+    (e.g. archive), the semantic follow-up must not deliver."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    ev = db.db.execute("SELECT * FROM notify_outbox "
+                       "WHERE kind='semantic_notice'").fetchone()
+    src = json.loads(ev["payload"])["src_event_id"]
+    db.outbox_suppress(src)
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"semantic": {"mode": "enforce"}})
+    with pytest.raises(notifier._StaleSend):
+        notifier._format_event(db, ev)
+    db.close()
+
+
+def test_chunk_failure_defers_without_partial_facts(tmp_path):
+    """A chunk whose LLM response is missing/unparseable defers the
+    job — the fingerprint-keyed facts artifact is never written from
+    partial input, so the loss can't freeze into this generation."""
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    body = "先頭。" + "あ" * 4000 + "\n" + "末尾の記載。"
+    p.messages = [_message(1, body=body)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    calls = {"n": 0}
+
+    def flaky(prompt):
+        if "事実候補抽出器" in prompt:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return None           # chunk 2 fails
+        return _llm(prompt)
+
+    out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=flaky)
+    assert out["deferred"] == 1
+    assert not db.artifacts("semantic_facts", message_id=1)
+    # LLM back -> the whole body is re-extracted, all chunks covered
+    db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                  "WHERE kind='semantic'")
+    db.db.commit()
+    out2 = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                            time.monotonic() + 300,
+                            jev_client=_FakeJev(), llm_fn=_llm)
+    assert out2["done"] == 1
+    meta = json.loads(db.artifacts("semantic_facts",
+                                   message_id=1)[-1]["meta"])
+    assert meta["chunks_total"] >= 2
+    db.close()
+
+
+def test_pending_assess_artifact_dedup(tmp_path):
+    """A durable Jev wait-state records ONE pending artifact per
+    generation — repeated drains must not stack identical rows."""
+    db = _seeded(tmp_path)
+    res = {"errors": []}
+    for _ in range(3):
+        semantic.run_due(db, _cfg("shadow", budget=0), res,
+                         time.monotonic() + 300,
+                         jev_client=None, llm_fn=_llm)
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                      "WHERE kind='semantic'")
+        db.db.commit()
+    rows = db.artifacts("semantic_assess", message_id=1)
+    assert len(rows) == 1
+    assert json.loads(rows[0]["meta"])["technical_status"] == "pending"
+    db.close()
+
+
+def test_daily_budget_binds_inside_job(tmp_path):
+    """The daily cap is per-request, not per-job: mid-job claim/detail
+    calls stop at the remaining budget instead of overshooting."""
+    def post(body, timeout):
+        answers = {}
+        for qid, q in body["questions"].items():
+            if q.get("type") == "choice":
+                opts = list(q["options"])
+                answers[qid] = {"type": "choice", "choice": opts[0],
+                                "confidence": 0.9,
+                                "distribution":
+                                {o: 1.0 / len(opts) for o in opts}}
+            else:
+                answers[qid] = {"type": "noul", "noul": 0.9}
+        return 200, {}, json.dumps(
+            {"model": jev.JEV_MODEL, "answers": answers}).encode()
+
+    db = _seeded(tmp_path)
+    client = jev.JevClient(api_key="k", post_fn=post)
+    semantic.run_due(db, _cfg("enforce", budget=3),
+                     {"errors": []}, time.monotonic() + 300,
+                     jev_client=client, llm_fn=_llm)
+    assert client.requests_made == 3        # capped mid-job, not after
+    job = db.db.execute("SELECT state,attempts FROM fetch_jobs "
+                        "WHERE kind='semantic'").fetchone()
+    assert job["state"] == "pending"        # audit unfinished -> retry
+    db.close()

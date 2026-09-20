@@ -1059,6 +1059,8 @@ class Ledger:
               WHERE kind='semantic' AND project_id=? AND message_id=?
                 AND state='pending'
             """, (project_id, root)).fetchone()
+            eligible = isinstance(origin, dict) \
+                and origin.get("event_id") is not None
             if pend is not None:
                 try:
                     pl = json.loads(pend["payload"] or "{}")
@@ -1067,7 +1069,18 @@ class Ledger:
                 if not isinstance(pl.get("targets"), list):
                     pl["targets"] = []
                 pl["targets"] = sorted(set(pl["targets"]) | set(ids))
-                pl["origin"] = origin
+                # once a job descends from a notify intent it keeps that
+                # provenance — a later history/replay merge must not
+                # demote its drain priority nor erase which arrival
+                # event seeded it (INV-20 keeps eligibility derived
+                # from the stored event; 'eligible' is ordering
+                # metadata only)
+                if eligible or not (
+                        isinstance(pl.get("origin"), dict)
+                        and pl["origin"].get("event_id") is not None):
+                    pl["origin"] = origin
+                if eligible:
+                    pl["eligible"] = True
                 self.db.execute(
                     "UPDATE fetch_jobs SET payload=?,updated_at=? "
                     "WHERE job_id=?",
@@ -1077,7 +1090,9 @@ class Ledger:
                 self._job_add_tx(
                     "semantic", project_id, root,
                     payload={"targets": sorted(set(ids)),
-                             "origin": origin})
+                             "origin": origin,
+                             **({"eligible": True} if eligible
+                                else {})})
 
     def semantic_seed(self, project_id: int, message_ids: list,
                       origin: dict):

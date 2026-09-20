@@ -8,7 +8,7 @@ Recorded: 2026-09-20
 | WP | 内容 | 実装 |
 |---|---|---|
 | WP-00/01 | config契約・データ契約 | `adapter/semantic.py`: `semantic_config()`（fail-closed検証）、bundle/Fact/Claim/Audit validators・fingerprint |
-| WP-02 | durable job生成 | `ledger._semantic_seed_tx` — `save_patient`/`save_messages`/`save_thread_replies` の `semantic=` flagで通知意図と同一Tx内に `fetch_jobs(kind='semantic')` を生成 |
+| WP-02 | durable job生成 | `ledger._semantic_seed_tx` — `save_patient`/`save_messages`/`save_thread_replies` の `semantic=` flagで通知意図と同一Tx内に `fetch_jobs(kind='semantic')` を生成。通知経路seedは `payload.eligible=true` を持ち、mergeで消えない（drain優先度用） |
 | WP-03 | Jev client | `adapter/semantic_jev.py`: `JevClient`（固定model `jev-1.13.0`、注入可能 `post_fn`）、P01–P12 proposition registry、`validate_answers` 厳格検証 |
 | WP-04 | fact/evidence候補 + summary | `semantic.extract_facts`（local LLM + quote→codepoint span照合）、`summarize`（共通Claim schema） |
 | WP-05 | claim監査・coverage監査・repair | `audit_code`（参照整合性・span一致・coverage）+ `audit_claims`（Jev per-claim choice）+ 1回限りrepair |
@@ -26,7 +26,7 @@ Recorded: 2026-09-20
 | off（既定） | しない | しない | しない | しない | `semantic.seed()` CLIでも拒否。job境界でconfig再検証しOFF反映（AT-060） |
 | shadow | する | する | semantic_*/loop_*/notify_plan | **触れない** | 既存 reader（extract_v1/extract_llm/rollup/notify kind）の選択に一切混入しない |
 | assist | する | する | 同左 | 触れない | `mcs_view semantic/loops` で人間が読む |
-| enforce | する | する | 同左 | `semantic_notice` intent経由 | PASS監査済み要約のみ。既存sender/fingerprint/receipt機構を再利用（INV-14） |
+| enforce | する | する | 同左 | `semantic_notice` intent経由 | PASS監査済み要約のみ。対象が保存済み `new_messages` 起点eventに被覆される場合のみ（INV-20/§20.3）。既存sender/fingerprint/receipt機構を再利用（INV-14） |
 
 不正値は全て fail-closed: `mode` 不正→off、`project_ids` 不正→空（処理対象なし）、`model` が固定ID以外→off。
 
@@ -45,6 +45,7 @@ Recorded: 2026-09-20
 | INV-14 確定payload | `semantic_notice` payloadに最終テキストを凍結格納。senderは再生成しない |
 | INV-15 fingerprint | `bundle_fingerprint` = canonical(member revisions + model + registry + schema + policy)。`_current` はfp一致artifactのみ現行扱い |
 | INV-16 shadow非干渉 | artifact kindは `semantic_*`/`loop_*`/`notify_plan` のみ — 既存readerのkind選択に混入しない。outboxはenforceのみ |
+| INV-20 通知資格と起点の分離 | `semantic_notice` のenqueue条件は `_notify_src_event` が outbox 内の保存済み `new_messages` event被覆を確認すること（§20.3「保存済み起点eventから決める」）。history_import／replay等の起点を持たないjobはartifactのみ。送信時にもnotifierが `src_event_id` の生存・非suppressを再検査 |
 | INV-21 stale昇格禁止 | commit直前にbundle fp再計算+job行生存確認。不一致→全出力 `STALE` 記録+job defer（再評価） |
 
 ## 4. AT対応テストマップ
@@ -61,6 +62,8 @@ Recorded: 2026-09-20
 | AT-035 | `test_stale_generation_not_promoted` |
 | AT-049 | `test_shadow_no_outbox` / `test_degraded_notice_enforce_only` |
 | AT-053 | `test_off_no_seed_no_drain` |
+| AT-055 | `test_history_import_never_notifies` / `test_replay_of_imported_message_no_notice` / `test_arrival_merge_keeps_eligibility` / `test_notice_suppressed_when_src_event_suppressed` |
+| AT-058 | `test_pending_audit_retries_then_passes`（途中監査保留はbounded retry）／`test_pending_assess_artifact_dedup`（同一wait-stateは重複記録しない） |
 | AT-059 | `test_replay_dedup_current_fp` |
 | AT-060 | `test_off_flip_mid_drain` |
 | AT-064 | `test_model_mismatch_rejected` / `test_config_fail_closed`（model検査） |
@@ -78,7 +81,7 @@ Recorded: 2026-09-20
 
 | 検証 | 結果 |
 |---|---|
-| 全テスト | **119 passed**（`pytest test_mcs_semantic.py test_mcs_ingestion.py test_mcs_features.py -q`、うち新規31件） |
+| 全テスト | **138 passed**（`pytest test_mcs_semantic.py test_mcs_ingestion.py test_mcs_features.py -q`、うちsemantic系50件） |
 | lint | 新規コード0件（残7件は全てbaseline E702/F401 — `git stash` で baseline=7 errors を対照確認済み） |
 | OFF regression | `mode:"off"` で job生成0・drain即return・既存119件中88件のPhase R系テスト全パス |
 

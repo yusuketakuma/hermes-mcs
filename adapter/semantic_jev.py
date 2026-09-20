@@ -174,6 +174,11 @@ class JevClient:
         self.requests_made = 0
         self.chars_out = 0
         self.chars_in = 0
+        # optional request ceiling set by the caller per job (the daily
+        # budget remainder) — evaluate() refuses once requests_made
+        # reaches it, so claim-audit/detail/loop calls cannot overshoot
+        # the daily cap mid-job (§13.5)
+        self.request_cap: int | None = None
 
     def _post(self, body: dict, timeout: float):
         raw = json.dumps(body, ensure_ascii=False,
@@ -214,6 +219,10 @@ class JevClient:
                 "questions": questions}
         last: JevError | None = None
         for attempt in range(self.max_attempts):
+            if self.request_cap is not None \
+                    and self.requests_made >= self.request_cap:
+                raise JevError("budget_exceeded", "daily_cap",
+                               retryable=True)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
