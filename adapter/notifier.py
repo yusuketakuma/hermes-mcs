@@ -472,7 +472,7 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None]:
 
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     token = _token()
-    res = {"sent": 0, "failed": 0, "skipped": 0}
+    res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0}
     due = ledger.outbox_due(limit)
     if not token:
         res["skipped"] = len(due)
@@ -481,6 +481,13 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if deadline is not None and time.monotonic() >= deadline:
             res["skipped"] += len(due) - event_index
             break
+        if ev["project_id"] and ledger.is_archived(ev["project_id"]):
+            # queued before the patient was archived — archived patient
+            # events must never reach Discord; drop terminally, do not
+            # count as sent OR as a retryable failure (Oracle F2)
+            ledger.outbox_suppress(ev["event_id"])
+            res["suppressed"] += 1
+            continue
         channel = _channel_id(ev["kind"])
         if not channel:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)

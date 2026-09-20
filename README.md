@@ -34,9 +34,14 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
 - `data/cmd/*.json`         — bot コマンドキュー (WatchPaths で即時実行)
 - `token_cache.json`        — bearer cache (0600; data/ 外=サンドボックス非公開)
 - `config.json`             — {discord_channel_id, mcs_login_id,
-                              notify_bot_profile?} — 設定時は通知投稿を
+                              notify_bot_profile?, discover_archived?} —
+                              notify_bot_profile 設定時は通知投稿を
                               ~/.hermes/profiles/<name>/.env のボット名義に固定
-                              (既定は ~/.hermes/.env = ジャービス)
+                              (既定は ~/.hermes/.env = ジャービス)。
+                              discover_archived は保管/削除でアーカイブ
+                              された患者の「新規列挙と取り込み予約」だけを
+                              止めるスイッチ — 既にpendingの取り込みジョブは
+                              false でも消化され続ける(完全停止ではない)
 
 ## 運用
 
@@ -48,7 +53,12 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
   耐久保存、中断しても次 run で続きから)。config `deep_history` で
   有効/無効、`trickle_pages` で頁数変更
 - discovery: `fetch_jobs(kind='discovery')` が1日1回 `/projects` を
-  列挙 → 未読を出さない新規患者を自動登録し trickle seed
+  列挙 → 未読を出さない新規患者を自動登録し trickle seed。
+  `discover_archived` が有効なら `/kartes?is_archived=1` も列挙し、
+  `is_archived=1` で登録＋`history_head` job(最終同期予約)を同一Txで
+  起こす。アーカイブ患者はfrontier/backfill対象外・通知抑止。
+  既にアーカイブ済みで消化中ジョブも確定floorも無い患者には
+  補修用 `history_head` を再予約する (失われた予約の修復)
 - cmd 即時実行: `local.mcs-cmd.plist` (WatchPaths `data/cmd/`) —
   bot が JSON を書くと次回 tick を待たず run_check が起動
   (flock 衝突時は定期 run が拾う)

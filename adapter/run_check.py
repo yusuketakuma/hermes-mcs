@@ -187,7 +187,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id):
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
     walk; a gap stays visible via coverage_lag."""
-    for row in ledger.known_patients():
+    for row in ledger.frontier_patients():
         pid = row["project_id"]
         if time.monotonic() > deadline - 30:
             result["errors"].append("deadline_exceeded")
@@ -347,7 +347,12 @@ def main() -> int:
         # trickle seeding only enqueue — the drains below execute them.
         job_ops.drain_commands(ledger, result)
         job_ops.seed_discovery(ledger)
-        job_ops.run_discovery(adapter, ledger, result, deadline)
+        discover_archived = cfg.get("discover_archived", False)
+        if type(discover_archived) is not bool:
+            result["errors"].append("config: discover_archived_invalid")
+            discover_archived = False
+        job_ops.run_discovery(adapter, ledger, result, deadline,
+                              include_archived=discover_archived)
         job_ops.run_reply_jobs(adapter, ledger, result, deadline)
         job_ops.run_history_jobs(adapter, ledger, result, deadline,
                                  trickle=False)
@@ -364,17 +369,21 @@ def main() -> int:
         if type(trickle_pages) is not int or not 1 <= trickle_pages <= 40:
             result["errors"].append("config: trickle_pages_invalid")
             trickle_pages = 3
+        # deep_history gates NEW seeding only — already-pending jobs
+        # (including archived patients' history_head final syncs) still
+        # drain on idle capacity. Same contract as discover_archived:
+        # a switch stops new work, never abandons committed work.
         if deep_history:
             seeded = job_ops.seed_trickle(ledger)
             if seeded:
                 result["trickle_seeded"] = seeded
-            # --jobs-only runs exist FOR this work: bigger slice of the
-            # window, smaller safety margin than the priority tick
-            job_ops.run_history_jobs(
-                adapter, ledger, result, deadline, trickle=True,
-                trickle_pages=trickle_pages,
-                max_jobs=8 if args.jobs_only else None,
-                min_margin=30 if args.jobs_only else None)
+        # --jobs-only runs exist FOR this work: bigger slice of the
+        # window, smaller safety margin than the priority tick
+        job_ops.run_history_jobs(
+            adapter, ledger, result, deadline, trickle=True,
+            trickle_pages=trickle_pages,
+            max_jobs=8 if args.jobs_only else None,
+            min_margin=30 if args.jobs_only else None)
 
         # -- derived data ----------------------------------------------
         stage_derive(ledger, result, deadline)

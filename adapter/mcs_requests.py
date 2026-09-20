@@ -150,7 +150,10 @@ def apply_command(ledger, req):
         raise ValueError("bad_command_id")
     digest = payload_hash(req)
     db = ledger.db
-    if db.execute("PRAGMA user_version").fetchone()[0] != 5:
+    # requests/command_receipts landed in schema v5; newer versions still
+    # carry them, and Ledger.__init__ already refuses schemas NEWER than
+    # the code — a floor check is the right contract here
+    if db.execute("PRAGMA user_version").fetchone()[0] < 5:
         raise RuntimeError("request_schema_not_ready")
     with db:
         db.execute("BEGIN IMMEDIATE")

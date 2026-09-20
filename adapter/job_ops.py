@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 
 from mcs_adapter import MCSError, SessionExpired
+from ledger import TERMINAL_BODY_STATES
 import mcs_requests
 
 CMD_DIR = os.path.join(os.path.expanduser("~/.mcs"), "data", "cmd")
@@ -34,13 +35,17 @@ TRICKLE_PAGES = 3        # timeline pages per patient per run
 TRICKLE_PATIENTS = 3     # patients advanced per run
 TRICKLE_MIN_S = 90       # only run trickle with this much budget left
 DISCOVERY_INTERVAL_S = 24 * 3600
+# failed discovery retries on a bounded backoff — the job must stay
+# pending forever, never accumulate attempts into a terminal 'failed'
+DISCOVERY_RETRY_S = 1800
 REPLY_JOB_LIMIT = 10
 HISTORY_JOB_LIMIT = 4
 
 # body_state values that mean "nothing more to fetch": 'full' = complete
 # body (including empty body on file-only posts); 'deleted' = tombstoned
 # on the MCS side, body permanently unavailable.
-TERMINAL_BODY_STATES = ("full", "deleted")
+# TERMINAL_BODY_STATES lives in ledger.py (imported above) — the ledger
+# reconciles reply-job state against it atomically during reply saves.
 
 
 @dataclass
@@ -178,6 +183,11 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
             result.deadline = True
             result.checkpoint_safe = False
             return result
+        # a parent whose own body is snippet/unknown must block cursor
+        # advancement AND the floor — not just this batch's completion
+        # flag — otherwise earlier pages certify around it (Oracle R3)
+        if m.body_state not in TERMINAL_BODY_STATES:
+            result.checkpoint_safe = False
         if not m.replies and not m.reply_count:
             continue
         if (m.replies
@@ -200,8 +210,10 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                                    parent_id=m.message_id)
                     stats["reply_jobs"] += 1
                     result.reply_jobs += 1
-            if not m.replies:
-                result.checkpoint_safe = False
+            # reaching the fetch means embedded replies were incomplete;
+            # a failed fetch leaves them unverified — never floor over
+            # this thread even when SOME replies were embedded (Oracle F3)
+            result.checkpoint_safe = False
             continue
         got = {f.message_id for f in full
                if f.body_state in TERMINAL_BODY_STATES}
@@ -254,23 +266,28 @@ def run_reply_jobs(adapter, ledger, result, deadline):
                 result["errors"].append(
                     f"reply {job['message_id']}: body_incomplete")
                 continue
-            target.parent_id = job["parent_id"]
-            ledger.save_messages([target], project_id=job["project_id"])
+            # the thread fetch returned EVERY reply — persisting siblings
+            # too means a single successful fetch can retire several
+            # queued reply jobs at once (Oracle F3). The thread root
+            # itself is excluded from the save set (C2). save_thread_
+            # replies reconciles each sibling's job state in the same
+            # commit (F05) and queues an unread-only notify intent (R4)
+            replies = [m for m in full
+                       if m.message_id != job["parent_id"]]
+            for m in replies:
+                m.parent_id = job["parent_id"]
+            ledger.save_thread_replies(replies, job["project_id"],
+                                       notify={"source": "reply_job"})
             ledger.job_done(job["job_id"])
         else:
             ledger.job_retry(job["job_id"])
 
 
 def _due_history_jobs(ledger):
-    """Walk the whole due history queue in small keyset pages."""
-    after = 0
-    while True:
-        rows = ledger.job_due(limit=40, kind="history", after_job_id=after)
-        if not rows:
-            return
-        for row in rows:
-            after = row["job_id"]
-            yield row
+    """All due history jobs in fair (least-recently-touched) order. The
+    snapshot is taken once — processing bumps updated_at, which already
+    rotates the job to the back for the NEXT drain (Oracle F8)."""
+    yield from ledger.history_jobs_due()
 
 
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
@@ -328,13 +345,28 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
         floored = False
+        is_head = job["kind"] == "history_head"
         if batch.reached and not batch.error and merged.checkpoint_safe \
                 and ledger.pending_reply_jobs(pid) == 0:
             # floor only when the root walk AND all required reply bodies
-            # completed (Oracle B08)
-            ledger.set_history_floor(pid, since)
-            ledger.job_done(job["job_id"])
-            floored = True
+            # completed (Oracle B08); non-terminal parent bodies already
+            # forced checkpoint_safe=False inside merge (R3/F9).
+            # The walk verified everything up to the newest stored
+            # message — record it as coverage so a later head sync can
+            # anchor there instead of re-walking the full timeline.
+            # Only when the walked range is contiguous with existing
+            # coverage (since <= cov): a bounded walk starting ABOVE
+            # coverage leaves an unverified gap it must not paper over.
+            # 'history_head' is a bounded final reconciliation — it must
+            # never rewrite the deep-walk floor (R5)
+            if since <= ledger.coverage_ts(pid):
+                ledger.set_coverage(pid, ledger.high_watermark(pid))
+            if is_head:
+                ledger.job_done(job["job_id"])
+            else:
+                ledger.set_history_floor(pid, since)
+                ledger.job_done(job["job_id"])
+                floored = True
         elif batch.error:
             ledger.job_defer(job["job_id"], 300, payload=pl)
         elif batch.reached:
@@ -364,14 +396,25 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
 
 def seed_discovery(ledger):
     """Ensure the periodic discovery job exists (kept permanently pending
-    with a daily next_try — never 'done', so it reschedules itself)."""
-    if not ledger.job_exists("discovery", 0):
+    with a daily next_try — never 'done', so it reschedules itself).
+    A previously failed discovery row is revived — job_add's conflict
+    path resets attempts and state (Oracle F7)."""
+    if not ledger.job_pending("discovery", 0):
         ledger.job_add("discovery", 0, payload={})
 
 
-def run_discovery(adapter, ledger, result, deadline):
+def run_discovery(adapter, ledger, result, deadline,
+                  include_archived: bool = False):
     """Enumerate all projects; register unknown patients and seed trickle
-    deep-imports. Runs at most once per DISCOVERY_INTERVAL_S."""
+    deep-imports. Runs at most once per DISCOVERY_INTERVAL_S.
+
+    include_archived also enumerates /kartes?is_archived=1 and registers
+    each linked project with is_archived=1 in ONE atomic upsert (F1).
+    A patient that transitions live -> archived gets a final-delta
+    history job so messages posted after its last completed walk are
+    still imported (F5); a patient reappearing in the live list is
+    unarchived (F4). Failures defer the job with a bounded retry —
+    discovery must stay pending forever, never burn out (F7)."""
     job = ledger.job_pending("discovery", 0)
     if not job or job["next_try"] > time.time():
         return 0
@@ -382,26 +425,84 @@ def run_discovery(adapter, ledger, result, deadline):
     except SessionExpired:
         raise
     except MCSError as e:
-        ledger.job_retry(job["job_id"])
+        ledger.job_defer(job["job_id"], DISCOVERY_RETRY_S)
         result["errors"].append(f"discovery: {e.kind}")
         return 0
     new_n = 0
     write_failed = False
+    active_ids = {p.project_id for p in projects}
     for p in projects:
-        if ledger.ensure_patient(p.project_id):
-            new_n += 1
         try:
-            ledger.upsert_patient_info(p)
+            created, _ = ledger.upsert_patient_info(p, is_archived=False)
+            new_n += created
         except Exception:
             write_failed = True
-    if write_failed:
-        ledger.job_retry(job["job_id"])
-        result["errors"].append("discovery: patient_write_failed")
+    # the archived sweep is a SEPARATE failure domain: its error must not
+    # discard already-fetched active registrations or unarchive-on-
+    # reappearance work (Oracle R7)
+    archived_n = 0
+    archived_err = None
+    if include_archived:
+        try:
+            archived = adapter.list_archived_kartes()
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            archived_err = e.kind
+        else:
+            for p in archived:
+                if p.project_id in active_ids:
+                    continue  # live listing wins — never archive it
+                try:
+                    ledger.upsert_patient_info(p, is_archived=True)
+                    archived_n += 1
+                    # liveness repair for already-archived patients —
+                    # the atomic transition reservation only fires on
+                    # 0->1 flips, so jobs lost under the pre-atomic code
+                    # or burnt out need this sweep (Oracle F06/R7).
+                    # A pending/finished deep walk or a completed floor
+                    # already covers the patient — never re-reserve those.
+                    hist_state = ledger.job_state("history", p.project_id)
+                    if hist_state == "failed":
+                        ledger.job_add("history", p.project_id, payload={
+                            "since": 0, "page": 1, "trickle": True})
+                        hist_state = "pending"
+                    if (ledger.job_state("history_head", p.project_id)
+                            not in ("pending", "done")
+                            and hist_state != "pending"):
+                        # archived row with no in-flight work — its head
+                        # reservation was lost under the pre-atomic code
+                        # or it predates the reservation entirely (F06).
+                        # An uncertified floor means deep gaps -> since=0
+                        # full re-walk; a certified floor only leaves a
+                        # possible post-floor gap -> bounded head anchor.
+                        since = (ledger.archive_head_since(p.project_id)
+                                 if ledger.history_floor(p.project_id) == -1
+                                 else 0)
+                        # a failed head's deeper anchor must be kept —
+                        # recomputing from an advanced boundary would
+                        # shrink the covered range each retry (F01)
+                        old = ledger.job_payload("history_head",
+                                                 p.project_id)
+                        if old and type(old.get("since")) is int:
+                            since = min(since, old["since"])
+                        ledger.job_add("history_head", p.project_id,
+                                       payload={"since": since, "page": 1,
+                                                "trickle": True})
+                except Exception:
+                    write_failed = True
+    if write_failed or archived_err:
+        ledger.job_defer(job["job_id"], DISCOVERY_RETRY_S)
+        cause = " ".join(
+            x for x in ("patient_write_failed" if write_failed else "",
+                        f"archived:{archived_err}" if archived_err else "")
+            if x)
+        result["errors"].append(f"discovery: {cause}")
         return 0
-    seeded = seed_trickle(ledger,
-                          [p.project_id for p in projects])
+    seeded = seed_trickle(ledger, [p.project_id for p in projects])
     ledger.job_defer(job["job_id"], DISCOVERY_INTERVAL_S)
     result["discovery"] = {"projects": len(projects),
+                           "archived": archived_n,
                            "new": new_n, "seeded": seeded}
     return len(projects)
 
@@ -409,11 +510,16 @@ def run_discovery(adapter, ledger, result, deadline):
 def seed_trickle(ledger, pids=None, since: int = 0) -> int:
     """Queue a trickle deep-import for every patient not already covered
     (no floor at/below `since`) and not already queued. since=0 = the
-    whole timeline — the walk ends when the API reports no next page."""
+    whole timeline — the walk ends when the API reports no next page.
+
+    Archived patients are never seeded here — their import vehicle is the
+    'history_head' job reserved atomically at archive time (Oracle R2)."""
     rows = pids if pids is not None else [
         r["project_id"] for r in ledger.known_patients()]
     n = 0
     for pid in rows:
+        if ledger.is_archived(pid):
+            continue
         floor = ledger.history_floor(pid)
         # floor==0 means "never floored" (NULL), floor==-1 means the whole
         # timeline was already walked — only a positive floor can deepen

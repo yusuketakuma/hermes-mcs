@@ -818,6 +818,62 @@ class MCSAdapter:
                            retryable=True)
         return out
 
+    def list_archived_kartes(self, per_page: int = 50,
+                             max_pages: int = 20) -> list[UnreadPatient]:
+        """Archived (保管・削除) kartes -> their linked medical_project ids.
+
+        Verified endpoint: GET /kartes?is_archived=1 — the ONLY params sent
+        are the ones exercised live (per_page/page/is_archived/
+        include_paginate_totals). Kartes without a medical_project are
+        skipped (nothing is fetchable); a present-but-malformed one raises
+        SchemaError rather than silently dropping a record (Oracle F10).
+        Project ids are deduplicated across pages."""
+        out: list[UnreadPatient] = []
+        seen: set[int] = set()
+        for page in range(1, max_pages + 1):
+            r = self._get("/kartes", {
+                "per_page": per_page, "page": page,
+                "is_archived": 1, "include_paginate_totals": 0})
+            kartes = r.get("kartes")
+            pag = r.get("paginate")
+            if not isinstance(kartes, list) or not isinstance(pag, dict):
+                raise SchemaError("kartes: page invalid")
+            for k in kartes:
+                if not isinstance(k, dict):
+                    raise SchemaError("kartes: karte invalid")
+                proj = k.get("medical_project")
+                if proj is None:
+                    continue
+                if not isinstance(proj, dict) \
+                        or not _valid_id(proj.get("id")):
+                    raise SchemaError("kartes: medical_project invalid")
+                pid = proj["id"]
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                station = k.get("station") or {}
+                if not isinstance(station, dict):
+                    raise SchemaError("kartes: station invalid")
+                out.append(UnreadPatient(
+                    # medical_project.id joins the same /projects/medical
+                    # namespace — the join itself is the type
+                    project_id=pid,
+                    project_type="medical",
+                    patient_name=(
+                        f"{_text(k.get('last_name'), 'kartes: last_name')} "
+                        f"{_text(k.get('first_name'), 'kartes: first_name')}"
+                    ).strip(),
+                    disease=_text(k.get("disease"), "kartes: disease"),
+                    station_name=_text(station.get("name"),
+                                       "kartes: station name"),
+                    url=f"{BASE}/projects/medical/{pid}"))
+            if not _has_next(pag, "kartes"):
+                break
+        else:
+            raise MCSError("pages_exceeded", "archived kartes inventory",
+                           retryable=True)
+        return out
+
     def fetch_history(self, project_id: int, since_ts: int,
                       max_pages: int = 10, per_page: int = 10,
                       start_page: int = 1) -> MessageBatch:

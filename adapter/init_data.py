@@ -161,10 +161,18 @@ def main() -> int:
             pages_left -= pages_used
             ledger.set_history_cursor(p.project_id, cursor)
             # floor requires: full walk to cutoff AND no failed/missing
-            # replies AND no mid-merge deadline hit (Oracle B08)
+            # replies AND no mid-merge deadline hit (Oracle B08);
+            # non-terminal parent bodies already forced
+            # checkpoint_safe=False inside merge (Oracle R3/F9)
             replies_pending = ledger.pending_reply_jobs(p.project_id) > 0
             if batch.reached and not batch.error and merged.checkpoint_safe \
                     and not replies_pending and not merged.deadline:
+                # contiguous-with-coverage walks extend the verified
+                # upper boundary — later head syncs anchor there
+                if since <= ledger.coverage_ts(p.project_id):
+                    ledger.set_coverage(p.project_id,
+                                        ledger.high_watermark(
+                                            p.project_id))
                 ledger.set_history_floor(p.project_id, since)
                 reached = True
             elif batch.reached:

@@ -32,7 +32,10 @@ class View:
         self.db = self.reader.db
         try:
             self.db.execute("BEGIN")
-            if self.db.execute("PRAGMA user_version").fetchone()[0] != 5:
+            # reader declares the schema generations it understands —
+            # v6 added patients.is_archived (additive, read-compatible)
+            if self.db.execute("PRAGMA user_version").fetchone()[0] \
+                    not in (5, 6, 7):
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")

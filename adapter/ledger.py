@@ -28,7 +28,15 @@ import uuid
 from pathlib import Path
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
+
+# overlap between a verified boundary and an archived patient's final
+# head reconciliation walk
+HEAD_SYNC_OVERLAP_S = 120
+
+# body_state values meaning "nothing more to fetch" — shared by the
+# ledger's job-reconciliation and the walk checkpoint logic
+TERMINAL_BODY_STATES = ("full", "deleted")
 
 
 class MigrationError(RuntimeError):
@@ -213,16 +221,22 @@ class Ledger:
             """).fetchone()
             if duplicate:
                 raise MigrationError("duplicate read mark keys")
+        # the schema version fence moves WITH the migration commit — a
+        # crash must never leave "new columns, old version" behind, or an
+        # old writer would keep writing a DB whose one-time backfills
+        # already ran (Oracle F03)
+        old_version = self.db.execute("PRAGMA user_version").fetchone()[0]
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            self._migrate_body(cols)
+            self._migrate_body(cols, old_version)
+            self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self.db.commit()
         except Exception:
             self.db.rollback()
             raise
         self._backfill_v3()
 
-    def _migrate_body(self, cols):
+    def _migrate_body(self, cols, old_version: int):
         c = cols("patients")
         adds = []
         for col, ddl in [("fetch_state",
@@ -236,7 +250,9 @@ class Ledger:
                          ("coverage_ts",
                           "ALTER TABLE patients ADD COLUMN coverage_ts INTEGER"),
                          ("history_target",
-                          "ALTER TABLE patients ADD COLUMN history_target INTEGER")]:
+                          "ALTER TABLE patients ADD COLUMN history_target INTEGER"),
+                         ("is_archived",
+                          "ALTER TABLE patients ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")]:
             if col not in c:
                 adds.append(ddl)
         if adds:
@@ -322,6 +338,44 @@ class Ledger:
                 adds.append(ddl)
         if adds:
             self._script(";".join(adds) + ";")
+        if "notified_at" not in cols("messages"):
+            self.db.execute(
+                "ALTER TABLE messages ADD COLUMN notified_at REAL")
+        if old_version < 7:
+            # reconstruct the old "stored == notified" boundary precisely:
+            # mark read messages (can never notify) plus every message
+            # already covered by an outbox intent. Unread messages with no
+            # intent stay NULL and will notify once when next observed —
+            # that also recovers anything a reply-job drain stored
+            # silently before the unread-only intent existed (R4).
+            # Keyed on old_version, not column presence: a DB that was
+            # interrupted between the ALTER and the version bump re-runs
+            # this idempotent fill safely (F03). Runs AFTER the is_unread
+            # column add above — older schemas may not have it yet.
+            intended = set()
+            for r in self.db.execute(
+                    "SELECT payload FROM notify_outbox "
+                    "WHERE kind='new_messages'"):
+                try:
+                    pl = json.loads(r["payload"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(pl, dict):
+                    # a quarantined non-object payload must not abort the
+                    # whole migration (F07) — it carries no usable ids
+                    continue
+                ids = pl.get("message_ids")
+                if isinstance(ids, list):
+                    intended.update(i for i in ids if type(i) is int)
+            now = time.time()
+            self.db.execute(
+                "UPDATE messages SET notified_at=? WHERE is_unread=0",
+                (now,))
+            if intended:
+                self.db.execute(
+                    "UPDATE messages SET notified_at=? WHERE message_id IN ("
+                    + ",".join("?" * len(intended)) + ")",
+                    [now, *intended])
         if "kind" not in cols("runs"):
             self.db.execute(
               "ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'tick'")
@@ -388,10 +442,25 @@ class Ledger:
         if self._upsert_message(m):
             new_ids.append(m.message_id)
         self._save_attachments(m, now)
+        self._retire_reply_job(m, now)
         for r in m.replies:
             if self._upsert_message(r):
                 new_ids.append(r.message_id)
             self._save_attachments(r, now)
+            self._retire_reply_job(r, now)
+
+    def _retire_reply_job(self, m, now: float):
+        """A terminal body landing in the ledger retires any queued reply
+        job for it — same commit as the save, so a burnt-out or pending
+        job can never outlive the body it exists to fetch (Oracle F05).
+        Non-terminal replies are NOT enqueued here — the walk's merge and
+        the reply-job drain own that decision."""
+        if m.body_state in TERMINAL_BODY_STATES:
+            self.db.execute(
+                "UPDATE fetch_jobs SET state='done',updated_at=? "
+                "WHERE kind='reply' AND project_id=? AND message_id=? "
+                "AND state != 'done'",
+                (now, m.project_id, m.message_id))
 
     def _outbox_insert(self, kind, project_id, payload):
         """In-transaction outbox insert — caller must hold `with self.db`."""
@@ -427,37 +496,127 @@ class Ledger:
                 fetch_reason=excluded.fetch_reason,
                 last_complete_fetch=COALESCE(excluded.last_complete_fetch,
                                              patients.last_complete_fetch),
-                last_seen=excluded.last_seen
+                last_seen=excluded.last_seen,
+                -- the unread path only sees live projects: presence here
+                -- is positive proof of reactivation (Oracle F4)
+                is_archived=0
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
                   p.station_name, p.url, p.fetch_state, p.fetch_reason,
                   now if p.fetch_state == "complete" else None,
                   now, now))
             for m in p.messages:
                 self._save_tree(m, new_ids, now)
-            if notify and new_ids:
-                pl = dict(notify)
-                pl["message_ids"] = new_ids
-                self._outbox_insert("new_messages", p.project_id, pl)
+            if notify and not self.is_archived(p.project_id):
+                # new_ids: every newly stored message is notification-
+                # worthy in the unread path; PLUS messages THIS fetch
+                # still reports unread that were stored earlier without
+                # a notification — a reply pre-saved by a reply-job drain
+                # must still notify once here (R4). The stored is_unread
+                # column is sticky (MAX semantics = ever-unread), so the
+                # fetch's own flag is the authority for "unread NOW" (F04)
+                fresh_unread = [m.message_id for m in p.messages
+                                if m.is_unread] + [
+                    t.message_id for m in p.messages for t in m.replies
+                    if t.is_unread]
+                notify_ids = list(dict.fromkeys(
+                    new_ids + self._unnotified(fresh_unread)))
+                if notify_ids:
+                    pl = dict(notify)
+                    pl["message_ids"] = notify_ids
+                    self._outbox_insert("new_messages", p.project_id, pl)
+                    self._mark_notified(notify_ids, now)
         return new_ids
 
-    def upsert_patient_info(self, p):
+    def _unnotified(self, ids: list) -> list:
+        """Of `ids` (already filtered to this fetch's unread messages),
+        those whose stored row has never been in a notify intent.
+        Caller holds `with self.db`."""
+        if not ids:
+            return []
+        q = ("SELECT message_id FROM messages WHERE notified_at IS NULL "
+             "AND message_id IN (" + ",".join("?" * len(ids)) + ")")
+        return [r["message_id"] for r in self.db.execute(q, ids)]
+
+    def _mark_notified(self, ids: list, now: float):
+        """Caller holds `with self.db` — same commit as the outbox intent,
+        so a crash cannot produce a notified-but-unqueued message."""
+        if not ids:
+            return
+        self.db.execute(
+            "UPDATE messages SET notified_at=? WHERE message_id IN ("
+            + ",".join("?" * len(ids)) + ")", [now, *ids])
+
+    def is_archived(self, project_id: int) -> bool:
+        r = self.db.execute(
+            "SELECT is_archived a FROM patients WHERE project_id=?",
+            (project_id,)).fetchone()
+        return bool(r and r["a"])
+
+    def upsert_patient_info(self, p, is_archived=None):
         """Identity fields only — for history imports; does NOT touch
-        fetch_state/fetch_reason/last_complete_fetch."""
+        fetch_state/fetch_reason/last_complete_fetch.
+
+        is_archived=None preserves the flag; True/False writes it inside
+        the SAME upsert statement, so archive state can never be
+        half-registered by a crash between two commits (Oracle F1).
+
+        Returns (created, archive_transitioned): archive_transitioned is
+        True when the row ends up archived and was not before — covers
+        both a live 0 -> 1 flip and a brand-new archived registration;
+        both need the atomic history_head reservation."""
+        flag = None if is_archived is None else int(bool(is_archived))
         now = time.time()
         with self.db:
+            row = self.db.execute(
+                "SELECT is_archived a FROM patients WHERE project_id=?",
+                (p.project_id,)).fetchone()
+            prev = bool(row["a"]) if row else False
+            # VALUES gets COALESCE(flag,0) for the NOT NULL column on
+            # fresh inserts; the UPDATE side re-binds the raw flag so
+            # NULL means "preserve" rather than "clear" (COALESCE against
+            # excluded.is_archived would never see NULL)
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
-                station_name,url,last_seen,created_at)
-              VALUES(?,?,?,?,?,?,?,?)
+                station_name,url,is_archived,last_seen,created_at)
+              VALUES(?,?,?,?,?,?,COALESCE(?,0),?,?)
               ON CONFLICT(project_id) DO UPDATE SET
                 project_type=excluded.project_type,
                 patient_name=excluded.patient_name,
                 disease=excluded.disease,
                 station_name=excluded.station_name,
                 url=excluded.url,
+                is_archived=COALESCE(?, patients.is_archived),
                 last_seen=excluded.last_seen
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
-                  p.station_name, p.url, now, now))
+                  p.station_name, p.url, flag, now, now, flag))
+            if flag == 1 and not prev:
+                # live -> archived transition: the final head-sync
+                # reservation must be durable in the SAME commit —
+                # a separate job_add could be lost to a crash, leaving a
+                # floored patient that nothing re-visits (Oracle R1).
+                # 'history_head' is a distinct job kind so a pending
+                # deep-walk never absorbs it (R2). A pending head from a
+                # PREVIOUS archive cycle must still restart at page 1 —
+                # new posts arrived during reactivation (F02) — and keep
+                # the deeper (smaller) since of the two reservations.
+                since = self.archive_head_since(p.project_id)
+                old = self.job_payload("history_head", p.project_id)
+                if old and type(old.get("since")) is int:
+                    since = min(since, old["since"])
+                self._job_add_tx("history_head", p.project_id, payload={
+                    "since": since, "page": 1, "trickle": True},
+                    reset_pending=True)
+        return (row is None, bool(flag) and not prev)
+
+    def archive_head_since(self, project_id: int) -> int:
+        """Anchor for an archived patient's final head reconciliation.
+        coverage_ts is the VERIFIED upper boundary — everything at or
+        below it was fetched by a completed walk. floor=-1 alone does
+        NOT certify the current high watermark: a later unread-path
+        store bumps the watermark past verified coverage without
+        fetching the gap below (Oracle F01). No boundary (0) falls
+        back to a conservative full walk."""
+        return max(0, self.coverage_ts(project_id) - HEAD_SYNC_OVERLAP_S)
 
     def ensure_patient(self, project_id: int) -> bool:
         """Bare row so history_floor/cursor writes never no-op on an
@@ -481,9 +640,14 @@ class Ledger:
         # store -1 so "fully imported" stays distinguishable from
         # "never floored" (0/NULL), and -1 <= any since so all the
         # `floor <= since` skip checks behave correctly.
+        # Monotonic: -1 is absorbing, and a positive floor may only
+        # deepen — a shallow re-completion must never regress it (R5).
+        new = -1 if floor <= 0 else floor
         self.db.execute(
-            "UPDATE patients SET history_floor=? WHERE project_id=?",
-            (-1 if floor <= 0 else floor, project_id))
+            "UPDATE patients SET history_floor=? WHERE project_id=? AND "
+            "(history_floor IS NULL OR history_floor=0 "
+            "OR ? < history_floor)",
+            (new, project_id, new))
         self.db.commit()
 
     def history_cursor(self, project_id: int) -> int:
@@ -536,10 +700,61 @@ class Ledger:
         with self.db:
             for m in msgs:
                 self._save_tree(m, new_ids, now)
-            if notify and new_ids and project_id:
-                pl = dict(notify)
-                pl["message_ids"] = new_ids
-                self._outbox_insert("new_messages", project_id, pl)
+            if notify and project_id \
+                    and not self.is_archived(project_id):
+                # backfill/reply-job context: "new to the ledger" is NOT
+                # notification-worthy (old replies would spam); only
+                # messages THIS fetch reports unread are (R4/F04)
+                fresh_unread = [m.message_id for m in msgs
+                                if m.is_unread] + [
+                    t.message_id for m in msgs for t in m.replies
+                    if t.is_unread]
+                notify_ids = self._unnotified(fresh_unread)
+                if notify_ids:
+                    pl = dict(notify)
+                    pl["message_ids"] = notify_ids
+                    self._outbox_insert("new_messages", project_id, pl)
+                    self._mark_notified(notify_ids, now)
+        return new_ids
+
+    def save_thread_replies(self, replies: list, project_id: int,
+                            notify: dict | None = None) -> list:
+        """Reply-job drain path: persist a fetched thread's replies AND
+        reconcile their reply-job states in the SAME commit (Oracle F05).
+        A reply whose body is now terminal retires its queued job (a
+        burnt-out one would otherwise block floor certification forever);
+        a still-incomplete reply reserves a durable retry."""
+        new_ids = []
+        now = time.time()
+        with self.db:
+            for m in replies:
+                self._save_tree(m, new_ids, now)
+                # reconcile against the STORED body, not the fetched one:
+                # upsert never downgrades 'full', so a refetch returning
+                # a snippet for an already-full reply must not spawn an
+                # endless retry job — and any stale job for it must be
+                # retired here (_save_tree's retire only fires on a
+                # terminal FETCH state)
+                st = self.db.execute(
+                    "SELECT body_state s FROM messages WHERE message_id=?",
+                    (m.message_id,)).fetchone()
+                if st and st["s"] in TERMINAL_BODY_STATES:
+                    self.db.execute(
+                        "UPDATE fetch_jobs SET state='done',updated_at=? "
+                        "WHERE kind='reply' AND project_id=? "
+                        "AND message_id=? AND state != 'done'",
+                        (now, project_id, m.message_id))
+                else:
+                    self._job_add_tx("reply", project_id, m.message_id,
+                                     parent_id=m.parent_id)
+            if notify and not self.is_archived(project_id):
+                notify_ids = self._unnotified(
+                    [m.message_id for m in replies if m.is_unread])
+                if notify_ids:
+                    pl = dict(notify)
+                    pl["message_ids"] = notify_ids
+                    self._outbox_insert("new_messages", project_id, pl)
+                    self._mark_notified(notify_ids, now)
         return new_ids
 
     def _upsert_message(self, m) -> int:
@@ -614,6 +829,14 @@ class Ledger:
         return self.db.execute(
             "SELECT project_id,patient_name FROM patients").fetchall()
 
+    def frontier_patients(self) -> list:
+        """Patients eligible for per-tick frontier/backfill polling —
+        archived patients are excluded; they are imported once via
+        durable history jobs, not re-walked every tick (Oracle Q2)."""
+        return self.db.execute(
+            "SELECT project_id,patient_name FROM patients "
+            "WHERE is_archived=0").fetchall()
+
     def high_watermark(self, project_id: int) -> int:
         """Epoch of the newest stored message posted_at (0 if none)."""
         r = self.db.execute(
@@ -644,23 +867,35 @@ class Ledger:
 
     # ---------- fetch jobs (durable retry units) ----------
 
-    def job_add(self, kind: str, project_id: int, message_id: int = 0,
-                parent_id: int | None = None, payload: dict | None = None,
-                next_try: float = 0) -> int | None:
+    def _job_add_tx(self, kind: str, project_id: int, message_id: int = 0,
+                    parent_id: int | None = None, payload: dict | None = None,
+                    next_try: float = 0, reset_pending: bool = False):
+        """job_add's INSERT ... ON CONFLICT without the commit — for callers
+        holding `with self.db` (e.g. the archive-transition reservation).
+        reset_pending=True also replaces a pending row's payload/cursor —
+        reserved for transition events where the queued walk no longer
+        covers what the new transition demands (Oracle F02)."""
         now = time.time()
-        # a done/failed job for the same key must be REVIVED by a new
-        # request — plain INSERT OR IGNORE would silently drop re-import
-        # requests forever. An in-flight job keeps its progress.
-        cur = self.db.execute("""
+        where = "" if reset_pending else "WHERE fetch_jobs.state != 'pending'"
+        return self.db.execute(f"""
           INSERT INTO fetch_jobs(kind,project_id,message_id,
             parent_id,payload,state,next_try,created_at,updated_at)
           VALUES(?,?,?,?,?,'pending',?,?,?)
           ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
             state='pending',payload=excluded.payload,attempts=0,
             next_try=excluded.next_try,updated_at=excluded.updated_at
-          WHERE fetch_jobs.state != 'pending'
+          {where}
         """, (kind, project_id, message_id, parent_id,
               json.dumps(payload or {}), next_try or now, now, now))
+
+    def job_add(self, kind: str, project_id: int, message_id: int = 0,
+                parent_id: int | None = None, payload: dict | None = None,
+                next_try: float = 0) -> int | None:
+        # a done/failed job for the same key must be REVIVED by a new
+        # request — plain INSERT OR IGNORE would silently drop re-import
+        # requests forever. An in-flight job keeps its progress.
+        cur = self._job_add_tx(kind, project_id, message_id, parent_id,
+                               payload, next_try)
         self.db.commit()
         return cur.lastrowid
 
@@ -718,6 +953,18 @@ class Ledger:
             (time.time(), job_id))
         self.db.commit()
 
+    def history_jobs_due(self) -> list:
+        """All due history jobs, least-recently-touched first. Every
+        defer/retry bumps updated_at, so a job that was just worked moves
+        to the back — a repeatedly incomplete patient cannot starve the
+        rest of the queue (Oracle F8)."""
+        return self.db.execute("""
+          SELECT * FROM fetch_jobs
+          WHERE kind IN ('history','history_head')
+            AND state='pending' AND next_try <= ?
+          ORDER BY updated_at, job_id
+        """, (time.time(),)).fetchall()
+
     def history_job(self, project_id: int) -> dict | None:
         return self.job_pending("history", project_id)
 
@@ -735,6 +982,23 @@ class Ledger:
             "AND message_id=? LIMIT 1", (kind, project_id, message_id)
         ).fetchone()
         return row["state"] if row else None
+
+    def job_payload(self, kind: str, project_id: int,
+                    message_id: int = 0) -> dict | None:
+        """Parsed payload of the job row in ANY state (pending/done/
+        failed) — for resume rules that must inspect a failed job's
+        last cursor. Malformed payloads return None."""
+        r = self.db.execute(
+            "SELECT payload FROM fetch_jobs WHERE kind=? AND project_id=? "
+            "AND message_id=? LIMIT 1", (kind, project_id, message_id)
+        ).fetchone()
+        if not r:
+            return None
+        try:
+            pl = json.loads(r["payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return pl if isinstance(pl, dict) else None
 
     def job_pending(self, kind: str, project_id: int,
                     message_id: int = 0) -> dict | None:
@@ -825,6 +1089,15 @@ class Ledger:
         self.db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,updated_at=? "
             "WHERE event_id=?", (time.time(), event_id))
+        self.db.commit()
+
+    def outbox_suppress(self, event_id: int):
+        """Terminal drop for events that must never reach Discord —
+        e.g. queued before the patient was archived (Oracle F2). Unlike
+        outbox_mark it consumes no attempt and leaves no retry timer."""
+        self.db.execute(
+            "UPDATE notify_outbox SET state='suppressed',next_try=NULL,"
+            "updated_at=? WHERE event_id=?", (time.time(), event_id))
         self.db.commit()
 
     def outbox_mark(self, event_id: int, state: str, accepted_ref: str = "",
