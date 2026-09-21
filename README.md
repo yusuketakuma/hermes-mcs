@@ -230,31 +230,10 @@ Private repository — 現時点で公開・再配布は想定していない。
 
 <!-- END GENERATED:modules -->
 
-### 主要ファイル（手書き詳細）
+### データ・設定ファイル（手書き詳細）
 
-- `mcs/mcs_adapter.py` — API client / CDP token bootstrap / auto_login
-                              (keep_read_status=1 全経路、login origin 固定、
-                              redirect/proxy 拒否、mark_as_read 応答厳密検証)
-- `mcs/ledger.py`       — SQLite (runs, patients + coverage_ts/
-                              history_target, messages, messages_fts(FTS5),
-                              attachments + retry state, notify_outbox +
-                              progress, read_marks, artifacts, fetch_jobs)
-                              + `LedgerReader`(ro) + `publish_snapshot()`
-- `mcs/mcs_view.py`     — 取込状況・根拠付き検索/タイムライン・依頼管理CLI
-- `mcs/mcs_requests.py` — 人手確定依頼・入力検証・原子的キュー投入・操作receipt
-- `mcs/run_check.py`    — launchd エントリポイント (orchestrator のみ:
-                              args/flock/deadline/段階別 status/例外境界)
-- `mcs/job_ops.py`      — cmd ingest・fetch_jobs drain・discovery・
-                              trickle 深掘り seed・thread merge
-- `mcs/maintenance.py`  — 日次検証済み backup・log rotation・snapshot 公開
-- `mcs/init_data.py`    — 過去分一括/増分取込 (history_floor +
-                              history_target/page カーソル、floor は返信
-                              完了後のみ確定、通知・既読化なし)
-- `mcs/notifier.py`     — Discord outbox drain (2段構成:構造化→原文、
-                              chunk receipt+送信表現fingerprint、429対応、宛先固定、
-                              DL済み添付を multipart で同梱 ≤10件/24MiB。
-                              未送信イベント参照の添付はDLキューで優先化され、
-                              添付投稿の確定的拒否時は本文のみにフォールバック)
+モジュール一覧は上の自動生成表を参照。以下はコード外のデータ・設定。
+
 - `chrome-profile/`         — 専用 Chrome user-data-dir (CDP :9333)
 - `data/ledger.db`          — 取得済みレコード (WAL)
 - `data/snapshots/`         — read-only スナップショット (CCO/コンテナ向け、
@@ -275,6 +254,7 @@ Private repository — 現時点で公開・再配布は想定していない。
 ## 運用
 
 - スケジューラ: `~/Library/LaunchAgents/local.mcs-check.plist`
+  （テンプレート: `deployment/launchagents/`）
   (00/15/30/45分, RunAtLoad) — ログ `data/run.log`
 - 深掘り trickle: `local.mcs-deep.plist` (07/37分, `--jobs-only`) —
   未読取得を飛ばし fetch_jobs のみ消化。全患者の全履歴を

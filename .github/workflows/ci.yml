@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: ruff
-        run: pip install ruff && ruff check --select E4,E7,E9,F mcs/ tests/
+        run: pip install ruff && ruff check mcs/ tests/
       - name: pytest
         run: pip install pytest && python -m pytest -x -q
 

@@ -8,3 +8,6 @@ config.json
 *.log
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store

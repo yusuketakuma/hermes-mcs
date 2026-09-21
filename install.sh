@@ -47,4 +47,7 @@ For a full machine setup (MCS credentials into macOS Keychain, config.json,
 
   python3 $REPO/mcs/mcs_setup.py init      # interactive provisioning
   python3 $REPO/mcs/mcs_setup.py check    # validate all conditions
+
+Scheduled collection needs the three LaunchAgents — templates and the
+install snippet are in $REPO/deployment/launchagents/README.md.
 EOF
