@@ -500,6 +500,94 @@ def st_rx_expiry(db, scope):
                   "a period without an end date cannot be evaluated"]})
 
 
+def st_med_change_followup(db, scope):
+    """ST-T2: retrospective count of med change mentions (>=7d old at
+    as_of) with no subsequent room post within 7d. 'No follow-up
+    record found' — never 'no follow-up happened'. A request row
+    referencing the message counts as a visible follow-up."""
+    cutoff = scope["as_of"] - 7 * 86400
+    w, p = _where(scope)
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
+            FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+            WHERE a.kind='extract_llm' AND json_valid(a.content)
+              AND json_valid(a.meta)
+              AND json_extract(a.meta,'$.error') IS NOT 1
+              AND json_extract(a.meta,'$.hash')=m.content_hash
+              AND json_array_length(a.content,'$.meds')>0
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts <= ?{w}""",
+        [cutoff, *p]).fetchall()
+    seen, total, no_follow = set(), 0, []
+    for pid, mid, ts, content in rows:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        meds = json.loads(content).get("meds") or []
+        if not any(isinstance(x, dict)
+                   and x.get("action") in _MED_ACTIONS
+                   for x in meds):
+            continue
+        total += 1
+        tracked = db.execute(
+            "SELECT 1 FROM requests WHERE source_message_id=? LIMIT 1",
+            (mid,)).fetchone()
+        follow = db.execute(
+            "SELECT COUNT(*) FROM messages WHERE project_id=? "
+            "AND posted_at_ts > ? AND posted_at_ts <= ?",
+            (pid, ts, ts + 7 * 86400)).fetchone()[0]
+        if not tracked and follow == 0:
+            no_follow.append({"project_id": pid, "message_id": mid})
+    return _result("ok", scope, {
+        "change_mentions_7d_plus": _ratio(total, total, "messages"),
+        "no_followup_record": _items(
+            sorted(no_follow, key=lambda r: r["message_id"]),
+            scope["limit"]),
+        "notes": ["'follow-up record' = any later room post OR a "
+                  "request registered against the message — neither "
+                  "proves a clinical response occurred",
+                  "absence is reported as 'not confirmable in records', "
+                  "not as missed work"]})
+
+
+def st_transition_reconciliation(db, scope):
+    """ST-T2: 退院 mentions co-occurring with med change mentions
+    within ±14 days in the same room. Co-occurrence count only —
+    reconciliation need is a human decision."""
+    w, p = _where(scope)
+    win = 14 * 86400
+    disc = db.execute(
+        f"""SELECT project_id, message_id, posted_at_ts FROM messages m
+            WHERE m.posted_at_ts NOT NULL
+              AND m.body_text LIKE '%退院%'{w}""", p).fetchall()
+    items = []
+    for pid, dmid, dts in disc:
+        meds = db.execute(
+            """SELECT m.message_id, a.content FROM artifacts a
+               JOIN messages m ON m.message_id=a.message_id
+               WHERE a.kind='extract_llm' AND m.project_id=?
+                 AND m.posted_at_ts BETWEEN ? AND ?
+                 AND json_valid(a.content) AND json_valid(a.meta)
+                 AND json_extract(a.meta,'$.error') IS NOT 1
+                 AND json_extract(a.meta,'$.hash')=m.content_hash
+                 AND json_array_length(a.content,'$.meds')>0""",
+            (pid, dts - win, dts + win)).fetchall()
+        change_ids = [mid for mid, content in meds
+                      if any(isinstance(x, dict)
+                             and x.get("action") in _MED_ACTIONS
+                             for x in (json.loads(content)
+                                       .get("meds") or []))]
+        if change_ids:
+            items.append({"project_id": pid,
+                          "discharge_message_id": dmid,
+                          "med_change_message_ids": sorted(change_ids)})
+    return _result("ok", scope, {
+        "cooccurrences": _items(items, scope["limit"]),
+        "notes": ["co-occurrence of surface mentions — not proof that "
+                  "reconciliation is needed or missing",
+                  "discharge detected by body substring '退院' only"]})
+
+
 def st_open_loop_aging(db, scope):
     """ST-024 (formal side only): open requests by overdue-age bucket.
     Text-derived candidates require interaction_links — reported
@@ -579,17 +667,11 @@ REGISTRY = {
     "open_loop_aging": {"tier": "T2",
                         "needs": ["interaction_links", "episode_links"],
                         "fn": st_open_loop_aging},
-    "med_change_followup": {"tier": "T2",
-                            "needs": ["med_events", "valid_facts",
-                                      "episode_links"],
-                            "fn": lambda db, s: _result(
-                                "unavailable", s, {},
-                                reason="needs episode_links")},
+    "med_change_followup": {"tier": "T2", "needs": ["med_events"],
+                            "fn": st_med_change_followup},
     "transition_reconciliation": {"tier": "T2",
-                                  "needs": ["transition_events"],
-                                  "fn": lambda db, s: _result(
-                                      "unavailable", s, {},
-                                      reason="needs transition_events")},
+                                  "needs": ["med_events"],
+                                  "fn": st_transition_reconciliation},
 }
 
 PRESETS = {

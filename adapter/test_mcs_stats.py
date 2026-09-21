@@ -23,7 +23,8 @@ CREATE TABLE artifacts (artifact_id INTEGER PRIMARY KEY, kind TEXT,
                         project_id INTEGER, message_id INTEGER,
                         content TEXT, model TEXT, meta TEXT, created_at REAL);
 CREATE TABLE requests (request_id INTEGER PRIMARY KEY, project_id INTEGER,
-                       status TEXT, due_date TEXT, updated_at REAL);
+                       status TEXT, due_date TEXT, updated_at REAL,
+                       source_message_id INTEGER);
 """
 
 SNAP_TS = 1789975073.0  # 2026-09-21 JST
@@ -105,9 +106,42 @@ def test_unknown_stat_rejected(db):
         run(db, stat="bogus")
 
 
-def test_unavailable_never_faked(db):
+def test_med_change_followup_stat(db):
+    """Change mention >=7d before as_of with no later post and no
+    registered request -> counted in no_followup_record."""
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)   # pid 1, no follow-up
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(db, 2, pid=2, chash="h2", ts=SNAP_TS - 30 * 86400)
+    _extract(db, 2, "h2", [{"name": "薬B", "action": "start"}])
+    _msg(db, 3, pid=2, ts=SNAP_TS - 29 * 86400)  # same-room follow-up
     st = run(db, stat="med_change_followup")["med_change_followup"]
-    assert st["status"] == "unavailable" and "episode_links" in st["reason"]
+    assert st["status"] == "ok"
+    assert st["change_mentions_7d_plus"]["numerator"] == 2
+    nf = st["no_followup_record"]
+    assert nf["total"] == 1 and nf["items"][0]["message_id"] == 1
+
+
+def test_med_change_followup_suppressed_by_request(db):
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    db.execute("INSERT INTO requests(request_id,project_id,status,"
+               "due_date,updated_at,source_message_id) "
+               "VALUES (1,1,'open',NULL,0,1)")
+    st = run(db, stat="med_change_followup")["med_change_followup"]
+    assert st["no_followup_record"]["total"] == 0
+
+
+def test_transition_reconciliation_stat(db):
+    _msg(db, 1, ts=SNAP_TS - 5 * 86400)
+    db.execute("UPDATE messages SET body_text='退院となりました' "
+               "WHERE message_id=1")
+    _msg(db, 2, chash="h2", ts=SNAP_TS - 3 * 86400)
+    _extract(db, 2, "h2", [{"name": "薬A", "action": "change"}])
+    st = run(db, stat="transition_reconciliation")[
+        "transition_reconciliation"]
+    assert st["status"] == "ok"
+    assert st["cooccurrences"]["total"] == 1
+    assert st["cooccurrences"]["items"][0]["discharge_message_id"] == 1
 
 
 def test_rx_expiry_window(db):
@@ -187,7 +221,8 @@ def test_open_loop_aging_buckets(db):
             (6, "2026-09-18", "done"),      # closed -> excluded
             (7, "2026-09-18", "cancelled"), # closed -> excluded
             (8, "2027-01-01", "in_progress")]:  # future -> not_yet_due
-        db.execute("INSERT INTO requests VALUES (?,?,?,?,?)",
+        db.execute("INSERT INTO requests(request_id,project_id,status,"
+                   "due_date,updated_at) VALUES (?,?,?,?,?)",
                    (rid, 1, status, due, 0))
     st = run(db, stat="open_loop_aging")["open_loop_aging"]
     b = st["age_buckets"]

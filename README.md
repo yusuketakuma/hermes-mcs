@@ -176,9 +176,11 @@ $PY adapter/mcs_view.py stats --stat patient_activity \
 - 薬の集計は抽出言及レベル。成分正規化・否定/家族/過去言及の分離は未実装で、
   その旨をnotesに明記する。部屋数は確定患者数ではない。
 - `rx_expiry` は extract_v1 の期間表現（例 '9/1-9/21'）の終了間近を数える。
-  表現のparseであり処方期間の確定ではない。`med_change_followup`/
-  `transition_reconciliation` は根拠artifactが未実装のため `unavailable`
-  を返す — 推測で穴埋めしない。
+  表現のparseであり処方期間の確定ではない。
+- `med_change_followup` は「変更言及後7日以内の後続記録（部屋の任意投稿または
+  対象メッセージに紐づく依頼登録）を確認できない件数」。記録上の確認であり
+  対応の欠如の証明ではない。`transition_reconciliation` は退院言及±14日の
+  薬変更言及の共起カウント — 照合要否は人の判断。
 
 ### レビュー候補シグナル（T2）
 
@@ -190,9 +192,12 @@ $PY adapter/mcs_view.py signals --project 123
 - `run_check` の derive 段階で `mcs_signals.evaluate()` が候補を再計算し、
   `signal_v1` artifact として台帳に保持する（open→resolvedのライフサイクル、
   検知日・最終確認・証跡ID付き）。
-- 検知器: `request_overdue`（依頼登録の期限超過）、`med_change_no_followup`
-  （薬変更言及後7日以内の後続記録を確認できない）、`comm_concentration`
-  （直近72hの記録集中）、`rx_period_expiry`（期間表現の終了間近）。
+- 検知器: `request_overdue`（依頼登録の期限超過）、`request_aging`
+  （登録から30日超の未完了依頼）、`med_change_no_followup`（薬変更言及後
+  7日以内の後続記録を確認できない。対象メッセージに紐づく依頼登録が
+  あれば可視の追跡として抑制）、`comm_concentration`（直近72hの記録
+  集中）、`rx_period_expiry`（期間表現の終了間近）、
+  `transition_reconciliation`（退院言及±14日の薬変更言及の共起）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
 - 通知は config の `signals.notify:true` を明示設定した場合のみ既存の

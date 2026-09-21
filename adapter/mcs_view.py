@@ -484,9 +484,12 @@ class View:
         extracted evidence only; candidates are prompts for human review
         of the source records, never proof of missed work."""
         import mcs_signals
+        try:
+            limit = min(max(int(args.get("limit") or 50), 1), 200)
+        except (TypeError, ValueError):
+            raise ValueError("bad_limit")
         result = mcs_signals.current_open(
-            self.db, project_id=args.get("project"),
-            limit=args.get("limit") or 50)
+            self.db, project_id=args.get("project"), limit=limit)
         return {"snapshot": self.meta,
                 "snapshot_age_s": max(0, time.time() - self.meta["generated_at"]),
                 "warnings": WARNINGS,
@@ -557,7 +560,8 @@ def _parser():
                                required=kind not in ("status", "signals"))
             if kind not in ("evidence", "receipt", "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
-                child.add_argument("--cursor")
+                if kind != "signals":
+                    child.add_argument("--cursor")
         if kind == "search":
             sub.add_argument("--query", required=True)
         if kind == "stats":

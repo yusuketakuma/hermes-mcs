@@ -293,8 +293,25 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             raise ValueError("payload_invalid")
         return text, []
     if ev["kind"] == "signal":
-        # review-candidate notice — frozen text built at enqueue time;
-        # payload holds ids only, no bodies (mcs_signals)
+        # review-candidate notice — frozen text + ids at enqueue time.
+        # Last-moment gates like semantic_notice: the flag may have been
+        # turned off, or the signal may have resolved while queued —
+        # both are terminal drops, not retries.
+        sig_cfg = _config().get("signals")
+        if not (isinstance(sig_cfg, dict)
+                and sig_cfg.get("notify") is True):
+            raise _StaleSend("signals_notify_disabled")
+        skey = payload.get("signal_key")
+        row = skey and ledger.db.execute(
+            """SELECT content FROM artifacts
+               WHERE kind='signal_v1' AND json_valid(meta)
+                 AND json_valid(content)
+                 AND json_extract(meta,'$.key')=?
+               ORDER BY artifact_id DESC LIMIT 1""", (skey,)).fetchone()
+        latest = (json.loads(row["content"])
+                  if row and row["content"] else {})
+        if latest.get("state") != "open":
+            raise _StaleSend("signal_not_open")
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")

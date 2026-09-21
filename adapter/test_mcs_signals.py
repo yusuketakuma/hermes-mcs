@@ -1,63 +1,38 @@
-"""Synthetic-DB tests for the prospective signal layer: detector
-correctness, open/resolved lifecycle, dedup, notify gating, honest
-wording. No live DB, network, or real patient data."""
+"""Tests for the prospective signal layer against a REAL Ledger on
+tmp_path (same pattern as test_mcs_ingestion): detector correctness,
+open/resolved lifecycle, append-only history, notify gating, honest
+wording. No network or live data."""
 import json
-import sqlite3
-import time
 
 import pytest
 
+import ledger as ledger_mod
 import mcs_signals
-
-SCHEMA = """
-CREATE TABLE messages (message_id INTEGER PRIMARY KEY, project_id INTEGER,
-                       parent_id INTEGER, sender_id INTEGER,
-                       sender_name TEXT, sender_type TEXT, profession TEXT,
-                       organization TEXT, posted_at TEXT, posted_at_ts INTEGER,
-                       body_text TEXT, body_state TEXT, content_hash TEXT,
-                       reply_count INTEGER DEFAULT 0);
-CREATE TABLE artifacts (artifact_id INTEGER PRIMARY KEY, kind TEXT,
-                        project_id INTEGER, message_id INTEGER,
-                        content TEXT, model TEXT, meta TEXT, created_at REAL);
-CREATE TABLE requests (request_id INTEGER PRIMARY KEY, project_id INTEGER,
-                       status TEXT, due_date TEXT, updated_at REAL);
-CREATE TABLE notify_outbox(
-    event_id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT,
-    project_id INTEGER, payload TEXT, state TEXT DEFAULT 'pending',
-    attempts INTEGER DEFAULT 0, next_try REAL, accepted_ref TEXT,
-    created_at REAL, updated_at REAL, progress TEXT);
-"""
 
 NOW = 1789975073.0   # 2026-09-21 JST
 DAY = 86400
 
 
-class FakeLedger:
-    """evaluate() touches only .db and .outbox_add_tx."""
-    def __init__(self, db):
-        self.db = db
-    def outbox_add_tx(self, kind, project_id, payload):
-        cur = self.db.execute(
-            "INSERT INTO notify_outbox(kind,project_id,payload,state,"
-            "next_try,created_at,updated_at) VALUES(?,?,?,'pending',?,?,?)",
-            (kind, project_id, json.dumps(payload, ensure_ascii=False),
-             time.time(), time.time(), time.time()))
-        return cur.lastrowid
-
-
 @pytest.fixture
-def led():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(SCHEMA)
-    yield FakeLedger(conn)
-    conn.close()
+def led(tmp_path):
+    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
+    yield lg
+    lg.db.close()
 
 
-def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1"):
+def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b"):
     db.execute(
-        "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO messages(message_id,project_id,parent_id,sender_id,"
+        "sender_name,sender_type,profession,organization,posted_at,"
+        "posted_at_ts,body_text,body_state,content_hash,reply_count,"
+        "is_unread,first_seen,updated_seen) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (mid, pid, None, 1, "n", "staff", "看護師", "org",
-         "2026-08-22T10:00:00+09:00", ts, "b", "full", chash, 0))
+         "2026-08-22T10:00:00+09:00", ts, body, "full", chash, 0, 0,
+         ts, ts))
+    db.execute(
+        "INSERT OR IGNORE INTO patients(project_id,is_archived,"
+        "created_at,last_seen) VALUES (?,0,?,?)", (pid, ts, ts))
 
 
 def _extract_llm(db, mid, chash, meds):
@@ -75,10 +50,20 @@ def _extract_v1(db, mid, chash, periods):
          json.dumps({"hash": chash})))
 
 
+def _req(db, status, due=None, src_mid=1, created=NOW):
+    db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,status,due_date,revision,created_at,updated_at) "
+        "VALUES (1,?,?,?,?,?,1,?,?)",
+        (src_mid, "h" * 64, "t", status, due, created, created))
+
+
 def _states(db):
+    """latest state per signal key (append-only model)"""
     out = {}
     for content, meta in db.execute(
-            "SELECT content, meta FROM artifacts WHERE kind='signal_v1'"):
+            "SELECT content, meta FROM artifacts WHERE kind='signal_v1' "
+            "ORDER BY artifact_id"):
         out[json.loads(meta)["key"]] = json.loads(content)["state"]
     return out
 
@@ -90,10 +75,10 @@ def _ev(lg, cfg=None, now=NOW):
 # --- detectors ---
 
 def test_request_overdue_detected_and_wording(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
-    led.db.execute("INSERT INTO requests VALUES (2,1,'done','2026-09-10',0)")
-    led.db.execute("INSERT INTO requests VALUES (3,1,'cancelled','2026-09-10',0)")
-    led.db.execute("INSERT INTO requests VALUES (4,1,'open','2026-10-01',0)")
+    _req(led.db, "open", due="2026-09-10")
+    _req(led.db, "done", due="2026-09-10")
+    _req(led.db, "cancelled", due="2026-09-10")
+    _req(led.db, "open", due="2026-10-01")
     res = _ev(led)
     assert res["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
@@ -140,6 +125,54 @@ def test_comm_concentration(led):
     assert "重症度ではありません" in sig["note"]
 
 
+def test_request_aging(led):
+    _req(led.db, "open", created=NOW - 40 * DAY)   # aged -> candidate
+    _req(led.db, "open", created=NOW - 5 * DAY)    # fresh -> not
+    res = _ev(led)
+    sigs = mcs_signals.current_open(led.db)["items"]
+    assert res["open"] == 1 and sigs[0]["type"] == "request_aging"
+    assert sigs[0]["context"]["days_since_created"] == 40
+
+
+def test_med_followup_skips_old_and_archived(led):
+    # mention older than FOLLOWUP_MAX_AGE_D -> historical, not flagged
+    _msg(led.db, 1, ts=NOW - 200 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    # recent mention but on an archived room -> not actionable
+    _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+    assert _ev(led)["open"] == 0
+
+
+def test_med_followup_suppressed_by_any_request(led):
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    # any registered request — even cancelled — is visible engagement
+    _req(led.db, "cancelled", src_mid=1)
+    assert _ev(led)["open"] == 0
+
+
+def test_transition_reconciliation(led):
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました")
+    _msg(led.db, 2, ts=NOW - 3 * DAY)
+    _extract_llm(led.db, 2, "h1", [{"name": "薬A", "action": "change"}])
+    _ev(led)
+    sigs = mcs_signals.current_open(led.db)["items"]
+    sig = [s for s in sigs
+           if s["type"] == "transition_reconciliation"]
+    assert len(sig) == 1
+    assert sig[0]["evidence"]["discharge_message_id"] == 1
+    assert sig[0]["evidence"]["med_change_message_ids"] == [2]
+
+
+def test_transition_requires_med_change(led):
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました")
+    _msg(led.db, 2, ts=NOW - 3 * DAY)
+    _extract_llm(led.db, 2, "h1", [{"name": "薬A", "action": "none"}])
+    assert _ev(led)["open"] == 0
+
+
 def test_rx_period_expiry(led):
     _msg(led.db, 1)
     _extract_v1(led.db, 1, "h1",
@@ -151,14 +184,14 @@ def test_rx_period_expiry(led):
     assert res["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
     assert sig["type"] == "rx_period_expiry"
-    assert sig["evidence"]["days_left"] == 9
+    assert sig["context"]["days_left"] == 9
     assert "確定ではありません" in sig["note"]
 
 
-# --- lifecycle / dedup ---
+# --- lifecycle (append-only transitions) ---
 
 def test_signal_resolves_when_condition_clears(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
+    _req(led.db, "open", due="2026-09-10")
     _ev(led)
     assert _states(led.db)["request_overdue:1:1"] == "open"
     led.db.execute("UPDATE requests SET status='done' WHERE request_id=1")
@@ -166,50 +199,137 @@ def test_signal_resolves_when_condition_clears(led):
     assert _states(led.db)["request_overdue:1:1"] == "resolved"
 
 
-def test_no_duplicate_artifacts_on_rerun(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
-    _ev(led)
-    _ev(led)
-    _ev(led)
-    n = led.db.execute("SELECT COUNT(*) FROM artifacts "
-                     "WHERE kind='signal_v1'").fetchone()[0]
-    assert n == 1
-
-
-def test_resolved_signal_reopens(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
+def test_lifecycle_is_append_only(led):
+    """open -> resolved -> open produces three rows, history intact."""
+    _req(led.db, "open", due="2026-09-10")
     _ev(led)
     led.db.execute("UPDATE requests SET status='done' WHERE request_id=1")
     _ev(led)
     led.db.execute("UPDATE requests SET status='open' WHERE request_id=1")
     _ev(led)
-    c = json.loads(led.db.execute(
-        "SELECT content FROM artifacts WHERE kind='signal_v1'").fetchone()[0])
-    assert c["state"] == "open" and c.get("reopened_at")
+    rows = [json.loads(r[0]) for r in led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='signal_v1' "
+        "ORDER BY artifact_id")]
+    assert [r["state"] for r in rows] == ["open", "resolved", "open"]
+    assert rows[0]["detected_at"] == NOW
+    assert rows[1]["resolved_at"] is not None
+    assert _states(led.db)["request_overdue:1:1"] == "open"
+
+
+def test_no_duplicate_rows_when_unchanged(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    _ev(led)
+    _ev(led)
+    n = led.db.execute("SELECT COUNT(*) FROM artifacts "
+                       "WHERE kind='signal_v1'").fetchone()[0]
+    assert n == 1
 
 
 # --- notify gating ---
 
 def test_notify_off_by_default(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
+    _req(led.db, "open", due="2026-09-10")
     _ev(led, cfg={})
     n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
     assert n == 0
 
 
+def test_notify_requires_strict_true(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led, cfg={"signals": {"notify": "yes"}})   # truthy string != True
+    n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
+    assert n == 0
+    _ev(led, cfg={"signals": True})                # non-dict -> off
+    n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
+    assert n == 0
+
+
 def test_notify_enqueues_signal_kind_when_enabled(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
+    _req(led.db, "open", due="2026-09-10")
     res = _ev(led, cfg={"signals": {"notify": True}})
-    row = led.db.execute("SELECT kind, payload FROM notify_outbox").fetchone()
-    assert res["notify_enqueued"] == 1 and row[0] == "signal"
-    pl = json.loads(row[1])
+    row = led.db.execute("SELECT kind, payload FROM notify_outbox"
+                         ).fetchone()
+    assert res["notify_enqueued"] == 1 and row["kind"] == "signal"
+    pl = json.loads(row["payload"])
     assert "レビュー候補" in pl["text"] and pl["signal_key"]
 
 
 def test_notify_only_on_new_open_not_refresh(led):
-    led.db.execute("INSERT INTO requests VALUES (1,1,'open','2026-09-10',0)")
+    _req(led.db, "open", due="2026-09-10")
     cfg = {"signals": {"notify": True}}
     _ev(led, cfg=cfg)
-    _ev(led, cfg=cfg)   # still open -> refresh, no new intent
+    _ev(led, cfg=cfg)  # still open, same evidence -> no write, no intent
     n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
     assert n == 1
+
+
+def test_notify_dedup_on_reopen_flap(led):
+    """open -> resolved -> reopened while the first intent is still
+    pending must not stack a second notification for the same key."""
+    _req(led.db, "open", due="2026-09-10")
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='open'")
+    res = _ev(led, cfg=cfg)
+    n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
+    assert n == 1 and res["notify_enqueued"] == 0
+
+
+# --- send-time gates (notifier._format_event) ---
+
+def _sig_ev(led):
+    row = led.db.execute(
+        "SELECT kind, payload FROM notify_outbox").fetchone()
+    return {"kind": row["kind"], "payload": row["payload"]}
+
+
+def test_send_gate_flag_turned_off(led, monkeypatch):
+    import notifier
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led, cfg={"signals": {"notify": True}})
+    monkeypatch.setattr(notifier, "_config", lambda: {})
+    with pytest.raises(notifier._StaleSend,
+                       match="signals_notify_disabled"):
+        notifier._format_event(led, _sig_ev(led))
+
+
+def test_send_gate_signal_resolved_while_queued(led, monkeypatch):
+    import notifier
+    _req(led.db, "open", due="2026-09-10")
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led, cfg=cfg)              # resolves; intent still pending
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    with pytest.raises(notifier._StaleSend, match="signal_not_open"):
+        notifier._format_event(led, _sig_ev(led))
+
+
+def test_send_gate_open_signal_formats(led, monkeypatch):
+    import notifier
+    _req(led.db, "open", due="2026-09-10")
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    text, files = notifier._format_event(led, _sig_ev(led))
+    assert "レビュー候補" in text and files == []
+
+
+# --- malformed data resilience ---
+
+def test_malformed_signal_artifact_skipped(led):
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('signal_v1',1,'{bad json','{bad json',0)")
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('signal_v1',1,'\"scalar\"','{\"key\":\"x\"}',0)")
+    _req(led.db, "open", due="2026-09-10")
+    res = _ev(led)                 # must not crash on opaque rows
+    assert res["open"] == 1
+    items = mcs_signals.current_open(led.db)["items"]
+    assert len(items) == 1 and items[0]["type"] == "request_overdue"

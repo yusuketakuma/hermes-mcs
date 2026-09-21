@@ -254,7 +254,8 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
 
 # ---------- stage: derived data ----------
 
-def stage_derive(ledger, result, deadline, llm_budget_cap: float = 90):
+def stage_derive(ledger, result, deadline, cfg=None,
+                 llm_budget_cap: float = 90):
     """extract_v1 (instant rules) -> extract_llm (bounded local LLM)
     -> rollups for dirty patients."""
     try:
@@ -294,7 +295,8 @@ def stage_derive(ledger, result, deadline, llm_budget_cap: float = 90):
     # artifacts; notify intents only when config signals.notify is set
     try:
         import mcs_signals
-        result["signals"] = mcs_signals.evaluate(ledger, _config())
+        result["signals"] = mcs_signals.evaluate(
+            ledger, cfg or _config(), deadline=deadline)
     except Exception as e:
         result["errors"].append(f"signals: {type(e).__name__}")
 
@@ -400,7 +402,7 @@ def main() -> int:
             semantic=sem_on)
 
         # -- derived data ----------------------------------------------
-        stage_derive(ledger, result, deadline)
+        stage_derive(ledger, result, deadline, cfg)
 
         # -- delivery ----------------------------------------------------
         # existing notification sends run BEFORE the semantic drain —
