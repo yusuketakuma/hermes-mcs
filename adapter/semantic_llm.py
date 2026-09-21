@@ -70,10 +70,11 @@ def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
     """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
     quotes get no span — never a guessed one (INV-07, AT-029).
 
-    Exact match first; if absent, retry on whitespace-collapsed text and
-    map the span back to original codepoints. Models routinely reproduce
-    quotes with normalized whitespace — the located span is still unique
-    and the caller stores body[s:e] verbatim, so span equality holds."""
+    Exact match first; if absent, retry with all whitespace removed and
+    map the span back to original codepoints. Models routinely emit
+    quotes with inserted/altered whitespace — the located span is still
+    unique and the caller stores body[s:e] verbatim, so span equality
+    holds."""
     if not body or not quote:
         return None
     first = body.find(quote)
@@ -81,20 +82,14 @@ def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
         return (first, first + len(quote))
     if first >= 0:
         return None
-    nbody, nidx = [], []
-    prev_ws = True
+    nbody = []
+    nidx = []
     for i, ch in enumerate(body):
-        if ch.isspace():
-            if not prev_ws:
-                nbody.append(" ")
-                nidx.append(i)
-            prev_ws = True
-        else:
+        if not ch.isspace():
             nbody.append(ch)
             nidx.append(i)
-            prev_ws = False
-    nquote = " ".join(quote.split())
     nbody = "".join(nbody)
+    nquote = "".join(quote.split())
     s = nbody.find(nquote)
     if s < 0 or nbody.find(nquote, s + 1) >= 0:
         return None
