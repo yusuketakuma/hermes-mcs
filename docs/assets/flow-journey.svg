@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="320" viewBox="0 0 760 320" font-family="Menlo, 'Hiragino Sans', monospace">
+  <rect width="760" height="320" fill="#0d1117"/>
+  <defs>
+    <marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="ar2r" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+  <!-- lifelines -->
+  <rect x="90" y="24" width="120" height="36" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="150" y="47" font-size="12" fill="#e6edf3" text-anchor="middle">訪問看護師</text>
+  <rect x="320" y="24" width="120" height="36" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="380" y="47" font-size="12" fill="#e6edf3" text-anchor="middle">薬剤師</text>
+  <rect x="550" y="24" width="120" height="36" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="610" y="47" font-size="12" fill="#e6edf3" text-anchor="middle">医師</text>
+  <line x1="150" y1="60" x2="150" y2="292" stroke="#30363d" stroke-dasharray="4 3"/>
+  <line x1="380" y1="60" x2="380" y2="292" stroke="#30363d" stroke-dasharray="4 3"/>
+  <line x1="610" y1="60" x2="610" y2="292" stroke="#30363d" stroke-dasharray="4 3"/>
+  <!-- messages -->
+  <line x1="150" y1="92" x2="372" y2="92" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <text x="255" y="86" font-size="11" fill="#8b949e" text-anchor="middle">疼痛増悪・レスキュー増加を共有</text>
+  <path d="M380 120 h44 v22 h-44" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <text x="402" y="114" font-size="11" fill="#8b949e" text-anchor="middle">薬物療法を評価</text>
+  <line x1="380" y1="168" x2="602" y2="168" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <text x="490" y="162" font-size="11" fill="#8b949e" text-anchor="middle">処方調整を相談</text>
+  <line x1="610" y1="196" x2="388" y2="196" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#ar2r)"/>
+  <text x="500" y="190" font-size="11" fill="#8b949e" text-anchor="middle">処方変更</text>
+  <line x1="150" y1="230" x2="372" y2="230" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <text x="255" y="224" font-size="11" fill="#8b949e" text-anchor="middle">変更後の状態を共有</text>
+  <path d="M380 258 h44 v22 h-44" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <text x="402" y="252" font-size="11" fill="#8b949e" text-anchor="middle">効果・副作用を再評価</text>
+  <!-- phase note -->
+  <text x="16" y="312" font-size="10" fill="#6e7681">単なる6投稿ではなく「症状→評価→提案→判断→実施→再評価」の一つの症例経過として扱う</text>
+</svg>

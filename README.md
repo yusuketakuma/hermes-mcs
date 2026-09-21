@@ -115,22 +115,7 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 
 ### メディカルチャットから縦断データへ
 
-```mermaid
-flowchart LR
-    A["MCS<br/>医療・介護チャット"] --> B["原文・時刻・投稿者<br/>職種・組織"]
-    B --> C["構造化イベント"]
-    C --> D["症状・状態変化"]
-    C --> E["薬剤変更"]
-    C --> F["依頼・回答・判断"]
-    C --> G["入退院・ケア移行"]
-    D --> H["患者時系列"]
-    E --> H
-    F --> I["多職種連携"]
-    G --> H
-    H --> J["統計・症例解析"]
-    I --> J
-    J --> K["現在症例の<br/>確認支援"]
-```
+![パイプライン図](docs/assets/flow-pipeline.svg)
 
 ### 測定できること
 
@@ -215,18 +200,7 @@ flowchart LR
 
 ### メッセージではなく症例経過
 
-```mermaid
-sequenceDiagram
-    participant N as 訪問看護師
-    participant P as 薬剤師
-    participant D as 医師
-    N->>P: 疼痛増悪・レスキュー増加を共有
-    P->>P: 薬物療法を評価
-    P->>D: 処方調整を相談
-    D-->>P: 処方変更
-    N->>P: 変更後の状態を共有
-    P->>P: 効果・副作用を再評価
-```
+![症例経過シーケンス図](docs/assets/flow-journey.svg)
 
 hermes-mcs はこの流れを単なる6投稿としてではなく、
 **症状 → 評価 → 提案 → 判断 → 実施 → 再評価** という一つの症例経過として
@@ -235,20 +209,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 多職種連携の解析
 
-```mermaid
-flowchart LR
-    N["訪問看護"]
-    P["薬剤師"]
-    D["医師"]
-    C["ケアマネ"]
-    H["病院"]
-    N -->|"症状・状態"| P
-    N -->|"診療相談"| D
-    P -->|"薬剤提案"| D
-    D -->|"方針"| N
-    C -->|"生活情報"| N
-    H -->|"退院情報"| P
-```
+![多職種連携ネットワーク図](docs/assets/flow-network.svg)
 
 記録から導出可能な分析軸: 職種間・組織間 interaction、応答時間、
 closed-loop（依頼→回答→実施の完結）、handoff、brokerage、
@@ -260,16 +221,7 @@ coordination burden、network density / reciprocity。
 
 ### 縦断症例解析
 
-```mermaid
-timeline
-    title 患者の記録経過（例）
-    Day -14 : 症状変化
-    Day -7  : 薬剤調整
-    Day 0   : 退院
-    Day +3  : 残薬確認
-    Day +7  : 再評価
-    Day +14 : 再調整
-```
+![症例タイムライン図](docs/assets/flow-timeline.svg)
 
 解析可能な軸: 症状→薬剤変更までの時間、薬剤変更→再評価までの時間、
 退院→薬剤照合までの時間、同一問題の再発、薬剤変更・多職種連携が
@@ -280,19 +232,7 @@ timeline
 「AI が未来を予測する」ではなく **「過去と現在を比較して確認候補を
 提示する」** 設計。候補は必ず原記録の確認を求める。
 
-```mermaid
-flowchart TD
-    A["現在患者"] --> B["直近7日"]
-    A --> C["患者自身の過去"]
-    B --> D["変化を比較"]
-    C --> D
-    E["過去症例の統計"] --> F["参考情報"]
-    D --> G["確認候補"]
-    F --> G
-    G --> H["薬剤変更後の<br/>再評価記録"]
-    G --> I["未解決事項"]
-    G --> J["通常より増えた<br/>薬剤変更・連携"]
-```
+![確認候補フロー図](docs/assets/flow-signals.svg)
 
 統計の閲覧が検知条件に影響する経路はなく、閾値は人確認コマンド
 （`signal_policy` + `reason` + receipt）経由でのみ変わる。
