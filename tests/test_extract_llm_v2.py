@@ -791,3 +791,40 @@ def test_chunk_deadline_defers_without_error(tmp_path, monkeypatch):
     assert res["done"] == 0 and res["failed"] == 0
     assert db.artifacts("extract_llm") == []   # no error row written
     db.close()
+
+
+def test_parallel_workers_process_all_selected(tmp_path, monkeypatch):
+    """workers>1 fans out llm_extract across threads; every selected
+    message still lands exactly one current v2 artifact."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 6)])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda: "plain")
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": f"s:{body}"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, workers=3)
+    assert res["done"] == 5 and res["failed"] == 0 and res["left"] == 0
+    arts = db.artifacts("extract_llm")
+    assert len(arts) == 5
+    assert all(json.loads(a["meta"])["extract_version"] == 2
+               for a in arts)
+    db.close()
+
+
+def test_parallel_workers_keep_fail_count_and_backoff(tmp_path,
+                                                      monkeypatch):
+    """A None result in the parallel path still writes the error row —
+    the serial commit loop is unchanged."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda: "plain")
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda: True)
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **_: None if body == "本文2" else {"summary": "ok"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, workers=3)
+    assert res["done"] == 2 and res["failed"] == 1
+    err = db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm' "
+        "AND message_id=2").fetchone()
+    assert json.loads(err["meta"])["error"] is True
+    db.close()

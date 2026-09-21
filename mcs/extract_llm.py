@@ -797,9 +797,16 @@ def _next_retry(ledger) -> float | None:
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
-                per_write_lock: bool = False) -> dict:
+                per_write_lock: bool = False, workers: int = 1) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
-    Returns {'done': n, 'left': n, 'failed': n}."""
+    Returns {'done': n, 'left': n, 'failed': n}.
+
+    `workers` fans out the LLM calls across threads — llama.cpp assigns
+    each unpinned request to a free slot, so workers should not exceed
+    the server's slot count. All DB access stays on the calling thread
+    (a sqlite3 connection is not thread-safe): thread contexts are
+    fetched serially up front and all writes land in the serial commit
+    loop after the map completes."""
     deadline = time.monotonic() + budget_s
     lock = _write_lock
     # Any artifact for an older body is stale, including retry state.
@@ -851,13 +858,28 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     """, (KIND, EXTRACT_VERSION, KIND, KIND, EXTRACT_VERSION)).fetchall()
     done = failed = 0
     done_pids = set()
-    for r in rows[:limit]:
-        if time.monotonic() > deadline:
-            break
-        ctx = _thread_context(ledger, r)
-        d = llm_extract(r["body_text"], context=ctx, deadline=deadline)
+    jobs = [(r, _thread_context(ledger, r)) for r in rows[:limit]]
+    if workers > 1 and len(jobs) > 1:
+        # settle the probed output format before fanning out — the
+        # workers would otherwise race to mutate the global mode
+        _probe_format()
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(
+                max_workers=min(workers, len(jobs))) as pool:
+            outs = list(pool.map(
+                lambda rc: _DEFERRED if time.monotonic() > deadline
+                else llm_extract(rc[0]["body_text"], context=rc[1],
+                                 deadline=deadline), jobs))
+    else:
+        outs = []
+        for r, ctx in jobs:
+            if time.monotonic() > deadline:
+                break  # budget ran out — the rest stay pending
+            outs.append(llm_extract(r["body_text"], context=ctx,
+                                    deadline=deadline))
+    for (r, ctx), d in zip(jobs, outs):
         if d is _DEFERRED:
-            break  # budget ran out mid-message — leave it pending
+            continue  # budget ran out mid-message — leave it pending
         if d is None:
             failed += 1
             if not _llm_up():
@@ -902,6 +924,9 @@ def main() -> int:
     ap.add_argument("--budget", type=float, default=180)
     ap.add_argument("--all", action="store_true",
                     help="drain the whole backlog (ignores budget pacing)")
+    ap.add_argument("--workers", type=int, default=3,
+                    help="concurrent LLM calls — llama.cpp assigns each "
+                         "unpinned request to a free slot (server -np)")
     args = ap.parse_args()
     led = Ledger(DB)
     try:
@@ -911,7 +936,8 @@ def main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             while True:
                 r = run_pending(led, limit=50, budget_s=3600,
-                                per_write_lock=True)
+                                per_write_lock=True,
+                                workers=max(1, min(args.workers, 8)))
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
