@@ -1,5 +1,8 @@
 # hermes-mcs — MedicalCareStation 未読モニター + レビュー支援
 
+**v1.0.1** — 変更履歴は [CHANGELOG.md](CHANGELOG.md)、リリースは
+[GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)。
+
 > **MCSに蓄積された医療・介護チャットを、患者時系列・薬物療法・
 > 多職種連携の解析可能なデータへ。**
 
