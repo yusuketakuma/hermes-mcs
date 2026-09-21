@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="210" viewBox="0 0 760 210" font-family="Menlo, 'Hiragino Sans', monospace">
+  <rect width="760" height="210" fill="#0d1117"/>
+  <defs>
+    <marker id="ov_ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <!-- stage 1: source -->
+  <rect x="30" y="60" width="170" height="90" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="115" y="92" font-size="14" fill="#e6edf3" text-anchor="middle" font-weight="bold">MCS</text>
+  <text x="115" y="112" font-size="11" fill="#8b949e" text-anchor="middle">医療・介護チームの</text>
+  <text x="115" y="126" font-size="11" fill="#8b949e" text-anchor="middle">チャット記録</text>
+  <line x1="200" y1="105" x2="248" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
+  <text x="224" y="92" font-size="10" fill="#58a6ff" text-anchor="middle">15分ごと</text>
+  <text x="224" y="122" font-size="10" fill="#8b949e" text-anchor="middle">自動収集</text>
+  <!-- stage 2: this system -->
+  <rect x="252" y="42" width="230" height="126" rx="10" fill="#1f6feb"/>
+  <text x="367" y="68" font-size="14" fill="#fff" text-anchor="middle" font-weight="bold">hermes-mcs</text>
+  <text x="367" y="90" font-size="11" fill="#dbe8ff" text-anchor="middle">このマシン上に保存し</text>
+  <text x="367" y="106" font-size="11" fill="#dbe8ff" text-anchor="middle">薬・症状・依頼などを整理</text>
+  <text x="367" y="130" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 記録は外部へ出ません</text>
+  <text x="367" y="146" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 元の記録は書き換えません</text>
+  <line x1="482" y1="105" x2="530" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
+  <text x="506" y="92" font-size="10" fill="#8b949e" text-anchor="middle">見える形に</text>
+  <!-- stage 3: outputs -->
+  <rect x="534" y="20" width="196" height="170" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="632" y="44" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">見られるようになるもの</text>
+  <text x="556" y="70" font-size="11" fill="#8b949e">・ Discord への新着通知</text>
+  <text x="556" y="92" font-size="11" fill="#8b949e">・ 全文検索と患者タイムライン</text>
+  <text x="556" y="114" font-size="11" fill="#8b949e">・ 患者ごとの状態一覧</text>
+  <text x="556" y="136" font-size="11" fill="#8b949e">・ 統計（読み取り専用）</text>
+  <text x="556" y="158" font-size="11" fill="#8b949e">・ 「確認候補」の一覧</text>
+  <text x="556" y="178" font-size="10" fill="#6e7681">（判断・登録は人が行う）</text>
+</svg>
