@@ -166,14 +166,41 @@ def test_open_loop_aging_buckets(db):
             (3, "2026-07-01", "open"),      # ~82d -> 31-90d
             (4, "2026-01-01", "open"),      # >90d -> over_90d
             (5, None, "open"),              # no_due
-            (6, "2026-09-18", "done")]:     # excluded
+            (6, "2026-09-18", "done"),      # closed -> excluded
+            (7, "2026-09-18", "cancelled"), # closed -> excluded
+            (8, "2027-01-01", "in_progress")]:  # future -> not_yet_due
         db.execute("INSERT INTO requests VALUES (?,?,?,?,?)",
                    (rid, 1, status, due, 0))
     st = run(db, stat="open_loop_aging")["open_loop_aging"]
     b = st["age_buckets"]
     assert b["0-7d"] == 1 and b["8-30d"] == 1 and b["31-90d"] == 1
     assert b["over_90d"] == 1 and b["no_due"] == 1
-    assert st["formal_open_requests"]["total"] == 5
+    assert b["not_yet_due"] == 1
+    assert st["formal_open_requests"]["total"] == 6
+
+
+def test_non_dict_med_element_skipped(db):
+    _msg(db, 1, chash="h1")
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"},
+                           None, "garbage"])
+    st = run(db, stat="meds")["meds"]
+    assert st["status"] == "ok"
+    assert st["action_totals"]["start"] == 1
+
+
+def test_until_clamped_below_since_is_bad_period(db):
+    # since is after the snapshot's as_of: until clamps to as_of and
+    # inverts the range — must surface bad_period, not an empty ok
+    with pytest.raises(ValueError, match="bad_period"):
+        run(db, stat="overview", since="2026-10-01", until="2026-11-01")
+
+
+def test_duplicate_current_artifacts_not_double_counted(db):
+    _msg(db, 1, chash="h1")
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])  # dup
+    st = run(db, stat="meds")["meds"]
+    assert st["action_totals"]["start"] == 1
 
 
 def test_stats_never_touch_write_path(db, tmp_path):

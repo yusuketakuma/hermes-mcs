@@ -19,6 +19,7 @@ Rules carried over from the spec:
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,11 +28,10 @@ DEFINITION_VERSION = "2026-09-21"
 STATS_SCHEMA = "stats_v1"
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
-# 25 default / 100 max, time buckets 120, response JSON ~1 MiB
+# 100 max, time buckets 120 — row-count caps bound the response size
 DETAIL_LIMIT = 100
 CATEGORY_LIMIT = 100
 BUCKET_LIMIT = 120
-MAX_JSON_BYTES = 1 << 20
 
 STATUSES = ("ok", "partial", "unavailable", "unsupported", "not_implemented")
 
@@ -74,9 +74,16 @@ def _scope(args: dict, snapshot_ts: int) -> dict:
         raise ValueError("as_of_after_snapshot")
     if until is not None and until > as_of:
         until = as_of
+        # clamping may invert the range — surface it, don't silently
+        # return an empty success
+        if since is not None and until <= since:
+            raise ValueError("bad_period")
+    try:
+        limit = min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)
+    except (TypeError, ValueError):
+        raise ValueError("bad_limit")
     return {"since": since, "until": until, "as_of": as_of,
-            "project_id": args.get("project"),
-            "limit": min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)}
+            "project_id": args.get("project"), "limit": limit}
 
 
 def _where(scope: dict, col: str = "m.posted_at_ts") -> tuple[str, list]:
@@ -142,6 +149,13 @@ def st_data_quality(db, scope):
     timed = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE posted_at_ts NOT NULL{w}",
         p).fetchone()[0]
+    # extract artifacts whose meta is not valid JSON: invisible to both
+    # 'parsed' and 'stale_parsed' yet permanently unparsed upstream
+    meta_bad = db.execute(
+        f"""SELECT COUNT(*) FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id
+            WHERE a.kind='extract_llm' AND NOT json_valid(a.meta){w}""",
+        p).fetchone()[0]
     return _result("ok", scope, {
         "stages": {
             "fetched": _ratio(fetched, total, "messages"),
@@ -149,6 +163,7 @@ def st_data_quality(db, scope):
             "stat_ready_timestamped": _ratio(timed, total, "messages")},
         "body_states": {s: n for s, n in body_states},
         "stale_parsed": stale,
+        "extract_meta_unparseable": meta_bad,
         "notes": ["body_absent_vs_unparsed kept separate",
                   "stale_parsed = extraction exists but for an older "
                   "content revision"]})
@@ -219,7 +234,9 @@ def st_patient_activity(db, scope):
     return _result("ok", scope, {
         "windows": out,
         "notes": ["post volume is not severity",
-                  "active_days = days with at least one post, JST"]})
+                  "active_days = days with at least one post, JST",
+                  "windows are fixed N*86400s ending at as_of; "
+                  "--since/--until do not apply"]})
 
 
 def st_professions(db, scope):
@@ -246,6 +263,9 @@ def st_workload(db, scope):
     rows = db.execute(
         f"SELECT m.posted_at_ts, m.project_id FROM messages m"
         f" WHERE m.posted_at_ts NOT NULL{w}", p).fetchall()
+    untimed = db.execute(
+        f"SELECT COUNT(*) FROM messages m"
+        f" WHERE m.posted_at_ts IS NULL{w}", p).fetchone()[0]
     bands = {}
     room_seen = {}
     for ts, pid in rows:
@@ -254,14 +274,15 @@ def st_workload(db, scope):
         day = 8 <= dt.hour < 18
         band = ("weekend" if weekend else
                 "weekday_day" if day else "weekday_night")
-        key = (dt.strftime("%a"), band)
+        key = (dt.weekday(), dt.strftime("%a"), band)
         bands[key] = bands.get(key, 0) + 1
         room_seen.setdefault(key, set()).add(pid)
-    by_day_band = [{"weekday": k[0], "band": k[1], "posts": n,
+    by_day_band = [{"weekday": k[1], "band": k[2], "posts": n,
                     "rooms": len(room_seen[k])}
                    for k, n in sorted(bands.items())]
     return _result("ok", scope, {
         "by_weekday_band": _items(by_day_band, BUCKET_LIMIT),
+        "untimed_posts_excluded": untimed,
         "band_definition": "weekday_day=Mon-Fri 08:00-18:00 JST; "
                            "weekday_night=other weekday hours; "
                            "weekend=Sat/Sun",
@@ -273,25 +294,28 @@ def st_workload(db, scope):
 def st_doc_burden(db, scope):
     """ST-006: sender concentration — top1/5/10 share + HHI."""
     w, p = _where(scope)
+    # group by sender_id — same display name ≠ same sender
     rows = db.execute(
-        f"""SELECT COALESCE(m.sender_name,'(unknown)') name, COUNT(*) n
+        f"""SELECT COALESCE(m.sender_id,-1) sid, COUNT(*) n,
+                   MAX(m.sender_name IS NULL) nameless
             FROM messages m WHERE 1=1{w}
-            GROUP BY name ORDER BY n DESC""", p).fetchall()
-    total = sum(n for _, n in rows)
+            GROUP BY sid ORDER BY n DESC""", p).fetchall()
+    total = sum(n for _, n, _ in rows)
     def share(k):
-        return _ratio(sum(n for _, n in rows[:k]), total, "posts")
-    hhi = sum((n / total) ** 2 for _, n in rows) if total else None
+        return _ratio(sum(n for _, n, _ in rows[:k]), total, "posts")
+    hhi = sum((n / total) ** 2 for _, n, _ in rows) if total else None
     return _result("ok", scope, {
         "top1_share": share(1), "top5_share": share(5),
         "top10_share": share(10),
         "hhi": round(hhi, 4) if hhi is not None else None,
         "hhi_reason": None if hhi is not None else "denominator_zero",
         "sender_count": len(rows),
-        "unknown_sender_posts": sum(n for name, n in rows
-                                    if name == "(unknown)"),
+        "unknown_sender_posts": sum(n for _, n, nameless in rows
+                                    if nameless),
         "notes": ["post count is not a performance score; "
                   "delegate posting and division of labour skew it",
-                  "sender names stay on this local screen only"]})
+                  "grouped by sender_id — distinct senders sharing a "
+                  "display name stay separate"]})
 
 
 # ---------------- meds (extract_llm source) ----------------
@@ -300,18 +324,29 @@ _MED_ACTIONS = ("start", "stop", "change", "increase", "decrease", "none")
 
 
 def _med_rows(db, scope):
-    """Yield (project_id, message_id, med_dict, posted_at_ts) for
-    current-revision extract_llm artifacts in scope."""
+    """(project_id, message_id, med_dict, posted_at_ts) for current-
+    revision extract_llm artifacts in scope. artifacts has no
+    UNIQUE(kind, message_id), so duplicate current-hash rows are
+    deduplicated per message_id here rather than double-counted."""
     w, p = _where(scope)
-    return db.execute(
+    rows = db.execute(
         f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind='extract_llm' AND json_valid(a.content)
               AND json_valid(a.meta)
               AND json_extract(a.meta,'$.error') IS NOT 1
               AND json_extract(a.meta,'$.hash')=m.content_hash
-              AND json_array_length(a.content,'$.meds')>0{w}""",
+              AND json_array_length(a.content,'$.meds')>0{w}
+            ORDER BY a.artifact_id""",
         p).fetchall()
+    seen = set()
+    for pid, mid, content, ts in rows:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        for med in (json.loads(content).get("meds") or []):
+            if isinstance(med, dict):
+                yield pid, mid, med, ts
 
 
 def st_meds(db, scope):
@@ -320,17 +355,16 @@ def st_meds(db, scope):
     per_month = {}
     action_counts = {}
     names = set()
-    for pid, mid, content, ts in _med_rows(db, scope):
+    for pid, mid, med, ts in _med_rows(db, scope):
         month = datetime.fromtimestamp(ts, JST).strftime("%Y-%m") \
-            if ts else "unknown"
-        for med in json.loads(content).get("meds") or []:
-            name = (med.get("name") or "").strip() or "(unnamed)"
-            action = med.get("action") if med.get("action") in _MED_ACTIONS \
-                else "other"
-            names.add(name)
-            action_counts[action] = action_counts.get(action, 0) + 1
-            key = (name, month)
-            per_month[key] = per_month.get(key, 0) + 1
+            if ts is not None else "unknown"
+        name = (med.get("name") or "").strip() or "(unnamed)"
+        action = med.get("action") if med.get("action") in _MED_ACTIONS \
+            else "other"
+        names.add(name)
+        action_counts[action] = action_counts.get(action, 0) + 1
+        key = (name, month)
+        per_month[key] = per_month.get(key, 0) + 1
     top = sorted(per_month.items(), key=lambda kv: -kv[1])
     return _result("ok", scope, {
         "action_totals": action_counts,
@@ -347,11 +381,10 @@ def st_meds(db, scope):
 def st_med_mentions(db, scope):
     """ST-008: distinct med names per room in scope."""
     per_room = {}
-    for pid, mid, content, ts in _med_rows(db, scope):
-        for med in json.loads(content).get("meds") or []:
-            name = (med.get("name") or "").strip()
-            if name:
-                per_room.setdefault(pid, set()).add(name)
+    for pid, mid, med, ts in _med_rows(db, scope):
+        name = (med.get("name") or "").strip()
+        if name:
+            per_room.setdefault(pid, set()).add(name)
     rows = sorted(({"project_id": pid, "distinct_med_names": len(s)}
                    for pid, s in per_room.items()),
                   key=lambda r: -r["distinct_med_names"])
@@ -364,23 +397,27 @@ def st_med_mentions(db, scope):
 
 
 def st_med_change_burden(db, scope):
-    """ST-009: med change actions per room over 7/14/30d windows."""
+    """ST-009: med change actions per room over 7/14/30d windows.
+    Windows are JST calendar days ending on the as_of date — unlike
+    patient_activity's exact N*86400s epoch windows (noted below)."""
     changes = {}  # (pid, day) -> count ; pid -> total
-    for pid, mid, content, ts in _med_rows(db, scope):
-        day = datetime.fromtimestamp(ts, JST).date().isoformat() \
-            if ts else "unknown"
-        for med in json.loads(content).get("meds") or []:
-            if med.get("action") in ("start", "stop", "change",
+    for pid, mid, med, ts in _med_rows(db, scope):
+        if med.get("action") not in ("start", "stop", "change",
                                      "increase", "decrease"):
-                key = (pid, day)
-                changes[key] = changes.get(key, 0) + 1
+            continue
+        day = datetime.fromtimestamp(ts, JST).date().isoformat() \
+            if ts is not None else "unknown"
+        key = (pid, day)
+        changes[key] = changes.get(key, 0) + 1
+    as_of_day = datetime.fromtimestamp(scope["as_of"], JST) \
+        .date().isoformat()
     out = {}
     for days in (7, 14, 30):
         cutoff = (datetime.fromtimestamp(scope["as_of"], JST)
-                  - timedelta(days=days)).date().isoformat()
+                  - timedelta(days=days - 1)).date().isoformat()
         per_room = {}
         for (pid, day), n in changes.items():
-            if (day != "unknown" and day >= cutoff
+            if (day != "unknown" and cutoff <= day <= as_of_day
                     and (scope["project_id"] is None
                          or pid == scope["project_id"])):
                 per_room[pid] = per_room.get(pid, 0) + n
@@ -396,7 +433,10 @@ def st_med_change_burden(db, scope):
         "busiest_days": _items(busiest, scope["limit"]),
         "notes": ["mention-level dedup only — the same change reported "
                   "by three professions counts three times",
-                  "change count is not clinical instability"]})
+                  "change count is not clinical instability",
+                  "windows are JST calendar days ending on the as_of "
+                  "date; patient_activity uses exact N*86400s windows "
+                  "instead"]})
 
 
 def st_adherence_events(db, scope):
@@ -416,45 +456,55 @@ def st_rx_expiry(db, scope):
 
 
 def st_open_loop_aging(db, scope):
-    """ST-024 (formal side only): open requests by age bucket. Text-
-    derived candidates require interaction_links — reported separately
-    as unavailable."""
+    """ST-024 (formal side only): open requests by overdue-age bucket.
+    Text-derived candidates require interaction_links — reported
+    separately as unavailable. due_date is stored as a validated
+    YYYY-MM-DD (mcs_requests), but out-of-band rows may not parse —
+    those surface as due_unparseable, not silently as no_due."""
     rows = db.execute(
-        "SELECT request_id, project_id, status, due_date, updated_at "
-        "FROM requests WHERE status != 'done'" +
+        "SELECT request_id, project_id, status, due_date FROM requests "
+        "WHERE status IN ('open','in_progress')" +
         (" AND project_id = ?" if scope["project_id"] is not None else ""),
         ([scope["project_id"]] if scope["project_id"] is not None else [])
     ).fetchall()
-    buckets = {"0-7d": 0, "8-30d": 0, "31-90d": 0, "over_90d": 0,
-               "no_due": 0}
+    buckets = {"not_yet_due": 0, "0-7d": 0, "8-30d": 0, "31-90d": 0,
+               "over_90d": 0, "no_due": 0}
     items = []
-    for rid, pid, status, due, upd in rows:
+    for rid, pid, status, due in rows:
         age_d = None
+        unparseable = False
         if due:
             try:
-                due_ts = _parse_when(str(due)) if "T" not in str(due) \
-                    else int(datetime.fromisoformat(str(due)).timestamp())
-                age_d = (scope["as_of"] - due_ts) / 86400
+                age_d = (scope["as_of"] - _parse_when(str(due))) / 86400
             except (ValueError, TypeError, OverflowError):
-                due = None
-        if age_d is None:
+                unparseable = True
+        if due is None:
             buckets["no_due"] += 1
+        elif unparseable:
+            buckets["no_due"] += 1  # counted but flagged, not hidden
+        elif age_d < 0:
+            buckets["not_yet_due"] += 1
         else:
             buckets["over_90d" if age_d > 90 else
                     "31-90d" if age_d > 30 else
                     "8-30d" if age_d > 7 else "0-7d"] += 1
         items.append({"request_id": rid, "project_id": pid,
                       "status": status, "due_date": due,
+                      "due_unparseable": unparseable or None,
                       "days_since_due": round(age_d) if age_d is not None
                       else None})
-    items.sort(key=lambda r: -(r["days_since_due"] or -1))
+    items.sort(key=lambda r: (r["days_since_due"] is None,
+                              -(r["days_since_due"] or 0)))
     return _result("partial", scope, {
         "formal_open_requests": _items(items, scope["limit"]),
         "age_buckets": buckets,
         "oldest_open_due": min((i["due_date"] for i in items
                                 if i["due_date"]), default=None),
         "text_candidates": {"status": "unavailable",
-                            "reason": "needs interaction_links"}},
+                            "reason": "needs interaction_links"},
+        "notes": ["overdue age measured from due date, not creation",
+                  "--since/--until do not filter the request register"],
+        },
         reason="text-derived open-loop candidates not computable; "
                "formal request register only")
 
@@ -527,7 +577,8 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
     for name in names:
         try:
             stats[name] = REGISTRY[name]["fn"](db, scope)
-        except (json.JSONDecodeError, TypeError, KeyError) as e:
+        except (json.JSONDecodeError, TypeError, KeyError,
+                AttributeError, OverflowError, sqlite3.Error) as e:
             stats[name] = _result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")
     return {"stats": stats}
