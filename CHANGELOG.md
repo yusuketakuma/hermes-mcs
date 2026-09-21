@@ -2,39 +2,59 @@
 
 ## [1.0.1] — 2026-09-22
 
-構造化抽出の精度向上プログラム（スキーマ拡張・文脈注入・出力保証・
-QC 検証の4系統）と、人承認済み参照セットによる統計回帰ゲートを追加。
+構造化抽出（extract_llm）の精度向上と、統計の回帰確認ワークフロー。
+既存の運用操作・設定はそのまま使え、移行作業は不要。
 
-### Features
-- `extract_llm` v2 スキーマ — meds `action/status/subject/negated`、
-  symptoms `status`、requests `from/due`、全項目に `evidence` スパン
-  （本文内一意照合）。完全合成 few-shot、スレッド context 注入
-  （DATA 境界 + 無害化 + meta 記録）
-- `response_format` 自動検出 — `json_schema → json_object → plain`
-  の段階降格 + cooldown 再 probe。長文は `_chunks` 全文カバレッジ +
-  決定的マージ（状態遷移保持、マルチチャンク要約破棄）
-- Jev QC — `extract_qc` ジョブを `run_due` 共有 claim で実行
-  （OFF/circuit/paused/予算の全ガード共有）。項目別 noul 裏付け +
-  urgency 監査を artifact に注記のみ記録（抽出の変更・抑制なし）
-- `mcs/extract_bench.py` — フィールド別 P/R/F1 ベンチハーネス +
-  完全合成回帰ケース14件（`bench/extract_cases.json`）
-- `mcs/mcs_refstats.py` — 承認済み参照セット統計検証:
-  `capture` → `control refstat_approve --confirm-human`（バイト列
-  SHA-256 を `refstat_approval_v1` artifact に記録）→ `verify`
-  （match/drift/regression/unverified/superseded）
+### 抽出結果が変わるもの
 
-### Fixes
-- consumer フィルタ統一 — `med_is_patient_current` 述語を
-  rollup/notifier/stats/signals/cooccurrence で共有し、否定・家族・
-  過去言及が「現在服用中」集計に混入しないよう修正
-- v1→v2 lazy-replace 移行 — 成功書込みと同一 tx で旧行を置換、
-  poison 行は保持、`--all` ドレイナーの非終了経路を解消
-- `test_semantic_runtime` 日次境界フレーク — 時刻を JST 正午に固定
+- **薬の抽出に「誰の・どの状態の薬か」が付く** — 各項目が
+  患者本人の薬か・家族など他人の薬か（`subject`）、現在服用中か
+  中止済みか計画中か（`status`）、否定言及か（`negated`）を区別する。
+  その結果、通知・患者ロールアップ・薬関連統計で「家族の薬」や
+  「中止した薬」が現在の薬として表示・集計されなくなる。
+- **抽出の各項目に本文中の根拠箇所（`evidence`）が記録される** —
+  通知や台帳の確認時に「どの記述から拾ったか」を照合できる。
+  本文に無い根拠をでっち上げた項目は自動で捨てられる。
+- **依頼の抽出に「誰からの依頼か」「期限」が付く**
+- **3000字を超える長文も全文が抽出対象になる** — 以前は先頭しか
+  見ていなかったため、後半に書かれた薬・症状・依頼も拾う。
+- **スレッドの親投稿・直近返信を文脈として参照する** —
+  「はい、大丈夫です」のような返信単体では意味が取れない投稿の
+  抽出精度が上がる。
+
+### 動作が変わるもの
+
+- **ローカルLLMサーバの能力に応じて出力方式を自動選択** — JSON
+  スキーマ強制に対応したサーバならそれを使い、非対応なら従来方式へ
+  自動で降格・復帰する。設定変更は不要。
+- **途中で失敗した抽出を成功扱いしない** — 長文の分割処理の一部が
+  失敗した場合、そのメッセージ全体を失敗として再試行する
+  （以前は中途半端な結果が「完了」として残り得た）。
+- **v1 の旧抽出は v2 が成功した時点で自動的に置き換わる** —
+  手動の移行操作は不要。抽出失敗の履歴は残る。
+
+### 新しい運用機能
+
+- **抽出結果の QC 検証（任意・既定 OFF）** — config に
+  `semantic.extract_qc: "annotate"` を設定すると、抽出済み項目を
+  Jev が裏付け確認し、判定を別 artifact に注記する。抽出結果自体は
+  変更・抑制されない。日次予算・一時停止など既存のガードは全て
+  そのまま効く。
+- **抽出精度ベンチ** — `mcs/extract_bench.py` で合成ケース14件に
+  対するフィールド別の適合率・再現率を計測できる（要ローカルLLM
+  サーバ。オフライン検証は `--mock-ok`）。
+- **統計の承認済み参照セット検証** — `mcs/mcs_refstats.py` で
+  「人が確認して承認した統計結果」を基準として保存し、後日の
+  snapshot に対して `verify` で再計算・突合できる。統計コードの
+  変更が結果を変えていないか（regression）、データが変わったか
+  （drift）を区別して報告する。承認は既存の `--confirm-human`
+  コマンド経路のみ。
 
 ### Docs
-- README: 「MCS データで何が追えるのか」節追加、mermaid → SVG 資産化、
-  モジュール/シグナル/統計/CLI 表の自動生成を `update_readme.py` に統合
-- AGENTS.md をエージェント向け最小指示に凝縮
+
+- README に「MCS データで何が追えるのか」節を追加、図を mermaid
+  から SVG に差し替え
+- AGENTS.md を最小限の指示に整理
 
 ## [1.0.0] — 2026-09-21
 
