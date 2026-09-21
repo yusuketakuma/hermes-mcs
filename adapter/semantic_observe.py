@@ -10,7 +10,7 @@ decide when assist/enforce is safe:
 
 Gates to watch (phase-j-record §7):
 - audit PASS rate and NEEDS_REVIEW reason distribution
-- jev_requests_today vs daily_request_budget (40)
+- jev_requests_today vs daily_request_budget (read from config)
 - pending drain rate vs new-arrival rate
 - failed job count staying at 0
 """
@@ -64,8 +64,18 @@ def observe(db_path: str = DB) -> dict:
         "audit_statuses": audits,
         "finding_codes": findings,
         "jev_requests_today": int(jev_today),
+        "jev_daily_budget": _daily_budget(),
         "extract_llm_left": extract_left,
     }
+
+
+def _daily_budget() -> int:
+    from mcs_util import load_config
+    try:
+        return int(load_config().get("semantic", {})
+                   .get("daily_request_budget", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def main() -> int:
@@ -80,7 +90,8 @@ def main() -> int:
     print(f"audit: {snap['audit_statuses'] or 'none yet'}")
     if snap["finding_codes"]:
         print(f"findings: {snap['finding_codes']}")
-    print(f"jev today: {snap['jev_requests_today']}/40 | "
+    print(f"jev today: {snap['jev_requests_today']}/"
+          f"{snap['jev_daily_budget']} | "
           f"extract_llm backlog left: {snap['extract_llm_left']}")
     return 0
 
