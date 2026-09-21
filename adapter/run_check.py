@@ -33,7 +33,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mcs_adapter import (MCSAdapter, MCSError, SessionExpired, SchemaError)
+from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger
 from mcs_util import acquire_run_lock, load_config
 import job_ops

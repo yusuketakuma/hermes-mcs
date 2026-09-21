@@ -48,7 +48,7 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger, LedgerReader
 from mcs_requests import payload_hash
-from mcs_util import acquire_run_lock, load_config
+from mcs_util import acquire_run_lock, env_value, load_config
 import semantic_jev as jev
 import semantic_runtime as runtime
 
@@ -69,17 +69,8 @@ KIND_LOOP = "loop_candidate"
 KIND_LOOP_EVENT = "loop_event"
 KIND_PLAN = "notify_plan"
 KIND_USAGE = "semantic_usage"
-SEMANTIC_KINDS = (KIND_BUNDLE, KIND_ASSESS, KIND_FACTS, KIND_SUMMARY,
-                  KIND_AUDIT, KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN,
-                  KIND_USAGE, "semantic_coverage", "semantic_extraction_chunk",
-                  "semantic_repair", "semantic_policy")
 
 MODES = ("off", "shadow", "assist", "enforce")
-TECH_STATUSES = ("complete", "partial", "pending", "retry_wait",
-                 "error", "stale")
-VERDICTS = ("MATCH", "UNDETERMINED", "NO_MATCH")
-AUDIT_STATUSES = ("PASS", "REPAIR_REQUIRED", "NEEDS_REVIEW", "PENDING",
-                  "STALE")
 FACT_KINDS = ("medication_event", "symptom", "explicit_request",
               "pending_item", "schedule", "preference", "observation",
               "other")
@@ -197,22 +188,6 @@ def policy_fingerprint(scfg: dict) -> str:
     """Only interpretation settings invalidate cached analysis, not retry budgets."""
     return payload_hash({key: scfg.get(key) for key in (
         "model", "match_threshold", "nomatch_threshold", "calibration_version")})
-
-
-def _env(key: str) -> str | None:
-    """TYPESAFE_API_KEY lookup: process env, then ~/.mcs/.env, then the
-    shared ~/.hermes/.env — the key is never written to payloads/logs."""
-    if os.environ.get(key):
-        return os.environ[key]
-    for path in (os.path.join(HOME, ".env"),
-                 os.path.expanduser("~/.hermes/.env")):
-        try:
-            for line in open(path, encoding="utf-8"):
-                if line.startswith(key + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except OSError:
-            pass
-    return None
 
 
 # ---------- fixed input bundle (spec §12.1) ----------
@@ -1738,7 +1713,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         llm_fn = llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
         jev_client = jev.JevClient(
-            api_key=_env("TYPESAFE_API_KEY"), model=scfg["model"],
+            api_key=env_value("TYPESAFE_API_KEY"), model=scfg["model"],
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])

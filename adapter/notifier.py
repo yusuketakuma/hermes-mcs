@@ -21,7 +21,8 @@ import urllib.request
 import urllib.error
 import uuid
 
-from mcs_util import NoRedirect, html_to_text, load_config, no_proxy_opener
+from mcs_util import (NoRedirect, env_value, html_to_text, load_config,
+                      no_proxy_opener)
 
 ENV_PATH = os.path.expanduser("~/.hermes/.env")
 CONF_PATH = os.path.expanduser("~/.mcs/config.json")
@@ -36,13 +37,9 @@ _MAX_REQUEST_BYTES = 24 * 1024 * 1024
 
 
 def _env(key: str, path: str = ENV_PATH) -> str | None:
-    try:
-        for line in open(path, encoding="utf-8"):
-            if line.startswith(key + "="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return None
+    # File-pinned lookup: a stray shell DISCORD_BOT_TOKEN must never
+    # override the profile's own .env — env_value(check_env=False).
+    return env_value(key, paths=(path,), check_env=False)
 
 
 _PROFILE_ENV = os.path.expanduser("~/.hermes/profiles/{}/.env")

@@ -737,12 +737,6 @@ class Ledger:
             (project_id,)).fetchone()
         return (r and r["t"]) or 0
 
-    def set_history_target(self, project_id: int, target: int):
-        self.db.execute(
-            "UPDATE patients SET history_target=? WHERE project_id=?",
-            (target, project_id))
-        self.db.commit()
-
     def reset_history_cursor(self, project_id: int, target: int):
         """Create the patient row and bind target+cursor atomically."""
         now = time.time()
@@ -964,12 +958,6 @@ class Ledger:
             """, (project_id, "incomplete", reason[:200],
                   time.time(), time.time()))
 
-    def last_seen_ts(self, project_id: int) -> float:
-        r = self.db.execute(
-            "SELECT MAX(updated_seen) t FROM messages WHERE project_id=?",
-            (project_id,)).fetchone()
-        return r["t"] or 0.0
-
     def known_patients(self) -> list:
         return self.db.execute(
             "SELECT project_id,patient_name FROM patients").fetchall()
@@ -1112,13 +1100,6 @@ class Ledger:
 
     def history_job(self, project_id: int) -> dict | None:
         return self.job_pending("history", project_id)
-
-    def job_exists(self, kind: str, project_id: int,
-                   message_id: int = 0) -> bool:
-        return self.db.execute(
-            "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
-            "AND message_id=? LIMIT 1", (kind, project_id, message_id)
-        ).fetchone() is not None
 
     def job_state(self, kind: str, project_id: int,
                   message_id: int = 0) -> str | None:
@@ -1463,12 +1444,6 @@ class Ledger:
                 out.extend(m for m in ids if type(m) is int)
         return out
 
-    def pending_attachments(self) -> list:
-        return self.db.execute("""
-          SELECT attachment_id,message_id,file_id,name,url FROM attachments
-          WHERE state='pending' AND url != ''
-        """).fetchall()
-
     # ---------- notify outbox ----------
 
     def outbox_add_tx(self, kind: str, project_id: int | None,
@@ -1563,61 +1538,6 @@ class Ledger:
           WHERE messages_fts MATCH ?
           ORDER BY m.posted_at_ts DESC LIMIT ?
         """, (fts_query, limit)).fetchall()
-
-    def find_patients(self, name: str) -> list:
-        """Space-insensitive substring match on patient_name.
-        '赤尾' / '赤尾 眞' / '赤尾眞' all match '赤尾 眞'."""
-        t = name.replace(" ", "").replace("　", "")
-        return self.db.execute("""
-          SELECT * FROM patients
-          WHERE REPLACE(REPLACE(patient_name,' ',''),'　','') LIKE ?
-          ORDER BY patient_name
-        """, ("%" + t + "%",)).fetchall()
-
-    def fuzzy_search(self, term: str, limit: int = 50) -> list:
-        """Substring search across body_text, sender_name and patient_name.
-        Japanese-friendly: ignores whitespace; multi-term = AND.
-        Use this when FTS5 (token-based) misses unsegmented Japanese."""
-        terms = [t.replace(" ", "").replace("　", "")
-                 for t in term.split() if t.strip()]
-        if not terms:
-            return []
-        wh = " AND ".join(
-            "(REPLACE(REPLACE(m.body_text,' ',''),'　','') LIKE ?"
-            " OR REPLACE(REPLACE(m.sender_name,' ',''),'　','') LIKE ?"
-            " OR REPLACE(REPLACE(p.patient_name,' ',''),'　','') LIKE ?)"
-            for _ in terms)
-        params = []
-        for t in terms:
-            params += ["%" + t + "%"] * 3
-        return self.db.execute(f"""
-          SELECT m.message_id, m.project_id, m.parent_id, m.sender_name,
-                 m.posted_at, m.body_text, m.body_state,
-                 p.patient_name
-          FROM messages m
-          LEFT JOIN patients p ON p.project_id = m.project_id
-          WHERE {wh}
-          ORDER BY m.posted_at_ts DESC LIMIT ?
-        """, (*params, limit)).fetchall()
-
-    def patient_timeline(self, project_id: int, limit: int = 100,
-                         before: tuple | int | None = None) -> list:
-        """Viewer path: top-level messages newest-first.
-        `before` is a (posted_at_ts, message_id) composite cursor — same-ts
-        messages at a page boundary must stay reachable (Oracle T25)."""
-        if before is not None:
-            ts, mid = (before, 0) if isinstance(before, int) else before
-            return self.db.execute("""
-              SELECT * FROM messages
-              WHERE project_id=? AND parent_id IS NULL
-                AND (posted_at_ts<? OR (posted_at_ts=? AND message_id<?))
-              ORDER BY posted_at_ts DESC, message_id DESC LIMIT ?
-            """, (project_id, ts, ts, mid, limit)).fetchall()
-        return self.db.execute("""
-          SELECT * FROM messages
-          WHERE project_id=? AND parent_id IS NULL
-          ORDER BY posted_at_ts DESC, message_id DESC LIMIT ?
-        """, (project_id, limit)).fetchall()
 
     def thread(self, parent_id: int) -> list:
         return self.db.execute("""

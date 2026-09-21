@@ -12,7 +12,7 @@ import mcs_requests as requests
 import mcs_view
 import semantic
 import semantic_loops
-from test_mcs_semantic import _FakeJev, _cfg, _message, _seeded
+from test_mcs_semantic import _cfg, _message, _seeded
 from test_semantic_loop_generations import _pending_fact
 
 

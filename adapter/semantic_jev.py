@@ -43,9 +43,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from urllib.parse import urlsplit
 
-from mcs_util import NoRedirect, no_proxy_opener
+from mcs_util import NoRedirect, env_value, no_proxy_opener
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
@@ -405,8 +407,7 @@ class JevClient:
         self.requests_made = 0
         self.usage_totals = {"input_tokens": 0, "output_tokens": 0,
                              "reported_requests": 0}
-        self.chars_out = 0
-        self.chars_in = 0
+
         # optional request ceiling set by the caller per job (the daily
         # budget remainder) — evaluate() refuses once requests_made
         # reaches it, so claim-audit/detail/loop calls cannot overshoot
@@ -473,7 +474,6 @@ class JevClient:
             if self.reserve_fn is not None:
                 self.reserve_fn(body, timeout)
             self.requests_made += 1
-            self.chars_out += len(json.dumps(body, ensure_ascii=False))
             previous_deadline = self._active_deadline
             self._active_deadline = deadline
             try:
@@ -493,7 +493,6 @@ class JevClient:
                                     retryable=True)
                     self.last_error = last
                     continue
-                self.chars_in += len(raw)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     last = JevError("protocol_error", "response_too_large")
                 elif status in (401, 403):
@@ -751,23 +750,6 @@ LOOP_RELATION_OPTIONS = {
 _SMOKE_TOKEN = "SMOKE_TOKEN_A1B2"
 
 
-def _env(key: str) -> str | None:
-    """API key lookup — same search order as semantic.py: process env,
-    then ~/.mcs/.env, then ~/.hermes/.env."""
-    if os.environ.get(key):
-        return os.environ[key]
-    for path in (os.path.expanduser("~/.mcs/.env"),
-                 os.path.expanduser("~/.hermes/.env")):
-        try:
-            for line in open(path, encoding="utf-8"):
-                if line.startswith(key + "="):
-                    return line.split("=", 1)[1] \
-                        .strip().strip('"').strip("'")
-        except OSError:
-            pass
-    return None
-
-
 def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
     """G2 check: ONE synthetic request through the real evaluate() path
     — transport, strict answer validation, and the fixed-model echo all
@@ -822,7 +804,7 @@ def main() -> int:
         print(json.dumps({"ok": False,
                           "error": "refused_without_--live"}))
         return 2
-    key = _env("TYPESAFE_API_KEY")
+    key = env_value("TYPESAFE_API_KEY")
     if not key:
         print(json.dumps({"ok": False, "error": "no_api_key"}))
         return 2

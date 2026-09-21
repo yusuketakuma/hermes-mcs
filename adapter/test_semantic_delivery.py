@@ -132,7 +132,7 @@ def test_semantic_block_requires_current_whole_thread_fingerprint(
 def test_semantic_send_holds_after_source_change_mid_delivery(
         tmp_path, monkeypatch):
     db = _db(tmp_path, [_message()])
-    event = _semantic_event(db, "z" * 4000)
+    _semantic_event(db, "z" * 4000)
     cfg = [_cfg("enforce")]
     _prepare_send(monkeypatch, cfg)
     calls = []
@@ -160,7 +160,7 @@ def test_semantic_send_holds_after_source_change_mid_delivery(
 def test_semantic_send_holds_after_mode_change_mid_delivery(
         tmp_path, monkeypatch):
     db = _db(tmp_path, [_message()])
-    event = _semantic_event(db, "z" * 4000)
+    _semantic_event(db, "z" * 4000)
     cfg = [_cfg("enforce")]
     _prepare_send(monkeypatch, cfg)
     calls = []

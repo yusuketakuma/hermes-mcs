@@ -5,7 +5,6 @@ import uuid
 
 import pytest
 
-import mcs_operations
 import mcs_requests
 import semantic
 import summary_review

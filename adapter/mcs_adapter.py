@@ -118,8 +118,6 @@ class Message:
     reply_count: int
     replies: list["Message"] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
-    has_new_replies: bool = False   # set by fetch_history when an old
-                                    # parent carries replies past cutoff
 
 
 @dataclass
@@ -301,25 +299,6 @@ class MCSAdapter:
                 self._token = cached
                 return cached
             raise BootstrapError(f"token bootstrap failed: {type(e).__name__}") from e
-
-    def ensure_session(self) -> bool:
-        """Validate current token; on failure try the OTHER source once."""
-        if self.check_session():
-            return True
-        cached = self._read_cache()
-        if cached and cached != self._token:
-            self._token = cached
-            if self.check_session():
-                return True
-        try:
-            tok = self._token_via_cdp()
-            self._token = tok
-            self._write_cache(tok)
-            if self.check_session():
-                return True
-        except Exception:
-            pass
-        return False
 
     def _read_cache(self) -> str | None:
         if not self._token_cache:
@@ -767,12 +746,6 @@ class MCSAdapter:
         return ReplyBatch([merged[i] for i in unread_ids if i in merged],
                           missing)
 
-    def check_project_delta(self, project_id: int, after_ts: int) -> dict | None:
-        r = self._get(f"/projects/{project_id}/messages/latest",
-                      {"after": after_ts, "keep_read_status": 1},
-                      extend_session=False)
-        return r.get("message")
-
     def list_projects(self, per_page: int = 50,
                       max_pages: int = 20) -> list[UnreadPatient]:
         """All projects, ordered by last_message recency (verified newest-first).
@@ -925,8 +898,6 @@ class MCSAdapter:
                             except (ValueError, TypeError) as e:
                                 raise SchemaError(
                                     "history: reply created_at invalid") from e
-                        if parent_ts <= since_ts < newest:
-                            nm.has_new_replies = True
                         if newest <= since_ts:
                             stop = True
                             break

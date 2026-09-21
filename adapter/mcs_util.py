@@ -29,6 +29,28 @@ def load_config(path: str = CONF_PATH) -> dict:
         return {}
 
 
+def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
+    """KEY=value lookup shared by notifier/semantic/semantic_jev.
+
+    Order: process env (unless check_env=False — file-pinned lookups like
+    per-profile Discord tokens pass False so a stray shell var can never
+    override the profile's own file), then each dotenv file in `paths`.
+    Default paths: ~/.mcs/.env then ~/.hermes/.env.
+    Secrets must never reach logs/payloads — callers hold that contract."""
+    if check_env and os.environ.get(key):
+        return os.environ[key]
+    for path in (paths if paths is not None else
+                 (os.path.join(HOME, ".env"),
+                  os.path.expanduser("~/.hermes/.env"))):
+        try:
+            for line in open(path, encoding="utf-8"):
+                if line.startswith(key + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return None
+
+
 def html_to_text(h: str) -> str:
     h = re.sub(r"<br\s*/?>", "\n", h or "")
     h = re.sub(r"</(p|div|li)>", "\n", h)

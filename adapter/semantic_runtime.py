@@ -502,7 +502,7 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
 def guard(ledger, token: JobToken, *, deadline: float,
           expected_config_generation: str | None,
           expected_mode: str, cfg_path: str | None = None,
-          load_cfg=None, parse_cfg=None, fallback_cfg: dict | None = None,
+          load_cfg=None, parse_cfg=None,
           source_fingerprint: str | None = None,
           current_source=None, stage: str = ""):
     """Re-read all mutable execution identity immediately before a side effect."""
