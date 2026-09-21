@@ -24,11 +24,12 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-JST = ZoneInfo("Asia/Tokyo")
+from mcs_queries import (CHANGE_ACTIONS_SQL, DAY_S, JST,
+                         current_extract_pred, iter_period_ends,
+                         med_period_artifacts, transition_cooccurrences)
+
 ARTIFACT_KIND = "signal_v1"
-DAY_S = 86400
 
 FOLLOWUP_DAYS = 7          # med_change_no_followup window
 FOLLOWUP_MAX_AGE_D = 90    # only mentions within this horizon — older
@@ -40,9 +41,6 @@ REQ_AGE_DAYS = 30          # request_aging: open register items older than this
 NOTIFY_COOLDOWN_S = 7 * DAY_S  # no second notify for the same key inside this
 TRANSITION_LOOKBACK_D = 60   # 退院 mentions within the last N days
 TRANSITION_MED_WINDOW_D = 14 # med change mentions within ±N days of it
-
-_CHANGE_ACTIONS = ("start", "stop", "change", "increase", "decrease")
-_CHANGE_ACTIONS_SQL = ",".join(f"'{a}'" for a in _CHANGE_ACTIONS)
 
 # Human-approved threshold policy: ops.signal_policy writes
 # signal_policy_v1 artifacts; the latest one overrides these defaults.
@@ -122,15 +120,12 @@ def _med_followup(db, now, th):
                 JOIN messages m ON m.message_id=a.message_id
                 JOIN patients p ON p.project_id=m.project_id
                 JOIN json_each(a.content,'$.meds') je
-                WHERE a.kind='extract_llm' AND json_valid(a.content)
-                  AND json_valid(a.meta)
-                  AND json_extract(a.meta,'$.error') IS NOT 1
-                  AND json_extract(a.meta,'$.hash')=m.content_hash
+                WHERE a.kind='extract_llm'{current_extract_pred()}
                   AND m.posted_at_ts IS NOT NULL
                   AND m.posted_at_ts >= ?
                   AND COALESCE(p.is_archived,0)=0
                   AND json_extract(je.value,'$.action')
-                      IN ({_CHANGE_ACTIONS_SQL})
+                      IN ({CHANGE_ACTIONS_SQL})
                   AND json_type(je.value,'$.name')='text'
                   AND TRIM(json_extract(je.value,'$.name'))!=''),
             latest AS (
@@ -246,24 +241,10 @@ def _rx_period_expiry(db, now, th):
     These are parsed surface expressions (e.g. '4/8-4/21'), not
     verified prescription periods. Scans all current artifacts — the
     horizon is relative to now, so no incremental watermark applies."""
-    rows = db.execute(
-        """SELECT m.project_id, m.message_id, a.content
-           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-           WHERE a.kind='extract_v1' AND json_valid(a.content)
-             AND json_valid(a.meta)
-             AND json_extract(a.meta,'$.hash')=m.content_hash
-             AND json_array_length(a.content,'$.med_periods')>0""",
-    ).fetchall()
     today = datetime.fromtimestamp(now, JST).date()
     seen = set()
-    for pid, mid, content in rows:
-        for p in (json.loads(content).get("med_periods") or []):
-            if not isinstance(p, dict) or not p.get("end"):
-                continue
-            try:
-                end_d = datetime.strptime(str(p["end"]), "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
+    for pid, mid, content in med_period_artifacts(db):
+        for p, end_d in iter_period_ends(content):
             days = (end_d - today).days
             if not (0 <= days <= th["expiry_ahead_days"]):
                 continue
@@ -290,39 +271,10 @@ def _transition_reconciliation(db, now, th):
     current extract_llm artifact, same as the med side."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
-    # CROSS JOIN pins the join order: discharge messages first (bounded
-    # by the lookback), then artifact lookup via idx_artifacts_kind_msg.
-    # Letting SQLite start from the unbounded artifacts side made this
-    # scan ~12s on the real ledger.
-    rows = db.execute(
-        f"""SELECT DISTINCT d.project_id, d.message_id, m.message_id
-            FROM messages d
-            CROSS JOIN patients p ON p.project_id=d.project_id
-            CROSS JOIN artifacts da ON da.message_id=d.message_id
-            CROSS JOIN json_each(da.content,'$.events') ev
-            CROSS JOIN messages m ON m.project_id=d.project_id
-                 AND m.posted_at_ts BETWEEN d.posted_at_ts-?
-                                        AND d.posted_at_ts+?
-            CROSS JOIN artifacts a ON a.message_id=m.message_id
-            WHERE d.posted_at_ts >= ? AND d.posted_at_ts <= ?
-              AND COALESCE(p.is_archived,0)=0
-              AND da.kind='extract_llm'
-              AND json_valid(da.content) AND json_valid(da.meta)
-              AND json_extract(da.meta,'$.error') IS NOT 1
-              AND json_extract(da.meta,'$.hash')=d.content_hash
-              AND ev.value IN ('discharge','transfer')
-              AND a.kind='extract_llm'
-              AND json_valid(a.content) AND json_valid(a.meta)
-              AND json_extract(a.meta,'$.error') IS NOT 1
-              AND json_extract(a.meta,'$.hash')=m.content_hash
-              AND EXISTS (SELECT 1 FROM json_each(a.content,'$.meds')
-                          je WHERE json_extract(je.value,'$.action')
-                              IN ({_CHANGE_ACTIONS_SQL}))
-            ORDER BY d.message_id, m.message_id""",
-        (win, win, lookback, now)).fetchall()
-    grouped = {}
-    for pid, dmid, mid in rows:
-        grouped.setdefault(dmid, (pid, set()))[1].add(mid)
+    grouped = transition_cooccurrences(
+        db, win_s=win,
+        extra_where="AND d.posted_at_ts >= ? AND d.posted_at_ts <= ?",
+        params=(lookback, now), exclude_archived=True)
     for dmid, (pid, mids) in grouped.items():
         change_ids = sorted(mids)
         if change_ids:

@@ -21,9 +21,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
-JST = ZoneInfo("Asia/Tokyo")
+from mcs_queries import (CHANGE_ACTIONS, DAY_S, JST, MED_ACTIONS,
+                         current_extract_pred, iter_period_ends,
+                         med_period_artifacts, transition_cooccurrences)
 DEFINITION_VERSION = "2026-09-21"
 STATS_SCHEMA = "stats_v1"
 
@@ -135,9 +136,7 @@ def st_data_quality(db, scope):
             AND EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='extract_llm'
                           AND a.message_id=m.message_id
-                          AND json_valid(a.meta)
-                          AND json_extract(a.meta,'$.error') IS NOT 1
-                          AND json_extract(a.meta,'$.hash')=m.content_hash)""",
+                          {current_extract_pred(content=False)})""",
         p).fetchone()[0]
     stale = db.execute(
         f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
@@ -212,7 +211,7 @@ def st_patient_activity(db, scope):
     """ST-003: per-room post counts over 7/14/30d windows ending as_of."""
     out = {}
     for days in (7, 14, 30):
-        since = scope["as_of"] - days * 86400
+        since = scope["as_of"] - days * DAY_S
         w = " AND m.posted_at_ts >= ? AND m.posted_at_ts < ?"
         params = [since, scope["as_of"]]
         if scope["project_id"] is not None:
@@ -320,9 +319,6 @@ def st_doc_burden(db, scope):
 
 # ---------------- meds (extract_llm source) ----------------
 
-_MED_ACTIONS = ("start", "stop", "change", "increase", "decrease", "none")
-
-
 def _med_rows(db, scope):
     """(project_id, message_id, med_dict, posted_at_ts) for current-
     revision extract_llm artifacts in scope. artifacts has no
@@ -332,10 +328,7 @@ def _med_rows(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind='extract_llm' AND json_valid(a.content)
-              AND json_valid(a.meta)
-              AND json_extract(a.meta,'$.error') IS NOT 1
-              AND json_extract(a.meta,'$.hash')=m.content_hash
+            WHERE a.kind='extract_llm'{current_extract_pred()}
               AND json_array_length(a.content,'$.meds')>0{w}
             ORDER BY a.artifact_id""",
         p).fetchall()
@@ -359,7 +352,7 @@ def st_meds(db, scope):
         month = datetime.fromtimestamp(ts, JST).strftime("%Y-%m") \
             if ts is not None else "unknown"
         name = (med.get("name") or "").strip() or "(unnamed)"
-        action = med.get("action") if med.get("action") in _MED_ACTIONS \
+        action = med.get("action") if med.get("action") in MED_ACTIONS \
             else "other"
         names.add(name)
         action_counts[action] = action_counts.get(action, 0) + 1
@@ -402,8 +395,7 @@ def st_med_change_burden(db, scope):
     patient_activity's exact N*86400s epoch windows (noted below)."""
     changes = {}  # (pid, day) -> count ; pid -> total
     for pid, mid, med, ts in _med_rows(db, scope):
-        if med.get("action") not in ("start", "stop", "change",
-                                     "increase", "decrease"):
+        if med.get("action") not in CHANGE_ACTIONS:
             continue
         day = datetime.fromtimestamp(ts, JST).date().isoformat() \
             if ts is not None else "unknown"
@@ -453,28 +445,13 @@ def st_rx_expiry(db, scope):
     room. Period expressions are parsed surface forms (e.g. '4/8-4/21')
     — NOT verified prescription periods, and not linked to specific
     drug names."""
-    rows = db.execute(
-        """SELECT m.project_id, m.message_id, a.content
-           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-           WHERE a.kind='extract_v1' AND json_valid(a.content)
-             AND json_valid(a.meta)
-             AND json_extract(a.meta,'$.hash')=m.content_hash
-             AND json_array_length(a.content,'$.med_periods')>0""",
-    ).fetchall()
     today = datetime.fromtimestamp(scope["as_of"], JST).date()
     horizon = today + timedelta(days=14)
     per_room = {}
     items = []
     seen = set()
-    for pid, mid, content in rows:
-        for p in (json.loads(content).get("med_periods") or []):
-            if not isinstance(p, dict) or not p.get("end"):
-                continue
-            try:
-                end_d = datetime.strptime(str(p["end"]),
-                                          "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
+    for pid, mid, content in med_period_artifacts(db):
+        for p, end_d in iter_period_ends(content):
             if not (today <= end_d <= horizon):
                 continue
             key = (pid, mid, p.get("raw") or p["end"])
@@ -505,15 +482,12 @@ def st_med_change_followup(db, scope):
     as_of) with no subsequent room post within 7d. 'No follow-up
     record found' — never 'no follow-up happened'. A request row
     referencing the message counts as a visible follow-up."""
-    cutoff = scope["as_of"] - 7 * 86400
+    cutoff = scope["as_of"] - 7 * DAY_S
     w, p = _where(scope)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind='extract_llm' AND json_valid(a.content)
-              AND json_valid(a.meta)
-              AND json_extract(a.meta,'$.error') IS NOT 1
-              AND json_extract(a.meta,'$.hash')=m.content_hash
+            WHERE a.kind='extract_llm'{current_extract_pred()}
               AND json_array_length(a.content,'$.meds')>0
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts <= ?{w}""",
@@ -525,7 +499,7 @@ def st_med_change_followup(db, scope):
         seen.add(mid)
         meds = json.loads(content).get("meds") or []
         if not any(isinstance(x, dict)
-                   and x.get("action") in _MED_ACTIONS
+                   and x.get("action") in MED_ACTIONS
                    for x in meds):
             continue
         total += 1
@@ -535,7 +509,7 @@ def st_med_change_followup(db, scope):
         follow = db.execute(
             "SELECT COUNT(*) FROM messages WHERE project_id=? "
             "AND posted_at_ts > ? AND posted_at_ts <= ?",
-            (pid, ts, ts + 7 * 86400)).fetchone()[0]
+            (pid, ts, ts + 7 * DAY_S)).fetchone()[0]
         if not tracked and follow == 0:
             no_follow.append({"project_id": pid, "message_id": mid})
     return _result("ok", scope, {
@@ -556,36 +530,8 @@ def st_transition_reconciliation(db, scope):
     the same room. Co-occurrence count only — reconciliation need is
     a human decision."""
     w, p = _where(scope, "d.posted_at_ts")
-    win = 14 * 86400
-    # CROSS JOIN pins messages-first order — same shape as the signal
-    # detector (artifacts-first scans cost ~12s on the real ledger).
-    rows = db.execute(
-        f"""SELECT DISTINCT d.project_id, d.message_id, m.message_id
-            FROM messages d
-            CROSS JOIN artifacts da ON da.message_id=d.message_id
-            CROSS JOIN json_each(da.content,'$.events') ev
-            CROSS JOIN messages m ON m.project_id=d.project_id
-                 AND m.posted_at_ts BETWEEN d.posted_at_ts-?
-                                        AND d.posted_at_ts+?
-            CROSS JOIN artifacts a ON a.message_id=m.message_id
-            WHERE da.kind='extract_llm'
-              AND json_valid(da.content) AND json_valid(da.meta)
-              AND json_extract(da.meta,'$.error') IS NOT 1
-              AND json_extract(da.meta,'$.hash')=d.content_hash
-              AND ev.value IN ('discharge','transfer')
-              AND a.kind='extract_llm'
-              AND json_valid(a.content) AND json_valid(a.meta)
-              AND json_extract(a.meta,'$.error') IS NOT 1
-              AND json_extract(a.meta,'$.hash')=m.content_hash
-              AND EXISTS (SELECT 1 FROM json_each(a.content,'$.meds') je
-                          WHERE json_extract(je.value,'$.action')
-                              IN ('start','stop','change','increase',
-                                  'decrease')){w}
-            ORDER BY d.message_id, m.message_id""",
-        [win, win] + p).fetchall()
-    grouped = {}
-    for pid, dmid, mid in rows:
-        grouped.setdefault(dmid, (pid, set()))[1].add(mid)
+    grouped = transition_cooccurrences(
+        db, win_s=14 * DAY_S, extra_where=w, params=p)
     items = [{"project_id": pid, "discharge_message_id": dmid,
               "med_change_message_ids": sorted(mids)}
              for dmid, (pid, mids) in grouped.items()]
@@ -617,7 +563,7 @@ def st_open_loop_aging(db, scope):
         unparseable = False
         if due:
             try:
-                age_d = (scope["as_of"] - _parse_when(str(due))) / 86400
+                age_d = (scope["as_of"] - _parse_when(str(due))) / DAY_S
             except (ValueError, TypeError, OverflowError):
                 unparseable = True
         if due is None:
