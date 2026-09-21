@@ -479,6 +479,21 @@ class View:
                            "as_of", "project", "limit")},
                 **result}
 
+    def signals(self, args: dict) -> dict:
+        """Open review-candidate signals (signal_v1 artifacts) — ids and
+        extracted evidence only; candidates are prompts for human review
+        of the source records, never proof of missed work."""
+        import mcs_signals
+        result = mcs_signals.current_open(
+            self.db, project_id=args.get("project"),
+            limit=args.get("limit") or 50)
+        return {"snapshot": self.meta,
+                "snapshot_age_s": max(0, time.time() - self.meta["generated_at"]),
+                "warnings": WARNINGS,
+                "candidates": result,
+                "note": "候補は原記録の人による確認を求める提示です。"
+                        "記録の欠如は対応の欠如を意味しません"}
+
     def read(self, kind, project=None, limit=50, cursor=None, query=None,
              message_id=None, request_id=None, status=None, command_id=None,
              payload_hash=None, since=None, until=None):
@@ -517,7 +532,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control", "stats"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -538,7 +553,8 @@ def _parser():
         for index, child in enumerate(parsers):
             if kind == "stats":
                 break  # stats carries its own arg set below
-            child.add_argument("--project", type=int, required=kind != "status")
+            child.add_argument("--project", type=int,
+                               required=kind not in ("status", "signals"))
             if kind not in ("evidence", "receipt", "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 child.add_argument("--cursor")
@@ -588,6 +604,8 @@ def main(argv=None):
             result = requests.enqueue(req, cmd_dir)
         elif args["kind"] == "stats":
             result = view.stats(args)
+        elif args["kind"] == "signals":
+            result = view.signals(args)
         else:
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))

@@ -292,6 +292,13 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
         return text, []
+    if ev["kind"] == "signal":
+        # review-candidate notice — frozen text built at enqueue time;
+        # payload holds ids only, no bodies (mcs_signals)
+        text = payload.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError("payload_invalid")
+        return text, []
     ids = payload.get("message_ids") or []
     if (not isinstance(ids, list)
             or any(type(mid) is not int or mid <= 0 for mid in ids)):

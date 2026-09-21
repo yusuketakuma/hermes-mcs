@@ -290,6 +290,14 @@ def stage_derive(ledger, result, deadline, llm_budget_cap: float = 90):
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
 
+    # prospective review candidates — lifecycle-persisted signal_v1
+    # artifacts; notify intents only when config signals.notify is set
+    try:
+        import mcs_signals
+        result["signals"] = mcs_signals.evaluate(ledger, _config())
+    except Exception as e:
+        result["errors"].append(f"signals: {type(e).__name__}")
+
 
 # ---------- main ----------
 

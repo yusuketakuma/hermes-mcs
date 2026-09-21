@@ -449,10 +449,55 @@ def st_adherence_events(db, scope):
 
 
 def st_rx_expiry(db, scope):
-    """ST-012: med periods need curated period bounds."""
-    return _result("unavailable", scope, {},
-                   reason="needs med_periods (evidenced administration "
-                          "periods); no such artifact exists")
+    """ST-012: extract_v1 med_periods ending within the horizon, per
+    room. Period expressions are parsed surface forms (e.g. '4/8-4/21')
+    — NOT verified prescription periods, and not linked to specific
+    drug names."""
+    rows = db.execute(
+        """SELECT m.project_id, m.message_id, a.content
+           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+           WHERE a.kind='extract_v1' AND json_valid(a.content)
+             AND json_valid(a.meta)
+             AND json_extract(a.meta,'$.hash')=m.content_hash
+             AND json_array_length(a.content,'$.med_periods')>0""",
+    ).fetchall()
+    today = datetime.fromtimestamp(scope["as_of"], JST).date()
+    horizon = today + timedelta(days=14)
+    per_room = {}
+    items = []
+    seen = set()
+    for pid, mid, content in rows:
+        for p in (json.loads(content).get("med_periods") or []):
+            if not isinstance(p, dict) or not p.get("end"):
+                continue
+            try:
+                end_d = datetime.strptime(str(p["end"]),
+                                          "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            if not (today <= end_d <= horizon):
+                continue
+            key = (pid, mid, p.get("raw") or p["end"])
+            if key in seen:
+                continue
+            seen.add(key)
+            if scope["project_id"] is not None \
+                    and pid != scope["project_id"]:
+                continue
+            per_room[pid] = per_room.get(pid, 0) + 1
+            items.append({"project_id": pid, "message_id": mid,
+                          "raw": p.get("raw"), "start": p.get("start"),
+                          "end": p["end"],
+                          "days_left": (end_d - today).days})
+    items.sort(key=lambda r: r["days_left"])
+    return _result("ok", scope, {
+        "expiring_periods": _items(items, scope["limit"]),
+        "rooms_with_expiring": len(per_room),
+        "horizon_days": 14,
+        "notes": ["surface-form period expressions from extract_v1 — "
+                  "not verified prescription periods",
+                  "periods are not linked to specific drug names",
+                  "a period without an end date cannot be evaluated"]})
 
 
 def st_open_loop_aging(db, scope):
@@ -528,7 +573,8 @@ REGISTRY = {
                           "fn": st_med_change_burden},
     "adherence_events": {"tier": "T1", "needs": ["valid_facts"],
                          "fn": st_adherence_events},
-    "rx_expiry": {"tier": "T1", "needs": ["med_periods"],
+    "rx_expiry": {"tier": "T1",
+                  "needs": ["med_periods (extract_v1 surface forms)"],
                   "fn": st_rx_expiry},
     "open_loop_aging": {"tier": "T2",
                         "needs": ["interaction_links", "episode_links"],

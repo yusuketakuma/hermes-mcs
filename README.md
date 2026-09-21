@@ -175,8 +175,30 @@ $PY adapter/mcs_view.py stats --stat patient_activity \
   「対象なし」と「情報不足で判定不能」を区別する。
 - 薬の集計は抽出言及レベル。成分正規化・否定/家族/過去言及の分離は未実装で、
   その旨をnotesに明記する。部屋数は確定患者数ではない。
-- `med_change_followup`/`rx_expiry`/`transition_reconciliation` は根拠となる
-  artifact が未実装のため `unavailable` を返す — 推測で穴埋めしない。
+- `rx_expiry` は extract_v1 の期間表現（例 '9/1-9/21'）の終了間近を数える。
+  表現のparseであり処方期間の確定ではない。`med_change_followup`/
+  `transition_reconciliation` は根拠artifactが未実装のため `unavailable`
+  を返す — 推測で穴埋めしない。
+
+### レビュー候補シグナル（T2）
+
+```bash
+$PY adapter/mcs_view.py signals                # openな候補一覧
+$PY adapter/mcs_view.py signals --project 123
+```
+
+- `run_check` の derive 段階で `mcs_signals.evaluate()` が候補を再計算し、
+  `signal_v1` artifact として台帳に保持する（open→resolvedのライフサイクル、
+  検知日・最終確認・証跡ID付き）。
+- 検知器: `request_overdue`（依頼登録の期限超過）、`med_change_no_followup`
+  （薬変更言及後7日以内の後続記録を確認できない）、`comm_concentration`
+  （直近72hの記録集中）、`rx_period_expiry`（期間表現の終了間近）。
+- 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
+  対応の欠如を意味しない。文言もその旨を明記する。
+- 通知は config の `signals.notify:true` を明示設定した場合のみ既存の
+  notify_outbox 経路（kind='signal'、本文はenqueue時に固定）で送る。
+  既定は通知なし。
+- 閾値は固定定数。統計の閲覧が検知条件に影響しない。
 
 ### 人が確認して依頼を登録・更新
 

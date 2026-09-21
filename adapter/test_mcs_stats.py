@@ -106,8 +106,26 @@ def test_unknown_stat_rejected(db):
 
 
 def test_unavailable_never_faked(db):
+    st = run(db, stat="med_change_followup")["med_change_followup"]
+    assert st["status"] == "unavailable" and "episode_links" in st["reason"]
+
+
+def test_rx_expiry_window(db):
+    """extract_v1 med_periods ending within 14d of as_of are counted;
+    past/far-future periods are not."""
+    _msg(db, 1, chash="h1")
+    db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES ('extract_v1',?,?,?)",
+        (1, json.dumps({"med_periods": [
+            {"start": "2026-09-01", "end": "2026-09-30", "raw": "9/1-30"},
+            {"start": "2020-01-01", "end": "2020-02-01", "raw": "old"},
+            {"start": "2026-09-01", "end": "2027-01-01", "raw": "far"}]}),
+         json.dumps({"hash": "h1"})))
     st = run(db, stat="rx_expiry")["rx_expiry"]
-    assert st["status"] == "unavailable" and "med_periods" in st["reason"]
+    assert st["status"] == "ok"
+    assert st["expiring_periods"]["total"] == 1
+    assert st["expiring_periods"]["items"][0]["days_left"] == 9
 
 
 def test_open_loop_partial_honesty(db):
