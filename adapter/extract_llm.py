@@ -17,14 +17,14 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import sys
 import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger
-from mcs_util import NoRedirect, acquire_run_lock, no_proxy_opener
+from mcs_util import (NoRedirect, acquire_run_lock, json_object,
+                      no_proxy_opener)
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -161,14 +161,8 @@ def llm_extract(body: str) -> dict | None:
     text = message.get("content") or ""
     if not isinstance(text, str):
         return None
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        return None
-    try:
-        d = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return _validate(d) if isinstance(d, dict) else None
+    d = json_object(text)
+    return _validate(d) if d is not None else None
 
 
 def _llm_up() -> bool:

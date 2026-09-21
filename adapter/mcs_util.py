@@ -51,6 +51,19 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     return None
 
 
+def json_object(text: str) -> dict | None:
+    """First `{...}` block in LLM output parsed as a dict — models wrap
+    JSON in prose, so the JSON object is located, not assumed."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
 def html_to_text(h: str) -> str:
     h = re.sub(r"<br\s*/?>", "\n", h or "")
     h = re.sub(r"</(p|div|li)>", "\n", h)

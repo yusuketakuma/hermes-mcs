@@ -9,6 +9,7 @@ import re
 import time
 
 import semantic_jev as jev
+from mcs_util import json_object as _json_block
 from semantic_policy import SCHEMA_VERSION
 
 FACT_KINDS = ("medication_event", "symptom", "explicit_request",
@@ -21,17 +22,6 @@ POLARITIES = ("affirmed", "negated", "uncertain")
 CLAIM_KINDS = ("reported_fact", "inference", "limitation")
 CLAIM_SECTIONS = ("medication", "status", "pharmacy", "followup",
                   "progress", "flow", "other")
-
-def _json_block(text: str) -> dict | None:
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return None
-    try:
-        d = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return d if isinstance(d, dict) else None
-
 
 _FACT_PROMPT = """あなたは在宅医療チャット記録の事実候補抽出器です。以下の投稿本文から、
 記載されている事実候補をJSONのみで列挙してください。推測や外部知識は禁止です。

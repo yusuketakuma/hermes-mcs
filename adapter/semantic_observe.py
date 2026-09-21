@@ -15,7 +15,6 @@ Gates to watch (phase-j-record §7):
 - failed job count staying at 0
 """
 import json
-import math
 import os
 import sqlite3
 import sys
@@ -52,9 +51,8 @@ def observe(db_path: str = DB) -> dict:
         " AND a.message_id=m.message_id AND json_valid(a.meta) "
         " AND json_extract(a.meta,'$.error') IS NOT 1 "
         " AND json_extract(a.meta,'$.hash')=m.content_hash)")[0][0]
-    # JST day boundary — same rule as semantic._jst_day_start
-    jst_start = (math.floor((time.time() + 9 * 3600) / 86400) * 86400
-                 - 9 * 3600)
+    from semantic_store import _jst_day_start
+    jst_start = _jst_day_start(time.time())
     jev_today = q(
         "SELECT COALESCE(SUM(json_extract(meta,'$.jev_requests')),0) "
         "FROM artifacts WHERE kind='semantic_usage' AND created_at >= ?",
