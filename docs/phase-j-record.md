@@ -1,19 +1,20 @@
 # Phase J Record — TypeSafe Jev 意味評価レイヤー実装記録 (spec MCS-REFACTOR-FIRST-20260920)
 
-Status: **実装済み・G2 実API評価済み / mode=shadow 稼働中（assist/enforce は観察後）**
+Status: **候補版マージ済み（`mcs-continuation-20260921` 採用）・G2 実API評価済み / mode=shadow 稼働中（assist/enforce は観察後）**
 Recorded: 2026-09-20
 
 ## 1. 実装構成（WP対応）
 
 | WP | 内容 | 実装 |
 |---|---|---|
-| WP-00/01 | config契約・データ契約 | `adapter/semantic.py`: `semantic_config()`（fail-closed検証）。`adapter/semantic_model.py`: bundle/Fact/Claim/Audit スキーマ定数・fingerprint・`jev_state` |
+| WP-00/01 | config契約・データ契約 | `adapter/semantic.py`: `semantic_config()`（fail-closed検証、`project_ids` は非off時必須）、bundle/Fact/Claim/Audit validators・fingerprint（prompt文・policy_fingerprint込み） |
 | WP-02 | durable job生成 | `ledger._semantic_seed_tx` — `save_patient`/`save_messages`/`save_thread_replies` の `semantic=` flagで通知意図と同一Tx内に `fetch_jobs(kind='semantic')` を生成。**新規保存された全messageが評価対象**（既読到着・backfill・reply-job分を含む — 通知資格とは分離、INV-20）。通知経路seedは `payload.eligible=true` を持ち、mergeで消えない（drain優先度用） |
 | WP-03 | Jev client | `adapter/semantic_jev.py`: `JevClient`（固定model `jev-1.13.0`、注入可能 `post_fn`）、P01–P12 proposition registry、`validate_answers` 厳格検証 |
-| WP-04 | fact/evidence候補 + summary | `adapter/semantic_llm.py`: `extract_facts`（local LLM + quote→codepoint span照合）、`summarize`（共通Claim schema、Jev verdictsを参考信号としてprompt同梱） |
-| WP-05 | claim監査・coverage監査・repair | `adapter/semantic_audit.py`: `audit_code`（参照整合性・span一致・coverage）+ `audit_claims`（Jev per-claim choice）+ 1回限りrepair |
+| WP-04 | fact/evidence候補 + summary | `adapter/semantic.py`: `extract_facts` + `adapter/semantic_extraction.py`: `extract_facts_resumable`（chunk単位で永続化・retryは完了prefix再利用）、`summarize`（共通Claim schema、構造化inputs+Jev verdictsを参考信号としてprompt同梱） |
+| WP-05 | claim監査・coverage監査・repair | `adapter/semantic.py`: `audit_code`（参照整合性・span一致・coverage・数量照合）+ `audit_claims`（Jev per-claim choice）+ `adapter/semantic_quantities.py` + 1回限りrepair（`semantic_repair` artifact で永続予約） |
 | WP-06 | Open Loop候補 | `adapter/semantic_loops.py`: `update_loops` — `loop_candidate`/`loop_event` artifacts。正式requestへの昇格は既存 `mcs_requests` の human_confirmed 経路のみ |
-| WP-07 | renderer + degraded notice | `adapter/semantic_notice.py`: `render_notice`（§20.1形式、複数対象のgenerationは `要約対象` 行で当該postを明示）/ `render_degraded`（§19.3 minimal）。shadowでは `notify_plan` artifactのみ、enforceのみ outbox `semantic_notice`（**監査PASS対象ごとに1件**、per-target delivery_key で冪等） |
+| WP-07 | renderer + degraded notice | `adapter/semantic.py`: `render_notice`（§20.1形式、複数対象のgenerationは `要約対象` 行で当該postを明示）/ `render_degraded`（§19.3 minimal）。shadowでは `notify_plan` artifactのみ、enforceのみ outbox `semantic_notice`（**監査PASS対象ごとに1件**、per-target delivery_key で冪等） |
+| WP-07b | 運用機構（候補版追加分） | `adapter/semantic_runtime.py`（job payload/attempt上限）、`semantic_assessment.py`（薬剤detail評価）、`semantic_blind.py`/`semantic_evaluation.py`（盲評価）、`mcs_operations.py`（pause/resume）、`request_loops.py`/`summary_review.py`、`hermes_plugin/`（Discord確認） |
 | WP-08 | 評価scaffold | `semantic.py --status`（job集計・audit status分布・loop候補数・日次Jev使用量） |
 | WP-09 | runbook/rollback | 本ドキュメント §6–8 |
 
@@ -82,19 +83,21 @@ Recorded: 2026-09-20
 
 | 検証 | 結果 |
 |---|---|
-| 全テスト | **157 passed**（adapter suite 全体、うちsemantic系69件） |
+| 全テスト | **345 passed**（adapter suite 全体、候補版マージ後） |
 | lint | 新規コード0件（16件全てbaseline E702/E741/F401 — `git stash` で baseline と完全一致を確認済み） |
 | OFF regression | `mode:"off"` で job生成0・drain即return・非semantic系88件のPhase R系テスト全パス |
 
 ## 6. 未実施・前提（正直な記録）
 
 - **G2 実API評価 実施済み**（2026-09-21）: `python semantic_jev.py --smoke --live` で合成文1リクエストを実 `evaluate()` 経路に送信し厳格検証を通過。結果: `{"ok": true, "model_echo": "jev-1.13.0", "noul": 0.99, "requests": 1}` — wire shape・model echo・noul/choice 検証とも実APIで conform。`/v1/models` listing はこのキーでは空リストを返した（`fixed_model_listed: false`）が、固定modelでの evaluate が成功したため契約上問題なし（listing は設計どおり非権威）。
+- **choice 型 wire 契約の実検証**（2026-09-21、候補版マージ後）: 旧クライアントでは claim監査用 choice 質問が `contract_error:http_422` で全滅していた（API は choice 型にも `criteria` を必須とし、応答は `probabilities` キーを返す — 候補版は両方に対応済み）。マージ後コードで実API検証: 幻覚claim「臍下離開部膿瘍があり」→ `not_supported` (conf 1.0)、真正claim「頻脈が持続している」→ `supports` (conf 0.99) と**正しく識別**。旧 `extract_llm` 要約に実在しない「臍下離開部膿瘍」が混入していた実例に対し、Jev がまさにその種の誤りを拒否できることを確認 — 「良いclaimを通す・悪いclaimを止める」両方向の動作を実APIで確認済み。
+- **候補版採用**（2026-09-21）: 並行ブランチ `mcs-continuation-20260921`（5コミット、+15k行、336テスト・G1 hash照合PASS・実API検証済みwire契約）を正本としてマージ。先行実装の facade+5モジュール分割は候補版の大規模分割（`semantic_runtime`/`extraction`/`assessment`/`blind`/`evaluation`/`quantities`/`mcs_operations`/`request_loops`/`summary_review`/`hermes_plugin`）に置換。先行側からの移植差分: parked集計分離（`_DeferredSend` 未送信を `skipped` から除外）、JST日次予算境界、verdicts→要約prompt配線、oversize meta永続化、seed() の project_ids スコープ、`models()` transport例外ラップ。閾値順序違反は候補版のfail-closed契約（mode=off）を採用。
 - **LLM prompt品質**: 抽出・要約promptは構造検証済みだが実モデル（Qwen3.5-9B等）での品質は未評価 — shadow観察で人間が audit分布を確認してから assist/enforce へ。
 - **degraded/audit notifyの二重送信**: degraded送出後に遅れて PASS した場合、監査済み通知も別 delivery_key で送信され得る（両方とも正確・重複は新着通知とは別eventとして識別される）。
 - **tick内 mid-run OFF**: job境界で config reload（`cfg_path` 指定時のみ）。ジョブ内部の外部呼出し途中でのOFF検知は次のjobまで遅延する。
 - **RF-OPS**（phase-r-record §8）: 複数tick観察・lock競合・snapshot読取・rollback実演は2026-09-20に実演済み。残るのは長期log/backup観察のみ（機構稼働中・傾向は継続確認）。
 - **レビュー第3ラウンド修正**（2026-09-20）: `seed()` の origin を `{"source": ...}` 形に統一（replay由来が payload で識別可能に）。drain優先順位を `payload LIKE` 文字列一致から `json_extract` へ変更（区切り whitespace に非依存）。`payload.targets` 欠落時の root が `target` role を得るよう修正（loop-relation pass が黙って skip されていたedge）。回帰テスト3件追加、計148件パス。
-- **レビュー第4ラウンド修正 + 責務分離リファクタ**（2026-09-21）: oversize stub の meta永続化（PENDING再監査で `_input_oversize` を復元し空stubのPASS化を防止）、`verdicts` を要約promptへ実装（`_verdicts_brief`）、`match_threshold > nomatch_threshold` の順序検証追加、notifier の enforce ゲートを `semantic_config` 正規化へ統一、parked semantic intent を `skipped` から分離し `parked` 集計へ（慢性 notify_incomplete の解消）、local LLM呼出しを tick残予算でクリップ、日次予算境界を UTC→JST 0時へ、`models()` の transport例外を JevError 化、`seed()` に project_ids スコープ適用、既存message編集時の再seed（`_upsert_message` が変更検知し3経路の seed に `changed_ids` を合流）、stale/loops持ち越し時の二重 defer を解消（`_process_job` が自己再スケジュールし drain は集計のみ）。モジュール分割: `semantic_model`（schema定数/bundle/fingerprint/jev_state）、`semantic_llm`（local LLM抽出・要約）、`semantic_audit`（code+claim監査）、`semantic_loops`（open-loop）、`semantic_notice`（通知render/degraded/plan dedup）、`semantic.py` は config・job orchestration・CLI の facade として既存公開名を再export。回帰テスト追加、計157件パス（semantic系69件）。
+- **レビュー第4ラウンド修正 + 責務分離リファクタ**（2026-09-21）: oversize stub の meta永続化（PENDING再監査で `_input_oversize` を復元し空stubのPASS化を防止）、`verdicts` を要約promptへ実装（`_verdicts_brief`）、`match_threshold > nomatch_threshold` の順序検証追加、notifier の enforce ゲートを `semantic_config` 正規化へ統一、parked semantic intent を `skipped` から分離し `parked` 集計へ（慢性 notify_incomplete の解消）、local LLM呼出しを tick残予算でクリップ、日次予算境界を UTC→JST 0時へ、`models()` の transport例外を JevError 化、`seed()` に project_ids スコープ適用、既存message編集時の再seed（`_upsert_message` が変更検知し3経路の seed に `changed_ids` を合流）、stale/loops持ち越し時の二重 defer を解消（`_process_job` が自己再スケジュールし drain は集計のみ）。モジュール分割: `semantic_model`/`semantic_llm`/`semantic_audit`/`semantic_loops`/`semantic_notice` + facade 化した `semantic.py`。**※この分割構成は同日の候補版マージで置換済み — 現行構成は §1 参照。**回帰テスト追加、計157件パス（semantic系69件）。
 
 ## 7. 有効化手順（OFF→shadow→assist→enforce）
 

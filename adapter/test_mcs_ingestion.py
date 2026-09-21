@@ -195,8 +195,8 @@ def test_attachment_destination_uses_ledger_identity(tmp_path, monkeypatch):
             {"attachment_id": 1, "file_id": "same", "url": "u1"},
             {"attachment_id": 2, "file_id": "same", "url": "u2"},
         ],
-        attachment_saved=lambda *a: None,
-        attachment_failed=lambda *a: None,
+        attachment_saved=lambda *a, **kw: None,
+        attachment_failed=lambda *a, **kw: None,
         pending_notify_message_ids=lambda: [],
     )
     monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
@@ -1729,3 +1729,226 @@ def test_cli_writer_holds_run_lock(tmp_path, monkeypatch):
     os.close(held)
     # free lock -> the CLI proceeds against the throwaway DB
     assert extract_llm.main() == 0
+
+
+@pytest.mark.parametrize("stop", ["before_commit", "after_commit"])
+def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch, stop):
+    """AT001/002: interrupted persistence can replay without orphaning work."""
+    path = str(tmp_path / "boundary.db")
+    db = ledger.Ledger(path)
+    marks = []
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[_message(unread=True)], reached=True),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        mark_patient_read=lambda *args: marks.append(args),
+    )
+
+    def run():
+        result = {"errors": [], "incomplete": [], "messages": 0,
+                  "new_messages": 0, "marked_read": []}
+        run_check.stage_unread(
+            adapter, db, SimpleNamespace(mark_read=True), result,
+            time.monotonic() + 30, db.begin_run(None), semantic=True)
+
+    with monkeypatch.context() as patch:
+        if stop == "before_commit":
+            def fail_seed(*args, **kwargs):
+                raise OSError("synthetic persistence interruption")
+            patch.setattr(db, "_semantic_seed_tx", fail_seed)
+            run()
+        else:
+            save = db.save_patient
+            def stop_after_save(*args, **kwargs):
+                save(*args, **kwargs)
+                raise KeyboardInterrupt("synthetic stop after commit")
+            patch.setattr(db, "save_patient", stop_after_save)
+            with pytest.raises(KeyboardInterrupt):
+                run()
+    assert marks == []
+    db.close()
+    db = ledger.Ledger(path)
+    expected = int(stop == "after_commit")
+    for table in ("messages", "notify_outbox"):
+        assert db.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == expected
+    assert db.db.execute(
+        "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()[0] == expected
+    assert db.db.execute("SELECT count(*) FROM read_marks").fetchone()[0] == 0
+
+    run()
+    assert marks == [(1, 123)]
+    for table in ("messages", "notify_outbox"):
+        assert db.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
+    assert db.db.execute(
+        "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()[0] == 1
+    assert db.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    db.close()
+
+
+@pytest.mark.parametrize("failure", ["snippet", "empty_ack", "lost_ack"])
+def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
+    """AT003/008: uncertainty and hydration work survive a DB reopen."""
+    path = str(tmp_path / "uncertain.db")
+    db = ledger.Ledger(path)
+    parent = _message(mid=10, unread=True)
+    if failure == "snippet":
+        parent.replies = [_message(mid=20, state="snippet", parent_id=10,
+                                   unread=True)]
+    calls = []
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def list_unread(self):
+            return mcs_adapter.UnreadSnapshot(123, [_unread_patient(1)])
+
+        def fetch_unread_messages(self, *args):
+            return mcs_adapter.MessageBatch([parent], reached=True)
+
+        def fetch_thread(self, *args):
+            return parent.replies
+
+        def _request(self, *args, **kwargs):
+            calls.append(args)
+            if failure == "lost_ack":
+                raise mcs_adapter.MCSError("network_error", retryable=True)
+            return 200, b'{}', {}
+
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": []}
+    run_check.stage_unread(
+        Adapter(), db, SimpleNamespace(mark_read=True), result,
+        time.monotonic() + 30, db.begin_run(None))
+    assert result["marked_read"] == []
+    db.close()
+    db = ledger.Ledger(path)
+    assert not db.was_marked(1, 123)
+    if failure == "snippet":
+        assert calls == []
+        assert db.job_pending("reply", 1, 20)["parent_id"] == 10
+        assert db.db.execute(
+            "SELECT body_state FROM messages WHERE message_id=20"
+        ).fetchone()[0] == "snippet"
+        assert db.db.execute(
+            "SELECT fetch_state FROM patients WHERE project_id=1"
+        ).fetchone()[0] == "incomplete"
+        assert db.db.execute("SELECT count(*) FROM read_marks").fetchone()[0] == 0
+    else:
+        assert len(calls) == 1
+        assert db.db.execute(
+            "SELECT status FROM read_marks WHERE project_id=1 AND snapshot_ts=123"
+        ).fetchone()[0] == "unknown"
+    db.close()
+
+
+@pytest.mark.parametrize("error", [mcs_adapter.SessionExpired(status=401),
+                                   mcs_adapter.MCSError("timeout", retryable=True)])
+def test_backfill_page_failure_keeps_saved_page_without_coverage(tmp_path, error):
+    """AT005: real pagination and storage preserve partial work on 401/timeout."""
+    path = str(tmp_path / "partial-history.db")
+    db = ledger.Ledger(path)
+    patient = _unread_patient(1)
+    patient.messages = [_message(mid=1)]
+    db.save_patient(patient)
+    db.set_coverage(1, 100)
+    pages = []
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            pages.append(params["page"])
+            if params["page"] == 2:
+                raise error
+            return {"messages": [{"id": 2, "comment": "synthetic page one",
+                                  "created_at": "2099-01-01T00:00:00+00:00"}],
+                    "paginate": {"has_next": True}}
+
+    result = {"errors": [], "backfilled": 0}
+    def run():
+        run_check.stage_backfill(Adapter(), db, result,
+                                 time.monotonic() + 60, db.begin_run(None),
+                                 semantic=True)
+    if isinstance(error, mcs_adapter.SessionExpired):
+        with pytest.raises(mcs_adapter.SessionExpired):
+            run()
+    else:
+        run()
+    assert pages == [1, 2]
+    assert result["backfilled"] == 1
+    assert any(error.kind in item for item in result["errors"])
+    db.close()
+    db = ledger.Ledger(path)
+    assert db.coverage_ts(1) == 100
+    assert db.db.execute(
+        "SELECT body_text FROM messages WHERE message_id=2"
+    ).fetchone()[0] == "synthetic page one"
+    assert db.job_pending("semantic", 1, 2) is not None
+    db.close()
+
+
+def test_identical_text_and_time_preserve_distinct_message_ids_and_projects(tmp_path):
+    """AT009: content hashes describe revisions, never cross-post identity."""
+    db = _ledger(tmp_path)
+    for pid, ids in ((1, [10, 11]), (2, [20, 21])):
+        patient = _unread_patient(pid)
+        patient.messages = [_message(mid=mid, project_id=pid, body="same", unread=True)
+                            for mid in ids]
+        assert db.save_patient(patient, notify={"source": "unread"},
+                               semantic=True) == ids
+        assert db.save_patient(patient, notify={"source": "unread"},
+                               semantic=True) == []
+    rows = db.db.execute(
+        "SELECT project_id,message_id,content_hash,posted_at FROM messages "
+        "ORDER BY project_id,message_id").fetchall()
+    assert [(r["project_id"], r["message_id"]) for r in rows] == [
+        (1, 10), (1, 11), (2, 20), (2, 21)]
+    assert len({r["content_hash"] for r in rows}) == 1
+    assert len({r["posted_at"] for r in rows}) == 1
+    events = db.db.execute("SELECT project_id,payload FROM notify_outbox").fetchall()
+    assert {r["project_id"]: json.loads(r["payload"])["message_ids"]
+            for r in events} == {1: [10, 11], 2: [20, 21]}
+    assert db.db.execute(
+        "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()[0] == 4
+    db.close()
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_backfill_recovers_read_reply_on_old_parent_without_hiding_gaps(tmp_path, complete):
+    """AT006: parent age and unread status cannot discard a recent reply."""
+    db = _ledger(tmp_path)
+    patient = _unread_patient(1)
+    patient.messages = [_message(mid=1)]
+    db.save_patient(patient)
+    watermark = db.high_watermark(1)
+    coverage = watermark - 100
+    db.set_coverage(1, coverage)
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            assert params["keep_read_status"] == 1
+            reply = {"id": 11, "created_at": "2099-01-01T00:00:00+00:00",
+                     "is_unread": False,
+                     "comment" if complete else "comment_snippet": "new reply"}
+            return {"messages": [{"id": 10, "comment": "old parent",
+                                  "created_at": "2000-01-01T00:00:00+00:00",
+                                  "count": {"thread_messages": 1},
+                                  "thread_messages": [reply]}],
+                    "paginate": {"has_next": False}}
+
+        def fetch_thread(self, *args):
+            return []
+
+    result = {"errors": [], "backfilled": 0}
+    run_check.stage_backfill(Adapter(), db, result, time.monotonic() + 60,
+                             db.begin_run(None), semantic=True)
+    row = db.db.execute(
+        "SELECT parent_id,body_text,body_state,is_unread FROM messages WHERE message_id=11"
+    ).fetchone()
+    assert tuple(row) == (10, "new reply", "full" if complete else "snippet", 0)
+    assert db.coverage_ts(1) == (watermark if complete else coverage)
+    assert (db.job_pending("reply", 1, 11) is None) == complete
+    assert db.job_pending("semantic", 1, 10) is not None
+    assert db.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 0
+    db.close()

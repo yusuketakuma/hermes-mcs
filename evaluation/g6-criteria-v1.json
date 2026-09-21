@@ -1,0 +1,21 @@
+{
+  "version": "g6-criteria-20260921-v1",
+  "required_splits": ["test"],
+  "min_human_labels": 200,
+  "minimums": {
+    "important_fact_recall": 0.98,
+    "final_recall": 0.98,
+    "medication_recall": 0.98,
+    "negation_recall": 0.98,
+    "time_recall": 0.98,
+    "speaker_relation_recall": 0.98,
+    "loop_conformity": 0.95,
+    "loop_precision": 0.95
+  },
+  "maximums": {
+    "critical_overclaim": 0.0,
+    "loop_false_resolution": 0.0,
+    "loop_unresolved_miss_rate": 0.0,
+    "defer_rate": 0.30
+  }
+}

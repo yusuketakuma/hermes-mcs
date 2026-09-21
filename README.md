@@ -164,11 +164,13 @@ $PY adapter/mcs_view.py requests show --project 123 --request-id 1
 承認内容をローカルの `approved-request.json` に用意する（hashは `evidence` の実値に置換）。
 必須の `command_id` はUUID。投入前に決め、応答を受け取れなかった場合も
 再送時には同じID・同じ内容を保持する（エラー時も既に公開された可能性はある）。
+新規操作は `reason`（空白のみ不可、最大2000文字）も必須。理由は操作者・時刻・対象版とともにreceiptへ保存する。
+更新前から残っている旧形式のキューは処理できるが、欠けていた理由を補作しない。
 
 ```json
 {"command_id":"00000000-0000-4000-8000-000000000001","actor":"確認者",
  "source_message_id":456,"source_hash":"取得した64桁content_hash",
- "title":"人が確認した依頼内容","assignee":"担当者","due_date":"2026-09-30"}
+ "title":"人が確認した依頼内容","assignee":"担当者","due_date":"2026-09-30","reason":"原文を確認し対応が必要と判断"}
 ```
 
 ```bash
@@ -176,12 +178,12 @@ $PY adapter/mcs_view.py requests create --project 123 --confirm-human < approved
 ```
 
 更新用JSONは `request_id`、表示された `expected_revision`、人が確認した最新本文の
-`expected_source_hash`、`actor`、`patch` を指定する。
+`expected_source_hash`、`actor`、`reason`、`patch` を指定する。
 
 ```json
 {"command_id":"00000000-0000-4000-8000-000000000002","actor":"確認者","request_id":1,"expected_revision":1,
  "expected_source_hash":"最新の64桁content_hash",
- "patch":{"status":"done","assignee":null}}
+ "patch":{"status":"done","assignee":null},"reason":"実施結果を確認"}
 ```
 
 ```bash

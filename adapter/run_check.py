@@ -229,7 +229,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
 
 # ---------- stage: attachments ----------
 
-def stage_attachments(adapter, ledger, result, deadline):
+def stage_attachments(adapter, ledger, result, deadline, semantic=False):
     # attachments referenced by queued notify events jump the queue —
     # otherwise a deep backlog leaves new-message files undownloaded
     # when flush() posts the event, and accepted events never re-send
@@ -241,14 +241,14 @@ def stage_attachments(adapter, ledger, result, deadline):
         try:
             info = adapter.download(a["url"], dest)
             ledger.attachment_saved(a["attachment_id"], dest,
-                                    info["bytes"], info["sha256"])
+                                    info["bytes"], info["sha256"], semantic=semantic)
         except MCSError as e:
-            ledger.attachment_failed(a["attachment_id"], e.kind)
+            ledger.attachment_failed(a["attachment_id"], e.kind, semantic=semantic)
             result["errors"].append(
                 f"attach {a['attachment_id']}: {e.kind}")
         except OSError as e:
             ledger.attachment_failed(
-                a["attachment_id"], f"fs_{type(e).__name__}")
+                a["attachment_id"], f"fs_{type(e).__name__}", semantic=semantic)
             result["errors"].append(f"attach {a['attachment_id']}: fs")
 
 
@@ -363,7 +363,7 @@ def main() -> int:
                                  trickle=False, semantic=sem_on)
 
         if args.download_files:
-            stage_attachments(adapter, ledger, result, deadline)
+            stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)
 
         # -- idle-capacity deep history (trickle) ----------------------
         deep_history = cfg.get("deep_history", True)

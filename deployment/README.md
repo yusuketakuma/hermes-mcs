@@ -1,0 +1,41 @@
+# CCO terminal/file隔離の候補設定
+
+未適用。`cco-terminal.candidate.yaml`はCCO configのterminal節だけの案で、config全体を置換しない。既存のHermes Docker backendを使用する。
+
+- terminal/fileツールへsnapshotディレクトリをread-only、既存cmdディレクトリをread-writeで公開する。原本DB・添付本体・backup・credentials・HOME全体をmountしない。
+- 自動CWD mount、環境変数転送、追加Docker引数を無効にする。コンテナのネットワークは無効。この変更でCCOの既存terminal/file経由の外部アクセスと他のホストファイル利用はできなくなるため、適用前に業務上の必要範囲を確認する。
+- imageは既存ローカルimageのIDに固定した。同IDが存在するこのホスト向けの設定で、別ホストへの移植には配布digestの確認が必要。pull/buildは実行していない。
+- この設定はモデルのterminal/file実行境界だけ。native Discord pluginはgateway process内で動くため、plugin設定のsnapshot/inboxにはホスト側パスを使う。コンテナの`/mcs/...`をそのまま渡さない。他のhost-side tool/MCP/委譲先もこのDocker設定では隔離されない。
+
+検証済み：一時homeへ候補設定のみをコピーし、実コード`build_profile_terminal_scope`でbackend・2mount・network/CWD mount無効・環境転送なしを確認。コンテナは起動していない。実際の読取/書込拒否の証明ではない。
+
+次の実機検証では本番データを使わず、一時ディレクトリにsnapshot用canary、inbox用canary、非公開canaryを置く。同じ設定形のコンテナからsnapshot読取成功/書込拒否、inbox書込成功、非公開canary非公開、外部ネットワーク不可を確認する。gateway/その他toolの権限は別途検証する。これらの成立前にCCOの全権限隔離が完了したとは扱わない。
+
+
+## 実Dockerの合成canary結果
+
+2026-09-21、既存ローカルimage `sha256:8f958bdc1b4a422bfafd97cab4f69836401f616ae985d4b57a53d254f5bcb038`を使用。`docker run --rm --pull=never --network=none`、一時snapshotディレクトリをreadonly mount、一時cmdをread-write mountとしてPython probeを実行した。
+
+snapshot読取成功、writeはEROFS、inbox書込成功をコンテナ内とホスト側で確認。非公開canary・原本DBのホストパス・Docker socketはコンテナに存在せず、/proc/net/routeは経路0件。コンテナ終了code 0、一時ファイルは終了時にcleanup済み。実原本・credential・snapshotはmountしていない。
+
+これはDocker mount構成の実機証拠であり、Hermesがこの候補設定を用いて生成するコンテナのE2E、host-side plugin/MCP/委譲先の隔離、CCO稼働設定への適用を証明しない。残りの権限確認と有効化承認は引き続き必要。
+
+## Hermes実コード経由の合成canary
+
+候補Hermesのbuild_profile_terminal_scope→terminal_scope→_get_env_config→_create_configured_env→DockerEnvironment.executeを通して同じ検査を実施し成功。一時HOME/HERMES_HOME、許可した最小環境変数、合成mountだけを使用。snapshot読取・書込拒否、inbox書込、原本パス/Docker socket非公開、経路表0件を確認した。force_removeとwait_for_cleanupでテスト用コンテナを終了・削除し、一時ディレクトリをcleanup。
+
+初回probeは戻り値キーをexit_codeと誤記したため検証側で失敗。実APIのreturncodeへ直して再実行し成功。製品コード変更なし。初期設定解決時にホスト上の/workspace不存在警告が出たが、コンテナ生成後のexecuteは/workspaceで正常実行できた。
+
+これはterminal/fileが共有する環境生成経路の検証。モデルturn全体、host-side plugin/MCP/委譲先の権限境界や本番有効化を含まない。
+
+## ホスト側経路の確認範囲
+
+CCO profileで設定されたMCPはremote transportのgbrain 1件で、subprocess型のローカルMCP指定はない（URL・認証値は記録しない）。現状の有効pluginはbot-conversationだけ。MCS native pluginは未配置で、導入後もホスト側で動作するため、Dockerのmount制限とは別の信頼境界になる。
+
+MCS pluginはhost contextのnative Discord/user/chat/profileと設定scopeを検査し、固定snapshotのViewと固定inboxへのenqueueだけを呼ぶ。実合成結合でpreview無書込み、確定後も原本のrunnerが適用するまでrequests不変、receiptと重複抑止を検証済み。任意shell/model toolは登録しない。
+
+委譲はdelegate_tool._build_childrenで親toolsetsを継承し、delegate_tool_dispatchでcontextvars.copy_context().runをexecutorへ渡す。terminal_scopeはContextVarなのでこのdispatch経路では親の設定を保持する。子agent全実行や各tool固有のhost I/Oをこのコード確認だけで監査済みとは扱わない。
+
+connectionsはmanaged accountとcatalog MCPの管理入口で、任意ファイル読取APIではない。一方、kanban/memory/session/skillsなどのhost I/Oと、remote connectorの権限はterminal Dockerだけでは制限されない。設定の存在確認やコード上の入口の照合は、OSレベルでCCO process全体が原本を開けない保証ではない。
+
+本番導入時に必要なのは、terminal/fileの隔離案の適用に加え、native pluginを信頼された限定入口として扱う構成と、CCOに許す既存業務toolの明示。既存の業務toolを無断で一括削除したり、単にDocker設定だけを「CCO全体隔離完了」と報告しない。

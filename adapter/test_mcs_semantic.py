@@ -70,14 +70,18 @@ def _patient(db, pid=1):
 
 def _cfg(mode="shadow", **kw):
     return {"semantic": {"mode": mode,
+                         "summary_mode": kw.pop("summary_mode", mode),
+                         "loop_mode": kw.pop("loop_mode", mode),
+                         "threshold_mode": "calibrated",
+                         "calibration_version": "synthetic-test-v1",
                          "daily_request_budget": kw.pop("budget", 50),
+                         "project_ids": kw.pop("project_ids", None),
                          **kw}}
 
 
 def _cfg_path(tmp_path, mode):
     p = tmp_path / "cfg.json"
-    p.write_text(json.dumps({"semantic": {"mode": mode,
-                                          "daily_request_budget": 50}}))
+    p.write_text(json.dumps(_cfg(mode)))
     return str(p)
 
 
@@ -98,11 +102,12 @@ class _FakeJev:
         out = {}
         for qid, q in questions.items():
             if q.get("type") == "choice":
-                opts = list(q.get("options") or {})
-                pick = self.choice_map.get(qid, opts[0] if opts else None)
+                opts = list(q.get("criteria") or {})
+                pick = self.choice_map.get(qid, "planned" if qid == "status"
+                                           else opts[0] if opts else None)
                 out[qid] = {"type": "choice", "choice": pick,
                             "confidence": 0.9,
-                            "distribution": {o: 1.0 / len(opts)
+                            "probabilities": {o: 1.0 / len(opts)
                                              for o in opts}}
             else:
                 out[qid] = {"type": "noul", "noul": self.noul}
@@ -142,7 +147,7 @@ def test_registry_scope_is_explicit():
 def test_noul_without_confidence_ok():
     q = {"q1": jev.noul_question("i", "t", "f")}
     out = jev.validate_answers(
-        {"model": jev.JEV_MODEL, "answers": {"q1": {"noul": 0.42}}}, q,
+        {"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL, "answers": {"q1": {"type": "noul", "noul": 0.42}}}, q,
         jev.JEV_MODEL)
     assert out["answers"]["q1"]["noul"] == 0.42
 
@@ -151,8 +156,10 @@ def test_noul_type_confusion_rejected():
     q = {"q1": jev.noul_question("i", "t", "f")}
     for bad in ({"noul": True}, {"noul": "0.9"}, {"noul": None},
                 {"noul": float("nan")}, {"noul": 1.5}, {}, "x"):
+        if isinstance(bad, dict):
+            bad = {"type": "noul", **bad}
         with pytest.raises(jev.JevError) as ei:
-            jev.validate_answers({"model": jev.JEV_MODEL,
+            jev.validate_answers({"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL,
                                   "answers": {"q1": bad}}, q,
                                  jev.JEV_MODEL)
         assert ei.value.kind == "protocol_error"
@@ -160,22 +167,23 @@ def test_noul_type_confusion_rejected():
 
 def test_choice_validation():
     q = {"q1": jev.choice_question("i", {"a": "A", "b": "B"})}
-    good = {"q1": {"choice": "a", "confidence": 0.7,
-                   "distribution": {"a": 0.7, "b": 0.3}}}
-    out = jev.validate_answers({"model": jev.JEV_MODEL,
+    good = {"q1": {"type": "choice", "choice": "a", "confidence": 0.7,
+                   "probabilities": {"a": 0.7, "b": 0.3}}}
+    out = jev.validate_answers({"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL,
                                 "answers": good}, q, jev.JEV_MODEL)
     assert out["answers"]["q1"]["choice"] == "a"
     for bad in ({"choice": "z", "confidence": 0.7,
-                 "distribution": {"a": 0.7, "b": 0.3}},
+                 "probabilities": {"a": 0.7, "b": 0.3}},
                 {"choice": "a", "confidence": 2.0,
-                 "distribution": {"a": 0.7, "b": 0.3}},
+                 "probabilities": {"a": 0.7, "b": 0.3}},
                 {"choice": "a", "confidence": 0.7,
-                 "distribution": {"a": 0.7, "b": 0.7}},
+                 "probabilities": {"a": 0.7, "b": 0.7}},
                 {"choice": "a", "confidence": 0.7},
                 {"choice": "a"},
                 ):
+        bad = {"type": "choice", **bad}
         with pytest.raises(jev.JevError):
-            jev.validate_answers({"model": jev.JEV_MODEL,
+            jev.validate_answers({"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL,
                                   "answers": {"q1": bad}}, q,
                                  jev.JEV_MODEL)
 
@@ -187,7 +195,7 @@ def test_answer_set_mismatch_rejected():
                 {"a": {"noul": 0.5}, "b": {"noul": 0.5},
                  "c": {"noul": 0.1}}):
         with pytest.raises(jev.JevError, match="protocol_error"):
-            jev.validate_answers({"model": jev.JEV_MODEL,
+            jev.validate_answers({"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL,
                                   "answers": bad}, q, jev.JEV_MODEL)
 
 
@@ -195,7 +203,7 @@ def test_model_mismatch_rejected():
     q = {"a": jev.noul_question("i", "t", "f")}
     with pytest.raises(jev.JevError, match="model_mismatch"):
         jev.validate_answers(
-            {"model": "jev-latest",
+            {"usage": {"input_tokens": 1, "output_tokens": 1}, "model": "jev-latest",
              "answers": {"a": {"noul": 0.5}}}, q, jev.JEV_MODEL)
 
 
@@ -207,8 +215,9 @@ def test_retryable_status_backoff():
         if len(calls) == 1:
             return 429, {"Retry-After": "0"}, b"{}"
         return 200, {}, json.dumps({
+            "usage": {"input_tokens": 1, "output_tokens": 1},
             "model": jev.JEV_MODEL,
-            "answers": {"a": {"noul": 0.8}}}).encode()
+            "answers": {"a": {"type": "noul", "noul": 0.8}}}).encode()
 
     c = jev.JevClient(api_key="k", post_fn=post, max_attempts=3)
     out = c.evaluate({}, {"a": jev.noul_question("i", "t", "f")},
@@ -269,6 +278,16 @@ def test_config_fail_closed():
     scfg, _ = semantic.semantic_config(
         {"semantic": {"mode": "enforce", "model": "jev-latest"}})
     assert scfg["mode"] == "off"    # non-fixed model -> refuses stage
+    for field, value in (("match_threshold", float("nan")),
+                         ("job_budget_seconds", True),
+                         ("daily_request_budget", -1),
+                         ("match_threhsold", .8)):
+        scfg, errors = semantic.semantic_config(
+            {"semantic": {"mode": "enforce", field: value}})
+        assert errors and scfg["mode"] == "off"
+    scfg, errors = semantic.semantic_config({"semantic": {
+        "mode": "enforce", "match_threshold": .2, "nomatch_threshold": .8}})
+    assert errors and scfg["mode"] == "off"
 
 
 # ---------- bundle / fingerprint ----------
@@ -457,11 +476,14 @@ def test_claim_without_evidence_audit(tmp_path):
 def test_repair_once_then_needs_review(tmp_path):
     db = _seeded(tmp_path)
 
+    drafts = []
+
     def llm(prompt):
         if "事実候補抽出器" in prompt:
             return _llm(prompt)
+        drafts.append("無根拠の断定" + str(len(drafts)))
         return json.dumps({"claims": [{
-            "section": "medication", "text": "無根拠の断定",
+            "section": "medication", "text": drafts[-1],
             "claim_kind": "reported_fact", "fact_refs": []}],
             "limitations": []})
 
@@ -472,6 +494,12 @@ def test_repair_once_then_needs_review(tmp_path):
                                    message_id=1)[-1]["meta"])
     # still unsupported after the single allowed repair -> human review
     assert meta["audit_status"] == "NEEDS_REVIEW"
+    initial = db.artifacts("semantic_candidate", message_id=1)
+    assert len(initial) == 1 and len(drafts) >= 2
+    assert json.loads(initial[0]["content"])["claims"][0]["text"] == drafts[0]
+    final = db.artifacts("semantic_summary", message_id=1)[-1]
+    assert json.loads(final["content"])["claims"][0]["text"] == drafts[1]
+    assert json.loads(initial[0]["meta"])["fingerprint"] == json.loads(final["meta"])["fingerprint"]
     db.close()
 
 
@@ -679,7 +707,7 @@ def test_notifier_semantic_notice_render(tmp_path, monkeypatch):
     frozen = json.loads(ev["payload"])["text"]
     import notifier
     monkeypatch.setattr(notifier, "_config",
-                        lambda: {"semantic": {"mode": "enforce"}})
+                        lambda: _cfg("enforce"))
     content, files = notifier._format_event(db, ev)
     assert content == frozen and files == []
     db.close()
@@ -854,6 +882,10 @@ def test_claim_audit_sees_surrounding_context(tmp_path):
     assert "evidence_quote" in roles and "evidence_context" in roles
     win = next(c["text"] for c in ctx if c["role"] == "evidence_context")
     assert "確認お願いします" in win    # outside the bare quote
+    source = json.loads(next(c["text"] for c in ctx if c["role"] == "evidence_metadata"))
+    member = semantic.thread_bundle(db, 1, 1)["members"][0]
+    assert source == {key: member[key] for key in
+                      ("message_id", "parent_id", "revision", "posted_at", "sender")}
     db.close()
 
 
@@ -861,15 +893,24 @@ def test_loop_scan_not_capped(tmp_path):
     """§17.2 regression: every open candidate is evaluated against new
     targets — not just the newest 10 — and re-runs add no duplicates."""
     db = _seeded(tmp_path)
-    for i in range(20, 32):          # 12 pre-existing open candidates
+    db.save_messages([_message(i, parent=1, body=f"確認事項{i}", unread=False)
+                      for i in range(20, 32)])
+    members = {m["message_id"]: m for m in
+               semantic.thread_bundle(db, 1, 1)["members"]}
+    for i in range(20, 32):          # 12 sourced same-thread open candidates
         db.artifact_add("loop_candidate", json.dumps({
             "loop_id": f"loop_{i}", "project_id": 1,
+            "account_scope": "mcs", "root_id": 1,
             "kind": "pending_item", "description": f"item{i}",
-            "origin": {"message_id": i, "revision": "r",
-                       "evidence_refs": []},
+            "origin": {"message_id": i, "revision": members[i]["revision"],
+                       "evidence_refs": [f"e{i}"],
+                       "evidence": {"quote": f"確認事項{i}",
+                                    "span_start": 0, "span_end": len(f"確認事項{i}")}},
             "assignee_text": None, "due_text": None,
             "state": "PROPOSED", "history": []}),
-            project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}"})
+            project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}",
+                "fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
+                "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
     res = {"errors": []}
     out = semantic.run_due(db, _cfg("shadow"), res,
                            time.monotonic() + 300,
@@ -893,10 +934,7 @@ def test_loop_scan_not_capped(tmp_path):
 
 
 def test_nonretryable_jev_error_fails_bounded(tmp_path):
-    """A non-retryable Jev failure must consume attempts — deferring
-    forever would burn a call every tick on an input that can never
-    pass. Six attempts later the job is terminally failed and visible
-    in status_report."""
+    """Permanent contract errors stop after one job attempt, including later ticks."""
     db = _seeded(tmp_path)
     fake = _FakeJev(error=jev.JevError("protocol_error",
                                      retryable=False))
@@ -912,6 +950,7 @@ def test_nonretryable_jev_error_fails_bounded(tmp_path):
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'"
     ).fetchone()
     assert job["state"] == "failed"
+    assert job["attempts"] == 1
     db.close()
 
 
@@ -939,7 +978,7 @@ def test_sem_block_drops_stale_revision(tmp_path, monkeypatch):
     import notifier
     monkeypatch.setattr(
         notifier, "_config",
-        lambda: {"semantic": {"mode": "enforce"}})
+        lambda: _cfg("enforce"))
     ev = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
@@ -999,7 +1038,7 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     import notifier
     monkeypatch.setattr(
         notifier, "_config",
-        lambda: {"semantic": {"mode": "enforce"},
+        lambda: {**_cfg("enforce"),
                  "discord_channel_id": "123"})
     monkeypatch.setattr(notifier, "_token", lambda: "tok")
     calls = []
@@ -1129,7 +1168,7 @@ def test_notice_suppressed_when_src_event_suppressed(tmp_path,
     db.outbox_suppress(src)
     import notifier
     monkeypatch.setattr(notifier, "_config",
-                        lambda: {"semantic": {"mode": "enforce"}})
+                        lambda: _cfg("enforce"))
     with pytest.raises(notifier._StaleSend):
         notifier._format_event(db, ev)
     db.close()
@@ -1197,15 +1236,15 @@ def test_daily_budget_binds_inside_job(tmp_path):
         answers = {}
         for qid, q in body["questions"].items():
             if q.get("type") == "choice":
-                opts = list(q["options"])
+                opts = list(q["criteria"])
                 answers[qid] = {"type": "choice", "choice": opts[0],
                                 "confidence": 0.9,
-                                "distribution":
+                                "probabilities":
                                 {o: 1.0 / len(opts) for o in opts}}
             else:
                 answers[qid] = {"type": "noul", "noul": 0.9}
         return 200, {}, json.dumps(
-            {"model": jev.JEV_MODEL, "answers": answers}).encode()
+            {"usage": {"input_tokens": 1, "output_tokens": 1}, "model": jev.JEV_MODEL, "answers": answers}).encode()
 
     db = _seeded(tmp_path)
     client = jev.JevClient(api_key="k", post_fn=post)
@@ -1437,7 +1476,13 @@ def test_loop_candidate_records_history(tmp_path):
     db.artifact_add("loop_event", json.dumps({
         "loop_artifact_id": cands[0]["artifact_id"],
         "trigger_message_id": 2,
-        "relation": "completion_report"}), project_id=1, message_id=2)
+        "origin_revision": cand["origin"]["revision"],
+        "trigger_revision": next(m["revision"] for m in
+            semantic.thread_bundle(db, 1, 1)["members"] if m["message_id"] == 2),
+        "root_id": 1,
+        "relation": "completion_report"}), project_id=1, message_id=2,
+        meta={"fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
+              "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
     snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
                                    str(tmp_path / "snaps"))
     view = mcs_view.View(snap)
@@ -1463,7 +1508,8 @@ def test_replay_seed_records_source(tmp_path):
     pl = json.loads(db.db.execute(
         "SELECT payload FROM fetch_jobs WHERE kind='semantic'")
         .fetchone()["payload"])
-    assert pl["origin"] == {"source": "replay"}
+    assert pl["origin"]["source"] == "replay"
+    assert pl["origin"]["notification_free"] is True
     assert "eligible" not in pl      # replay is never notify-eligible
     db.close()
 
@@ -1504,14 +1550,22 @@ def test_empty_targets_root_is_target(tmp_path):
     role and was silently skipped for this edge."""
     db = _ledger(tmp_path)
     p = _patient(db)
-    p.messages = [_message(1)]
+    p.messages = [_message(1), _message(9, parent=1)]
     db.save_patient(p)
+    source = next(m for m in semantic.thread_bundle(db, 1, 1)["members"]
+                  if m["message_id"] == 9)
     db.artifact_add("loop_candidate", json.dumps({
         "loop_id": "loop_x", "project_id": 1, "kind": "pending_item",
         "description": "確認依頼が未回答",
-        "origin": {"message_id": 9}, "assignee_text": None,
+        "account_scope": "mcs", "root_id": 1,
+        "origin": {"message_id": 9, "revision": source["revision"],
+                   "evidence": {"quote": BODY, "start_codepoint": 0,
+                                "end_codepoint": len(BODY)}},
+        "assignee_text": None,
         "due_text": None, "state": "PROPOSED", "history": []}),
-        project_id=1, message_id=9)
+        project_id=1, message_id=9, meta={
+            "fingerprint": semantic.thread_bundle(db, 1, 1)["source_fingerprint"],
+            "policy_fingerprint": semantic.policy_fingerprint(semantic.semantic_config(_cfg())[0])})
     db.job_add("semantic", 1, 1, payload={})   # no "targets" key
     out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
@@ -1527,13 +1581,12 @@ def test_empty_targets_root_is_target(tmp_path):
 def test_config_threshold_order_fail_closed():
     """match <= nomatch would silently collapse the UNDETERMINED band
     (verdict_for checks MATCH first) — the inversion is reported and
-    both reset to defaults."""
+    the whole feature fails closed to off."""
     scfg, errs = semantic.semantic_config(
         {"semantic": {"mode": "shadow", "match_threshold": 0.3,
                       "nomatch_threshold": 0.7}})
     assert "config: semantic_threshold_order_invalid" in errs
-    assert scfg["match_threshold"] == jev.MATCH_THRESHOLD
-    assert scfg["nomatch_threshold"] == jev.NOMATCH_THRESHOLD
+    assert scfg["mode"] == "off"
 
 
 def test_edit_reseeds_semantic(tmp_path):
@@ -1635,12 +1688,9 @@ def test_jst_day_boundary():
 def test_models_transport_wrapped():
     """models() must surface transport failure as JevError like
     evaluate() does — the smoke harness only catches JevError."""
-    class _Boom:
-        def open(self, *a, **k):
-            raise urllib.error.URLError("down")
-
     c = jev.JevClient(api_key="k")
-    c._opener = _Boom()
+    c._http_request = lambda *a, **k: (_ for _ in ()).throw(
+        urllib.error.URLError("down"))
     with pytest.raises(jev.JevError, match="transport"):
         c.models()
 

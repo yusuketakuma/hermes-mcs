@@ -59,6 +59,11 @@ class _StaleSend(Exception):
     suppress terminally instead of publishing stale results (§18.4)."""
 
 
+class _FreezeSend(Exception):
+    """A semantic intent changed after a chunk was accepted — preserve its
+    receipt/progress and quarantine the remaining chunks."""
+
+
 def _config() -> dict:
     return load_config(CONF_PATH)
 
@@ -285,45 +290,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         # notice's input fingerprint must still be live — a degraded
         # notice is instead suppressed if its base event has since
         # delivered.
-        try:
-            import semantic as _sem
-        except Exception:
-            # a queued intent whose renderer cannot load is parked,
-            # not dropped — flush() must keep serving other events
-            raise _DeferredSend("semantic_import_failed")
-        try:
-            scfg, _errs = _sem.semantic_config(_config())
-        except Exception:
-            raise _DeferredSend("semantic_config_failed")
-        if scfg["mode"] != "enforce":
-            raise _DeferredSend("semantic_not_enforce")
-        if payload.get("degraded"):
-            src = payload.get("src_event_id")
-            if type(src) is int:
-                row = ledger.db.execute(
-                    "SELECT state FROM notify_outbox WHERE event_id=?",
-                    (src,)).fetchone()
-                if row is None or row["state"] in ("accepted",
-                                                   "suppressed"):
-                    raise _StaleSend("base_delivered")
-        else:
-            fp = payload.get("fingerprint")
-            root = payload.get("root_id")
-            src = payload.get("src_event_id")
-            if not isinstance(fp, str) or type(root) is not int \
-                    or type(src) is not int:
-                raise ValueError("payload_invalid")
-            # the notice descends from a stored arrival intent — if that
-            # origin event was suppressed or no longer exists, the
-            # follow-up must not deliver either (INV-20, AT-055)
-            srow = ledger.db.execute(
-                "SELECT state FROM notify_outbox WHERE event_id=? "
-                "AND kind='new_messages'", (src,)).fetchone()
-            if srow is None or srow["state"] == "suppressed":
-                raise _StaleSend("src_event_ineligible")
-            b = _sem.thread_bundle(ledger, ev["project_id"], root)
-            if b is None or b["source_fingerprint"] != fp:
-                raise _StaleSend("stale_generation")
+        _semantic_gate(ledger, ev, payload)
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
@@ -397,8 +364,13 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
         try:
             import semantic as _sem
-            scfg, _errs = _sem.semantic_config(_config())
-            if scfg["mode"] != "enforce":
+            from mcs_operations import paused
+            if paused(ledger.db, r["project_id"]):
+                return ""
+            scfg, _ = _sem.semantic_config(_config())
+            if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
+                return ""
+            if scfg["project_ids"] is not None and r["project_id"] not in scfg["project_ids"]:
                 return ""
             art = ledger.db.execute(
                 "SELECT content,meta FROM artifacts "
@@ -408,24 +380,40 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             if not art:
                 return ""
             meta = json.loads(art["meta"] or "{}")
-            if meta.get("audit_status") != "PASS" or meta.get("stale"):
+            if (meta.get("audit_status") != "PASS" or meta.get("stale")
+                    or meta.get("publication_mode") != "enforce"
+                    or meta.get("policy_fingerprint") != _sem.policy_fingerprint(scfg)):
                 return ""
-            # the audited summary must describe THIS revision — a body
-            # edit after PASS leaves the old artifact on record but it
-            # may no longer be attached (INV-15)
-            if meta.get("target_revision") != r["content_hash"]:
+            try:
+                import semantic as _sem
+                root = r["parent_id"] or r["message_id"]
+                bundle = _sem.thread_bundle(ledger, r["project_id"], root,
+                                             [r["message_id"]])
+            except Exception:
+                return ""
+            # The audited summary must describe the current whole-thread
+            # generation, not only the target's body revision (INV-15).
+            if bundle is None or meta.get("fingerprint") != \
+                    bundle["source_fingerprint"]:
+                return ""
+            target = next((m for m in bundle["members"]
+                           if m["message_id"] == r["message_id"]), None)
+            if target is None or meta.get("target_revision") != \
+                    target["revision"]:
                 return ""
             summ = json.loads(art["content"])
-            lines = [str(c.get("text", ""))[:160]
+            # Keep every audited claim; the existing notifier chunker is the
+            # one place that splits a notification.
+            lines = [str(c.get("text", ""))
                      for c in summ.get("claims", [])
-                     if isinstance(c, dict) and c.get("text")][:6]
+                     if isinstance(c, dict) and c.get("text")]
             if not lines:
                 return ""
             body = "\n".join(f"・{x}" for x in lines)
-            lims = [str(x)[:80] for x in (summ.get("limitations") or [])
+            lims = [str(x) for x in (summ.get("limitations") or [])
                     if isinstance(x, str)]
             if lims:
-                body += "\n・（原文確認）" + "；".join(lims[:2])
+                body += "\n・（原文確認）" + "；".join(lims)
             return f"\n───── 要約（自動検査済） ─────\n{body}"
         except Exception:
             return ""   # never let a summary render break delivery
@@ -442,6 +430,303 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     head = f"[MCS {src}] 新着 {len(rows)} 件"
     return (head + "\n\n" + "\n\n".join(out),
             _collect_files(att_map, order))
+
+
+def _semantic_stale(reason: str, in_progress: bool):
+    if in_progress:
+        raise _FreezeSend(reason)
+    raise _StaleSend(reason)
+
+
+def _semantic_summary_current(ledger, project_id: int, message_id: int,
+                              bundle: dict,
+                              fingerprint: str, policy: str) -> bool:
+    """Require the frozen notice to still have its current PASS summary."""
+    row = ledger.db.execute(
+        "SELECT content,meta FROM artifacts "
+        "WHERE kind='semantic_summary' AND project_id=? AND message_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        (project_id, message_id)).fetchone()
+    if row is None:
+        return False
+    try:
+        content = json.loads(row["content"] or "null")
+        meta = json.loads(row["meta"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(content, dict) or not isinstance(meta, dict):
+        return False
+    target = next((m for m in bundle.get("members", [])
+                   if m["message_id"] == message_id), None)
+    return (meta.get("audit_status") == "PASS"
+            and not meta.get("stale")
+            and meta.get("publication_mode") == "enforce"
+            and meta.get("policy_fingerprint") == policy
+            and meta.get("fingerprint") == fingerprint
+            and target is not None
+            and meta.get("target_revision") == target["revision"])
+
+
+def _semantic_source_event(ledger, project_id: int, event_id: int):
+    """Load an origin event only inside the semantic notice's project."""
+    row = ledger.db.execute(
+        "SELECT state,attempts,progress,payload FROM notify_outbox "
+        "WHERE event_id=? AND kind='new_messages' AND project_id=?",
+        (event_id, project_id)).fetchone()
+    if row is None:
+        return None, None
+    try:
+        source = json.loads(row["payload"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return row, None
+    return row, source if isinstance(source, dict) else None
+
+
+def _semantic_gate(ledger, ev, payload: dict, in_progress: bool = False):
+    """Recheck a semantic intent immediately before every external post."""
+    import semantic as _sem
+    if not isinstance(payload, dict):
+        raise ValueError("payload_invalid")
+    scfg, _ = _sem.semantic_config(_config())
+    if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
+        if in_progress:
+            raise _FreezeSend("semantic_not_enforce")
+        raise _DeferredSend("semantic_not_enforce")
+    project_id = ev["project_id"]
+    if type(project_id) is not int or project_id <= 0:
+        raise ValueError("payload_invalid")
+    from mcs_operations import paused
+    if paused(ledger.db, project_id):
+        raise _FreezeSend("semantic_paused") if in_progress else _DeferredSend("semantic_paused")
+    if scfg["project_ids"] is not None and project_id not in scfg["project_ids"]:
+        raise _FreezeSend("project_out_of_scope") if in_progress \
+            else _DeferredSend("project_out_of_scope")
+    policy_version = payload.get("policy_version")
+    if not isinstance(policy_version, str) \
+            or policy_version != _sem.POLICY_VERSION:
+        _semantic_stale("policy_changed", in_progress)
+    degraded = payload.get("degraded", False)
+    if type(degraded) is not bool:
+        raise ValueError("payload_invalid")
+    policy = payload.get("policy_fingerprint")
+    if not isinstance(policy, str) \
+            or policy != _sem.policy_fingerprint(scfg):
+        _semantic_stale("policy_changed", in_progress)
+    fp = payload.get("fingerprint")
+    root = payload.get("root_id")
+    src = payload.get("src_event_id")
+    if not isinstance(fp, str) or not fp or type(root) is not int \
+            or root <= 0 or type(src) is not int or src <= 0:
+        raise ValueError("payload_invalid")
+    source_row, source = _semantic_source_event(ledger, project_id, src)
+    if source_row is None or source is None:
+        _semantic_stale("src_event_ineligible", in_progress)
+    try:
+        source_ids = source.get("message_ids")
+        if (not isinstance(source_ids, list)
+                or any(type(mid) is not int or mid <= 0 for mid in source_ids)):
+            raise ValueError
+        source_ids = set(source_ids)
+    except (AttributeError, ValueError):
+        _semantic_stale("src_event_ineligible", in_progress)
+    if source_row["state"] == "suppressed":
+        _semantic_stale("src_event_ineligible", in_progress)
+    if degraded:
+        target_ids = payload.get("target_message_ids")
+        if (not isinstance(target_ids, list) or not target_ids
+                or any(type(mid) is not int or mid <= 0 for mid in target_ids)
+                or len(set(target_ids)) != len(target_ids)
+                or not set(target_ids).issubset(source_ids)):
+            raise ValueError("payload_invalid")
+        try:
+            progress = json.loads(source_row["progress"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            progress = None
+        if (source_row["state"] == "accepted"
+                or source_row["attempts"] > 0
+                or not isinstance(progress, dict)
+                or bool(progress.get("sent"))):
+            _semantic_stale("base_delivered", in_progress)
+        bundle = _sem.thread_bundle(ledger, project_id, root)
+        if bundle is None or bundle["source_fingerprint"] != fp:
+            _semantic_stale("stale_generation", in_progress)
+        member_ids = {m["message_id"] for m in bundle["members"]}
+        if not set(target_ids).issubset(member_ids):
+            _semantic_stale("stale_generation", in_progress)
+    else:
+        target = payload.get("target_message_id")
+        target_revision = payload.get("target_revision")
+        if (type(target) is not int or target <= 0
+                or not isinstance(target_revision, str) or not target_revision
+                or target not in source_ids):
+            raise ValueError("payload_invalid")
+        bundle = _sem.thread_bundle(ledger, project_id, root)
+        if bundle is None or bundle["source_fingerprint"] != fp:
+            _semantic_stale("stale_generation", in_progress)
+        member = next((m for m in bundle["members"]
+                       if m["message_id"] == target), None)
+        if member is None or member["revision"] != target_revision:
+            _semantic_stale("stale_generation", in_progress)
+        if not _semantic_summary_current(ledger, project_id, target, bundle,
+                                         fp, policy):
+            _semantic_stale("summary_stale", in_progress)
+
+
+def _semantic_render_state(ledger, ev) -> tuple:
+    """Current identities of audited summaries attached to a raw notice."""
+    import semantic as _sem
+    from mcs_operations import paused
+    if paused(ledger.db, ev["project_id"]):
+        return ()
+    scfg, _ = _sem.semantic_config(_config())
+    if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
+        return ()
+    if scfg["project_ids"] is not None and ev["project_id"] not in scfg["project_ids"]:
+        return ()
+    project_id = ev["project_id"]
+    if type(project_id) is not int or project_id <= 0:
+        return ()
+    try:
+        payload = json.loads(ev["payload"])
+        ids = payload.get("message_ids") or []
+        import semantic as _sem
+    except Exception:
+        return ()
+    state = []
+    for mid in ids if isinstance(ids, list) else []:
+        if type(mid) is not int:
+            continue
+        row = ledger.db.execute(
+            "SELECT project_id,message_id,parent_id,content_hash "
+            "FROM messages WHERE project_id=? AND message_id=?",
+            (project_id, mid)).fetchone()
+        if row is None:
+            continue
+        art = ledger.db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE kind='semantic_summary' AND project_id=? "
+            "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+            (project_id, mid)).fetchone()
+        if art is None:
+            continue
+        try:
+            meta = json.loads(art["meta"] or "{}")
+            root = row["parent_id"] or row["message_id"]
+            bundle = _sem.thread_bundle(ledger, row["project_id"], root, [mid])
+        except Exception:
+            continue
+        target = next((m for m in (bundle or {}).get("members", [])
+                       if m["message_id"] == mid), None)
+        if (bundle is None or meta.get("audit_status") != "PASS"
+                or meta.get("stale")
+                or meta.get("publication_mode") != "enforce"
+                or meta.get("policy_fingerprint") != _sem.policy_fingerprint(scfg)
+                or meta.get("fingerprint") != bundle["source_fingerprint"]
+                or target is None
+                or meta.get("target_revision") != target["revision"]):
+            continue
+        state.append((mid, art["artifact_id"], meta["fingerprint"]))
+    return tuple(state)
+
+
+def _semantic_render_gate(ledger, ev, initial: tuple,
+                          in_progress: bool = False):
+    if not initial:
+        return
+    cfg = _config().get("semantic")
+    current = _semantic_render_state(ledger, ev)
+    if not isinstance(cfg, dict) or cfg.get("mode") != "enforce":
+        if in_progress:
+            raise _FreezeSend("semantic_not_enforce")
+        raise _DeferredSend("semantic_not_enforce")
+    if current != initial:
+        raise _FreezeSend("semantic_generation_changed") if in_progress \
+            else _StaleSend("semantic_generation_changed")
+
+
+def _semantic_chunks(content: str) -> list[str]:
+    """Split a frozen semantic notice while repeating its provenance.
+
+    ``semantic.render_notice`` already puts the patient, coverage/audit
+    labels, and stored MCS URL in the frozen payload. A raw character slice
+    would leave those lines only in part 1, so each part gets the same frozen
+    header and link. The payload is never rebuilt from the ledger here.
+    """
+    lines = content.splitlines()
+    footer_index = next(
+        (i for i, line in enumerate(lines) if line == "▶ MCSで確認"),
+        None,
+    )
+    link_index = next(
+        (i for i, line in enumerate(lines[footer_index + 1:], footer_index + 1)
+         if line.startswith("https://")),
+        None,
+    ) if footer_index is not None else None
+    if link_index is None or footer_index is None:
+        raise ValueError("semantic_provenance_missing")
+    link = lines[link_index].strip()
+    if not link.startswith("https://"):
+        raise ValueError("semantic_provenance_missing")
+
+    # The renderer's leading block is stable and ends at the first blank line
+    # or section. Keep every line in that block so target time and any
+    # degraded-notice explanation remain visible on every part.
+    header_end = len(lines)
+    for index, line in enumerate(lines[:footer_index]):
+        if not line.strip() or line.startswith("■"):
+            header_end = index
+            break
+    header = [line for line in lines[:header_end] if line.strip()]
+    if not any(line.startswith("取得：") for line in header):
+        raise ValueError("semantic_coverage_missing")
+    if not any(line.startswith("要約：") for line in header):
+        raise ValueError("semantic_audit_missing")
+
+    # Remove the original header/footer before reattaching them to every
+    # chunk. This keeps the frozen claims intact without duplicating the
+    # first block inside part 1.
+    body_start = header_end
+    while body_start < footer_index and not lines[body_start].strip():
+        body_start += 1
+    body_lines = lines[body_start:footer_index]
+    body = "\n".join(body_lines).strip()
+
+    footer = ["▶ MCSで確認", link]
+    static = "\n".join(header + footer)
+    count = 1
+    chunks = []
+    for _ in range(20):
+        marker = f"part {count}/{count}"
+        overhead = len(static) + len(marker) + 3
+        capacity = _MAX_LEN - overhead
+        if capacity < 1:
+            raise ValueError("semantic_provenance_too_long")
+        chunks = [body[i:i + capacity] for i in range(0, len(body), capacity)]
+        if not chunks:
+            chunks = [""]
+        next_count = len(chunks)
+        if next_count == count:
+            break
+        count = next_count
+    else:
+        raise ValueError("semantic_chunking_failed")
+
+    out = []
+    for index, chunk in enumerate(chunks, 1):
+        marker = f"part {index}/{count}"
+        part = "\n".join(header + [marker, chunk, *footer])
+        if len(part) > _MAX_LEN:
+            raise ValueError("semantic_chunk_limit")
+        out.append(part)
+    return out
+
+
+def _has_sent_progress(ev) -> bool:
+    try:
+        progress = json.loads(ev["progress"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return type(progress.get("next")) is int and progress["next"] > 0
 
 
 # The bot token rides the Authorization header — a redirect anywhere
@@ -579,8 +864,12 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             continue
         try:
             content, files = _format_event(ledger, ev)
-            chunks = [content[i:i + _MAX_LEN]
-                      for i in range(0, len(content), _MAX_LEN)]
+            render_state = (_semantic_render_state(ledger, ev)
+                            if ev["kind"] == "new_messages" else ())
+            chunks = (_semantic_chunks(content)
+                      if ev["kind"] == "semantic_notice" else
+                      [content[i:i + _MAX_LEN]
+                       for i in range(0, len(content), _MAX_LEN)])
             # resume at the first unacknowledged chunk — a crash after a
             # partial send must not duplicate accepted chunks (B25)
             start, sent_ids, previous = _progress(ev["progress"], len(chunks))
@@ -597,6 +886,16 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 if deadline is not None and time.monotonic() >= deadline:
                     res["skipped"] += len(due) - event_index
                     return res
+                if ev["kind"] == "semantic_notice":
+                    try:
+                        payload = json.loads(ev["payload"])
+                    except (json.JSONDecodeError, TypeError) as e:
+                        raise ValueError("payload_invalid") from e
+                    _semantic_gate(ledger, ev, payload,
+                                   in_progress=bool(start or i))
+                elif render_state:
+                    _semantic_render_gate(ledger, ev, render_state,
+                                          in_progress=bool(start or i))
                 # files ride the FIRST post only; on resume (start>0) they
                 # were already delivered with chunk 0. A definitive
                 # rejection of the file-bearing post (local size/format
@@ -615,12 +914,24 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                             ("file_too_large", "multipart_too_large")):
                         raise
                     post_files = None
+                    if ev["kind"] == "semantic_notice":
+                        _semantic_gate(ledger, ev, payload,
+                                       in_progress=bool(start or i))
+                    elif render_state:
+                        _semantic_render_gate(ledger, ev, render_state,
+                                              in_progress=bool(start or i))
                     mid = _post(token, channel, chunks[i])
                 except urllib.error.HTTPError as e:
                     if (i != 0 or not post_files or e.code == 429
                             or e.code < 400 or e.code >= 500):
                         raise
                     post_files = None
+                    if ev["kind"] == "semantic_notice":
+                        _semantic_gate(ledger, ev, payload,
+                                       in_progress=bool(start or i))
+                    elif render_state:
+                        _semantic_render_gate(ledger, ev, render_state,
+                                              in_progress=bool(start or i))
                     mid = _post(token, channel, chunks[i])
                 sent_ids.append(mid)
                 ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
@@ -633,15 +944,28 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # parked enforce intent is policy-blocked, not incomplete —
             # count it separately so run_check's notify_incomplete signal
             # doesn't flag every other tick while the mode gate is down
-            ledger.db.execute(
-                "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                "WHERE event_id=?",
-                (time.time() + 3600, time.time(), ev["event_id"]))
-            ledger.db.commit()
-            res["parked"] += 1
+            if _has_sent_progress(ev):
+                ledger.outbox_hold(ev["event_id"])
+                res["failed"] += 1
+            else:
+                ledger.db.execute(
+                    "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                    "WHERE event_id=?",
+                    (time.time() + 3600, time.time(), ev["event_id"]))
+                ledger.db.commit()
+                res["parked"] += 1
+        except _FreezeSend:
+            # An accepted chunk is immutable. Keep its receipt/progress and
+            # freeze the remaining chunks until an explicit retry decision.
+            ledger.outbox_hold(ev["event_id"])
+            res["failed"] += 1
         except _StaleSend:
-            ledger.outbox_suppress(ev["event_id"])
-            res["suppressed"] += 1
+            if _has_sent_progress(ev):
+                ledger.outbox_hold(ev["event_id"])
+                res["failed"] += 1
+            else:
+                ledger.outbox_suppress(ev["event_id"])
+                res["suppressed"] += 1
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 retry = _retry_after(e)

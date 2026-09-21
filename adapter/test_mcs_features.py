@@ -262,7 +262,7 @@ def test_inbox_rejections_faults_and_commit_before_unlink(tmp_path, monkeypatch,
     db = _source(tmp_path)
     inbox = tmp_path / "cmd"
     inbox.mkdir()
-    create = _create(db)
+    create = _create(db, reason="Human reviewed the synthetic request")
     for patch, code in (({"human_confirmed": False}, "human_confirmation_required"),
                         ({"due_date": "2026-02-30"}, "bad_due_date"),
                         ({"project_id": 2}, "source_missing"),
@@ -348,6 +348,10 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     assert any(m["candidates"] for m in json.loads(before.stdout)["items"])
     request = _create(db)
     payload = {k: v for k, v in request.items() if k not in ("cmd", "version", "human_confirmed", "project_id")}
+    missing_reason = subprocess.run(command + ["requests", "create", "--project", "1", "--confirm-human"],
+                                    input=json.dumps(payload), capture_output=True, text=True)
+    assert missing_reason.returncode == 1 and not list(inbox.glob("*.json"))
+    payload["reason"] = "Human reviewed the synthetic request"
     missing = subprocess.run(command + ["requests", "create", "--project", "1"], input=json.dumps(payload),
                              capture_output=True, text=True)
     assert missing.returncode != 0 and not list(inbox.glob("*.json"))
@@ -369,6 +373,7 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     saved = view.read("requests", project=1)["items"][0]
     view.close()
     update = {"command_id": str(uuid.uuid4()), "actor": "synthetic reviewer",
+              "reason": "Human verified completion",
               "request_id": saved["request_id"], "expected_revision": saved["revision"],
               "expected_source_hash": saved["current_source_hash"],
               "patch": {"status": "done", "due_date": None}}
