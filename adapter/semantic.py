@@ -33,67 +33,51 @@ never presented as verified (INV-04/08), repair is once per input
 generation (INV-10), Open Loop candidates never mutate formal requests
 (INV-11/19), a stale input fingerprint demotes results instead of
 publishing them (INV-15/21).
+
+Module layout (responsibility split):
+  semantic.py        — this file: config, job orchestration
+                       (drain/process/seed), status, CLI
+  semantic_model.py  — schema constants, thread bundle, fingerprint,
+                       Jev state shaping, artifact lookup
+  semantic_llm.py    — local-LLM fact extraction + summary drafting
+  semantic_audit.py  — deterministic audit + per-claim Jev support check
+  semantic_loops.py  — open-loop candidates + relation events
+  semantic_notice.py — notice rendering, degraded emit, plan/outbox dedup
+  semantic_jev.py    — TypeSafe Jev wire client + proposition registry
 """
 import argparse
-import http.client
 import json
 import math
 import os
-import re
 import sys
 import time
-import urllib.error
-import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger, LedgerReader
 from mcs_requests import payload_hash
-from mcs_util import NoRedirect, acquire_run_lock, load_config, \
-    no_proxy_opener
+from mcs_util import acquire_run_lock, load_config
 import semantic_jev as jev
+from semantic_model import (AUDIT_STATUSES, CLAIM_KINDS, CLAIM_SECTIONS,
+                            FACT_KINDS, FACT_STATUSES, JOB_KIND,
+                            KIND_ASSESS, KIND_AUDIT, KIND_BUNDLE,
+                            KIND_FACTS, KIND_LOOP, KIND_LOOP_EVENT,
+                            KIND_PLAN, KIND_SUMMARY, KIND_USAGE, MODES,
+                            POLARITIES, POLICY_VERSION, PROMPT_CHAR_LIMIT,
+                            SCHEMA_VERSION, SEMANTIC_KINDS,
+                            TECH_STATUSES, VERDICTS, bundle_fingerprint,
+                            jev_state, jev_usage_today, thread_bundle,
+                            _current, _jst_day_start, _member)
+from semantic_llm import (LLM_MODEL, LLM_TIMEOUT, extract_facts,
+                          llm_chat, summarize, _chunks, _locate_quote)
+from semantic_audit import (audit_claims, audit_code, audit_status_for)
+from semantic_loops import update_loops
+from semantic_notice import (_emit_degraded, _notify_src_event,
+                             _outbox_has_delivery, _plan_exists,
+                             render_degraded, render_notice)
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 CONF_PATH = os.path.join(HOME, "config.json")
-
-SCHEMA_VERSION = "2026-09-20"
-POLICY_VERSION = "2026-09-20"
-JOB_KIND = "semantic"
-
-KIND_BUNDLE = "semantic_bundle"
-KIND_ASSESS = "semantic_assess"
-KIND_FACTS = "semantic_facts"
-KIND_SUMMARY = "semantic_summary"
-KIND_AUDIT = "semantic_audit"
-KIND_LOOP = "loop_candidate"
-KIND_LOOP_EVENT = "loop_event"
-KIND_PLAN = "notify_plan"
-KIND_USAGE = "semantic_usage"
-SEMANTIC_KINDS = (KIND_BUNDLE, KIND_ASSESS, KIND_FACTS, KIND_SUMMARY,
-                  KIND_AUDIT, KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN,
-                  KIND_USAGE)
-
-MODES = ("off", "shadow", "assist", "enforce")
-TECH_STATUSES = ("complete", "partial", "pending", "retry_wait",
-                 "error", "stale")
-VERDICTS = ("MATCH", "UNDETERMINED", "NO_MATCH")
-AUDIT_STATUSES = ("PASS", "REPAIR_REQUIRED", "NEEDS_REVIEW", "PENDING",
-                  "STALE")
-FACT_KINDS = ("medication_event", "symptom", "explicit_request",
-              "pending_item", "schedule", "preference", "observation",
-              "other")
-FACT_STATUSES = ("considered", "planned", "order_reported",
-                 "execution_reported", "cancelled", "not_stated",
-                 "conflicting")
-POLARITIES = ("affirmed", "negated", "uncertain")
-CLAIM_KINDS = ("reported_fact", "inference", "limitation")
-CLAIM_SECTIONS = ("medication", "status", "pharmacy", "followup",
-                  "progress", "flow", "other")
-
-LLM_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
-LLM_MODEL = "Qwen3.5-9B"
-LLM_TIMEOUT = 90
-LLM_OPENER = no_proxy_opener(NoRedirect)
 
 
 # ---------- config ----------
@@ -159,6 +143,13 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             out["project_ids"] = []
         else:
             out["project_ids"] = sorted(set(v))
+    if out["match_threshold"] <= out["nomatch_threshold"]:
+        # individually-in-range values can still be inverted — that would
+        # silently collapse the UNDETERMINED band (verdict_for takes MATCH
+        # first), so reset the pair to defaults and report it
+        errors.append("config: semantic_threshold_order_invalid")
+        out["match_threshold"] = jev.MATCH_THRESHOLD
+        out["nomatch_threshold"] = jev.NOMATCH_THRESHOLD
     return out, errors
 
 
@@ -178,929 +169,6 @@ def _env(key: str) -> str | None:
     return None
 
 
-# ---------- fixed input bundle (spec §12.1) ----------
-
-def _member(row) -> dict:
-    return {
-        "message_id": row["message_id"],
-        "parent_id": row["parent_id"],
-        "revision": row["content_hash"] or "",
-        "posted_at": row["posted_at"] or "",
-        "occurred_at": None,      # event time is a fact-level field
-        "sender": {"type": row["sender_type"] or "",
-                   "profession": row["profession"] or ""},
-        "body_original": row["body_text"] or "",
-        "body_state": row["body_state"] or "unknown",
-    }
-
-
-def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
-    """Content+context revision fingerprint: any body edit, context
-    change, model/registry/schema bump invalidates prior results
-    (INV-15). Canonical JSON — never a lossy string concat."""
-    return payload_hash({
-        "members": sorted(({"m": m["message_id"], "r": m["revision"]}
-                          for m in members), key=lambda x: x["m"]),
-        "model": model,
-        "registry": jev.REGISTRY_VERSION,
-        "schema": SCHEMA_VERSION,
-        "policy": POLICY_VERSION,
-    })
-
-
-def thread_bundle(ledger, project_id: int, root_id: int,
-                  target_ids: list | None = None) -> dict | None:
-    """One post + its same-thread stored replies — the atomic analysis
-    unit (§12.3). A message whose row vanished makes the bundle
-    unbuildable (None), never silently re-scoped (AT-019)."""
-    rows = ledger.db.execute("""
-      SELECT message_id,parent_id,sender_type,profession,posted_at,
-             body_text,body_state,content_hash
-      FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?)
-      ORDER BY posted_at_ts, message_id
-    """, (project_id, root_id, root_id)).fetchall()
-    root = [r for r in rows if r["message_id"] == root_id]
-    if not root:
-        return None
-    members = [_member(r) for r in rows]
-    for m in members:
-        m["role"] = ("target" if target_ids
-                     and m["message_id"] in target_ids else
-                     "root" if m["parent_id"] is None else "context")
-    quality = "full" if all(
-        m["body_state"] in ("full", "deleted") for m in members) \
-        else "partial"
-    fp = bundle_fingerprint(members)
-    return {"bundle_id": f"bundle_{project_id}_{root_id}_{fp[:12]}",
-            "account_scope": "mcs",
-            "project_id": project_id, "root_id": root_id,
-            "members": members, "content_quality": quality,
-            "source_fingerprint": fp,
-            "registry_version": jev.REGISTRY_VERSION,
-            "schema_version": SCHEMA_VERSION,
-            "notification_policy_version": POLICY_VERSION}
-
-
-def jev_state(bundle: dict, target_id: int) -> dict | None:
-    """Jev input: opaque ids, body text, sender type/profession —
-    patient display names and unrelated threads are never sent
-    (INV-05, §21.1)."""
-    target = ctx = None
-    members = bundle["members"]
-    target = next((m for m in members if m["message_id"] == target_id),
-                  None)
-    if target is None:
-        return None
-    ctx = [{"id": f"m{m['message_id']}", "role": m["role"],
-            "posted_at": m["posted_at"], "sender": m["sender"],
-            "text": m["body_original"]}
-           for m in members if m["message_id"] != target_id]
-    return {"target": {"id": f"m{target_id}", "role": "target",
-                       "posted_at": target["posted_at"],
-                       "sender": target["sender"],
-                       "text": target["body_original"]},
-            "context": ctx}
-
-
-# ---------- artifact helpers ----------
-
-def _current(ledger, kind: str, message_id: int, fp: str):
-    """Latest artifact of `kind` for `message_id` whose meta fingerprint
-    still matches the live input — older generations stay recorded as
-    history but are never 'current' (AT-035/056)."""
-    for r in ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? "
-            "AND message_id=? ORDER BY artifact_id DESC",
-            (kind, message_id)):
-        try:
-            meta = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if meta.get("fingerprint") == fp:
-            try:
-                content = json.loads(r["content"])
-            except (json.JSONDecodeError, TypeError):
-                return None
-            return {"content": content, "meta": meta}
-    return None
-
-
-def jev_usage_today(ledger) -> int:
-    """Durable daily Jev request count — shadow traffic spends real API
-    budget too, so it is never unbounded (§13.5, AT-067). Counts the
-    per-attempt semantic_usage rows written by run_due — one row per job
-    attempt carrying that attempt's request DELTA, so every external
-    call (primary, detail, claim-audit, loop-relation, failed) is
-    counted exactly once."""
-    day = time.time() - (time.time() % 86400)
-    total = 0
-    for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
-            (KIND_USAGE, day)):
-        try:
-            total += int(json.loads(r["meta"] or "{}")
-                         .get("jev_requests", 0))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-    return total
-
-
-# ---------- local LLM (existing endpoint, same isolation) ----------
-
-def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
-    """One local-llama.cpp chat call. The model gets no tools and no
-    send capability; loopback-only opener, no proxy, no redirect
-    (INV-13, §15.3). Returns raw text or None."""
-    req = urllib.request.Request(
-        LLM_ENDPOINT,
-        data=json.dumps({
-            "model": LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1400, "temperature": 0,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }).encode(),
-        headers={"Content-Type": "application/json"})
-    try:
-        with LLM_OPENER.open(req, timeout=timeout) as r:
-            out = json.load(r)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError,
-            http.client.HTTPException):
-        return None
-    try:
-        text = out["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        return None
-    return text if isinstance(text, str) else None
-
-
-def _json_block(text: str) -> dict | None:
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return None
-    try:
-        d = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return d if isinstance(d, dict) else None
-
-
-_FACT_PROMPT = """あなたは在宅医療チャット記録の事実候補抽出器です。以下の投稿本文から、
-記載されている事実候補をJSONのみで列挙してください。推測や外部知識は禁止です。
-引用は本文から一字一句そのままコピーしてください。
-
-各候補のキー:
-- "statement": 事実内容を15〜60字で（「〜の記載がある」等、報告としての表現）
-- "kind": medication_event|symptom|explicit_request|pending_item|schedule|preference|observation|other
-- "status": considered|planned|order_reported|execution_reported|cancelled|not_stated|conflicting
-- "polarity": affirmed|negated|uncertain
-- "time_text": 時間表現またはnull
-- "quantity": 数量表現またはnull
-- "evidence_quote": 根拠となる本文の完全一致引用（30字以内）
-
-{"facts": [ ... ]} の形のみ出力。該当なしなら {"facts": []}。
-
-本文:
-<<<
-%s
->>>
-JSON:"""
-
-
-def _iso_date(text: str) -> str | None:
-    """occurred_at only when the original expression already carries an
-    absolute date — relative/ambiguous text stays null and the raw
-    time_text preserves it (spec §15.2)."""
-    if not isinstance(text, str):
-        return None
-    m = re.match(r"^\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
-    if not m:
-        return None
-    y, mo, d = int(m[1]), int(m[2]), int(m[3])
-    if not (2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31):
-        return None
-    return f"{y:04d}-{mo:02d}-{d:02d}"
-
-
-def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
-    """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
-    quotes get no span — never a guessed one (INV-07, AT-029)."""
-    if not body or not quote:
-        return None
-    first = body.find(quote)
-    if first < 0 or body.find(quote, first + 1) >= 0:
-        return None
-    return (first, first + len(quote))
-
-
-def _chunks(text: str, size: int = 3000) -> list:
-    """Split into <=size chunks at line/sentence boundaries, hard-
-    splitting only as a last resort. The concatenation of all chunks is
-    the original text — full coverage, never head-only processing
-    (§12.3, AT-017)."""
-    if not text:
-        return []
-    if len(text) <= size:
-        return [text]
-    out, buf = [], ""
-    for seg in re.split(r"(?<=\n)", text):
-        if len(buf) + len(seg) <= size:
-            buf += seg
-            continue
-        if buf:
-            out.append(buf)
-            buf = ""
-        while len(seg) > size:
-            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size))
-            if cut <= 0:
-                cut = size
-            out.append(seg[:cut])
-            seg = seg[cut:]
-        buf = seg
-    if buf:
-        out.append(buf)
-    return out
-
-
-def extract_facts(llm_fn, member: dict,
-                  deadline: float | None = None) -> tuple[list, bool, int]:
-    """Fact candidates with verified evidence spans, extracted across
-    the WHOLE body in bounded chunks — a long tail is never silently
-    dropped (§12.3, AT-017). Returns (facts, complete, dropped):
-    complete=False means the deadline hit mid-extraction OR a chunk's
-    response was missing/unparseable — the caller must defer; the
-    member is NOT 'processed' and no partial artifact is recorded, so a
-    failed chunk can never silently narrow the extraction for this
-    generation (§16.2 chunk ledger). dropped counts valid items lost to
-    the fact cap so the artifact meta records the truncation instead of
-    hiding it (§16.2). Unlocatable or ambiguous quotes stay
-    'unverified' — never silently promoted (INV-07/08)."""
-    body = member["body_original"]
-    facts = []
-    dropped = 0
-    for ch in _chunks(body):
-        if deadline is not None and time.monotonic() > deadline:
-            return facts, False, dropped
-        raw = _json_block(llm_fn(_FACT_PROMPT % ch) or "")
-        items = raw.get("facts") if isinstance(raw, dict) else None
-        if not isinstance(items, list):
-            return facts, False, dropped
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            if len(facts) >= 40:
-                dropped += 1
-                continue
-            stmt = it.get("statement")
-            if not isinstance(stmt, str) or not stmt.strip():
-                continue
-            quote = it.get("evidence_quote")
-            span = _locate_quote(body, quote) \
-                if isinstance(quote, str) else None
-            i = len(facts)
-            ev_id = f"ev_{member['message_id']}_{i}"
-            status = it.get("status")
-            polarity = it.get("polarity")
-            facts.append({
-                "fact_id": f"fact_{member['message_id']}_{i}",
-                "kind": it.get("kind") if it.get("kind") in FACT_KINDS
-                        else "other",
-                "statement": stmt.strip()[:200],
-                "subject_ref": f"m{member['message_id']}",
-                "drug_ref": None,
-                "status": status if status in FACT_STATUSES
-                          else "not_stated",
-                "polarity": polarity if polarity in POLARITIES
-                            else "uncertain",
-                "occurred_at": _iso_date(it.get("time_text")),
-                "time_text": it.get("time_text")
-                             if isinstance(it.get("time_text"), str)
-                             else None,
-                "quantity": it.get("quantity")
-                            if isinstance(it.get("quantity"), str)
-                            else None,
-                "evidence_refs": [ev_id] if span else [],
-                "validation_status": "candidate" if span
-                                     else "unverified",
-                "_evidence": {"evidence_id": ev_id,
-                              "message_id": member["message_id"],
-                              "revision_id": member["revision"],
-                              "start_codepoint": span[0],
-                              "end_codepoint": span[1],
-                              "quote": quote} if span else None,
-            })
-    return facts, True, dropped
-
-
-_SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器です。対象投稿と同一スレッド文脈、
-検証済み事実候補から、全セクション共通のclaim構造を持つJSONのみ出力してください。
-
-ルール:
-- 各claimは {"section","text","claim_kind","fact_refs","status","polarity"}
-- section: medication|status|pharmacy|followup|progress|flow|other
-- claim_kind: reported_fact|inference|limitation
-- fact_refs: 根拠となる候補の番号(0起き)の配列 — reported_factは必須、空は不可
-- 対象時点の情報として書く（現在の診察結果と断定しない）
-- 「対応不要」を既定にしない。未記載は limitations に書く
-- 依頼の確認提案は原文の依頼と分け、claim_kind="inference" とする
-
-対象投稿:
-<<<
-%s
->>>
-同一スレッド文脈:
-<<<
-%s
->>>
-事実候補(番号付き):
-%s
-
-{"claims":[...], "limitations":[...]} のみ出力。
-JSON:"""
-
-_REPAIR_SUFFIX = """
-前回の出力は監査で不合格でした。修正点:
-%s
-同じ入力で全claimを再生成してください。原文を書き換えず、支持されない
-表現を削り、落とした候補を拾ってください。
-JSON:"""
-
-
-def _facts_brief(facts: list) -> str:
-    lines = []
-    for i, f in enumerate(facts):
-        lines.append(f"{i}. [{f['kind']}/{f['status']}/{f['polarity']}] "
-                     f"{f['statement']}"
-                     + (f"（{f['time_text']}）" if f.get("time_text") else ""))
-    return "\n".join(lines) or "(なし)"
-
-
-# Safety ceiling for one local-LLM prompt. Above it the model's context
-# window could silently drop input — an oversize target is flagged
-# input_oversize -> NEEDS_REVIEW instead of being chopped (§12.3).
-PROMPT_CHAR_LIMIT = 28000
-
-
-def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
-              verdicts: dict, feedback: list | None = None) -> dict | None:
-    """Local-LLM summary in the common Claim schema. Jev verdicts are
-    context for the writer, never forced truth (§15.3). The FULL target
-    body and thread context are passed untruncated; if the prompt would
-    exceed PROMPT_CHAR_LIMIT no model call is made and the result is a
-    stub flagged _input_oversize (audit forces NEEDS_REVIEW — never a
-    silent partial PASS)."""
-    target = next((m for m in bundle["members"]
-                   if m["message_id"] == target_id), None)
-    if target is None:
-        return None
-    ctx = "\n".join(m["body_original"] for m in bundle["members"]
-                    if m["message_id"] != target_id
-                    and m["body_original"])
-    prompt = _SUMMARY_PROMPT % (target["body_original"],
-                                ctx, _facts_brief(facts))
-    if feedback:
-        prompt += _REPAIR_SUFFIX % "\n".join(feedback[:10])
-    if len(prompt) > PROMPT_CHAR_LIMIT:
-        return {"summary_id": f"sum_{bundle['bundle_id']}",
-                "input_bundle_id": bundle["bundle_id"],
-                "schema_version": SCHEMA_VERSION,
-                "target_message_id": target_id,
-                "claims": [],
-                "limitations": ["対象投稿または文脈が大きすぎるため"
-                                "要約を生成できませんでした"],
-                "audit_status": "pending", "_input_oversize": True}
-    raw = _json_block(llm_fn(prompt) or "")
-    if raw is None:
-        return None
-    claims_in = raw.get("claims")
-    if not isinstance(claims_in, list):
-        return None
-    claims = []
-    for i, c in enumerate(claims_in[:30]):
-        if not isinstance(c, dict):
-            continue
-        text, section = c.get("text"), c.get("section")
-        kind = c.get("claim_kind", "reported_fact")
-        refs = c.get("fact_refs")
-        if not isinstance(text, str) or not text.strip():
-            continue
-        if section not in CLAIM_SECTIONS:
-            section = "other"
-        if kind not in CLAIM_KINDS:
-            kind = "reported_fact"
-        if not isinstance(refs, list):
-            refs = []
-        refs = [r for r in refs
-                if type(r) is int and 0 <= r < len(facts)]
-        # a reported_fact without evidence is INV-07's exact failure —
-        # keep it flagged so the audit can fail it, never drop silently
-        ev_refs = sorted({e for r in refs
-                          for e in facts[r]["evidence_refs"]})
-        claims.append({
-            "claim_id": f"claim_{target_id}_{i}",
-            "section": section, "text": text.strip()[:400],
-            "claim_kind": kind, "fact_refs": refs,
-            "evidence_refs": ev_refs,
-            "status": c.get("status") if c.get("status")
-                      in FACT_STATUSES else "not_stated",
-            "polarity": c.get("polarity") if c.get("polarity")
-                        in POLARITIES else "uncertain"})
-    limitations = [str(x)[:200] for x in
-                   (raw.get("limitations") or []) if isinstance(x, str)]
-    # cap truncation is a finding, not a silent drop — the auditor and
-    # the notice reader must see that claims were left out (§16.2)
-    if len(claims_in) > 30:
-        limitations = [f"claim数が上限を超えたため"
-                       f"{len(claims_in) - 30}件省略"] + limitations
-    return {"summary_id": f"sum_{bundle['bundle_id']}",
-            "input_bundle_id": bundle["bundle_id"],
-            "schema_version": SCHEMA_VERSION,
-            "target_message_id": target_id,
-            "claims": claims, "limitations": limitations[:10],
-            "audit_status": "pending"}
-
-
-# ---------- audit (spec §16) ----------
-
-def audit_code(bundle: dict, facts: list, summary: dict) -> list:
-    """Deterministic checks: reference integrity, span equality,
-    structural enums, fact->claim coverage. Returns findings list —
-    [] means the code side found no blocker (model check still runs)."""
-    findings = []
-    if summary.get("_input_oversize"):
-        findings.append({"code": "input_oversize"})
-    members = {m["message_id"]: m for m in bundle["members"]}
-    for f in facts:
-        ev = f.get("_evidence")
-        if f["evidence_refs"] and not ev:
-            findings.append({"code": "evidence_missing",
-                             "fact": f["fact_id"]})
-            continue
-        if not ev:
-            continue
-        src = members.get(ev["message_id"])
-        if src is None or ev["revision_id"] != src["revision"]:
-            findings.append({"code": "evidence_revision_mismatch",
-                             "fact": f["fact_id"]})
-            continue
-        s, e = ev["start_codepoint"], ev["end_codepoint"]
-        if type(s) is not int or type(e) is not int or s < 0 or s >= e \
-                or src["body_original"][s:e] != ev["quote"]:
-            findings.append({"code": "evidence_span_mismatch",
-                             "fact": f["fact_id"]})
-        # numbers/units in a fact must trace to ITS quote — appearing
-        # somewhere else in the post is not tracing (AT-025/026)
-        if f.get("quantity") and f["quantity"] not in ev["quote"]:
-            findings.append({"code": "quantity_untraced",
-                             "fact": f["fact_id"]})
-    covered = set()
-    for c in summary["claims"]:
-        for r in c["fact_refs"]:
-            covered.add(r)
-        if c["claim_kind"] == "reported_fact" and not c["evidence_refs"]:
-            findings.append({"code": "claim_without_evidence",
-                             "claim": c["claim_id"]})
-    for i, f in enumerate(facts):
-        if f["validation_status"] == "candidate" and i not in covered:
-            findings.append({"code": "fact_dropped",
-                             "fact": f["fact_id"],
-                             "statement": f["statement"]})
-    return findings
-
-
-def audit_claims(jev_client, bundle: dict, summary: dict,
-                 deadline: float) -> tuple[list, bool]:
-    """Per-claim Jev support check (supports/contradicts/not_supported/
-    ambiguous). Returns (findings, evaluated) — evaluated=False means
-    the check could not run, i.e. PENDING rather than a silent PASS."""
-    findings = []
-    if jev_client is None:
-        return [{"code": "support_unevaluated"}], False
-    claims = [c for c in summary["claims"]
-              if c["claim_kind"] != "limitation"]
-    if not claims:
-        return findings, True
-    # one request per claim keeps question scope unambiguous (§13.2)
-    questions = {}
-    for c in claims:
-        questions[c["claim_id"]] = jev.choice_question(
-            "Does the claim in state.target.text follow from the "
-            "provided source spans in state.context? Each evidence "
-            "entry pairs the exact quote (role=evidence_quote) with its "
-            "surrounding original-text window (role=evidence_context) — "
-            "a verbatim quote negated or conditioned by neighboring "
-            "text does NOT support the claim. Judge target, value, "
-            "polarity and tense together — a same-topic claim with "
-            "different drug/dose does not match (AT-024/025/028).",
-            jev.CLAIM_SUPPORT_OPTIONS)
-    members = {m["message_id"]: m for m in bundle["members"]}
-    ev_ctx = {}
-    for f in summary.get("_facts", []):
-        ev = f.get("_evidence")
-        if not ev:
-            continue
-        quote = ev["quote"]
-        src = members.get(ev["message_id"])
-        body = src["body_original"] if src else ""
-        s, e = ev["start_codepoint"], ev["end_codepoint"]
-        # the claim's support is judged against the quote PLUS its
-        # surrounding原文 window — a bare quote cannot reveal a
-        # negation or condition sitting next to it (§16.2, AT-028)
-        if type(s) is int and type(e) is int and 0 <= s < e <= len(body):
-            win = body[max(0, s - 250):min(len(body), e + 250)]
-        else:
-            win = ""
-        ev_ctx[ev["evidence_id"]] = (quote, win)
-    for c in claims:
-        ctx = []
-        for ev in c["evidence_refs"]:
-            quote, win = ev_ctx.get(ev, ("", ""))
-            ctx.append({"id": ev, "role": "evidence_quote",
-                        "text": quote})
-            if win and win != quote:
-                ctx.append({"id": f"{ev}_ctx",
-                            "role": "evidence_context", "text": win})
-        state = {"target": {"id": c["claim_id"], "text": c["text"]},
-                 "context": ctx}
-        try:
-            out = jev_client.evaluate(
-                state, {c["claim_id"]: questions[c["claim_id"]]},
-                deadline)
-        except jev.JevError:
-            return findings + [{"code": "support_unevaluated",
-                                "claim": c["claim_id"]}], False
-        ans = out["answers"][c["claim_id"]]
-        if ans["choice"] in ("contradicts", "not_supported"):
-            findings.append({"code": "claim_" + ans["choice"],
-                             "claim": c["claim_id"],
-                             "confidence": ans["confidence"]})
-        elif ans["choice"] == "ambiguous":
-            findings.append({"code": "claim_ambiguous",
-                             "claim": c["claim_id"],
-                             "confidence": ans["confidence"]})
-    return findings, True
-
-
-def audit_status_for(code_findings: list, jev_findings: list,
-                     evaluated: bool, repaired: bool) -> str:
-    if not evaluated:
-        return "PENDING"
-    blocking = [f for f in code_findings
-                if f["code"] in ("evidence_missing",
-                                 "evidence_revision_mismatch",
-                                 "evidence_span_mismatch",
-                                 "input_oversize")]
-    if blocking:
-        return "NEEDS_REVIEW"
-    repairable = [f for f in code_findings + jev_findings
-                  if f["code"] in ("fact_dropped", "claim_not_supported",
-                                   "quantity_untraced",
-                                   "claim_without_evidence")]
-    if repairable and not repaired:
-        return "REPAIR_REQUIRED"
-    if repairable or [f for f in jev_findings
-                      if f["code"] in ("claim_contradicts",
-                                       "claim_ambiguous")]:
-        return "NEEDS_REVIEW"
-    return "PASS"
-
-
-# ---------- open loop candidates (spec §17) ----------
-
-def update_loops(ledger, project_id: int, bundle: dict,
-                 facts_by_target: dict, jev_client, scfg: dict,
-                 deadline: float) -> tuple[int, bool]:
-    """Returns (candidates_created, complete). complete=False means the
-    pair budget/deadline/a Jev error cut the relation pass short — the
-    caller must reschedule so the remainder is carried forward (§17.2).
-    Candidate creation is automatic; promotion to a formal request is
-    NOT — that stays behind mcs_requests' human_confirmed contract
-    (INV-11/19, AT-051)."""
-    created = 0
-    for target_id, facts in facts_by_target.items():
-        member = next((m for m in bundle["members"]
-                       if m["message_id"] == target_id), None)
-        if member is None:
-            continue
-        for f in facts:
-            if f["kind"] not in ("explicit_request", "pending_item",
-                                 "schedule") or f["polarity"] == "negated":
-                continue
-            cand_fp = payload_hash({"p": project_id, "m": target_id,
-                                    "s": f["statement"]})
-            dup = False
-            for r in ledger.db.execute(
-                    "SELECT meta FROM artifacts WHERE kind=? "
-                    "AND message_id=?", (KIND_LOOP, target_id)):
-                try:
-                    if json.loads(r["meta"] or "{}").get(
-                            "candidate_fp") == cand_fp:
-                        dup = True
-                        break
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            if dup:
-                continue
-            ledger.artifact_add(
-                KIND_LOOP,
-                json.dumps({"loop_id": f"loop_{cand_fp[:12]}",
-                            "project_id": project_id,
-                            "kind": f["kind"],
-                            "description": f["statement"],
-                            "origin": {"message_id": target_id,
-                                       "revision": member["revision"],
-                                       "evidence_refs":
-                                       f["evidence_refs"]},
-                            "assignee_text": None,
-                            "due_text": f.get("time_text"),
-                            "state": "PROPOSED",
-                            "history": [{
-                                "state": "PROPOSED",
-                                "at": int(time.time()),
-                                "trigger_message_id": target_id}]},
-                           ensure_ascii=False),
-                project_id=project_id, message_id=target_id,
-                model=jev.JEV_MODEL,
-                meta={"fingerprint": bundle["source_fingerprint"],
-                      "candidate_fp": cand_fp,
-                      "registry": jev.REGISTRY_VERSION})
-            created += 1
-    if jev_client is None:
-        return created, True
-    # relate new arrivals to open candidates. EVERY open candidate is
-    # eligible (no LIMIT — the spec forbids dropping the remainder,
-    # §17.2); evaluated (candidate, target) pairs are deduped via their
-    # recorded loop_event so re-runs only evaluate new pairs, and a
-    # per-job pair budget carries the remainder to the next run of the
-    # same job instead of truncating it.
-    seen = set()
-    for r in ledger.db.execute(
-            "SELECT content FROM artifacts WHERE kind=? AND project_id=?",
-            (KIND_LOOP_EVENT, project_id)):
-        try:
-            ev = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(ev, dict):
-            # loop_artifact_id identifies the candidate — two candidates
-            # can share an origin message, so the bare origin id is not
-            # a safe dedup key (legacy rows fall back to it)
-            seen.add((ev.get("loop_artifact_id")
-                      or ev.get("loop_origin_id"),
-                      ev.get("trigger_message_id")))
-    open_loops = ledger.db.execute("""
-      SELECT artifact_id, message_id, content FROM artifacts
-      WHERE kind=? AND project_id=? ORDER BY artifact_id DESC
-    """, (KIND_LOOP, project_id)).fetchall()
-    targets = [m for m in bundle["members"] if m["role"] == "target"]
-    pairs = 0
-    for row in open_loops:
-        try:
-            cand = json.loads(row["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(cand, dict) or cand.get("state") not in \
-                ("PROPOSED", "RESOLUTION_CANDIDATE"):
-            continue
-        for m in targets:
-            if row["message_id"] == m["message_id"]:
-                continue  # a candidate never relates to its own origin
-            key = (row["artifact_id"], m["message_id"])
-            if key in seen:
-                continue
-            if pairs >= 40 or time.monotonic() > deadline:
-                return created, False   # remainder -> next run
-            qid = f"rel_{row['message_id']}_{m['message_id']}"
-            q = jev.choice_question(
-                "state.context[0] is an open follow-up item recorded "
-                "earlier. state.target is a newer message. Classify "
-                "their relation — 'acknowledged'/'will confirm' is "
-                "receipt, not resolution (AT-037/038).",
-                jev.LOOP_RELATION_OPTIONS)
-            try:
-                out = jev_client.evaluate(
-                    {"target": {"id": qid, "text": m["body_original"]},
-                     "context": [{"id": "loop", "role": "open_item",
-                                  "text": cand.get("description", "")}]},
-                    {qid: q}, deadline)
-            except jev.JevError:
-                return created, False
-            pairs += 1
-            seen.add(key)
-            ledger.artifact_add(
-                KIND_LOOP_EVENT,
-                json.dumps({"loop_origin_id": row["message_id"],
-                            "loop_artifact_id": row["artifact_id"],
-                            "trigger_message_id": m["message_id"],
-                            "relation": out["answers"][qid]["choice"],
-                            "confidence": out["answers"][qid]
-                            .get("confidence"),
-                            "candidate_state": cand.get("state")},
-                           ensure_ascii=False),
-                project_id=project_id, message_id=m["message_id"],
-                model=jev.JEV_MODEL,
-                meta={"fingerprint": bundle["source_fingerprint"],
-                      "registry": jev.REGISTRY_VERSION,
-                      "jev_requests": 1})
-    return created, True
-
-
-# ---------- notification render (spec §20, §19.3) ----------
-
-_SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
-                  "status": "現在の状況（対象投稿時点）",
-                  "pharmacy": "薬局への影響", "followup": "未決事項／フォローアップ",
-                  "progress": "前回からの進展", "flow": "投稿の流れ",
-                  "other": "その他"}
-
-
-def render_notice(ledger, project_id: int, root_id: int,
-                  summary: dict, audit_status: str,
-                  targets: list | None = None,
-                  quality: str | None = None,
-                  focus_mid: int | None = None) -> str:
-    """The §20.1 block. Patient label + coverage/audit status lines are
-    code-generated; claim text comes from the audited summary. The MCS
-    link is the stored patient URL — never a guessed permalink.
-    対象新着 counts only THIS generation's target posts — the rest of
-    the thread is context, not arrivals. A multi-target generation
-    emits one notice per target; focus_mid names WHICH covered post
-    this notice's claims belong to."""
-    pat = ledger.db.execute(
-        "SELECT patient_name,url FROM patients WHERE project_id=?",
-        (project_id,)).fetchone()
-    name = (pat["patient_name"] if pat else None) or str(project_id)
-    url = (pat["url"] if pat else None) or ""
-    ids = [t for t in (targets or [root_id]) if type(t) is int] \
-        or [root_id]
-    marks = ",".join("?" * len(ids))
-    members = ledger.db.execute(
-        f"SELECT COUNT(*) c, MAX(posted_at) latest FROM messages "
-        f"WHERE project_id=? AND message_id IN ({marks})",
-        (project_id, *ids)).fetchone()
-    latest = (members["latest"] or "")[:16].replace("T", " ") \
-        .replace("-", "/")
-    lines = [f"【{name}】",
-             f"対象新着：{members['c']}投稿"
-             f"｜対象投稿の最終時刻：{latest} JST",
-             f"取得：{'完全' if quality == 'full' else '一部未取得'}",
-             f"要約：{'自動検査完了' if audit_status == 'PASS' else '要確認'}"]
-    if focus_mid is not None and len(ids) > 1:
-        trow = ledger.db.execute(
-            "SELECT posted_at FROM messages WHERE project_id=? "
-            "AND message_id=?", (project_id, focus_mid)).fetchone()
-        stamp = ((trow["posted_at"] or "")[:16].replace("T", " ")
-                 .replace("-", "/")) if trow else ""
-        lines.append(f"要約対象：{stamp} の投稿" if stamp
-                     else f"要約対象：投稿#{focus_mid}")
-    by_sec: dict[str, list] = {}
-    for c in summary.get("claims", []):
-        by_sec.setdefault(c["section"], []).append(c)
-    if by_sec:
-        lines.append("\n■ 今回の重要情報")
-        for c in by_sec.get("medication", []) + by_sec.get("status", []):
-            lines.append(f"・{c['text']}")
-    for sec in ("pharmacy", "followup", "progress", "other"):
-        if by_sec.get(sec):
-            lines.append(f"\n■ {_SECTION_LABEL[sec]}")
-            for c in by_sec[sec]:
-                prefix = "【提案】" if c["claim_kind"] == "inference" else ""
-                lines.append(f"・{prefix}{c['text']}")
-    lims = summary.get("limitations") or []
-    if lims:
-        lines.append("\n■ 原文・制約")
-        lines.extend(f"・{x}" for x in lims[:5])
-    if url.startswith("https://"):
-        lines.append("\n▶ MCSで確認\n" + url)
-    return "\n".join(lines)
-
-
-def render_degraded(ledger, project_id: int) -> str:
-    """Minimal code-generated notice for enforce-mode overruns — carries
-    no unverified clinical claims (§19.3)."""
-    pat = ledger.db.execute(
-        "SELECT patient_name,url FROM patients WHERE project_id=?",
-        (project_id,)).fetchone()
-    name = (pat["patient_name"] if pat else None) or str(project_id)
-    url = (pat["url"] if pat else None) or ""
-    text = (f"【{name}】新着を取り込みました\n"
-            "取得：保存済み\n"
-            "要約：意味検査が完了していないため保留\n"
-            "確認方法：MCS原文を確認してください")
-    if url.startswith("https://"):
-        text += "\n\n▶ MCSで確認\n" + url
-    return text
-
-
-def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
-    for r in ledger.db.execute(
-            "SELECT payload FROM notify_outbox WHERE kind=? AND state IN "
-            "('pending','failed','accepted','suppressed')",
-            ("semantic_notice",)):
-        try:
-            if json.loads(r["payload"]).get("delivery_key") \
-                    == delivery_key:
-                return True
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            continue
-    return False
-
-
-def _notify_src_event(ledger, project_id: int,
-                      message_ids: list) -> int | None:
-    """The newest new_messages outbox intent covering any of these
-    message ids — the stored origin event this evaluation descends
-    from. Notification eligibility is decided by the recorded origin
-    event, never by the semantic pipeline (INV-20, §20.3): a history
-    import, archive-suppressed path, replay, or after-the-fact seed
-    whose targets were never in a real arrival intent returns None and
-    can produce artifacts only — no notice is generated (AT-055).
-    A suppressed origin (archived/retracted arrival) counts as no
-    origin — the send-time gate in notifier re-checks the same
-    condition in case suppression lands after enqueue. Replay of a
-    genuinely notified thread re-derives the same eligibility, which
-    is what lets a crash-lost intent heal."""
-    if not message_ids:
-        return None
-    want = set(message_ids)
-    for r in ledger.db.execute(
-            "SELECT event_id,payload FROM notify_outbox "
-            "WHERE kind='new_messages' AND project_id=? "
-            "AND state != 'suppressed' "
-            "ORDER BY event_id DESC", (project_id,)):
-        try:
-            ids = json.loads(r["payload"]).get("message_ids") or []
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(ids, list) and want.intersection(ids):
-            return r["event_id"]
-    return None
-
-
-def _emit_degraded(ledger, scfg: dict) -> int:
-    """Enforce-only fallback: a new-messages intent whose thread still
-    lacks a PASS-audited summary past delayed_notice_seconds gets ONE
-    code-generated degraded notice through the existing outbox — no
-    clinical claims, original-check instruction only (spec §19.3).
-    Each (root, fingerprint) pair dedupes via delivery_key."""
-    cutoff = time.time() - scfg["delayed_notice_seconds"]
-    sent = 0
-    # Only events still undelivered qualify — a base notification that
-    # already reached Discord (accepted) or was dropped (suppressed)
-    # must never get an extra "新着取得" degraded notice (§19.3). A
-    # pending/failed event this old means delivery is genuinely stuck,
-    # so the minimal code-generated notice covers the silence.
-    events = ledger.db.execute(
-        "SELECT event_id,project_id,payload FROM notify_outbox "
-        "WHERE kind='new_messages' AND state IN ('pending','failed') "
-        "AND created_at<?", (cutoff,))
-    for ev in events:
-        try:
-            ids = json.loads(ev["payload"]).get("message_ids") or []
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(ids, list):
-            continue
-        ids = ids[:500]      # a malformed fat payload must not wedge the scan
-        pid = ev["project_id"]
-        if scfg["project_ids"] is not None and pid not in \
-                scfg["project_ids"]:
-            continue
-        marks = ",".join("?" * len(ids)) or "NULL"
-        roots = {r["r"] for r in ledger.db.execute(
-            f"SELECT COALESCE(parent_id,message_id) r FROM messages "
-            f"WHERE message_id IN ({marks})", ids)}
-        for root in roots:
-            bundle = thread_bundle(ledger, pid, root)
-            if bundle is None:
-                continue
-            fp = bundle["source_fingerprint"]
-            passed = False
-            for a in ledger.db.execute(
-                    "SELECT meta FROM artifacts WHERE kind=? AND "
-                    "project_id=?", (KIND_AUDIT, pid)):
-                try:
-                    m = json.loads(a["meta"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if m.get("fingerprint") == fp \
-                        and m.get("audit_status") == "PASS":
-                    passed = True
-                    break
-            if passed:
-                continue
-            dkey = payload_hash({"kind": "semantic_notice", "root": root,
-                                 "fp": fp, "degraded": 1})
-            if _outbox_has_delivery(ledger, dkey):
-                continue
-            ledger.outbox_add("semantic_notice", pid, {
-                "delivery_key": dkey, "root_id": root,
-                "degraded": True, "src_event_id": ev["event_id"],
-                "text": render_degraded(ledger, pid),
-                "policy_version": POLICY_VERSION})
-            sent += 1
-    return sent
-
-
 # ---------- drain ----------
 
 def _eval_chunked(jev_client, state: dict, questions: dict,
@@ -1117,25 +185,6 @@ def _eval_chunked(jev_client, state: dict, questions: dict,
     return merged
 
 
-def _plan_exists(ledger, message_id: int, fp: str,
-                 status: str) -> bool:
-    """A notify_plan for THIS (generation, audit outcome) already
-    recorded — replay and crash-retry must not stack duplicate plan
-    rows. Keyed on status too: a plan left by a PENDING run does not
-    satisfy a later PASS on the same fingerprint."""
-    for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=? AND message_id=?",
-            (KIND_PLAN, message_id)):
-        try:
-            m = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if m.get("fingerprint") == fp \
-                and m.get("audit_status") == status:
-            return True
-    return False
-
-
 def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
                   members: dict, final_status: str) -> None:
     """Summary + audit artifact pair for one evaluated target — the
@@ -1150,7 +199,11 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
         meta={"fingerprint": fp, "schema": SCHEMA_VERSION,
               "audit_status": final_status,
               "stale": final_status == "STALE",
-              "target_revision": members[mid]["revision"]})
+              "target_revision": members[mid]["revision"],
+              # the stored content drops _-keys — the oversize marker
+              # must survive storage or a re-audit of a PENDING-stored
+              # stub would lose its blocking finding
+              "input_oversize": bool(r["summary"].get("_input_oversize"))})
     ledger.artifact_add_tx(
         KIND_AUDIT,
         json.dumps({"status": final_status,
@@ -1165,7 +218,9 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
 
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
     """One semantic job -> durable artifacts + job state transition.
-    Returns 'done'|'deferred'|'retry'|'failed'."""
+    Returns 'done'|'deferred'|'retry'|'failed'. Every non-done return
+    self-reschedules (defer for waits/remainder, retry for failures) —
+    the drain loop only tallies, it never rewrites next_try."""
     pid, root = job["project_id"], job["message_id"]
     pl = {}
     try:
@@ -1324,6 +379,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             ledger.job_retry(job["job_id"], retry_in=300,
                              max_attempts=6)
             return "retry"
+        ledger.job_defer(job["job_id"], 60)
         return "deferred"
 
     # summary + audit. A TERMINAL audit (PASS/NEEDS_REVIEW) for THIS
@@ -1348,6 +404,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             break
         if existing is not None:
             summary = existing["content"]
+            if existing["meta"].get("input_oversize"):
+                summary["_input_oversize"] = True
         else:
             summary = summarize(llm_fn, bundle, mid, facts,
                                 verdicts.get(mid, {}))
@@ -1420,6 +478,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline) -> str:
             ledger.job_retry(job["job_id"], retry_in=300,
                              max_attempts=6)
             return "retry"
+        ledger.job_defer(job["job_id"], 60)
         return "deferred"
 
     # generation guard: the bundle must still be current at commit, and
@@ -1545,7 +604,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if scfg["mode"] == "off":
         return out
     if llm_fn is None:
-        llm_fn = llm_chat
+        # clip each call to the tick's remaining budget — a local-LLM
+        # hang must not stall the shared run lock beyond it (Jev calls
+        # already clip attempt_timeout to the deadline)
+        def llm_fn(prompt):
+            return llm_chat(prompt, timeout=max(
+                1.0, min(LLM_TIMEOUT, deadline - time.monotonic())))
     if jev_client is None and scfg["daily_request_budget"] > 0:
         jev_client = jev.JevClient(
             api_key=_env("TYPESAFE_API_KEY"), model=scfg["model"],
@@ -1629,7 +693,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             out["done"] += 1
         elif status == "deferred":
             out["deferred"] += 1
-            ledger.job_defer(job["job_id"], 60)
         elif status == "retry":
             out["deferred"] += 1   # job_retry already rescheduled it
         else:
@@ -1655,6 +718,11 @@ def seed(ledger, message_id: int, origin: str = "replay",
         "SELECT project_id, COALESCE(parent_id,message_id) r "
         "FROM messages WHERE message_id=?", (message_id,)).fetchone()
     if row is None:
+        return None
+    if cfg["project_ids"] is not None \
+            and row["project_id"] not in cfg["project_ids"]:
+        # out of the rollout scope — seeding it would only churn in
+        # drain-time defers
         return None
     ledger.semantic_seed(row["project_id"], [message_id],
                          {"source": origin})

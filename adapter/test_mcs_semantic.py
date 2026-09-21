@@ -22,9 +22,11 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
   INV-16  shadow artifact kinds   -> test_shadow_full_pipeline
   AT-065  snapshot readers intact -> test_snapshot_view_semantic
 """
+import datetime
 import json
 import sys
 import time
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1519,4 +1521,148 @@ def test_empty_targets_root_is_target(tmp_path):
     evs = db.artifacts("loop_event", project_id=1)
     assert evs and json.loads(
         evs[0]["content"])["trigger_message_id"] == 1
+    db.close()
+
+
+def test_config_threshold_order_fail_closed():
+    """match <= nomatch would silently collapse the UNDETERMINED band
+    (verdict_for checks MATCH first) — the inversion is reported and
+    both reset to defaults."""
+    scfg, errs = semantic.semantic_config(
+        {"semantic": {"mode": "shadow", "match_threshold": 0.3,
+                      "nomatch_threshold": 0.7}})
+    assert "config: semantic_threshold_order_invalid" in errs
+    assert scfg["match_threshold"] == jev.MATCH_THRESHOLD
+    assert scfg["nomatch_threshold"] == jev.NOMATCH_THRESHOLD
+
+
+def test_edit_reseeds_semantic(tmp_path):
+    """An edited stored message is not 'new' but it IS new input: the
+    winning content_hash changes, the fingerprint moves, and a semantic
+    job must be re-seeded instead of leaving stale artifacts forever."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    assert db.job_state("semantic", 1, 1) == "done"
+    # same id, edited body, already-read: no notify ids, but the
+    # changed revision must still seed evaluation
+    db.save_messages([_message(1, body=BODY + "（編集）", unread=False)],
+                     project_id=1, notify={"source": "history"},
+                     semantic=True)
+    assert db.job_state("semantic", 1, 1) == "pending"
+    db.close()
+
+
+def test_identical_resave_does_not_reseed(tmp_path):
+    """An unchanged re-save must not burn a re-evaluation — only a real
+    revision change re-seeds."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    assert db.job_state("semantic", 1, 1) == "done"
+    db.save_messages([_message(1, unread=False)], project_id=1,
+                     notify={"source": "history"}, semantic=True)
+    assert db.job_state("semantic", 1, 1) == "done"
+    db.close()
+
+
+def test_replay_respects_project_scope(tmp_path):
+    """--replay outside project_ids must not seed — it would only churn
+    in drain-time defers forever."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1)], project_id=1)
+    cfgf = tmp_path / "cfg.json"
+    cfgf.write_text(json.dumps({"semantic": {"mode": "shadow",
+                                             "project_ids": [2]}}))
+    assert semantic.seed(db, 1, cfg_path=str(cfgf)) is None
+    assert db.job_state("semantic", 1, 1) is None
+    db.close()
+
+
+def test_parked_notice_not_counted_skipped(tmp_path, monkeypatch):
+    """A policy-parked intent is not 'skipped' — otherwise run_check's
+    notify_incomplete fires on every hourly re-check while the mode
+    gate is down."""
+    db = _seeded(tmp_path)
+    semantic.run_due(db, _cfg("enforce"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    import notifier
+    monkeypatch.setattr(
+        notifier, "_config",
+        lambda: {"semantic": {"mode": "shadow"},
+                 "discord_channel_id": "123"})
+    monkeypatch.setattr(notifier, "_token", lambda: "tok")
+    monkeypatch.setattr(notifier, "_post", lambda *a, **k: "1")
+    res = notifier.flush(db)
+    assert res["parked"] == 2 and res["skipped"] == 0
+    db.close()
+
+
+def test_summary_prompt_carries_verdicts(tmp_path):
+    """Jev verdicts are advisory context for the writer (§15.3) — the
+    prompt must actually carry them, not silently drop the parameter."""
+    db = _seeded(tmp_path)
+    seen = []
+
+    def capture(prompt):
+        seen.append(prompt)
+        return _llm(prompt)
+
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=capture)
+    summ = next(p for p in seen if "要約器" in p)
+    assert "命題評価" in summ and "P01" in summ and "MATCH" in summ
+    db.close()
+
+
+def test_jst_day_boundary():
+    """The daily Jev budget resets at JST midnight — the operation's
+    actual day — not UTC midnight (09:00 JST)."""
+    t = datetime.datetime(2026, 9, 20, 16, 0,
+                          tzinfo=datetime.timezone.utc).timestamp()
+    start = semantic._jst_day_start(t)
+    jst = datetime.timezone(datetime.timedelta(hours=9))
+    got = datetime.datetime.fromtimestamp(start, tz=jst)
+    assert (got.year, got.month, got.day,
+            got.hour, got.minute) == (2026, 9, 21, 0, 0)
+
+
+def test_models_transport_wrapped():
+    """models() must surface transport failure as JevError like
+    evaluate() does — the smoke harness only catches JevError."""
+    class _Boom:
+        def open(self, *a, **k):
+            raise urllib.error.URLError("down")
+
+    c = jev.JevClient(api_key="k")
+    c._opener = _Boom()
+    with pytest.raises(jev.JevError, match="transport"):
+        c.models()
+
+
+def test_oversize_marker_survives_storage(tmp_path):
+    """The stored summary drops _-prefixed keys; the oversize marker
+    must persist in meta so a later re-audit still blocks PASS instead
+    of approving an empty stub."""
+    big = "あ" * 30000
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1, body=big)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300,
+                     jev_client=_FakeJev(), llm_fn=_llm)
+    meta = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='semantic_summary'"
+    ).fetchone()["meta"])
+    assert meta["input_oversize"] is True
+    audit = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='semantic_audit'"
+    ).fetchone()["meta"])
+    assert audit["audit_status"] == "NEEDS_REVIEW"
     db.close()
