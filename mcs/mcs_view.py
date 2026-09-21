@@ -231,6 +231,121 @@ class View:
             row["payload_valid"] = row["payload_hash"] is not None
         return {**page, "semantic_paused": paused(self.db, pid)}
 
+    def _qc(self, pid, mid, limit, cursor):
+        """extract_qc annotation view — Jev quality control over v2
+        extractions. Verdicts are annotations only: they never modified
+        the extraction they describe. Without --message-id: aggregate
+        counts plus a paginated list of messages whose QC flagged at
+        least one item or could not run. With --message-id: the full
+        per-item verdicts for that message."""
+        import extract_llm
+        if mid is not None:
+            msg = self._message(pid, mid)
+            rows = []
+            for r in self.db.execute(
+                    "SELECT artifact_id,content,meta,model,created_at "
+                    "FROM artifacts WHERE kind='extract_qc' AND "
+                    "message_id=? AND project_id=? "
+                    "ORDER BY artifact_id DESC LIMIT 10", (mid, pid)):
+                try:
+                    meta = json.loads(r["meta"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                try:
+                    content = json.loads(r["content"])
+                except (json.JSONDecodeError, TypeError):
+                    content = None
+                rows.append({"artifact_id": r["artifact_id"],
+                             "model": r["model"], "meta": meta,
+                             "content": content,
+                             "current": meta.get("hash") == msg["content_hash"],
+                             "created_at": r["created_at"]})
+            return {"message": msg, "qc": rows}
+        cur = ("a.kind='extract_qc' AND m.project_id=? "
+               "AND json_valid(a.meta) AND json_valid(a.content) "
+               "AND json_extract(a.meta,'$.hash')=m.content_hash")
+        base = ("FROM artifacts a JOIN messages m "
+                "ON m.message_id=a.message_id WHERE " + cur)
+        summary = dict(self.db.execute(
+            "SELECT COUNT(*) total,"
+            " COALESCE(SUM(json_extract(a.content,'$.qc')='done'),0)"
+            "   evaluated,"
+            " COALESCE(SUM(json_extract(a.content,'$.qc')='unevaluated'),0)"
+            "   unevaluated,"
+            " COALESCE(SUM(json_extract(a.content,'$.urgency.jev')"
+            "    IS NOT NULL"
+            "    AND json_extract(a.content,'$.urgency.jev') IS NOT"
+            "        json_extract(a.content,'$.urgency.extracted')),0)"
+            "   urgency_mismatch " + base, (pid,)).fetchone())
+        for r in self.db.execute(
+                "SELECT COALESCE(json_extract(je.value,'$.verdict'),'?') v,"
+                " COUNT(*) c FROM artifacts a"
+                " JOIN messages m ON m.message_id=a.message_id,"
+                " json_each(a.content,'$.items') je WHERE " + cur +
+                " GROUP BY v", (pid,)):
+            summary.setdefault("verdicts", {})[r["v"]] = r["c"]
+        summary.setdefault("verdicts", {})
+        # pending mirrors _qc_seed: current v2 extraction, no QC row for
+        # the same body hash yet (queued or not)
+        summary["pending"] = self.db.execute("""
+          SELECT COUNT(*) FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id
+          WHERE a.kind='extract_llm' AND m.project_id=?
+            AND json_valid(a.meta)
+            AND json_extract(a.meta,'$.hash')=m.content_hash
+            AND json_extract(a.meta,'$.extract_version')=?
+            AND json_extract(a.meta,'$.error') IS NULL
+            AND NOT EXISTS(SELECT 1 FROM artifacts q
+                WHERE q.kind='extract_qc' AND q.message_id=a.message_id
+                  AND json_valid(q.meta)
+                  AND json_extract(q.meta,'$.hash')
+                      =json_extract(a.meta,'$.hash'))
+        """, (pid, extract_llm.EXTRACT_VERSION)).fetchone()[0]
+        page = self._page(
+            "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
+            "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
+            " AND (json_extract(a.content,'$.qc')='unevaluated'"
+            "  OR EXISTS(SELECT 1 FROM json_each(a.content,'$.items') je"
+            "            WHERE json_extract(je.value,'$.verdict')"
+            "                  IS NOT 'MATCH')"
+            "  OR (json_extract(a.content,'$.urgency.jev') IS NOT NULL"
+            "      AND json_extract(a.content,'$.urgency.jev')"
+            "          IS NOT json_extract(a.content,'$.urgency.extracted')))",
+            [pid], ["a.artifact_id"], ["qc", pid], limit, cursor)
+        for row in page["items"]:
+            try:
+                content = json.loads(row.pop("content") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                content = {}
+            if not isinstance(content, dict):
+                content = {}
+            row["qc_state"] = content.get("qc")
+            row["flagged_items"] = [
+                it for it in (content.get("items") or [])
+                if isinstance(it, dict) and it.get("verdict") != "MATCH"]
+            urg = content.get("urgency")
+            if isinstance(urg, dict) and urg.get("jev") is not None \
+                    and urg.get("jev") != urg.get("extracted"):
+                row["urgency_mismatch"] = urg
+            if content.get("qc") == "unevaluated":
+                row["unevaluated_reason"] = content.get("reason")
+        legend = {
+            "qc": "抽出チェック — 機械が拾い上げた各項目が本文に裏付け"
+                  "られるかを外部の確認用AI（Jev）が判定した注記。"
+                  "抽出結果自体は変更されない",
+            "verdicts": {
+                "MATCH": "本文に裏付けあり",
+                "NO_MATCH": "本文に裏付けが見つからない"
+                            "（その事実が存在しない、という意味ではない）",
+                "UNDETERMINED": "本文だけでは判断できない"},
+            "qc_state": {"done": "判定済み",
+                         "unevaluated": "判定を実行できなかった"},
+            "pending": "v2抽出済みだがQC未実施の件数（キュー済みを含む）",
+        }
+        return {**page, "summary": summary, "legend": legend}
+
     def _requests(self, pid, request_id, status, limit, cursor):
         if status is not None and status not in requests.STATUSES:
             raise ValueError("bad_status")
@@ -512,6 +627,7 @@ class View:
             "evidence": lambda: {"message": self._message(project, message_id)},
             "attachments": lambda: self._attachments(project, message_id, limit, cursor),
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
+            "qc": lambda: self._qc(project, message_id, limit, cursor),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
             "comparison": lambda: self._comparison(project, message_id),
@@ -538,7 +654,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -585,6 +701,8 @@ def _parser():
             sub.add_argument("--until", type=int, help="Inclusive epoch seconds")
         if kind in ("evidence", "thread", "attachments", "semantic", "comparison"):
             sub.add_argument("--message-id", type=int, required=True)
+        if kind == "qc":
+            sub.add_argument("--message-id", type=int)
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)
             sub.add_argument("--payload-hash", required=True)
