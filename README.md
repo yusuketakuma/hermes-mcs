@@ -45,6 +45,42 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
                               止めるスイッチ — 既にpendingの取り込みジョブは
                               false でも消化され続ける(完全停止ではない)
 
+## Hermes addon として使う
+
+このリポジトリは単独で clone・配置できる。実行コード（`adapter/`・
+`hermes_plugin/`）は標準ライブラリのみで、外部依存はない。
+
+```bash
+git clone https://github.com/yusuketakuma/mcs-adapter.git ~/.mcs-repo
+~/.mcs-repo/install.sh            # ~/.hermes/plugins/mcs-discord-commands をリンク
+```
+
+`install.sh` は plugin dir への symlink を作るだけ — plugin は
+`../adapter` を相対参照するため、checkout 全体を残したまま
+`hermes_plugin/` だけを profile の plugins へ見せる構成。
+
+profile の `config.yaml` で有効化（全 scope 必須、未設定は拒否）:
+
+```yaml
+plugins:
+  enabled: [mcs-discord-commands]
+  entries:
+    mcs-discord-commands:
+      settings:
+        snapshot: /path/to/mcs/snapshots/ledger-snapshot.db
+        inbox: /path/to/mcs/cmd
+        allowed_user_ids: ["<discord user id>"]
+        allowed_chat_ids: ["<discord chat/channel id>"]
+        project_ids: [1]
+```
+
+Discord で `/mcs <json>` が使えるようになる（status・snapshot閲覧・
+依頼 preview/confirm・限定操作）。詳細: `hermes_plugin/README.md`。
+
+テスト: `cd adapter && python -m pytest` — `integration/` は
+hermes-agent checkout 上でのみ収集される（無い環境では skip）。
+収集・通知パイプライン側のデータ dir は `~/.mcs`（実行時に自動生成）。
+
 ## 運用
 
 - スケジューラ: `~/Library/LaunchAgents/local.mcs-check.plist`
