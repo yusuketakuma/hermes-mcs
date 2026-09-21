@@ -203,8 +203,7 @@ def _probe_format() -> str:
                               "content": 'Reply with {"ok": true}'}],
                 "max_tokens": 20, "temperature": 0,
                 "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": rf,
-                "id_slot": 1}).encode(),
+                "response_format": rf}).encode(),
             headers={"Content-Type": "application/json"})
         try:
             with _OPENER.open(req, timeout=10) as r:
@@ -450,9 +449,9 @@ def _llm_call(prompt: str) -> dict | None:
             "max_tokens": MAX_TOKENS,
             "temperature": 0,
             "chat_template_kwargs": {"enable_thinking": False},
-            # Background lane: backlog extraction pins slot 1 so slot 0
-            # (semantic.llm_chat, realtime) is never queued behind it.
-            "id_slot": 1,
+            # No id_slot: unpinned requests take any free slot, so
+            # background work fills all slots when realtime is idle —
+            # and a realtime call gets the first slot to complete.
         }
         if fmt == "schema":
             payload["response_format"] = {"type": "json_schema",

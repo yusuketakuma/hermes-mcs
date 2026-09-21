@@ -102,17 +102,18 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 
 | 用途 | モデル | 使用先 | モジュール |
 |---|---|---|---|
-| メッセージ構造化抽出(薬・依頼・否定極性・30字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` **slot1**(`id_slot:1`) | `mcs/extract_llm.py` |
-| セマンティック処理のリアルタイム問合せ | `Qwen3.5-9B` | 同上 **slot0**(`id_slot:0`) | `mcs/semantic.py` `llm_chat` |
+| メッセージ構造化抽出(薬・依頼・否定極性・30字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` | `mcs/extract_llm.py` |
+| セマンティック処理のリアルタイム問合せ | `Qwen3.5-9B` | 同上 | `mcs/semantic.py` `llm_chat` |
 | 意味的妥当性の評価・監査・ベンチ | `jev-1.13.0`(固定) | TypeSafe Jev API `api.typesafe.ai/v1/systemone` | `mcs/semantic_jev.py`・`semantic_assessment.py`・`semantic_audit.py`・`semantic_bench.py` |
 
 **ローカルLLM(Qwen3.5-9B @ llama.cpp)**
 
 - エンドポイント: `http://127.0.0.1:8080/v1/chat/completions`(OpenAI 互換)
   — loopback 固定・proxy 無効・API key なし。**個人情報はマシンから出ない**
-- サーバは `-np 2` の2スロット構成: slot0=リアルタイム系(semantic)、
-  slot1=バックグラウンド抽出(extract_llm)に `id_slot` で pin —
-  バックログ処理がリアルタイム系をブロックしない
+- サーバは `-np 3` の3スロット構成。両経路とも `id_slot` を付けない
+  — llama.cpp が空きスロットへ自動割当する。バックログ抽出は空きを
+  全部使い(最大3並列)、リアルタイム系が来ると最初に空いた/完了した
+  スロットへ即座に載る(キューイングは llama.cpp 側のFIFO)
 - パラメータ: `temperature: 0`・`enable_thinking: false` で決定的出力。
   extract_llm は `max_tokens: 1400`・timeout 90s。長文は全文をチャンク
   分割して全区間を処理(先頭打ち切りなし)。サーバ対応を合成ペイロードで
@@ -694,8 +695,8 @@ $PY mcs/init_data.py --project <id>       # 患者個別
   30字要約・要点points。schema検証済み出力のみ保存、失敗は
   meta.error+backoff で retry (上限5)。loopback固定・proxy無効。
   run_check が残予算で差分処理、全量は `--all` で drain (中断安全)。
-  llama-server は `-np 2`: slot0=realtime (semantic.llm_chat)、
-  slot1=background (extract_llm) に `id_slot` で pin。`--all` は
+  llama-server は `-np 3`・全経路 `id_slot` なし — bg は空きスロット
+  を全部使い、rt は最初に空くスロットへ。`--all` は
   per-write lock のみで run.lock を長期保持しない (tick を阻害しない)
 - `rollup.py` — 患者ロールアップ (kind='patient_rollup'): 最新バイタル・
   現在の薬期間・薬剤一覧・直近症状(否定統合済み)・未解決依頼・次回予定・
