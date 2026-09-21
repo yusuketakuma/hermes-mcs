@@ -14,6 +14,7 @@ extract_llm artifact (content_hash tracked in meta). run_check calls it
 with a time budget each tick so the backlog drains gradually.
 """
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -141,6 +142,9 @@ def llm_extract(body: str) -> dict | None:
             "max_tokens": 900,
             "temperature": 0,
             "chat_template_kwargs": {"enable_thinking": False},
+            # Background lane: backlog extraction pins slot 1 so slot 0
+            # (semantic.llm_chat, realtime) is never queued behind it.
+            "id_slot": 1,
         }).encode(),
         headers={"Content-Type": "application/json"})
     try:
@@ -197,22 +201,72 @@ def _clear_error(ledger, mid: int):
     ledger.db.commit()
 
 
-def run_pending(ledger, limit: int = 20, budget_s: float = 180) -> dict:
+@contextlib.contextmanager
+def _write_lock(enabled: bool):
+    """Hold the run lock only across a DB write when `enabled`.
+
+    The tick caller already holds the lock for the whole run, so it
+    passes False. The standalone --all backlog drainer passes True so it
+    never holds the lock longer than a single write — holding it across
+    the whole backlog would starve the 15-min tick for days."""
+    fd = None
+    if enabled:
+        for _ in range(60):
+            fd = acquire_run_lock()
+            if fd is not None:
+                break
+            time.sleep(1)
+    try:
+        yield fd is not None or not enabled
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _current(ledger, mid: int, content_hash: str) -> bool:
+    """True if a non-error artifact for this exact body already exists —
+    guards per-write locking against a tick processing the same message
+    between this process's LLM call and its write."""
+    return ledger.db.execute(
+        "SELECT 1 FROM artifacts WHERE kind=? AND message_id=? "
+        "AND json_valid(meta) "
+        "AND json_extract(meta,'$.error') IS NOT 1 "
+        "AND json_extract(meta,'$.hash')=? LIMIT 1",
+        (KIND, mid, content_hash)).fetchone() is not None
+
+
+def _next_retry(ledger) -> float | None:
+    """Earliest next_try among retriable error artifacts, or None when
+    nothing is retriable (all remaining are permanent failures)."""
+    row = ledger.db.execute(
+        "SELECT MIN(json_extract(meta,'$.next_try')) FROM artifacts "
+        "WHERE kind=? AND json_valid(meta) "
+        "AND json_extract(meta,'$.error')=1 "
+        "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5",
+        (KIND,)).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def run_pending(ledger, limit: int = 20, budget_s: float = 180,
+                per_write_lock: bool = False) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}."""
     deadline = time.monotonic() + budget_s
+    lock = _write_lock
     # Any artifact for an older body is stale, including retry state.
-    ledger.db.execute("""
-      DELETE FROM artifacts
-      WHERE kind=? AND message_id IN (SELECT message_id FROM messages)
-        AND CASE WHEN json_valid(meta) THEN
-          json_extract(meta,'$.hash') IS NULL
-          OR json_extract(meta,'$.hash') !=
-             (SELECT m.content_hash FROM messages m
-              WHERE m.message_id=artifacts.message_id)
-        ELSE 0 END
-    """, (KIND,))
-    ledger.db.commit()
+    with lock(per_write_lock) as held:
+        if held:
+            ledger.db.execute("""
+              DELETE FROM artifacts
+              WHERE kind=? AND message_id IN (SELECT message_id FROM messages)
+                AND CASE WHEN json_valid(meta) THEN
+                  json_extract(meta,'$.hash') IS NULL
+                  OR json_extract(meta,'$.hash') !=
+                     (SELECT m.content_hash FROM messages m
+                      WHERE m.message_id=artifacts.message_id)
+                ELSE 0 END
+            """, (KIND,))
+            ledger.db.commit()
     # pending = no artifact, plus retriable error artifacts whose
     # backoff expired (attempts < 5, next_try <= now)
     rows = ledger.db.execute("""
@@ -248,17 +302,23 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180) -> dict:
             failed += 1
             if not _llm_up():
                 break  # endpoint down — don't burn budget retrying
-            _clear_error(ledger, r["message_id"])
-            _fail(ledger, r, r["attempts"])
+            with lock(per_write_lock) as held:
+                if held and not _current(ledger, r["message_id"],
+                                         r["content_hash"]):
+                    _clear_error(ledger, r["message_id"])
+                    _fail(ledger, r, r["attempts"])
             continue
-        _clear_error(ledger, r["message_id"])
         d["_model"] = MODEL
-        ledger.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
-                            project_id=r["project_id"],
-                            message_id=r["message_id"], model=MODEL,
-                            meta={"hash": r["content_hash"]})
-        done += 1
-        done_pids.add(r["project_id"])
+        with lock(per_write_lock) as held:
+            if held and not _current(ledger, r["message_id"],
+                                     r["content_hash"]):
+                _clear_error(ledger, r["message_id"])
+                ledger.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
+                                    project_id=r["project_id"],
+                                    message_id=r["message_id"], model=MODEL,
+                                    meta={"hash": r["content_hash"]})
+                done += 1
+                done_pids.add(r["project_id"])
     left = ledger.db.execute("""
       SELECT COUNT(*) FROM messages m
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
@@ -280,32 +340,44 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="drain the whole backlog (ignores budget pacing)")
     args = ap.parse_args()
-    # same single-writer lock as the scheduled tick — run_pending() writes
-    # artifacts and a concurrent tick must not double-process the backlog
-    lock_fd = acquire_run_lock()
-    if lock_fd is None:
-        print(json.dumps({"ok": False, "error": "lock_held"}))
-        return 3
+    l = Ledger(DB)
     try:
-        l = Ledger(DB)
-    except Exception:
-        os.close(lock_fd)
-        raise
-    if args.all:
-        total = {"done": 0, "failed": 0, "left": 0}
-        while True:
-            r = run_pending(l, limit=50, budget_s=3600)
-            total["done"] += r["done"]; total["failed"] += r["failed"]
-            total["left"] = r["left"]
-            print(json.dumps(r, ensure_ascii=False), flush=True)
-            if r["done"] == 0 or r["left"] == 0:
-                break
-        print(json.dumps(total, ensure_ascii=False))
-    else:
-        print(json.dumps(run_pending(l, args.limit, args.budget),
-                         ensure_ascii=False))
-    l.close()
-    os.close(lock_fd)
+        if args.all:
+            # Backlog drainer: per-write locking only — holding the run
+            # lock across the whole backlog would starve the 15-min tick.
+            total = {"done": 0, "failed": 0, "left": 0}
+            while True:
+                r = run_pending(l, limit=50, budget_s=3600,
+                                per_write_lock=True)
+                total["done"] += r["done"]; total["failed"] += r["failed"]
+                total["left"] = r["left"]
+                print(json.dumps(r, ensure_ascii=False), flush=True)
+                if r["left"] == 0:
+                    break
+                if r["done"] == 0:
+                    # Everything selectable failed or is backed off —
+                    # wait for the earliest retry instead of quitting.
+                    nt = _next_retry(l)
+                    if nt is None:
+                        break
+                    time.sleep(min(300.0, max(5.0, nt - time.time())))
+                else:
+                    time.sleep(1)  # yield the write window between batches
+            print(json.dumps(total, ensure_ascii=False))
+        else:
+            # Bounded single batch: keep the whole-run lock so the batch
+            # is atomic against a concurrent tick.
+            lock_fd = acquire_run_lock()
+            if lock_fd is None:
+                print(json.dumps({"ok": False, "error": "lock_held"}))
+                return 3
+            try:
+                print(json.dumps(run_pending(l, args.limit, args.budget),
+                                 ensure_ascii=False))
+            finally:
+                os.close(lock_fd)
+    finally:
+        l.close()
     return 0
 
 

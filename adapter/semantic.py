@@ -383,6 +383,9 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1400, "temperature": 0,
         "chat_template_kwargs": {"enable_thinking": False},
+        # Realtime lane: slot 0 is reserved for interactive/tick work;
+        # backlog extraction pins slot 1 (extract_llm.py).
+        "id_slot": 0,
     }
     try:
         status, _headers, raw = jev.bounded_http_request(

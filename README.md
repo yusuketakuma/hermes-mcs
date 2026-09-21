@@ -103,7 +103,10 @@ $PY adapter/init_data.py --project <id>       # 患者個別
   高度抽出 (kind='extract_llm'): 用量なし薬剤名・否定極性・依頼宛先・
   30字要約・要点points。schema検証済み出力のみ保存、失敗は
   meta.error+backoff で retry (上限5)。loopback固定・proxy無効。
-  run_check が残予算で差分処理、全量は `--all` で drain (中断安全)
+  run_check が残予算で差分処理、全量は `--all` で drain (中断安全)。
+  llama-server は `-np 2`: slot0=realtime (semantic.llm_chat)、
+  slot1=background (extract_llm) に `id_slot` で pin。`--all` は
+  per-write lock のみで run.lock を長期保持しない (tick を阻害しない)
 - `rollup.py` — 患者ロールアップ (kind='patient_rollup'): 最新バイタル・
   現在の薬期間・薬剤一覧・直近症状(否定統合済み)・未解決依頼・次回予定・
   possibly_deleted を患者毎に原子的再構築。`dirty_projects()` で
