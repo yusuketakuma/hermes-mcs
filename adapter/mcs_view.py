@@ -465,6 +465,20 @@ class View:
             return {"outcome": "not_processed_or_not_in_snapshot"}
         return json.loads(row["receipt_json"])
 
+    def stats(self, args: dict) -> dict:
+        """Cross-project statistics — same snapshot generation, read-only
+        (MCS-STAT-PROSPECTIVE §A-3: entry lives in mcs_view, the math in
+        mcs_stats; no own connections, no writes)."""
+        import mcs_stats
+        result = mcs_stats.run_stats(self.db, self.meta["generated_at"], args)
+        return {"snapshot": self.meta,
+                "snapshot_age_s": max(0, time.time() - self.meta["generated_at"]),
+                "warnings": WARNINGS,
+                "query": {k: args.get(k) for k in
+                          ("stat", "preset", "list", "since", "until",
+                           "as_of", "project", "limit")},
+                **result}
+
     def read(self, kind, project=None, limit=50, cursor=None, query=None,
              message_id=None, request_id=None, status=None, command_id=None,
              payload_hash=None, since=None, until=None):
@@ -503,7 +517,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "semantic", "comparison", "loops", "operations", "control", "stats"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -522,12 +536,27 @@ def _parser():
         else:
             parsers = [sub]
         for index, child in enumerate(parsers):
+            if kind == "stats":
+                break  # stats carries its own arg set below
             child.add_argument("--project", type=int, required=kind != "status")
             if kind not in ("evidence", "receipt", "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 child.add_argument("--cursor")
         if kind == "search":
             sub.add_argument("--query", required=True)
+        if kind == "stats":
+            group = sub.add_mutually_exclusive_group(required=True)
+            group.add_argument("--stat")
+            group.add_argument("--preset")
+            group.add_argument("--list", action="store_true")
+            # dates: YYYY-MM-DD = JST midnight of that day; the scope is
+            # half-open [since, until) — pass the next day for a whole day;
+            # datetimes must carry an explicit offset (A-6)
+            sub.add_argument("--since")
+            sub.add_argument("--until")
+            sub.add_argument("--as-of", dest="as_of")
+            sub.add_argument("--project", type=int)
+            sub.add_argument("--limit", type=int, default=20)
         if kind in ("search", "timeline", "thread", "candidates"):
             sub.add_argument("--since", type=int, help="Inclusive epoch seconds; excludes unknown posting times")
             sub.add_argument("--until", type=int, help="Inclusive epoch seconds")
@@ -557,6 +586,8 @@ def main(argv=None):
             req = {**req, "cmd": command, "version": 1,
                    "project_id": args["project"], "human_confirmed": confirmed}
             result = requests.enqueue(req, cmd_dir)
+        elif args["kind"] == "stats":
+            result = view.stats(args)
         else:
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))

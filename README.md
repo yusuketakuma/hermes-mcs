@@ -157,6 +157,27 @@ $PY adapter/mcs_view.py requests show --project 123 --request-id 1
   全文取得済みの抽出だけを表示する。LLM停止中も既存ルール抽出は使える。候補は未確定の提案であり、
   既存rollupの依頼「言及」と同じく、未処理の臨床業務だと断定しない。
 
+### 統計（読み取り専用）
+
+```bash
+$PY adapter/mcs_view.py stats --list                     # 登録済み統計の一覧
+$PY adapter/mcs_view.py stats --stat overview            # 単一統計
+$PY adapter/mcs_view.py stats --preset operational       # プリセット束
+$PY adapter/mcs_view.py stats --stat patient_activity \
+    --since 2026-09-01 --until 2026-10-01 --project 123 --limit 20
+```
+
+- snapshot上の読み取り専用集計。原本・依頼状態・通知を一切変更しない。
+- `--since/--until` は半開区間 `[since, until)`。日付のみはJST当日0時。
+  1日分を取るには翌日を `until` に渡す。`until <= since` は拒否。
+- `--as-of` はsnapshot生成時刻が既定で、それより未来は拒否。
+- 分母0は `null`（0%とは別）。`ok/partial/unavailable` で利用可否を明示し、
+  「対象なし」と「情報不足で判定不能」を区別する。
+- 薬の集計は抽出言及レベル。成分正規化・否定/家族/過去言及の分離は未実装で、
+  その旨をnotesに明記する。部屋数は確定患者数ではない。
+- `med_change_followup`/`rx_expiry`/`transition_reconciliation` は根拠となる
+  artifact が未実装のため `unavailable` を返す — 推測で穴埋めしない。
+
 ### 人が確認して依頼を登録・更新
 
 **エージェントは内容・根拠・担当者・期限を提示し、人の明示承認を得てから実行する。**

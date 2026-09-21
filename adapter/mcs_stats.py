@@ -1,0 +1,533 @@
+"""Cross-project statistics over the published ledger snapshot.
+
+Implements the foundation tiers of MCS-STAT-PROSPECTIVE-20260921:
+registry + shared calculation contract + T0/T1 stats, and the med
+stats that the extract_llm artifact set can support today.
+
+Rules carried over from the spec:
+- Read-only: every function takes the View's already-validated read
+  connection. No writes, no own connections, no job scheduling (INV-02).
+- One fixed input: stats run against the single snapshot generation the
+  caller opened — never re-open mid-run, never fall back to the live DB.
+- Ratios always carry numerator/denominator/unit; a zero denominator is
+  null + reason, never 0% and never NaN/Infinity (A-7).
+- Missing capability is reported as unavailable/unsupported with a
+  reason — never faked as an empty success (INV-06, §12).
+- Details carry ids only (project_id / message_id); bodies and patient
+  names stay on the protected per-patient views (§11).
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+JST = ZoneInfo("Asia/Tokyo")
+DEFINITION_VERSION = "2026-09-21"
+STATS_SCHEMA = "stats_v1"
+
+# engineering caps (A-8): detail 20 default / 100 max, top categories
+# 25 default / 100 max, time buckets 120, response JSON ~1 MiB
+DETAIL_LIMIT = 100
+CATEGORY_LIMIT = 100
+BUCKET_LIMIT = 120
+MAX_JSON_BYTES = 1 << 20
+
+STATUSES = ("ok", "partial", "unavailable", "unsupported", "not_implemented")
+
+
+def _ratio(num: int, den: int, unit: str) -> dict:
+    """Ratio with explicit denominator — 0 denominator is null, not 0%."""
+    return {"numerator": num, "denominator": den, "unit": unit,
+            "value": (num / den) if den else None,
+            "reason": None if den else "denominator_zero"}
+
+
+def _parse_when(text: str) -> int:
+    """YYYY-MM-DD -> JST midnight; datetime requires an explicit offset.
+    A bare `until` date is that day's 0:00 — to include a whole day the
+    caller passes the next date (A-6: since <= t < until)."""
+    if not isinstance(text, str):
+        raise ValueError("bad_time_arg")
+    try:
+        if "T" not in text and " " not in text:
+            d = datetime.strptime(text, "%Y-%m-%d")
+            return int(d.replace(tzinfo=JST).timestamp())
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            raise ValueError("bad_time_arg")
+        return int(dt.timestamp())
+    except (ValueError, OverflowError):
+        raise ValueError("bad_time_arg")
+
+
+def _scope(args: dict, snapshot_ts: int) -> dict:
+    """Resolve since/until/as_of once. Half-open [since, until) —
+    including a whole day needs the next date as `until`. as_of defaults
+    to the snapshot's generated_at and may not exceed it (A-6)."""
+    since = _parse_when(args["since"]) if args.get("since") else None
+    until = _parse_when(args["until"]) if args.get("until") else None
+    if since is not None and until is not None and until <= since:
+        raise ValueError("bad_period")
+    as_of = _parse_when(args["as_of"]) if args.get("as_of") else snapshot_ts
+    if as_of > snapshot_ts:
+        raise ValueError("as_of_after_snapshot")
+    if until is not None and until > as_of:
+        until = as_of
+    return {"since": since, "until": until, "as_of": as_of,
+            "project_id": args.get("project"),
+            "limit": min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)}
+
+
+def _where(scope: dict, col: str = "m.posted_at_ts") -> tuple[str, list]:
+    sql, params = "", []
+    if scope["since"] is not None:
+        sql += f" AND {col} >= ?"
+        params.append(scope["since"])
+    if scope["until"] is not None:
+        sql += f" AND {col} < ?"
+        params.append(scope["until"])
+    if scope["project_id"] is not None:
+        sql += " AND m.project_id = ?"
+        params.append(scope["project_id"])
+    return sql, params
+
+
+def _items(rows: list, limit: int) -> dict:
+    return {"total": len(rows), "returned": min(len(rows), limit),
+            "truncated": len(rows) > limit, "items": rows[:limit]}
+
+
+def _result(status: str, scope: dict, data: dict, reason=None) -> dict:
+    out = {"status": status, "definition_version": DEFINITION_VERSION,
+           "scope": {"since": scope["since"], "until": scope["until"],
+                     "as_of": scope["as_of"],
+                     "project_id": scope["project_id"]}}
+    if reason:
+        out["reason"] = reason
+    out.update(data)
+    return out
+
+
+# ---------------- T0 ----------------
+
+def st_data_quality(db, scope):
+    """ST-002: three-stage coverage — fetched / parsed / stat-ready."""
+    w, p = _where(scope)
+    total = db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
+    fetched = db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE body_state='full'{w}",
+        p).fetchone()[0]
+    body_states = db.execute(
+        f"SELECT COALESCE(body_state,'null'), COUNT(*) FROM messages m"
+        f" WHERE 1=1{w} GROUP BY 1", p).fetchall()
+    # parsed = a current-version extract_llm artifact exists
+    parsed = db.execute(
+        f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
+            AND EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind='extract_llm'
+                          AND a.message_id=m.message_id
+                          AND json_valid(a.meta)
+                          AND json_extract(a.meta,'$.error') IS NOT 1
+                          AND json_extract(a.meta,'$.hash')=m.content_hash)""",
+        p).fetchone()[0]
+    stale = db.execute(
+        f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
+            AND EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind='extract_llm' AND a.message_id=m.message_id
+                          AND json_valid(a.meta)
+                          AND json_extract(a.meta,'$.hash')!=m.content_hash)""",
+        p).fetchone()[0]
+    timed = db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE posted_at_ts NOT NULL{w}",
+        p).fetchone()[0]
+    return _result("ok", scope, {
+        "stages": {
+            "fetched": _ratio(fetched, total, "messages"),
+            "parsed_current_revision": _ratio(parsed, total, "messages"),
+            "stat_ready_timestamped": _ratio(timed, total, "messages")},
+        "body_states": {s: n for s, n in body_states},
+        "stale_parsed": stale,
+        "notes": ["body_absent_vs_unparsed kept separate",
+                  "stale_parsed = extraction exists but for an older "
+                  "content revision"]})
+
+
+# ---------------- T1 ----------------
+
+def st_overview(db, scope):
+    """ST-001: rooms / patients / posts / senders / orgs / period."""
+    w, p = _where(scope)
+    rooms = db.execute("SELECT COUNT(*) FROM patients").fetchone()[0]
+    state_rows = db.execute(
+        "SELECT CASE WHEN is_archived=1 THEN 'archived' "
+        "       WHEN fetch_state IS NULL THEN 'unknown' "
+        "       ELSE fetch_state END s, COUNT(*) FROM patients "
+        "GROUP BY s").fetchall()
+    posts = db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE 1=1{w}", p).fetchone()[0]
+    active_rooms = db.execute(
+        f"SELECT COUNT(DISTINCT m.project_id) FROM messages m"
+        f" WHERE 1=1{w}", p).fetchone()[0]
+    senders = db.execute(
+        f"SELECT COUNT(DISTINCT m.sender_id) FROM messages m"
+        f" WHERE sender_id IS NOT NULL{w}", p).fetchone()[0]
+    orgs = db.execute(
+        f"SELECT COUNT(DISTINCT m.organization) FROM messages m"
+        f" WHERE organization NOT NULL AND organization!=''{w}",
+        p).fetchone()[0]
+    rng = db.execute(
+        "SELECT MIN(posted_at_ts), MAX(posted_at_ts) FROM messages"
+    ).fetchone()
+    return _result("ok", scope, {
+        "rooms_total": rooms,
+        "rooms_by_state": {s: n for s, n in state_rows},
+        # rooms ≠ confirmed patients — never reported as patient count
+        "patient_count_note": "rooms, not confirmed patients",
+        "rooms_with_posts_in_scope": active_rooms,
+        "posts_in_scope": posts,
+        "distinct_senders_in_scope": senders,
+        "distinct_organizations_in_scope": orgs,
+        "stored_range": {"first_posted_ts": rng[0],
+                         "last_posted_ts": rng[1]}})
+
+
+def st_patient_activity(db, scope):
+    """ST-003: per-room post counts over 7/14/30d windows ending as_of."""
+    out = {}
+    for days in (7, 14, 30):
+        since = scope["as_of"] - days * 86400
+        w = " AND m.posted_at_ts >= ? AND m.posted_at_ts < ?"
+        params = [since, scope["as_of"]]
+        if scope["project_id"] is not None:
+            w += " AND m.project_id = ?"
+            params.append(scope["project_id"])
+        rows = db.execute(
+            f"""SELECT m.project_id, COUNT(*) posts,
+                       COUNT(DISTINCT date(m.posted_at_ts,'unixepoch','+9 hours')) active_days,
+                       COUNT(DISTINCT m.sender_id) senders,
+                       COUNT(DISTINCT NULLIF(m.profession,'')) professions,
+                       COUNT(DISTINCT NULLIF(m.organization,'')) orgs
+                FROM messages m WHERE 1=1{w}
+                GROUP BY m.project_id ORDER BY posts DESC""",
+            params).fetchall()
+        out[f"last_{days}d"] = _items(
+            [{"project_id": r[0], "posts": r[1], "active_days": r[2],
+              "senders": r[3], "professions": r[4], "orgs": r[5]}
+             for r in rows], scope["limit"])
+    return _result("ok", scope, {
+        "windows": out,
+        "notes": ["post volume is not severity",
+                  "active_days = days with at least one post, JST"]})
+
+
+def st_professions(db, scope):
+    """ST-004: posts / senders / rooms by recorded profession."""
+    w, p = _where(scope)
+    rows = db.execute(
+        f"""SELECT COALESCE(NULLIF(m.profession,''),'unknown') prof,
+                   COUNT(*) posts, COUNT(DISTINCT m.sender_id) senders,
+                   COUNT(DISTINCT m.project_id) rooms
+            FROM messages m WHERE 1=1{w}
+            GROUP BY prof ORDER BY posts DESC""", p).fetchall()
+    return _result("ok", scope, {
+        "by_profession": _items(
+            [{"profession": r[0], "posts": r[1], "senders": r[2],
+              "rooms": r[3]} for r in rows], CATEGORY_LIMIT),
+        "notes": ["raw recorded profession values — no profession_map "
+                  "normalization yet",
+                  "non-posting staff never appear; not a roster"]})
+
+
+def st_workload(db, scope):
+    """ST-005: JST weekday x time-band distribution."""
+    w, p = _where(scope)
+    rows = db.execute(
+        f"SELECT m.posted_at_ts, m.project_id FROM messages m"
+        f" WHERE m.posted_at_ts NOT NULL{w}", p).fetchall()
+    bands = {}
+    room_seen = {}
+    for ts, pid in rows:
+        dt = datetime.fromtimestamp(ts, JST)
+        weekend = dt.weekday() >= 5
+        day = 8 <= dt.hour < 18
+        band = ("weekend" if weekend else
+                "weekday_day" if day else "weekday_night")
+        key = (dt.strftime("%a"), band)
+        bands[key] = bands.get(key, 0) + 1
+        room_seen.setdefault(key, set()).add(pid)
+    by_day_band = [{"weekday": k[0], "band": k[1], "posts": n,
+                    "rooms": len(room_seen[k])}
+                   for k, n in sorted(bands.items())]
+    return _result("ok", scope, {
+        "by_weekday_band": _items(by_day_band, BUCKET_LIMIT),
+        "band_definition": "weekday_day=Mon-Fri 08:00-18:00 JST; "
+                           "weekday_night=other weekday hours; "
+                           "weekend=Sat/Sun",
+        "notes": ["public holidays not distinguished — no holiday "
+                  "calendar wired in",
+                  "night posts do not imply night work or urgency"]})
+
+
+def st_doc_burden(db, scope):
+    """ST-006: sender concentration — top1/5/10 share + HHI."""
+    w, p = _where(scope)
+    rows = db.execute(
+        f"""SELECT COALESCE(m.sender_name,'(unknown)') name, COUNT(*) n
+            FROM messages m WHERE 1=1{w}
+            GROUP BY name ORDER BY n DESC""", p).fetchall()
+    total = sum(n for _, n in rows)
+    def share(k):
+        return _ratio(sum(n for _, n in rows[:k]), total, "posts")
+    hhi = sum((n / total) ** 2 for _, n in rows) if total else None
+    return _result("ok", scope, {
+        "top1_share": share(1), "top5_share": share(5),
+        "top10_share": share(10),
+        "hhi": round(hhi, 4) if hhi is not None else None,
+        "hhi_reason": None if hhi is not None else "denominator_zero",
+        "sender_count": len(rows),
+        "unknown_sender_posts": sum(n for name, n in rows
+                                    if name == "(unknown)"),
+        "notes": ["post count is not a performance score; "
+                  "delegate posting and division of labour skew it",
+                  "sender names stay on this local screen only"]})
+
+
+# ---------------- meds (extract_llm source) ----------------
+
+_MED_ACTIONS = ("start", "stop", "change", "increase", "decrease", "none")
+
+
+def _med_rows(db, scope):
+    """Yield (project_id, message_id, med_dict, posted_at_ts) for
+    current-revision extract_llm artifacts in scope."""
+    w, p = _where(scope)
+    return db.execute(
+        f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
+            FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+            WHERE a.kind='extract_llm' AND json_valid(a.content)
+              AND json_valid(a.meta)
+              AND json_extract(a.meta,'$.error') IS NOT 1
+              AND json_extract(a.meta,'$.hash')=m.content_hash
+              AND json_array_length(a.content,'$.meds')>0{w}""",
+        p).fetchall()
+
+
+def st_meds(db, scope):
+    """ST-007: med actions by raw name x month. Names are NOT normalized
+    to ingredients (drug_map unavailable) — noted, not hidden."""
+    per_month = {}
+    action_counts = {}
+    names = set()
+    for pid, mid, content, ts in _med_rows(db, scope):
+        month = datetime.fromtimestamp(ts, JST).strftime("%Y-%m") \
+            if ts else "unknown"
+        for med in json.loads(content).get("meds") or []:
+            name = (med.get("name") or "").strip() or "(unnamed)"
+            action = med.get("action") if med.get("action") in _MED_ACTIONS \
+                else "other"
+            names.add(name)
+            action_counts[action] = action_counts.get(action, 0) + 1
+            key = (name, month)
+            per_month[key] = per_month.get(key, 0) + 1
+    top = sorted(per_month.items(), key=lambda kv: -kv[1])
+    return _result("ok", scope, {
+        "action_totals": action_counts,
+        "distinct_names": len(names),
+        "by_name_month": _items(
+            [{"name": k[0], "month": k[1], "mentions": n}
+             for k, n in top], CATEGORY_LIMIT),
+        "notes": ["names are raw surface forms, NOT ingredient-"
+                  "normalized (drug_map not implemented)",
+                  "mention counts, not deduplicated change events",
+                  "'none' = mentioned without a change action"]})
+
+
+def st_med_mentions(db, scope):
+    """ST-008: distinct med names per room in scope."""
+    per_room = {}
+    for pid, mid, content, ts in _med_rows(db, scope):
+        for med in json.loads(content).get("meds") or []:
+            name = (med.get("name") or "").strip()
+            if name:
+                per_room.setdefault(pid, set()).add(name)
+    rows = sorted(({"project_id": pid, "distinct_med_names": len(s)}
+                   for pid, s in per_room.items()),
+                  key=lambda r: -r["distinct_med_names"])
+    return _result("ok", scope, {
+        "rooms_with_mentions": len(rows),
+        "by_room": _items(rows, scope["limit"]),
+        "notes": ["distinct names in period ≠ currently used drugs",
+                  "negated / past / family mentions not separated yet "
+                  "(needs valid_facts polarity)"]})
+
+
+def st_med_change_burden(db, scope):
+    """ST-009: med change actions per room over 7/14/30d windows."""
+    changes = {}  # (pid, day) -> count ; pid -> total
+    for pid, mid, content, ts in _med_rows(db, scope):
+        day = datetime.fromtimestamp(ts, JST).date().isoformat() \
+            if ts else "unknown"
+        for med in json.loads(content).get("meds") or []:
+            if med.get("action") in ("start", "stop", "change",
+                                     "increase", "decrease"):
+                key = (pid, day)
+                changes[key] = changes.get(key, 0) + 1
+    out = {}
+    for days in (7, 14, 30):
+        cutoff = (datetime.fromtimestamp(scope["as_of"], JST)
+                  - timedelta(days=days)).date().isoformat()
+        per_room = {}
+        for (pid, day), n in changes.items():
+            if (day != "unknown" and day >= cutoff
+                    and (scope["project_id"] is None
+                         or pid == scope["project_id"])):
+                per_room[pid] = per_room.get(pid, 0) + n
+        out[f"last_{days}d"] = _items(
+            [{"project_id": pid, "change_mentions": n}
+             for pid, n in sorted(per_room.items(), key=lambda x: -x[1])],
+            scope["limit"])
+    busiest = sorted((({"project_id": pid, "day": day, "changes": n}
+                       for (pid, day), n in changes.items())),
+                     key=lambda r: -r["changes"])
+    return _result("ok", scope, {
+        "windows": out,
+        "busiest_days": _items(busiest, scope["limit"]),
+        "notes": ["mention-level dedup only — the same change reported "
+                  "by three professions counts three times",
+                  "change count is not clinical instability"]})
+
+
+def st_adherence_events(db, scope):
+    """ST-010: adherence problem mentions (残薬/飲み忘れ etc.) need
+    valid_facts polarity; extract_llm events don't carry them."""
+    return _result("unavailable", scope, {},
+                   reason="needs valid_facts (fact-level polarity); "
+                          "extract_llm events cannot distinguish "
+                          "present/absent/improved adherence problems")
+
+
+def st_rx_expiry(db, scope):
+    """ST-012: med periods need curated period bounds."""
+    return _result("unavailable", scope, {},
+                   reason="needs med_periods (evidenced administration "
+                          "periods); no such artifact exists")
+
+
+def st_open_loop_aging(db, scope):
+    """ST-024 (formal side only): open requests by age bucket. Text-
+    derived candidates require interaction_links — reported separately
+    as unavailable."""
+    rows = db.execute(
+        "SELECT request_id, project_id, status, due_date, updated_at "
+        "FROM requests WHERE status != 'done'" +
+        (" AND project_id = ?" if scope["project_id"] is not None else ""),
+        ([scope["project_id"]] if scope["project_id"] is not None else [])
+    ).fetchall()
+    buckets = {"0-7d": 0, "8-30d": 0, "31-90d": 0, "over_90d": 0,
+               "no_due": 0}
+    items = []
+    for rid, pid, status, due, upd in rows:
+        age_d = None
+        if due:
+            try:
+                due_ts = _parse_when(str(due)) if "T" not in str(due) \
+                    else int(datetime.fromisoformat(str(due)).timestamp())
+                age_d = (scope["as_of"] - due_ts) / 86400
+            except (ValueError, TypeError, OverflowError):
+                due = None
+        if age_d is None:
+            buckets["no_due"] += 1
+        else:
+            buckets["over_90d" if age_d > 90 else
+                    "31-90d" if age_d > 30 else
+                    "8-30d" if age_d > 7 else "0-7d"] += 1
+        items.append({"request_id": rid, "project_id": pid,
+                      "status": status, "due_date": due,
+                      "days_since_due": round(age_d) if age_d is not None
+                      else None})
+    items.sort(key=lambda r: -(r["days_since_due"] or -1))
+    return _result("partial", scope, {
+        "formal_open_requests": _items(items, scope["limit"]),
+        "age_buckets": buckets,
+        "oldest_open_due": min((i["due_date"] for i in items
+                                if i["due_date"]), default=None),
+        "text_candidates": {"status": "unavailable",
+                            "reason": "needs interaction_links"}},
+        reason="text-derived open-loop candidates not computable; "
+               "formal request register only")
+
+
+REGISTRY = {
+    # name -> {tier, needs, fn}
+    "overview": {"tier": "T1", "needs": ["metadata"], "fn": st_overview},
+    "data_quality": {"tier": "T0", "needs": ["metadata"],
+                     "fn": st_data_quality},
+    "patient_activity": {"tier": "T1", "needs": ["metadata"],
+                         "fn": st_patient_activity},
+    "professions": {"tier": "T1", "needs": ["metadata", "profession_map"],
+                    "fn": st_professions},
+    "workload": {"tier": "T1", "needs": ["metadata"], "fn": st_workload},
+    "doc_burden": {"tier": "T1", "needs": ["metadata"], "fn": st_doc_burden},
+    "meds": {"tier": "T1", "needs": ["med_events", "drug_map"],
+             "fn": st_meds},
+    "med_mentions": {"tier": "T1", "needs": ["med_events", "drug_map"],
+                     "fn": st_med_mentions},
+    "med_change_burden": {"tier": "T1", "needs": ["med_events"],
+                          "fn": st_med_change_burden},
+    "adherence_events": {"tier": "T1", "needs": ["valid_facts"],
+                         "fn": st_adherence_events},
+    "rx_expiry": {"tier": "T1", "needs": ["med_periods"],
+                  "fn": st_rx_expiry},
+    "open_loop_aging": {"tier": "T2",
+                        "needs": ["interaction_links", "episode_links"],
+                        "fn": st_open_loop_aging},
+    "med_change_followup": {"tier": "T2",
+                            "needs": ["med_events", "valid_facts",
+                                      "episode_links"],
+                            "fn": lambda db, s: _result(
+                                "unavailable", s, {},
+                                reason="needs episode_links")},
+    "transition_reconciliation": {"tier": "T2",
+                                  "needs": ["transition_events"],
+                                  "fn": lambda db, s: _result(
+                                      "unavailable", s, {},
+                                      reason="needs transition_events")},
+}
+
+PRESETS = {
+    "operational": ["data_quality", "patient_activity",
+                    "med_change_burden", "open_loop_aging",
+                    "med_change_followup", "rx_expiry",
+                    "transition_reconciliation"],
+    "pharmacy": ["meds", "med_mentions", "adherence_events"],
+}
+
+
+def run_stats(db, snapshot_ts: int, args: dict) -> dict:
+    """Dispatch --stat / --preset / --list over one snapshot generation."""
+    names = []
+    if args.get("list"):
+        return {"registry": [
+            {"name": n, "tier": d["tier"], "needs": d["needs"]}
+            for n, d in REGISTRY.items()]}
+    if args.get("stat"):
+        if args["stat"] not in REGISTRY:
+            raise ValueError("unknown_stat")
+        names = [args["stat"]]
+    elif args.get("preset"):
+        if args["preset"] not in PRESETS:
+            raise ValueError("unknown_preset")
+        names = PRESETS[args["preset"]]
+    else:
+        raise ValueError("stat_or_preset_required")
+    scope = _scope(args, snapshot_ts)
+    stats = {}
+    for name in names:
+        try:
+            stats[name] = REGISTRY[name]["fn"](db, scope)
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            stats[name] = _result("unavailable", scope, {},
+                                  reason=f"data_error:{type(e).__name__}")
+    return {"stats": stats}
