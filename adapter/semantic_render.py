@@ -2,7 +2,9 @@
 summary text, the code-only degraded notice, outbox delivery dedupe,
 and origin-event eligibility.
 
-Store/policy names are imported directly — no facade dependency."""
+_emit_degraded resolves pipeline names through the semantic module so
+facade monkeypatch points (thread_bundle/_current/policy_fingerprint)
+keep working."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -10,9 +12,6 @@ import json
 import time
 
 from mcs_requests import payload_hash
-from semantic_policy import (KIND_AUDIT, POLICY_VERSION,
-                             policy_fingerprint)
-from semantic_store import _current, thread_bundle
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -184,6 +183,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
     code-generated degraded notice through the existing outbox — no
     clinical claims, original-check instruction only (spec §19.3).
     Each (root, fingerprint) pair dedupes via delivery_key."""
+    import semantic
     cutoff = time.time() - scfg["delayed_notice_seconds"]
     sent = 0
     # Only events still undelivered qualify — a base notification that
@@ -221,14 +221,14 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
-            bundle = thread_bundle(ledger, pid, root)
+            bundle = semantic.thread_bundle(ledger, pid, root)
             if bundle is None:
                 continue
             fp = bundle["source_fingerprint"]
             arrivals = [m["message_id"] for m in bundle["members"]
                         if m["message_id"] in ids]
-            audits = [_current(ledger, KIND_AUDIT, mid,
-                                        fp, policy_fingerprint(scfg))
+            audits = [semantic._current(ledger, semantic.KIND_AUDIT, mid,
+                                        fp, semantic.policy_fingerprint(scfg))
                       for mid in arrivals]
             if arrivals and all(a and a["meta"].get("audit_status") == "PASS"
                                 for a in audits):
@@ -241,9 +241,9 @@ def _emit_degraded(ledger, scfg: dict) -> int:
                 "delivery_key": dkey, "root_id": root,
                 "degraded": True, "src_event_id": ev["event_id"],
                 "fingerprint": fp,
-                "policy_fingerprint": policy_fingerprint(scfg),
+                "policy_fingerprint": semantic.policy_fingerprint(scfg),
                 "target_message_ids": arrivals,
                 "text": render_degraded(ledger, pid),
-                "policy_version": POLICY_VERSION})
+                "policy_version": semantic.POLICY_VERSION})
             sent += 1
     return sent
