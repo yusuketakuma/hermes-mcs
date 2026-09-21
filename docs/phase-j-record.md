@@ -1,6 +1,6 @@
 # Phase J Record — TypeSafe Jev 意味評価レイヤー実装記録 (spec MCS-REFACTOR-FIRST-20260920)
 
-Status: **実装済み（mode=off が既定）/ G2 実API評価・本番観察は未実施**
+Status: **実装済み・G2 実API評価済み / mode=shadow 稼働中（assist/enforce は観察後）**
 Recorded: 2026-09-20
 
 ## 1. 実装構成（WP対応）
@@ -88,7 +88,7 @@ Recorded: 2026-09-20
 
 ## 6. 未実施・前提（正直な記録）
 
-- **G2 実API評価 未実施**: wire shape `{"model","state","questions"}→{"model","answers":{qid:{...}}}` は mock のみで検証。実TypeSafe Jev APIの契約は `semantic_jev` 冒頭に assumption として明記。`JevClient.models()` は alias listingのみ — 固定versionの利用可否は承認済み synthetic-input smoke call で確認すること（alias自動切替は行わない）。検証ハーネスは `python semantic_jev.py --smoke --live`（合成文1リクエストを実 `evaluate()` 経路で送信し応答を厳格検証・model echo確認・/v1/models一覧を報告）。`TYPESAFE_API_KEY` は `~/.mcs/.env` に配置済み（キー名のみ確認・値は未読）。実API呼出しは予算消費を伴うため未実行 — 予算承認後に1コマンドで実施可能。
+- **G2 実API評価 実施済み**（2026-09-21）: `python semantic_jev.py --smoke --live` で合成文1リクエストを実 `evaluate()` 経路に送信し厳格検証を通過。結果: `{"ok": true, "model_echo": "jev-1.13.0", "noul": 0.99, "requests": 1}` — wire shape・model echo・noul/choice 検証とも実APIで conform。`/v1/models` listing はこのキーでは空リストを返した（`fixed_model_listed: false`）が、固定modelでの evaluate が成功したため契約上問題なし（listing は設計どおり非権威）。
 - **LLM prompt品質**: 抽出・要約promptは構造検証済みだが実モデル（Qwen3.5-9B等）での品質は未評価 — shadow観察で人間が audit分布を確認してから assist/enforce へ。
 - **degraded/audit notifyの二重送信**: degraded送出後に遅れて PASS した場合、監査済み通知も別 delivery_key で送信され得る（両方とも正確・重複は新着通知とは別eventとして識別される）。
 - **tick内 mid-run OFF**: job境界で config reload（`cfg_path` 指定時のみ）。ジョブ内部の外部呼出し途中でのOFF検知は次のjobまで遅延する。
@@ -121,5 +121,5 @@ Recorded: 2026-09-20
 
 ## 9. Blocker
 
-- 実API wire shape の確認（G2）。mock検証のみでは enforce 到達不可。
-- shadow期間中の audit分布観察（PASS率・NEEDS_REVIEW理由）が assist/enforce の実質的判定材料。
+- ~~実API wire shape の確認（G2）~~ → **2026-09-21 実施・通過**（§6 G2 項参照）。
+- shadow期間中の audit分布観察（PASS率・NEEDS_REVIEW理由）が assist/enforce の実質的判定材料。2026-09-21 に `mode: shadow, daily_request_budget: 40` で稼働開始。
