@@ -506,6 +506,33 @@ $PY mcs/mcs_view.py requests list --project 123 --status open
 $PY mcs/mcs_view.py requests show --project 123 --request-id 1
 ```
 
+コマンド一覧:
+
+<!-- BEGIN GENERATED:cli -->
+
+16 subcommands — auto-generated from `mcs_view` argparse.
+
+| コマンド | アクション |
+|---|---|
+| `status` | — |
+| `search` | — |
+| `timeline` | — |
+| `evidence` | — |
+| `thread` | — |
+| `attachments` | — |
+| `candidates` | — |
+| `receipt` | — |
+| `requests` | `list` `show` `create` `update` |
+| `semantic` | — |
+| `comparison` | — |
+| `loops` | — |
+| `operations` | — |
+| `control` | `scan` `retry` `pause` `resume` `adopt_summary` `signal_dismiss` `signal_policy` |
+| `stats` | — |
+| `signals` | — |
+
+<!-- END GENERATED:cli -->
+
 これらは明示的な閲覧コマンドなので、JSON出力に患者の本文・投稿者・依頼内容を含む。
 共有ログ・外部LLM・公開リポジトリへ転送しない。定期実行ログは引き続きID・件数・状態だけ。
 
@@ -538,6 +565,31 @@ $PY mcs/mcs_view.py stats --stat patient_activity \
     --since 2026-09-01 --until 2026-10-01 --project 123 --limit 20
 ```
 
+登録済み統計の一覧:
+
+<!-- BEGIN GENERATED:stats -->
+
+14 stats / presets: `operational`(7) / `pharmacy`(3) — auto-generated from `mcs_stats.REGISTRY`.
+
+| 統計 | tier | 必要データ |
+|---|---|---|
+| `overview` | T1 | metadata |
+| `data_quality` | T0 | metadata |
+| `patient_activity` | T1 | metadata |
+| `professions` | T1 | metadata, profession_map |
+| `workload` | T1 | metadata |
+| `doc_burden` | T1 | metadata |
+| `meds` | T1 | med_events, drug_map |
+| `med_mentions` | T1 | med_events, drug_map |
+| `med_change_burden` | T1 | med_events |
+| `adherence_events` | T1 | valid_facts |
+| `rx_expiry` | T1 | med_periods (extract_v1 surface forms) |
+| `open_loop_aging` | T2 | interaction_links, episode_links |
+| `med_change_followup` | T2 | med_events |
+| `transition_reconciliation` | T2 | med_events |
+
+<!-- END GENERATED:stats -->
+
 - snapshot上の読み取り専用集計。原本・依頼状態・通知を一切変更しない。
 - `--since/--until` は半開区間 `[since, until)`。日付のみはJST当日0時。
   1日分を取るには翌日を `until` に渡す。`until <= since` は拒否。
@@ -564,6 +616,22 @@ $PY mcs/mcs_view.py signals --project 123
 - `run_check` の derive 段階で `mcs_signals.evaluate()` が候補を再計算し、
   `signal_v1` artifact として台帳に保持する（open→resolvedのライフサイクル、
   検知日・最終確認・証跡ID付き）。
+
+<!-- BEGIN GENERATED:signals -->
+
+6 detectors — auto-generated from `mcs_signals.DETECTORS`.
+
+| 検知器 | 概要 |
+|---|---|
+| `request_overdue` | Formal register fact: open/in_progress requests past due_date. |
+| `request_aging` | Open register items whose created_at is older than the aging threshold — regardless of due_date (register fact only). |
+| `med_change_no_followup` | Per (room, med surface form) episodes: flag when the LATEST change-action mention of a med in a non-archived room has… |
+| `comm_concentration` | Non-archived rooms whose post count in the last 72h exceeds a fixed threshold. Volume is not severity. |
+| `rx_period_expiry` | extract_v1 med_periods whose end date lands within the horizon. |
+| `transition_reconciliation` | Rooms where a typed discharge/transfer event (extract_llm `events`, not a body substring — '退院できません' etc. does not ma… |
+
+<!-- END GENERATED:signals -->
+
 - 検知器: `request_overdue`（依頼登録の期限超過）、`request_aging`
   （登録から30日超の未完了依頼）、`med_change_no_followup`（部屋×薬の
   エピソード単位。同一薬の最新言及が7日窓を過ぎても後続記録・依頼登録を

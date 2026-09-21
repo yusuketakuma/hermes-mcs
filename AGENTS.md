@@ -40,5 +40,12 @@ python3 mcs/mcs_setup.py check            # 実機環境の必須条件検証
 
 ## README 自動生成
 
-`mcs/*.py` を追加・docstring 変更したら `scripts/update_readme.py` を実行
-（CI が drift を検出する）。docstring 先頭行は公開される1行要約にする。
+`scripts/update_readme.py` が `<!-- GENERATED:name -->` マーカー内を再生成:
+
+- `modules` — `mcs/*.py` の docstring 先頭行
+- `signals` — `mcs_signals.DETECTORS`（検知器名+docstring 先頭文）
+- `stats` — `mcs_stats.REGISTRY`/`PRESETS`
+- `cli` — `mcs_view` argparse サブコマンド
+
+該当箇所を変更したら必ず `python3 scripts/update_readme.py` を実行
+（CI が drift を検出する）。docstring の先頭文は公開されるので1文要約にする。
