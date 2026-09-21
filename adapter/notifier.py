@@ -310,7 +310,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                ORDER BY artifact_id DESC LIMIT 1""", (skey,)).fetchone()
         latest = (json.loads(row["content"])
                   if row and row["content"] else {})
-        if latest.get("state") != "open":
+        if not isinstance(latest, dict) or latest.get("state") != "open":
             raise _StaleSend("signal_not_open")
         text = payload.get("text")
         if not isinstance(text, str) or not text:

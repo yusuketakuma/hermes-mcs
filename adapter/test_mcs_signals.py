@@ -3,6 +3,7 @@ tmp_path (same pattern as test_mcs_ingestion): detector correctness,
 open/resolved lifecycle, append-only history, notify gating, honest
 wording. No network or live data."""
 import json
+import time
 
 import pytest
 
@@ -35,11 +36,14 @@ def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b"):
         "created_at,last_seen) VALUES (?,0,?,?)", (pid, ts, ts))
 
 
-def _extract_llm(db, mid, chash, meds):
+def _extract_llm(db, mid, chash, meds, events=None):
+    content = {"meds": meds}
+    if events is not None:
+        content["events"] = events
     db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps({"meds": meds}), json.dumps({"hash": chash})))
+        (mid, json.dumps(content), json.dumps({"hash": chash})))
 
 
 def _extract_v1(db, mid, chash, periods):
@@ -64,7 +68,9 @@ def _states(db):
     for content, meta in db.execute(
             "SELECT content, meta FROM artifacts WHERE kind='signal_v1' "
             "ORDER BY artifact_id"):
-        out[json.loads(meta)["key"]] = json.loads(content)["state"]
+        meta_d, content_d = json.loads(meta), json.loads(content)
+        if isinstance(meta_d, dict) and isinstance(content_d, dict):
+            out[meta_d["key"]] = content_d["state"]
     return out
 
 
@@ -186,9 +192,10 @@ def test_med_followup_suppressed_by_any_request(led):
 
 
 def test_transition_reconciliation(led):
-    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました")
-    _msg(led.db, 2, ts=NOW - 3 * DAY)
-    _extract_llm(led.db, 2, "h1", [{"name": "薬A", "action": "change"}])
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました", chash="h1")
+    _extract_llm(led.db, 1, "h1", [], events=["discharge"])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"}])
     _ev(led)
     sigs = mcs_signals.current_open(led.db)["items"]
     sig = [s for s in sigs
@@ -198,10 +205,19 @@ def test_transition_reconciliation(led):
     assert sig[0]["evidence"]["med_change_message_ids"] == [2]
 
 
+def test_transition_ignores_surface_only_text(led):
+    """退院 substring without a typed discharge event is not evidence."""
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院できませんでした")
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"}])
+    assert _ev(led)["open"] == 0
+
+
 def test_transition_requires_med_change(led):
-    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました")
-    _msg(led.db, 2, ts=NOW - 3 * DAY)
-    _extract_llm(led.db, 2, "h1", [{"name": "薬A", "action": "none"}])
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました", chash="h1")
+    _extract_llm(led.db, 1, "h1", [], events=["discharge"])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "none"}])
     assert _ev(led)["open"] == 0
 
 
@@ -499,6 +515,69 @@ def test_policy_validation(led):
         "human_confirmed": True, "project_id": 1,
         "policy": {}, "reason": "r"})
     assert r["outcome"] == "rejected" and r["error"] == "bad_policy"
+
+
+# --- deadline / partial evaluation must not fabricate resolutions ---
+
+def test_deadline_stop_never_resolves_unrun_types(led):
+    """A run cut short by the deadline (or a crashed detector) must not
+    write 'resolved' for signal types it never inspected — 'could not
+    check' is not 'checked, nothing found'."""
+    # src_mid=999: the request must not sit on the med-mention message
+    # (a request on the mention is a visible follow-up and suppresses it)
+    _req(led.db, "open", due="2026-09-10", src_mid=999)  # request_overdue
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1",
+                 [{"name": "薬A", "action": "stop"}])  # med episode
+    _ev(led)
+    assert _states(led.db)["request_overdue:1:1"] == "open"
+    assert _states(led.db)["med_change_no_followup:1:薬A"] == "open"
+    # deadline already past -> NO detector runs -> nothing resolves
+    # (deadline is a monotonic clock, not epoch — pass an expired one)
+    res = mcs_signals.evaluate(led, {}, now=NOW,
+                               deadline=time.monotonic() - 1)
+    assert res["resolved"] == 0 and res["open"] == 0
+    assert res["detectors_ran"] == []
+    assert _states(led.db)["request_overdue:1:1"] == "open"
+    assert _states(led.db)["med_change_no_followup:1:薬A"] == "open"
+
+
+def test_crashed_detector_type_is_not_resolved(led, monkeypatch):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    def boom(db, now, th):
+        raise RuntimeError("detector exploded")
+        yield
+    monkeypatch.setattr(mcs_signals, "DETECTORS", (
+        ("request_overdue", boom),))
+    res = _ev(led)
+    assert res["errors"] == ["request_overdue:RuntimeError"]
+    assert _states(led.db)["request_overdue:1:1"] == "open"
+
+
+def test_policy_requires_provenance(led):
+    """A signal_policy_v1 artifact without command_id/actor (i.e. not
+    written via the human-confirmed command path) is ignored."""
+    _req(led.db, "open", created=NOW - 10 * DAY)
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('signal_policy_v1',NULL,?,?,0)",
+        (json.dumps({"policy": {"req_age_days": 7}}), "{}"))
+    assert _ev(led)["open"] == 0          # provenance missing -> default
+    _policy(led, {"req_age_days": 7})
+    assert _ev(led)["open"] == 1          # approved policy applies
+
+
+def test_dismiss_corrupt_signal_row(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('signal_v1',1,'\"scalar\"',?,0)",
+        (json.dumps({"key": "request_overdue:1:1"}),))
+    led.db.commit()   # apply_command opens BEGIN IMMEDIATE itself
+    r = _dismiss(led, "request_overdue:1:1")
+    assert r["outcome"] == "rejected" and r["error"] == "signal_corrupt"
 
 
 # --- malformed data resilience ---

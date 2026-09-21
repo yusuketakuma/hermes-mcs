@@ -47,11 +47,14 @@ def _msg(db, mid, pid=1, sender=1, name="n1", prof="看護師", org="orgA",
          "2026-09-20T10:00:00+09:00", ts, "b", state, chash, 0))
 
 
-def _extract(db, mid, chash, meds):
+def _extract(db, mid, chash, meds, events=None):
+    content = {"meds": meds}
+    if events is not None:
+        content["events"] = events
     db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps({"meds": meds}), json.dumps({"hash": chash})))
+        (mid, json.dumps(content), json.dumps({"hash": chash})))
 
 
 def run(db, **args):
@@ -132,6 +135,20 @@ def test_med_change_followup_suppressed_by_request(db):
 
 
 def test_transition_reconciliation_stat(db):
+    _msg(db, 1, chash="h1", ts=SNAP_TS - 5 * 86400)
+    _extract(db, 1, "h1", [], events=["discharge"])
+    _msg(db, 2, chash="h2", ts=SNAP_TS - 3 * 86400)
+    _extract(db, 2, "h2", [{"name": "薬A", "action": "change"}])
+    st = run(db, stat="transition_reconciliation")[
+        "transition_reconciliation"]
+    assert st["status"] == "ok"
+    assert st["cooccurrences"]["total"] == 1
+    assert st["cooccurrences"]["items"][0]["discharge_message_id"] == 1
+
+
+def test_transition_reconciliation_ignores_surface_text(db):
+    """A 退院 body substring without a typed discharge event does NOT
+    count — coverage is extract_llm events, not raw text."""
     _msg(db, 1, ts=SNAP_TS - 5 * 86400)
     db.execute("UPDATE messages SET body_text='退院となりました' "
                "WHERE message_id=1")
@@ -140,8 +157,7 @@ def test_transition_reconciliation_stat(db):
     st = run(db, stat="transition_reconciliation")[
         "transition_reconciliation"]
     assert st["status"] == "ok"
-    assert st["cooccurrences"]["total"] == 1
-    assert st["cooccurrences"]["items"][0]["discharge_message_id"] == 1
+    assert st["cooccurrences"]["total"] == 0
 
 
 def test_rx_expiry_window(db):

@@ -551,41 +551,50 @@ def st_med_change_followup(db, scope):
 
 
 def st_transition_reconciliation(db, scope):
-    """ST-T2: 退院 mentions co-occurring with med change mentions
-    within ±14 days in the same room. Co-occurrence count only —
-    reconciliation need is a human decision."""
-    w, p = _where(scope)
+    """ST-T2: typed discharge/transfer events (extract_llm `events`)
+    co-occurring with med change-action mentions within ±14 days in
+    the same room. Co-occurrence count only — reconciliation need is
+    a human decision."""
+    w, p = _where(scope, "d.posted_at_ts")
     win = 14 * 86400
-    disc = db.execute(
-        f"""SELECT project_id, message_id, posted_at_ts FROM messages m
-            WHERE m.posted_at_ts NOT NULL
-              AND m.body_text LIKE '%退院%'{w}""", p).fetchall()
-    items = []
-    for pid, dmid, dts in disc:
-        meds = db.execute(
-            """SELECT m.message_id, a.content FROM artifacts a
-               JOIN messages m ON m.message_id=a.message_id
-               WHERE a.kind='extract_llm' AND m.project_id=?
-                 AND m.posted_at_ts BETWEEN ? AND ?
-                 AND json_valid(a.content) AND json_valid(a.meta)
-                 AND json_extract(a.meta,'$.error') IS NOT 1
-                 AND json_extract(a.meta,'$.hash')=m.content_hash
-                 AND json_array_length(a.content,'$.meds')>0""",
-            (pid, dts - win, dts + win)).fetchall()
-        change_ids = [mid for mid, content in meds
-                      if any(isinstance(x, dict)
-                             and x.get("action") in _MED_ACTIONS
-                             for x in (json.loads(content)
-                                       .get("meds") or []))]
-        if change_ids:
-            items.append({"project_id": pid,
-                          "discharge_message_id": dmid,
-                          "med_change_message_ids": sorted(change_ids)})
+    # CROSS JOIN pins messages-first order — same shape as the signal
+    # detector (artifacts-first scans cost ~12s on the real ledger).
+    rows = db.execute(
+        f"""SELECT DISTINCT d.project_id, d.message_id, m.message_id
+            FROM messages d
+            CROSS JOIN artifacts da ON da.message_id=d.message_id
+            CROSS JOIN json_each(da.content,'$.events') ev
+            CROSS JOIN messages m ON m.project_id=d.project_id
+                 AND m.posted_at_ts BETWEEN d.posted_at_ts-?
+                                        AND d.posted_at_ts+?
+            CROSS JOIN artifacts a ON a.message_id=m.message_id
+            WHERE da.kind='extract_llm'
+              AND json_valid(da.content) AND json_valid(da.meta)
+              AND json_extract(da.meta,'$.error') IS NOT 1
+              AND json_extract(da.meta,'$.hash')=d.content_hash
+              AND ev.value IN ('discharge','transfer')
+              AND a.kind='extract_llm'
+              AND json_valid(a.content) AND json_valid(a.meta)
+              AND json_extract(a.meta,'$.error') IS NOT 1
+              AND json_extract(a.meta,'$.hash')=m.content_hash
+              AND EXISTS (SELECT 1 FROM json_each(a.content,'$.meds') je
+                          WHERE json_extract(je.value,'$.action')
+                              IN ('start','stop','change','increase',
+                                  'decrease')){w}
+            ORDER BY d.message_id, m.message_id""",
+        [win, win] + p).fetchall()
+    grouped = {}
+    for pid, dmid, mid in rows:
+        grouped.setdefault(dmid, (pid, set()))[1].add(mid)
+    items = [{"project_id": pid, "discharge_message_id": dmid,
+              "med_change_message_ids": sorted(mids)}
+             for dmid, (pid, mids) in grouped.items()]
     return _result("ok", scope, {
         "cooccurrences": _items(items, scope["limit"]),
-        "notes": ["co-occurrence of surface mentions — not proof that "
-                  "reconciliation is needed or missing",
-                  "discharge detected by body substring '退院' only"]})
+        "notes": ["co-occurrence of typed LLM events + med mentions — "
+                  "not proof that reconciliation is needed or missing",
+                  "discharge/transfer detected via extract_llm events; "
+                  "coverage limited to extracted messages"]})
 
 
 def st_open_loop_aging(db, scope):

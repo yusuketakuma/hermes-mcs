@@ -59,7 +59,7 @@ THRESHOLDS = {
     "req_age_days":             (REQ_AGE_DAYS,             7, 365),
     "transition_lookback_d":    (TRANSITION_LOOKBACK_D,    7, 365),
     "transition_med_window_d":  (TRANSITION_MED_WINDOW_D,  1,  60),
-    "notify_cooldown_d":        (NOTIFY_COOLDOWN_S // DAY_S, 0, 90),
+    "notify_cooldown_d":        (NOTIFY_COOLDOWN_S // DAY_S, 1, 90),
 }
 
 
@@ -76,7 +76,17 @@ def _thresholds(db):
     if row is None:
         return th
     content = json.loads(row["content"])
-    policy = content.get("policy") if isinstance(content, dict) else None
+    # provenance required: a policy only counts when it arrived through
+    # the human-confirmed command path (command_id + actor recorded by
+    # _apply_signal_policy_tx). A bare artifact insert cannot move
+    # thresholds — same identity boundary as the command envelope.
+    if not (isinstance(content, dict)
+            and isinstance(content.get("command_id"), str)
+            and content["command_id"]
+            and isinstance(content.get("actor"), str)
+            and content["actor"]):
+        return th
+    policy = content.get("policy")
     if isinstance(policy, dict):
         for name, (default, lo, hi) in THRESHOLDS.items():
             v = policy.get(name)
@@ -272,22 +282,35 @@ def _rx_period_expiry(db, now, th):
 
 
 def _transition_reconciliation(db, now, th):
-    """Rooms where a 退院 (discharge) mention co-occurs with a med
-    change-action mention within ±14 days. Co-occurrence is a review
-    prompt — whether reconciliation is needed is a human decision."""
+    """Rooms where a typed discharge/transfer event (extract_llm
+    `events`, not a body substring — '退院できません' etc. does not
+    match) co-occurs with a med change-action mention within ±N days.
+    Co-occurrence is a review prompt — whether reconciliation is needed
+    is a human decision. Coverage is limited to messages carrying a
+    current extract_llm artifact, same as the med side."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
+    # CROSS JOIN pins the join order: discharge messages first (bounded
+    # by the lookback), then artifact lookup via idx_artifacts_kind_msg.
+    # Letting SQLite start from the unbounded artifacts side made this
+    # scan ~12s on the real ledger.
     rows = db.execute(
-        f"""SELECT d.project_id, d.message_id, m.message_id
+        f"""SELECT DISTINCT d.project_id, d.message_id, m.message_id
             FROM messages d
-            JOIN patients p ON p.project_id=d.project_id
-            JOIN messages m ON m.project_id=d.project_id
+            CROSS JOIN patients p ON p.project_id=d.project_id
+            CROSS JOIN artifacts da ON da.message_id=d.message_id
+            CROSS JOIN json_each(da.content,'$.events') ev
+            CROSS JOIN messages m ON m.project_id=d.project_id
                  AND m.posted_at_ts BETWEEN d.posted_at_ts-?
                                         AND d.posted_at_ts+?
-            JOIN artifacts a ON a.message_id=m.message_id
+            CROSS JOIN artifacts a ON a.message_id=m.message_id
             WHERE d.posted_at_ts >= ? AND d.posted_at_ts <= ?
-              AND d.body_text LIKE '%退院%'
               AND COALESCE(p.is_archived,0)=0
+              AND da.kind='extract_llm'
+              AND json_valid(da.content) AND json_valid(da.meta)
+              AND json_extract(da.meta,'$.error') IS NOT 1
+              AND json_extract(da.meta,'$.hash')=d.content_hash
+              AND ev.value IN ('discharge','transfer')
               AND a.kind='extract_llm'
               AND json_valid(a.content) AND json_valid(a.meta)
               AND json_extract(a.meta,'$.error') IS NOT 1
@@ -313,9 +336,12 @@ def _transition_reconciliation(db, now, th):
                         "てください（自動判定ではありません）"}
 
 
-DETECTORS = (_request_overdue, _request_aging, _med_followup,
-             _comm_concentration, _rx_period_expiry,
-             _transition_reconciliation)
+DETECTORS = (("request_overdue", _request_overdue),
+             ("request_aging", _request_aging),
+             ("med_change_no_followup", _med_followup),
+             ("comm_concentration", _comm_concentration),
+             ("rx_period_expiry", _rx_period_expiry),
+             ("transition_reconciliation", _transition_reconciliation))
 
 
 def _insert(db, key, sig):
@@ -340,11 +366,20 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     notify = isinstance(sig_cfg, dict) and sig_cfg.get("notify") is True
 
     current = {}
-    for det in DETECTORS:
+    ran_types = set()
+    errors = []
+    for stype, det in DETECTORS:
         if deadline is not None and time.monotonic() >= deadline:
             break
-        for key, sig in det(ledger.db, now, th):
-            current[key] = sig
+        try:
+            found = dict(det(ledger.db, now, th))
+        except Exception as e:
+            errors.append(f"{stype}:{type(e).__name__}")
+            continue
+        # merge only on full success: a half-scanned type must neither
+        # open partial candidates nor resolve its existing signals
+        current.update(found)
+        ran_types.add(stype)
 
     # latest parseable state row per key — artifacts are append-only,
     # so artifact_id order is the lifecycle order
@@ -393,14 +428,20 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 superseded += 1
             # else: still open with identical evidence — nothing to write
         for key, old in existing.items():
-            if key not in current and old["state"] == "open":
+            # resolve only types that actually ran this evaluation —
+            # an unfinished or crashed detector must never turn
+            # "not inspected" into a recorded "resolved" (the ledger
+            # history is a review record, not a guess)
+            if (key not in current and old["state"] == "open"
+                    and old.get("type") in ran_types):
                 row = dict(old, state="resolved", resolved_at=now)
                 row.pop("reopened_at", None)
                 _insert(ledger.db, key, row)
                 resolved += 1
     return {"open": len(current), "opened": opened,
             "superseded": superseded, "resolved": resolved,
-            "notify_enqueued": enqueued, "notify_enabled": notify}
+            "notify_enqueued": enqueued, "notify_enabled": notify,
+            "detectors_ran": sorted(ran_types), "errors": errors}
 
 
 def _notify(ledger, sig, key, now, th):
@@ -472,5 +513,23 @@ def current_open(db, project_id=None, limit=50):
               "note": c.get("note")}
              for k, c in latest.items() if c.get("state") == "open"]
     items.sort(key=lambda i: -(i["detected_at"] or 0))
+    last_run = db.execute(
+        "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
+    ).fetchone()[0]
+    prow = db.execute(
+        "SELECT artifact_id, content FROM artifacts WHERE kind=? AND "
+        "json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        (POLICY_KIND,)).fetchone()
+    policy = None
+    if prow is not None:
+        pc = json.loads(prow["content"])
+        if (isinstance(pc, dict) and pc.get("command_id")
+                and pc.get("actor")):
+            policy = {"artifact_id": prow["artifact_id"],
+                      "actor": pc["actor"],
+                      "approved_at": pc.get("approved_at"),
+                      "overrides": pc.get("policy")}
     return {"total": len(items), "returned": min(len(items), limit),
-            "truncated": len(items) > limit, "items": items[:limit]}
+            "truncated": len(items) > limit, "items": items[:limit],
+            "pipeline_last_run_at": last_run,
+            "thresholds": _thresholds(db), "policy": policy}

@@ -393,6 +393,10 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     if row is None:
         return "signal_not_found", {"signal_key": req["signal_key"]}
     content = json.loads(row["content"])
+    if not isinstance(content, dict):
+        # json_valid passed but the payload is a scalar/array — a corrupt
+        # row must reject cleanly, not crash the whole command drain
+        return "signal_corrupt", {"signal_key": req["signal_key"]}
     if row["project_id"] != req["project_id"]:
         return "project_mismatch", {"signal_key": req["signal_key"]}
     if content.get("state") != "open":

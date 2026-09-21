@@ -495,7 +495,10 @@ class View:
                 "warnings": WARNINGS,
                 "candidates": result,
                 "note": "候補は原記録の人による確認を求める提示です。"
-                        "記録の欠如は対応の欠如を意味しません"}
+                        "記録の欠如は対応の欠如を意味しません。"
+                        "検出対象は本文取得済みかつ抽出済みの記録に限り"
+                        "ます — 未抽出・未取得の記録は候補に現れません。"
+                        "pipeline_last_run_at が古い場合は未評価です"}
 
     def read(self, kind, project=None, limit=50, cursor=None, query=None,
              message_id=None, request_id=None, status=None, command_id=None,

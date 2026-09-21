@@ -179,8 +179,9 @@ $PY adapter/mcs_view.py stats --stat patient_activity \
   表現のparseであり処方期間の確定ではない。
 - `med_change_followup` は「変更言及後7日以内の後続記録（部屋の任意投稿または
   対象メッセージに紐づく依頼登録）を確認できない件数」。記録上の確認であり
-  対応の欠如の証明ではない。`transition_reconciliation` は退院言及±14日の
-  薬変更言及の共起カウント — 照合要否は人の判断。
+  対応の欠如の証明ではない。`transition_reconciliation` は extract_llm の
+  型付き discharge/transfer イベント±14日の薬変更言及の共起カウント —
+  照合要否は人の判断。検出は抽出済み記録の範囲に限る。
 
 ### レビュー候補シグナル（T2）
 
@@ -197,8 +198,9 @@ $PY adapter/mcs_view.py signals --project 123
   エピソード単位。同一薬の最新言及が7日窓を過ぎても後続記録・依頼登録を
   確認できない場合のみ — 後で応答のあった言及はその薬を追跡中とみなし
   抑制）、`comm_concentration`（直近72hの記録集中）、`rx_period_expiry`
-  （期間表現の終了間近）、`transition_reconciliation`（退院言及±14日の
-  薬変更言及の共起）。
+  （期間表現の終了間近）、`transition_reconciliation`（extract_llm の
+  型付き discharge/transfer イベント±14日の薬変更言及の共起 —
+  「退院」文字列ではなく抽出イベントを使う）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
 - 人による却下: `mcs_view.py control signal_dismiss --confirm-human` に
