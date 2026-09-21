@@ -13,8 +13,8 @@ environment probes (Keychain entry, Chrome binary, local-LLM endpoint,
 secret resolution) report as warnings vs errors. Exit 1 on any error
 so it can gate automation.
 
-  python3 adapter/mcs_setup.py init [--login-id ID --password PW ...]
-  python3 adapter/mcs_setup.py check
+  python3 mcs/mcs_setup.py init [--login-id ID --password PW ...]
+  python3 mcs/mcs_setup.py check
 """
 from __future__ import annotations
 

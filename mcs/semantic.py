@@ -71,6 +71,14 @@ from semantic_store import (_current, _jst_day_start, bundle_fingerprint,
 # them through its `semantic` facade argument).
 from semantic_llm import (_FACT_PROMPT, _REPAIR_SUFFIX, _SUMMARY_PROMPT,
                           _chunks, extract_facts, summarize)
+# drain engine — semantic_drain.py owns the durable-job worker;
+# _process_job stays re-exported because tests patch it on the facade.
+# drain/loops reach back through `import semantic` inside functions, so
+# top-level imports here are safe from module cycles.
+from semantic_drain import (_eval_chunked, _jev_failure_class,
+                            _plan_exists, _process_job, _process_job_inner,
+                            _write_result, run_due)
+from semantic_loops import update_loops
 from semantic_llm import (CLAIM_KINDS, CLAIM_SECTIONS, FACT_KINDS,
                           FACT_STATUSES, POLARITIES, _iso_date,
                           _json_block, _locate_quote)
@@ -137,14 +145,6 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
 
 # ---------- open loop candidates (spec §17) ----------
 # Implementation lives in semantic_loops.py; this facade keeps the public name.
-# drain engine — semantic_drain.py owns the durable-job worker;
-# _process_job stays re-exported because tests patch it on the facade.
-from semantic_drain import (_eval_chunked, _jev_failure_class,
-                            _plan_exists, _process_job, _process_job_inner,
-                            _write_result, run_due)
-from semantic_loops import update_loops
-
-
 def seed(ledger, message_id: int, origin: str = "replay",
          cfg_path: str = CONF_PATH) -> int | None:
     """Explicit finite replay/retry seed — notification-free. OFF blocks

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-_ADAPTER_DIR = Path(__file__).resolve().parents[1] / "adapter"
+_ADAPTER_DIR = Path(__file__).resolve().parents[1] / "mcs"
 _MISSING = object()
 _CONFIG_KEYS = (
     "snapshot", "inbox", "allowed_user_ids", "allowed_chat_ids", "project_ids")

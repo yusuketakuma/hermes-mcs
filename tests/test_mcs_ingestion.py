@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
 
 import extract_llm
 import job_ops
@@ -1656,7 +1656,7 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
     monkeypatch.setattr(notifier, "_token", lambda: "t")
     monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
     monkeypatch.setattr(notifier, "_format_event",
-                        lambda l, ev: ("body text", [("f.txt", str(f))]))
+                        lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
     def fake_post(token, channel, content, files=None):
@@ -1686,7 +1686,7 @@ def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(notifier, "_token", lambda: "t")
     monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
     monkeypatch.setattr(notifier, "_format_event",
-                        lambda l, ev: ("body text", [("f.txt", str(f))]))
+                        lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
     def fake_post(token, channel, content, files=None):

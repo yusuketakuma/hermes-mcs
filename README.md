@@ -5,25 +5,25 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
 
 ## 構成
 
-- `adapter/mcs_adapter.py` — API client / CDP token bootstrap / auto_login
+- `mcs/mcs_adapter.py` — API client / CDP token bootstrap / auto_login
                               (keep_read_status=1 全経路、login origin 固定、
                               redirect/proxy 拒否、mark_as_read 応答厳密検証)
-- `adapter/ledger.py`       — SQLite (runs, patients + coverage_ts/
+- `mcs/ledger.py`       — SQLite (runs, patients + coverage_ts/
                               history_target, messages, messages_fts(FTS5),
                               attachments + retry state, notify_outbox +
                               progress, read_marks, artifacts, fetch_jobs)
                               + `LedgerReader`(ro) + `publish_snapshot()`
-- `adapter/mcs_view.py`     — 取込状況・根拠付き検索/タイムライン・依頼管理CLI
-- `adapter/mcs_requests.py` — 人手確定依頼・入力検証・原子的キュー投入・操作receipt
-- `adapter/run_check.py`    — launchd エントリポイント (orchestrator のみ:
+- `mcs/mcs_view.py`     — 取込状況・根拠付き検索/タイムライン・依頼管理CLI
+- `mcs/mcs_requests.py` — 人手確定依頼・入力検証・原子的キュー投入・操作receipt
+- `mcs/run_check.py`    — launchd エントリポイント (orchestrator のみ:
                               args/flock/deadline/段階別 status/例外境界)
-- `adapter/job_ops.py`      — cmd ingest・fetch_jobs drain・discovery・
+- `mcs/job_ops.py`      — cmd ingest・fetch_jobs drain・discovery・
                               trickle 深掘り seed・thread merge
-- `adapter/maintenance.py`  — 日次検証済み backup・log rotation・snapshot 公開
-- `adapter/init_data.py`    — 過去分一括/増分取込 (history_floor +
+- `mcs/maintenance.py`  — 日次検証済み backup・log rotation・snapshot 公開
+- `mcs/init_data.py`    — 過去分一括/増分取込 (history_floor +
                               history_target/page カーソル、floor は返信
                               完了後のみ確定、通知・既読化なし)
-- `adapter/notifier.py`     — Discord outbox drain (2段構成:構造化→原文、
+- `mcs/notifier.py`     — Discord outbox drain (2段構成:構造化→原文、
                               chunk receipt+送信表現fingerprint、429対応、宛先固定、
                               DL済み添付を multipart で同梱 ≤10件/24MiB。
                               未送信イベント参照の添付はDLキューで優先化され、
@@ -47,7 +47,7 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
 
 ## Hermes addon として使う
 
-このリポジトリは単独で clone・配置できる。実行コード（`adapter/`・
+このリポジトリは単独で clone・配置できる。実行コード（`mcs/`・
 `hermes_plugin/`）は標準ライブラリのみで、外部依存はない。
 
 ```bash
@@ -84,11 +84,11 @@ hermes-agent checkout 上でのみ収集される（無い環境では skip）�
 ### マシンセットアップ（収集パイプライン側）
 
 plugin の閲覧面だけなら上記で足りるが、収集・通知パイプラインを新規
-マシン（例: Mac mini）に立てる場合は `adapter/mcs_setup.py` を使う:
+マシン（例: Mac mini）に立てる場合は `mcs/mcs_setup.py` を使う:
 
 ```bash
-python3 adapter/mcs_setup.py init    # 対話式プロビジョニング
-python3 adapter/mcs_setup.py check   # 必須条件の検証（typesafe ゲート）
+python3 mcs/mcs_setup.py init    # 対話式プロビジョニング
+python3 mcs/mcs_setup.py check   # 必須条件の検証（typesafe ゲート）
 ```
 
 `init` が行うこと:
@@ -138,7 +138,7 @@ python3 adapter/mcs_setup.py check   # 必須条件の検証（typesafe ゲー�
 - コマンド形式: `{"cmd":"import","project_id":N,"days":N,"pages":N}`
   (days≤365, pages≤40, GET-only — 既読化系は実装していない)
 - 手動実行:
-  `~/.hermes/hermes-agent/venv/bin/python adapter/run_check.py --json`
+  `~/.hermes/hermes-agent/venv/bin/python mcs/run_check.py --json`
 - フラグ: `--mark-read`(手動のみ。snapshot timestamp 必須で型強制)
   `--download-files` `--no-backfill` `--no-notify`
 - exit codes: 0 ok / 1 failed / 2 session_expired(手動要) / 3 lock_held
@@ -147,9 +147,9 @@ python3 adapter/mcs_setup.py check   # 必須条件の検証（typesafe ゲー�
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY adapter/init_data.py --days 45            # 直近45日に活動のあった患者を深掘り
-$PY adapter/init_data.py --days 45 --pages 10 # ページ上限 (1頁=数十msg)
-$PY adapter/init_data.py --project <id>       # 患者個別
+$PY mcs/init_data.py --days 45            # 直近45日に活動のあった患者を深掘り
+$PY mcs/init_data.py --days 45 --pages 10 # ページ上限 (1頁=数十msg)
+$PY mcs/init_data.py --project <id>       # 患者個別
 ```
 
 - `patients.history_page` = 消費済みページカーソル — 中断/上限到達時は
@@ -194,16 +194,16 @@ $PY adapter/init_data.py --project <id>       # 患者個別
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY adapter/mcs_view.py status
-$PY adapter/mcs_view.py status --project 123
-$PY adapter/mcs_view.py search --project 123 --query '確認'
-$PY adapter/mcs_view.py timeline --project 123 --limit 50
-$PY adapter/mcs_view.py evidence --project 123 --message-id 456
-$PY adapter/mcs_view.py thread --project 123 --message-id 456
-$PY adapter/mcs_view.py attachments --project 123 --message-id 456
-$PY adapter/mcs_view.py candidates --project 123
-$PY adapter/mcs_view.py requests list --project 123 --status open
-$PY adapter/mcs_view.py requests show --project 123 --request-id 1
+$PY mcs/mcs_view.py status
+$PY mcs/mcs_view.py status --project 123
+$PY mcs/mcs_view.py search --project 123 --query '確認'
+$PY mcs/mcs_view.py timeline --project 123 --limit 50
+$PY mcs/mcs_view.py evidence --project 123 --message-id 456
+$PY mcs/mcs_view.py thread --project 123 --message-id 456
+$PY mcs/mcs_view.py attachments --project 123 --message-id 456
+$PY mcs/mcs_view.py candidates --project 123
+$PY mcs/mcs_view.py requests list --project 123 --status open
+$PY mcs/mcs_view.py requests show --project 123 --request-id 1
 ```
 
 これらは明示的な閲覧コマンドなので、JSON出力に患者の本文・投稿者・依頼内容を含む。
@@ -231,10 +231,10 @@ $PY adapter/mcs_view.py requests show --project 123 --request-id 1
 ### 統計（読み取り専用）
 
 ```bash
-$PY adapter/mcs_view.py stats --list                     # 登録済み統計の一覧
-$PY adapter/mcs_view.py stats --stat overview            # 単一統計
-$PY adapter/mcs_view.py stats --preset operational       # プリセット束
-$PY adapter/mcs_view.py stats --stat patient_activity \
+$PY mcs/mcs_view.py stats --list                     # 登録済み統計の一覧
+$PY mcs/mcs_view.py stats --stat overview            # 単一統計
+$PY mcs/mcs_view.py stats --preset operational       # プリセット束
+$PY mcs/mcs_view.py stats --stat patient_activity \
     --since 2026-09-01 --until 2026-10-01 --project 123 --limit 20
 ```
 
@@ -257,8 +257,8 @@ $PY adapter/mcs_view.py stats --stat patient_activity \
 ### レビュー候補シグナル（T2）
 
 ```bash
-$PY adapter/mcs_view.py signals                # openな候補一覧
-$PY adapter/mcs_view.py signals --project 123
+$PY mcs/mcs_view.py signals                # openな候補一覧
+$PY mcs/mcs_view.py signals --project 123
 ```
 
 - `run_check` の derive 段階で `mcs_signals.evaluate()` が候補を再計算し、
@@ -311,7 +311,7 @@ $PY adapter/mcs_view.py signals --project 123
 ```
 
 ```bash
-$PY adapter/mcs_view.py requests create --project 123 --confirm-human < approved-request.json
+$PY mcs/mcs_view.py requests create --project 123 --confirm-human < approved-request.json
 ```
 
 更新用JSONは `request_id`、表示された `expected_revision`、人が確認した最新本文の
@@ -324,8 +324,8 @@ $PY adapter/mcs_view.py requests create --project 123 --confirm-human < approved
 ```
 
 ```bash
-$PY adapter/mcs_view.py requests update --project 123 --confirm-human < approved-update.json
-$PY adapter/mcs_view.py receipt --project 123 --command-id UUID --payload-hash HASH
+$PY mcs/mcs_view.py requests update --project 123 --confirm-human < approved-update.json
+$PY mcs/mcs_view.py receipt --project 123 --command-id UUID --payload-hash HASH
 ```
 
 - 状態は `open / in_progress / done / cancelled`。人の承認による再開も可能。
@@ -366,7 +366,7 @@ $PY adapter/mcs_view.py receipt --project 123 --command-id UUID --payload-hash H
 ## 検証
 
 ```bash
-~/.hermes/hermes-agent/scripts/run_tests.sh ~/.mcs/adapter/test_mcs_ingestion.py ~/.mcs/adapter/test_mcs_features.py
+~/.hermes/hermes-agent/scripts/run_tests.sh ~/.mcs/mcs/test_mcs_ingestion.py ~/.mcs/mcs/test_mcs_features.py
 ~/.hermes/hermes-agent/.venv/bin/ruff check ~/.mcs/adapter
 ```
 

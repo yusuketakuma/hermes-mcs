@@ -154,9 +154,11 @@ def _structured_lines(ledger, mid: int) -> list[str]:
         if isinstance(s, dict) and s.get("text"):
             if s.get("negated"):
                 if s["text"] not in neg_seen:
-                    neg_seen.add(s["text"]); neg.append(s["text"])
+                    neg_seen.add(s["text"])
+                    neg.append(s["text"])
             elif s["text"] not in seen:
-                seen.add(s["text"]); syms.append(s["text"])
+                seen.add(s["text"])
+                syms.append(s["text"])
     for s in v1.get("symptoms") or []:
         contradicted = any(n in s or s in n for n in neg_seen)
         if s and s not in seen and not contradicted:
@@ -832,9 +834,11 @@ def _delivery_fingerprint(channel: str, chunks: list[str],
                           files: list[tuple[str, str]]) -> str:
     h = hashlib.sha256(channel.encode())
     for chunk in chunks:
-        h.update(b"\0text\0"); h.update(chunk.encode())
+        h.update(b"\0text\0")
+        h.update(chunk.encode())
     for name, path in files:
-        h.update(b"\0file\0"); h.update(name.encode())
+        h.update(b"\0file\0")
+        h.update(name.encode())
         with open(path, "rb") as f:
             for block in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(block)

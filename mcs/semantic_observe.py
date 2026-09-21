@@ -26,7 +26,8 @@ DB = os.path.join(HOME, "data", "ledger.db")
 
 def observe(db_path: str = DB) -> dict:
     c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    q = lambda sql, p=(): c.execute(sql, p).fetchall()
+    def q(sql, p=()):
+        return c.execute(sql, p).fetchall()
 
     jobs = {s: n for s, n in q(
         "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind='semantic' "

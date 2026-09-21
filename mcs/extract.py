@@ -295,7 +295,7 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": "lock_held"}))
             return 3
     try:
-        l = LedgerReader(DB) if args.stats else Ledger(DB)
+        led = LedgerReader(DB) if args.stats else Ledger(DB)
     except Exception:
         if lock_fd is not None:
             os.close(lock_fd)
@@ -306,10 +306,11 @@ def main() -> int:
              AND m.body_text != ''"""
     params: list = []
     if args.project:
-        q += " AND m.project_id=?"; params.append(args.project)
-    rows = l.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
+        q += " AND m.project_id=?"
+        params.append(args.project)
+    rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
 
-    done = {r["message_id"] for r in l.db.execute(
+    done = {r["message_id"] for r in led.db.execute(
         "SELECT message_id FROM artifacts WHERE kind=? "
         "AND message_id IS NOT NULL", (KIND,))}
     todo = [r for r in rows if r["message_id"] not in done]
@@ -323,7 +324,7 @@ def main() -> int:
     n = 0
     for r in todo:
         d = extract_message(r["body_text"], r["posted_at"])
-        l.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
+        led.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
                        project_id=r["project_id"],
                        message_id=r["message_id"], model="rules-v1",
                        meta={"hash": r["content_hash"]})
@@ -335,7 +336,7 @@ def main() -> int:
     import collections
     keys = collections.Counter()
     events = collections.Counter()
-    for a in l.db.execute(
+    for a in led.db.execute(
             "SELECT content FROM artifacts WHERE kind=?", (KIND,)):
         try:
             d = json.loads(a["content"])
@@ -350,7 +351,7 @@ def main() -> int:
             events[e] += 1
     print(json.dumps({"field_coverage": dict(keys),
                       "events": dict(events)}, ensure_ascii=False, indent=1))
-    l.close()
+    led.close()
     if lock_fd is not None:
         os.close(lock_fd)
     return 0

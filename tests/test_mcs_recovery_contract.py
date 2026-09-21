@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
 
 import ledger
 import maintenance
@@ -275,11 +275,11 @@ def test_explicit_snapshot_cli_survives_foreign_cwd_and_home(tmp_path):
     home.mkdir()
     env = os.environ.copy()
     env["HOME"] = str(home)
-    env["PYTHONPATH"] = str(Path(__file__).parent) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(Path(__file__).parent.parent / "mcs") + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run(
         [
             sys.executable,
-            str(Path(__file__).with_name("mcs_view.py")),
+            str(Path(__file__).parent.parent / "mcs" / "mcs_view.py"),
             "--snapshot",
             str(snapshot),
             "status",

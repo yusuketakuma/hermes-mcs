@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 MCS_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(MCS_ROOT / 'adapter'))
+sys.path.insert(0, str(MCS_ROOT / 'mcs'))
 
 from ledger import Ledger, publish_snapshot
 from mcs_adapter import Message

@@ -1569,9 +1569,11 @@ class Ledger:
         q = "SELECT * FROM artifacts WHERE kind=?"
         params: list = [kind]
         if project_id is not None:
-            q += " AND project_id=?"; params.append(project_id)
+            q += " AND project_id=?"
+            params.append(project_id)
         if message_id is not None:
-            q += " AND message_id=?"; params.append(message_id)
+            q += " AND message_id=?"
+            params.append(message_id)
         return self.db.execute(q + " ORDER BY artifact_id", params).fetchall()
 
     def close(self):

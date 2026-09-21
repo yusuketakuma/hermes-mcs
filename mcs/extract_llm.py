@@ -334,16 +334,17 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="drain the whole backlog (ignores budget pacing)")
     args = ap.parse_args()
-    l = Ledger(DB)
+    led = Ledger(DB)
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
             # lock across the whole backlog would starve the 15-min tick.
             total = {"done": 0, "failed": 0, "left": 0}
             while True:
-                r = run_pending(l, limit=50, budget_s=3600,
+                r = run_pending(led, limit=50, budget_s=3600,
                                 per_write_lock=True)
-                total["done"] += r["done"]; total["failed"] += r["failed"]
+                total["done"] += r["done"]
+                total["failed"] += r["failed"]
                 total["left"] = r["left"]
                 print(json.dumps(r, ensure_ascii=False), flush=True)
                 if r["left"] == 0:
@@ -351,7 +352,7 @@ def main() -> int:
                 if r["done"] == 0:
                     # Everything selectable failed or is backed off —
                     # wait for the earliest retry instead of quitting.
-                    nt = _next_retry(l)
+                    nt = _next_retry(led)
                     if nt is None:
                         break
                     time.sleep(min(300.0, max(5.0, nt - time.time())))
@@ -366,12 +367,12 @@ def main() -> int:
                 print(json.dumps({"ok": False, "error": "lock_held"}))
                 return 3
             try:
-                print(json.dumps(run_pending(l, args.limit, args.budget),
+                print(json.dumps(run_pending(led, args.limit, args.budget),
                                  ensure_ascii=False))
             finally:
                 os.close(lock_fd)
     finally:
-        l.close()
+        led.close()
     return 0
 
 

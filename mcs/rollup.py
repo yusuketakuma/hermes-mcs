@@ -246,15 +246,15 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3
     try:
-        l = Ledger(DB)
+        led = Ledger(DB)
     except Exception:
         os.close(lock_fd)
         raise
     ids = args.project or [r["project_id"] for r in
-                           l.db.execute("SELECT project_id FROM patients")]
-    n = rebuild_many(l, ids)
+                           led.db.execute("SELECT project_id FROM patients")]
+    n = rebuild_many(led, ids)
     print(json.dumps({"rollups": n}, ensure_ascii=False))
-    l.close()
+    led.close()
     os.close(lock_fd)
     return 0
 

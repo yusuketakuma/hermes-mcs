@@ -13,8 +13,12 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcs"))
 
 
 _SENSITIVE_ENV = (
