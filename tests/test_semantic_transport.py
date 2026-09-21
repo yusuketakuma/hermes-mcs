@@ -28,7 +28,7 @@ def _guard_original(owner, name):
 @pytest.fixture
 def local_http(monkeypatch):
     """Run only loopback servers after explicitly lifting the socket guard."""
-    # adapter/conftest.py blocks all socket connects so an accidental live
+    # tests/conftest.py blocks all socket connects so an accidental live
     # call fails.  These three originals are restored only for this fixture;
     # the endpoint is a temporary loopback server created below.
     monkeypatch.setattr(socket, "create_connection",

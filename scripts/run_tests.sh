@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
+# shellcheck disable=SC1007
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1007
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 
 if [ -n "${MCS_TEST_PYTHON:-}" ]; then
@@ -22,7 +24,7 @@ fi
 cd "$repo_root"
 
 if [ "$#" -eq 0 ]; then
-    set -- adapter
+    set -- tests
 fi
 
 test_home=$(mktemp -d "${TMPDIR:-/tmp}/mcs-test-home.XXXXXX")
