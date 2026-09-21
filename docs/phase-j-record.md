@@ -126,3 +126,14 @@ Recorded: 2026-09-20
 
 - ~~実API wire shape の確認（G2）~~ → **2026-09-21 実施・通過**（§6 G2 項参照）。
 - shadow期間中の audit分布観察（PASS率・NEEDS_REVIEW理由）が assist/enforce の実質的判定材料。2026-09-21 に `mode: shadow, daily_request_budget: 40` で稼働開始。
+
+### 観察方法（shadow期間中の日次確認）
+
+```bash
+cd ~/.mcs/adapter && python3 semantic_observe.py          # 人間向けスナップショット
+python3 semantic_observe.py --json >> ~/.mcs/data/observe.jsonl  # 時系列ログ
+```
+
+時系列は `data/run.log` の各 tick の `semantic` フィールド（done/deferred/left/jev_requests）でも追える。
+
+**ベースライン（2026-09-21 13:50頃）**: jobs done=24/pending=52/failed=0、eligible pending=0、audit = PENDING×4+unparsed×1、findings = `claim_without_evidence`×13・`support_unevaluated`×4・`summary_unavailable`×1、Jev 39/40、extract_llm backlog 残7591。pending の大半は非eligible（trickle/attachment由来）で bundle+assess までで done になる設計 — audit 到達は notify経路の新着のみ。初速所見: ローカルLLMが証拠なしclaimを多発（`claim_without_evidence` が最多）しており、監査が正しく止めている状態。PASS率の実測は新着 eligible job が来てから。
