@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" font-family="Menlo, monospace">
+  <rect width="640" height="300" fill="#313338"/>
+  <circle cx="36" cy="56" r="20" fill="#5865f2"/>
+  <text x="36" y="62" font-size="16" fill="#ffffff" text-anchor="middle">M</text>
+  <text x="66" y="50" font-size="15" fill="#ffffff" font-weight="bold">mcs-bot</text>
+  <rect x="152" y="38" width="40" height="18" rx="4" fill="#5865f2"/>
+  <text x="172" y="51" font-size="11" fill="#ffffff" text-anchor="middle">BOT</text>
+  <text x="200" y="51" font-size="11" fill="#949cf7">今日 9:15</text>
+  <rect x="66" y="66" width="548" height="200" rx="6" fill="#2b2d31"/>
+  <rect x="66" y="66" width="4" height="200" fill="#5865f2"/>
+  <text x="84" y="92" font-size="14" fill="#00a8fc" font-weight="bold">新着メッセージ (3件)</text>
+  <text x="84" y="118" font-size="12" fill="#dbdee1">山田 太郎 さん — ケアマネ 佐藤</text>
+  <text x="84" y="140" font-size="12" fill="#b5bac1">訪問日の変更について相談があります。来週火曜の予定を…</text>
+  <text x="84" y="168" font-size="12" fill="#dbdee1">鈴木 花子 さん — 訪問看護 田中</text>
+  <text x="84" y="190" font-size="12" fill="#b5bac1">処方薬の残数確認をお願いします。添付: 薬情.jpg</text>
+  <text x="84" y="218" font-size="12" fill="#dbdee1">佐藤 一郎 さん — ヘルパー 高橋</text>
+  <text x="84" y="240" font-size="12" fill="#b5bac1">本日のバイタル: 血圧 128/82、SpO2 97%</text>
+</svg>

@@ -1,7 +1,142 @@
-# MCS Adapter — MedicalCareStation unread monitor
+# hermes-mcs — MedicalCareStation 未読モニター + レビュー支援
 
-15分間隔で MCS の未読メッセージを API-first で収集し、SQLite に保存、
-Discord #mcs へ通知する。セッション失効時は Keychain 資格情報で自動再ログイン。
+医療・介護の現場向けメッセージ基盤 **MedicalCareStation (MCS)** の記録を
+15分間隔で収集・保存し、Discord 通知・検索・統計・レビュー候補提示までを
+一気通貫で行うローカルシステム。Hermes エージェントの addon としても動作する。
+
+> 記録の収集・提示と人による確認・判断の境界を設計上の安全ゲートとして
+> 分離している。「記録が見つからない」ことを「対応がなかった」証拠として
+> 扱わない — 候補は常に原記録の確認を求める提示。
+
+## 解決する課題
+
+医療従事者・ケアマネ・訪問看護の現場で起きる問題:
+
+- **未読の取りこぼし** — MCS の未読メッセージを巡回する負荷を自動化。
+  15分ごとに収集し Discord #mcs に通知するので、見逃しを減らす
+- **過去記録の埋没** — 患者ごとの全履歴を SQLite + FTS5 で蓄積。
+  「あの薬の言及はいつだっけ」を全文検索・タイムラインで即座に辿れる
+- **フォロー漏れの発見** — 「薬が変わったが後続記録がない」
+  「退院/転院の記録の前後で薬変更の言及がある」など、
+  人が目視では拾いきれないレビュー候補を機械的に列挙する
+- **判断負荷の局所化** — LLM による構造化抽出(薬剤名・依頼・否定極性)は
+  「候補」として提示するだけ。確定・登録は必ず人の明示承認を経る
+
+## 機能一覧
+
+| 機能 | 内容 |
+|---|---|
+| 未読収集 + Discord 通知 | API-first で15分間隔収集、構造化→原文の2段投稿、添付同梱 |
+| 全履歴アーカイブ | 過去分の一括/増分取込、ページカーソルで中断再開、アーカイブ患者も追跡 |
+| 全文検索・タイムライン | FTS5 + 日本語空白無視の部分一致、患者タイムライン、スレッド時系列 |
+| 構造化抽出 | ルールベース `extract_v1` + ローカルLLM `extract_llm`(薬・依頼・否定極性) |
+| 患者ロールアップ | 最新バイタル・現在の薬期間・未解決依頼・次回予定を患者単位で再構築 |
+| 統計(読み取り専用) | snapshot 上の集計。原本を一切変更しない。「対象なし」と「情報不足」を区別 |
+| レビュー候補シグナル | 薬変更後の記録なし・依頼滞留・退院/転院±薬変更・連絡集中・期間終了間近 |
+| 人承認の依頼管理 | 候補→人が確認→`--confirm-human` で台帳登録。MCS へは送信しない |
+| Hermes addon | `/mcs <json>` コマンドを Discord から実行(閲覧・依頼 preview/confirm) |
+
+## 仕組み
+
+```
+MCS (MedicalCareStation)
+   │  API-first / CDP(Chrome :9333) セッション自動再ログイン
+   ▼
+run_check.py ──15分 tick──► ledger.db (SQLite/WAL)
+   │                          ├ messages + messages_fts(FTS5)
+   │                          ├ artifacts(extract_v1 / extract_llm / signals)
+   │                          └ requests / command_receipts(人承認操作)
+   ▼
+notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シグナル閲覧
+   │                                    ▲
+   └ snapshots/ (read-only 公開) ────────┘  cco コンテナ・hermes plugin は
+                                            snapshot だけを読む
+```
+
+- 収集は launchd 3層(定期 tick・深掘り trickle・cmd WatchPaths 即時)
+- LLM はローカルのみ(llama.cpp `127.0.0.1:8080`)。外部送信しない
+- 通知は `signals.notify:true` の明示設定時のみ既存 outbox 経路で送信
+
+## 画面イメージ
+
+**Discord 通知**
+
+![Discord通知イメージ](docs/screenshots/discord-notify.svg)
+
+**レビュー候補シグナル (`mcs_view.py signals`)**
+
+![シグナル出力イメージ](docs/screenshots/signals-cli.svg)
+
+## 導入方法
+
+### Hermes addon として(clone して使う)
+
+```bash
+git clone https://github.com/yusuketakuma/hermes-mcs.git
+cd hermes-mcs && ./install.sh      # ~/.hermes/plugins/mcs-discord-commands をリンク
+```
+
+profile の `config.yaml` で有効化(全 scope 必須、未設定は拒否):
+
+```yaml
+plugins:
+  enabled: [mcs-discord-commands]
+  entries:
+    mcs-discord-commands:
+      settings:
+        snapshot: /path/to/mcs/snapshots/ledger-snapshot.db
+        inbox: /path/to/mcs/cmd
+        allowed_user_ids: ["<discord user id>"]
+        allowed_chat_ids: ["<discord chat/channel id>"]
+        project_ids: [1]
+```
+
+Discord で `/mcs <json>` が使えるようになる。詳細: `hermes_plugin/README.md`
+
+### 収集パイプラインのマシンセットアップ(Mac mini 等)
+
+```bash
+python3 mcs/mcs_setup.py init    # 対話式: config + Keychain + .env
+python3 mcs/mcs_setup.py check   # 必須条件の検証(exit 1 で失敗)
+```
+
+`init` が行うこと: `~/.mcs/config.json` 生成・Keychain `mcs-adapter` への
+MCS パスワード登録・`~/.mcs/.env` に `DISCORD_BOT_TOKEN`/`TYPESAFE_API_KEY`
+保存・`--semantic-mode` で Jev 連携有効化。`check` は必須キーの型・
+Keychain・Chrome・トークン解決・ローカルLLM 到達性を typesafe に検証する。
+
+## 使い方
+
+```bash
+PY=~/.hermes/hermes-agent/venv/bin/python
+$PY mcs/mcs_view.py status                    # 取込状況
+$PY mcs/mcs_view.py search --project 123 --query '確認'
+$PY mcs/mcs_view.py timeline --project 123 --limit 50
+$PY mcs/mcs_view.py stats --preset operational
+$PY mcs/mcs_view.py signals                   # open なレビュー候補
+```
+
+人承認の依頼登録・却下・閾値ポリシーなどの詳細は下記「閲覧・依頼管理」。
+
+## 安全設計
+
+- **人承認境界** — 依頼登録・シグナル却下・閾値変更はすべて
+  `--confirm-human` + `reason` + receipt 記録付きの ops 経路のみ。
+  自動確定・自動通知はしない
+- **「不在≠未実施」** — 候補は「記録が見つからない」事実の提示であり、
+  対応の欠如を意味しない。文言にも明記
+- **既読化ゲート** — fetch_state=complete かつ ledger commit 済みの患者のみ、
+  snapshot timestamp を必ず送信
+- **no-redirect / no-proxy** — Bearer は許可 origin 以外へ送らない。
+  レスポンス本文はログに出さない
+- **定期実行は本文・氏名を出さない** — 明示的な `mcs_view` 閲覧のみ例外
+
+## ライセンス
+
+Private repository — 現時点で公開・再配布は想定していない。
+利用・改変はリポジトリ管理者の明示許可に従う。
+
+---
 
 ## 構成
 
@@ -44,77 +179,6 @@ Discord #mcs へ通知する。セッション失効時は Keychain 資格情報
                               された患者の「新規列挙と取り込み予約」だけを
                               止めるスイッチ — 既にpendingの取り込みジョブは
                               false でも消化され続ける(完全停止ではない)
-
-## Hermes addon として使う
-
-このリポジトリは単独で clone・配置できる。実行コード（`mcs/`・
-`hermes_plugin/`）は標準ライブラリのみで、外部依存はない。
-
-```bash
-git clone https://github.com/yusuketakuma/mcs-adapter.git ~/.mcs-repo
-~/.mcs-repo/install.sh            # ~/.hermes/plugins/mcs-discord-commands をリンク
-```
-
-`install.sh` は plugin dir への symlink を作るだけ — plugin は
-`../adapter` を相対参照するため、checkout 全体を残したまま
-`hermes_plugin/` だけを profile の plugins へ見せる構成。
-
-profile の `config.yaml` で有効化（全 scope 必須、未設定は拒否）:
-
-```yaml
-plugins:
-  enabled: [mcs-discord-commands]
-  entries:
-    mcs-discord-commands:
-      settings:
-        snapshot: /path/to/mcs/snapshots/ledger-snapshot.db
-        inbox: /path/to/mcs/cmd
-        allowed_user_ids: ["<discord user id>"]
-        allowed_chat_ids: ["<discord chat/channel id>"]
-        project_ids: [1]
-```
-
-Discord で `/mcs <json>` が使えるようになる（status・snapshot閲覧・
-依頼 preview/confirm・限定操作）。詳細: `hermes_plugin/README.md`。
-
-テスト: `cd adapter && python -m pytest` — `integration/` は
-hermes-agent checkout 上でのみ収集される（無い環境では skip）。
-収集・通知パイプライン側のデータ dir は `~/.mcs`（実行時に自動生成）。
-
-### マシンセットアップ（収集パイプライン側）
-
-plugin の閲覧面だけなら上記で足りるが、収集・通知パイプラインを新規
-マシン（例: Mac mini）に立てる場合は `mcs/mcs_setup.py` を使う:
-
-```bash
-python3 mcs/mcs_setup.py init    # 対話式プロビジョニング
-python3 mcs/mcs_setup.py check   # 必須条件の検証（typesafe ゲート）
-```
-
-`init` が行うこと:
-
-- `~/.mcs/config.json` — `mcs_login_id`/`discord_channel_id` を設定
-  （既存キーは保持、0600）
-- macOS Keychain — MCS パスワードを `security add-generic-password
-  -s mcs-adapter` で登録（Mac mini の Google Chrome が使う login
-  keychain と同じ領域。adapter は `find-generic-password -w` で読み
-  CDP 経由でログインフォームへ注入 — 初回のみ Keychain ACL 確認あり）
-- `~/.mcs/.env` — `DISCORD_BOT_TOKEN`/`TYPESAFE_API_KEY` を追記保存
-  （0600、既存キー保持）
-- `--semantic-mode shadow|enforce` で semantic block を有効化
-  （`--project-ids` 必須、`--typesafe-key` で Jev キー登録）
-
-`check` が検証する必須条件（型まで検査、exit 1 で失敗）:
-
-- `mcs_login_id`: 非空文字列、`discord_channel_id`: 数値 ID
-- 任意キーの型・範囲（`discover_archived`/`deep_history`=bool、
-  `trickle_pages`=1-40、`signals.notify`=bool、`notify_bot_profile`=
-  `[a-z0-9_-]+` 等）— 不明キーは警告のみ
-- `semantic` block は本番 `semantic_config` validator に委譲
-  （mode!=off→`project_ids` 必須、enforce→calibration 必須 等）
-- 環境: Keychain `mcs-adapter` 項目・Chrome binary・
-  `DISCORD_BOT_TOKEN` 解決可能・semantic 有効時は
-  `TYPESAFE_API_KEY` 必須・ローカルLLM `127.0.0.1:8080` 到達性は警告
 
 ## 運用
 
@@ -366,12 +430,12 @@ $PY mcs/mcs_view.py receipt --project 123 --command-id UUID --payload-hash HASH
 ## 検証
 
 ```bash
-~/.hermes/hermes-agent/scripts/run_tests.sh ~/.mcs/mcs/test_mcs_ingestion.py ~/.mcs/mcs/test_mcs_features.py
-~/.hermes/hermes-agent/.venv/bin/ruff check ~/.mcs/adapter
+python -m pytest                      # tests/ 全件 (一時DB+スタブのみ)
+uv run --with ruff ruff check mcs/ tests/
 ```
 
 テストは一時DBと通信スタブだけを使い、実MCS・Discord・Keychain・原本DBへ
-アクセスしない。
+アクセスしない。`integration/` は hermes-agent checkout 上でのみ収集される。
 
 ## 未検証残件
 
