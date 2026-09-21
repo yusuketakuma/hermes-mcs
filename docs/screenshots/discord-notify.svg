@@ -1,18 +1,52 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" font-family="Menlo, monospace">
-  <rect width="640" height="300" fill="#313338"/>
-  <circle cx="36" cy="56" r="20" fill="#5865f2"/>
-  <text x="36" y="62" font-size="16" fill="#ffffff" text-anchor="middle">M</text>
-  <text x="66" y="50" font-size="15" fill="#ffffff" font-weight="bold">mcs-bot</text>
-  <rect x="152" y="38" width="40" height="18" rx="4" fill="#5865f2"/>
-  <text x="172" y="51" font-size="11" fill="#ffffff" text-anchor="middle">BOT</text>
-  <text x="200" y="51" font-size="11" fill="#949cf7">今日 9:15</text>
-  <rect x="66" y="66" width="548" height="200" rx="6" fill="#2b2d31"/>
-  <rect x="66" y="66" width="4" height="200" fill="#5865f2"/>
-  <text x="84" y="92" font-size="14" fill="#00a8fc" font-weight="bold">新着メッセージ (3件)</text>
-  <text x="84" y="118" font-size="12" fill="#dbdee1">山田 太郎 さん — ケアマネ 佐藤</text>
-  <text x="84" y="140" font-size="12" fill="#b5bac1">訪問日の変更について相談があります。来週火曜の予定を…</text>
-  <text x="84" y="168" font-size="12" fill="#dbdee1">鈴木 花子 さん — 訪問看護 田中</text>
-  <text x="84" y="190" font-size="12" fill="#b5bac1">処方薬の残数確認をお願いします。添付: 薬情.jpg</text>
-  <text x="84" y="218" font-size="12" fill="#dbdee1">佐藤 一郎 さん — ヘルパー 高橋</text>
-  <text x="84" y="240" font-size="12" fill="#b5bac1">本日のバイタル: 血圧 128/82、SpO2 97%</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="560" viewBox="0 0 680 560" font-family="Menlo, 'Hiragino Sans', monospace">
+  <rect width="680" height="560" fill="#313338"/>
+  <!-- channel header -->
+  <rect width="680" height="44" fill="#1e1f22"/>
+  <text x="20" y="28" font-size="14" fill="#b5bac1">#</text>
+  <text x="38" y="28" font-size="14" fill="#dbdee1" font-weight="bold">mcs</text>
+  <text x="80" y="28" font-size="11" fill="#80848e">MCS 未読通知</text>
+
+  <!-- ===== message 1: structured + raw (2-stage format) ===== -->
+  <circle cx="36" cy="84" r="20" fill="#5865f2"/>
+  <text x="36" y="90" font-size="15" fill="#ffffff" text-anchor="middle">M</text>
+  <text x="66" y="72" font-size="14" fill="#ffffff" font-weight="bold">mcs-bot</text>
+  <rect x="132" y="60" width="38" height="17" rx="4" fill="#5865f2"/>
+  <text x="151" y="72" font-size="10" fill="#ffffff" text-anchor="middle">BOT</text>
+  <text x="178" y="72" font-size="11" fill="#949cf7">今日 9:15</text>
+
+  <!-- head -->
+  <text x="66" y="98" font-size="13" fill="#ffffff" font-weight="bold">A山 太郎</text>
+  <text x="140" y="98" font-size="13" fill="#faa61a">⚠️</text>
+  <text x="66" y="116" font-size="12" fill="#b5bac1">B野 花子 (訪問看護師 / △△ステーション) — 2026-10-02 09:12</text>
+
+  <!-- structured block -->
+  <text x="66" y="140" font-size="12" fill="#dbdee1">📋 構造化</text>
+  <text x="66" y="160" font-size="12" fill="#b5bac1">・要約: バイタル報告と残薬確認の依頼</text>
+  <text x="66" y="178" font-size="12" fill="#b5bac1">・要点: BP 128/82 / 残薬あと3日分 / 次回訪問10/5</text>
+  <text x="66" y="196" font-size="12" fill="#b5bac1">・区分: 訪問・バイタル報告</text>
+  <text x="66" y="214" font-size="12" fill="#b5bac1">・バイタル: BP 128/82  BT 36.4  SpO2 97</text>
+  <text x="66" y="232" font-size="12" fill="#b5bac1">・症状: むくみ　発熱なし</text>
+  <text x="66" y="250" font-size="12" fill="#b5bac1">・依頼: 残薬の確認をお願いします</text>
+
+  <!-- raw body -->
+  <text x="66" y="276" font-size="12" fill="#949ba4">───── 原文 ─────</text>
+  <text x="66" y="296" font-size="12" fill="#dbdee1">本日の訪問時バイタルを報告します。血圧128/82、体温36.4℃、</text>
+  <text x="66" y="314" font-size="12" fill="#dbdee1">SpO2 97%。足のむくみが気になるとの訴えがありました。</text>
+  <text x="66" y="332" font-size="12" fill="#dbdee1">処方薬があと3日分しかないため、確認をお願いします。</text>
+  <text x="66" y="356" font-size="12" fill="#b5bac1">📎 服薬情報.jpg</text>
+
+  <!-- ===== message 2: short raw-only ===== -->
+  <circle cx="36" cy="408" r="20" fill="#5865f2"/>
+  <text x="36" y="414" font-size="15" fill="#ffffff" text-anchor="middle">M</text>
+  <text x="66" y="396" font-size="14" fill="#ffffff" font-weight="bold">mcs-bot</text>
+  <rect x="132" y="384" width="38" height="17" rx="4" fill="#5865f2"/>
+  <text x="151" y="396" font-size="10" fill="#ffffff" text-anchor="middle">BOT</text>
+  <text x="178" y="396" font-size="11" fill="#949cf7">今日 9:15</text>
+  <text x="66" y="422" font-size="13" fill="#ffffff" font-weight="bold">C木 次郎</text>
+  <text x="66" y="440" font-size="12" fill="#b5bac1">D田 健一 (ケアマネジャー / □□包括) — 2026-10-02 09:08</text>
+  <text x="66" y="462" font-size="12" fill="#dbdee1">来週の訪問日を火曜から木曜へ変更できないか相談があります。</text>
+  <text x="66" y="480" font-size="12" fill="#dbdee1">ご家族の希望も確認済みです。</text>
+
+  <!-- footer -->
+  <text x="66" y="530" font-size="10" fill="#6d6f78">※ 上: 構造化抽出(ローカルLLM) / 下: 原文 — 患者名・投稿者名は匿名化した例</text>
 </svg>

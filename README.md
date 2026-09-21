@@ -54,14 +54,38 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 ```
 
 - 収集は launchd 3層(定期 tick・深掘り trickle・cmd WatchPaths 即時)
-- LLM はローカルのみ(llama.cpp `127.0.0.1:8080`)。外部送信しない
+- LLM はローカルのみ(llama.cpp `127.0.0.1:8080`)。患者記録は外部へ出ない
 - 通知は `signals.notify:true` の明示設定時のみ既存 outbox 経路で送信
+
+### ローカルLLM・外部API の使用箇所
+
+| 用途 | 使用先 | モジュール |
+|---|---|---|
+| メッセージ構造化抽出(薬・依頼・否定極性・要約) | ローカルLLM llama.cpp `127.0.0.1:8080` slot1 | `mcs/extract_llm.py` |
+| セマンティック処理のリアルタイム問合せ | ローカルLLM slot0 (`id_slot:0`) | `mcs/semantic.py` `llm_chat` |
+| 意味的妥当性の評価・監査・ベンチ(Jev) | TypeSafe Jev API `api.typesafe.ai` | `mcs/semantic_jev.py`・`semantic_assessment.py`・`semantic_audit.py`・`semantic_bench.py` |
+
+- **ローカルLLM**: 患者記録の構造化はすべて loopback 固定・proxy 無効の
+  ローカルサーバで処理 — 個人情報はマシンから出ない
+- **Jev**: `semantic.mode` を `shadow|enforce` にした場合のみ使用。
+  `TYPESAFE_API_KEY` が必須(`mcs_setup.py check` が検証)。記録本文ではなく
+  評価用の state/questions を送る設計 — 本文は DATA として扱い
+  プロンプトインジェクション境界を設けている
+- `semantic.mode:off` なら Jev は一切呼ばれず、ルール抽出のみで動く
 
 ## 画面イメージ
 
-**Discord 通知**
+**Discord 通知 — 上に構造化・下に原文の2段構成**
 
 ![Discord通知イメージ](docs/screenshots/discord-notify.svg)
+
+`📋 構造化` ブロックはローカルLLMの抽出(要約・要点・区分・バイタル・
+症状・依頼)をコンパクトに提示し、その下に原文をそのまま載せる。
+抽出が無い/失敗時は原文のみにフォールバック。
+
+**取込状況・タイムライン (`mcs_view.py status` / `timeline`)**
+
+![status/timelineイメージ](docs/screenshots/view-status.svg)
 
 **レビュー候補シグナル (`mcs_view.py signals`)**
 
