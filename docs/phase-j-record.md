@@ -164,11 +164,30 @@ python3 semantic_bench.py calibrate                               # 閾値校正
 
 ### 実施済み改善（claim_without_evidence 対策）
 
-1. `_locate_quote` に空白正規化フォールバック — モデルが空白・改行を正規化して引用した
-   場合でも一意マッチすれば verbatim span に解決（`body[s:e]==quote` を維持）。
+1. `_locate_quote` に空白除去フォールバック — モデルが数字の周りに空白を挿入して
+   引用する実態（`9 時から` vs 原文 `9時から`）をカバー。空白除去後の一意マッチを
+   verbatim span に解決（`body[s:e]==quote` を維持）。
 2. `semantic_extraction` は span 発見時に quote を原文 verbatim に置換。
 3. `_SUMMARY_PROMPT` に2ルール追加: 「根拠候補なしの reported_fact は claim 化せず
    limitations へ」「claim は参照候補 statement の言い換えに留める」。
+
+### A/B 実測（同一コーパス20件・実メッセージ）
+
+| 指標 | baseline | v2（改善後） |
+|---|---|---|
+| findings/claim | 1.407 | **0.340** |
+| claim_without_evidence | 24 | **3** |
+| claim_quantity_unverified | 14 | 7 |
+| fact_dropped | 0 | 4 |
+| quantity_untraced / mismatch | 0 | 2 / 1 |
+
+`claim_without_evidence` 88%減。新出の `fact_dropped` は「根拠なしclaimを落とした
+結果、参照されない候補が残る」正常な副産物。残る `claim_quantity_unverified` は
+claim数量と証拠quoteの対応づけ精度の課題（次段）。
+
+別途判明: 抽出の `model` 失敗が 10/20 件 — llama.cpp 温度0でもバッチ並行で揺れ、
+slot 1 backlog 処理との競合下で 90s timeout に達するケースがある。drain は
+retryable として再試行する設計のため運用上は滞留のみ。
 
 ### モデルA/B手順（未実施・要サービス再起動）
 
