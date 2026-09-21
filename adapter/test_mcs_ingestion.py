@@ -499,7 +499,8 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     monkeypatch.setattr(notifier, "_channel_id", lambda kind: None)
 
     assert notifier.flush(Outbox()) == {"sent": 0, "failed": 1,
-                                        "skipped": 0, "suppressed": 0}
+                                        "skipped": 0, "suppressed": 0,
+                                        "parked": 0}
     assert marked == [(1, "failed", 3600)]
 
 

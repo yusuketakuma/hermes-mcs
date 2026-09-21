@@ -285,8 +285,17 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         # notice's input fingerprint must still be live — a degraded
         # notice is instead suppressed if its base event has since
         # delivered.
-        cfg = _config().get("semantic")
-        if not isinstance(cfg, dict) or cfg.get("mode") != "enforce":
+        try:
+            import semantic as _sem
+        except Exception:
+            # a queued intent whose renderer cannot load is parked,
+            # not dropped — flush() must keep serving other events
+            raise _DeferredSend("semantic_import_failed")
+        try:
+            scfg, _errs = _sem.semantic_config(_config())
+        except Exception:
+            raise _DeferredSend("semantic_config_failed")
+        if scfg["mode"] != "enforce":
             raise _DeferredSend("semantic_not_enforce")
         if payload.get("degraded"):
             src = payload.get("src_event_id")
@@ -312,12 +321,6 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 "AND kind='new_messages'", (src,)).fetchone()
             if srow is None or srow["state"] == "suppressed":
                 raise _StaleSend("src_event_ineligible")
-            try:
-                import semantic as _sem
-            except Exception:
-                # a queued intent whose renderer cannot load is parked,
-                # not dropped — flush() must keep serving other events
-                raise _DeferredSend("semantic_import_failed")
             b = _sem.thread_bundle(ledger, ev["project_id"], root)
             if b is None or b["source_fingerprint"] != fp:
                 raise _StaleSend("stale_generation")
@@ -393,8 +396,9 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         silently absent, and in shadow/assist/off the notification stays
         byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
         try:
-            cfg = _config().get("semantic")
-            if not isinstance(cfg, dict) or cfg.get("mode") != "enforce":
+            import semantic as _sem
+            scfg, _errs = _sem.semantic_config(_config())
+            if scfg["mode"] != "enforce":
                 return ""
             art = ledger.db.execute(
                 "SELECT content,meta FROM artifacts "
@@ -551,7 +555,8 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None]:
 
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     token = _token()
-    res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0}
+    res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
+           "parked": 0}
     due = ledger.outbox_due(limit)
     if not token:
         res["skipped"] = len(due)
@@ -624,15 +629,16 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                                sent_ids[-1] if sent_ids else "")
             res["sent"] += 1
         except _DeferredSend:
-            # stays pending but re-checks hourly, not every flush — a
-            # parked enforce intent must not report notify_incomplete
-            # on every tick while the mode gate is down
+            # stays pending but re-checks hourly, not every flush. A
+            # parked enforce intent is policy-blocked, not incomplete —
+            # count it separately so run_check's notify_incomplete signal
+            # doesn't flag every other tick while the mode gate is down
             ledger.db.execute(
                 "UPDATE notify_outbox SET next_try=?,updated_at=? "
                 "WHERE event_id=?",
                 (time.time() + 3600, time.time(), ev["event_id"]))
             ledger.db.commit()
-            res["skipped"] += 1
+            res["parked"] += 1
         except _StaleSend:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1

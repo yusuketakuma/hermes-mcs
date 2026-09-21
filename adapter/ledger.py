@@ -429,17 +429,26 @@ class Ledger:
                 url=COALESCE(NULLIF(excluded.url,''),attachments.url)
             """, (m.message_id, a.file_id, a.name, a.url, now))
 
-    def _save_tree(self, m, new_ids: list, now: float):
+    def _save_tree(self, m, new_ids: list, now: float,
+                   changed_ids: list | None = None):
         """One message + its attachments + replies (with their attachments).
         Replies carry files too — a single shared path keeps them from
-        silently dropping."""
-        if self._upsert_message(m):
+        silently dropping. changed_ids collects stored rows whose winning
+        body revision actually differs — an edit is not 'new' but it IS
+        new evaluation input (INV-15 fingerprints move on it)."""
+        st = self._upsert_message(m)
+        if st == 1:
             new_ids.append(m.message_id)
+        elif st == 2 and changed_ids is not None:
+            changed_ids.append(m.message_id)
         self._save_attachments(m, now)
         self._retire_reply_job(m, now)
         for r in m.replies:
-            if self._upsert_message(r):
+            st = self._upsert_message(r)
+            if st == 1:
                 new_ids.append(r.message_id)
+            elif st == 2 and changed_ids is not None:
+                changed_ids.append(r.message_id)
             self._save_attachments(r, now)
             self._retire_reply_job(r, now)
 
@@ -477,6 +486,7 @@ class Ledger:
         commit (INV-06)."""
         now = time.time()
         new_ids = []
+        changed_ids = []
         with self.db:  # commit on success, rollback on exception
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
@@ -502,7 +512,7 @@ class Ledger:
                   now if p.fetch_state == "complete" else None,
                   now, now))
             for m in p.messages:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, changed_ids)
             if notify and not self.is_archived(p.project_id):
                 # new_ids: every newly stored message is notification-
                 # worthy in the unread path; PLUS messages THIS fetch
@@ -517,23 +527,31 @@ class Ledger:
                     if t.is_unread]
                 notify_ids = list(dict.fromkeys(
                     new_ids + self._unnotified(fresh_unread)))
+                ev_id = None
                 if notify_ids:
                     pl = dict(notify)
                     pl["message_ids"] = notify_ids
                     ev_id = self._outbox_insert("new_messages",
                                                 p.project_id, pl)
                     self._mark_notified(notify_ids, now)
-                    if semantic:
-                        self._semantic_seed_tx(p.project_id, notify_ids,
-                                               {"source": notify.get(
-                                                   "source"),
-                                                "event_id": ev_id})
+                if semantic:
+                    # same coverage rule as save_messages: new AND edited
+                    # bodies are evaluation input; eligibility stays
+                    # derived from stored origin events (INV-20)
+                    seed_ids = sorted(set(notify_ids) | set(changed_ids))
+                    if seed_ids:
+                        origin = {"source": notify.get("source")}
+                        if ev_id is not None:
+                            origin["event_id"] = ev_id
+                        self._semantic_seed_tx(p.project_id, seed_ids,
+                                               origin)
             elif semantic and not self.is_archived(p.project_id):
                 # notify-less path: same coverage rule as save_messages —
                 # every newly stored message is evaluation input with no
                 # notification eligibility (INV-20)
-                self._semantic_seed_tx(p.project_id, new_ids,
-                                       {"source": "history_import"})
+                self._semantic_seed_tx(
+                    p.project_id, sorted(set(new_ids) | set(changed_ids)),
+                    {"source": "history_import"})
         return new_ids
 
     def _unnotified(self, ids: list) -> list:
@@ -706,10 +724,11 @@ class Ledger:
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages."""
         new_ids = []
+        changed_ids = []
         now = time.time()
         with self.db:
             for m in msgs:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, changed_ids)
             if notify and project_id \
                     and not self.is_archived(project_id):
                 # backfill/reply-job context: "new to the ledger" is NOT
@@ -729,14 +748,15 @@ class Ledger:
                     self._mark_notified(notify_ids, now)
                 if semantic:
                     # semantic coverage is wider than notification
-                    # coverage: EVERY newly stored message — including
-                    # posts that arrived already-read, which are exactly
-                    # what this path exists to catch — is evaluation
-                    # input. Notification eligibility stays separate,
-                    # derived at drain time from stored origin events
-                    # (INV-20): a read-arrival seed can produce
+                    # coverage: EVERY newly stored OR edited message —
+                    # including posts that arrived already-read, which are
+                    # exactly what this path exists to catch — is
+                    # evaluation input. Notification eligibility stays
+                    # separate, derived at drain time from stored origin
+                    # events (INV-20): a read-arrival seed can produce
                     # artifacts but never a notice.
-                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    seed_ids = sorted(set(new_ids) | set(notify_ids)
+                                      | set(changed_ids))
                     if seed_ids:
                         origin = {"source": notify.get("source")}
                         if ev_id is not None:
@@ -746,12 +766,14 @@ class Ledger:
             elif semantic and project_id \
                     and not self.is_archived(project_id):
                 # history-import path (no notify intent): every newly
-                # stored message still gets durable semantic coverage —
-                # open-loop/pending items in imported history are real
-                # findings, not just notification triggers. These jobs
-                # are drained AFTER arrival seeds (run_due ordering).
-                self._semantic_seed_tx(project_id, new_ids,
-                                       {"source": "history_import"})
+                # stored or edited message still gets durable semantic
+                # coverage — open-loop/pending items in imported history
+                # are real findings, not just notification triggers.
+                # These jobs are drained AFTER arrival seeds (run_due
+                # ordering).
+                self._semantic_seed_tx(
+                    project_id, sorted(set(new_ids) | set(changed_ids)),
+                    {"source": "history_import"})
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -763,10 +785,11 @@ class Ledger:
         burnt-out one would otherwise block floor certification forever);
         a still-incomplete reply reserves a durable retry."""
         new_ids = []
+        changed_ids = []
         now = time.time()
         with self.db:
             for m in replies:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, changed_ids)
                 # reconcile against the STORED body, not the fetched one:
                 # upsert never downgrades 'full', so a refetch returning
                 # a snippet for an already-full reply must not spawn an
@@ -799,7 +822,8 @@ class Ledger:
                     # widened like save_messages: a reply persisted
                     # already-read is still evaluation input — its
                     # facts and open-loop candidates are real findings
-                    seed_ids = sorted(set(new_ids) | set(notify_ids))
+                    seed_ids = sorted(set(new_ids) | set(notify_ids)
+                                      | set(changed_ids))
                     if seed_ids:
                         origin = {"source": notify.get("source")}
                         if ev_id is not None:
@@ -809,13 +833,15 @@ class Ledger:
         return new_ids
 
     def _upsert_message(self, m) -> int:
-        """Returns 1 if newly inserted. Never downgrades a stored 'full' body
-        to a later 'snippet'."""
+        """1 if newly inserted, 2 if an existing row's winning body revision
+        changed (an edit), 0 otherwise. Never downgrades a stored 'full'
+        body to a later 'snippet'."""
         now = time.time()
         chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
-        existed = self.db.execute(
-            "SELECT 1 FROM messages WHERE message_id=?",
-            (m.message_id,)).fetchone() is not None
+        prev = self.db.execute(
+            "SELECT content_hash,body_state FROM messages WHERE message_id=?",
+            (m.message_id,)).fetchone()
+        existed = prev is not None
         body_text = html_to_text(m.body_html)
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
@@ -857,7 +883,12 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
-        return 0 if existed else 1
+        if not existed:
+            return 1
+        # mirror the content_hash CASE above: the incoming hash only wins
+        # when the new body is 'full' or the stored one wasn't
+        wins = m.body_state == "full" or prev["body_state"] != "full"
+        return 2 if wins and prev["content_hash"] != chash else 0
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:

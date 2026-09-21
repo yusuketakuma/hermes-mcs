@@ -293,8 +293,11 @@ class JevClient:
         req = urllib.request.Request(
             JEV_MODELS_URL,
             headers={"Authorization": f"Bearer {self.api_key}"})
-        with self._opener.open(req, timeout=timeout) as res:
-            raw = res.read(MAX_RESPONSE_BYTES + 1)
+        try:
+            with self._opener.open(req, timeout=timeout) as res:
+                raw = res.read(MAX_RESPONSE_BYTES + 1)
+        except (OSError, urllib.error.URLError, TimeoutError) as e:
+            raise JevError("transport", type(e).__name__, retryable=True)
         try:
             d = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
