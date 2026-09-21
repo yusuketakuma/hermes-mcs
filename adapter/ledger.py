@@ -1539,12 +1539,6 @@ class Ledger:
           ORDER BY m.posted_at_ts DESC LIMIT ?
         """, (fts_query, limit)).fetchall()
 
-    def thread(self, parent_id: int) -> list:
-        return self.db.execute("""
-          SELECT * FROM messages WHERE parent_id=?
-          ORDER BY posted_at_ts ASC
-        """, (parent_id,)).fetchall()
-
     def artifact_add_tx(self, kind: str, content: str,
                         project_id: int = None, message_id: int = None,
                         model: str = "", meta: dict | None = None) -> int:
