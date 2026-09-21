@@ -296,20 +296,28 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             continue             # opaque row: skipped, not fatal
         if (isinstance(meta, dict) and meta.get("key")
                 and isinstance(content, dict)
-                and content.get("state") in ("open", "resolved")):
+                and content.get("state") in ("open", "resolved",
+                                             "dismissed")):
             existing[meta["key"]] = content
 
     opened = superseded = resolved = enqueued = 0
     with ledger.db:
         for key, sig in current.items():
             old = existing.get(key)
-            if old is None or old["state"] == "resolved":
+            if old is None or old["state"] == "resolved" or (
+                    old["state"] == "dismissed"
+                    and old.get("evidence") != sig["evidence"]):
+                # new signal, condition returned after resolution, or a
+                # human dismissed an earlier evidence set that has since
+                # changed — a genuinely new situation, open again
                 sig.update(v=1, state="open", detected_at=now,
                            resolved_at=None)
                 _insert(ledger.db, key, sig)
                 opened += 1
                 if notify and _notify(ledger, sig, key):
                     enqueued += 1
+            elif old["state"] == "dismissed":
+                pass   # human dismissed this exact evidence — stays down
             elif old.get("evidence") != sig["evidence"]:
                 # identity-level evidence moved on — supersede with a
                 # fresh open row preserving the original detection time

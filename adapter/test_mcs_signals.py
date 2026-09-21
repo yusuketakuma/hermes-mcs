@@ -319,6 +319,77 @@ def test_send_gate_open_signal_formats(led, monkeypatch):
     assert "レビュー候補" in text and files == []
 
 
+# --- human dismissal (ops.signal_dismiss via the command path) ---
+
+def _dismiss(led, key, pid=1, reason="原記録を確認済み"):
+    import mcs_requests
+    from uuid import uuid4
+    req = {"cmd": "ops.signal_dismiss", "version": 1,
+           "command_id": str(uuid4()), "actor": "tester",
+           "human_confirmed": True, "project_id": pid,
+           "signal_key": key, "reason": reason}
+    return mcs_requests.apply_command(led, req)
+
+
+def test_dismiss_open_signal(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    key = "request_overdue:1:1"
+    r = _dismiss(led, key)
+    assert r["outcome"] == "applied"
+    assert _states(led.db)[key] == "dismissed"
+    assert mcs_signals.current_open(led.db)["items"] == []
+    rows = [json.loads(x[0]) for x in led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='signal_v1'")]
+    assert rows[-1]["dismissed_by"] == "tester"
+    assert rows[-1]["dismiss_reason"] == "原記録を確認済み"
+
+
+def test_dismissed_signal_stays_down_while_evidence_same(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    _dismiss(led, "request_overdue:1:1")
+    res = _ev(led)                 # condition still holds -> no reopen
+    assert res["open"] == 1 and res["opened"] == 0
+    assert _states(led.db)["request_overdue:1:1"] == "dismissed"
+
+
+def test_dismissed_signal_reopens_on_evidence_change(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    _dismiss(led, "request_overdue:1:1")
+    led.db.execute("UPDATE requests SET due_date='2026-09-05'")
+    res = _ev(led)                 # evidence moved on -> reopen
+    assert res["opened"] == 1
+    assert _states(led.db)["request_overdue:1:1"] == "open"
+
+
+def test_dismiss_unknown_and_nonopen(led):
+    r = _dismiss(led, "request_overdue:1:999")
+    assert r["outcome"] == "rejected" and r["error"] == "signal_not_found"
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led)                       # resolves -> no longer open
+    r = _dismiss(led, "request_overdue:1:1")
+    assert r["outcome"] == "rejected" and r["error"] == "signal_not_open"
+
+
+def test_dismiss_validation(led):
+    import mcs_requests
+    from uuid import uuid4
+    base = {"cmd": "ops.signal_dismiss", "version": 1, "actor": "t",
+            "human_confirmed": True, "project_id": 1}
+    # missing reason -> rejected before touching the ledger
+    r = mcs_requests.apply_command(
+        led, {**base, "command_id": str(uuid4()), "signal_key": "k"})
+    assert r["outcome"] == "rejected" and r["error"] == "bad_reason"
+    r = mcs_requests.apply_command(
+        led, {**base, "command_id": str(uuid4()),
+              "reason": "r"})                  # missing signal_key
+    assert r["outcome"] == "rejected" and r["error"] == "bad_signal_key"
+
+
 # --- malformed data resilience ---
 
 def test_malformed_signal_artifact_skipped(led):

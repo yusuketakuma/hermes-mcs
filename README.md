@@ -200,6 +200,10 @@ $PY adapter/mcs_view.py signals --project 123
   `transition_reconciliation`（退院言及±14日の薬変更言及の共起）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
+- 人による却下: `mcs_view.py control signal_dismiss --confirm-human` に
+  `{"project_id":…, "signal_key":"…", "reason":"…"}` を渡すと、理由・
+  実行者付きの dismissed 遷移行を追加する。同じ証跡の間は再検出を
+  抑制し、証跡が変われば新しい状況として再openする。
 - 通知は config の `signals.notify:true` を明示設定した場合のみ既存の
   notify_outbox 経路（kind='signal'、本文はenqueue時に固定）で送る。
   既定は通知なし。

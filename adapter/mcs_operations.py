@@ -111,6 +111,15 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
         return None
+    if cmd == "ops.signal_dismiss":
+        allowed = base | {"signal_key", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if not _text(req.get("signal_key"), 300):
+            return "bad_signal_key"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+        return None
     return "unknown_ops_cmd"
 
 
@@ -358,6 +367,45 @@ def _apply_adopt_summary_tx(db, req: dict, now: float) -> tuple[str | None, dict
     }
 
 
+def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    """Human dismissal of an open review-candidate signal. Appends a
+    'dismissed' signal_v1 transition row carrying actor+reason — the
+    evaluator keeps the key dismissed while its evidence is unchanged
+    and reopens only if the underlying evidence moves on."""
+    row = db.execute(
+        """SELECT project_id, content FROM artifacts
+           WHERE kind='signal_v1' AND json_valid(meta)
+             AND json_valid(content)
+             AND json_extract(meta,'$.key')=?
+           ORDER BY artifact_id DESC LIMIT 1""",
+        (req["signal_key"],)).fetchone()
+    if row is None:
+        return "signal_not_found", {"signal_key": req["signal_key"]}
+    content = json.loads(row["content"])
+    if row["project_id"] != req["project_id"]:
+        return "project_mismatch", {"signal_key": req["signal_key"]}
+    if content.get("state") != "open":
+        return "signal_not_open", {"signal_key": req["signal_key"],
+                                   "state": content.get("state")}
+    dismissed = dict(content, state="dismissed", dismissed_at=now,
+                     resolved_at=None, dismissed_by=req["actor"],
+                     dismiss_reason=req["reason"],
+                     dismiss_command_id=req["command_id"])
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("signal_v1", row["project_id"],
+         content.get("evidence", {}).get("message_id")
+         or content.get("evidence", {}).get("discharge_message_id"),
+         json.dumps(dismissed, ensure_ascii=False), "human",
+         json.dumps({"key": req["signal_key"],
+                     "type": content.get("type"),
+                     "command_id": req["command_id"],
+                     "actor": req["actor"]}, ensure_ascii=False), now))
+    return None, {"signal_key": req["signal_key"],
+                  "signal_type": content.get("type")}
+
+
 def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
@@ -370,6 +418,8 @@ def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]
         return _apply_control_tx(db, req, current)
     if req["cmd"] == "ops.adopt_summary":
         return _apply_adopt_summary_tx(db, req, current)
+    if req["cmd"] == "ops.signal_dismiss":
+        return _apply_signal_dismiss_tx(db, req, current)
     return "unknown_ops_cmd", {}
 
 
