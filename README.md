@@ -81,6 +81,41 @@ Discord で `/mcs <json>` が使えるようになる（status・snapshot閲覧�
 hermes-agent checkout 上でのみ収集される（無い環境では skip）。
 収集・通知パイプライン側のデータ dir は `~/.mcs`（実行時に自動生成）。
 
+### マシンセットアップ（収集パイプライン側）
+
+plugin の閲覧面だけなら上記で足りるが、収集・通知パイプラインを新規
+マシン（例: Mac mini）に立てる場合は `adapter/mcs_setup.py` を使う:
+
+```bash
+python3 adapter/mcs_setup.py init    # 対話式プロビジョニング
+python3 adapter/mcs_setup.py check   # 必須条件の検証（typesafe ゲート）
+```
+
+`init` が行うこと:
+
+- `~/.mcs/config.json` — `mcs_login_id`/`discord_channel_id` を設定
+  （既存キーは保持、0600）
+- macOS Keychain — MCS パスワードを `security add-generic-password
+  -s mcs-adapter` で登録（Mac mini の Google Chrome が使う login
+  keychain と同じ領域。adapter は `find-generic-password -w` で読み
+  CDP 経由でログインフォームへ注入 — 初回のみ Keychain ACL 確認あり）
+- `~/.mcs/.env` — `DISCORD_BOT_TOKEN`/`TYPESAFE_API_KEY` を追記保存
+  （0600、既存キー保持）
+- `--semantic-mode shadow|enforce` で semantic block を有効化
+  （`--project-ids` 必須、`--typesafe-key` で Jev キー登録）
+
+`check` が検証する必須条件（型まで検査、exit 1 で失敗）:
+
+- `mcs_login_id`: 非空文字列、`discord_channel_id`: 数値 ID
+- 任意キーの型・範囲（`discover_archived`/`deep_history`=bool、
+  `trickle_pages`=1-40、`signals.notify`=bool、`notify_bot_profile`=
+  `[a-z0-9_-]+` 等）— 不明キーは警告のみ
+- `semantic` block は本番 `semantic_config` validator に委譲
+  （mode!=off→`project_ids` 必須、enforce→calibration 必須 等）
+- 環境: Keychain `mcs-adapter` 項目・Chrome binary・
+  `DISCORD_BOT_TOKEN` 解決可能・semantic 有効時は
+  `TYPESAFE_API_KEY` 必須・ローカルLLM `127.0.0.1:8080` 到達性は警告
+
 ## 運用
 
 - スケジューラ: `~/Library/LaunchAgents/local.mcs-check.plist`

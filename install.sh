@@ -41,4 +41,10 @@ required — an unset value denies the command):
 `mcs_view.py stats/signals` and the scraping pipeline keep their own
 data dir at ~/.mcs — see README.md. See hermes_plugin/README.md for the
 full command surface and the preview/confirm flow.
+
+For a full machine setup (MCS credentials into macOS Keychain, config.json,
+.env secrets, local-LLM and typesafe/Jev requirements) run:
+
+  python3 $REPO/adapter/mcs_setup.py init      # interactive provisioning
+  python3 $REPO/adapter/mcs_setup.py check    # validate all conditions
 EOF
