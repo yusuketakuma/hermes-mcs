@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" font-family="Menlo, 'Hiragino Sans', monospace">
+  <rect width="720" height="260" fill="#0d1117"/>
+  <!-- card 1: medication -->
+  <rect x="16" y="24" width="164" height="130" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="32" y="52" font-size="12" fill="#8b949e">💊 Medication</text>
+  <text x="32" y="80" font-size="13" fill="#e6edf3">直近7日 薬剤変更 4件</text>
+  <text x="32" y="102" font-size="12" fill="#8b949e">通常28日平均</text>
+  <text x="32" y="122" font-size="12" fill="#8b949e">0.8件/週</text>
+  <text x="32" y="144" font-size="12" fill="#d29922">↑ 通常より多い</text>
+  <!-- card 2: collaboration -->
+  <rect x="192" y="24" width="164" height="130" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="208" y="52" font-size="12" fill="#8b949e">👥 Collaboration</text>
+  <text x="208" y="80" font-size="13" fill="#e6edf3">関与職種 2 → 5</text>
+  <text x="208" y="102" font-size="13" fill="#e6edf3">組織数   2 → 4</text>
+  <text x="208" y="144" font-size="12" fill="#d29922">↑ 連携が増加</text>
+  <!-- card 3: follow-up -->
+  <rect x="368" y="24" width="164" height="130" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="384" y="52" font-size="12" fill="#8b949e">⏱ Follow-up</text>
+  <text x="384" y="80" font-size="13" fill="#e6edf3">変更後の再評価</text>
+  <text x="384" y="102" font-size="13" fill="#e6edf3">記録まで 2.1日</text>
+  <text x="384" y="144" font-size="12" fill="#3fb950">範囲内</text>
+  <!-- card 4: review candidate -->
+  <rect x="544" y="24" width="164" height="130" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="560" y="52" font-size="12" fill="#8b949e">🔎 Review candidate</text>
+  <text x="560" y="80" font-size="12" fill="#e6edf3">薬剤変更後の</text>
+  <text x="560" y="100" font-size="12" fill="#e6edf3">再評価記録を</text>
+  <text x="560" y="120" font-size="12" fill="#e6edf3">確認してください</text>
+  <text x="560" y="144" font-size="11" fill="#8b949e">※記録上の確認依頼</text>
+  <text x="16" y="196" font-size="11" fill="#6e7681">Synthetic example — 架空データ。実患者データではありません</text>
+  <text x="16" y="216" font-size="11" fill="#6e7681">「記録が見つからない」は「対応がなかった」の証明ではありません</text>
+</svg>
