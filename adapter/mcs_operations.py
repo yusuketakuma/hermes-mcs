@@ -120,6 +120,17 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
         return None
+    if cmd == "ops.signal_policy":
+        allowed = base | {"policy", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if (not isinstance(req.get("policy"), dict)
+                or not req["policy"]
+                or not all(isinstance(k, str) for k in req["policy"])):
+            return "bad_policy"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+        return None
     return "unknown_ops_cmd"
 
 
@@ -406,6 +417,39 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
                   "signal_type": content.get("type")}
 
 
+def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    """Human-approved threshold override for the signal evaluator.
+    Appends a signal_policy_v1 artifact (latest wins, full audit trail);
+    per-key bounds are enforced here so a confirmed command cannot push
+    a detector into an absurd range. The policy is global — project_id
+    on the envelope is only the acting context, stored as NULL."""
+    from mcs_signals import POLICY_KIND, THRESHOLDS
+    policy = req["policy"]
+    unknown = sorted(k for k in policy if k not in THRESHOLDS)
+    if unknown:
+        return "unknown_policy_key", {"keys": unknown}
+    for name, value in policy.items():
+        _, low, high = THRESHOLDS[name]
+        if type(value) is not int or not (low <= value <= high):
+            return "bad_policy_value", {"key": name,
+                                        "bounds": [low, high]}
+    content = {"policy": dict(policy), "actor": req["actor"],
+               "reason": req["reason"], "command_id": req["command_id"],
+               "approved_at": now}
+    cur = db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
+        (POLICY_KIND, None,
+         json.dumps(content, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False),
+         "human",
+         json.dumps({"command_id": req["command_id"],
+                     "actor": req["actor"]}, ensure_ascii=False,
+                    sort_keys=True, separators=(",", ":")), now))
+    return None, {"policy_artifact_id": cur.lastrowid,
+                  "policy": dict(policy)}
+
+
 def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
@@ -420,6 +464,8 @@ def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]
         return _apply_adopt_summary_tx(db, req, current)
     if req["cmd"] == "ops.signal_dismiss":
         return _apply_signal_dismiss_tx(db, req, current)
+    if req["cmd"] == "ops.signal_policy":
+        return _apply_signal_policy_tx(db, req, current)
     return "unknown_ops_cmd", {}
 
 

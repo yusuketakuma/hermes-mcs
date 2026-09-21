@@ -193,21 +193,30 @@ $PY adapter/mcs_view.py signals --project 123
   `signal_v1` artifact として台帳に保持する（open→resolvedのライフサイクル、
   検知日・最終確認・証跡ID付き）。
 - 検知器: `request_overdue`（依頼登録の期限超過）、`request_aging`
-  （登録から30日超の未完了依頼）、`med_change_no_followup`（薬変更言及後
-  7日以内の後続記録を確認できない。対象メッセージに紐づく依頼登録が
-  あれば可視の追跡として抑制）、`comm_concentration`（直近72hの記録
-  集中）、`rx_period_expiry`（期間表現の終了間近）、
-  `transition_reconciliation`（退院言及±14日の薬変更言及の共起）。
+  （登録から30日超の未完了依頼）、`med_change_no_followup`（部屋×薬の
+  エピソード単位。同一薬の最新言及が7日窓を過ぎても後続記録・依頼登録を
+  確認できない場合のみ — 後で応答のあった言及はその薬を追跡中とみなし
+  抑制）、`comm_concentration`（直近72hの記録集中）、`rx_period_expiry`
+  （期間表現の終了間近）、`transition_reconciliation`（退院言及±14日の
+  薬変更言及の共起）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
 - 人による却下: `mcs_view.py control signal_dismiss --confirm-human` に
   `{"project_id":…, "signal_key":"…", "reason":"…"}` を渡すと、理由・
   実行者付きの dismissed 遷移行を追加する。同じ証跡の間は再検出を
   抑制し、証跡が変われば新しい状況として再openする。
+- 閾値の人承認変更: `mcs_view.py control signal_policy --confirm-human` に
+  `{"project_id":…, "policy":{"req_age_days":14,…}, "reason":"…"}` を渡すと
+  `signal_policy_v1` artifact として記録され、最新が有効値となる
+  （キーごとに上限/下限あり。未承認なら既定値）。統計の閲覧が検知条件に
+  影響する経路はなく、閾値は人確認コマンド経由でのみ変わる。
+- 同一シグナルキーの再通知は最終送信から7日（既定値、policyで変更可）の
+  クールダウンで抑制する — open/resolved を往復するシグナルが通知を
+  連発しない。
 - 通知は config の `signals.notify:true` を明示設定した場合のみ既存の
   notify_outbox 経路（kind='signal'、本文はenqueue時に固定）で送る。
-  既定は通知なし。
-- 閾値は固定定数。統計の閲覧が検知条件に影響しない。
+  既定は通知なし。送信直前にフラグとシグナルの現状態を再検査し、
+  無効化・解決・却下済みの intent は送らない。
 
 ### 人が確認して依頼を登録・更新
 

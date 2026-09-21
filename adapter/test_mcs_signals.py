@@ -93,8 +93,40 @@ def test_med_change_no_followup(led):
     assert res["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
     assert sig["type"] == "med_change_no_followup"
+    assert sig["evidence"]["med"] == "薬A"
+    assert sig["evidence"]["message_ids"] == [1]
     assert "確認できませんでした" in sig["note"]
     assert "対応の有無を示すものではありません" in sig["note"]
+
+
+def test_med_episode_groups_same_med(led):
+    """Repeated mentions of the same med collapse into ONE signal per
+    room — the episode keeps all qualifying mention ids as evidence."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"},
+                                   {"name": "薬B", "action": "start"}])
+    _msg(led.db, 3, ts=NOW - 10 * DAY, chash="h3")   # last room post
+    res = _ev(led)
+    # last post is inside neither 30d+7d nor 20d+7d window -> both
+    # mentions qualify; one signal for 薬A AND one for 薬B
+    sigs = mcs_signals.current_open(led.db)["items"]
+    meds = {s["evidence"]["med"]: s["evidence"]["message_ids"]
+            for s in sigs if s["type"] == "med_change_no_followup"}
+    assert meds == {"薬A": [1, 2], "薬B": [2]}
+    assert res["open"] == 2
+
+
+def test_med_episode_suppressed_by_later_answered_mention(led):
+    """An early unanswered mention is suppressed when the LATEST mention
+    of the same med did get a follow-up post in its window."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 15 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"}])
+    _msg(led.db, 3, ts=NOW - 13 * DAY)   # answers the -15d mention only
+    assert _ev(led)["open"] == 0
 
 
 def test_med_change_with_followup_not_flagged(led):
@@ -278,6 +310,31 @@ def test_notify_dedup_on_reopen_flap(led):
     assert n == 1 and res["notify_enqueued"] == 0
 
 
+def test_notify_cooldown_suppresses_renotify(led):
+    """A key notified recently stays silent on reopen; after the
+    cooldown a genuine reopen notifies again."""
+    _req(led.db, "open", due="2026-09-10")
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    led.db.execute(
+        "UPDATE notify_outbox SET state='accepted', updated_at=?",
+        (NOW - 2 * DAY,))                        # delivered 2d ago
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='open'")
+    res = _ev(led, cfg=cfg)                      # reopened inside cooldown
+    assert res["notify_enqueued"] == 0
+    n = led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0]
+    assert n == 1
+    led.db.execute("UPDATE notify_outbox SET updated_at=?",
+                   (NOW - 8 * DAY,))             # cooldown elapsed
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='open'")
+    res = _ev(led, cfg=cfg)
+    assert res["notify_enqueued"] == 1
+
+
 # --- send-time gates (notifier._format_event) ---
 
 def _sig_ev(led):
@@ -388,6 +445,60 @@ def test_dismiss_validation(led):
         led, {**base, "command_id": str(uuid4()),
               "reason": "r"})                  # missing signal_key
     assert r["outcome"] == "rejected" and r["error"] == "bad_signal_key"
+
+
+# --- human-approved threshold policy (ops.signal_policy) ---
+
+def _policy(led, policy, reason="閾値承認"):
+    import mcs_requests
+    from uuid import uuid4
+    req = {"cmd": "ops.signal_policy", "version": 1,
+           "command_id": str(uuid4()), "actor": "tester",
+           "human_confirmed": True, "project_id": 1,
+           "policy": policy, "reason": reason}
+    return mcs_requests.apply_command(led, req)
+
+
+def test_policy_override_changes_detection(led):
+    _req(led.db, "open", created=NOW - 10 * DAY)   # 10d old
+    assert _ev(led)["open"] == 0                 # default: 30d
+    r = _policy(led, {"req_age_days": 7})
+    assert r["outcome"] == "applied"
+    res = _ev(led)                               # approved 7d -> flags
+    assert res["open"] == 1
+    assert mcs_signals.current_open(led.db)["items"][0]["type"] \
+        == "request_aging"
+
+
+def test_policy_latest_wins_and_audited(led):
+    _policy(led, {"req_age_days": 10})
+    _policy(led, {"req_age_days": 40}, reason="再調整")
+    _req(led.db, "open", created=NOW - 20 * DAY)
+    assert _ev(led)["open"] == 0                 # latest = 40d
+    rows = led.db.execute(
+        "SELECT content, project_id FROM artifacts "
+        "WHERE kind='signal_policy_v1' ORDER BY artifact_id").fetchall()
+    assert len(rows) == 2 and rows[0]["project_id"] is None
+    c = json.loads(rows[-1]["content"])
+    assert c["policy"] == {"req_age_days": 40}
+    assert c["actor"] == "tester" and c["reason"] == "再調整"
+
+
+def test_policy_validation(led):
+    r = _policy(led, {"bogus_key": 5})
+    assert r["outcome"] == "rejected" and r["error"] == "unknown_policy_key"
+    r = _policy(led, {"req_age_days": 9999})
+    assert r["outcome"] == "rejected" and r["error"] == "bad_policy_value"
+    r = _policy(led, {"req_age_days": "five"})
+    assert r["outcome"] == "rejected" and r["error"] == "bad_policy_value"
+    import mcs_requests
+    from uuid import uuid4
+    r = mcs_requests.apply_command(led, {
+        "cmd": "ops.signal_policy", "version": 1,
+        "command_id": str(uuid4()), "actor": "t",
+        "human_confirmed": True, "project_id": 1,
+        "policy": {}, "reason": "r"})
+    assert r["outcome"] == "rejected" and r["error"] == "bad_policy"
 
 
 # --- malformed data resilience ---
