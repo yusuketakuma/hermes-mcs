@@ -1,51 +1,49 @@
 # AGENTS.md — hermes-mcs
 
-エージェント作業時の指示。人間向けの詳細は `README.md`。
+エージェント作業用の最小指示。詳細は `README.md`・`SECURITY.md`。
+
+## これは何か（機能サマリ）
+
+MedicalCareStation (MCS) の医療・介護チャットを収集・解析するローカルシステム:
+
+- 15分間隔で未読収集 → SQLite(`data/ledger.db`) → Discord 通知
+- 全履歴アーカイブ・FTS5 全文検索・患者タイムライン
+- 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`(Qwen3.5-9B、外部送信なし)
+- 読み取り専用統計・レビュー候補シグナル6種・人承認の依頼管理
+- Hermes addon(`hermes_plugin/`): Discord `/mcs <json>` で閲覧・preview/confirm
 
 ## 構成
 
-- `mcs/` — 実行モジュール（flat import、`sys.path` に `mcs/` を挿入して `import ledger` 等）
-- `tests/` — pytest（`conftest.py` が `../mcs` を sys.path に挿入 + 環境隔離ガード）
-- `hermes_plugin/` — `/mcs` コマンドを登録する plugin（`../mcs` を相対参照）
-- `integration/` — hermes-agent checkout 上でのみ収集される E2E
-- `deployment/` — cco 隔離設定・launchagents テンプレート
-- `docs/` — 運用資料。開発記録は `docs/dev-records/`
-- `scripts/` — `run_tests.sh`（sandbox env で pytest）、`update_readme.py`
+- `mcs/` — 実行モジュール（flat import: `sys.path` に `mcs/` を挿入して `import ledger`）
+- `tests/` — pytest（`conftest.py` が sys.path 挿入 + socket 遮断ガード）
+- `hermes_plugin/` · `integration/`(hermes E2E) · `deployment/` · `docs/`
+- `scripts/` — `run_tests.sh`、`update_readme.py`
 
 ## コマンド
 
 ```bash
-python -m pytest              # 全テスト（pyproject で testpaths=tests）
-ruff check mcs/ tests/        # lint（pyproject の select=E4,E7,E9,F）
-python3 scripts/update_readme.py          # README モジュール表を再生成
-python3 scripts/update_readme.py --check  # drift 検出
-python3 mcs/mcs_setup.py check            # 実機環境の必須条件検証
+python -m pytest                    # 全テスト（pyproject: testpaths=tests）
+ruff check mcs/ tests/              # lint（pyproject: select=E4,E7,E9,F）
+python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
+python3 mcs/mcs_setup.py check      # 実機の必須条件検証
 ```
 
-`uv` があれば `uv run --with pytest python -m pytest` で依存なし実行できる。
+`make test|lint|readme|check` も利用可（uv があれば ephemeral 実行）。
 
-## 規約
+## 絶対ルール
 
-- **依存は標準ライブラリのみ**。`yaml`/`requests` 等を新たに import しない
-- テストは一時DBと通信スタブのみ — 実 MCS・Discord・Keychain・原本DB・
-  ローカルLLM・Jev へは絶対にアクセスしない（conftest が socket を遮断）
-- **安全ゲートを壊さない**: 既読化ゲート（snapshot timestamp 必須）、
-  no-redirect/no-proxy、定期実行は本文・氏名をログに出さない、
+- **依存は標準ライブラリのみ**。新しい外部 import を加えない
+- テストは一時DB+スタブのみ。実 MCS・Discord・Keychain・原本DB・
+  ローカルLLM・Jev へ**一切アクセスしない**
+- 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）
+- **安全ゲートを壊さない**: 既読化は snapshot timestamp 必須、no-redirect/no-proxy、
   人承認操作は `--confirm-human`+`reason`+receipt 経路のみ
-- 「記録が見つからない」≠「対応がなかった」— 候補提示は必ずこの区別を保持
-- 構造は facade+同階層 sibling 分解。強結合なモジュールを行数だけで
-  機械分割しない（`ledger.py`/`mcs_adapter.py`/`semantic_drain` は凝集単位）
-- 大きなモジュールは `semantic_*.py` のように機能別 prefix で並べる
-- コメントは最小限。既存コメントを勝手に消さない
+- 「記録が見つからない」≠「対応がなかった」— 候補提示はこの区別を保持
+- 大きな凝集モジュール（`ledger.py`/`mcs_adapter.py`/`semantic_drain`）を
+  行数だけで機械分割しない
 
 ## README 自動生成
 
-`scripts/update_readme.py` が `<!-- GENERATED:name -->` マーカー内を再生成:
-
-- `modules` — `mcs/*.py` の docstring 先頭行
-- `signals` — `mcs_signals.DETECTORS`（検知器名+docstring 先頭文）
-- `stats` — `mcs_stats.REGISTRY`/`PRESETS`
-- `cli` — `mcs_view` argparse サブコマンド
-
-該当箇所を変更したら必ず `python3 scripts/update_readme.py` を実行
-（CI が drift を検出する）。docstring の先頭文は公開されるので1文要約にする。
+`mcs/*.py` 追加・docstring 変更・検知器/統計/サブコマンド追加時は
+`python3 scripts/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
+docstring 先頭文は公開されるので1文要約にする。
