@@ -88,7 +88,13 @@ def test_usage_reservation_survives_unknown_post_failure(tmp_path):
 
 
 def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypatch):
-    clock = [time.time()]
+    # Pin the clock to JST noon: advancing +301s per drain must not cross
+    # the daily-budget boundary that jev_usage_today() measures against.
+    import math
+    now = time.time()
+    jst_noon = math.floor((now + 9 * 3600) / 86400) * 86400 \
+        - 9 * 3600 + 12 * 3600
+    clock = [jst_noon]
     monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
     db = _seeded(tmp_path)
     calls = []

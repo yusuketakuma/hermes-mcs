@@ -26,8 +26,9 @@ import time
 from datetime import datetime
 
 from mcs_queries import (CHANGE_ACTIONS_SQL, DAY_S, JST,
-                         current_extract_pred, iter_period_ends,
-                         med_period_artifacts, transition_cooccurrences)
+                         MED_PATIENT_CURRENT_SQL, current_extract_pred,
+                         iter_period_ends, med_period_artifacts,
+                         transition_cooccurrences)
 
 ARTIFACT_KIND = "signal_v1"
 
@@ -127,7 +128,10 @@ def _med_followup(db, now, th):
                   AND json_extract(je.value,'$.action')
                       IN ({CHANGE_ACTIONS_SQL})
                   AND json_type(je.value,'$.name')='text'
-                  AND TRIM(json_extract(je.value,'$.name'))!=''),
+                  AND TRIM(json_extract(je.value,'$.name'))!=''
+                  -- a negated / other-person / historical-report med
+                  -- mention is not a change needing follow-up
+                  AND {MED_PATIENT_CURRENT_SQL}),
             latest AS (
                 SELECT pid, med, MAX(ts) AS lts FROM med_msgs
                 GROUP BY pid, med)

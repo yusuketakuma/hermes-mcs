@@ -23,6 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger import Ledger
+from mcs_queries import med_is_patient_current
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -106,6 +107,13 @@ def build_rollup(ledger, project_id: int) -> dict:
             med_period = periods[-1]
         for x in _dicts(lm.get("meds")):
             name = x.get("name")
+            # negated mentions, other people's meds, and past/planned
+            # mentions must not surface as the patient's CURRENT meds —
+            # the shared predicate still lets "planned" through, so the
+            # explicit status check below keeps current-meds strict
+            if not med_is_patient_current(x) \
+                    or x.get("status", "current") != "current":
+                continue
             if isinstance(name, str) and name not in ("", "処方薬", "薬"):
                 meds.setdefault(name, {"dose": x.get("dose"),
                                        "last": m["posted_at"]})
@@ -124,8 +132,9 @@ def build_rollup(ledger, project_id: int) -> dict:
                 continue
             # LLM polarity: a negation newer than a positive mention
             # RESOLVES the symptom — it must cancel v1/rule positives,
-            # not just be skipped (Oracle B24)
-            if s.get("negated"):
+            # not just be skipped (Oracle B24). resolved/past statuses
+            # resolve the same way — they are not ongoing symptoms.
+            if s.get("negated") or s.get("status") in ("resolved", "past"):
                 sym_neg.setdefault(t, ts)
             else:
                 sym_pos.setdefault(t, ts)

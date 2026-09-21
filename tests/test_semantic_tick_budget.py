@@ -85,7 +85,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         lambda db, result: drain(db, result, str(data / "cmd")),
     )
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
-    monkeypatch.setattr(extract_llm, "llm_extract", lambda body: None)
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda: False)
     monkeypatch.setattr(semantic.jev, "JevClient", _BudgetJev)
     def flush(ledger, *args, **kwargs):

@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "note": "All bodies are fully synthetic fixtures written for regression testing. Never place real message text here.",
+  "cases": [
+    {
+      "id": "med-stop-simple",
+      "body": "本日の往診でプレドニン5mgの中止を指示しました。副作用の食欲不振が改善傾向です。",
+      "expect": {
+        "meds": [{"name": "プレドニン", "action": "stop"}],
+        "symptoms": [{"text": "食欲不振", "negated": false}],
+        "events": ["visit"],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "symptom-negated",
+      "body": "バイタル確認しました。発熱なし、SpO2 97%、脈拍78で安定しています。胸痛の訴えもありません。",
+      "expect": {
+        "symptoms": [{"text": "発熱", "negated": true},
+                     {"text": "胸痛", "negated": true}],
+        "urgency": "routine"
+      },
+      "forbid": {
+        "symptoms": [{"text": "発熱", "negated": false},
+                     {"text": "胸痛", "negated": false}]
+      }
+    },
+    {
+      "id": "family-med-not-patient",
+      "body": "ご家族から、お兄様が降圧薬を飲み忘れたと相談がありました。患者本人の服薬状況に変更はありません。",
+      "expect": {"urgency": "routine"},
+      "forbid": {
+        "meds": [{"name": "降圧薬"}]
+      }
+    },
+    {
+      "id": "past-med-history",
+      "body": "既往歴の確認です。5年前までワーファリンを内服していましたが、現在は中止済みです。",
+      "expect": {
+        "meds": [{"name": "ワーファリン"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "planned-med-start",
+      "body": "次回訪問時にリハビリ担当と相談の上、レボドパ100mgの開始を検討します。",
+      "expect": {
+        "meds": [{"name": "レボドパ"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "med-no-dose",
+      "body": "褥瘡の処置を行い、亜鉛華軟膏を塗布しました。",
+      "expect": {
+        "meds": [{"name": "亜鉛華軟膏"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "request-with-role",
+      "body": "看護師さんへ：明日の訪問時に創部の写真を撮影してください。医師への報告用です。",
+      "expect": {
+        "requests": [{"action": "創部の写真を撮影"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "urgent-fall",
+      "body": "本日午後、ベッドからの転落を認めました。左側頭部に皮下血腫あり、意識清明ですが経過観察が必要です。至急ご確認ください。",
+      "expect": {
+        "events": ["fall"],
+        "urgency": "high"
+      }
+    },
+    {
+      "id": "percent-literal",
+      "body": "SpO2 97%まで回復。前回の93%から改善しています。加湿を継続してください。",
+      "expect": {"urgency": "routine"},
+      "forbid": {}
+    },
+    {
+      "id": "vitals-and-ongoing-symptom",
+      "body": "体温38.2℃、脈拍102。咳嗽は昨日から継続しています。解熱剤は使用せず経過観察としました。",
+      "expect": {
+        "symptoms": [{"text": "咳嗽", "negated": false}],
+        "urgency": "routine"
+      },
+      "forbid": {
+        "meds": [{"name": "解熱剤", "action": "start"}],
+        "symptoms": [{"text": "咳嗽", "negated": true}]
+      }
+    },
+    {
+      "id": "symptom-resolved",
+      "body": "先週からの嘔吐は本日確認されず、解消したと判断します。水分摂取は継続してください。",
+      "expect": {
+        "symptoms": [{"text": "嘔吐"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "admission-event",
+      "body": "本日15時にA病院へ入院となりました。肺炎の疑いで精査予定です。家族には連絡済み。",
+      "expect": {
+        "events": ["admission", "family_contact"],
+        "urgency": "high"
+      }
+    },
+    {
+      "id": "exam-scheduled",
+      "body": "来週火曜日に採血と胸部レントゲンの予定です。当日は朝食抜きでお願いします。",
+      "expect": {
+        "events": ["exam"],
+        "requests": [{"action": "朝食"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "mixed-med-actions",
+      "body": "血圧の推移を踏まえ、アムロジピン5mgは中止、代わりにカルベジロール2.5mgを開始しました。",
+      "expect": {
+        "meds": [{"name": "アムロジピン", "action": "stop"},
+                 {"name": "カルベジロール", "action": "start"}],
+        "urgency": "routine"
+      }
+    }
+  ]
+}

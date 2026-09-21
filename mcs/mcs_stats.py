@@ -24,7 +24,8 @@ from datetime import datetime, timedelta
 
 from mcs_queries import (CHANGE_ACTIONS, DAY_S, JST, MED_ACTIONS,
                          current_extract_pred, iter_period_ends,
-                         med_period_artifacts, transition_cooccurrences)
+                         med_is_patient_current, med_period_artifacts,
+                         transition_cooccurrences)
 DEFINITION_VERSION = "2026-09-21"
 STATS_SCHEMA = "stats_v1"
 
@@ -130,7 +131,8 @@ def st_data_quality(db, scope):
     body_states = db.execute(
         f"SELECT COALESCE(body_state,'null'), COUNT(*) FROM messages m"
         f" WHERE 1=1{w} GROUP BY 1", p).fetchall()
-    # parsed = a current-version extract_llm artifact exists
+    # parsed = a hash-current extract_llm artifact exists (any schema
+    # version — v1 rows stay readable until lazily replaced by v2)
     parsed = db.execute(
         f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
             AND EXISTS (SELECT 1 FROM artifacts a
@@ -338,8 +340,12 @@ def _med_rows(db, scope):
             continue
         seen.add(mid)
         for med in (json.loads(content).get("meds") or []):
-            if isinstance(med, dict):
-                yield pid, mid, med, ts
+            # negated / other-person / historical-report mentions are
+            # not the patient's current medication activity — the same
+            # predicate the prospective signal applies
+            if not med_is_patient_current(med):
+                continue
+            yield pid, mid, med, ts
 
 
 def st_meds(db, scope):
@@ -385,8 +391,8 @@ def st_med_mentions(db, scope):
         "rooms_with_mentions": len(rows),
         "by_room": _items(rows, scope["limit"]),
         "notes": ["distinct names in period ≠ currently used drugs",
-                  "negated / past / family mentions not separated yet "
-                  "(needs valid_facts polarity)"]})
+                  "negated / other-person / historical mentions are "
+                  "excluded by med_is_patient_current"]})
 
 
 def st_med_change_burden(db, scope):
@@ -498,8 +504,11 @@ def st_med_change_followup(db, scope):
             continue
         seen.add(mid)
         meds = json.loads(content).get("meds") or []
-        if not any(isinstance(x, dict)
-                   and x.get("action") in MED_ACTIONS
+        # CHANGE_ACTIONS only — a "none" (no-change) mention is not a
+        # change; negated/other-person/historical mentions are filtered
+        # by the same predicate the signal detector uses
+        if not any(med_is_patient_current(x)
+                   and x.get("action") in CHANGE_ACTIONS
                    for x in meds):
             continue
         total += 1

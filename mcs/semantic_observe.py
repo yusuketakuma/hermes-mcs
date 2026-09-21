@@ -51,13 +51,19 @@ def observe(db_path: str = DB) -> dict:
         "SELECT json_extract(meta,'$.audit_status'), COUNT(*) "
         "FROM artifacts WHERE kind='semantic_audit' "
         "AND json_extract(meta,'$.repair_count')=1 GROUP BY 1")}
+    # version-aware: counts the messages still lacking a CURRENT-schema
+    # artifact — matches run_pending's `left`, so migration progress is
+    # visible instead of reading 0 while the v2 backlog drains
+    from extract_llm import EXTRACT_VERSION
     extract_left = q(
         "SELECT COUNT(*) FROM messages m WHERE m.body_text IS NOT NULL "
         "AND m.body_text != '' AND NOT EXISTS "
         "(SELECT 1 FROM artifacts a WHERE a.kind='extract_llm' "
         " AND a.message_id=m.message_id AND json_valid(a.meta) "
         " AND json_extract(a.meta,'$.error') IS NOT 1 "
-        " AND json_extract(a.meta,'$.hash')=m.content_hash)")[0][0]
+        " AND json_extract(a.meta,'$.hash')=m.content_hash "
+        " AND json_extract(a.meta,'$.extract_version')=?)",
+        (EXTRACT_VERSION,))[0][0]
     from semantic_store import _jst_day_start
     jst_start = _jst_day_start(time.time())
     jev_today = q(

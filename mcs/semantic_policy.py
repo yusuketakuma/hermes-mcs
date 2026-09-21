@@ -12,6 +12,8 @@ import semantic_jev as jev
 SCHEMA_VERSION = "2026-09-20"
 POLICY_VERSION = "2026-09-21.2"
 JOB_KIND = "semantic"
+QC_JOB_KIND = "extract_qc"
+QC_ARTIFACT = "extract_qc"
 
 KIND_BUNDLE = "semantic_bundle"
 KIND_ASSESS = "semantic_assess"
@@ -32,6 +34,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
     typo can never widen the rollout stage (spec §22.1, AT-067)."""
     errors = []
     out = {"mode": "off", "summary_mode": "off", "loop_mode": "off",
+           "extract_qc": "off",
            "threshold_mode": "shadow_only", "calibration_version": None,
            "model": jev.JEV_MODEL,
            "daily_request_budget": 0,
@@ -63,6 +66,11 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             errors.append(f"config: semantic_{feature}_invalid")
         else:
             out[feature] = value
+    qc = block.get("extract_qc", "off")
+    if qc not in ("off", "annotate"):
+        errors.append("config: semantic_extract_qc_invalid")
+    else:
+        out["extract_qc"] = qc
     threshold_mode = block.get("threshold_mode", "shadow_only")
     if threshold_mode not in ("shadow_only", "calibrated"):
         errors.append("config: semantic_threshold_mode_invalid")

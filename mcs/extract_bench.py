@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Field-level benchmark for extract_llm (message-level extraction).
+
+Runs llm_extract over a FROZEN corpus of fully-synthetic labeled cases
+and reports per-field precision/recall — so prompt, schema, or model
+changes can be A/B compared numerically without human labeling and
+without touching the ledger.
+
+  extract_bench.py run --cases bench/extract_cases.json --tag v2 \
+      --out bench_v2.json
+  extract_bench.py report bench_v1.json bench_v2.json
+  extract_bench.py run --mock-ok   # offline sanity: validation only
+
+Case file format (all bodies MUST be synthetic — never real messages):
+
+  {"version": 1, "cases": [
+    {"id": "negated-fever", "body": "...",
+     "expect": {"meds": [{"name": "...", "action": "stop"}],
+                "symptoms": [{"text": "発熱", "negated": true}],
+                "events": ["visit"], "urgency": "routine"},
+     "forbid": {"meds": [{"name": "..."}]}}]}
+
+Matching is deliberately loose: meds key on (name, action), symptoms on
+text containment, events/urgency exact. `expect` entries must appear;
+`forbid` entries must not. Items the model dropped count as FN; extra
+items matching nothing count as FP.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "bench", "extract_cases.json")
+
+
+def _match_med(expected: dict, got: list) -> bool:
+    return any(type(m) is dict
+               and m.get("name") == expected.get("name")
+               and (expected.get("action") in (None, m.get("action")))
+               for m in got)
+
+
+def _match_symptom(expected: dict, got: list) -> bool:
+    want = expected.get("text", "")
+    return any(type(s) is dict
+               and want and want in str(s.get("text", ""))
+               and s.get("negated") == expected.get("negated", False)
+               for s in got)
+
+
+def _field_pr(expected: list, got: list, matcher,
+              strict_fp: bool = True) -> dict:
+    """tp/fp/fn for one field. With strict_fp=False the open-vocabulary
+    fields (events) only count forbid-matching extras as FP — the model
+    legitimately emits 'care'/'visit' on nearly every post, so unlisted
+    extras would be noise rather than a regression signal."""
+    tp = sum(1 for e in expected if matcher(e, got))
+    fp = sum(1 for g in got
+             if not any(matcher(e, [g]) for e in expected)) \
+        if strict_fp else 0
+    return {"tp": tp, "fp": fp, "fn": len(expected) - tp}
+
+
+def _score_case(case: dict, out: dict | None) -> dict:
+    """Score one extraction against expectations. Returns per-field
+    counts plus forbid violations."""
+    exp = case.get("expect", {})
+    forbid = case.get("forbid", {})
+    if out is None:
+        return {"id": case["id"], "error": "extract_failed",
+                "fields": {}}
+    got_meds = out.get("meds") or []
+    got_syms = out.get("symptoms") or []
+    got_events = out.get("events") or []
+    fields = {
+        "meds": _field_pr(exp.get("meds", []), got_meds, _match_med),
+        "symptoms": _field_pr(exp.get("symptoms", []), got_syms,
+                              _match_symptom),
+        "events": _field_pr(exp.get("events", []), got_events,
+                            lambda e, g: e in g, strict_fp=False),
+    }
+    if "urgency" in exp:
+        ok = out.get("urgency") == exp["urgency"]
+        fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
+                             "fn": int(not ok)}
+    violations = []
+    for fm in forbid.get("meds", []):
+        if _match_med(fm, got_meds):
+            violations.append(f"meds:{fm.get('name')}")
+    for fs in forbid.get("symptoms", []):
+        if _match_symptom(fs, got_syms):
+            violations.append(f"symptoms:{fs.get('text')}")
+    for fe in forbid.get("events", []):
+        if fe in got_events:
+            violations.append(f"events:{fe}")
+            fields["events"]["fp"] += 1
+    if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
+        violations.append(f"urgency:{forbid['urgency']}")
+    return {"id": case["id"], "fields": fields,
+            "forbid_violations": violations,
+            "items_dropped": out.get("_items_dropped", 0),
+            "evidence_dropped": out.get("_evidence_dropped", 0),
+            "raw": {k: out.get(k) for k in
+                    ("meds", "symptoms", "events", "urgency")}}
+
+
+def _aggregate(scores: list[dict]) -> dict:
+    agg = {}
+    for s in scores:
+        for field, c in s.get("fields", {}).items():
+            a = agg.setdefault(field, {"tp": 0, "fp": 0, "fn": 0})
+            for k in a:
+                a[k] += c[k]
+    for a in agg.values():
+        p = a["tp"] / (a["tp"] + a["fp"]) if a["tp"] + a["fp"] else 0.0
+        r = a["tp"] / (a["tp"] + a["fn"]) if a["tp"] + a["fn"] else 0.0
+        a["precision"] = round(p, 3)
+        a["recall"] = round(r, 3)
+        a["f1"] = (round(2 * p * r / (p + r), 3) if p + r else 0.0)
+    return agg
+
+
+def _load_cases(path: str) -> list:
+    corpus = json.load(open(path))
+    cases = corpus.get("cases")
+    if not isinstance(cases, list):
+        raise ValueError("cases file must contain a 'cases' list")
+    for c in cases:
+        if not isinstance(c.get("body"), str) or not c.get("id"):
+            raise ValueError("each case needs string 'body' and 'id'")
+    return cases
+
+
+def cmd_run(args) -> int:
+    cases = _load_cases(args.cases)
+    if args.mock_ok:
+        import extract_llm
+        results = [{"id": c["id"],
+                    "validate_ok": isinstance(
+                        extract_llm._validate(c.get("expect", {})), dict)}
+                   for c in cases]
+        bad = [r for r in results if not r["validate_ok"]]
+        print(f"mock: {len(results)} cases, "
+              f"{len(bad)} expectations fail _validate")
+        for r in bad:
+            print("  INVALID EXPECTATION:", r["id"])
+        return 1 if bad else 0
+    import extract_llm
+    scores = []
+    t0 = time.time()
+    for c in cases:
+        out = extract_llm.llm_extract(c["body"])
+        if out is extract_llm._DEFERRED:
+            out = None
+        scores.append(_score_case(c, out))
+        print(f"  {c['id']}: "
+              + ("FAIL" if scores[-1].get("error") else "ok"))
+    agg = _aggregate(scores)
+    report = {"tag": args.tag, "created_at": int(time.time()),
+              "elapsed_s": round(time.time() - t0, 1),
+              "n_cases": len(cases),
+              "errors": [s["id"] for s in scores if s.get("error")],
+              "fields": agg, "cases": scores}
+    with open(args.out, "w") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    print(f"\n{args.tag}: {len(cases)} cases, "
+          f"{len(report['errors'])} extraction errors -> {args.out}")
+    for field, a in agg.items():
+        print(f"  {field:9s} P={a['precision']:.3f} "
+              f"R={a['recall']:.3f} F1={a['f1']:.3f}")
+    vio = [(s["id"], s["forbid_violations"])
+           for s in scores if s.get("forbid_violations")]
+    if vio:
+        print("  forbid violations:")
+        for cid, v in vio:
+            print(f"    {cid}: {v}")
+    return 0
+
+
+def cmd_report(args) -> int:
+    reps = [json.load(open(p)) for p in args.files]
+    fields = sorted({f for r in reps for f in r["fields"]})
+    print(f"{'field':10s}" + "".join(f"{r['tag']:>24s}" for r in reps))
+    for field in fields:
+        row = f"{field:10s}"
+        for r in reps:
+            a = r["fields"].get(field)
+            row += (f"  P{a['precision']:.2f} R{a['recall']:.2f}"
+                    f" F1{a['f1']:.2f}" if a else " " * 24)
+        print(row)
+    for r in reps:
+        if r["errors"]:
+            print(f"{r['tag']} extraction errors: {r['errors']}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--cases", default=DEFAULT_CASES)
+    r.add_argument("--tag", default="run")
+    r.add_argument("--out", required=True)
+    r.add_argument("--mock-ok", action="store_true",
+                   help="offline: only check expectations pass _validate")
+    r.set_defaults(fn=cmd_run)
+    p = sub.add_parser("report")
+    p.add_argument("files", nargs="+")
+    p.set_defaults(fn=cmd_report)
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

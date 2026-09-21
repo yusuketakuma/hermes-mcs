@@ -9,6 +9,9 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 - 15分間隔で未読収集 → SQLite(`data/ledger.db`) → Discord 通知
 - 全履歴アーカイブ・FTS5 全文検索・患者タイムライン
 - 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`(Qwen3.5-9B、外部送信なし)
+  — スキーマ v2（薬剤 action/status/subject・症状 status・evidence スパン）
+- 抽出項目の Jev QC 監査: `semantic.extract_qc:"annotate"` で `extract_qc`
+  artifact に注記のみ記録（抽出の変更・抑制なし、drain ガード共有）
 - 読み取り専用統計・レビュー候補シグナル6種・人承認の依頼管理
 - Hermes addon(`hermes_plugin/`): Discord `/mcs <json>` で閲覧・preview/confirm
 
@@ -36,6 +39,7 @@ python3 mcs/mcs_setup.py check      # 実機の必須条件検証
 - テストは一時DB+スタブのみ。実 MCS・Discord・Keychain・原本DB・
   ローカルLLM・Jev へ**一切アクセスしない**
 - 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）
+  — ベンチ・few-shot・テスト fixture は**完全合成のみ**（実投稿の匿名化も不可）
 - **安全ゲートを壊さない**: 既読化は snapshot timestamp 必須、no-redirect/no-proxy、
   人承認操作は `--confirm-human`+`reason`+receipt 経路のみ
 - 「記録が見つからない」≠「対応がなかった」— 候補提示はこの区別を保持

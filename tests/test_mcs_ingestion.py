@@ -353,7 +353,7 @@ def test_llm_error_retry_resets_after_body_change(tmp_path, monkeypatch):
     row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     extract_llm._fail(db, row, 4)
     db.save_messages([_message(body="B")])
-    monkeypatch.setattr(extract_llm, "llm_extract", lambda body: {})
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: {})
 
     result = extract_llm.run_pending(db, limit=1, budget_s=5)
 
@@ -369,7 +369,7 @@ def test_malformed_llm_retry_metadata_is_held(tmp_path, monkeypatch):
             "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
             "VALUES('extract_llm',1,1,'{}','{broken')")
     monkeypatch.setattr(
-        extract_llm, "llm_extract", lambda body: pytest.fail("must not retry"))
+        extract_llm, "llm_extract", lambda body, **_: pytest.fail("must not retry"))
 
     result = extract_llm.run_pending(db, limit=1, budget_s=5)
 
@@ -651,7 +651,7 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(job_ops, "drain_commands", lambda db, result:
                         drain(db, result, str(data / "cmd")))
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
-    monkeypatch.setattr(extract_llm, "llm_extract", lambda body: None)
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda: False)
     monkeypatch.setattr(notifier, "flush", lambda *a, **k:
                         pytest.fail("notification forbidden"))

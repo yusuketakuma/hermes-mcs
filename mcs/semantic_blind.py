@@ -107,7 +107,9 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     """Build comparison texts; baseline_fn is explicitly supplied by the caller.
 
     candidate/final are decoded artifact rows (content and meta are objects).
-    The production baseline receives only the target body, as it always did.
+    The baseline receives the target body plus the same thread context the
+    production extractor would see (earlier bundle members of its thread),
+    so it measures the same input configuration as run_pending.
     """
     import semantic
     from summary_review import _validate_candidate, _validate_baseline
@@ -160,7 +162,22 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
             or candidate["meta"]["policy_fingerprint"] != final["meta"].get("policy_fingerprint")
             or candidate["meta"].get("publication_mode") != final["meta"].get("publication_mode")):
         raise EvaluationError("artifact_stage_mismatch")
-    baseline = baseline_fn(target["body_original"])
+    # The production extractor receives earlier thread members as
+    # reference context — the baseline must see the same input or it
+    # measures a different configuration than production.
+    from extract_llm import _ctx_lines
+    t_ts = target.get("posted_at") or ""
+    ctx_rows = [
+        {"message_id": m["message_id"], "body_text": m["body_original"],
+         "posted_at_ts": m.get("posted_at") or "",
+         "who": m.get("sender") or "投稿者"}
+        for m in members
+        if m.get("body_state") == "full" and m.get("body_original")
+        and (m["message_id"] == root or m.get("parent_id") == root)
+        and (m.get("posted_at") or "") < t_ts
+    ]
+    ctx = "\n".join(_ctx_lines(ctx_rows, root)) or None
+    baseline = baseline_fn(target["body_original"], context=ctx)
     if not isinstance(baseline, dict) or not _validate_baseline(baseline):
         raise EvaluationError("baseline_failed")
     claims = {"baseline": [text for text in
@@ -211,7 +228,8 @@ def snapshot_records(path: str, selections: list[dict], baseline_fn) -> list[dic
                     or bundle_row["project_id"] != candidate["project_id"]):
                 raise EvaluationError("selection_project_mismatch")
             outputs = fixed_bundle_outputs(bundle, target, candidate, final,
-                                           lambda body: {"summary": "validation only"})
+                                           lambda body, **_:
+                                           {"summary": "validation only"})
             record = {key: selection.get(key) for key in
                       ("case_id", "account_id", "project_id", "split")}
             record.update(artifact_ids={key: selection[key] for key in

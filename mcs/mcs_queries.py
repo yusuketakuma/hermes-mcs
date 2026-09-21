@@ -58,6 +58,31 @@ def med_period_artifacts(db):
         "AND json_array_length(a.content,'$.med_periods')>0").fetchall()
 
 
+def med_is_patient_current(med) -> bool:
+    """extract_llm med dict predicate: the mention counts as the
+    patient's own actionable medication — not negated, not another
+    person's, not a historical (past-status) report. Mirrors
+    MED_PATIENT_CURRENT_SQL so Python-side stats agree with SQL-side
+    filters (med_change_no_followup / transition co-occurrence)."""
+    return isinstance(med, dict) \
+        and not med.get("negated") \
+        and med.get("subject", "patient") == "patient" \
+        and med.get("status", "current") != "past"
+
+
+# SQL twin of med_is_patient_current, evaluated inside
+# json_each(a.content,'$.meds') — the alias `je` is part of the
+# contract. `IS NOT 1` matches `not med.get("negated")` because
+# _validate admits only strict booleans (JSON true -> SQLite 1);
+# absent keys on pre-v2 rows read as NULL and pass.
+MED_PATIENT_CURRENT_SQL = (
+    "json_extract(je.value,'$.negated') IS NOT 1 "
+    "AND COALESCE(json_extract(je.value,'$.subject'),"
+    "'patient')='patient' "
+    "AND COALESCE(json_extract(je.value,'$.status'),"
+    "'current')!='past'")
+
+
 def iter_period_ends(content: str):
     """(period_dict, end_date) for each med_periods entry whose 'end'
     parses as YYYY-MM-DD. Undated or unparseable entries are skipped —
@@ -103,7 +128,8 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
               {pred_p}AND EXISTS
                   (SELECT 1 FROM json_each(a.content,'$.meds') je
                    WHERE json_extract(je.value,'$.action')
-                       IN ({CHANGE_ACTIONS_SQL}))
+                       IN ({CHANGE_ACTIONS_SQL})
+                     AND {MED_PATIENT_CURRENT_SQL})
               {extra_where}
             ORDER BY d.message_id, m.message_id""",
         (win_s, win_s, *params)).fetchall()

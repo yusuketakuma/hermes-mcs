@@ -56,7 +56,7 @@ def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
         final["meta"] = dict(meta, audit_status="NEEDS_REVIEW")
         final["content"]["claims"][0]["text"] = "final"
         calls = []
-        def baseline(body):
+        def baseline(body, **_):
             calls.append(body)
             return {"summary": "baseline"}
         outputs = blind.fixed_bundle_outputs(bundle, 1, candidate, final, baseline)
@@ -105,7 +105,7 @@ def test_snapshot_cli_uses_explicit_artifacts_without_database_writes(tmp_path, 
             selection[field] = db.artifacts(kind, message_id=1)[-1]["artifact_id"]
         before = list(db.db.iterdump())
         calls = []
-        def baseline(body):
+        def baseline(body, **_):
             calls.append(body)
             return {"summary": "synthetic baseline"}
         monkeypatch.setattr(extract_llm, "llm_extract", baseline)

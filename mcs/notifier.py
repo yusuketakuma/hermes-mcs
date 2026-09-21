@@ -21,6 +21,7 @@ import urllib.request
 import urllib.error
 import uuid
 
+from mcs_queries import med_is_patient_current
 from mcs_util import (NoRedirect, env_value, html_to_text, load_config,
                       no_proxy_opener)
 
@@ -110,12 +111,15 @@ def _artifact(ledger, kind: str, mid: int) -> dict | None:
 
 
 _RX_LABEL = {"start": "開始", "stop": "中止", "change": "変更",
-             "no_change": "変更なし", "increase": "増量", "decrease": "減量"}
+             "none": "変更なし", "no_change": "変更なし",
+             "increase": "増量", "decrease": "減量"}
 _REQ_LABEL = {"confirm": "確認", "contact": "連絡", "share": "共有",
               "ask": "質問", "request": "依頼", "report": "報告"}
 _EVT_LABEL = {"admission": "入院", "discharge": "退院", "exam": "受診/検査",
               "visit": "訪問", "medication": "投薬", "adherence": "服薬",
-              "care": "介護", "eol": "看取り", "media_ref": "添付"}
+              "care": "介護", "eol": "看取り", "media_ref": "添付",
+              "transfer": "転院/移動", "fall": "転倒",
+              "family_contact": "家族連絡", "other": "その他"}
 
 
 def _structured_lines(ledger, mid: int) -> list[str]:
@@ -152,10 +156,14 @@ def _structured_lines(ledger, mid: int) -> list[str]:
     syms, neg, seen, neg_seen = [], [], set(), set()
     for s in llm.get("symptoms") or []:
         if isinstance(s, dict) and s.get("text"):
-            if s.get("negated"):
+            # resolved/past/negated all cancel an earlier positive —
+            # they enter neg_seen so a v1 positive below is contradicted
+            # (same resolver semantics as rollup.py)
+            if s.get("negated") or s.get("status") in ("resolved", "past"):
                 if s["text"] not in neg_seen:
                     neg_seen.add(s["text"])
-                    neg.append(s["text"])
+                    if s.get("negated"):
+                        neg.append(s["text"])
             elif s["text"] not in seen:
                 seen.add(s["text"])
                 syms.append(s["text"])
@@ -171,12 +179,22 @@ def _structured_lines(ledger, mid: int) -> list[str]:
         lines.append(line)
     meds = []
     for m in llm.get("meds") or []:
-        if isinstance(m, dict) and m.get("name"):
-            d = str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
-            if m.get("action") in _RX_LABEL:
-                d += f"[{_RX_LABEL[m['action']]}]"
-            meds.append(d)
-    if not meds:
+        if not isinstance(m, dict) or not m.get("name"):
+            continue
+        # negated / other-person / historical meds must not read as the
+        # patient's own medication (planned survives — shown as [予定])
+        if not med_is_patient_current(m):
+            continue
+        d = str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
+        if m.get("action") in _RX_LABEL:
+            d += f"[{_RX_LABEL[m['action']]}]"
+        if m.get("status") == "planned":
+            d += "[予定]"
+        meds.append(d)
+    if not llm.get("meds"):
+        # v1 fallback only when the LLM saw NO meds — if it saw meds
+        # but all were filtered (negated/family/past), falling back to
+        # v1 would re-display the very mentions that were filtered out
         for m in v1.get("medications") or []:
             if isinstance(m, dict) and m.get("name"):
                 meds.append(str(m["name"]) +
@@ -191,8 +209,15 @@ def _structured_lines(ledger, mid: int) -> list[str]:
     for r in llm.get("requests") or []:
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
             to = str(r.get("to") or "")
-            to = "" if to in ("不明", "unknown", "-") else f"{to}へ"
-            reqs.append(to + str(r.get("action") or "")[:30])
+            to = "" if to in ("", "不明", "unknown", "-") else f"{to}へ"
+            frm = str(r.get("from") or "")
+            prefix = "" if frm in ("", "不明", "unknown", "-") \
+                else f"{frm}→"
+            due = r.get("due")
+            suffix = f"(期限:{due})" if isinstance(due, str) and due \
+                else ""
+            reqs.append(prefix + to + str(r.get("action") or "")[:30]
+                        + suffix)
     if not reqs:
         for r in v1.get("requests") or []:
             if isinstance(r, dict) and r.get("ctx"):
