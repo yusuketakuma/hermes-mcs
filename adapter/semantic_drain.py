@@ -101,7 +101,11 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
         meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "repair_count": 1 if r["repaired"] else 0,
-              "jev_requests": r.get("jev_requests", 0)})
+              "jev_requests": r.get("jev_requests", 0),
+              # raw Jev claim verdicts — the calibration corpus for
+              # match_threshold tuning (summary content strips _-keys,
+              # so this private channel is the only place they persist)
+              "claim_audit": r["summary"].get("_claim_audit") or {}})
 
 
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,

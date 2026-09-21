@@ -594,6 +594,11 @@ def test_evidence_span_locate():
     assert semantic._locate_quote(BODY, "カロナール300mg") == (4, 14)
     assert semantic._locate_quote(BODY, "存在しない文") is None
     assert semantic._locate_quote("aa aa", "aa") is None   # ambiguous
+    # whitespace-normalized fallback resolves to the verbatim unique span
+    src = "投与を\n  開始した。翌日に再評価。"
+    s, e = semantic._locate_quote(src, "投与を 開始した。")
+    assert src[s:e] == "投与を\n  開始した。"
+    assert semantic._locate_quote("aa\naa aa aa", "aa aa") is None
     f, ok, dropped = semantic.extract_facts(
         lambda p: json.dumps({"facts": [{
             "statement": "x", "kind": "other", "status": "not_stated",

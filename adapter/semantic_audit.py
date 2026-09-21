@@ -133,6 +133,12 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
             return findings + [{"code": "support_unevaluated",
                                 "claim": c["claim_id"]}], False
         ans = out["answers"][c["claim_id"]]
+        # raw answers ride on the summary's private channel so the
+        # drain can persist them into the audit artifact's meta —
+        # accumulated confidences feed threshold calibration (§22).
+        raw = summary.setdefault("_claim_audit", {})
+        raw[c["claim_id"]] = {"choice": ans["choice"],
+                              "confidence": ans["confidence"]}
         if ans["confidence"] < match_threshold:
             findings.append({"code": "claim_low_confidence",
                              "claim": c["claim_id"],

@@ -141,6 +141,11 @@ def _normalise_facts(items: list, member: dict, source: str,
         quote = item.get("evidence_quote")
         span = (semantic._locate_quote(source, quote)
                 if isinstance(quote, str) else None)
+        if span:
+            # _locate_quote may have matched after whitespace
+            # normalization — store the verbatim original so
+            # body[s:e] == quote holds exactly for the audit.
+            quote = source[span[0]:span[1]]
         index = fact_offset + len(facts)
         evidence_id = f"ev_{message_id}_{index}"
         status = item.get("status")

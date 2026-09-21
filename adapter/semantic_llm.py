@@ -68,13 +68,37 @@ def _iso_date(text: str) -> str | None:
 
 def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
     """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
-    quotes get no span — never a guessed one (INV-07, AT-029)."""
+    quotes get no span — never a guessed one (INV-07, AT-029).
+
+    Exact match first; if absent, retry on whitespace-collapsed text and
+    map the span back to original codepoints. Models routinely reproduce
+    quotes with normalized whitespace — the located span is still unique
+    and the caller stores body[s:e] verbatim, so span equality holds."""
     if not body or not quote:
         return None
     first = body.find(quote)
-    if first < 0 or body.find(quote, first + 1) >= 0:
+    if first >= 0 and body.find(quote, first + 1) < 0:
+        return (first, first + len(quote))
+    if first >= 0:
         return None
-    return (first, first + len(quote))
+    nbody, nidx = [], []
+    prev_ws = True
+    for i, ch in enumerate(body):
+        if ch.isspace():
+            if not prev_ws:
+                nbody.append(" ")
+                nidx.append(i)
+            prev_ws = True
+        else:
+            nbody.append(ch)
+            nidx.append(i)
+            prev_ws = False
+    nquote = " ".join(quote.split())
+    nbody = "".join(nbody)
+    s = nbody.find(nquote)
+    if s < 0 or nbody.find(nquote, s + 1) >= 0:
+        return None
+    return (nidx[s], nidx[s + len(nquote) - 1] + 1)
 
 
 def _chunks(text: str, size: int = 3000) -> list:
@@ -128,6 +152,10 @@ _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器で�
 - section: medication|status|pharmacy|followup|progress|flow|other
 - claim_kind: reported_fact|inference|limitation
 - fact_refs: 根拠となる候補の番号(0起き)の配列 — reported_factは必須、空は不可
+- reported_fact の根拠となる事実候補が一覧に無い場合、そのclaimは出力しない。
+  代わりに limitations に「〜は事実候補なし」と記述する
+- claimの内容は fact_refs が指す候補の statement の言い換えに留める。
+  候補に無い数値・主体・時制・推測をclaimに追加しない
 - 数値・単位・1回量/1日量は参照する原文の表記と対応を保つ。換算や合算を新たに推測しない
 - 対象時点の情報として書く（現在の診察結果と断定しない）
 - 「対応不要」を既定にしない。未記載は limitations に書く

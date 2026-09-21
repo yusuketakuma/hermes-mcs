@@ -138,4 +138,43 @@ python3 semantic_observe.py --json >> ~/.mcs/data/observe.jsonl  # 時系列ロ�
 
 時系列は `data/run.log` の各 tick の `semantic` フィールド（done/deferred/left/jev_requests）でも追える。
 
+## 10. 能力向上計測基盤（2026-09-21 追加）
+
+`semantic_bench.py` — prompt/モデル変更を同一コーパスで A/B 計測する自動メトリクス:
+
+```bash
+python3 semantic_bench.py corpus --n 20 --out bench_corpus.json   # 実データ凍結
+python3 semantic_bench.py run --corpus bench_corpus.json --tag A --out rA.json
+python3 semantic_bench.py report rA.json rB.json                  # findings率の差分
+python3 semantic_bench.py detect                                  # Jev検知プローブ(実API)
+python3 semantic_bench.py calibrate                               # 閾値校正用分布
+```
+
+- **corpus/run**: bundle 凍結済みケースに extract_facts→summarize→audit_code を実行し、
+  finding code 率を集計。人手採点なしで prompt/モデル変更の回帰を比較できる。
+  `--jev` 指定で audit_claims 実呼出も追加（予算内）。
+- **detect**: 合成不良ケース（否定反転・用量違い・時制錯誤・主体混同・無関係根拠 +
+  陽性対照2件）を audit_claims に実APIで通し検知率を計測。
+  **初回結果 9/9**（TP=7 FP=0 FN=0 TN=2、9リクエスト消費）— 否定反転・用量違い・
+  時制錯誤・主体混同・無関係根拠・頻度違い・相対日付の全不良クラスを検知し、
+  正しい claim 2件は通過。基本失敗クラスの検知能力は既に十分。
+- **calibrate**: `semantic_audit` artifact の `meta.claim_audit`（drain が per-claim の
+  choice+confidence を蓄積開始）の分布と match_threshold what-if スイープ。
+- `semantic_observe.py` に `repaired:` 行を追加 — repair 経由で PASS 回復した率を観測。
+
+### 実施済み改善（claim_without_evidence 対策）
+
+1. `_locate_quote` に空白正規化フォールバック — モデルが空白・改行を正規化して引用した
+   場合でも一意マッチすれば verbatim span に解決（`body[s:e]==quote` を維持）。
+2. `semantic_extraction` は span 発見時に quote を原文 verbatim に置換。
+3. `_SUMMARY_PROMPT` に2ルール追加: 「根拠候補なしの reported_fact は claim 化せず
+   limitations へ」「claim は参照候補 statement の言い換えに留める」。
+
+### モデルA/B手順（未実施・要サービス再起動）
+
+代替 gguf を `~/.hermes/models/` に配置 → `ai.hermes.llamacpp.plist` の `-m` を切替 →
+`launchctl kickstart -k gui/$(id -u)/ai.hermes.llamacpp` → 同一コーパスで
+`semantic_bench.py run` を新旧で実行し `report` 比較。候補は Q5_K_M（品質↑・
+RAM+~1GB・速度↓）。再起動中は backlog lane が止まる点に注意。
+
 **ベースライン（2026-09-21 13:50頃）**: jobs done=24/pending=52/failed=0、eligible pending=0、audit = PENDING×4+unparsed×1、findings = `claim_without_evidence`×13・`support_unevaluated`×4・`summary_unavailable`×1、Jev 39/40、extract_llm backlog 残7591。pending の大半は非eligible（trickle/attachment由来）で bundle+assess までで done になる設計 — audit 到達は notify経路の新着のみ。初速所見: ローカルLLMが証拠なしclaimを多発（`claim_without_evidence` が最多）しており、監査が正しく止めている状態。PASS率の実測は新着 eligible job が来てから。

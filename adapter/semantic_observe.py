@@ -44,6 +44,12 @@ def observe(db_path: str = DB) -> dict:
     eligible_pending = q(
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
         "AND state='pending' AND json_extract(payload,'$.eligible')=1")[0][0]
+    # repair-path effectiveness: among audits that consumed a repair,
+    # how many still landed NEEDS_REVIEW vs recovered to PASS
+    repairs = {s or "?": n for s, n in q(
+        "SELECT json_extract(meta,'$.audit_status'), COUNT(*) "
+        "FROM artifacts WHERE kind='semantic_audit' "
+        "AND json_extract(meta,'$.repair_count')=1 GROUP BY 1")}
     extract_left = q(
         "SELECT COUNT(*) FROM messages m WHERE m.body_text IS NOT NULL "
         "AND m.body_text != '' AND NOT EXISTS "
@@ -62,6 +68,7 @@ def observe(db_path: str = DB) -> dict:
         "jobs": jobs,
         "eligible_pending": eligible_pending,
         "audit_statuses": audits,
+        "repaired_audits": repairs,
         "finding_codes": findings,
         "jev_requests_today": int(jev_today),
         "jev_daily_budget": _daily_budget(),
@@ -88,6 +95,8 @@ def main() -> int:
           f"failed={j.get('failed',0)} "
           f"(notify-eligible pending: {snap['eligible_pending']})")
     print(f"audit: {snap['audit_statuses'] or 'none yet'}")
+    if snap["repaired_audits"]:
+        print(f"repaired: {snap['repaired_audits']}")
     if snap["finding_codes"]:
         print(f"findings: {snap['finding_codes']}")
     print(f"jev today: {snap['jev_requests_today']}/"
