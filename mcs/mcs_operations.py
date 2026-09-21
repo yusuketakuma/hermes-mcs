@@ -8,7 +8,10 @@ receipt transaction.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import time
 
 from mcs_requests import _text, canonical, payload_hash, positive, valid_hash
@@ -22,6 +25,8 @@ _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
 _CONTROL_ARTIFACT = "semantic_control"
 _ADOPTION_ARTIFACT = "semantic_adoption"
+_REFSTAT_ARTIFACT = "refstat_approval_v1"
+_REFSTAT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
 
@@ -128,6 +133,18 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
                 or not req["policy"]
                 or not all(isinstance(k, str) for k in req["policy"])):
             return "bad_policy"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+        return None
+    if cmd == "ops.refstat_approve":
+        allowed = base | {"name", "file_hash", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if not isinstance(req.get("name"), str) \
+                or not _REFSTAT_NAME_RE.fullmatch(req["name"]):
+            return "bad_refstat_name"
+        if not valid_hash(req.get("file_hash")):
+            return "bad_file_hash"
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
         return None
@@ -454,6 +471,76 @@ def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict
                   "policy": dict(policy)}
 
 
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _apply_refstat_approve_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    """Human-approved promotion of a captured stats reference set:
+    <data-dir>/refstats/pending/<name>.json -> approved/<name>.json plus
+    a refstat_approval_v1 artifact pinning the exact approved bytes.
+
+    Ordering: move pending -> approved first, then hash the approved
+    file at rest and roll the move back when it differs from the
+    human-pinned digest, then insert the artifact.  An artifact failure
+    propagates and rolls back the whole receipt tx (the renamed file
+    then shows up in verify as an approved file without matching
+    artifact — a visible tamper/inconsistency signal, never a silent
+    pass)."""
+    name, file_hash = req["name"], req["file_hash"]
+    # re-asserted here too: apply_tx is public and this field reaches
+    # the filesystem, unlike sibling ops' SQL-bound fields
+    if not isinstance(name, str) or not _REFSTAT_NAME_RE.fullmatch(name):
+        return "bad_refstat_name", {}
+    main = db.execute("PRAGMA database_list").fetchone()["file"]
+    if not main:
+        return "refstat_no_data_dir", {}
+    base = os.path.join(os.path.dirname(os.path.abspath(main)), "refstats")
+    pending = os.path.join(base, "pending", name + ".json")
+    approved = os.path.join(base, "approved", name + ".json")
+    try:
+        # isfile follows links — reject links so the approved path is a
+        # regular file, not an alias whose target was never hashed
+        if not os.path.isfile(pending) or os.path.islink(pending):
+            return "refstat_not_pending", {
+                "approved_exists": os.path.isfile(approved)}
+        os.makedirs(os.path.dirname(approved), exist_ok=True)
+        os.replace(pending, approved)
+        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+        actual = _sha256(approved)
+    except OSError:
+        return "refstat_io_error", {}
+    if actual != file_hash:
+        try:
+            os.replace(approved, pending)
+        except OSError:
+            pass  # verify flags the unmatching bytes — never silent
+        return "refstat_hash_mismatch", {}
+    content = {"name": name, "file_hash": file_hash,
+               "actor": req["actor"], "reason": req["reason"],
+               "command_id": req["command_id"], "approved_at": now}
+    cur = db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
+        (_REFSTAT_ARTIFACT, None,
+         json.dumps(content, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False),
+         "human",
+         json.dumps({"command_id": req["command_id"],
+                     "actor": req["actor"]}, ensure_ascii=False,
+                    sort_keys=True, separators=(",", ":")), now))
+    return None, {"refstat_artifact_id": cur.lastrowid,
+                  "name": name, "file_hash": file_hash}
+
+
 def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
@@ -470,6 +557,8 @@ def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]
         return _apply_signal_dismiss_tx(db, req, current)
     if req["cmd"] == "ops.signal_policy":
         return _apply_signal_policy_tx(db, req, current)
+    if req["cmd"] == "ops.refstat_approve":
+        return _apply_refstat_approve_tx(db, req, current)
     return "unknown_ops_cmd", {}
 
 

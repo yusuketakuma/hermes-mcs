@@ -542,7 +542,7 @@ def _parser():
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
-            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss", "signal_policy")]
+            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss", "signal_policy", "refstat_approve")]
             for write in parsers:
                 write.add_argument("--confirm-human", action="store_true", required=True,
                                    help="Queue an exact human-approved operation from JSON stdin.")
