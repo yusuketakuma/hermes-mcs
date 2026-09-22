@@ -828,3 +828,29 @@ def test_parallel_workers_keep_fail_count_and_backoff(tmp_path,
         "AND message_id=2").fetchone()
     assert json.loads(err["meta"])["error"] is True
     db.close()
+
+
+def test_parallel_endpoint_down_keeps_later_successes(tmp_path,
+                                                     monkeypatch):
+    """Endpoint-down must not discard already-computed parallel results.
+    pool.map materializes every result before the commit loop, so a
+    None followed by successes must still persist the successes; only
+    the error-row writes are skipped (the message stays pending instead
+    of burning an attempt on an outage)."""
+    db = _ledger(tmp_path)
+    # the failing message sorts first (posted_at_ts DESC), so a `break`
+    # would drop the two already-computed successes behind it
+    db.save_messages([
+        _message(mid=1, body="本文1", posted_at="2026-09-20T00:00:00+09:00"),
+        _message(mid=2, body="本文2"),
+        _message(mid=3, body="本文3")])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda: "plain")
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda: False)
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **_: None if body == "本文1" else {"summary": "ok"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, workers=3)
+    assert res["done"] == 2 and res["failed"] == 1
+    arts = {a["message_id"] for a in db.artifacts("extract_llm")}
+    assert arts == {2, 3}
+    db.close()

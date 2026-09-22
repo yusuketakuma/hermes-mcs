@@ -145,7 +145,17 @@ def _where_args(token: JobToken) -> tuple:
     # legacy rows safe when a worker rewrites a payload without a generation
     # field. New semantic rows always carry a UUID generation.
     return (token.job_id, token.kind, token.project_id, token.message_id,
-            token.state, token.attempts, token.payload_raw)
+            token.state, token.attempts, token.payload_raw,
+            token.payload_raw)
+
+
+# payload is matched exactly, with one rescue: a stored NULL/empty payload
+# (only reachable through out-of-band DB edits — every in-repo writer
+# stores json.dumps output) normalizes to "{}" in JobToken, so a strict
+# `payload=?` CAS could never fire and the row would wedge pending
+# forever (S-6). The rescue only applies when the token itself carries
+# the normalized "{}" — real payloads still require an exact match.
+_PAYLOAD_MATCH = ("(payload=? OR (COALESCE(payload,'')='' AND ?='{}'))")
 
 
 def transition_tx(ledger, token: JobToken, action: str,
@@ -162,27 +172,29 @@ def transition_tx(ledger, token: JobToken, action: str,
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET state='done',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND payload=?",
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
             (now, *args))
     elif action == "defer":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET next_try=?,updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND payload=?",
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
             (now + max(0.0, retry_in), now, *args))
     elif action == "retry":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET attempts=attempts+1,next_try=?,"
             "state=CASE WHEN attempts+1>=? THEN 'failed' ELSE state END,"
             "updated_at=? WHERE job_id=? AND kind=? AND project_id=? "
-            "AND message_id=? AND state=? AND attempts=? AND payload=?",
+            "AND message_id=? AND state=? AND attempts=? AND "
+            + _PAYLOAD_MATCH,
             (now + max(0.0, retry_in), max(1, int(max_attempts)), now,
              *args))
     elif action == "failed":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET state='failed',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? "
-            "AND message_id=? AND state=? AND attempts=? AND payload=?",
+            "AND message_id=? AND state=? AND attempts=? AND "
+            + _PAYLOAD_MATCH,
             (now, *args))
     else:
         raise ValueError(f"unknown semantic transition: {action}")

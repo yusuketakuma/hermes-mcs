@@ -23,6 +23,7 @@ import getpass
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -40,11 +41,6 @@ LLM_MODELS_URL = "http://127.0.0.1:8080/v1/models"
 # name -> (required, check) — check(v) -> error string | None
 def _nonempty_str(v):
     return None if isinstance(v, str) and v.strip() else "must be a non-empty string"
-
-
-def _channel_id(v):
-    ok = (isinstance(v, str) and v.isdigit()) or type(v) is int
-    return None if ok else "must be a numeric channel id"
 
 
 def _bool(v):
@@ -73,15 +69,17 @@ def _dict(v):
 
 
 CONFIG_RULES = {
-    "mcs_login_id":        (True,  _nonempty_str),
-    "discord_channel_id":  (True,  _channel_id),
-    "notify_bot_profile":  (False, _bot_profile),
-    "discover_archived":   (False, _bool),
-    "deep_history":        (False, _bool),
-    "trickle_pages":       (False, _int_range(1, 40)),
-    "job_budget_seconds":  (False, _num),
-    "signals":             (False, _dict),
-    "semantic":            (False, _dict),
+    "mcs_login_id":          (True,  _nonempty_str),
+    "notify_target":         (True,  _nonempty_str),
+    "notify_bot_profile":    (False, _bot_profile),
+    "notify_system_target":  (False, _nonempty_str),
+    "hermes_bin":            (False, _nonempty_str),
+    "discover_archived":     (False, _bool),
+    "deep_history":          (False, _bool),
+    "trickle_pages":         (False, _int_range(1, 40)),
+    "job_budget_seconds":    (False, _num),
+    "signals":               (False, _dict),
+    "semantic":              (False, _dict),
 }
 
 
@@ -132,10 +130,22 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         warnings.append("local LLM endpoint 127.0.0.1:8080 not reachable — "
                         "extract_llm/semantic jobs will stall until "
                         "llama.cpp is up")
-    if env_value("DISCORD_BOT_TOKEN") is None:
-        errors.append("DISCORD_BOT_TOKEN not resolvable "
-                      "(~/.mcs/.env or ~/.hermes/.env) — notifications "
-                      "cannot be sent")
+    profile = cfg.get("notify_bot_profile")
+    if isinstance(profile, str) and profile \
+            and not re.fullmatch(r"[a-z0-9_-]+", profile):
+        errors.append("notify_bot_profile: must match [a-z0-9_-]+")
+    # Delivery is `hermes send` — the binary must resolve the same way
+    # notifier._hermes_exe does: config hermes_bin, else PATH, else the
+    # standard user-local install (launchd PATH is minimal).
+    exe = cfg.get("hermes_bin")
+    if not isinstance(exe, str) or not exe.strip():
+        exe = shutil.which("hermes") \
+            or os.path.expanduser("~/.local/bin/hermes")
+    else:
+        exe = exe.strip()
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        errors.append(f"hermes CLI not resolvable ({exe}) — "
+                      "notifications cannot be sent")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
             and env_value("TYPESAFE_API_KEY") is None:
@@ -185,13 +195,13 @@ def cmd_init(args) -> int:
         return v
 
     login_id = pick(args.login_id, "mcs_login_id", "MCS login ID")
-    channel = pick(args.discord_channel, "discord_channel_id",
-                   "Discord channel ID")
+    target = pick(args.notify_target, "notify_target",
+                  "hermes send target (e.g. slack, slack:#mcs)")
     updates = {}
     if login_id:
         cfg["mcs_login_id"] = login_id
-    if channel:
-        cfg["discord_channel_id"] = str(channel)
+    if target:
+        cfg["notify_target"] = str(target)
 
     pw = args.password
     if pw is None and not args.yes:
@@ -208,8 +218,6 @@ def cmd_init(args) -> int:
             return 1
         print(f"keychain: '{KEYCHAIN_SERVICE}' registered")
 
-    if args.discord_token:
-        updates["DISCORD_BOT_TOKEN"] = args.discord_token
     if args.typesafe_key:
         updates["TYPESAFE_API_KEY"] = args.typesafe_key
     if updates:
@@ -255,8 +263,9 @@ def main() -> int:
     p = sub.add_parser("init", help="provision config/env/keychain")
     p.add_argument("--login-id")
     p.add_argument("--password")
-    p.add_argument("--discord-channel")
-    p.add_argument("--discord-token")
+    p.add_argument("--notify-target",
+                   help="hermes send target for notifications "
+                        "(e.g. slack, slack:#mcs, discord:1234)")
     p.add_argument("--typesafe-key")
     p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"])
     p.add_argument("--project-ids", type=int, nargs="*")

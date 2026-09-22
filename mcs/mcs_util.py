@@ -45,7 +45,13 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
         try:
             for line in open(path, encoding="utf-8"):
                 if line.startswith(key + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+                    v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if v:
+                        return v
+                    # an emptied `KEY=` line is "not configured" — same
+                    # as an empty env var, it must not shadow a real
+                    # value in a later dotenv file
+                    break
         except OSError:
             pass
     return None
@@ -53,15 +59,19 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
 
 def json_object(text: str) -> dict | None:
     """First `{...}` block in LLM output parsed as a dict — models wrap
-    JSON in prose, so the JSON object is located, not assumed."""
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return None
-    try:
-        d = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return d if isinstance(d, dict) else None
+    JSON in prose, so the JSON object is located, not assumed.
+    raw_decode stops at the object's own closing brace; a greedy
+    first-{/last-} match would swallow trailing prose braces and fail."""
+    text = text or ""
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", text):
+        try:
+            d, _end = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
 
 
 def html_to_text(h: str) -> str:

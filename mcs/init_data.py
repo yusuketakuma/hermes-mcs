@@ -106,13 +106,19 @@ def main() -> int:
         if floor and floor <= since:
             result["skipped_floored"] += 1
             continue
-        # Resume only continues the SAME target: a deeper `since` starts a
-        # new walk at page 1 (numbering is relative to newest posts), while
-        # an interrupted walk for the same cutoff resumes its cursor —
-        # finished floors never re-trigger a restart (Oracle B09).
-        if ledger.history_target(p.project_id) != since:
+        # Resume the stored cursor for ANY cutoff: pages are newest-first
+        # so a deeper --since just continues the descent and a shallower
+        # one reaches its cutoff on the next fetched page. Restarting at
+        # page 1 on target drift made `--days` re-runs (whose `since`
+        # moves every invocation) re-walk already-saved pages forever
+        # (P-3). The floor write is monotonic, so a resumed walk can
+        # never regress coverage. Finished floors still skip above.
+        cursor = ledger.history_cursor(p.project_id)
+        if not cursor:
             ledger.reset_history_cursor(p.project_id, since)
-        cursor = ledger.history_cursor(p.project_id) or 1
+            cursor = 1
+        elif ledger.history_target(p.project_id) != since:
+            ledger.set_history_target(p.project_id, since)
         pages_left = args.pages
         total_new = 0
         reached = False

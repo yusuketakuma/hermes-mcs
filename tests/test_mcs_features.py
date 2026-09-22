@@ -386,3 +386,38 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     assert (completed["status"], completed["revision"], completed["due_date"]) == ("done", 2, None)
     view.close()
     db.close()
+
+
+def test_extract_all_reextracts_stale_artifacts(tmp_path, monkeypatch,
+                                              capsys):
+    """extract.py --all must re-extract a message whose stored artifact
+    hash drifted (edited body) — the same stale cleanup run_pending
+    does. A stale row used to count as 'done', so the manual path could
+    never repair it."""
+    db_path = str(tmp_path / "ledger.db")
+    db = ledger.Ledger(db_path)
+    msg = Message(1, 1, None, 1, "synthetic sender", "user", "", "",
+                  "2026-09-19T00:00:00+09:00", "<p>確認お願いします</p>",
+                  "full", False, 0)
+    db.save_messages([msg])
+    db.artifact_add("extract_v1", json.dumps({"events": ["old"]}),
+                    project_id=1, message_id=1, model="rules-v1",
+                    meta={"hash": "stale-hash"})
+    chash = db.db.execute(
+        "SELECT content_hash FROM messages WHERE message_id=1"
+    ).fetchone()[0]
+    db.close()
+
+    monkeypatch.setattr(extract, "DB", db_path)
+    lock_fd = os.open(str(tmp_path / "run.lock"), os.O_CREAT | os.O_RDWR)
+    monkeypatch.setattr(extract, "acquire_run_lock", lambda: lock_fd)
+    monkeypatch.setattr(sys, "argv", ["extract.py", "--all"])
+    assert extract.main() == 0
+    first = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert first["extracted"] == 1 and first["skipped_existing"] == 0
+
+    check = ledger.Ledger(db_path)
+    arts = check.artifacts("extract_v1", message_id=1)
+    assert len(arts) == 1
+    assert json.loads(arts[0]["meta"])["hash"] == chash
+    check.close()

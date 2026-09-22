@@ -350,21 +350,9 @@ def claim_quantity_findings(claim: dict, facts: list) -> list[dict]:
         exact = [candidate for candidate in same
                  if _compatible(wanted, candidate)]
         if exact:
-            # If the same token appears in several referenced facts, the
-            # amount itself matches but its fact relation remains ambiguous.
-            if len(evidence_facts) > 1:
-                matching_facts = []
-                for index in evidence_facts:
-                    evidence = facts[index].get("_evidence")
-                    quote = evidence.get("quote") if isinstance(evidence, dict) else ""
-                    if any(_compatible(wanted, candidate)
-                           for candidate in extract_quantities(quote)
-                           if candidate["kind"] == wanted["kind"]):
-                        matching_facts.append(index)
-                if len(matching_facts) != 1:
-                    findings.append(_finding(
-                        "claim_quantity_relation_unverified", claim_id,
-                        quantity=wanted, fact_refs=refs))
+            # Multi-fact claims already returned relation_unverified above,
+            # so every claim reaching this point references exactly one
+            # evidence fact — a compatible amount there is unambiguous.
             continue
 
         same_value = [candidate for candidate in same

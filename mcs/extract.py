@@ -239,16 +239,15 @@ def extract_message(body: str, posted_at: str) -> dict:
     return out
 
 
-def run_pending(ledger) -> dict:
-    """Extract messages lacking an extract_v1 artifact, and re-extract
-    ones whose body changed on the server (content_hash drift — MCS
-    allows edits). NULL meta hashes (legacy CLI artifacts) count as
-    stale — a missing hash must never shield a changed body (Oracle
-    B19). Returns {done, pids} so rollups can rebuild touched patients."""
+def _delete_stale(ledger) -> int:
+    """Drop extract_v1 artifacts whose pinned hash no longer matches the
+    live body (content_hash drift — MCS allows edits). NULL meta hashes
+    (legacy CLI artifacts) count as stale — a missing hash must never
+    shield a changed body (Oracle B19). Returns the dropped row count."""
     stale = ledger.db.execute("""
-      SELECT m.message_id FROM messages m
-      JOIN artifacts a ON a.message_id=m.message_id AND a.kind=?
-      WHERE CASE WHEN json_valid(a.meta) THEN
+      SELECT DISTINCT a.message_id FROM artifacts a
+      JOIN messages m ON m.message_id=a.message_id
+      WHERE a.kind=? AND CASE WHEN json_valid(a.meta) THEN
         json_extract(a.meta,'$.hash') IS NULL
         OR json_extract(a.meta,'$.hash') != m.content_hash
       ELSE 0 END
@@ -258,6 +257,15 @@ def run_pending(ledger) -> dict:
             "DELETE FROM artifacts WHERE kind=? AND message_id=?",
             (KIND, r["message_id"]))
     ledger.db.commit()
+    return len(stale)
+
+
+def run_pending(ledger) -> dict:
+    """Extract messages lacking an extract_v1 artifact, and re-extract
+    ones whose body changed on the server (content_hash drift — see
+    _delete_stale). Returns {done, pids} so rollups can rebuild touched
+    patients."""
+    _delete_stale(ledger)
     rows = ledger.db.execute("""
       SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
              m.content_hash
@@ -310,6 +318,11 @@ def main() -> int:
         params.append(args.project)
     rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
 
+    if not args.stats:
+        # Same stale cleanup as the tick path: a hash-drifted artifact
+        # (edited body, or a legacy row without a pinned hash) must not
+        # count as done — otherwise --all could never re-extract it.
+        _delete_stale(led)
     done = {r["message_id"] for r in led.db.execute(
         "SELECT message_id FROM artifacts WHERE kind=? "
         "AND message_id IS NOT NULL", (KIND,))}

@@ -590,7 +590,7 @@ Private repository — 現時点で公開・再配布は想定していない。
 | `mcs/mcs_stats.py` | project statistics over the published ledger snapshot. |
 | `mcs/mcs_util.py` | no network, no DB access. |
 | `mcs/mcs_view.py` | approved inbox commands (JSON CLI). |
-| `mcs/notifier.py` | drains notify_outbox to a Discord channel. |
+| `mcs/notifier.py` | drains notify_outbox through `hermes send`. |
 | `mcs/request_loops.py` | only validation for adopting a current Open Loop candidate. |
 | `mcs/rollup.py` | one consolidated artifact per patient. |
 | `mcs/run_check.py` | cron/launchd entry point (orchestrator only). |

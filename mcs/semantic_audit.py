@@ -97,9 +97,12 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
         src = members.get(ev["message_id"])
         body = src["body_original"] if src else ""
         s, e = ev["start_codepoint"], ev["end_codepoint"]
-        # the claim's support is judged against the quote PLUS its
-        # surrounding原文 window — a bare quote cannot reveal a
-        # negation or condition sitting next to it (§16.2, AT-028)
+        # the claim's support is judged against the quote PLUS the whole
+        # source body as context — a bare quote cannot reveal a negation
+        # or condition sitting elsewhere in the same post (§16.2, AT-028).
+        # The full body is deliberately sent (not a clipped window) so a
+        # distant qualifier is never lost; the cost is bounded by the job
+        # budget (S-3).
         if type(s) is int and type(e) is int and 0 <= s < e <= len(body):
             win = body
         else:

@@ -19,7 +19,7 @@ Exit codes:
 
 Privacy: stdout/stderr carries ids, counts, states only. Patient names,
 bodies, tokens never leave this process except into the local ledger and
-(once external send was explicitly approved) the Discord channel.
+(once external send was explicitly approved) the notify channel.
 
 Read-ack gate: --mark-read only marks a patient when its fetch_state is
 'complete' AND the ledger commit succeeded, and it always sends the exact
@@ -342,8 +342,12 @@ def main() -> int:
     try:
         import semantic as _sem
         sem_on = _sem.semantic_config(cfg)[0]["mode"] != "off"
-    except Exception:
-        sem_on = False   # config/module trouble -> semantic stays OFF
+    except Exception as e:
+        # config/module trouble forces semantic OFF — but it must be
+        # visible: an enforced pipeline silently disabled is a missed
+        # evaluation, not a clean "no work" tick
+        sem_on = False
+        result["errors"].append(f"semantic_init: {type(e).__name__}")
 
     try:
         # -- priority fetch work -------------------------------------

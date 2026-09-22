@@ -733,13 +733,19 @@ class Ledger:
         self.db.commit()
 
     def history_target(self, project_id: int) -> int:
-        """The `since` epoch the current history_page cursor belongs to.
-        A different requested cutoff means a NEW deepen — the cursor only
-        resumes work for the same target (Oracle B09)."""
+        """The `since` epoch the current history_page cursor is walking
+        toward — updated on each run so the view reflects the active
+        deepen target (P-3)."""
         r = self.db.execute(
             "SELECT history_target t FROM patients WHERE project_id=?",
             (project_id,)).fetchone()
         return (r and r["t"]) or 0
+
+    def set_history_target(self, project_id: int, target: int):
+        self.db.execute(
+            "UPDATE patients SET history_target=? WHERE project_id=?",
+            (target, project_id))
+        self.db.commit()
 
     def reset_history_cursor(self, project_id: int, target: int):
         """Create the patient row and bind target+cursor atomically."""

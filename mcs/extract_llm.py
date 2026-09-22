@@ -877,13 +877,19 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 break  # budget ran out — the rest stay pending
             outs.append(llm_extract(r["body_text"], context=ctx,
                                     deadline=deadline))
+    endpoint_down = False
     for (r, ctx), d in zip(jobs, outs):
         if d is _DEFERRED:
             continue  # budget ran out mid-message — leave it pending
         if d is None:
             failed += 1
-            if not _llm_up():
-                break  # endpoint down — don't burn budget retrying
+            if endpoint_down or not _llm_up():
+                # Endpoint unreachable — don't burn budget/attempts on
+                # error rows. Keep looping instead of breaking: in the
+                # parallel path every `outs` entry is already computed,
+                # so later successes must still be persisted.
+                endpoint_down = True
+                continue
             with lock(per_write_lock) as held:
                 if held and not _current(ledger, r["message_id"],
                                          r["content_hash"]):

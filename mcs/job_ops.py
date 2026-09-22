@@ -40,6 +40,11 @@ DISCOVERY_INTERVAL_S = 24 * 3600
 DISCOVERY_RETRY_S = 1800
 REPLY_JOB_LIMIT = 10
 HISTORY_JOB_LIMIT = 4
+# a history window that stays checkpoint-unsafe is re-walked on each
+# defer; after this many stalls the job fails visibly instead of looping
+# forever over an unresolvable blocker (e.g. a 'snippet' parent whose
+# full body has no API surface)
+HISTORY_STALL_LIMIT = 8
 
 # body_state values that mean "nothing more to fetch": 'full' = complete
 # body (including empty body on file-only posts); 'deleted' = tombstoned
@@ -80,7 +85,9 @@ def _valid_history_payload(pl) -> bool:
             and type(pl.get("page", 1)) is int and pl.get("page", 1) >= 1
             and ("pages" not in pl
                  or (type(pl["pages"]) is int and 1 <= pl["pages"] <= 40))
-            and ("trickle" not in pl or type(pl["trickle"]) is bool))
+            and ("trickle" not in pl or type(pl["trickle"]) is bool)
+            and ("stalls" not in pl
+                 or (type(pl["stalls"]) is int and pl["stalls"] >= 0)))
 
 
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
@@ -368,6 +375,12 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                                        semantic=semantic)
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
+            pl["stalls"] = 0
+        elif not batch.error:
+            # same window re-walked with checkpoint unsafe — track stalls
+            # so a permanently unverifiable blocker surfaces instead of
+            # re-fetching identical pages forever
+            pl["stalls"] = pl.get("stalls", 0) + 1
         floored = False
         is_head = job["kind"] == "history_head"
         if batch.reached and not batch.error and merged.checkpoint_safe \
@@ -393,9 +406,18 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 floored = True
         elif batch.error:
             ledger.job_defer(job["job_id"], 300, payload=pl)
+        elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
+            # window can never certify (e.g. 'snippet' parent whose full
+            # body has no API surface) — fail visibly; the job is still
+            # revivable by a new import request (P-2)
+            ledger.job_fail(job["job_id"])
+            result["errors"].append(f"import {pid}: window_stalled")
         elif batch.reached:
-            # replies still pending — keep job alive to re-check floor
-            ledger.job_defer(job["job_id"], 600)
+            # replies still pending — keep job alive to re-check floor,
+            # backing off as stalls accumulate
+            ledger.job_defer(job["job_id"],
+                             min(3600, 600 * pl.get("stalls", 1)),
+                             payload=pl)
         else:
             # progress checkpoint: resume from this page next tick without
             # consuming attempts (only real failures do)

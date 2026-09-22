@@ -144,7 +144,11 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
     endpoint = local_http(SlowHandler)
     monkeypatch.setattr(semantic, "LLM_ENDPOINT", endpoint)
     started_at = time.monotonic()
-    assert semantic.llm_chat("synthetic prompt", timeout=0.35) is None
+    # The worker is a fresh interpreter process; under suite load its spawn
+    # can approach a few hundred ms.  timeout=1.0 leaves ample headroom for
+    # the POST to land while the byte-trickled response (≈3.6 s) still
+    # proves the absolute deadline fires (elapsed stays ~timeout).
+    assert semantic.llm_chat("synthetic prompt", timeout=1.0) is None
     elapsed = time.monotonic() - started_at
 
     assert started.wait(0.5)

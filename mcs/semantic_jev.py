@@ -438,7 +438,10 @@ class JevClient:
 
     def _retry_after(self, headers: dict) -> float | None:
         try:
-            v = headers.get("Retry-After") or headers.get("retry-after")
+            # HTTP field names are case-insensitive — the worker keeps the
+            # wire casing, so scan instead of guessing two spellings (S-2)
+            v = next((val for k, val in headers.items()
+                      if str(k).lower() == "retry-after"), None)
             if v is None:
                 return None
             f = float(v)
@@ -757,7 +760,9 @@ def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
     contract conforms. The input is a fixed nonsense fixture; no ledger
     or message data is ever sent. A successful evaluation is followed by
     one models-list GET. The reported `noul` is informational
-    only — the gate is contract conformance, not the model's answer."""
+    only — the gate is contract conformance, not the model's answer.
+    This manual path is an explicit operator action: it bypasses the
+    durable daily budget and semantic-mode gates by design (S-5)."""
     target = {"id": "smoke", "role": "target",
               "posted_at": "2026-01-01T00:00:00",
               "sender": {"type": "synthetic", "profession": ""},

@@ -26,11 +26,12 @@ Safety rules enforced here (post-review):
 """
 from __future__ import annotations
 
-import asyncio
+import base64
 import hashlib
 import json
 from datetime import datetime
 import os
+import socket
 import time
 import urllib.request
 import urllib.error
@@ -75,22 +76,194 @@ class BootstrapError(MCSError):
         super().__init__("bootstrap_error", detail)
 
 
+def _allowed_port(u) -> bool:
+    try:
+        return u.port in (None, 443)
+    except ValueError:
+        return False  # malformed port — refuse, never follow
+
+
+class _WSConn:
+    """Minimal RFC 6455 client — Chrome DevTools ws:// on loopback.
+
+    The declared dependency set is stdlib-only (AGENTS.md); the old
+    `import websockets` worked only because the production interpreter
+    happened to be another project's venv. Covers exactly what CDP eval
+    needs: upgrade handshake (with Accept verification), masked client
+    text frames, server fragmentation reassembly, ping->pong, close.
+    """
+    _MAX_MSG = 8 * 1024 * 1024
+
+    def __init__(self, url: str, timeout: float):
+        try:
+            u = urllib.parse.urlparse(url)
+            host, port = u.hostname, u.port or 80
+        except ValueError:
+            raise BootstrapError("cdp_ws_url_invalid") from None
+        if u.scheme != "ws" or not host:
+            raise BootstrapError("cdp_ws_url_invalid")
+        self._deadline = time.monotonic() + timeout
+        self._sock = socket.create_connection((host, port), timeout=timeout)
+        self._buf = bytearray()
+        path = u.path or "/"
+        if u.query:
+            path += "?" + u.query
+        self._handshake(host, port, path)
+
+    def _handshake(self, host: str, port: int, path: str):
+        key = base64.b64encode(os.urandom(16)).decode()
+        self._sock.sendall(
+            (f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+             "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+             f"Sec-WebSocket-Key: {key}\r\n"
+             "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = self._read_until(b"\r\n\r\n", 65536)
+        lines = head.split(b"\r\n")
+        accept = next((ln.split(b":", 1)[1].strip() for ln in lines[1:]
+                       if ln.lower().startswith(b"sec-websocket-accept:")),
+                      None)
+        want = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+            .encode()).digest())
+        if not lines[0].startswith(b"HTTP/") or b" 101" not in lines[0] \
+                or accept != want:
+            raise BootstrapError("cdp_ws_handshake")
+
+    def _fill(self):
+        if time.monotonic() > self._deadline:
+            raise BootstrapError("cdp_ws_timeout")
+        chunk = self._sock.recv(65536)
+        if not chunk:
+            raise BootstrapError("cdp_ws_closed")
+        self._buf += chunk
+
+    def _read_exact(self, n: int) -> bytes:
+        while len(self._buf) < n:
+            self._fill()
+        out = bytes(self._buf[:n])
+        del self._buf[:n]
+        return out
+
+    def _read_until(self, marker: bytes, cap: int) -> bytes:
+        while marker not in self._buf:
+            if len(self._buf) > cap:
+                raise BootstrapError("cdp_ws_too_large")
+            self._fill()
+        idx = self._buf.index(marker) + len(marker)
+        out = bytes(self._buf[:idx])
+        del self._buf[:idx]
+        return out
+
+    def _send_frame(self, opcode: int, payload: bytes):
+        n = len(payload)
+        head = bytearray([0x80 | opcode])
+        if n < 126:
+            head.append(0x80 | n)
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + n.to_bytes(2, "big")
+        else:
+            head += bytes([0x80 | 127]) + n.to_bytes(8, "big")
+        mask = os.urandom(4)
+        head += mask
+        masked = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
+        self._sock.sendall(bytes(head) + masked)
+
+    def send_text(self, text: str):
+        self._send_frame(0x1, text.encode("utf-8"))
+
+    def recv_message(self) -> bytes:
+        """Reassemble one complete data message; answer pings inline."""
+        parts: list[bytes] = []
+        while True:
+            b0, b1 = self._read_exact(2)
+            fin, opcode = b0 & 0x80, b0 & 0x0F
+            masked, ln = b1 & 0x80, b1 & 0x7F
+            if ln == 126:
+                ln = int.from_bytes(self._read_exact(2), "big")
+            elif ln == 127:
+                ln = int.from_bytes(self._read_exact(8), "big")
+            mask = self._read_exact(4) if masked else None
+            payload = self._read_exact(ln) if ln else b""
+            if mask:
+                payload = bytes(b ^ mask[i & 3]
+                                for i, b in enumerate(payload))
+            if opcode == 0x9:
+                self._send_frame(0xA, payload)   # ping -> pong
+                continue
+            if opcode == 0xA:
+                continue                         # pong — ignore
+            if opcode == 0x8:
+                raise BootstrapError("cdp_ws_closed")
+            if opcode in (0x1, 0x2):
+                if parts:
+                    raise BootstrapError("cdp_ws_protocol")
+            elif opcode != 0x0 or not parts:
+                raise BootstrapError("cdp_ws_protocol")
+            parts.append(payload)
+            if sum(map(len, parts)) > self._MAX_MSG:
+                raise BootstrapError("cdp_ws_too_large")
+            if fin:
+                return b"".join(parts)
+
+    def close(self):
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
+def _ws_eval(ws_url: str, expression: str, timeout: float = 15):
+    """Runtime.evaluate over the minimal ws client; returns the
+    result.value, or raises BootstrapError/MCSError — never a bare
+    KeyError on a malformed CDP reply."""
+    conn = _WSConn(ws_url, timeout)
+    try:
+        conn.send_text(json.dumps({
+            "id": 1, "method": "Runtime.evaluate",
+            "params": {"expression": expression,
+                       "returnByValue": True}}))
+        while True:
+            m = json.loads(conn.recv_message())
+            if isinstance(m, dict) and m.get("id") == 1:
+                result = m.get("result")
+                if not isinstance(result, dict):
+                    raise BootstrapError("cdp_eval_malformed")
+                inner = result.get("result")
+                return inner.get("value") if isinstance(inner, dict) \
+                    else None
+    finally:
+        conn.close()
+
+
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     """Follow redirects only when the target stays on an allowlisted host."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        u = urllib.parse.urlparse(newurl)
-        if (u.scheme != "https" or u.hostname not in _ALLOWED_DOWNLOAD_HOSTS
-                or u.port not in (None, 443)):
+        try:
+            u = urllib.parse.urlparse(newurl)
+            ok = (u.scheme == "https"
+                  and u.hostname in _ALLOWED_DOWNLOAD_HOSTS
+                  and _allowed_port(u))
+        except ValueError:
+            ok = False  # malformed redirect target — refuse, never follow
+        if not ok:
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _assert_allowed_url(url: str):
-    u = urllib.parse.urlparse(url)
-    if (u.scheme != "https" or u.hostname not in _ALLOWED_DOWNLOAD_HOSTS
-            or u.port not in (None, 443)):
+    try:
+        u = urllib.parse.urlparse(url)
+        ok_port = _allowed_port(u)
+        host = u.hostname
+    except ValueError:
+        # urlparse/.hostname/.port raise on bad brackets or malformed
+        # ports — a stored malformed URL must fail as MCSError, not
+        # escape as a bare ValueError
+        raise MCSError("url_not_allowed", "unparseable") from None
+    if (u.scheme != "https" or host not in _ALLOWED_DOWNLOAD_HOSTS
+            or not ok_port):
         raise MCSError("url_not_allowed",
-                       f"scheme={u.scheme} host={u.hostname}")
+                       f"scheme={u.scheme} host={host}")
 
 
 @dataclass
@@ -330,11 +503,6 @@ class MCSAdapter:
             pass
 
     def _token_via_cdp(self) -> str:
-        try:
-            import websockets
-        except ImportError as e:
-            raise BootstrapError("websockets missing") from e
-
         with urllib.request.urlopen(f"{self.cdp_url}/json/list", timeout=5) as r:
             targets = json.load(r)
         page = next((t for t in targets if t.get("type") == "page"
@@ -347,21 +515,8 @@ class MCSAdapter:
                 page = json.load(r)
             time.sleep(3)
 
-        async def _eval():
-            async with asyncio.timeout(15):
-                async with websockets.connect(page["webSocketDebuggerUrl"],
-                                              max_size=8 * 1024 * 1024) as ws:
-                    await ws.send(json.dumps({
-                        "id": 1, "method": "Runtime.evaluate",
-                        "params": {"expression":
-                                   f"localStorage.getItem('{LS_TOKEN_KEY}')",
-                                   "returnByValue": True}}))
-                    while True:
-                        m = json.loads(await ws.recv())
-                        if m.get("id") == 1:
-                            return m["result"]["result"].get("value")
-
-        raw = asyncio.run(_eval())
+        raw = _ws_eval(page["webSocketDebuggerUrl"],
+                       f"localStorage.getItem('{LS_TOKEN_KEY}')", 15)
         if not raw:
             raise BootstrapError("no session token in localStorage")
         try:
@@ -409,21 +564,7 @@ class MCSAdapter:
         raise BootstrapError("chrome launch timed out")
 
     def _cdp_eval(self, ws_url: str, expr: str, timeout: int = 15):
-        import websockets
-
-        async def _ev():
-            async with asyncio.timeout(timeout):
-                async with websockets.connect(ws_url,
-                                              max_size=8 * 1024 * 1024) as ws:
-                    await ws.send(json.dumps({
-                        "id": 1, "method": "Runtime.evaluate",
-                        "params": {"expression": expr,
-                                   "returnByValue": True}}))
-                    while True:
-                        m = json.loads(await ws.recv())
-                        if m.get("id") == 1:
-                            return m["result"]["result"].get("value")
-        return asyncio.run(_ev())
+        return _ws_eval(ws_url, expr, timeout)
 
     def _login_page(self):
         """Pick the login tab by STRICT origin+path — never fill credentials
@@ -926,14 +1067,22 @@ class MCSAdapter:
             if e.code in (301, 302, 303, 307, 308):
                 loc = e.headers.get("location")
                 if loc:
-                    u = urllib.parse.urlparse(loc)
-                    if (u.scheme == "https"
-                            and u.hostname in _ALLOWED_REDIRECT_HOSTS
-                            and u.port in (None, 443)):
+                    try:
+                        u = urllib.parse.urlparse(loc)
+                        ok = (u.scheme == "https"
+                              and u.hostname in _ALLOWED_REDIRECT_HOSTS
+                              and _allowed_port(u))
+                    except ValueError:
+                        ok = False  # malformed Location — never follow
+                    if ok:
                         # signed CDN URL authenticates itself — follow with
                         # a fresh request carrying NO Authorization header
                         return self._dl_opener.open(
                             urllib.request.Request(loc), timeout=60)
+                    # a rejected/malformed redirect target is permanent —
+                    # fail as url_not_allowed instead of retrying
+                    raise MCSError("url_not_allowed",
+                                   "redirect rejected") from e
             raise
 
     def download(self, url: str, dest: str) -> dict:

@@ -1,49 +1,35 @@
-"""Discord notifier — drains notify_outbox to a Discord channel.
+"""Outbox notifier — drains notify_outbox through `hermes send`.
 
-Credentials: bot token is read at send time; it is never printed, logged,
-or stored elsewhere. When ~/.mcs/config.json sets "notify_bot_profile"
-(e.g. "cco"), the token comes from ~/.hermes/profiles/<name>/.env so posts
-arrive under that bot's identity; otherwise ~/.hermes/.env is used.
-Channel id comes from ~/.mcs/config.json {discord_channel_id} falling
-back to DISCORD_HOME_CHANNEL in ~/.hermes/.env.
+Delivery is delegated to Hermes's standard send path: the destination
+comes from ~/.mcs/config.json {notify_target} in `hermes send --to`
+syntax (e.g. "slack", "slack:#mcs", "discord:1234"), and Hermes owns
+platform connection, credentials, channel resolution and mentions
+policy. When config sets "notify_bot_profile" (e.g. "cco"), sends run
+under that Hermes profile so posts arrive under that bot's identity.
+Attachments ride as MEDIA:<path> references in the message text; the
+platform adapter owns upload limits.
 
-Events carry message_ids; message content is looked up in the local ledger
-at send time so the outbox payload itself stays tiny.
+Events carry message_ids; message content is looked up in the local
+ledger at send time so the outbox payload itself stays tiny.
 """
 import hashlib
 import json
-import math
-import mimetypes
 import os
 import re
+import shutil
+import subprocess
 import time
-import urllib.request
-import urllib.error
-import uuid
 
 from mcs_queries import med_is_patient_current
-from mcs_util import (NoRedirect, env_value, html_to_text, load_config,
-                      no_proxy_opener)
+from mcs_util import html_to_text, load_config
 
-ENV_PATH = os.path.expanduser("~/.hermes/.env")
 CONF_PATH = os.path.expanduser("~/.mcs/config.json")
-API = "https://discord.com/api/v10"
 _MAX_LEN = 1900
-# Discord per-message file caps; oversized files stay local-only and are
+# Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.
 _MAX_FILES = 10
 _MAX_FILE_BYTES = 24 * 1024 * 1024
-_MAX_FILES_BYTES = 23 * 1024 * 1024  # leaves room for JSON + multipart framing
-_MAX_REQUEST_BYTES = 24 * 1024 * 1024
-
-
-def _env(key: str, path: str = ENV_PATH) -> str | None:
-    # File-pinned lookup: a stray shell DISCORD_BOT_TOKEN must never
-    # override the profile's own .env — env_value(check_env=False).
-    return env_value(key, paths=(path,), check_env=False)
-
-
-_PROFILE_ENV = os.path.expanduser("~/.hermes/profiles/{}/.env")
+_MAX_FILES_BYTES = 23 * 1024 * 1024
 
 
 class _DeferredSend(Exception):
@@ -66,29 +52,38 @@ def _config() -> dict:
     return load_config(CONF_PATH)
 
 
-def _token() -> str | None:
-    """Bot token for sends. `notify_bot_profile` in config.json pins a
-    dedicated bot identity (e.g. "cco"); when set, its token MUST resolve —
-    falling back to another bot would post under the wrong identity."""
-    profile = _config().get("notify_bot_profile")
-    if isinstance(profile, str) and profile:
-        if not re.fullmatch(r"[a-z0-9_-]+", profile):
-            return None
-        return _env("DISCORD_BOT_TOKEN", _PROFILE_ENV.format(profile))
-    return _env("DISCORD_BOT_TOKEN")
+def _hermes_exe(cfg: dict) -> str:
+    """`hermes` binary for delivery. config {hermes_bin} overrides; the
+    default falls back to the standard user-local install because the
+    launchd PATH is minimal."""
+    exe = cfg.get("hermes_bin")
+    if isinstance(exe, str) and exe.strip():
+        return exe.strip()
+    return (shutil.which("hermes")
+            or os.path.expanduser("~/.local/bin/hermes"))
 
 
-def _channel_id(kind: str) -> str | None:
-    """Patient-content events ONLY go to the explicitly configured MCS
-    channel — a missing config must never spill bodies into a fallback
-    channel (Oracle B15). System alerts may use the home channel."""
-    cid = _config().get("discord_channel_id")
-    if cid and str(cid).isdigit():
-        return str(cid)
+def _target(cfg: dict, kind: str) -> str | None:
+    """Delivery target in `hermes send --to` syntax. Patient-content
+    events ONLY go to the explicitly configured target — a missing
+    config must never spill bodies into a fallback destination
+    (Oracle B15). System alerts may override via notify_system_target."""
+    t = cfg.get("notify_target")
     if kind in ("session_expired", "run_failed"):
-        cid = _env("DISCORD_HOME_CHANNEL")
-        return cid if cid and cid.isdigit() else None
-    return None
+        st = cfg.get("notify_system_target")
+        if isinstance(st, str) and st.strip():
+            t = st
+    return t.strip() if isinstance(t, str) and t.strip() else None
+
+
+def _send_argv(cfg: dict, target: str) -> list[str]:
+    """`hermes [-p profile] send --to <target> --quiet` argv."""
+    argv = [_hermes_exe(cfg)]
+    profile = cfg.get("notify_bot_profile")
+    if isinstance(profile, str) and re.fullmatch(r"[a-z0-9_-]+", profile):
+        argv += ["-p", profile]
+    argv += ["send", "--to", target, "--quiet"]
+    return argv
 
 
 def _artifact(ledger, kind: str, mid: int) -> dict | None:
@@ -777,87 +772,63 @@ def _has_sent_progress(ev) -> bool:
     return type(progress.get("next")) is int and progress["next"] > 0
 
 
-# The bot token rides the Authorization header — a redirect anywhere
-# (even same-host path change is unneeded for this API) must never be
-# followed with credentials attached (Oracle B16). NoRedirect + the
-# no-proxy opener come from mcs_util.
-_OPENER = no_proxy_opener(NoRedirect)
+class _SendFailed(OSError):
+    """`hermes send` exited non-zero — the retryable failure class:
+    outbox backoff and a later flush retry the event."""
 
 
-def _multipart(payload: dict, files: list[tuple[str, str]]) -> tuple[bytes, str]:
-    """multipart/form-data body for Discord file upload. payload_json carries
-    the JSON body; files[i] parts carry raw bytes. Original (possibly
-    non-ASCII) filename goes in payload_json attachments; the Content-
-    Disposition filename is an ASCII-safe stand-in."""
-    boundary = f"mcs-{uuid.uuid4().hex}"
-    out = bytearray()
-    out += (f"--{boundary}\r\nContent-Disposition: form-data; "
-            f"name=\"payload_json\"\r\nContent-Type: application/json"
-            f"\r\n\r\n").encode()
-    out += json.dumps(payload).encode() + b"\r\n"
-    for i, (fname, path) in enumerate(files):
-        ext = os.path.splitext(fname)[1] or ".bin"
-        ctype = mimetypes.guess_type(fname)[0] or "application/octet-stream"
-        out += (f"--{boundary}\r\nContent-Disposition: form-data; "
-                f"name=\"files[{i}]\"; filename=\"file{i}{ext}\"\r\n"
-                f"Content-Type: {ctype}\r\n\r\n").encode()
-        with open(path, "rb") as f:
-            data = f.read(_MAX_FILE_BYTES + 1)
-        if len(data) > _MAX_FILE_BYTES:
-            raise ValueError("file_too_large")
-        out += data
-        out += b"\r\n"
-    out += f"--{boundary}--\r\n".encode()
-    if len(out) > _MAX_REQUEST_BYTES:
-        raise ValueError("multipart_too_large")
-    return bytes(out), f"multipart/form-data; boundary={boundary}"
+class _SendUsage(Exception):
+    """`hermes send` refused the invocation itself (exit 2) — a CLI/
+    config contract problem that retrying cannot fix → outbox_hold."""
 
 
-def _post(token: str, channel: str, content: str,
-          files: list[tuple[str, str]] | None = None) -> str:
-    """Returns Discord message id. Raises on failure."""
-    payload = {"content": content,
-               # message text must never ping @everyone/users
-               "allowed_mentions": {"parse": []}}
-    if files:
-        payload["attachments"] = [{"id": i, "filename": fn}
-                                  for i, (fn, _) in enumerate(files)]
-        body, ctype = _multipart(payload, files)
-        headers = {"Authorization": f"Bot {token}",
-                   "User-Agent": "DiscordBot (mcs-adapter, 1.0)",
-                   "Content-Type": ctype}
-        timeout = 60
-    else:
-        body = json.dumps(payload).encode()
-        headers = {"Authorization": f"Bot {token}",
-                   "User-Agent": "DiscordBot (mcs-adapter, 1.0)",
-                   "Content-Type": "application/json"}
-        timeout = 15
-    req = urllib.request.Request(
-        f"{API}/channels/{channel}/messages",
-        data=body, headers=headers, method="POST")
-    with _OPENER.open(req, timeout=timeout) as res:
-        reply = json.load(res)
-    mid = reply.get("id") if isinstance(reply, dict) else None
-    if ((type(mid) is int and mid > 0)
-            or (isinstance(mid, str) and mid.isdigit())):
-        return str(mid)
-    raise ValueError("discord_receipt_invalid")
-
-
-def _retry_after(e: urllib.error.HTTPError) -> float:
-    """Discord 429 carries the real wait; default bounded backoff."""
+def _media_path(name: str, path: str) -> str:
+    """MEDIA: delivery path for a stored attachment. Downloaded files are
+    saved extensionless (attachments/<id>); platforms derive the upload
+    filename from the path basename, so a bare id posts as an
+    extensionless blob Discord won't render inline. Alias the file to
+    `<path><ext>` (hardlink, copy fallback) carrying the original
+    extension so the upload keeps a renderable filename."""
+    ext = os.path.splitext(name)[1].lower() if name else ""
+    if (not ext or not re.fullmatch(r"\.[a-z0-9]{1,8}", ext)
+            or os.path.splitext(path)[1]):
+        return path
+    alias = path + ext
+    if os.path.exists(alias):
+        return alias
     try:
-        d = json.loads(e.read() or b"{}")
-        wait = float(d.get("retry_after", 0))
-        return wait + 1 if math.isfinite(wait) and wait >= 0 else 60.0
-    except (ValueError, TypeError):
-        return 60.0
+        os.link(path, alias)
+    except OSError:
+        try:
+            shutil.copy2(path, alias)
+        except OSError:
+            return path
+    return alias
 
 
-def _delivery_fingerprint(channel: str, chunks: list[str],
+def _send(argv: list[str], content: str,
+          files: list[tuple[str, str]] | None = None) -> None:
+    """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
+    references — the adapter owns upload limits and mention policy)."""
+    body = content
+    if files:
+        body += "".join(f"\nMEDIA:{_media_path(fn, path)}"
+                        for fn, path in files)
+    try:
+        r = subprocess.run(argv, input=body, text=True,
+                           capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired as e:
+        raise _SendFailed("hermes send timed out") from e
+    detail = (r.stderr or r.stdout or "").strip()[:400]
+    if r.returncode == 2:
+        raise _SendUsage(detail or "hermes send usage error")
+    if r.returncode != 0:
+        raise _SendFailed(detail or f"hermes send exit {r.returncode}")
+
+
+def _delivery_fingerprint(target: str, chunks: list[str],
                           files: list[tuple[str, str]]) -> str:
-    h = hashlib.sha256(channel.encode())
+    h = hashlib.sha256(target.encode())
     for chunk in chunks:
         h.update(b"\0text\0")
         h.update(chunk.encode())
@@ -889,11 +860,12 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None]:
 
 
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
-    token = _token()
+    cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
     due = ledger.outbox_due(limit)
-    if not token:
+    exe = _hermes_exe(cfg)
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
         res["skipped"] = len(due)
         return res
     for event_index, ev in enumerate(due):
@@ -902,16 +874,17 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             break
         if ev["project_id"] and ledger.is_archived(ev["project_id"]):
             # queued before the patient was archived — archived patient
-            # events must never reach Discord; drop terminally, do not
-            # count as sent OR as a retryable failure (Oracle F2)
+            # events must never reach the channel; drop terminally, do
+            # not count as sent OR as a retryable failure (Oracle F2)
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
-        channel = _channel_id(ev["kind"])
-        if not channel:
+        target = _target(cfg, ev["kind"])
+        if not target:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
+        argv = _send_argv(cfg, target)
         try:
             content, files = _format_event(ledger, ev)
             render_state = (_semantic_render_state(ledger, ev)
@@ -923,14 +896,13 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # resume at the first unacknowledged chunk — a crash after a
             # partial send must not duplicate accepted chunks (B25)
             start, sent_ids, previous = _progress(ev["progress"], len(chunks))
-            fingerprint = _delivery_fingerprint(channel, chunks, files)
+            fingerprint = _delivery_fingerprint(target, chunks, files)
             if start and previous != fingerprint:
                 ledger.outbox_hold(ev["event_id"])
                 res["failed"] += 1
                 continue
             if not start:
                 ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
-            mid = ""
             post_files = files
             for i in range(start, len(chunks)):
                 if deadline is not None and time.monotonic() >= deadline:
@@ -947,21 +919,16 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                     _semantic_render_gate(ledger, ev, render_state,
                                           in_progress=bool(start or i))
                 # files ride the FIRST post only; on resume (start>0) they
-                # were already delivered with chunk 0. A definitive
-                # rejection of the file-bearing post (local size/format
-                # error, or Discord 4xx — never 429/5xx/network where
-                # acceptance is unknown) drops the files and retries
-                # text-only so a bad attachment can never sink the
-                # notification itself
+                # were already delivered with chunk 0. A usage rejection
+                # of the file-bearing send (exit 2 — never a delivery
+                # failure where acceptance is unknown) drops the files
+                # and retries text-only so a bad attachment can never
+                # sink the notification itself
                 try:
-                    mid = _post(token, channel, chunks[i],
-                                post_files if i == 0 else None)
-                except ValueError as e:
-                    # only errors raised while BUILDING the body — a
-                    # post-send ValueError (receipt_invalid) may mean
-                    # the message already reached Discord
-                    if (i != 0 or not post_files or str(e) not in
-                            ("file_too_large", "multipart_too_large")):
+                    _send(argv, chunks[i],
+                          post_files if i == 0 else None)
+                except _SendUsage:
+                    if i != 0 or not post_files:
                         raise
                     post_files = None
                     if ev["kind"] == "semantic_notice":
@@ -970,20 +937,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                     elif render_state:
                         _semantic_render_gate(ledger, ev, render_state,
                                               in_progress=bool(start or i))
-                    mid = _post(token, channel, chunks[i])
-                except urllib.error.HTTPError as e:
-                    if (i != 0 or not post_files or e.code == 429
-                            or e.code < 400 or e.code >= 500):
-                        raise
-                    post_files = None
-                    if ev["kind"] == "semantic_notice":
-                        _semantic_gate(ledger, ev, payload,
-                                       in_progress=bool(start or i))
-                    elif render_state:
-                        _semantic_render_gate(ledger, ev, render_state,
-                                              in_progress=bool(start or i))
-                    mid = _post(token, channel, chunks[i])
-                sent_ids.append(mid)
+                    _send(argv, chunks[i])
+                sent_ids.append(str(i + 1))
                 ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                        fingerprint)
             ledger.outbox_mark(ev["event_id"], "accepted",
@@ -1016,24 +971,29 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             else:
                 ledger.outbox_suppress(ev["event_id"])
                 res["suppressed"] += 1
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                retry = _retry_after(e)
-            elif e.code >= 500:
-                retry = 60
-            elif e.code in (401, 403, 404):
-                retry = 3600  # config/permission issue — slow retry
-            else:
-                retry = min(3600, 60 * (2 ** ev["attempts"]))
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=retry)
+        except _SendUsage:
+            # invocation itself refused (exit 2) — a CLI/config contract
+            # problem; retrying cannot fix it, quarantine the event
+            ledger.outbox_hold(ev["event_id"])
             res["failed"] += 1
-            if e.code == 429:
-                break
         except ValueError:
             ledger.outbox_hold(ev["event_id"])
             res["failed"] += 1
-        except (urllib.error.URLError, TimeoutError, KeyError, OSError):
+        except (OSError, TimeoutError, KeyError):
             backoff = min(3600, 60 * (2 ** ev["attempts"]))
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
+            res["failed"] += 1
+        except Exception:
+            # Per-event containment: an unexpected failure inside
+            # _format_event/_semantic_gate (broken import, sqlite error)
+            # must not escape flush and starve every later due event.
+            # Retry hourly first — a transient fault self-heals; a
+            # deterministic bug quarantines after 5 attempts instead of
+            # looping forever.
+            if ev["attempts"] >= 4:
+                ledger.outbox_hold(ev["event_id"])
+            else:
+                ledger.outbox_mark(ev["event_id"], "failed",
+                                   retry_in=3600)
             res["failed"] += 1
     return res

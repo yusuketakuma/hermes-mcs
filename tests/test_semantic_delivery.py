@@ -87,8 +87,8 @@ def _semantic_event(db, text="notice"):
 
 def _prepare_send(monkeypatch, cfg):
     monkeypatch.setattr(notifier, "_config", lambda: cfg[0])
-    monkeypatch.setattr(notifier, "_token", lambda: "token")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "channel")
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda c, kind: "channel")
 
 
 def test_shadow_and_off_keep_existing_notification_byte_identical(
@@ -138,13 +138,13 @@ def test_semantic_send_holds_after_source_change_mid_delivery(
     calls = []
 
     def post(*args, **kwargs):
-        calls.append(args[2])
+        calls.append(args[1])
         if len(calls) == 1:
             db.save_patient(_patient([_message(body="本文が訂正された",
                                                 unread=False)]), notify=None)
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_post", post)
+    monkeypatch.setattr(notifier, "_send", post)
     result = notifier.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox WHERE kind='semantic_notice'"
@@ -166,12 +166,12 @@ def test_semantic_send_holds_after_mode_change_mid_delivery(
     calls = []
 
     def post(*args, **kwargs):
-        calls.append(args[2])
+        calls.append(args[1])
         if len(calls) == 1:
             cfg[0] = {"semantic": {"mode": "off"}}
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_post", post)
+    monkeypatch.setattr(notifier, "_send", post)
     result = notifier.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox WHERE kind='semantic_notice'"
@@ -193,12 +193,12 @@ def test_attached_summary_holds_when_mode_changes_mid_delivery(
     calls = []
 
     def post(*args, **kwargs):
-        calls.append(args[2])
+        calls.append(args[1])
         if len(calls) == 1:
             cfg[0] = {"semantic": {"mode": "off"}}
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_post", post)
+    monkeypatch.setattr(notifier, "_send", post)
     result = notifier.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox "
@@ -227,8 +227,8 @@ def test_resumed_stale_semantic_notice_holds_receipt(
     cfg = [_cfg("enforce")]
     _prepare_send(monkeypatch, cfg)
     calls = []
-    monkeypatch.setattr(notifier, "_post",
-                        lambda *args, **kwargs: calls.append(args[2]) or "2")
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *args, **kwargs: calls.append(args[1]) or "2")
     result = notifier.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox "
@@ -249,8 +249,8 @@ def test_semantic_notice_repeats_provenance_on_every_chunk(
     _prepare_send(monkeypatch, cfg)
     calls = []
     monkeypatch.setattr(
-        notifier, "_post",
-        lambda *args, **kwargs: calls.append(args[2]) or str(len(calls)))
+        notifier, "_send",
+        lambda *args, **kwargs: calls.append(args[1]) or str(len(calls)))
 
     result = notifier.flush(db)
     row = db.db.execute(
@@ -281,12 +281,12 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
     first_attempt = []
 
     def fail_after_first(*args, **kwargs):
-        first_attempt.append(args[2])
+        first_attempt.append(args[1])
         if len(first_attempt) == 1:
             return "1"
         raise OSError("synthetic transport failure")
 
-    monkeypatch.setattr(notifier, "_post", fail_after_first)
+    monkeypatch.setattr(notifier, "_send", fail_after_first)
     result = notifier.flush(db)
     row = db.db.execute(
         "SELECT state,progress FROM notify_outbox WHERE event_id=?",
@@ -300,7 +300,7 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
 
     retry = []
     monkeypatch.setattr(
-        notifier, "_post", lambda *args, **kwargs: retry.append(args[2]) or "2"
+        notifier, "_send", lambda *args, **kwargs: retry.append(args[1]) or "2"
     )
     db.db.execute(
         "UPDATE notify_outbox SET next_try=0 WHERE event_id=?",

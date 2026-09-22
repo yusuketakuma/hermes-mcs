@@ -4,7 +4,6 @@ import os
 import sqlite3
 import sys
 import time
-import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -251,11 +250,6 @@ def test_mcs_db_validation_rejects_empty_sqlite(tmp_path):
     assert ledger.valid_mcs_db(str(path)) is False
 
 
-def test_retry_after_never_shortens_server_delay():
-    error = SimpleNamespace(read=lambda: b'{"retry_after":1336.57}')
-    assert notifier._retry_after(error) >= 1336.57
-
-
 def test_history_returns_saved_pages_and_error():
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
@@ -406,11 +400,11 @@ def test_changed_partial_notification_is_quarantined(monkeypatch):
             held.append(event_id)
 
     monkeypatch.setattr(notifier, "_config", lambda: {})
-    monkeypatch.setattr(notifier, "_env", lambda key: "token")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "123")
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notifier, "_format_event",
                         lambda ledger, event: ("changed", []))
-    monkeypatch.setattr(notifier, "_post",
+    monkeypatch.setattr(notifier, "_send",
                         lambda *args: pytest.fail("must not send"))
 
     assert notifier.flush(Outbox())["failed"] == 1
@@ -495,8 +489,8 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
             pytest.fail("a recoverable config error must not discard retries")
 
     monkeypatch.setattr(notifier, "_config", lambda: {})
-    monkeypatch.setattr(notifier, "_env", lambda key: "token")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: None)
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: None)
 
     assert notifier.flush(Outbox()) == {"sent": 0, "failed": 1,
                                         "skipped": 0, "suppressed": 0,
@@ -789,10 +783,10 @@ def test_outbox_event_suppressed_after_archival(tmp_path, monkeypatch):
     db.upsert_patient_info(_unread_patient(60), is_archived=True)
 
     sent = []
-    monkeypatch.setattr(notifier, "_token", lambda: "t")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
-    monkeypatch.setattr(notifier, "_post",
-                        lambda *a, **k: sent.append(a) or "mid")
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *a, **k: sent.append(a) or None)
 
     res = notifier.flush(db)
     # BOTH of archived pid 60's events — pending AND already-failed —
@@ -855,6 +849,73 @@ def test_history_floor_withheld_for_nonterminal_parent(tmp_path):
     # a parent whose body never completed must not certify the floor (F9)
     assert db.history_floor(70) == 0
     assert db.job_state("history", 70) == "pending"
+    db.close()
+
+
+def test_history_stalled_window_fails_visibly(tmp_path):
+    # a 'snippet' parent can never be upgraded (no API surface returns
+    # its full body), so a checkpoint-unsafe window re-walked forever
+    # must eventually fail instead of looping silently (P-2)
+    db = _ledger(tmp_path)
+    db.ensure_patient(72)
+    db.job_add("history", 72,
+               payload={"since": 0, "page": 1, "trickle": True})
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch(
+                messages=[_message(mid=5, project_id=72,
+                                   state="snippet")],
+                pages=1, reached=True)
+
+        def fetch_thread(self, *a):
+            return []
+
+    result = {"errors": []}
+    for _ in range(job_ops.HISTORY_STALL_LIMIT):
+        db.db.execute(
+            "UPDATE fetch_jobs SET next_try=0 WHERE kind='history'")
+        db.db.commit()
+        job_ops.run_history_jobs(Adapter(), db, result,
+                                 time.monotonic() + 300, trickle=True)
+    assert db.job_state("history", 72) == "failed"
+    assert "import 72: window_stalled" in result["errors"]
+    assert db.history_floor(72) == 0
+    db.close()
+
+
+def test_history_stall_counter_resets_on_progress(tmp_path):
+    # stalls count consecutive unsafe windows only — once the cursor
+    # advances (checkpoint safe) the counter clears (P-2)
+    db = _ledger(tmp_path)
+    db.ensure_patient(73)
+    db.job_add("history", 73,
+               payload={"since": 0, "page": 1, "pages": 1,
+                        "trickle": True})
+    calls = {"n": 0}
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            calls["n"] += 1
+            state = "snippet" if calls["n"] == 1 else "full"
+            return mcs_adapter.MessageBatch(
+                messages=[_message(mid=calls["n"], project_id=73,
+                                   state=state)],
+                pages=1, reached=calls["n"] > 1)
+
+        def fetch_thread(self, *a):
+            return []
+
+    result = {"errors": []}
+    for _ in range(2):
+        db.db.execute(
+            "UPDATE fetch_jobs SET next_try=0 WHERE kind='history'")
+        db.db.commit()
+        job_ops.run_history_jobs(Adapter(), db, result,
+                                 time.monotonic() + 300, trickle=True)
+    # first pass stalled once (snippet), second advanced + floored
+    assert db.job_state("history", 73) == "done"
+    assert db.history_floor(73) == -1
     db.close()
 
 
@@ -1640,32 +1701,27 @@ def test_notify_pending_attachments_jump_download_queue(tmp_path,
     db.close()
 
 
-def _http_error(code):
-    return urllib.error.HTTPError("u", code, "err", {}, None)
-
-
 def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
-    """A definitive rejection of the file-bearing post (Discord 4xx or
-    a local body-build error) must not sink the notification — drop the
-    files and retry the chunk text-only."""
+    """A usage rejection of the file-bearing send (hermes send exit 2 —
+    never a delivery failure where acceptance is unknown) must not sink
+    the notification — drop the files and retry the chunk text-only."""
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(70))
     f = tmp_path / "f.txt"
     f.write_bytes(b"x")
     db.outbox_add("new_messages", 70, {"message_ids": [1]})
-    monkeypatch.setattr(notifier, "_token", lambda: "t")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notifier, "_format_event",
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
-    def fake_post(token, channel, content, files=None):
+    def fake_send(argv, content, files=None):
         calls.append(bool(files))
         if files:
-            raise _http_error(403)
-        return "mid1"
+            raise notifier._SendUsage("media rejected")
 
-    monkeypatch.setattr(notifier, "_post", fake_post)
+    monkeypatch.setattr(notifier, "_send", fake_send)
     res = notifier.flush(db)
     assert res["sent"] == 1
     assert calls == [True, False]
@@ -1674,8 +1730,41 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
     db.close()
 
 
+def test_media_path_aliases_extensionless_files(tmp_path):
+    """Attachments are stored extensionless (attachments/<id>) but
+    platforms derive the upload filename from the path basename — the
+    MEDIA path must carry the original extension or Discord renders a
+    generic blob instead of an image."""
+    src = tmp_path / "18156"
+    src.write_bytes(b"jpg-bytes")
+    p = notifier._media_path("IMG_1.JPG", str(src))
+    assert p == str(src) + ".jpg"
+    assert os.path.exists(p)                 # alias created
+    assert open(p, "rb").read() == b"jpg-bytes"
+    assert notifier._media_path("IMG_1.JPG", str(src)) == p  # idempotent
+    # name without a sane extension, or path already carrying one -> unchanged
+    assert notifier._media_path("noext", str(src)) == str(src)
+    assert notifier._media_path("x.png", str(src) + ".jpg") == str(src) + ".jpg"
+
+
+def test_send_writes_media_tags_with_extension(tmp_path, monkeypatch):
+    """_send must emit MEDIA: lines on the aliased (extension-carrying)
+    path so the platform upload keeps a real filename."""
+    src = tmp_path / "99"
+    src.write_bytes(b"x")
+    sent = {}
+    monkeypatch.setattr(
+        notifier.subprocess, "run",
+        lambda argv, **kw: sent.update(argv=argv, body=kw["input"])
+        or SimpleNamespace(returncode=0, stdout="", stderr=""))
+    notifier._send(["hermes", "send"], "text",
+                   [("photo.jpg", str(src))])
+    assert f"MEDIA:{src}.jpg" in sent["body"]
+    assert "text" in sent["body"]
+
+
 def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
-    """5xx/network/429 and post-send ValueError mean acceptance is
+    """Delivery failure (hermes send exit 1) means acceptance is
     unknown — retrying text-only could duplicate, so no fallback."""
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(71))
@@ -1683,17 +1772,17 @@ def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
     f.write_bytes(b"x")
     db.outbox_add("new_messages", 71, {"message_ids": [1]})
     db.outbox_add("new_messages", 71, {"message_ids": [2]})
-    monkeypatch.setattr(notifier, "_token", lambda: "t")
-    monkeypatch.setattr(notifier, "_channel_id", lambda kind: "chan")
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notifier, "_format_event",
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
-    def fake_post(token, channel, content, files=None):
+    def fake_send(argv, content, files=None):
         calls.append(bool(files))
-        raise _http_error(500)
+        raise notifier._SendFailed("delivery failed")
 
-    monkeypatch.setattr(notifier, "_post", fake_post)
+    monkeypatch.setattr(notifier, "_send", fake_send)
     res = notifier.flush(db)
     assert res["sent"] == 0 and res["failed"] == 2
     assert calls == [True, True]  # never retried without files
@@ -1952,3 +2041,253 @@ def test_backfill_recovers_read_reply_on_old_parent_without_hiding_gaps(tmp_path
     assert db.job_pending("semantic", 1, 10) is not None
     assert db.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 0
     db.close()
+
+
+def test_json_object_skips_trailing_prose_braces():
+    """A greedy first-{/last-} regex used to swallow trailing prose
+    braces and fail the whole parse; raw_decode must stop at the
+    object's own closing brace."""
+    import mcs_util
+    assert mcs_util.json_object(
+        'prefix {"a": 1} suffix (see {note})') == {"a": 1}
+    assert mcs_util.json_object(
+        '{"a": 1} tail } extra') == {"a": 1}
+    assert mcs_util.json_object('{broken} {"a": 2}') == {"a": 2}
+    assert mcs_util.json_object('no json here') is None
+    assert mcs_util.json_object('[1,2]') is None
+
+
+def test_env_value_empty_line_is_unconfigured(tmp_path, monkeypatch):
+    """An emptied `KEY=` line must read as None — `is None` setup checks
+    otherwise report a blank credential as configured, and it must not
+    shadow a real value in a later dotenv file."""
+    import mcs_util
+    empty = tmp_path / "a.env"
+    real = tmp_path / "b.env"
+    empty.write_text("MY_KEY=\n")
+    real.write_text("MY_KEY=real\n")
+    monkeypatch.delenv("MY_KEY", raising=False)
+    assert mcs_util.env_value("MY_KEY", paths=(str(empty),)) is None
+    assert mcs_util.env_value(
+        "MY_KEY", paths=(str(empty), str(real))) == "real"
+    empty.write_text('MY_KEY=""\n')
+    assert mcs_util.env_value("MY_KEY", paths=(str(empty),)) is None
+
+
+def test_assert_allowed_url_bad_port_is_mcserror():
+    """A malformed port (':bad', out-of-range, broken bracket) makes
+    urlparse's .port raise ValueError — it must surface as MCSError
+    'url_not_allowed', not leak as a bare ValueError that escapes
+    stage_attachments' except MCSError and poisons the whole tick."""
+    import pytest as _pt
+    for bad in ("https://www.medical-care.net:bad/x",
+                "https://www.medical-care.net:99999/x",
+                "https://[::1/x"):
+        with _pt.raises(mcs_adapter.MCSError) as e:
+            mcs_adapter._assert_allowed_url(bad)
+        assert e.value.kind == "url_not_allowed"
+    # allowed still passes
+    mcs_adapter._assert_allowed_url("https://www.medical-care.net/f")
+    mcs_adapter._assert_allowed_url("https://www.medical-care.net:443/f")
+
+
+def test_flush_unexpected_event_error_does_not_starve_queue(monkeypatch):
+    """An exception type outside the classified set (e.g. a broken
+    `import semantic` inside _semantic_gate, or sqlite3.Error from
+    thread_bundle) used to escape flush() entirely — every later due
+    event starved and the poisoned event died first again next tick.
+    The event retries hourly (transient faults self-heal) and only
+    quarantines after 5 attempts, while the rest still sends."""
+    held, sent, marked = [], [], []
+
+    class Outbox:
+        def outbox_due(self, limit):
+            return [{"event_id": 1, "kind": "semantic_notice",
+                     "project_id": 1, "payload": "{}", "attempts": 0,
+                     "progress": None},
+                    {"event_id": 2, "kind": "new_messages",
+                     "project_id": 1,
+                     "payload": json.dumps({"message_ids": []}),
+                     "attempts": 0, "progress": None}]
+
+        def is_archived(self, project_id):
+            return False
+
+        def outbox_hold(self, event_id):
+            held.append(event_id)
+
+        def outbox_mark(self, event_id, state, retry_in=60):
+            marked.append((event_id, state))
+
+        def outbox_progress(self, *a):
+            pass
+
+        db = None
+
+    def boom(ledger, event):
+        if event["event_id"] == 1:
+            raise RuntimeError("semantic layer exploded")
+        return ("text", [])
+
+    monkeypatch.setattr(notifier, "_config", lambda: {})
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(notifier, "_format_event", boom)
+    # stub ledger has no real db — the render-gate pre-scan is
+    # irrelevant to this test
+    monkeypatch.setattr(notifier, "_semantic_render_state",
+                        lambda *a: ())
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *a, **k: sent.append(a) or None)
+
+    res = notifier.flush(Outbox())
+    # attempts=0 -> retryable failure (hourly), NOT terminal hold; a
+    # persistent unexpected error quarantines after 5 attempts
+    assert (1, "failed") in marked and held == []
+    assert len(sent) == 1 and res["sent"] == 1 and res["failed"] == 1
+
+    class Outbox2(Outbox):
+        def outbox_due(self, limit):
+            return [{"event_id": 7, "kind": "semantic_notice",
+                     "project_id": 1, "payload": "{}", "attempts": 4,
+                     "progress": None}]
+
+    monkeypatch.setattr(
+        notifier, "_format_event",
+        lambda ledger, event: (_ for _ in ()).throw(RuntimeError("x")))
+    res2 = notifier.flush(Outbox2())
+    assert held == [7] and res2["failed"] == 1
+
+
+class _FakeSock:
+    """In-memory socket — no real network (conftest blocks sockets)."""
+    def __init__(self, incoming: bytes = b""):
+        self.incoming = bytearray(incoming)
+        self.sent = bytearray()
+        self.closed = False
+
+    def recv(self, n):
+        out = bytes(self.incoming[:n])
+        del self.incoming[:n]
+        return out
+
+    def sendall(self, data):
+        self.sent += data
+
+    def close(self):
+        self.closed = True
+
+
+def _ws_frame(payload: bytes, opcode=0x1, fin=True, mask=False) -> bytes:
+    b0 = (0x80 if fin else 0) | opcode
+    n = len(payload)
+    if n < 126:
+        head = bytes([b0, (0x80 if mask else 0) | n])
+    elif n < 65536:
+        head = bytes([b0, (0x80 if mask else 0) | 126]) + n.to_bytes(2, "big")
+    else:
+        head = bytes([b0, (0x80 if mask else 0) | 127]) + n.to_bytes(8, "big")
+    if not mask:
+        return head + payload
+    key = b"\x11\x22\x33\x44"
+    return head + key + bytes(b ^ key[i & 3] for i, b in enumerate(payload))
+
+
+def _ws_conn(incoming: bytes = b""):
+    conn = mcs_adapter._WSConn.__new__(mcs_adapter._WSConn)
+    conn._sock = _FakeSock(incoming)
+    conn._buf = bytearray()
+    conn._deadline = time.monotonic() + 5
+    return conn
+
+
+def test_ws_handshake_verifies_accept_key():
+    import base64 as b64
+    import hashlib as hl
+    conn = _ws_conn()
+
+    class Sock(_FakeSock):
+        def sendall(self, data):
+            super().sendall(data)
+            # extract the client key, then feed a valid 101 response
+            # carrying the matching Sec-WebSocket-Accept
+            req = data.decode().split("\r\n")
+            k = next(line.split(": ", 1)[1] for line in req
+                     if line.startswith("Sec-WebSocket-Key:"))
+            accept = b64.b64encode(hl.sha1(
+                (k + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                .encode()).digest()).decode()
+            self.incoming += (f"HTTP/1.1 101 Switching Protocols\r\n"
+                              f"Upgrade: websocket\r\n"
+                              f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+                              ).encode()
+
+    conn._sock = Sock()
+    conn._handshake("127.0.0.1", 9222, "/devtools/page/x")
+    sent = conn._sock.sent.decode()
+    assert sent.startswith("GET /devtools/page/x HTTP/1.1")
+    assert "Upgrade: websocket" in sent
+
+
+def test_ws_handshake_rejects_wrong_accept():
+    conn = _ws_conn(b"HTTP/1.1 101 Switching Protocols\r\n"
+                    b"Sec-WebSocket-Accept: wrong\r\n\r\n")
+    try:
+        conn._handshake("127.0.0.1", 9222, "/x")
+    except mcs_adapter.BootstrapError as e:
+        assert "handshake" in str(e)
+    else:
+        raise AssertionError("wrong Accept must be refused")
+
+
+def test_ws_recv_reassembles_fragments_and_answers_ping():
+    payload = _ws_frame(b'{"id":1,"par', fin=False) \
+        + _ws_frame(b"ping!", opcode=0x9) \
+        + _ws_frame(b'tial"}', opcode=0x0, fin=True)
+    conn = _ws_conn(payload)
+    assert conn.recv_message() == b'{"id":1,"partial"}'
+    # a pong frame was sent in reply to the ping
+    pong = bytes(conn._sock.sent)
+    assert pong[0] & 0x0F == 0xA and pong[0] & 0x80
+    n = pong[1] & 0x7F
+    mask = pong[2:6]
+    assert bytes(b ^ mask[i & 3] for i, b in enumerate(pong[6:6+n])) \
+        == b"ping!"
+
+
+def test_ws_recv_close_and_oversize_fail():
+    conn = _ws_conn(_ws_frame(b"bye", opcode=0x8))
+    try:
+        conn.recv_message()
+    except mcs_adapter.BootstrapError:
+        pass
+    else:
+        raise AssertionError("close frame must end the connection")
+    conn = _ws_conn(_ws_frame(b"x" * 100, fin=False))
+    conn._MAX_MSG = 10
+    try:
+        conn.recv_message()
+    except mcs_adapter.BootstrapError as e:
+        assert "too_large" in str(e)
+    else:
+        raise AssertionError("oversized message must be refused")
+
+
+def test_ws_eval_roundtrip_and_id_match(monkeypatch):
+    """_ws_eval waits for the frame whose id matches the request."""
+    request = {}
+    reply = _ws_frame(json.dumps({"id": 99, "result": {}}).encode()) \
+        + _ws_frame(json.dumps(
+            {"id": 1, "result": {"result": {"value": "tok123"}}}).encode())
+    conn = _ws_conn(reply)
+    real_send = conn.send_text
+
+    def send(text):
+        request.update(json.loads(text))
+        real_send(text)
+
+    conn.send_text = send
+    monkeypatch.setattr(mcs_adapter, "_WSConn", lambda *a, **k: conn)
+    assert mcs_adapter._ws_eval("ws://127.0.0.1:9/x", "1+1", 5) == "tok123"
+    assert request["method"] == "Runtime.evaluate"
+    assert request["params"]["returnByValue"] is True

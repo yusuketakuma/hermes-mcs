@@ -35,6 +35,16 @@ from semantic_store import bundle_fingerprint, thread_bundle
 DB = os.path.join(os.path.expanduser("~/.mcs"), "data", "ledger.db")
 
 
+def _write_json_private(path: str, data) -> None:
+    """Corpus/run outputs contain patient-derived text — write them with
+    the same owner-only permissions semantic_blind uses for its outputs
+    (S-4)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.chmod(path, 0o600)  # tighten when the output file pre-existed
+
+
 def cmd_corpus(args) -> int:
     """Freeze N recent substantive threads into a portable corpus file."""
     db = LedgerReader(DB)
@@ -72,8 +82,7 @@ def cmd_corpus(args) -> int:
     db.close()
     out = {"corpus_version": 1, "created_at": int(time.time()),
            "cases": cases}
-    with open(args.out, "w") as f:
-        json.dump(out, f, ensure_ascii=False)
+    _write_json_private(args.out, out)
     print(f"corpus: {len(cases)} cases -> {args.out}")
     return 0
 
@@ -136,6 +145,13 @@ def _aggregate(results: list[dict]) -> dict:
 
 
 def cmd_run(args) -> int:
+    """Run the frozen corpus through the local pipeline.
+
+    ``--jev`` spends real API requests through an explicit operator
+    action — it deliberately bypasses the durable daily budget,
+    circuit state, and semantic-mode gates that the scheduled drain
+    enforces (S-5). Use sparingly and only when a live check is
+    intended."""
     corpus = json.load(open(args.corpus))
     import semantic
     jev_client = None
@@ -154,8 +170,7 @@ def cmd_run(args) -> int:
               flush=True)
     out = {"tag": args.tag, "created_at": int(time.time()),
            "aggregate": _aggregate(results), "results": results}
-    with open(args.out, "w") as f:
-        json.dump(out, f, ensure_ascii=False)
+    _write_json_private(args.out, out)
     a = out["aggregate"]
     print(f"aggregate[{args.tag}]: {a['findings_total']} findings on "
           f"{a['claims']} claims / {a['cases']} cases -> {args.out}")
@@ -298,6 +313,9 @@ _PROBES = [
 
 
 def cmd_detect(args) -> int:
+    """Fixed probe set through the real Jev audit path. Like ``--jev``
+    this is an explicit operator action outside the durable budget and
+    mode gates — the requests do not appear in semantic_usage (S-5)."""
     key = env_value("TYPESAFE_API_KEY")
     if not key:
         print("TYPESAFE_API_KEY not found", file=sys.stderr)

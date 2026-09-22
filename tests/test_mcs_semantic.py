@@ -1015,14 +1015,14 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
     monkeypatch.setattr(
         notifier, "_config",
         lambda: {"semantic": {"mode": "off"},
-                 "discord_channel_id": "123"})
-    monkeypatch.setattr(notifier, "_token", lambda: "tok")
+                 "notify_target": "slack"})
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notifier, "_post",
-                        lambda *a, **k: calls.append(a) or "1")
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *a, **k: calls.append(a) or None)
     notifier.flush(db)
     # the base new_messages notice sends; the semantic_notice must not
-    assert not any("要約" in str(c[2]) for c in calls)
+    assert not any("要約" in str(c[1]) for c in calls)
     row = db.db.execute(
         "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
     ).fetchone()
@@ -1044,13 +1044,13 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         notifier, "_config",
         lambda: {**_cfg("enforce"),
-                 "discord_channel_id": "123"})
-    monkeypatch.setattr(notifier, "_token", lambda: "tok")
+                 "notify_target": "slack"})
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notifier, "_post",
-                        lambda *a, **k: calls.append(a) or "1")
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *a, **k: calls.append(a) or None)
     notifier.flush(db)
-    assert not any("要約" in str(c[2]) for c in calls)
+    assert not any("要約" in str(c[1]) for c in calls)
     row = db.db.execute(
         "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
     ).fetchone()
@@ -1652,9 +1652,9 @@ def test_parked_notice_not_counted_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(
         notifier, "_config",
         lambda: {"semantic": {"mode": "shadow"},
-                 "discord_channel_id": "123"})
-    monkeypatch.setattr(notifier, "_token", lambda: "tok")
-    monkeypatch.setattr(notifier, "_post", lambda *a, **k: "1")
+                 "notify_target": "slack"})
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_send", lambda *a, **k: None)
     res = notifier.flush(db)
     assert res["parked"] == 2 and res["skipped"] == 0
     db.close()
@@ -1720,4 +1720,57 @@ def test_oversize_marker_survives_storage(tmp_path):
         "SELECT meta FROM artifacts WHERE kind='semantic_audit'"
     ).fetchone()["meta"])
     assert audit["audit_status"] == "NEEDS_REVIEW"
+    db.close()
+
+
+def test_retry_after_header_any_casing():
+    # HTTP field names are case-insensitive — a non-standard casing must
+    # still be honored instead of falling back to exponential backoff (S-2)
+    c = jev.JevClient(api_key="k", post_fn=lambda b, t: (200, {}, b""))
+    assert c._retry_after({"RETRY-AFTER": "2.5"}) == 2.5
+    assert c._retry_after({"Retry-After": "3"}) == 3.0
+    assert c._retry_after({"x-other": "9"}) is None
+    assert c._retry_after({"Retry-After": "soon"}) is None
+
+
+def test_transition_rescues_null_payload_row(tmp_path):
+    # A fetch_jobs row whose stored payload is NULL (only reachable via
+    # out-of-band edits) normalizes to "{}" in JobToken — a strict
+    # payload=? CAS could never fire and the row would wedge pending
+    # forever (S-6).
+    import semantic_runtime
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state,"
+        "next_try,created_at,updated_at) VALUES('semantic',1,7,NULL,"
+        "'pending',0,0,0)")
+    db.db.commit()
+    row = db.db.execute(
+        "SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    token = semantic_runtime.JobToken.from_row(row)
+    assert token.payload_raw == "{}"
+    assert semantic_runtime.transition_tx(db, token, "failed") is True
+    db.db.commit()
+    assert db.db.execute(
+        "SELECT state FROM fetch_jobs WHERE job_id=?",
+        (row["job_id"],)).fetchone()["state"] == "failed"
+    # a real payload row must still require an exact CAS match
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state,"
+        "next_try,created_at,updated_at) VALUES('semantic',1,8,"
+        "'{\"x\":1}','pending',0,0,0)")
+    db.db.commit()
+    row2 = db.db.execute(
+        "SELECT * FROM fetch_jobs WHERE message_id=8").fetchone()
+    token2 = semantic_runtime.JobToken.from_row(row2)
+    assert semantic_runtime.transition_tx(db, token2, "failed") is True
+    db.db.commit()
+    # but a token built for a DIFFERENT payload must not fire on it
+    stale = semantic_runtime.JobToken.from_row(
+        {**dict(row2), "payload": '{"x":2}'})
+    db.db.execute(
+        "UPDATE fetch_jobs SET state='pending' WHERE message_id=8")
+    db.db.commit()
+    assert semantic_runtime.transition_tx(db, stale, "done") is False
     db.close()
