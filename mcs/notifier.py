@@ -287,6 +287,44 @@ def _collect_files(att_map: dict, order: list[int]) -> list[tuple[str, str]]:
     return files
 
 
+def _signal_text(ledger, payload: dict, latest: dict):
+    """Render a review-candidate signal notice for delivery.
+
+    The outbox payload keeps its frozen shape (ids + fixed note, never
+    message bodies). At send time we resolve display context from the
+    ledger: the patient's name into the location line, and the latest
+    triggering mention (sender/time/snippet) as a quote so the notice
+    says WHO and WHAT without a manual lookup. Degrades silently — a
+    missing patient row or a deleted message never fails the send.
+    """
+    text = payload.get("text")
+    if not isinstance(text, str) or not text:
+        return text
+    lines = text.split("\n")
+    pid = payload.get("project_id")
+    if type(pid) is int and len(lines) > 1:
+        r = ledger.db.execute(
+            "SELECT patient_name FROM patients WHERE project_id=?",
+            (pid,)).fetchone()
+        name = r["patient_name"].strip() if r and r["patient_name"] else ""
+        if name:
+            lines[1] = f"{name}（{lines[1]}）"
+        ev = latest.get("evidence")
+        mids = (ev.get("message_ids") if isinstance(ev, dict)
+                else None) or []
+        if mids and type(mids[-1]) is int:
+            m = ledger.db.execute(
+                "SELECT sender_name, posted_at, body_text FROM messages"
+                " WHERE message_id=?", (mids[-1],)).fetchone()
+            if m and m["body_text"]:
+                snippet = " ".join(str(m["body_text"]).split())[:120]
+                lines.append(
+                    f"最新言及 {m['posted_at'] or '?'} "
+                    f"{m['sender_name'] or '?'}: {snippet}")
+        lines.append(f"確認: /mcs {{\"op\":\"timeline\",\"project_id\":{pid}}}")
+    return "\n".join(lines)
+
+
 def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     """Returns (content, files). files = [(filename, local_path)] to upload."""
     try:
@@ -334,7 +372,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                   if row and row["content"] else {})
         if not isinstance(latest, dict) or latest.get("state") != "open":
             raise _StaleSend("signal_not_open")
-        text = payload.get("text")
+        text = _signal_text(ledger, payload, latest)
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
         return text, []

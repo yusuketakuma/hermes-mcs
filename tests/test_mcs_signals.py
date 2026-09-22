@@ -303,6 +303,42 @@ def test_notify_enqueues_signal_kind_when_enabled(led):
     assert "レビュー候補" in pl["text"] and pl["signal_key"]
 
 
+def test_signal_notice_renders_patient_and_snippet(led, monkeypatch):
+    """The stored payload stays ids+frozen note, but the SENT text
+    resolves patient name and the latest mention's snippet so the
+    notice says who/what without a manual lookup."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY, body="エリキュースを開始しました")
+    led.db.execute("UPDATE patients SET patient_name='山田テスト' "
+                   "WHERE project_id=1")
+    _extract_llm(led.db, 1, "h1",
+                 [{"name": "エリキュース", "action": "start"}])
+    _ev(led, cfg={"signals": {"notify": True}})
+    ev = led.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='signal'").fetchone()
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    content, files = notifier._format_event(led, ev)
+    assert "山田テスト（project 1 / med エリキュース）" in content
+    assert "最新言及" in content and "エリキュースを開始しました" in content
+    assert '"op":"timeline"' in content and '"project_id":1' in content
+    assert files == []
+
+
+def test_signal_notice_degrades_without_patient_or_message(
+        led, monkeypatch):
+    """No patient row / deleted message -> base text still sends."""
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led, cfg={"signals": {"notify": True}})
+    ev = led.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='signal'").fetchone()
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    content, _ = notifier._format_event(led, ev)
+    assert "レビュー候補" in content and "request_overdue" in content
+
+
 def test_notify_only_on_new_open_not_refresh(led):
     _req(led.db, "open", due="2026-09-10")
     cfg = {"signals": {"notify": True}}
