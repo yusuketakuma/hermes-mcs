@@ -20,9 +20,9 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 HERMES_HOME="${1:-$HOME/.hermes}"
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
-# Pinned: v0.21.4 + audit repairs + plugin command_context injection — the
-# revision this deployment runs (fork branch: mcs-deploy).
-HERMES_PIN="1e8fbfe6b41399a46e232f6cde5618cfdfa2729a"
+# Pinned: fork main — org build merged with upstream main (v2026.9.22),
+# including audit repairs and plugin command_context injection.
+HERMES_PIN="16390dc80d248b7b49554c0cde52caf22e1fc3d8"
 HERMES_BIN_DIR="$HOME/.local/bin"
 
 ensure_hermes() {
