@@ -884,6 +884,64 @@ def test_history_stalled_window_fails_visibly(tmp_path):
     db.close()
 
 
+def test_history_batch_error_consumes_attempts(tmp_path):
+    """AUDIT-J03: an embedded batch.error must consume job attempts like
+    a raised MCSError — a permanent mid-walk failure (gone project, lost
+    permission) has to reach 'failed', not defer every interval forever."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(73)
+    db.job_add("history", 73,
+               payload={"since": 0, "page": 1, "trickle": True})
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch(
+                [], pages=1, reached=False,
+                error=mcs_adapter.MCSError("gone", retryable=False))
+
+        def fetch_thread(self, *a):
+            return []
+
+    result = {"errors": []}
+    for _ in range(8):   # job_retry's default max_attempts
+        db.db.execute(
+            "UPDATE fetch_jobs SET next_try=0 WHERE kind='history'")
+        db.db.commit()
+        job_ops.run_history_jobs(Adapter(), db, result,
+                                 time.monotonic() + 300, trickle=True)
+    assert db.job_state("history", 73) == "failed"
+    assert any("import 73: gone" in e for e in result["errors"])
+    db.close()
+
+
+def test_history_batch_session_expired_stays_attempt_free(tmp_path):
+    """An embedded SessionExpired aborts the run like the raised path —
+    auth failure is not a per-job failure and must not consume attempts."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(74)
+    db.job_add("history", 74,
+               payload={"since": 0, "page": 1, "trickle": True})
+
+    class Adapter:
+        def fetch_history(self, *a, **k):
+            return mcs_adapter.MessageBatch(
+                [], pages=0, reached=False,
+                error=mcs_adapter.SessionExpired(status=401))
+
+        def fetch_thread(self, *a):
+            return []
+
+    result = {"errors": []}
+    with pytest.raises(mcs_adapter.SessionExpired):
+        job_ops.run_history_jobs(Adapter(), db, result,
+                                 time.monotonic() + 300, trickle=True)
+    row = db.db.execute(
+        "SELECT attempts, state FROM fetch_jobs "
+        "WHERE kind='history'").fetchone()
+    assert row["attempts"] == 0 and row["state"] == "pending"
+    db.close()
+
+
 def test_history_stall_counter_resets_on_progress(tmp_path):
     # stalls count consecutive unsafe windows only — once the cursor
     # advances (checkpoint safe) the counter clears (P-2)

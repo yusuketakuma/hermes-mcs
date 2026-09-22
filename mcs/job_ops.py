@@ -405,7 +405,17 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 ledger.job_done(job["job_id"])
                 floored = True
         elif batch.error:
-            ledger.job_defer(job["job_id"], 300, payload=pl)
+            # a walk aborted mid-way must consume an attempt like a
+            # raised MCSError does — deferring without one re-walks the
+            # same pages every retry interval forever on a permanent
+            # error (gone project, lost permission), never surfacing
+            # 'failed' (AUDIT-J03). P-2 revival via re-seed still applies.
+            # SessionExpired stays attempt-free (auth aborts the run below,
+            # matching the raised path).
+            if isinstance(batch.error, SessionExpired):
+                ledger.job_defer(job["job_id"], 300, payload=pl)
+            else:
+                ledger.job_retry(job["job_id"], 300)
         elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
             # window can never certify (e.g. 'snippet' parent whose full
             # body has no API surface) — fail visibly; the job is still
