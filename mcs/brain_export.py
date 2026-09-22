@@ -51,11 +51,20 @@ def _meta_md(view) -> str:
             + "- source: published snapshot (read-only; live ledger untouched)\n")
 
 
-def _count(db, sql, *params) -> int:
+def _count(db, sql, *params) -> int | None:
     try:
         return int(db.execute(sql, params).fetchone()[0])
     except sqlite3.Error:
-        return -1
+        return None
+
+
+def _num(value) -> str:
+    return "n/a" if value is None else str(value)
+
+
+def _cell(value) -> str:
+    """Escape a value for a markdown table cell."""
+    return str(value).replace("|", "\\|")
 
 
 def _health_md(view) -> str:
@@ -72,8 +81,9 @@ def _health_md(view) -> str:
     pending = _count(db, "SELECT COUNT(*) FROM notify_outbox WHERE state='pending'")
     failed = _count(db, "SELECT COUNT(*) FROM notify_outbox WHERE state='failed'")
     jobs = _count(db, "SELECT COUNT(*) FROM fetch_jobs")
-    lines.append(f"\n## queues\n\n- notify_outbox pending: {pending}\n"
-                 f"- notify_outbox failed: {failed}\n- fetch_jobs: {jobs}\n")
+    lines.append(f"\n## queues\n\n- notify_outbox pending: {_num(pending)}\n"
+                 f"- notify_outbox failed: {_num(failed)}\n"
+                 f"- fetch_jobs: {_num(jobs)}\n")
     return "".join(lines)
 
 
@@ -90,11 +100,14 @@ def _metrics(db, snap_ts: float, open_signals: int) -> list[tuple]:
             ("mcs.signals.open", open_signals)]
 
 
-def _facts_block(db, snap_ts: float, today: str, open_signals: int) -> str:
+def _facts_block(db, snap_ts: float, open_signals: int) -> str:
+    # `since` is the SNAPSHOT's date — an unchanged snapshot yields byte-
+    # identical output across days (the dated file name carries wall time).
+    since = time.strftime("%Y-%m-%d", time.localtime(snap_ts))
     rows = [FACTS_HEADER, FACTS_SEP]
     for i, (name, val) in enumerate(_metrics(db, snap_ts, open_signals), 1):
-        rows.append(f"| {i} | {name} | metric | mcs | 1.0 | {today} "
-                    f"| brain_export |  |  |  | {val} | count |  |")
+        rows.append(f"| {i} | {name} | metric | mcs | 1.0 | {since} "
+                    f"| brain_export |  |  |  | {_num(val)} | count |  |")
     return "\n".join(rows) + "\n"
 
 
@@ -105,7 +118,7 @@ def _stats_md(view, today: str, open_signals: int) -> str:
     result2 = mcs_stats.run_stats(view.db, view.meta["generated_at"], args2)
     lines = [_fm(f"MCS stats {today}"), f"# MCS stats — {today}\n\n",
              _banner(view), "## Facts\n\n",
-             _facts_block(view.db, view.meta["generated_at"], today,
+             _facts_block(view.db, view.meta["generated_at"],
                           open_signals)]
     for preset, res in (("operational", result), ("pharmacy", result2)):
         lines.append(f"\n## preset: {preset}\n\n")
@@ -135,7 +148,8 @@ def _signals_md(view, res: dict) -> str:
         note = str(c.get("note") or "")[:120].replace("|", "\\|")
         ev = json.dumps(c.get("evidence"), ensure_ascii=False)[:120] \
             if c.get("evidence") else ""
-        lines.append(f"| {typ} | {pid} | {detected} | {note} | {ev} |\n")
+        lines.append(f"| {_cell(typ)} | {pid} | {detected} | {note} "
+                     f"| {_cell(ev)} |\n")
     if res.get("truncated"):
         lines.append(f"\n> truncated: {res['total']} total\n")
     return "".join(lines)
@@ -166,16 +180,17 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     if roll.get("medications"):
         lines.append("\n## current medications\n\n| name | dose | last |\n| --- | --- | --- |\n")
         for m in roll["medications"]:
-            lines.append(f"| {m.get('name')} | {m.get('dose') or ''} | {m.get('last') or ''} |\n")
+            lines.append(f"| {_cell(m.get('name'))} | {_cell(m.get('dose') or '')} "
+                         f"| {m.get('last') or ''} |\n")
     if roll.get("recent_symptoms"):
         lines.append("\n## recent symptoms\n\n| symptom | last |\n| --- | --- |\n")
         for s in roll["recent_symptoms"]:
-            lines.append(f"| {s.get('symptom')} | {s.get('last')} |\n")
+            lines.append(f"| {_cell(s.get('symptom'))} | {s.get('last')} |\n")
     if roll.get("recent_requests"):
         lines.append("\n## open-looking requests\n\n| at | kind | ctx |\n| --- | --- | --- |\n")
         for r in roll["recent_requests"]:
             ctx = str(r.get("ctx") or "")[:80]
-            lines.append(f"| {r.get('at')} | {r.get('kind')} | {ctx} |\n")
+            lines.append(f"| {r.get('at')} | {_cell(r.get('kind'))} | {_cell(ctx)} |\n")
     if roll.get("next_planned"):
         lines.append(f"\n## next planned\n\n{roll['next_planned']}\n")
     if roll.get("top_senders"):

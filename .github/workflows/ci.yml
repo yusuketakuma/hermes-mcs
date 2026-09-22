@@ -81,3 +81,15 @@ jobs:
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml
           grep -q "register" hermes_plugin/__init__.py
+
+  incident-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: static failure-pattern gates
+        run: python3 ci/gates.py
+      - name: incident coverage from dev-records
+        run: python3 ci/mine_gates.py --check

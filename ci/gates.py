@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Static CI gates distilled from this repo's incident history.
+
+Each gate encodes a defect class that actually bit this codebase (see
+docs/dev-records/ and ci/gates-coverage.json). A gate returns a list of
+human-readable violations; empty means pass. Run: ``python3 ci/gates.py``
+(exit 1 on any violation, 0 when clean). Stdlib only, offline.
+"""
+from __future__ import annotations
+
+import ast
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MCS = ROOT / "mcs"
+PLUGIN = ROOT / "hermes_plugin"
+
+# Files allowed to construct a write-mode Ledger. Anything else opening
+# the ledger read-write is a regression of the snapshot/read-only contract.
+LEDGER_WRITERS = {
+    "extract.py", "extract_llm.py", "init_data.py", "rollup.py",
+    "run_check.py", "semantic.py",
+}
+
+_LOCAL_MODULES = {p.stem for p in MCS.glob("*.py")} | {"hermes_plugin"}
+
+
+def _py_files(*dirs: Path) -> list[Path]:
+    out = []
+    for d in dirs:
+        out.extend(sorted(d.glob("*.py")))
+    return out
+
+
+def gate_stdlib_only() -> list[str]:
+    """mcs/ + hermes_plugin/ must import stdlib or flat-local modules only."""
+    bad = []
+    stdlib = sys.stdlib_module_names
+    for path in _py_files(MCS, PLUGIN):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as e:
+            bad.append(f"{path.name}: unparseable ({e})")
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [] if node.level else [node.module.split(".")[0]]
+            else:
+                continue
+            for m in mods:
+                if m not in stdlib and m not in _LOCAL_MODULES:
+                    bad.append(f"{path.name}:{node.lineno} imports {m}")
+    return bad
+
+
+_PLATFORM_URLS = re.compile(
+    r"discord\.com/api|api\.telegram\.org|slack\.com/api|discordapp\.com")
+_PLATFORM_TOKENS = re.compile(
+    r"DISCORD_BOT_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|"
+    r"SLACK_BOT_TOKEN|SLACK_APP_TOKEN")
+
+
+def gate_no_direct_platform_api() -> list[str]:
+    """Delivery goes through `hermes send`. Direct platform REST/env-token
+    code in mcs/ is the removed pre-standard implementation — forbid it."""
+    bad = []
+    for path in _py_files(MCS):
+        text = path.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _PLATFORM_URLS.search(line):
+                bad.append(f"{path.name}:{i} direct platform API URL")
+            if _PLATFORM_TOKENS.search(line):
+                bad.append(f"{path.name}:{i} platform token env read")
+    return bad
+
+
+# Modules the plugin must never import (network/process surfaces). Checked
+# via AST so the local `mcs_requests` alias bound as `requests` is not a
+# false positive.
+_PLUGIN_FORBIDDEN_IMPORTS = {
+    "subprocess", "socket", "urllib", "requests", "http", "ftplib",
+    "smtplib", "asyncio",
+}
+_PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
+
+
+def gate_plugin_sandbox() -> list[str]:
+    """The Hermes plugin is an untrusted-context adapter: no ambient env,
+    no network, no subprocess; DB access only via mcs_view (mode=ro) and
+    command files via mcs_requests.enqueue."""
+    bad = []
+    for path in _py_files(PLUGIN):
+        text = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            bad.append(f"{path.name}: unparseable")
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [] if node.level else [node.module.split(".")[0]]
+            else:
+                continue
+            for m in mods:
+                if m in _PLUGIN_FORBIDDEN_IMPORTS:
+                    bad.append(f"{path.name}:{node.lineno} imports {m}")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _PLUGIN_FORBIDDEN_TEXT.search(line):
+                bad.append(f"{path.name}:{i} forbidden surface: "
+                           f"{line.strip()[:60]}")
+            if re.search(r"\bLedger\s*\(", line):
+                bad.append(f"{path.name}:{i} write-mode Ledger open")
+    return bad
+
+
+# maintenance.py opens its BACKUP TARGET (a fresh tmp file) read-write —
+# that connect() writes the copy, never the source ledger.
+_SQLITE_RW_OK = {"maintenance.py"}
+
+
+def gate_snapshot_readonly() -> list[str]:
+    """Only whitelisted modules may construct a write-mode Ledger(); any
+    sqlite3.connect elsewhere must carry mode=ro/immutable (snapshot
+    contract — mcs_view/brain_export/plugin read published snapshots)."""
+    bad = []
+    for path in _py_files(MCS, PLUGIN):
+        text = path.read_text(encoding="utf-8")
+        if path.parent == MCS and path.name in LEDGER_WRITERS | {"ledger.py"}:
+            continue
+        for m in re.finditer(r"\bLedger\s*\(", text):
+            line = text.count("\n", 0, m.start()) + 1
+            bad.append(f"{path.name}:{line} write-mode Ledger(")
+        if path.name in _SQLITE_RW_OK:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if "sqlite3.connect" in line and "mode=ro" not in line \
+                    and "immutable" not in line and "uri" not in line:
+                bad.append(f"{path.name}:{i} sqlite3.connect without "
+                           f"mode=ro/immutable")
+    return bad
+
+
+def gate_writer_lock() -> list[str]:
+    """FIX-R00-01: every module that opens a write-mode Ledger must hold
+    acquire_run_lock — manual CLIs previously wrote the DB unflocked."""
+    bad = []
+    for path in _py_files(MCS):
+        text = path.read_text(encoding="utf-8")
+        if path.name == "ledger.py":
+            continue
+        if re.search(r"\bLedger\s*\(", text) and \
+                "acquire_run_lock" not in text:
+            bad.append(f"{path.name}: write-mode Ledger without "
+                       f"acquire_run_lock")
+    return bad
+
+
+_CHANNEL_LITERAL = re.compile(r"discord:\d{10,}|\b\d{17,20}\b")
+
+
+def gate_notify_fail_closed() -> list[str]:
+    """No hardcoded delivery destination: a missing notify_target must
+    skip, never fall back to a baked-in channel (patient-content risk)."""
+    bad = []
+    for path in _py_files(MCS, PLUGIN):
+        for i, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1):
+            if _CHANNEL_LITERAL.search(line) and "test" not in path.name:
+                bad.append(f"{path.name}:{i} hardcoded channel/chat id")
+    return bad
+
+
+def gate_install_pin() -> list[str]:
+    """install.sh must pin hermes-agent to a 40-hex commit, not float."""
+    bad = []
+    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    m = re.search(r'^HERMES_PIN="([0-9a-f]{40})"$', text, re.M)
+    if not m:
+        bad.append("install.sh: HERMES_PIN missing or not a 40-hex commit")
+    if 'HERMES_REPO="https://github.com/' not in text:
+        bad.append("install.sh: HERMES_REPO pin missing")
+    return bad
+
+
+def gate_records_isolation() -> list[str]:
+    """docs/dev-records must not gain executable config or secrets —
+    they are evidence, not runtime input."""
+    bad = []
+    for path in sorted((ROOT / "docs" / "dev-records").glob("*")):
+        if path.suffix not in {".md", ".json"}:
+            bad.append(f"{path.name}: unexpected file type in dev-records")
+        if path.suffix == ".json":
+            try:
+                json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                bad.append(f"{path.name}: invalid JSON ({e})")
+    return bad
+
+
+GATES = {
+    "stdlib_only": gate_stdlib_only,
+    "no_direct_platform_api": gate_no_direct_platform_api,
+    "plugin_sandbox": gate_plugin_sandbox,
+    "snapshot_readonly": gate_snapshot_readonly,
+    "writer_lock": gate_writer_lock,
+    "notify_fail_closed": gate_notify_fail_closed,
+    "install_pin": gate_install_pin,
+    "records_isolation": gate_records_isolation,
+}
+
+
+def main() -> int:
+    failed = 0
+    for name, fn in GATES.items():
+        violations = fn()
+        if violations:
+            failed += 1
+            print(f"FAIL {name} ({len(violations)} violations)")
+            for v in violations[:20]:
+                print(f"  - {v}")
+        else:
+            print(f"pass {name}")
+    print(f"\n{len(GATES) - failed}/{len(GATES)} gates pass")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

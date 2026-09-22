@@ -1,4 +1,4 @@
-.PHONY: test lint readme check setup-check
+.PHONY: test lint readme check setup-check gates
 
 # uv is preferred when present (deps fetched ephemerally); otherwise the
 # commands are assumed to be installed on PATH / in the active venv.
@@ -22,6 +22,9 @@ readme:         ## regenerate the auto-generated README module table
 
 check:          ## lint + readme drift check (PR-gate equivalent)
 	$(RUFF) check mcs/ tests/ && python3 scripts/update_readme.py --check
+
+gates:          ## incident-derived static gates + dev-record coverage
+	python3 ci/gates.py && python3 ci/mine_gates.py --check
 
 setup-check:    ## verify the live machine's required conditions
 	python3 mcs/mcs_setup.py check

@@ -78,7 +78,7 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
                                             snapshot だけを読む
 ```
 
-- 収集は launchd 3層(定期 tick・深掘り trickle・cmd WatchPaths 即時)
+- 収集は hermes cron 2系(定期 tick・深掘り trickle) + launchd 1件(cmd WatchPaths 即時)
 - LLM はローカルのみ(llama.cpp `127.0.0.1:8080`)。患者記録は外部へ出ない
 - 通知は `signals.notify:true` の明示設定時のみ既存 outbox 経路で送信
 </details>
@@ -497,7 +497,9 @@ MCS 外の診療事実を自動補完しない。
 
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
-cd hermes-mcs && ./install.sh      # ~/.hermes/plugins/mcs-discord-commands をリンク
+cd hermes-mcs && ./install.sh      # hermes-agent 未導入なら pin 済み commit を
+                                   #   ~/.hermes/hermes-agent に自動導入してから
+                                   #   ~/.hermes/plugins/mcs-discord-commands をリンク
 ```
 
 profile の `config.yaml` で有効化(全 scope 必須、未設定は拒否):
@@ -638,10 +640,10 @@ Private repository — 現時点で公開・再配布は想定していない。
 
 ## 運用
 
-- スケジューラ: `~/Library/LaunchAgents/local.mcs-check.plist`
-  （テンプレート: `deployment/launchagents/`）
-  (00/15/30/45分, RunAtLoad) — ログ `data/run.log`
-- 深掘り trickle: `local.mcs-deep.plist` (07/37分, `--jobs-only`) —
+- スケジューラ: hermes cron `MCS unread check`（`*/15 * * * *`,
+  `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
+  実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る
+- 深掘り trickle: hermes cron `MCS job drain`（`7,37 * * * *`, `--jobs-only`） —
   未読取得を飛ばし fetch_jobs のみ消化。全患者の全履歴を
   `since=0` まで少しずつ取得(1run=最大8患者×3頁、cursor は payload に
   耐久保存、中断しても次 run で続きから)。config `deep_history` で
@@ -653,7 +655,9 @@ Private repository — 現時点で公開・再配布は想定していない。
   起こす。アーカイブ患者はfrontier/backfill対象外・通知抑止。
   既にアーカイブ済みで消化中ジョブも確定floorも無い患者には
   補修用 `history_head` を再予約する (失われた予約の修復)
-- cmd 即時実行: `local.mcs-cmd.plist` (WatchPaths `data/cmd/`) —
+- cmd 即時実行: `~/Library/LaunchAgents/local.mcs-cmd.plist`
+  (WatchPaths `data/cmd/` — launchd のみ残る。テンプレート:
+  `deployment/launchagents/`) —
   bot が JSON を書くと次回 tick を待たず run_check が起動
   (flock 衝突時は定期 run が拾う)
 - コマンド形式: `{"cmd":"import","project_id":N,"days":N,"pages":N}`

@@ -1,0 +1,48 @@
+{
+  "incidents": {
+    "FIX-R00-01": {
+      "status": "covered",
+      "summary": "manual CLIs (extract/extract_llm/rollup) wrote DB without flock",
+      "gates": ["writer_lock"],
+      "tests": ["test_run_lock_excludes_second_writer",
+                "test_cli_writer_holds_run_lock"]
+    },
+    "FIX-J01": {
+      "status": "covered",
+      "summary": "Jev choice wire contract mismatch (criteria/probabilities)",
+      "tests": ["test_choice_question_uses_criteria_wire_field",
+                "test_choice_response_uses_probabilities_and_normalizes_distribution",
+                "test_choice_probabilities_require_bounds_sum_and_maximum_choice"]
+    },
+    "FIX-J02": {
+      "status": "covered",
+      "summary": "send-part OFF/source/policy re-check gaps mid-delivery",
+      "gates": ["notify_fail_closed"],
+      "tests": ["test_semantic_send_holds_after_mode_change_mid_delivery",
+                "test_semantic_send_holds_after_source_change_mid_delivery",
+                "test_semantic_block_requires_current_whole_thread_fingerprint"]
+    },
+    "AUDIT-J03": {
+      "status": "open",
+      "summary": "job内停止・累積retry・修復予約・旧worker状態変更 — 未完了"
+    },
+    "AUDIT-J04": {
+      "status": "open",
+      "summary": "原文→facts網羅性・低confidence・入力完全性・長文再開 — 未完了"
+    },
+    "AUDIT-J05": {
+      "status": "open",
+      "summary": "Open Loop thread/対象/改訂一致・正式依頼関連 — 未完了"
+    },
+    "EVAL-J06": {
+      "status": "open",
+      "summary": "人間ラベル評価・校正・段階別gate・CLI操作 — 未完了"
+    },
+    "TEST-01": {
+      "status": "covered",
+      "summary": "HOME/資格情報/通信/Keychainから隔離する共通runner",
+      "tests": ["test_run_lock_excludes_second_writer"],
+      "notes": "conftest.py socket遮断ガードとして実装済み"
+    }
+  }
+}
