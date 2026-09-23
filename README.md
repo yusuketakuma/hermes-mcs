@@ -1,6 +1,6 @@
 # hermes-mcs — MedicalCareStation 記録の収集・整理・見直し支援
 
-**v1.0.1** — 変更履歴は [CHANGELOG.md](CHANGELOG.md)、リリースは
+**v1.0.2** — 変更履歴は [CHANGELOG.md](CHANGELOG.md)、リリースは
 [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)。
 
 > **MCS にたまる医療・介護チームのやり取りを、あとから検索・集計・
@@ -99,7 +99,9 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 - **抽出結果の監査（任意・既定は OFF）** — `semantic.extract_qc` を
   `"annotate"` に設定した場合のみ、抽出済み項目が本文に裏付け
   られているかを Jev が確認し、結果へ注記として記録します
-  （抽出結果自体の変更・抑制はしません）
+  （抽出結果自体の変更・抑制はしません）。対象は投稿日時が直近60日以内の
+  記録です。60日超・日時不明の記録は対象外として区別し、過去の監査結果は
+  引き続き閲覧できます。
 - **知識ストア向け出力** — `brain_export.py` は snapshot から患者名・病名・
   要約・薬剤等の PHI を含む Markdown をローカルに書き出します。匿名化はしません。
   出力後の知識ストアへの同期や LLM への入力は別経路で、その送信先・権限は
