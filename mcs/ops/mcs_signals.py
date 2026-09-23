@@ -1052,23 +1052,48 @@ def open_signal_rows(db, keys):
     return out
 
 
-def rescue_digest_members(ledger, payload, now, interval_h):
-    """A quarantined digest intent strands its member keys — signals
-    notify only at the open transition, so members of a held digest
+def rescue_digest_members(ledger, payload, now, interval_h,
+                          origin_id=None):
+    """A quarantined signal intent strands its member keys — signals
+    notify only at the open transition, so members of a held intent
     would never be re-enqueued. Fold the still-open ones into a fresh
-    scheduled digest. Caller decides it's safe (no sent progress —
-    salvage after a partial send could duplicate a delivered post).
-    Returns the rescued keys."""
-    keys = [k for k in ((payload or {}).get("signal_keys") or [])
+    intent preserving the original shape: a held digest reschedules as
+    a digest (interval_h out); a held merged/single intent re-enqueues
+    immediately with the same signal_keys/signal_key carrier. Caller
+    decides it's safe (no sent progress — salvage after a partial send
+    could duplicate a delivered post). A rescued intent carries
+    rescue_of=origin_id so a SECOND quarantine does not respawn —
+    rescue is single-shot, not an immortal retry loop. Returns the
+    rescued keys."""
+    pl = payload or {}
+    if pl.get("rescue_of") is not None:
+        return []
+    keys = [k for k in (pl.get("signal_keys") or [])
             if type(k) is str and k]
+    skey = pl.get("signal_key")
+    if not keys and type(skey) is str and skey:
+        keys = [skey]
     live = [k for k, _ in open_signal_rows(ledger.db, keys)]
     if not live:
         return []
-    ledger.outbox_add_tx(
-        "signal", None,
-        {"digest": True, "type": "signal_digest", "signal_keys": live,
-         "text": _digest_text(len(live))},
-        next_try=now + interval_h * 3600)
+    if pl.get("digest") is True:
+        ledger.outbox_add_tx(
+            "signal", None,
+            {"digest": True, "type": "signal_digest", "signal_keys": live,
+             "text": _digest_text(len(live)),
+             "rescue_of": origin_id},
+            next_try=now + interval_h * 3600)
+    else:
+        new_pl = {"signal_keys": live,
+                  "type": pl.get("type"),
+                  "project_id": pl.get("project_id"),
+                  "rescue_of": origin_id}
+        if pl.get("urgent") is True:
+            new_pl["urgent"] = True
+        if len(live) == 1:
+            new_pl["signal_key"] = live[0]
+            del new_pl["signal_keys"]
+        ledger.outbox_add_tx("signal", pl.get("project_id"), new_pl)
     return live
 
 
