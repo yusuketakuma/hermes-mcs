@@ -19,15 +19,21 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 
 - `mcs/` — 実行モジュール。**flat import維持のまま第一層サブディレクトリに分割**:
   `core/`(ledger・mcs_util・init_data・local_llm・maintenance) ·
-  `ingest/`(mcs_adapter・job_ops・notifier・run_check) ·
+  `ingest/`(mcs_adapter・mcs_transport・job_ops・notifier・run_check) ·
   `extract/`(extract・extract_llm・extract_bench・rollup) ·
   `semantic/`(semantic.py + semantic_* 20本) ·
-  `ops/`(mcs_* view/stats/queries/requests/signals/setup等・brain_export)
+  `views/`(読み取り専用: mcs_view・mcs_stats・mcs_queries・summary_review) ·
+  `ops/`(書き込み系: mcs_requests・mcs_operations・mcs_signals・mcs_setup・
+  mcs_refstats・request_loops・brain_export)
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
   sys.path に挿れて `import _mcs_path`（全サブディレクトリを import root
   として登録）する2行ブートストラップを持つ。`mcs/` 直下に import 可能な
   モジュールは `_mcs_path.py` のみ
-- `tests/` — pytest（`conftest.py` が全サブディレクトリを sys.path 挿入 + socket 遮断ガード）
+- `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置
+  （`conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
+  テスト間ヘルパーimportを維持 + socket 遮断ガード）
+- `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
+  rehearsal結果）
 - `hermes_plugin/` · `integration/`(hermes E2E) · `deployment/` · `docs/`
 - `scripts/` — `run_tests.sh`、`update_readme.py`
 

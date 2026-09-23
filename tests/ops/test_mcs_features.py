@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import extract
 import job_ops
 import ledger
@@ -368,7 +368,7 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     view.close()
     inbox = tmp_path / "cmd"
     inbox.mkdir()
-    command = [sys.executable, str(Path(__file__).parent.parent / "mcs" / "ops" / "mcs_view.py"),
+    command = [sys.executable, str(Path(__file__).resolve().parents[2] / "mcs" / "views" / "mcs_view.py"),
                "--snapshot", str(tmp_path / "snapshots/ledger-snapshot.db"), "--cmd-dir", str(inbox)]
     for malformed_args in (["status", "--project", "SYNTHETIC_PRIVATE_CANARY"],
                            ["requests", "list", "--project", "1", "--status", "SYNTHETIC_PRIVATE_CANARY"],

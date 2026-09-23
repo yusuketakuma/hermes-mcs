@@ -9,7 +9,7 @@ real Jev client.
 
 Usage:
   python3 scripts/semantic_shadow_e2e.py \
-      --cases bench/semantic_completeness_cases.json \
+      --cases evaluation/semantic_completeness_cases.json \
       --out /tmp/shadow-e2e.json [--jev] [--deadline 300]
 
 Without --jev (or without the API key) the audit stages honestly

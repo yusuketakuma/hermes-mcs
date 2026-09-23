@@ -6,7 +6,7 @@ and reports per-field precision/recall — so prompt, schema, or model
 changes can be A/B compared numerically without human labeling and
 without touching the ledger.
 
-  extract_bench.py run --cases bench/extract_cases.json --tag v2 \
+  extract_bench.py run --cases evaluation/extract_cases.json --tag v2 \
       --out bench_v2.json
   extract_bench.py report bench_v1.json bench_v2.json
   extract_bench.py run --mock-ok   # offline sanity: validation only
@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "..", "..", "bench", "extract_cases.json")
+                             "..", "..", "evaluation", "extract_cases.json")
 
 
 # safety-bearing med attributes — when a case SPECIFIES one it is part
