@@ -22,16 +22,19 @@ PLUGIN = ROOT / "hermes_plugin"
 # the ledger read-write is a regression of the snapshot/read-only contract.
 LEDGER_WRITERS = {
     "extract.py", "extract_llm.py", "init_data.py", "rollup.py",
-    "run_check.py", "semantic.py",
+    "run_check.py", "semantic.py", "semantic_drain.py",
 }
 
-_LOCAL_MODULES = {p.stem for p in MCS.glob("*.py")} | {"hermes_plugin"}
+_LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin"}
 
 
 def _py_files(*dirs: Path) -> list[Path]:
+    # mcs/ modules live in first-level subdirs (flat import namespace —
+    # the filename stays the identity); skip __pycache__ artifacts.
     out = []
     for d in dirs:
-        out.extend(sorted(d.glob("*.py")))
+        out.extend(sorted(p for p in d.rglob("*.py")
+                          if "__pycache__" not in p.parts))
     return out
 
 
@@ -132,7 +135,8 @@ def gate_snapshot_readonly() -> list[str]:
     bad = []
     for path in _py_files(MCS, PLUGIN):
         text = path.read_text(encoding="utf-8")
-        if path.parent == MCS and path.name in LEDGER_WRITERS | {"ledger.py"}:
+        if path.is_relative_to(MCS) \
+                and path.name in LEDGER_WRITERS | {"ledger.py"}:
             continue
         for m in re.finditer(r"\bLedger\s*\(", text):
             line = text.count("\n", 0, m.start()) + 1
@@ -140,8 +144,12 @@ def gate_snapshot_readonly() -> list[str]:
         if path.name in _SQLITE_RW_OK:
             continue
         for i, line in enumerate(text.splitlines(), 1):
+            # the read-only marker must sit on the connect() line itself —
+            # a plain "uri" token previously exempted `connect(uri)` where
+            # the URI was built (possibly without mode=ro) elsewhere
+            # (FIX-G1)
             if "sqlite3.connect" in line and "mode=ro" not in line \
-                    and "immutable" not in line and "uri" not in line:
+                    and "immutable" not in line:
                 bad.append(f"{path.name}:{i} sqlite3.connect without "
                            f"mode=ro/immutable")
     return bad
@@ -193,7 +201,11 @@ def gate_records_isolation() -> list[str]:
     """docs/dev-records must not gain executable config or secrets —
     they are evidence, not runtime input."""
     bad = []
-    for path in sorted((ROOT / "docs" / "dev-records").glob("*")):
+    # rglob — a record nested in a subdirectory must be audited too, not
+    # silently skipped (FIX-G2)
+    for path in sorted((ROOT / "docs" / "dev-records").rglob("*")):
+        if not path.is_file():
+            continue
         if path.suffix not in {".md", ".json"}:
             bad.append(f"{path.name}: unexpected file type in dev-records")
         if path.suffix == ".json":

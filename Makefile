@@ -27,4 +27,4 @@ gates:          ## incident-derived static gates + dev-record coverage
 	python3 ci/gates.py && python3 ci/mine_gates.py --check
 
 setup-check:    ## verify the live machine's required conditions
-	python3 mcs/mcs_setup.py check
+	python3 mcs/ops/mcs_setup.py check

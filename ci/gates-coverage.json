@@ -3,48 +3,220 @@
     "FIX-R00-01": {
       "status": "covered",
       "summary": "manual CLIs (extract/extract_llm/rollup) wrote DB without flock",
-      "gates": ["writer_lock"],
-      "tests": ["test_run_lock_excludes_second_writer",
-                "test_cli_writer_holds_run_lock"]
+      "gates": [
+        "writer_lock"
+      ],
+      "tests": [
+        "test_run_lock_excludes_second_writer",
+        "test_cli_writer_holds_run_lock"
+      ]
     },
     "FIX-J01": {
       "status": "covered",
       "summary": "Jev choice wire contract mismatch (criteria/probabilities)",
-      "tests": ["test_choice_question_uses_criteria_wire_field",
-                "test_choice_response_uses_probabilities_and_normalizes_distribution",
-                "test_choice_probabilities_require_bounds_sum_and_maximum_choice"]
+      "tests": [
+        "test_choice_question_uses_criteria_wire_field",
+        "test_choice_response_uses_probabilities_and_normalizes_distribution",
+        "test_choice_probabilities_require_bounds_sum_and_maximum_choice"
+      ]
     },
     "FIX-J02": {
       "status": "covered",
       "summary": "send-part OFF/source/policy re-check gaps mid-delivery",
-      "gates": ["notify_fail_closed"],
-      "tests": ["test_semantic_send_holds_after_mode_change_mid_delivery",
-                "test_semantic_send_holds_after_source_change_mid_delivery",
-                "test_semantic_block_requires_current_whole_thread_fingerprint"]
+      "gates": [
+        "notify_fail_closed"
+      ],
+      "tests": [
+        "test_semantic_send_holds_after_mode_change_mid_delivery",
+        "test_semantic_send_holds_after_source_change_mid_delivery",
+        "test_semantic_block_requires_current_whole_thread_fingerprint"
+      ]
+    },
+    "FIX-KC1": {
+      "status": "covered",
+      "summary": "locked login keychain was reported as missing credential; auto_login now returns keychain_locked and mcs_setup check probes readability",
+      "tests": [
+        "test_keychain_password_locked_raises",
+        "test_keychain_password_locked_by_stderr_text",
+        "test_auto_login_reports_keychain_locked",
+        "test_err_str_includes_structured_detail",
+        "test_check_environment_detects_locked_keychain"
+      ]
+    },
+    "FIX-HIST1": {
+      "status": "covered",
+      "summary": "sort=pinned order violation could early-stop the history walk and falsely certify the coverage floor; termination is now certified by has_next only",
+      "tests": [
+        "test_history_ordered_cutoff_still_walks_to_natural_end",
+        "test_history_pinned_straggler_at_page_boundary_keeps_walking",
+        "test_history_pinned_order_violation_walks_to_natural_end",
+        "test_history_order_violation_without_end_is_not_certified"
+      ]
+    },
+    "FIX-BE1": {
+      "status": "covered",
+      "summary": "brain_export YAML front-matter title and Markdown table cells were not escaped for hostile names/newlines/pipes",
+      "tests": [
+        "test_hostile_name_does_not_break_front_matter_or_tables"
+      ]
+    },
+    "FIX-BE2": {
+      "status": "covered",
+      "summary": "brain_export stale cleanup deleted arbitrary *.md in the chosen --out dir; now restricted to generated p<int>.md names",
+      "tests": [
+        "test_stale_cleanup_never_deletes_foreign_files",
+        "test_stale_patient_removed"
+      ]
+    },
+    "FIX-RU1": {
+      "status": "covered",
+      "summary": "rollup rendered literal '0' as symptom date for messages with NULL posted_at_ts",
+      "tests": [
+        "test_rollup_symptom_null_ts_shows_posted_at_not_zero"
+      ]
+    },
+    "FIX-ID1": {
+      "status": "covered",
+      "summary": "init_data crashed on embedded SessionExpired and unguarded second list_projects; now re-auths once and resumes from cursor",
+      "tests": [
+        "test_init_data_reauths_embedded_session_expired",
+        "test_init_data_reauth_failure_aborts_patient",
+        "test_init_data_second_list_projects_failure_is_json"
+      ]
+    },
+    "FIX-ID2": {
+      "status": "covered",
+      "summary": "list_projects silently coerced malformed last_message.created_at to epoch 0 (live project looks inactive); now SchemaError",
+      "tests": [
+        "test_projects_malformed_last_message_timestamp_is_schema_error",
+        "test_projects_without_last_message_get_zero_activity"
+      ]
+    },
+    "FIX-UR1": {
+      "status": "covered",
+      "summary": "update_readme swallowed generator exceptions so --check could pass without verifying; now fails closed in both modes",
+      "tests": [
+        "test_update_readme_check_fails_when_generator_fails",
+        "test_update_readme_write_fails_without_partial_write"
+      ]
+    },
+    "FIX-G1": {
+      "status": "covered",
+      "summary": "snapshot_readonly gate exempted connect() calls when a separate line mentioned a uri token; connect line itself must carry mode=ro/immutable",
+      "gates": [
+        "snapshot_readonly"
+      ],
+      "tests": [
+        "test_snapshot_gate_flags_connect_line_without_mode_ro"
+      ]
+    },
+    "FIX-G2": {
+      "status": "covered",
+      "summary": "records_isolation + mine_gates scanned only top-level dev-records; nested files escaped audit — now rglob",
+      "gates": [
+        "records_isolation"
+      ],
+      "tests": [
+        "test_records_isolation_audits_nested_files",
+        "test_mine_gates_extracts_ids_from_nested_records"
+      ]
+    },
+    "FIX-SU1": {
+      "status": "covered",
+      "summary": "mcs_setup accepted secrets via --password/--typesafe-key argv (shell history + ps exposure); now env vars/getpass and security -i stdin with read-back verify",
+      "tests": [
+        "test_keychain_store_sends_password_via_stdin_not_argv",
+        "test_keychain_store_readback_mismatch_removes_entry",
+        "test_init_secrets_from_env_not_argv",
+        "test_password_argv_flag_rejected"
+      ]
+    },
+    "FIX-SD1": {
+      "status": "covered",
+      "summary": "semantic_drain._write_result appended a byte-identical summary+audit pair on every deferred/PENDING pass (3 identical rows in 13min during Jev outage); now dedups identical current outcome",
+      "tests": [
+        "test_write_result_is_idempotent_for_identical_outcome",
+        "test_write_result_records_status_transition"
+      ]
     },
     "AUDIT-J03": {
-      "status": "open",
-      "summary": "job内停止・累積retry・修復予約・旧worker状態変更 — batch.error attempt不消費を修復済み(2026-09-23)、他項目は未消化",
-      "tests": ["test_history_batch_error_consumes_attempts",
-                "test_history_batch_session_expired_stays_attempt_free"]
+      "status": "covered",
+      "summary": "job内停止・累積retry・修復予約・旧worker状態変更 — batch.error attempt不消費を修復済み。実運用観察(2026-09-23 snapshot): discovery日次再スケジュール健全・reply 19件全done(attempts<=6有界)・添付10件attempts=6打止め・outbox滞留0・QC backlogはmax_jobs=4/tick FIFOで消化中・中間state滞留なし",
+      "tests": [
+        "test_history_batch_error_consumes_attempts",
+        "test_history_batch_session_expired_stays_attempt_free"
+      ]
     },
     "AUDIT-J04": {
       "status": "open",
-      "summary": "原文→facts網羅性・低confidence・入力完全性・長文再開 — 未完了"
+      "summary": "原文→facts網羅性・低confidence・入力完全性・長文再開 — 抽出側は実測で設計内確認(v1網羅97.4%・欠落は空本文のみ、llm新着~100%・旧文はper-tick cap消化中、error attempts<=5有界+version reset)。facts(Jev)側の網羅性は本番件数が少なく未検証"
     },
     "AUDIT-J05": {
       "status": "open",
-      "summary": "Open Loop thread/対象/改訂一致・正式依頼関連 — 未完了"
+      "summary": "Open Loop thread/対象/改訂一致・正式依頼関連 — loop機構はrevision/世代bindで静査健全、本番loop_candidate/loop_eventゼロで整合性は未検証。requests/receipts未使用"
     },
     "EVAL-J06": {
       "status": "open",
-      "summary": "人間ラベル評価・校正・段階別gate・CLI操作 — 未完了"
+      "summary": "人間ラベル評価・校正・段階別gate・CLI操作 — ツール類(semantic_blind等)存在・本番ラベル0件でワークフロー未実施"
     },
     "TEST-01": {
       "status": "covered",
       "summary": "HOME/資格情報/通信/Keychainから隔離する共通runner",
-      "tests": ["test_run_lock_excludes_second_writer"],
+      "tests": [
+        "test_run_lock_excludes_second_writer"
+      ],
       "notes": "conftest.py socket遮断ガードとして実装済み"
+    },
+    "FIX-SE1": {
+      "status": "covered",
+      "summary": "v1-hint dedup left the dropped fact_id linked in chunk obligations -> doc_obligation_fact_unknown crash; links now retarget the surviving fact",
+      "tests": [
+        "test_hint_dedup_retargets_dangling_obligation_links",
+        "test_hint_dedup_subject_mismatch_also_safe"
+      ]
+    },
+    "FIX-SE2": {
+      "status": "covered",
+      "summary": "v2 chunk cache validated _evidence with v1 start/end_codepoint keys -> every evidence-bearing chunk missed cache and re-extracted",
+      "tests": [
+        "test_v2_cache_reuses_evidence_bearing_chunks"
+      ]
+    },
+    "FIX-SE3": {
+      "status": "covered",
+      "summary": "leading whitespace-only lines were not owned by any atom -> atom_coverage_incomplete crash for sources starting with blank lines",
+      "tests": [
+        "test_leading_whitespace_is_owned_by_first_atom"
+      ]
+    },
+    "FIX-SR1": {
+      "status": "covered",
+      "summary": "mandatory_render silently truncated verified facts past the 40-line cap; omission now disclosed as a limitation",
+      "tests": [
+        "test_mandatory_render_dedupes_and_caps"
+      ]
+    },
+    "FIX-SE4": {
+      "status": "covered",
+      "summary": "repair merged partial facts from a chunk that dropped malformed items; now applies extraction's fail-the-chunk rule",
+      "tests": [
+        "test_repair_chunk_with_dropped_items_contributes_nothing"
+      ]
+    },
+    "FIX-SE5": {
+      "status": "covered",
+      "summary": "repair status re-derivation upgraded failed/pending-chunk obligations to covered on stray links; owner-chunk status now preserved",
+      "tests": [
+        "test_repair_preserves_failed_chunk_obligation_status"
+      ]
+    },
+    "FIX-AD1": {
+      "status": "covered",
+      "summary": "fetch_history under sort=pinned certified exhaustion from a below-cutoff item at a page boundary; termination is now certified by has_next only",
+      "tests": [
+        "test_history_ordered_cutoff_still_walks_to_natural_end",
+        "test_history_pinned_straggler_at_page_boundary_keeps_walking"
+      ]
     }
   }
 }

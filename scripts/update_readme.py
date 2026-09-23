@@ -19,7 +19,6 @@ Keep module/function docstrings' first line a one-line summary — it is
 published.
 """
 import argparse
-import importlib
 import re
 import sys
 from pathlib import Path
@@ -29,7 +28,9 @@ README = ROOT / "README.md"
 MCS_DIR = ROOT / "mcs"
 TESTS_DIR = ROOT / "tests"
 
-sys.path.insert(0, str(MCS_DIR))
+for _d in sorted(MCS_DIR.iterdir()):
+    if _d.is_dir() and not _d.name.startswith((".", "_")):
+        sys.path.insert(0, str(_d))
 
 
 def _first_docline(obj) -> str:
@@ -66,9 +67,11 @@ def _clean(desc: str, strip_prefix: bool = False) -> str:
 
 def gen_modules() -> str:
     rows = []
-    for f in sorted(MCS_DIR.glob("*.py")):
+    files = sorted(p for p in MCS_DIR.rglob("*.py")
+                   if "__pycache__" not in p.parts)
+    for f in files:
         desc = _clean(_mod_docline(f), strip_prefix=True) or "(docstring なし)"
-        rows.append(f"| `mcs/{f.name}` | {desc} |")
+        rows.append(f"| `{f.relative_to(ROOT)}` | {desc} |")
     n_tests = len(list(TESTS_DIR.glob("test_*.py")))
     return "\n".join(
         [f"{len(rows)} modules / {n_tests} test files — auto-generated "
@@ -118,8 +121,9 @@ GENERATORS = {"modules": gen_modules, "signals": gen_signals,
               "stats": gen_stats, "cli": gen_cli}
 
 
-def render(readme: str) -> str:
+def render(readme: str) -> tuple[str, list[str]]:
     out = readme
+    failed = []
     for name, gen in GENERATORS.items():
         begin = f"<!-- BEGIN GENERATED:{name} -->"
         end = f"<!-- END GENERATED:{name} -->"
@@ -132,9 +136,10 @@ def render(readme: str) -> str:
         except Exception as e:  # import/parse failure must not delete text
             print(f"warning: generator '{name}' failed: {e}",
                   file=sys.stderr)
+            failed.append(name)
             continue
         out = f"{pre}{begin}\n\n{body}\n\n{end}{post}"
-    return out
+    return out, failed
 
 
 def main() -> int:
@@ -143,7 +148,15 @@ def main() -> int:
                     help="fail when README.md differs from generated output")
     args = ap.parse_args()
     old = README.read_text(encoding="utf-8")
-    new = render(old)
+    new, failed = render(old)
+    if failed:
+        # a failed generator keeps its old block — under --check that made
+        # `new == old` pass the drift gate on a README it could not verify
+        # (FIX-UR1). Fail in both modes; write mode must not commit a
+        # partial regeneration either.
+        print("error: generator(s) failed — README freshness cannot be "
+              f"verified: {', '.join(failed)}", file=sys.stderr)
+        return 1
     if new == old:
         if not args.check:
             print("README.md already up to date")

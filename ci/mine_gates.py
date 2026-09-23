@@ -42,8 +42,10 @@ _KEYWORDS = [
 
 def extract_ids() -> dict[str, set[str]]:
     defects, process = set(), set()
-    for path in sorted(RECORDS.glob("*")):
-        if path.suffix not in {".md", ".json"}:
+    # rglob — incident IDs in a nested record must be extracted too; a
+    # non-recursive glob silently skipped subdirectory files (FIX-G2)
+    for path in sorted(RECORDS.rglob("*")):
+        if not path.is_file() or path.suffix not in {".md", ".json"}:
             continue
         text = path.read_text(encoding="utf-8")
         defects.update(_DEFECT_ID.findall(text))
@@ -67,7 +69,7 @@ def test_names() -> set[str]:
 
 def heatmap() -> None:
     print("\n## defect-keyword heatmap (informational)")
-    for path in sorted(RECORDS.glob("*.md")):
+    for path in sorted(RECORDS.rglob("*.md")):
         text = path.read_text(encoding="utf-8").lower()
         hits = {k: text.count(k) for k in _KEYWORDS}
         top = sorted(hits.items(), key=lambda kv: -kv[1])[:5]
