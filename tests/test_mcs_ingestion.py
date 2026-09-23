@@ -3763,3 +3763,69 @@ def test_keychain_timeout_preserves_fallback_only_with_run_budget(monkeypatch):
     with pytest.raises(mcs_adapter.MCSError) as error:
         adapter._login_password()
     assert error.value.kind == "deadline_exceeded"
+
+
+# ---------- self_profile (MCS-derived self identity) ----------
+
+def test_self_profile_normalizes_user_envelope():
+    """GET /users/self -> sender id + display name + professions +
+    stations — the signal engine's default self identity."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            assert path == "/users/self"
+            return {"user": {
+                "id": 42, "last_name": "山田", "first_name": "薬剤",
+                "specialist_categories": [{"name": "薬剤師"},
+                                          {"name": "管理薬剤師"}],
+                "stations": [{"name": "みどり薬局"}]}}
+
+    p = Adapter().self_profile()
+    assert p == {"sender_id": 42, "name": "山田 薬剤",
+                 "professions": ["薬剤師", "管理薬剤師"],
+                 "organizations": ["みどり薬局"]}
+
+
+def test_self_profile_accepts_bare_user_object():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {"id": 7, "last_name": "佐藤", "first_name": "花子",
+                    "stations": [{"name": "みどり薬局"}]}
+
+    p = Adapter().self_profile()
+    assert p["sender_id"] == 7 and p["name"] == "佐藤 花子"
+    assert p["professions"] == [] and p["organizations"] == ["みどり薬局"]
+
+
+def test_self_profile_endpoint_unavailable_maps_kind():
+    """An endpoint failure is re-raised with a stable kind so the
+    caller can log-and-continue instead of failing the run."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            raise mcs_adapter.MCSError("http_error", "404", status=404)
+
+    import pytest
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        Adapter().self_profile()
+    assert e.value.kind == "self_profile_unavailable"
+
+
+def test_self_profile_empty_is_schema_error():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {"user": {"id": 9}}
+
+    import pytest
+    with pytest.raises(mcs_adapter.SchemaError):
+        Adapter().self_profile()
+
+
+def test_self_profile_session_expired_passthrough():
+    """An expired session stays SessionExpired — it must never be
+    relabeled as a missing/unsupported endpoint."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            raise mcs_adapter.SessionExpired("token rejected")
+
+    import pytest
+    with pytest.raises(mcs_adapter.SessionExpired):
+        Adapter().self_profile()

@@ -22,7 +22,7 @@
 
 | # | 要求 | 実装 |
 |---|---|---|
-| 1 | 自己投稿抑制 | `signals.self_organizations`/`self_professions`。`_self_author_pred` で検知時除外 — 既存 open は証拠消失で resolved（append-only のまま自然クリーンアップ）。自己投稿は `_self_post_exists` で応答者としても扱う |
+| 1 | 自己投稿抑制 | 自己同一性は **MCS `GET /users/self` から自動取得**（氏名・職種・所属施設 → `self_profile_v1` artifact、変化時のみ追記）。`signals.self_organizations`/`self_professions` は手動オーバーライド。`_self_author_pred` で検知時除外 — 既存 open は証拠消失で resolved（append-only のまま自然クリーンアップ）。自己投稿は `_self_post_exists` で応答者としても扱う |
 | 2 | 薬剤師宛未応答 | `pharmacist_request_unanswered`。to が「薬」含有 or `request_targets`。窓 `request_response_days`(3d)。unverified 除外・依頼登録済み除外・応答者投稿で抑制。文言は「記録上の応答を確認できませんでした」 |
 | 3 | 出来ない系誤分類 | `mcs_queries.MED_NOT_CAPABILITY_SQL`/`med_capability_evidence` を共有化 — med_change と `transition_cooccurrences`（統計側も）両方に適用。抽出プロンプトにも「能力・実施可否は action:none」と例3を追加 |
 | 4 | 医師宛処方依頼 | `rx_request_visibility`。他職種宛（薬宛・不明を除く）で action が 処方/薬/内服/残薬/一包化 含有のみ — FYI 文言 |
@@ -58,16 +58,20 @@
 - **urgency は修飾子**: 570件の一般急性報告を薬剤師通知にしないため、単独
   シグナルにはせず immediate 昇格フラグとしてのみ使用。
 
-## 設定（本番 config.json に投入済み）
+## 設定（本番 config.json に投入済み — 施設名は実環境の値、記録上は仮名）
 
 ```json
 "signals": {"notify": true,
-            "self_organizations": ["八幡薬剤師会薬局"],
+            "self_organizations": ["〈所属施設名〉"],
+            "self_professions": ["薬剤師"],
             "med_exclude_names": ["在宅酸素"]}
 ```
 
-`tiers`・`digest:false`・`digest_interval_h`・`request_targets`・
-`self_professions` は未設定（既定値）。
+`tiers`・`digest:false`・`digest_interval_h`・`request_targets` は未設定
+（既定値）。self_organizations/self_professions は `/users/self` 由来の
+`self_profile_v1` artifact があればそちらが既定となり、config は
+オーバーライドとして機能する（本番は両方を設定済み = 取得失敗時の
+フォールバックでもある）。
 
 ## 残る限界（正直な記録）
 

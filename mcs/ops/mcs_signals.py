@@ -107,24 +107,74 @@ def _key(type_, pid, anchor):
     return f"{type_}:{pid}:{anchor}"
 
 
-def _self_sets(sig_cfg):
-    """Resolved 'us' identities from config signals.*:
+SELF_PROFILE_KIND = "self_profile_v1"
+
+
+def _latest_self_profile(db):
+    """Most recent self_profile artifact (written from the MCS
+    /users/self response by record_self_profile) — the fetched default
+    for self identity. Returns {} when absent or unparsable."""
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind=? "
+        "AND json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        (SELF_PROFILE_KIND,)).fetchone()
+    try:
+        d = json.loads(row["content"]) if row else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def record_self_profile(db, prof) -> bool:
+    """Persist a fetched MCS self profile as an append-only artifact —
+    skipped when byte-identical to the latest row so repeated ticks
+    don't spam the log. Caller holds the transaction. Returns True
+    when a row was written."""
+    doc = {"sender_id": prof.get("sender_id"), "name": prof.get("name"),
+           "professions": [x for x in (prof.get("professions") or [])
+                           if isinstance(x, str) and x],
+           "organizations": [x for x in (prof.get("organizations") or [])
+                             if isinstance(x, str) and x],
+           "fetched_at": int(time.time())}
+    base = {k: doc[k] for k in
+            ("sender_id", "name", "professions", "organizations")}
+    cur = _latest_self_profile(db)
+    if cur and all(cur.get(k) == v for k, v in base.items()):
+        return False
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
+        " VALUES(?,NULL,?,?,?)",
+        (SELF_PROFILE_KIND, json.dumps(doc, ensure_ascii=False),
+         json.dumps({"type": "self_profile"}), time.time()))
+    return True
+
+
+def _self_sets(sig_cfg, db=None):
+    """Resolved 'us' identities — config signals.* first, then the
+    fetched MCS self profile (self_profile_v1 artifact) as defaults:
     - self_organizations: org names whose posts are OUR actions —
       self-authored mentions are not review candidates for us, and
       their posts count as responder engagement.
     - self_professions: professions whose posts count as pharmacist
-      engagement for response checks (default 薬剤師).
+      engagement for response checks (config/artifact, else 薬剤師).
     - request_targets: extra requests.to values meaning 'addressed to
-      us' — 薬-containing targets match automatically."""
+      us' — 薬-containing targets match automatically (config only)."""
     sc = sig_cfg if isinstance(sig_cfg, dict) else {}
-    def _lst(key, default=()):
-        v = sc.get(key, default)
+    def _lst(key):
+        v = sc.get(key)
         if not isinstance(v, list):
-            return list(default)
+            return []
         return [x for x in v if isinstance(x, str) and x]
-    return (_lst("self_organizations"),
-            _lst("self_professions", ["薬剤師"]),
-            _lst("request_targets"))
+    orgs, profs = _lst("self_organizations"), _lst("self_professions")
+    if (not orgs or not profs) and db is not None:
+        art = _latest_self_profile(db)
+        if not orgs:
+            orgs = [x for x in (art.get("organizations") or [])
+                    if isinstance(x, str) and x]
+        if not profs:
+            profs = [x for x in (art.get("professions") or [])
+                     if isinstance(x, str) and x]
+    return (orgs, profs or ["薬剤師"], _lst("request_targets"))
 
 
 def _med_excludes(sig_cfg):
@@ -207,7 +257,7 @@ def _med_followup(db, now, th, sig_cfg):
     review candidates for us), capability-evidence spans like
     「〜は出来ない」 (those are adherence_concern, not changes), and
     configured med_exclude_names (non-dispensed therapies)."""
-    orgs, _, _ = _self_sets(sig_cfg)
+    orgs, _, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     excludes = _med_excludes(sig_cfg)
     rows = db.execute(
@@ -379,7 +429,7 @@ def _transition_reconciliation(db, now, th, sig_cfg):
     reports are not review candidates for us."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
-    orgs, _, _ = _self_sets(sig_cfg)
+    orgs, _, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs, "d")
     grouped = transition_cooccurrences(
         db, win_s=win,
@@ -405,9 +455,9 @@ def _pharmacist_request(db, now, th, sig_cfg):
     response window with no visible responder post — 'no response could
     be confirmed on the record', never 'ignored'. Response = a post by
     self_professions/self_organizations or a registered request."""
-    orgs, profs, targets = _self_sets(sig_cfg)
+    orgs, profs, targets = _self_sets(sig_cfg, db)
     # '薬' in the target covers 薬剤師/薬局/etc.; request_targets adds
-    # exact spellings like 「八幡薬剤師会薬局さま」. Empty/不明 targets
+    # exact spellings like 「〇〇薬局さま」. Empty/不明 targets
     # never count as pharmacist-addressed.
     tgt_pred = (f" OR json_extract(je.value,'$.to') IN "
                 f"({','.join('?' * len(targets))})") if targets else ""
@@ -458,7 +508,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     visibility into the prescription pipeline (a nurse asking the
     doctor for a drug is tomorrow's dispense). FYI only; pharmacist-
     addressed requests belong to pharmacist_request_unanswered."""
-    orgs, profs, targets = _self_sets(sig_cfg)
+    orgs, profs, targets = _self_sets(sig_cfg, db)
     extra = "".join(",?" for _ in targets)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
@@ -536,7 +586,7 @@ def _adherence_concern(db, now, th, sig_cfg):
     carrying capability evidence (「〜は出来ない」 — the same spans
     med_change_no_followup now excludes), and body phrases that never
     become meds items. Self-authored mentions are excluded."""
-    orgs, profs, _ = _self_sets(sig_cfg)
+    orgs, profs, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     horizon = now - th["fyi_max_age_d"] * DAY_S
     groups = {}
@@ -599,7 +649,7 @@ def _discharge_notice(db, now, th, sig_cfg):
     takes over), when a responder posts, or at the lookback edge."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
-    orgs, profs, _ = _self_sets(sig_cfg)
+    orgs, profs, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs, "d")
     grouped = transition_cooccurrences(
         db, win_s=win,
@@ -640,7 +690,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
     ongoing non-negated patient symptom in ONE message — an ADR-triage
     prompt. Coupling is deliberately strict (same extraction): a loose
     room-level window paired almost everything and meant nothing."""
-    orgs, profs, _ = _self_sets(sig_cfg)
+    orgs, profs, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content

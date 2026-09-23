@@ -110,6 +110,24 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     sig = cfg.get("signals")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: must be a boolean")
+    if isinstance(sig, dict):
+        for key in ("self_organizations", "self_professions",
+                    "request_targets", "med_exclude_names"):
+            if key in sig:
+                v = sig[key]
+                if not (isinstance(v, list)
+                        and all(isinstance(x, str) and x.strip()
+                                for x in v)):
+                    errors.append(f"signals.{key}: must be a list of "
+                                  "non-empty strings")
+        if "digest" in sig and type(sig["digest"]) is not bool:
+            errors.append("signals.digest: must be a boolean")
+        if "digest_interval_h" in sig:
+            err = _num(sig["digest_interval_h"])
+            if err:
+                errors.append(f"signals.digest_interval_h: {err}")
+        if "tiers" in sig and not isinstance(sig["tiers"], dict):
+            errors.append("signals.tiers: must be an object")
     if isinstance(cfg.get("semantic"), dict):
         try:
             from semantic_policy import semantic_config
@@ -274,6 +292,16 @@ def _keychain_store(account: str, pw: str) -> bool:
     return False
 
 
+def _csv_list(values):
+    """A repeated flag or a comma-separated string -> list[str] | None."""
+    if not values:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    out = [x.strip() for v in values for x in v.split(",") if x.strip()]
+    return out or None
+
+
 def cmd_init(args) -> int:
     cfg = load_config()
     def pick(flag, key, prompt, secret=False):
@@ -341,6 +369,32 @@ def cmd_init(args) -> int:
                       "resetting")
             sig = cfg["signals"] = {}
         sig["notify"] = args.signals_notify
+
+    # own facility/professions — manual OVERRIDE of the self identity
+    # the signal engine otherwise derives automatically from MCS
+    # (/users/self -> self_profile_v1 artifact). Flag-only: no prompt,
+    # since the fetched profile normally covers this.
+    cur_sig = cfg.get("signals")
+    cur_sig = cur_sig if isinstance(cur_sig, dict) else {}
+    orgs = (_csv_list(args.self_orgs)
+            or (cur_sig.get("self_organizations")
+                if isinstance(cur_sig.get("self_organizations"), list)
+                else None))
+    profs = (_csv_list(args.self_professions)
+             or (cur_sig.get("self_professions")
+                 if isinstance(cur_sig.get("self_professions"), list)
+                 else None))
+    if orgs or profs:
+        sig = cfg.get("signals")
+        if not isinstance(sig, dict):
+            if sig is not None:
+                print("config: existing 'signals' is not an object — "
+                      "resetting")
+            sig = cfg["signals"] = {}
+        if orgs:
+            sig["self_organizations"] = orgs
+        if profs:
+            sig["self_professions"] = profs
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
     os.makedirs(os.path.join(HOME, "chrome-profile"), exist_ok=True)
@@ -496,6 +550,16 @@ def main() -> int:
     p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"])
     p.add_argument("--project-ids", type=int, nargs="*")
     p.add_argument("--signals-notify", action=argparse.BooleanOptionalAction)
+    p.add_argument("--self-org", dest="self_orgs", action="append",
+                   metavar="NAME",
+                   help="override own facility name — repeatable or "
+                        "comma-separated; normally derived from MCS "
+                        "/users/self automatically "
+                        "(signals.self_organizations)")
+    p.add_argument("--self-professions", metavar="A,B",
+                   help="override responder professions, comma-"
+                        "separated (signals.self_professions; "
+                        "normally derived from MCS /users/self)")
     p.add_argument("--yes", action="store_true",
                    help="non-interactive — never prompt")
     p.set_defaults(fn=cmd_init)

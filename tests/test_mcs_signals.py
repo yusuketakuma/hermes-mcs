@@ -684,7 +684,7 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     rows keep their own open state and keys."""
     _msg(led.db, 1, ts=NOW - 30 * DAY,
          body="インスリン管理は出来ない。在宅酸素は出来ない。")
-    led.db.execute("UPDATE patients SET patient_name='奥 善輝' "
+    led.db.execute("UPDATE patients SET patient_name='山田 テスト' "
                    "WHERE project_id=1")
     _extract_llm(led.db, 1, "h1", [{"name": "インスリン", "action": "stop"},
                                    {"name": "在宅酸素", "action": "stop"}])
@@ -711,7 +711,7 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     assert "med インスリン・在宅酸素" in text
     assert "薬「インスリン」「在宅酸素」の変更言及後" in text
     assert "対応の有無を示すものではありません" in text
-    assert "奥 善輝" in text and "最新言及" in text
+    assert "山田 テスト" in text and "最新言及" in text
     assert '"op":"timeline"' in text and files == []
 
 
@@ -921,7 +921,7 @@ def test_self_org_med_mention_excluded(led):
     """A med-change mention authored by the pharmacy itself is not a
     review candidate — our own reports need no follow-up ping to us.
     Without self_organizations configured nothing is suppressed."""
-    _msg(led.db, 1, ts=NOW - 30 * DAY, org="八幡薬剤師会薬局")
+    _msg(led.db, 1, ts=NOW - 30 * DAY, org="みどり薬局")
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     res = _ev(led)
     assert res["open"] == 1            # unconfigured: org is just an org
@@ -929,9 +929,9 @@ def test_self_org_med_mention_excluded(led):
     # evidence set entirely: new ones open nothing, and the
     # already-open one RESOLVES (evidence gone) — that is exactly how
     # the self-authored backlog cleans itself up, append-only.
-    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+    cfg = {"signals": {"self_organizations": ["みどり薬局"]}}
     _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2",
-         org="八幡薬剤師会薬局")
+         org="みどり薬局")
     _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
     _ev(led, cfg=cfg)
     states = _states(led.db)
@@ -1075,9 +1075,9 @@ def test_discharge_notice_bare(led):
 
 def test_discharge_notice_self_authored_excluded(led):
     _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院報告",
-         org="八幡薬剤師会薬局")
+         org="みどり薬局")
     _extract_doc(led.db, 1, "h1", events=["discharge"])
-    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+    cfg = {"signals": {"self_organizations": ["みどり薬局"]}}
     _ev(led, cfg=cfg)
     assert not [s for s in mcs_signals.current_open(led.db)["items"]
                 if s["type"] in ("discharge_notice",
@@ -1201,8 +1201,57 @@ def test_self_org_request_responder(led):
     _extract_doc(led.db, 1, "h1",
                  requests=[_req_item("薬剤師", "残薬調整の確認")])
     _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2", prof="その他",
-         org="八幡薬剤師会薬局")
-    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+         org="みどり薬局")
+    cfg = {"signals": {"self_organizations": ["みどり薬局"]}}
     _ev(led, cfg=cfg)
     assert not [s for s in mcs_signals.current_open(led.db)["items"]
                 if s["type"] == "pharmacist_request_unanswered"]
+
+
+# --- MCS-fetched self identity (self_profile_v1 artifact) ---
+
+def test_self_profile_artifact_supplies_defaults(led):
+    """Without config, the fetched MCS self profile (recorded as an
+    artifact by run_check) supplies self organizations/professions."""
+    mcs_signals.record_self_profile(led.db, {
+        "sender_id": 42, "name": "山田 薬剤",
+        "professions": ["薬剤師"], "organizations": ["みどり薬局"]})
+    _msg(led.db, 1, ts=NOW - 30 * DAY, org="みどり薬局")
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2")   # other org
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    _ev(led)
+    states = _states(led.db)
+    assert "med_change_no_followup:1:薬A" not in states
+    assert states["med_change_no_followup:1:薬B"] == "open"
+
+
+def test_config_overrides_self_profile_artifact(led):
+    """An explicit signals.self_organizations wins over the fetched
+    profile — manual override beats derivation."""
+    mcs_signals.record_self_profile(led.db, {
+        "sender_id": 42, "name": "山田 薬剤",
+        "professions": [], "organizations": ["みどり薬局"]})
+    _msg(led.db, 1, ts=NOW - 30 * DAY, org="みどり薬局")
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    cfg = {"signals": {"self_organizations": ["そら薬局"]}}
+    _ev(led, cfg=cfg)
+    # みどり薬局 is NOT self under the override -> signal opens
+    assert _states(led.db)["med_change_no_followup:1:薬A"] == "open"
+
+
+def test_record_self_profile_dedupes(led):
+    """Identical profiles are not re-appended — append-only stays
+    clean across ticks."""
+    prof = {"sender_id": 42, "name": "山田 薬剤",
+            "professions": ["薬剤師"], "organizations": ["みどり薬局"]}
+    assert mcs_signals.record_self_profile(led.db, prof) is True
+    assert mcs_signals.record_self_profile(led.db, prof) is False
+    changed = dict(prof, organizations=["みどり薬局", "そら薬局"])
+    assert mcs_signals.record_self_profile(led.db, changed) is True
+    n = led.db.execute("SELECT COUNT(*) FROM artifacts "
+                       "WHERE kind='self_profile_v1'").fetchone()[0]
+    assert n == 2
+    latest = mcs_signals._latest_self_profile(led.db)
+    assert latest["organizations"] == ["みどり薬局", "そら薬局"]
+    assert latest["name"] == "山田 薬剤"

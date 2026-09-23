@@ -577,6 +577,43 @@ class MCSAdapter:
         except SessionExpired:
             return False
 
+    def self_profile(self) -> dict:
+        """The logged-in user's own profile — sender id, display name,
+        specialist professions, and station names — the signal engine's
+        default self identity (config signals.self_* overrides it).
+        Accepts a bare user object or a {"user": {...}} envelope.
+        Raises MCSError(kind='self_profile_unavailable') when the
+        endpoint does not serve a usable profile."""
+        try:
+            d = self._get("/users/self", extend_session=False)
+        except SessionExpired:
+            raise          # an expired session is its own signal —
+                           # never relabel it as a missing endpoint
+        except MCSError as e:
+            raise MCSError("self_profile_unavailable",
+                           f"{e.kind}: {e.detail}",
+                           status=e.status) from e
+        u = d.get("user") if isinstance(d.get("user"), dict) else d
+        if not isinstance(u, dict):
+            raise SchemaError("self_profile: user invalid")
+        cats = u.get("specialist_categories") or []
+        sts = u.get("stations") or []
+        if (not isinstance(cats, list) or not isinstance(sts, list)
+                or any(not isinstance(c, dict) for c in cats)
+                or any(not isinstance(s, dict) for s in sts)):
+            raise SchemaError("self_profile: profile fields invalid")
+        profs = [n for n in (_text(c.get("name"),
+                                   "self_profile: specialist name")
+                           for c in cats) if n]
+        orgs = [n for n in (_text(s.get("name"),
+                                  "self_profile: station name")
+                          for s in sts) if n]
+        name = _sender_name(u)
+        if not (name or profs or orgs):
+            raise SchemaError("self_profile: empty profile")
+        return {"sender_id": u.get("id"), "name": name,
+                "professions": profs, "organizations": orgs}
+
     # ---------- auto login ----------
 
     def _cdp_up(self) -> bool:
