@@ -976,12 +976,14 @@ $PY mcs/ops/mcs_view.py signals --project 123
   共起 — 「退院」文字列ではなく抽出イベントを使う）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
-- 自己同一性の設定（config `signals.*`）:
-  `self_organizations`（薬局自身の組織名 — その組織の投稿由来の言及は
-  レビュー候補にせず、その投稿は応答者として数える）、
-  `self_professions`（応答者とみなす職種、既定 `["薬剤師"]`）、
-  `request_targets`（「薬剤師宛」とみなす追加の宛先表記 —
-  「薬」を含む宛先は自動で対象）。
+- 自己同一性: 毎回のチェックで MCS の `GET /users/self` から氏名・
+  職種・所属施設を取得し `self_profile_v1` artifact として記録する
+  （変化時のみ追記）。その施設の投稿由来の言及はレビュー候補にせず、
+  その施設・職種の投稿は応答者として数える。config `signals.*` は
+  手動オーバーライドとして優先される: `self_organizations`・
+  `self_professions`（既定 薬剤師）・`request_targets`（「薬剤師宛」
+  とみなす追加の宛先表記 — 「薬」を含む宛先は自動で対象）。
+  `mcs_setup init --self-org/--self-professions` でも設定できる。
 - `signals.med_exclude_names`（空白無視の完全一致）に列挙した薬剤名は
   med_change_no_followup の対象外 — 在宅酸素など調剤対象でない療法用。
 - 通知階層: 即時 tier は `pharmacist_request_unanswered`・

@@ -297,3 +297,51 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     assert not any("keychain is locked" in e.lower() for e in errors)
     assert any("keychain is locked" in w.lower() for w in warnings)
     assert any("env fallback" in w.lower() for w in warnings)
+
+
+def test_signals_new_keys_validated():
+    base = {"mcs_login_id": "u", "notify_target": "slack"}
+    errors, _ = mcs_setup.validate_config({**base, "signals": {
+        "self_organizations": "みどり薬局",          # str, not list
+        "self_professions": ["薬剤師", 3],           # non-str member
+        "med_exclude_names": [""],                  # empty member
+        "digest": "yes",                            # str not bool
+        "digest_interval_h": 0,                     # not positive
+        "tiers": ["immediate"],                     # not object
+    }})
+    for k in ("self_organizations", "self_professions",
+              "med_exclude_names", "digest", "digest_interval_h", "tiers"):
+        assert any(k in e for e in errors), k
+    errors, _ = mcs_setup.validate_config({**base, "signals": {
+        "self_organizations": ["みどり薬局"],
+        "self_professions": ["薬剤師"],
+        "med_exclude_names": ["在宅酸素"],
+        "digest": False, "digest_interval_h": 12,
+        "tiers": {"med_change_no_followup": "immediate"},
+    }})
+    assert errors == []
+
+
+def test_init_self_identity_flags(monkeypatch, tmp_path):
+    """--self-org/--self-professions write signals.self_* as a manual
+    override of the MCS-derived self profile."""
+    import json
+    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "c.json"))
+    monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda: {"mcs_login_id": "u1",
+                                 "notify_target": "slack"})
+    monkeypatch.setattr(
+        mcs_setup.sys, "argv",
+        ["mcs_setup", "init", "--yes",
+         "--self-org", "みどり薬局", "--self-org", "そら薬局,梅薬局",
+         "--self-professions", "薬剤師,管理薬剤師"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    sig = cfg["signals"]
+    assert sig["self_organizations"] == ["みどり薬局", "そら薬局", "梅薬局"]
+    assert sig["self_professions"] == ["薬剤師", "管理薬剤師"]

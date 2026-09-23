@@ -554,6 +554,18 @@ def main() -> int:
         job_ops.run_reconcile_jobs(adapter, ledger, result, deadline,
                                    semantic=sem_on)
 
+        # -- own identity: name/professions/stations from MCS, persisted
+        # as the signal engine's default self (config overrides). Never
+        # fails the run — an unusable profile is a logged warning.
+        try:
+            import mcs_signals
+            prof = adapter.self_profile()
+            with ledger.db:
+                if mcs_signals.record_self_profile(ledger.db, prof):
+                    result["self_profile"] = "updated"
+        except Exception as e:
+            result["errors"].append(f"self_profile: {type(e).__name__}")
+
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice
         # can be wider than the 15-min tick's — still capped well under
