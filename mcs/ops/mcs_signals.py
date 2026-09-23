@@ -99,6 +99,14 @@ def _key(type_, pid, anchor):
     return f"{type_}:{pid}:{anchor}"
 
 
+def _med_followup_note(meds, days):
+    """med_change_no_followup note for one or several meds sharing a
+    post — 「A」「B」 juxtaposition keeps the single-med wording intact."""
+    names = "".join(f"「{m}」" for m in meds)
+    return (f"薬{names}の変更言及後{days}日以内の後続記録を確認できません"
+            "でした（記録上の確認であり、対応の有無を示すものではありません）")
+
+
 def _med_followup(db, now, th):
     """Per (room, med surface form) episodes: flag when the LATEST
     change-action mention of a med in a non-archived room has passed the
@@ -175,9 +183,7 @@ def _med_followup(db, now, th):
             "evidence": {"med": med, "message_ids": mids[:10],
                          "mention_count": len(mids)},
             "context": {"window_days": th["followup_days"]},
-            "note": f"薬「{med}」の変更言及後{th['followup_days']}日以内の"
-                    "後続記録を確認できませんでした（記録上の確認であり、"
-                    "対応の有無を示すものではありません）"}
+            "note": _med_followup_note([med], th["followup_days"])}
 
 
 def _comm_concentration(db, now, th):
@@ -358,6 +364,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             existing[meta["key"]] = content
 
     opened = superseded = resolved = enqueued = 0
+    newly = []
     with ledger.db:
         for key, sig in current.items():
             old = existing.get(key)
@@ -371,8 +378,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                            resolved_at=None)
                 _insert(ledger.db, key, sig)
                 opened += 1
-                if notify and _notify(ledger, sig, key, now, th):
-                    enqueued += 1
+                newly.append((key, sig))
             elif old["state"] == "dismissed":
                 pass   # human dismissed this exact evidence — stays down
             elif old.get("evidence") != sig["evidence"]:
@@ -396,6 +402,8 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 row.pop("reopened_at", None)
                 _insert(ledger.db, key, row)
                 resolved += 1
+        if notify:
+            enqueued = _notify_opened(ledger, newly, now, th)
     return {"open": len(current), "opened": opened,
             "superseded": superseded, "resolved": resolved,
             "notify_enqueued": enqueued, "notify_enabled": notify,
@@ -428,35 +436,128 @@ def signal_notice_text(sig: dict) -> str:
             f"{where}\n{sig['note']}")
 
 
-def _notify(ledger, sig, key, now, th):
+def med_followup_group_notice(sigs):
+    """One notice body for med_change_no_followup signals whose latest
+    mention is the same post — 'med A・B' plus a combined note instead
+    of N near-identical sends. Returns None when a member lacks the
+    fields a merged rendering needs (caller falls back to per-signal
+    text)."""
+    meds, days = [], None
+    for s in sigs:
+        ev = s.get("evidence") or {}
+        med = ev.get("med")
+        if not isinstance(med, str) or not med:
+            return None
+        meds.append(med)
+        if days is None:
+            d = (s.get("context") or {}).get("window_days")
+            if type(d) is int:
+                days = d
+            elif type(d) is float and d.is_integer():
+                days = int(d)
+    if len(meds) < 2 or days is None:
+        return None
+    sig = sigs[0]
+    return (f"[MCS] レビュー候補 ({sig['type']})\n"
+            f"project {sig['project_id']} / med {'・'.join(meds)}\n"
+            + _med_followup_note(meds, days))
+
+
+def _notify_opened(ledger, items, now, th):
+    """Enqueue notify intents for signals opened this evaluation —
+    one per signal, EXCEPT med_change_no_followup members sharing a
+    latest-mention message: a per-med burst off one post reads as a
+    duplicate send, so they coalesce into ONE intent listing every
+    med. Signal rows/keys stay per-med — only the notification merges.
+    A med whose mention lands in a later evaluation still notifies on
+    its own (merging into an already-queued intent would rewrite a
+    pending payload — kept simple on purpose). Returns rows added."""
+    units, groups = [], {}
+    for key, sig in items:
+        gkey = None
+        ev = sig.get("evidence") or {}
+        mids = ev.get("message_ids")
+        if (sig.get("type") == "med_change_no_followup"
+                and isinstance(mids, list) and mids
+                and type(mids[-1]) is int):
+            gkey = (sig["project_id"], mids[-1])
+        if gkey is None:
+            units.append([(key, sig)])
+        elif gkey in groups:
+            groups[gkey].append((key, sig))
+        else:
+            members = [(key, sig)]
+            groups[gkey] = members
+            units.append(members)
+    n = 0
+    for members in units:
+        n += _notify(ledger, members, now, th)
+    return n
+
+
+def _notify_suppressed(db, key, now, th):
+    """True when an undelivered intent already covers this signal key
+    or one was accepted inside the cooldown — 'covers' includes the
+    signal_keys[] of a merged same-post med intent."""
+    covered = ("(json_extract(payload,'$.signal_key')=? OR EXISTS("
+               "SELECT 1 FROM json_each(CASE WHEN "
+               "json_type(payload,'$.signal_keys')='array' THEN "
+               "json_extract(payload,'$.signal_keys') ELSE '[]' END) je "
+               "WHERE je.value=?))")
+    if db.execute(
+            "SELECT 1 FROM notify_outbox WHERE kind='signal' "
+            "AND state IN ('pending','failed') AND json_valid(payload) "
+            f"AND {covered} LIMIT 1", (key, key)).fetchone():
+        return True
+    return db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='signal' "
+        "AND state='accepted' AND json_valid(payload) "
+        f"AND {covered} AND updated_at > ? LIMIT 1",
+        (key, key, now - th["notify_cooldown_d"] * DAY_S)
+    ).fetchone() is not None
+
+
+def _notify(ledger, members, now, th):
     """Frozen-text notify intent via the existing outbox — payload
     carries ids and the fixed note, never message bodies. The send path
-    re-checks at flush time: signals.notify revoked OR the signal no
-    longer open -> _StaleSend (terminal drop). An undelivered intent for
-    the same key is not duplicated (reopen flapping), and a key that was
-    already notified inside the cooldown stays silent — a signal
-    that flaps open/resolved must not spam the channel."""
-    if ledger.db.execute(
-            """SELECT 1 FROM notify_outbox
-               WHERE kind='signal' AND state IN ('pending','failed')
-                 AND json_valid(payload)
-                 AND json_extract(payload,'$.signal_key')=? LIMIT 1""",
-            (key,)).fetchone():
-        return False
-    if ledger.db.execute(
-            """SELECT 1 FROM notify_outbox
-               WHERE kind='signal' AND state='accepted'
-                 AND json_valid(payload)
-                 AND json_extract(payload,'$.signal_key')=?
-                 AND updated_at > ? LIMIT 1""",
-            (key, now - th["notify_cooldown_d"] * DAY_S)).fetchone():
-        return False
-    ledger.outbox_add_tx("signal", sig["project_id"], {
-        "text": signal_notice_text(sig),
-        "signal_key": key, "type": sig["type"],
-        "project_id": sig["project_id"],
-        "evidence_fp": evidence_fp(sig["evidence"])})
-    return True
+    re-checks at flush time: signals.notify revoked OR no member signal
+    still open -> _StaleSend (terminal drop). An undelivered intent
+    covering a member key is not duplicated (reopen flapping), and a
+    key that was already notified inside the cooldown stays silent — a
+    signal that flaps open/resolved must not spam the channel.
+    members>1 is a same-post med_change group: ONE merged intent keyed
+    by signal_keys[] instead of one intent per med. Returns the number
+    of outbox rows added."""
+    live = [(k, s) for k, s in members
+            if not _notify_suppressed(ledger.db, k, now, th)]
+    if not live:
+        return 0
+    text = (med_followup_group_notice([s for _, s in live])
+            if len(live) > 1 else None)
+    if len(live) == 1 or text is None:
+        # singleton unit, or a member that can't render merged — fall
+        # back to per-signal intents rather than losing a medication
+        for key, sig in live:
+            ledger.outbox_add_tx("signal", sig["project_id"], {
+                "text": signal_notice_text(sig),
+                "signal_key": key, "type": sig["type"],
+                "project_id": sig["project_id"],
+                "evidence_fp": evidence_fp(sig["evidence"])})
+        return len(live)
+    sigs = [s for _, s in live]
+    mids = sorted({m for s in sigs
+                   for m in ((s.get("evidence") or {})
+                             .get("message_ids") or [])
+                   if type(m) is int})
+    ledger.outbox_add_tx("signal", sigs[0]["project_id"], {
+        "text": text,
+        "signal_keys": [k for k, _ in live],
+        "type": "med_change_no_followup",
+        "project_id": sigs[0]["project_id"],
+        "evidence_fp": evidence_fp(
+            {"meds": [s["evidence"]["med"] for s in sigs],
+             "message_ids": mids})})
+    return 1
 
 
 def current_open(db, project_id=None, limit=50):
