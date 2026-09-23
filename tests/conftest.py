@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcs"))
+import _mcs_path  # noqa: F401  registers every subdir as import root
 
 
 _SENSITIVE_ENV = (

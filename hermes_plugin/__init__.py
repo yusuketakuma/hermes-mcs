@@ -174,9 +174,9 @@ def _authorize(settings: dict[str, Any], identity: dict[str, str | None], value:
 
 
 def _adapter_modules():
-    path = str(_ADAPTER_DIR)
-    if path not in sys.path:
-        sys.path.insert(0, path)
+    if str(_ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(_ADAPTER_DIR))
+    import _mcs_path  # noqa: F401  registers every subdir as import root
     import mcs_requests
     import mcs_view
     return mcs_requests, mcs_view

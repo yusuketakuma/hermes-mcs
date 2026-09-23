@@ -13,8 +13,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-MCS_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(MCS_ROOT / 'mcs'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'mcs'))
+import _mcs_path  # noqa: F401  registers every subdir as import root
 
 from ledger import Ledger, publish_snapshot
 from mcs_adapter import Message
@@ -25,6 +25,8 @@ from gateway.config import Platform, PlatformConfig
 from gateway.run import GatewayRunner
 from gateway.run_inbound import GatewayInboundMixin
 from plugins.platforms.discord.adapter import DiscordAdapter
+
+MCS_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.asyncio
