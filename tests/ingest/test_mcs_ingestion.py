@@ -3364,6 +3364,34 @@ def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db.close()
 
 
+def test_backfill_deferred_certification_is_not_an_error(tmp_path):
+    """cov==wm with >BACKFILL_MAX_PAGES of history: the bounded scan can
+    never reach the natural end, so certification defers to history_head
+    — with lag=0 nothing is suspected missing, hence no error/gap."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=100)])
+    db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
+    items = [{"id": mid, "comment": "synthetic post",
+              "created_at": "2026-09-19T00:00:00+09:00"}
+             for mid in range(1, 33)]
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            start = (params["page"] - 1) * params["per_page"]
+            return {"messages": items[start:start + params["per_page"]],
+                    "paginate": {"has_next": start + params["per_page"] < len(items)}}
+
+    result = {"errors": [], "backfilled": 0}
+    run_check.stage_backfill(Adapter(), db, result, time.monotonic() + 300, 1)
+    assert result["errors"] == []
+    assert not result.get("coverage_gaps")
+    assert db.job_pending("history_head", 1)
+    assert db.db.execute("SELECT 1 FROM messages WHERE message_id=30").fetchone()
+    db.close()
+
+
 def test_reconcile_hydrates_changed_reply_and_rotates_patients(tmp_path):
     db = _ledger(tmp_path)
     for pid in (1, 2, 3):

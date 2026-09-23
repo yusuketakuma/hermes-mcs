@@ -362,9 +362,16 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                 "since": max(0, cutoff),
                 "page": 1 + batch.pages if merged.checkpoint_safe else 1,
                 "pages": BACKFILL_MAX_PAGES, "trickle": False})
-            result.setdefault("coverage_gaps", []).append(
-                {"pid": pid, "lag_s": ledger.coverage_lag(pid)})
-            result["errors"].append(f"backfill {pid}: coverage_incomplete")
+            lag = ledger.coverage_lag(pid)
+            if lag > 0:
+                # Only a real gap between the stored head and verified
+                # coverage is reportable — a bounded scan that cannot
+                # reach the natural end (>BACKFILL_MAX_PAGES of
+                # history) defers certification to history_head.
+                result.setdefault("coverage_gaps", []).append(
+                    {"pid": pid, "lag_s": lag})
+                result["errors"].append(
+                    f"backfill {pid}: coverage_incomplete")
 
 
 # ---------- stage: attachments ----------
