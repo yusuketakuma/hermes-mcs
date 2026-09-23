@@ -67,6 +67,7 @@ def main() -> int:
         return 3
 
     adapter = MCSAdapter(token_cache=CACHE)
+    adapter.set_deadline(deadline)
     ledger = Ledger(DB)
     stats = {"errors": [], "threads": 0, "deadline": False}
 

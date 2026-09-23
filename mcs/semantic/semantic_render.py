@@ -7,6 +7,7 @@ facade monkeypatch points (thread_bundle/_current/policy_fingerprint)
 keep working."""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
 import time
@@ -38,13 +39,16 @@ def mandatory_render(doc: dict, max_facts: int = 40) -> dict:
     facts = [f for f in doc.get("facts", [])
              if isinstance(f, dict)
              and f.get("validation_status") == "verified"]
+    statement_counts = Counter(
+        fact.get("statement") for fact in
+        {fact["fact_id"]: fact for fact in facts}.values())
     lines, seen = [], set()
     omitted = 0
     for fact in facts:
         text = fact.get("statement")
-        if not isinstance(text, str) or not text or text in seen:
+        if not isinstance(text, str) or not text or fact["fact_id"] in seen:
             continue
-        seen.add(text)
+        seen.add(fact["fact_id"])
         # beyond the cap a verified fact must not vanish silently —
         # count it and disclose the omission as a limitation (FIX-SR1)
         if len(lines) >= max_facts:
@@ -52,6 +56,9 @@ def mandatory_render(doc: dict, max_facts: int = 40) -> dict:
             continue
         label = _CATEGORY_LABEL.get(
             sf.KIND_CATEGORY.get(fact.get("kind"), ""), "その他の所見")
+        if statement_counts[text] > 1:
+            text += (f"（対象: {fact['subject']}、時点: {fact['event_time']}、"
+                     f"ID: {fact['fact_id']}）")
         lines.append(f"{label}｜{text}")
     lims, lim_seen = [], set()
     for ob in doc.get("obligations", []):

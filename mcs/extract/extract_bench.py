@@ -70,6 +70,15 @@ def _match_symptom(expected: dict, got: list) -> bool:
                for s in got)
 
 
+def _match_request(expected: dict, got: list) -> bool:
+    action = expected.get("action", "")
+    return any(isinstance(item, dict) and action
+               and action in (item.get("action") or "")
+               and all(expected.get(key) in (None, item.get(key))
+                       for key in ("to", "from", "due", "evidence"))
+               for item in got)
+
+
 def _field_pr(expected: list, got: list, matcher,
               strict_fp: bool = True) -> dict:
     """tp/fp/fn for one field. With strict_fp=False the open-vocabulary
@@ -95,7 +104,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
         fields = {}
         for f, items in (("meds", exp.get("meds")),
                          ("symptoms", exp.get("symptoms")),
-                         ("events", exp.get("events"))):
+                         ("events", exp.get("events")),
+                         ("requests", exp.get("requests"))):
             fields[f] = {"tp": 0, "fp": 0, "fn": len(items or [])}
         if "urgency" in exp:
             fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
@@ -108,12 +118,15 @@ def _score_case(case: dict, out: dict | None) -> dict:
     got_meds = out.get("meds") or []
     got_syms = out.get("symptoms") or []
     got_events = out.get("events") or []
+    got_requests = out.get("requests") or []
     fields = {
         "meds": _field_pr(exp.get("meds", []), got_meds, _match_med),
         "symptoms": _field_pr(exp.get("symptoms", []), got_syms,
                               _match_symptom),
         "events": _field_pr(exp.get("events", []), got_events,
                             lambda e, g: e in g, strict_fp=False),
+        "requests": _field_pr(exp.get("requests", []), got_requests,
+                              _match_request),
     }
     if "urgency" in exp:
         ok = out.get("urgency") == exp["urgency"]
@@ -147,6 +160,9 @@ def _score_case(case: dict, out: dict | None) -> dict:
         if fe in got_events:
             violations.append(f"events:{fe}")
             fields["events"]["fp"] += 1
+    for request in forbid.get("requests", []):
+        if _match_request(request, got_requests):
+            violations.append(f"requests:{request.get('action')}")
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
         violations.append(f"urgency:{forbid['urgency']}")
     return {"id": case["id"], "fields": fields,
@@ -154,7 +170,7 @@ def _score_case(case: dict, out: dict | None) -> dict:
             "items_dropped": out.get("_items_dropped", 0),
             "evidence_dropped": out.get("_evidence_dropped", 0),
             "raw": {k: out.get(k) for k in
-                    ("meds", "symptoms", "events", "urgency")}}
+                    ("meds", "symptoms", "events", "requests", "urgency")}}
 
 
 def _aggregate(scores: list[dict]) -> dict:

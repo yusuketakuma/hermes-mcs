@@ -143,6 +143,7 @@ def test_llm_extract_attaches_bounded_integrity_to_nonempty_output(
 def test_llm_chat_pins_background_slot(monkeypatch):
     """semantic.llm_chat must pin every call to slot 1 (wire id_slot 0)
     so slot 2 stays reserved for real-time traffic."""
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     seen = {}
 
     def fake_chat(prompt, **kw):
@@ -155,8 +156,9 @@ def test_llm_chat_pins_background_slot(monkeypatch):
     assert local_llm.BACKGROUND_SLOT == local_llm.SLOT_1 - 1 == 0
 
 
-def test_probe_format_pins_background_slot():
+def test_probe_format_pins_background_slot(monkeypatch):
     """probe_format request bodies also carry the background slot pin."""
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     bodies = []
 
     def send(endpoint, method, body, timeout, deadline=None):
@@ -172,6 +174,7 @@ def test_probe_format_pins_background_slot():
 
 def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
     seen = {}
 

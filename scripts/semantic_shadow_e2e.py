@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
+import _mcs_path  # noqa: F401  registers every subdir as an import root
 
 
 def main() -> int:

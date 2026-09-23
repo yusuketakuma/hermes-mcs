@@ -3,6 +3,7 @@ ci/gates.py (FIX-G1/G2), ci/mine_gates.py and scripts/update_readme.py
 (FIX-UR1). Each gate is imported as a module and driven against a
 synthetic tree."""
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +19,18 @@ def _load(name, rel):
 
 def _boom():
     raise RuntimeError("generator exploded")
+
+
+def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import runpy, sys; runpy.run_path(sys.argv[1]); "
+         "from semantic import llm_chat; "
+         "from semantic_evaluation import run_shadow_e2e; "
+         "assert callable(llm_chat) and callable(run_shadow_e2e)",
+         str(ROOT / "scripts" / "semantic_shadow_e2e.py")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
 
 
 # ---------- FIX-UR1: generator failure must fail the run ----------

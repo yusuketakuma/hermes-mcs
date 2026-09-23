@@ -180,12 +180,13 @@ def test_seed_keeps_failed_job_for_same_hash(tmp_path):
 
 
 def test_seed_skips_archive_posts(tmp_path):
-    """QC is realtime-only — a backfilled old post never seeds a job
-    while a recent post still does."""
+    """Posts older than 60 days stay outside QC; a 30-day post is eligible."""
     db = _ledger(tmp_path)
     old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
-                        time.localtime(time.time() - 30 * 86400))
-    db.save_messages([_message(1, posted_at=old), _message(2)])
+                        time.localtime(time.time() - 61 * 86400))
+    recent = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                           time.localtime(time.time() - 30 * 86400))
+    db.save_messages([_message(1, posted_at=old), _message(2, posted_at=recent)])
     _v2_artifact(db, 1, _hash(db, 1))
     _v2_artifact(db, 2, _hash(db, 2))
     assert semantic_drain._qc_seed(db, time.time()) == 1
@@ -195,11 +196,11 @@ def test_seed_skips_archive_posts(tmp_path):
 
 
 def test_seed_reaps_stale_archive_jobs(tmp_path):
-    """A pending QC job whose post aged out of the realtime window is
+    """A pending QC job whose post aged out of the 60-day window is
     reaped on the next seed pass, not evaluated late."""
     db = _ledger(tmp_path)
     old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
-                        time.localtime(time.time() - 30 * 86400))
+                        time.localtime(time.time() - 61 * 86400))
     db.save_messages([_message(1, posted_at=old)])
     db.db.execute(
         "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
@@ -376,12 +377,12 @@ def test_drain_skips_qc_when_not_annotate(tmp_path):
 
 
 def test_process_qc_job_skips_aged_post(tmp_path):
-    """A queued job whose post aged past the realtime window completes
+    """A queued job whose post aged past the 60-day window completes
     without spending a Jev request or writing an artifact."""
     from semantic_policy import semantic_config
     db = _ledger(tmp_path)
     old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
-                        time.localtime(time.time() - 30 * 86400))
+                        time.localtime(time.time() - 61 * 86400))
     db.save_messages([_message(1, posted_at=old)])
     _v2_artifact(db, 1, _hash(db))
     db.db.execute(

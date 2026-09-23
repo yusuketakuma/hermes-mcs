@@ -182,7 +182,8 @@ def acceptance_error(response: dict | None) -> str | None:
 
 def probe_format(endpoint: str, model: str, schema: dict | None,
                  timeout: float = 10, verify=None,
-                 deadline: float | None = None, request_fn=None) -> str | None:
+                 deadline: float | None = None, request_fn=None,
+                 slot: int | None = None) -> str | None:
     """Detect the best ``response_format`` the server accepts.
 
     Ladder: json_schema (if *schema* given) -> json_object -> plain.
@@ -191,8 +192,16 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     Returns the accepted mode, or ``"plain"`` when every constraint was
     rejected; transport failure aborts probing and also yields
     ``"plain"`` (callers cache the result for a bounded cooldown).
+    *slot* pins the probe's wire ``id_slot``; ``None`` resolves it via
+    :func:`request_slot`, so the per-process ``MCS_LLM_SLOT`` override —
+    or the caller's own slot decision — governs probes exactly as it
+    does the calls they precede.
     """
     verify = verify or (lambda text: isinstance(_json_obj(text), dict))
+    # A malformed caller slot must not become an unpinned request —
+    # llama.cpp treats out-of-range id_slot as unpinned, which could land
+    # the probe on the real-time slot. Fall back to the default resolver.
+    id_slot = slot if type(slot) is int and slot >= 0 else request_slot()
     candidates = []
     if schema is not None:
         candidates.append(("schema", {"type": "json_schema",
@@ -209,7 +218,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
             response = chat(
                 'Reply with {"ok": true}', endpoint=endpoint, model=model,
                 max_tokens=20, timeout=remaining, deadline=operation_deadline,
-                response_format=rf, extra_payload={"id_slot": BACKGROUND_SLOT},
+                response_format=rf, extra_payload={"id_slot": id_slot},
                 request_fn=request_fn)
             if response is None:
                 break

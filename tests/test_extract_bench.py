@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
 
 import extract_bench
@@ -57,6 +59,29 @@ def test_aggregate_f1():
     assert agg["meds"] == {"tp": 1, "fp": 1, "fn": 1,
                            "precision": 0.5, "recall": 0.5,
                            "f1": 0.5}
+
+
+@pytest.mark.parametrize(
+    "output,counts",
+    [(None, {"tp": 0, "fp": 0, "fn": 1}),
+     ({"requests": []}, {"tp": 0, "fp": 0, "fn": 1}),
+     ({"requests": [{"action": "確認", "to": "家族"}]},
+      {"tp": 0, "fp": 1, "fn": 1}),
+     ({"requests": [{"action": "確認してください", "to": "医師"}]},
+      {"tp": 1, "fp": 0, "fn": 0})])
+def test_request_expectations_contribute_to_recall(output, counts):
+    case = {"id": "request", "expect": {
+        "requests": [{"action": "確認", "to": "医師"}]}}
+    score = extract_bench._score_case(case, output)
+    assert score["fields"]["requests"] == counts
+
+
+def test_forbidden_request_is_reported_with_extracted_items():
+    request = {"action": "中止", "to": "患者"}
+    case = {"id": "request", "forbid": {"requests": [request]}}
+    score = extract_bench._score_case(case, {"requests": [request]})
+    assert score["forbid_violations"] == ["requests:中止"]
+    assert score["raw"]["requests"] == [request]
 
 
 def test_case_file_validates_offline():

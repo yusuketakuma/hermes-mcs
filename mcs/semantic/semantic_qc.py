@@ -17,11 +17,15 @@ import semantic_runtime as runtime
 from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, semantic_config
 
 QC_MAX_ITEMS = 16
-# QC applies to realtime processing only — a backfill/archive fetch must
-# not turn stored history into Jev audit traffic (operator directive:
-# "QCはリアルタイム処理のみに適用する").  A pending job that ages past
+# QC covers posts from the last 60 days. A pending job that ages past
 # the window is reaped rather than evaluated late.
-QC_REALTIME_MAX_AGE_S = 3 * 86400
+QC_REALTIME_MAX_AGE_S = 60 * 86400
+
+
+def qc_scope_sql(now: float, msg: str = "m") -> tuple[str, tuple]:
+    """Shared post-age eligibility for QC seeding, processing, and display."""
+    return (f"({msg}.posted_at_ts IS NOT NULL AND {msg}.posted_at_ts >= ?)",
+            (now - QC_REALTIME_MAX_AGE_S,))
 
 
 def _qc_seed(ledger, now: float, limit: int = 32) -> int:
@@ -34,13 +38,13 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
     the seed window. A changed extraction replaces their generation."""
     import extract_llm
     version = extract_llm.EXTRACT_VERSION
-    cutoff = now - QC_REALTIME_MAX_AGE_S
+    scope, scope_params = qc_scope_sql(now)
     with ledger.db:
         ledger.db.execute(
             "DELETE FROM fetch_jobs WHERE kind=? AND state='pending'"
-            " AND message_id IN (SELECT message_id FROM messages"
-            "  WHERE COALESCE(posted_at_ts,0) < ?)",
-            (QC_JOB_KIND, cutoff))
+            " AND message_id IN (SELECT message_id FROM messages m"
+            f"  WHERE NOT {scope})",
+            (QC_JOB_KIND, *scope_params))
         cur = ledger.db.execute(f"""
           INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
             payload,state,next_try,created_at,updated_at)
@@ -51,7 +55,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
             'pending', ?, ?, ?
           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
           WHERE a.artifact_id={qc_source_id(version=version)}
-            AND COALESCE(m.posted_at_ts,0) >= ?
+            AND {scope}
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                            WHERE q.kind=? AND q.message_id=a.message_id
                              {current_qc_pred('q', version=version)})
@@ -77,7 +81,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
               OR coalesce(json_extract(fetch_jobs.payload,'$.ver'),0)
                 !=json_extract(excluded.payload,'$.ver')
             ELSE 1 END
-        """, (QC_JOB_KIND, now, now, now, cutoff,
+        """, (QC_JOB_KIND, now, now, now, *scope_params,
               QC_ARTIFACT, QC_JOB_KIND, limit))
     return cur.rowcount
 
@@ -140,14 +144,15 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         return "done" if runtime.transition(ledger, token, "done") \
             else "stale"
 
+    scope, scope_params = qc_scope_sql(time.time())
     msg = ledger.db.execute(
-        "SELECT content_hash,body_text,posted_at_ts FROM messages"
-        " WHERE message_id=?", (mid,)).fetchone()
+        f"SELECT content_hash,body_text,{scope} AS qc_eligible FROM messages m"
+        " WHERE message_id=?", (*scope_params, mid)).fetchone()
     if msg is None:
         return done()
-    # Realtime-only: a queued job whose post aged past the window is
+    # A queued job whose post aged past the window is
     # completed without evaluation rather than audited late.
-    if (msg["posted_at_ts"] or 0) < time.time() - QC_REALTIME_MAX_AGE_S:
+    if not msg["qc_eligible"]:
         return done()
     source = ledger.db.execute(
         "SELECT a.artifact_id,a.content,json_extract(a.meta,'$.hash') AS hash "

@@ -198,6 +198,19 @@ def test_corpus_is_synthetic_and_asserts_mandatory_coverage():
             assert rel["type"] in sf.RELATION_TYPES
 
 
+@pytest.mark.parametrize("changed", [
+    {"message_id": "m2"}, {"revision": "r2"}, {"end": 41},
+    {"start": 21, "end": 25},
+])
+def test_facts_doc_rejects_evidence_outside_its_source_or_atom(changed):
+    evidence = {"evidence_id": "ev_1", "message_id": "m1",
+                "revision": "r1", "start": 0, "end": 8,
+                "quote": "synthetic", "atom_id": "atom_a1", **changed}
+    doc = _doc(facts=[_fact(evidence_ids=["ev_1"], validation_status="verified")])
+    doc["evidence"] = [evidence]
+    with pytest.raises(sf.ContractError):
+        sf.validate_facts_doc(doc)
+
 def test_corpus_has_no_cross_case_id_collision():
     corpus = json.loads(CORPUS.read_text())
     ids = [c["id"] for c in corpus["cases"]]

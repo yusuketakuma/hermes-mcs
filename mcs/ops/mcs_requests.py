@@ -339,30 +339,33 @@ def enqueue(req, cmd_dir):
 
 
 def candidates(db, message):
-    """Select newest extraction FIRST; malformed/newer errors never resurrect
-    old suggestions.  A hash-current canonical_projection shadows
+    """Select the newest legacy extraction before validating its suggestions.
+    The newest usable canonical_projection shadows
     extract_llm for the same message (T12) so canonical request_pending
     facts drive suggestions when canonical mode is the fact source."""
     if (message["body_state"] != "full" or not isinstance(message["body_text"], str)
             or not message["body_text"].strip() or not valid_hash(message["content_hash"])):
         return []
-    # Single-source predicate shared with the resolver in mcs_queries —
-    # an error/malformed/superseded projection must not shadow a usable
-    # extract_llm.
-    from mcs_queries import current_projection_pred
-    has_projection = db.execute(f"""
-      SELECT 1 FROM artifacts WHERE message_id=? AND kind='canonical_projection'
-        AND {current_projection_pred('')} LIMIT 1
-    """, (message["message_id"], message["content_hash"])).fetchone() is not None
+    # Select the same artifact as stats/signals, including when a newer
+    # malformed or expired projection follows a usable one.
+    from mcs_queries import current_projection_id
+    current = db.execute(f"""
+      SELECT {current_projection_id('m')} FROM messages m
+      WHERE m.message_id=? AND m.project_id=? AND m.content_hash=?
+    """, (message["message_id"], message["project_id"],
+          message["content_hash"])).fetchone()
+    projection_id = current[0] if current else None
     seen, result = set(), []
     for row in db.execute("""
       SELECT * FROM artifacts WHERE message_id=?
         AND kind IN ('extract_v1','extract_llm','canonical_projection')
       ORDER BY artifact_id DESC
     """, (message["message_id"],)):
+        if row["kind"] == "canonical_projection" and row["artifact_id"] != projection_id:
+            continue
         if row["kind"] in seen:
             continue
-        if has_projection and row["kind"] == "extract_llm":
+        if projection_id is not None and row["kind"] == "extract_llm":
             continue
         seen.add(row["kind"])
         try:

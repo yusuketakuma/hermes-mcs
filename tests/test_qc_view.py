@@ -6,6 +6,8 @@ per-message detail with staleness marking.
 """
 import json
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
@@ -14,6 +16,7 @@ import extract_llm
 import ledger
 import mcs_adapter
 import mcs_view
+import semantic_qc
 
 
 def _ledger(tmp_path):
@@ -25,7 +28,7 @@ def _message(mid, project_id=1):
         message_id=mid, project_id=project_id, parent_id=None,
         sender_id=1, sender_name="sender", sender_type="user",
         profession="", organization="",
-        posted_at="2026-09-19T00:00:00+09:00",
+        posted_at=datetime.now(timezone.utc).isoformat(),
         body_html=f"本文{mid}", body_state="full", is_unread=False,
         reply_count=0)
 
@@ -180,6 +183,47 @@ def test_qc_view_binds_exact_extraction_and_discloses_unchecked_fields(tmp_path)
             assert view.read("qc", project=1)["summary"]["pending"] == 4
             detail = view.read("qc", project=1, message_id=1)
             assert not any(r["current"] for r in detail["qc"])
+        finally:
+            view.close()
+    finally:
+        db.close()
+
+
+def test_qc_view_separates_age_scope_from_unfinished_work(tmp_path, monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(semantic_qc.time, "time", lambda: now)
+    cutoff = now - semantic_qc.QC_REALTIME_MAX_AGE_S
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(i) for i in (1, 2, 3, 4, 5)])
+        for mid, posted in ((1, now - 30 * 86400), (2, now - 61 * 86400), (3, None),
+                            (4, cutoff), (5, cutoff - 1)):
+            db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?",
+                          (posted, mid))
+            _v2(db, mid)
+        db.db.commit()
+        _qc(db, 5, {"qc": "done", "items": []})
+        assert semantic_qc._qc_seed(db, now) == 2
+        assert {r[0] for r in db.db.execute(
+            "SELECT message_id FROM fetch_jobs WHERE kind='extract_qc'")} == {1, 4}
+        view = _view(db, tmp_path)
+        try:
+            summary = view.read("qc", project=1)["summary"]
+            assert summary["pending"] == 2
+            assert summary["eligible"] == 2
+            assert summary["out_of_scope"] == 3
+            assert summary["evaluated"] == 1  # historical annotation remains visible
+        finally:
+            view.close()
+        for mid in (1, 4):
+            _qc(db, mid, {"qc": "done", "items": []})
+        assert semantic_qc._qc_seed(db, now) == 0
+        view = _view(db, tmp_path)
+        try:
+            summary = view.read("qc", project=1)["summary"]
+            assert summary["pending"] == 0
+            assert summary["eligible"] == 2 and summary["out_of_scope"] == 3
+            assert summary["evaluated"] == 3
         finally:
             view.close()
     finally:

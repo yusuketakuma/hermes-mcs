@@ -2504,6 +2504,12 @@ def test_ws_recv_close_and_oversize_fail():
         raise AssertionError("oversized message must be refused")
 
 
+def test_ws_recv_rejects_masked_server_frames():
+    conn = _ws_conn(_ws_frame(b'{"id":1}', mask=True))
+    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
+        conn.recv_message()
+
+
 def test_ws_eval_roundtrip_and_id_match(monkeypatch):
     """_ws_eval waits for the frame whose id matches the request."""
     request = {}
@@ -2667,6 +2673,9 @@ class _InitAdapter:
         self.fetches += 1
         return self._batches.pop(0)
 
+    def set_deadline(self, deadline):
+        self.deadline = deadline
+
 
 def _run_init_data(monkeypatch, tmp_path, adapter):
     import init_data
@@ -2676,6 +2685,20 @@ def _run_init_data(monkeypatch, tmp_path, adapter):
     monkeypatch.setattr(
         sys, "argv", ["init_data.py", "--days", "1", "--delay", "0"])
     return init_data.main()
+
+
+def test_init_data_binds_deadline_before_enumeration(monkeypatch, tmp_path):
+    import init_data
+
+    class Adapter(_InitAdapter):
+        deadline = None
+
+        def list_projects(self):
+            assert self.deadline == 1900
+            return []
+
+    monkeypatch.setattr(init_data.time, "monotonic", lambda: 100)
+    assert _run_init_data(monkeypatch, tmp_path, Adapter([])) == 0
 
 
 def test_init_data_reauths_embedded_session_expired(

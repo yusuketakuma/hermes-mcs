@@ -111,6 +111,17 @@ def test_validate_all_corrupt_is_failure_not_empty():
     assert out["_items_dropped"] == 1
 
 
+@pytest.mark.parametrize("section,field", [("meds", "name"), ("symptoms", "text")])
+@pytest.mark.parametrize("value", ["", " \t "])
+def test_validate_rejects_blank_clinical_identifiers(section, field, value):
+    item = {field: value, "action": "none", "subject": "patient",
+            "status": "current" if section == "meds" else "ongoing",
+            "negated": False, "evidence": "確認した"}
+    out = extract_llm._validate({section: [item], "summary": "確認した"}, "確認した")
+    assert out[section] == []
+    assert out["_items_dropped"] == 1
+
+
 def test_validate_symptom_status_preserved():
     out = extract_llm._validate({"symptoms": [
         {"text": "発熱", "negated": False, "status": "resolved"},

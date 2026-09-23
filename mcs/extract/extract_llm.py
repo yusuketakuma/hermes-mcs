@@ -216,6 +216,7 @@ def _probe_format(deadline: float | None = None) -> str:
     _FMT_MODE = local_llm.probe_format(
         ENDPOINT, MODEL, _SCHEMA, timeout=10,
         deadline=deadline, request_fn=_opener_request,
+        slot=_choose_slot(deadline=deadline),
         verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -305,6 +306,7 @@ def _validate(d: dict, body: str | None = None) -> dict | None:
                         if isinstance(m, dict) else False
                     if not (isinstance(m, dict)
                             and isinstance(m.get("name"), str)
+                            and m["name"].strip()
                             and m.get("action") in _RX_ACTS
                             and ("negated" not in m
                                  or type(m.get("negated")) is bool)
@@ -345,6 +347,7 @@ def _validate(d: dict, body: str | None = None) -> dict | None:
                         if isinstance(s, dict) else False
                     if not (isinstance(s, dict)
                             and isinstance(s.get("text"), str)
+                            and s["text"].strip()
                             and ("negated" not in s
                                  or type(s.get("negated")) is bool)
                             and st is not False and sj is not False):

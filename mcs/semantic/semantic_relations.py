@@ -101,7 +101,10 @@ def classify_pair(left: dict, right: dict) -> dict | None:
     rel_type = None
     reason = None
     if _norm(left.get("statement")) == _norm(right.get("statement")) \
-            and left.get("kind") == right.get("kind"):
+            and all(left.get(field) == right.get(field) for field in (
+                "kind", "subject", "actor", "polarity", "epistemic",
+                "workflow_status", "event_time", "valid_time", "quantity",
+                "action")):
         rel_type, reason = "EXACT_DUPLICATE", "same_statement"
     else:
         shared = _entity_overlap(left, right)
@@ -145,7 +148,7 @@ def classify_pair(left: dict, right: dict) -> dict | None:
             elif _norm(left.get("statement")) != _norm(right.get("statement")):
                 rel_type, reason = "COMPLEMENTS", "shared_entity"
             else:
-                rel_type, reason = "EXACT_DUPLICATE", "same_entity"
+                rel_type, reason = "UNRESOLVED", "clinical_attributes_differ"
         elif not same_subject:
             rel_type, reason = "COMPLEMENTS", "shared_entity_other_subject"
         else:

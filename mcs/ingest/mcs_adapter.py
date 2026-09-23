@@ -187,15 +187,13 @@ class _WSConn:
             b0, b1 = self._read_exact(2)
             fin, opcode = b0 & 0x80, b0 & 0x0F
             masked, ln = b1 & 0x80, b1 & 0x7F
+            if masked:
+                raise BootstrapError("cdp_ws_protocol")
             if ln == 126:
                 ln = int.from_bytes(self._read_exact(2), "big")
             elif ln == 127:
                 ln = int.from_bytes(self._read_exact(8), "big")
-            mask = self._read_exact(4) if masked else None
             payload = self._read_exact(ln) if ln else b""
-            if mask:
-                payload = bytes(b ^ mask[i & 3]
-                                for i, b in enumerate(payload))
             if opcode == 0x9:
                 self._send_frame(0xA, payload)   # ping -> pong
                 continue

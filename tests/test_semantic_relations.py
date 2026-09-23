@@ -7,6 +7,7 @@ typed relations between surviving facts.
 """
 import copy
 
+import pytest
 
 import semantic_facts as sf
 import semantic_relations as sr
@@ -34,6 +35,21 @@ def test_exact_duplicate_same_statement():
     rel = sr.classify_pair(left, right)
     assert rel["type"] == "EXACT_DUPLICATE"
     sf.validate_relation(rel)
+
+
+@pytest.mark.parametrize("changed", [
+    {"subject": "person:family01"}, {"actor": "sender:s2"},
+    {"polarity": "negated"}, {"epistemic": "suspected"},
+    {"workflow_status": "planned"}, {"event_time": "2026-09-02"},
+    {"valid_time": "2026-09-02"}, {"quantity": "10mg"},
+    {"action": "stop"},
+])
+def test_same_statement_preserves_distinct_clinical_attributes(changed):
+    left = _fact("fact_aaaa", "アムロジピン服用", action="start")
+    right = {**_fact("fact_bbbb", "アムロジピン服用", action="start"), **changed}
+    relation = sr.classify_pair(left, right)
+    assert relation is not None
+    assert relation["type"] != "EXACT_DUPLICATE"
 
 
 def test_ordered_action_pair_supersedes():

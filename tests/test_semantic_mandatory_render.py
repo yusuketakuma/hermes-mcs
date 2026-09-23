@@ -96,3 +96,13 @@ def test_mandatory_render_dedupes_and_caps():
     # FIX-SR1: capped verified facts are disclosed, not silently dropped
     assert any("20件" in lim and "省略" in lim
                for lim in out["limitations"])
+
+
+def test_mandatory_render_keeps_distinct_facts_with_identical_statements():
+    patient = _fact("服用を継続")
+    family = {**patient, "fact_id": "fact_family", "subject": "role:family"}
+    out = render.mandatory_render(_doc(facts=[patient, family, patient]))
+    assert len(out["facts"]) == 2
+    assert len(set(out["facts"])) == 2
+    assert all(fact["subject"] in "\n".join(out["facts"])
+               for fact in (patient, family))

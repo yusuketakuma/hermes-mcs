@@ -531,9 +531,18 @@ def validate_facts_doc(doc: dict) -> dict:
     evidence_ids = {e["evidence_id"] for e in evidence}
     if len(evidence_ids) != len(evidence):
         _fail("doc_evidence_id_duplicate")
+    atoms_by_id = {a["atom_id"]: a for a in atoms}
     for e in evidence:
         if e["atom_id"] not in atom_ids:
             _fail("doc_evidence_atom_unknown")
+        if e["message_id"] != source["message_id"] \
+                or e["revision"] != source["revision"]:
+            _fail("doc_evidence_source_mismatch")
+        atom = atoms_by_id[e["atom_id"]]
+        # A quote may cross atoms; the atom containing its start owns it.
+        if not atom["start"] <= e["start"] < atom["end"] \
+                or e["end"] > source["body_codepoints"]:
+            _fail("doc_evidence_range_invalid")
 
     fact_ids = {f["fact_id"] for f in facts}
     if len(fact_ids) != len(facts):

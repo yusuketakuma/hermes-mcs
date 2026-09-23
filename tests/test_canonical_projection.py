@@ -10,6 +10,7 @@ import pytest
 
 import semantic_projection as projection
 import semantic_facts as sf
+import mcs_requests as requests
 from mcs_queries import current_fact_pred
 from test_mcs_semantic import _seeded
 
@@ -84,10 +85,84 @@ def test_projection_subject_and_events():
 
 
 def _artifact(db, kind, mid, content, meta):
-    db.execute(
-        "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES(?,?,?,?)",
-        (kind, mid, json.dumps(content), json.dumps(meta)))
+    project_id = db.execute(
+        "SELECT project_id FROM messages WHERE message_id=?", (mid,)
+    ).fetchone()[0]
+    return db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+        "VALUES(?,?,?,?,?)",
+        (kind, project_id, mid, json.dumps(content), json.dumps(meta))).lastrowid
+
+
+@pytest.mark.parametrize("older_projection", [False, True])
+@pytest.mark.parametrize("fault", [
+    "invalid_json", "array", "null", "payload_error", "meta_error",
+    "invalid_meta", "nonobject_meta", "invalidated", "invalidated_number",
+    "invalidated_string", "old_hash", "wrong_project",
+])
+def test_projection_readers_agree_after_newer_unusable_row(
+        tmp_path, older_projection, fault):
+    """A failed projection cannot hide either usable canonical facts or legacy fallback."""
+    db = _seeded(tmp_path)
+    try:
+        msg = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        meta = {"hash": msg["content_hash"]}
+        content = {"requests": [{"action": "synthetic request", "to": None}]}
+        selected = _artifact(db.db, "extract_llm", 1, content, meta)
+        if older_projection:
+            selected = _artifact(db.db, "canonical_projection", 1, content, meta)
+        broken_content = {"array": [], "null": None,
+                          "payload_error": {"_error": True}}.get(fault, content)
+        broken_meta = {**meta, **{
+            "meta_error": {"error": True}, "invalidated": {"invalidated": True},
+            "invalidated_number": {"invalidated": 2},
+            "invalidated_string": {"invalidated": "yes"},
+            "old_hash": {"hash": "stale"},
+        }.get(fault, {})}
+        broken = _artifact(db.db, "canonical_projection", 1, broken_content, broken_meta)
+        if fault == "invalid_json":
+            db.db.execute("UPDATE artifacts SET content='{' WHERE artifact_id=?", (broken,))
+        elif fault == "invalid_meta":
+            db.db.execute("UPDATE artifacts SET meta='{' WHERE artifact_id=?", (broken,))
+        elif fault == "nonobject_meta":
+            db.db.execute("UPDATE artifacts SET meta='[]' WHERE artifact_id=?", (broken,))
+        elif fault == "wrong_project":
+            db.ensure_patient(2)
+            db.db.execute("UPDATE artifacts SET project_id=2 WHERE artifact_id=?", (broken,))
+        rows = db.db.execute(
+            "SELECT a.artifact_id FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id WHERE m.message_id=1 "
+            "AND a.kind IN ('extract_llm','canonical_projection') "
+            + current_fact_pred()).fetchall()
+        suggestions = [item for item in requests.candidates(db.db, msg)
+                       if item["extraction_kind"] != "extract_v1"]
+        assert [row[0] for row in rows] == [selected]
+        assert [item["artifact_id"] for item in suggestions] == [selected]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("empty_content", [{}, {"requests": []}])
+def test_projection_readers_keep_newest_empty_projection(tmp_path, empty_content):
+    """An intentionally empty projection still replaces older requests and legacy facts."""
+    db = _seeded(tmp_path)
+    try:
+        msg = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        meta = {"hash": msg["content_hash"]}
+        content = {"requests": [{"action": "synthetic old request", "to": None}]}
+        _artifact(db.db, "extract_llm", 1, content, meta)
+        _artifact(db.db, "canonical_projection", 1, content, meta)
+        selected = _artifact(db.db, "canonical_projection", 1, empty_content, meta)
+        rows = db.db.execute(
+            "SELECT a.artifact_id FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id WHERE m.message_id=1 "
+            "AND a.kind IN ('extract_llm','canonical_projection') "
+            + current_fact_pred()).fetchall()
+        assert [row[0] for row in rows] == [selected]
+        assert [item for item in requests.candidates(db.db, msg)
+                if item["extraction_kind"] != "extract_v1"] == []
+    finally:
+        db.close()
 
 
 def test_current_fact_pred_prefers_canonical_projection(tmp_path):

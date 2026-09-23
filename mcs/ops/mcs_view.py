@@ -247,6 +247,7 @@ class View:
         per-item verdicts for that message."""
         import extract_llm
         from mcs_queries import current_qc_pred, qc_source_id
+        from semantic_qc import QC_REALTIME_MAX_AGE_S, qc_scope_sql
         version = extract_llm.EXTRACT_VERSION
         if mid is not None:
             msg = self._message(pid, mid)
@@ -304,16 +305,25 @@ class View:
                 " GROUP BY v", (pid,)):
             summary.setdefault("verdicts", {})[r["v"]] = r["c"]
         summary.setdefault("verdicts", {})
-        # Match seed eligibility, including re-extraction of the same body.
-        summary["pending"] = self.db.execute(f"""
-          SELECT COUNT(*) FROM artifacts a JOIN messages m
-            ON m.message_id=a.message_id
-          WHERE m.project_id=?
-            AND a.artifact_id={qc_source_id(version=version)}
-            AND NOT EXISTS(SELECT 1 FROM artifacts q
+        # The historical annotations stay visible after their post ages out;
+        # pending counts only current extractions eligible for another audit.
+        scope, scope_params = qc_scope_sql(time.time())
+        scope_counts = self.db.execute(f"""
+          WITH sources AS (
+            SELECT m.message_id, {scope} AS eligible,
+              EXISTS(SELECT 1 FROM artifacts q
                 WHERE q.kind='extract_qc' AND q.message_id=a.message_id
-                  {current_qc_pred('q', version=version)})
-        """, (pid,)).fetchone()[0]
+                  {current_qc_pred('q', version=version)}) AS has_qc
+            FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+            WHERE m.project_id=?
+              AND a.artifact_id={qc_source_id(version=version)}
+          )
+          SELECT COALESCE(SUM(eligible),0) AS eligible,
+            COALESCE(SUM(eligible AND NOT has_qc),0) AS pending,
+            COALESCE(SUM(NOT eligible),0) AS out_of_scope
+          FROM sources
+        """, (*scope_params, pid)).fetchone()
+        summary.update(dict(scope_counts))
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
             "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
@@ -344,6 +354,7 @@ class View:
                 row["urgency_mismatch"] = urg
             if content.get("qc") == "unevaluated":
                 row["unevaluated_reason"] = content.get("reason")
+        window_days = QC_REALTIME_MAX_AGE_S // 86400
         legend = {
             "qc": "抽出チェック — 機械が拾い上げた各項目が本文に裏付け"
                   "られるかを外部の確認用AI（Jev）が判定した注記。"
@@ -355,7 +366,9 @@ class View:
                 "UNDETERMINED": "本文だけでは判断できない"},
             "qc_state": {"done": "判定済み",
                          "unevaluated": "判定を実行できなかった"},
-            "pending": "現在の抽出結果に対するQC未実施件数（キュー済みを含む）",
+            "eligible": f"投稿時刻が直近{window_days}日以内の現行抽出件数（QC実施済みを含む）",
+            "pending": "対象内の現行抽出に対するQC未実施件数（キュー済みを含む）",
+            "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
         }
         return {**page, "summary": summary, "legend": legend}

@@ -70,19 +70,23 @@ def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
 
 
 def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
-    """AND-fragment: a canonical_projection row is usable right now —
+    """Predicate: a canonical_projection row is usable right now —
     valid payloads, no error, hash-current to the source message, and not
     superseded by a later source save (meta.invalidated).  Shared by
-    _current_projection_id and mcs_requests.candidates — the T12 shadow
+    current_projection_id and mcs_requests.candidates — the T12 shadow
     rule must be identical on every read path."""
     col = f"{art}." if art else ""
-    return (f"json_valid({col}content) AND json_valid({col}meta) "
+    return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
+            f"THEN json_type({col}content)='object' "
+            f"AND json_type({col}meta)='object' "
+            f"AND COALESCE(json_extract({col}content,'$._error'),0)=0 "
             f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
             f"AND json_extract({col}meta,'$.hash')={hash_ref} "
-            f"AND json_extract({col}meta,'$.invalidated') IS NOT 1")
+            f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
+            "ELSE 0 END")
 
 
-def _current_projection_id(art: str, msg: str) -> str:
+def current_projection_id(msg: str = "m") -> str:
     """Subquery: THE current canonical-projection row for a message —
     the newest valid artifact_id among hash-current, unexpired projections.
     The writer expires source/context/policy generations explicitly; a
@@ -90,25 +94,25 @@ def _current_projection_id(art: str, msg: str) -> str:
     EMPTY projection legitimately replaces an old non-empty one (C06).
     Returns the artifact_id or NULL."""
     return (f"(SELECT MAX(c.artifact_id) FROM artifacts c"
-            f" JOIN messages cm ON cm.message_id=c.message_id"
             f" WHERE c.kind='{CANONICAL_PROJECTION_KIND}'"
-            f" AND c.message_id={art}.message_id"
-            f" AND {current_projection_pred('c', 'cm.content_hash')})")
+            f" AND c.message_id={msg}.message_id"
+            f" AND c.project_id={msg}.project_id"
+            f" AND {current_projection_pred('c', f'{msg}.content_hash')})")
 
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,
                       error_check: bool = True) -> str:
     """AND-fragment for fact-extraction reads (T12 consumer migration):
     the CURRENT-generation ``canonical_projection`` row (see
-    _current_projection_id) shadows ``extract_llm`` for the same
+    current_projection_id) shadows ``extract_llm`` for the same
     message; either kind must satisfy current_extract_pred. The
     caller's FROM clause must admit both kinds —
     ``<art>.kind IN ('extract_llm','canonical_projection')``."""
     return (current_extract_pred(art, msg, error_check=error_check)
             + f" AND CASE WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"
               f" THEN {art}.artifact_id="
-              f"{_current_projection_id(art, msg)}"
-              f" ELSE {_current_projection_id(art, msg)} IS NULL END")
+              f"{current_projection_id(msg)}"
+              f" ELSE {current_projection_id(msg)} IS NULL END")
 
 
 def med_period_artifacts(db):

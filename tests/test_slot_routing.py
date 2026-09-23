@@ -64,3 +64,64 @@ def test_choose_slot_lend_probe_failure_falls_back(monkeypatch):
 
     monkeypatch.setattr(extract_llm, "_opener_request", boom)
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
+
+
+def _capture_bodies():
+    bodies = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        bodies.append(body)
+        reply = {"choices": [{"message": {"content": '{"ok": true}'},
+                              "finish_reason": "stop"}]}
+        return 200, {}, json.dumps(reply).encode()
+
+    return bodies, send
+
+
+def test_probe_format_honors_env_override(monkeypatch):
+    """MCS_LLM_SLOT is the documented per-process wire id_slot override —
+    the format probe must follow request_slot() like every other call."""
+    monkeypatch.setenv("MCS_LLM_SLOT", "3")
+    bodies, send = _capture_bodies()
+    mode = local_llm.probe_format("http://127.0.0.1:8080/v1/chat/completions",
+                                  "m", None, request_fn=send)
+    assert mode == "object"
+    assert bodies and all(b.get("id_slot") == 3 for b in bodies)
+
+
+def test_probe_format_explicit_slot_wins(monkeypatch):
+    """A caller's own slot decision takes precedence over the env."""
+    monkeypatch.setenv("MCS_LLM_SLOT", "3")
+    bodies, send = _capture_bodies()
+    mode = local_llm.probe_format("http://127.0.0.1:8080/v1/chat/completions",
+                                  "m", None, request_fn=send, slot=2)
+    assert mode == "object"
+    assert bodies and all(b.get("id_slot") == 2 for b in bodies)
+
+
+def test_probe_format_bad_slot_falls_back(monkeypatch):
+    """A malformed explicit slot must never become an unpinned request —
+    llama.cpp treats out-of-range id_slot as unpinned, which could land
+    the probe on the real-time slot."""
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    for bad in (-1, "1", 0.5, True):
+        bodies, send = _capture_bodies()
+        mode = local_llm.probe_format(
+            "http://127.0.0.1:8080/v1/chat/completions",
+            "m", None, request_fn=send, slot=bad)
+        assert mode == "object"
+        assert bodies and all(b.get("id_slot") == local_llm.BACKGROUND_SLOT
+                              for b in bodies)
+
+
+def test_extract_probe_format_uses_choose_slot(monkeypatch):
+    """extract_llm's probe resolves its slot through _choose_slot — the
+    same single point as the extraction calls it precedes."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 3)
+    monkeypatch.setattr(extract_llm, "_LEND_RT", False)
+    bodies, send = _capture_bodies()
+    monkeypatch.setattr(extract_llm, "_opener_request", send)
+    assert extract_llm._probe_format() == "schema"
+    assert bodies and all(b.get("id_slot") == 3 for b in bodies)
