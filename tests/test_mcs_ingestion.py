@@ -3829,3 +3829,21 @@ def test_self_profile_session_expired_passthrough():
     import pytest
     with pytest.raises(mcs_adapter.SessionExpired):
         Adapter().self_profile()
+
+
+def test_self_profile_normalizes_sender_id():
+    """A non-scalar user id (unexpected shape) degrades to None —
+    never poisons the artifact with a dict."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {"user": {"id": {"unexpected": 1},
+                             "last_name": "山田", "first_name": "太郎",
+                             "specialist_categories":
+                                 [{"name": "薬剤師"}],
+                             "stations": [{"name": "みどり薬局"}]}}
+
+    p = Adapter().self_profile()
+    assert p["sender_id"] is None
+    assert p["name"] == "山田 太郎"
+    assert p["professions"] == ["薬剤師"]
+    assert p["organizations"] == ["みどり薬局"]

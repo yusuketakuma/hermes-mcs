@@ -611,7 +611,9 @@ class MCSAdapter:
         name = _sender_name(u)
         if not (name or profs or orgs):
             raise SchemaError("self_profile: empty profile")
-        return {"sender_id": u.get("id"), "name": name,
+        sid = u.get("id")
+        return {"sender_id": sid if type(sid) in (int, str) else None,
+                "name": name,
                 "professions": profs, "organizations": orgs}
 
     # ---------- auto login ----------

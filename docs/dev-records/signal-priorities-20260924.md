@@ -82,3 +82,32 @@
   intent の改変はしない方針を維持）。
 - `sig` 検知器は例外時に型単位でスキップ（既存どおり）— 新規5検知器も
   同じ isolate 意味論に乗る。
+
+## 追記: 実装レビューで修正した問題（同日）
+
+- `_adherence_phrases`: 「残薬ありません」「飲み忘れていない」等の
+  否定形が誤発火 → `_NEGATE_RE` に `ません`/`ていない`/`していない` を
+  追加。「管理は出来ない」系（末尾の否定自体が懸念）は tail-check を
+  行わない `ADHERENCE_TERMINAL` へ分離。phrase scan に SQL LIKE
+  prefilter を追加し全件走査を解消
+- `_urgency_high` が extract_llm のみ読み extract_v1 の
+  urgency:high を見落としていた → 両 kind を確認（notifier._urgency
+  と同じ意味論）
+- 隔離（`outbox_hold` = state=failed + next_try NULL）された digest
+  intent のメンバー喪失 → `_digest_add`/`_notify_suppressed` が
+  `next_try IS NOT NULL` を要求するよう修正し、`_hold_event` が
+  「送信未開始が証明できる」hold 時に open メンバーを新 digest intent
+  へ救出（`rescue_digest_members`）。部分送信の可能性がある場合は
+  救出しない（重複リスク優先）
+- `_signal_unit_text` の併合不能フォールバックが先頭メンバーのみ
+  描画していた → 全メンバー個別描画に変更
+- digest intent は project_id=None で flush の archived ゲートを
+  素通り → 送信時にメンバー単位で archived 判定を追加
+- `to LIKE '%薬%'` がタスク的宛先（「薬の確認」）を薬剤師宛に誤認
+  → `PHARM_TARGET_SQL`（薬剤師/薬局/調剤）に限定。visibility 側も
+  鏡像否定で整合
+- `_self_sets` が明示的な空リストと未設定を区別できなかった →
+  config の list は空でも優先、artifact の空 professions も
+  authoritative（プロフィール自体が無い時のみ薬剤師既定）
+- `self_profile` の sender_id 型正規化（int/str 以外→None）
+- `_adherence_concern` の meds 経路に status!='past' を追加

@@ -349,6 +349,11 @@ def _signal_unit_text(ledger, sigs: list[dict]):
     latest = sigs[0]
     merged = (mcs_signals.med_followup_group_notice(sigs)
               if len(sigs) > 1 else None)
+    if len(sigs) > 1 and merged is None:
+        # a unit that cannot render merged must still show EVERY
+        # member — never silently collapse to the first signal
+        return "\n\n".join(_signal_unit_text(ledger, [s])
+                           for s in sigs)
     sig_view = latest
     if merged is not None:
         mids = sorted({m for s in sigs
@@ -407,20 +412,15 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         skey = payload.get("signal_key")
         if not keys and type(skey) is str and skey:
             keys = [skey]
-        open_sigs = []
-        for k in keys:
-            row = ledger.db.execute(
-                """SELECT content FROM artifacts
-                   WHERE kind='signal_v1' AND json_valid(meta)
-                     AND json_valid(content)
-                     AND json_extract(meta,'$.key')=?
-                   ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
-            s = (json.loads(row["content"])
-                 if row and row["content"] else {})
-            # a member that resolved while queued drops out of a merged
-            # notice; only a fully-resolved group cancels the send
-            if isinstance(s, dict) and s.get("state") == "open":
-                open_sigs.append(s)
+        # a member that resolved while queued drops out of a merged
+        # notice; only a fully-resolved group cancels the send. Digest
+        # payloads carry project_id=None, so the per-event archived
+        # gate in flush() can't see them — members of an archived
+        # patient drop out here instead.
+        open_sigs = [s for _, s in mcs_signals.open_signal_rows(
+            ledger.db, keys)
+            if not (s.get("project_id")
+                    and ledger.is_archived(s["project_id"]))]
         if not open_sigs:
             raise _StaleSend("signal_not_open")
         # Rebuild text at send time: notes can change while evidence
@@ -891,6 +891,51 @@ def _has_sent_progress(ev) -> bool:
     return type(progress.get("next")) is int and progress["next"] > 0
 
 
+def _send_never_began(ev) -> bool:
+    """No delivery could have happened: the progress receipt is absent
+    entirely (the pre-send marker write precedes any subprocess) or it
+    records no accepted AND no in-flight chunk. An UNPARSEABLE receipt
+    is ambiguous — a corrupted record of a real send — so it fails
+    safe (False)."""
+    raw = ev["progress"]
+    if not raw:
+        return True
+    try:
+        progress = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(progress, dict):
+        return False
+    return (not progress.get("next") and progress.get("sending") is None
+            and not progress.get("sent"))
+
+
+def _hold_event(ledger, ev, cfg, proven_undelivered=False):
+    """Quarantine an event; for an unsent digest payload, first move
+    its still-open member keys into a fresh scheduled digest — a held
+    intent stops covering its keys but nothing else would ever
+    re-enqueue them (signals notify only at the open transition), so
+    without this the members would go permanently silent. Salvage runs
+    only when non-delivery is provable: an empty/no-send receipt, or a
+    send path that refused before posting (proven_undelivered)."""
+    if (proven_undelivered or _send_never_began(ev)) \
+            and not _has_sent_progress(ev):
+        try:
+            payload = json.loads(ev["payload"])
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("digest") is True:
+            sc = cfg.get("signals")
+            ih = sc.get("digest_interval_h") \
+                if isinstance(sc, dict) else None
+            interval_h = (ih if type(ih) in (int, float) and ih > 0
+                          else mcs_signals.DIGEST_INTERVAL_H)
+            with ledger.db:
+                mcs_signals.rescue_digest_members(
+                    ledger, payload, time.time(), interval_h)
+    ledger.outbox_hold(ev["event_id"])
+
+
 class _SendFailed(OSError):
     """Delivery did not begin; the outbox may safely retry."""
 
@@ -1076,12 +1121,12 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 # recording the ack — delivery is UNCERTAIN: resending
                 # could duplicate a post that did go out. Hold it for
                 # human reconciliation instead (F19)
-                ledger.outbox_hold(ev["event_id"])
+                _hold_event(ledger, ev, cfg)
                 res["uncertain"] = res.get("uncertain", 0) + 1
                 continue
             fingerprint = _delivery_fingerprint(target, chunks, files)
             if start and previous != fingerprint:
-                ledger.outbox_hold(ev["event_id"])
+                _hold_event(ledger, ev, cfg)
                 res["failed"] += 1
                 continue
             if not start:
@@ -1136,7 +1181,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # count it separately so run_check's notify_incomplete signal
             # doesn't flag every other tick while the mode gate is down
             if _has_sent_progress(ev):
-                ledger.outbox_hold(ev["event_id"])
+                _hold_event(ledger, ev, cfg)
                 res["failed"] += 1
             else:
                 ledger.db.execute(
@@ -1148,26 +1193,28 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         except _FreezeSend:
             # An accepted chunk is immutable. Keep its receipt/progress and
             # freeze the remaining chunks until an explicit retry decision.
-            ledger.outbox_hold(ev["event_id"])
+            _hold_event(ledger, ev, cfg)
             res["failed"] += 1
         except _StaleSend:
             if _has_sent_progress(ev):
-                ledger.outbox_hold(ev["event_id"])
+                _hold_event(ledger, ev, cfg)
                 res["failed"] += 1
             else:
                 ledger.outbox_suppress(ev["event_id"])
                 res["suppressed"] += 1
         except _SendUsage:
             # invocation itself refused (exit 2) — a CLI/config contract
-            # problem; retrying cannot fix it, quarantine the event
-            ledger.outbox_hold(ev["event_id"])
+            # problem; retrying cannot fix it, quarantine the event.
+            # The refusal is provably pre-delivery, so held digest
+            # members may be salvaged.
+            _hold_event(ledger, ev, cfg, proven_undelivered=True)
             res["failed"] += 1
         except _SendUncertain:
-            ledger.outbox_hold(ev["event_id"])
+            _hold_event(ledger, ev, cfg)
             res["uncertain"] = res.get("uncertain", 0) + 1
             res["failed"] += 1
         except ValueError:
-            ledger.outbox_hold(ev["event_id"])
+            _hold_event(ledger, ev, cfg)
             res["failed"] += 1
         except (OSError, TimeoutError, KeyError):
             backoff = min(3600, 60 * (2 ** ev["attempts"]))
@@ -1181,7 +1228,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # deterministic bug quarantines after 5 attempts instead of
             # looping forever.
             if ev["attempts"] >= 4:
-                ledger.outbox_hold(ev["event_id"])
+                _hold_event(ledger, ev, cfg)
             else:
                 ledger.outbox_mark(ev["event_id"], "failed",
                                    retry_in=3600)

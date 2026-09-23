@@ -947,7 +947,7 @@ $PY mcs/ops/mcs_view.py signals --project 123
 | `request_overdue` | Formal register fact: open/in_progress requests past due_date. |
 | `request_aging` | Open register items whose created_at is older than the aging threshold — regardless of due_date (register fact only). |
 | `med_change_no_followup` | Per (room, med surface form) episodes: flag when the LATEST change-action mention of a med in a non-archived room has… |
-| `pharmacist_request_unanswered` | extract_llm requests addressed to the pharmacy (any 薬-containing target or configured request_targets) whose mention … |
+| `pharmacist_request_unanswered` | extract_llm requests addressed to the pharmacy (a pharmacist-role target or configured request_targets) whose mention… |
 | `rx_request_visibility` | Med-related requests directed at OTHER professions — early visibility into the prescription pipeline (a nurse asking … |
 | `adherence_concern` | Medication-management difficulty / non-use mentions — the dispensing pharmacist's intervention domain (一包化・管理支援・ 残薬調整… |
 | `discharge_notice` | Bare discharge/transfer mentions with no med-change co-occurrence (co-occurring ones are transition_reconciliation) —… |
