@@ -630,3 +630,224 @@ def test_malformed_signal_artifact_skipped(led):
     assert res["open"] == 1
     items = mcs_signals.current_open(led.db)["items"]
     assert len(items) == 1 and items[0]["type"] == "request_overdue"
+
+
+# --- same-post med_change notification coalescing ---
+
+def _set_meds(db, meds, mid=1):
+    """Rewrite the med list of one extract_llm artifact — the detector
+    toggle used to resolve/reopen med signals between evaluations."""
+    db.execute(
+        "UPDATE artifacts SET content=? WHERE kind='extract_llm' "
+        "AND message_id=?", (json.dumps({"meds": meds}), mid))
+
+
+def _outbox_payloads(led):
+    return [json.loads(r[0]) for r in led.db.execute(
+        "SELECT payload FROM notify_outbox ORDER BY event_id")]
+
+
+def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
+    """Two meds change-mentioned in the SAME post produce ONE merged
+    intent, not two near-identical sends — while per-med signal rows
+    keep their own open state and keys."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY,
+         body="インスリン管理は出来ない。在宅酸素は出来ない。")
+    led.db.execute("UPDATE patients SET patient_name='合成 患者' "
+                   "WHERE project_id=1")
+    _extract_llm(led.db, 1, "h1", [{"name": "インスリン", "action": "stop"},
+                                   {"name": "在宅酸素", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["open"] == 2 and res["notify_enqueued"] == 1
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1
+    pl = pls[0]
+    assert sorted(pl["signal_keys"]) == [
+        "med_change_no_followup:1:インスリン",
+        "med_change_no_followup:1:在宅酸素"]
+    assert "signal_key" not in pl
+    assert pl["type"] == "med_change_no_followup"
+    # per-med lifecycle untouched
+    assert _states(led.db)["med_change_no_followup:1:インスリン"] == "open"
+    assert _states(led.db)["med_change_no_followup:1:在宅酸素"] == "open"
+    # sent text lists both meds in ONE notice
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, files = notifier._format_event(led, ev)
+    assert "med インスリン・在宅酸素" in text
+    assert "薬「インスリン」「在宅酸素」の変更言及後" in text
+    assert "対応の有無を示すものではありません" in text
+    assert "合成 患者" in text and "最新言及" in text
+    assert '"op":"timeline"' in text and files == []
+
+
+def test_shared_latest_mention_merges_despite_history(led):
+    """A med with a deeper episode and a med mentioned only in the
+    latest post still merge — the triggering post is the same. The
+    signal evidence keeps its full mention history; only the
+    notification coalesces."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"},
+                                   {"name": "薬B", "action": "start"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 1
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"]
+    items = {s["evidence"]["med"]: s["evidence"]["message_ids"]
+             for s in mcs_signals.current_open(led.db)["items"]
+             if s["type"] == "med_change_no_followup"}
+    assert items == {"薬A": [1, 2], "薬B": [2]}     # evidence intact
+
+
+def test_single_med_notice_unchanged(led, monkeypatch):
+    """One med in the post -> original single-med payload + wording."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY, body="薬Aを中止しました")
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _ev(led, cfg={"signals": {"notify": True}})
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1
+    assert pls[0]["signal_key"] == "med_change_no_followup:1:薬A"
+    assert "signal_keys" not in pls[0]
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, _ = notifier._format_event(led, ev)
+    assert "med 薬A" in text and "薬「薬A」の変更言及後" in text
+    assert "・" not in text
+
+
+def test_distinct_posts_not_merged(led):
+    """Meds whose LATEST mentions are different posts keep separate
+    notices — only the same triggering post coalesces."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 2
+    pls = _outbox_payloads(led)
+    assert {p["signal_key"] for p in pls} == {
+        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"}
+
+
+def test_different_projects_not_merged(led):
+    _msg(led.db, 1, pid=1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 2
+    assert len(_outbox_payloads(led)) == 2
+
+
+def test_other_signal_types_not_merged(led):
+    """Coalescing applies only to med_change_no_followup — other types
+    keep one intent each even in the same evaluation."""
+    _req(led.db, "open", due="2026-09-10", src_mid=999)
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 2
+    pls = _outbox_payloads(led)
+    assert all("signal_key" in p for p in pls)
+    assert {p["type"] for p in pls} == {
+        "request_overdue", "med_change_no_followup"}
+
+
+def test_merged_intent_not_duplicated_on_reeval(led):
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"},
+                                   {"name": "薬B", "action": "stop"}])
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    res = _ev(led, cfg=cfg)     # unchanged -> nothing re-enqueued
+    assert res["notify_enqueued"] == 0
+    assert len(_outbox_payloads(led)) == 1
+
+
+def test_send_gate_group_member_resolved(led, monkeypatch):
+    """A member med that resolves while the merged intent is queued
+    drops out of the notice — the still-open med still sends."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"},
+                                   {"name": "薬B", "action": "stop"}])
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    _set_meds(led.db, [{"name": "薬A", "action": "stop"}])
+    _ev(led, cfg=cfg)           # 薬B resolved; merged intent still queued
+    import notifier
+    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, _ = notifier._format_event(led, ev)
+    assert "薬「薬A」" in text and "薬B" not in text
+    assert "med 薬A" in text
+
+
+def test_send_gate_group_all_resolved(led, monkeypatch):
+    """All members resolved while queued -> terminal drop."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"},
+                                   {"name": "薬B", "action": "stop"}])
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    _set_meds(led.db, [])
+    _ev(led, cfg=cfg)
+    import notifier
+    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    with pytest.raises(notifier._StaleSend, match="signal_not_open"):
+        notifier._format_event(led, ev)
+
+
+def test_group_intent_covers_member_reopen(led):
+    """Members re-opening while the merged intent is still undelivered
+    must not stack a second notification."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    meds = [{"name": "薬A", "action": "stop"},
+            {"name": "薬B", "action": "stop"}]
+    _extract_llm(led.db, 1, "h1", meds)
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    _set_meds(led.db, [])
+    _ev(led, cfg=cfg)           # resolve both
+    _set_meds(led.db, meds)
+    res = _ev(led, cfg=cfg)     # reopen both — pending group covers them
+    assert res["notify_enqueued"] == 0
+    assert len(_outbox_payloads(led)) == 1
+
+
+def test_group_intent_cooldown_covers_members(led):
+    """An ACCEPTED merged intent keeps each member key inside its
+    cooldown — a reopened member stays silent, then notifies after the
+    cooldown as usual."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    meds = [{"name": "薬A", "action": "stop"},
+            {"name": "薬B", "action": "stop"}]
+    _extract_llm(led.db, 1, "h1", meds)
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    led.db.execute(
+        "UPDATE notify_outbox SET state='accepted', updated_at=?",
+        (NOW - 2 * DAY,))                       # delivered 2d ago
+    _set_meds(led.db, [])
+    _ev(led, cfg=cfg)
+    _set_meds(led.db, meds)
+    res = _ev(led, cfg=cfg)                     # reopened inside cooldown
+    assert res["notify_enqueued"] == 0
+    assert len(_outbox_payloads(led)) == 1
+    led.db.execute("UPDATE notify_outbox SET updated_at=?",
+                   (NOW - 8 * DAY,))            # cooldown elapsed
+    _set_meds(led.db, [])
+    _ev(led, cfg=cfg)
+    _set_meds(led.db, meds)
+    res = _ev(led, cfg=cfg)
+    assert res["notify_enqueued"] == 1          # merged again, one row
+    assert len(_outbox_payloads(led)) == 2
+    assert "signal_keys" in _outbox_payloads(led)[-1]

@@ -375,26 +375,49 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         if not (isinstance(sig_cfg, dict)
                 and sig_cfg.get("notify") is True):
             raise _StaleSend("signals_notify_disabled")
+        # Member keys: a merged same-post med intent carries
+        # signal_keys[]; a legacy/single intent carries signal_key.
+        skeys = payload.get("signal_keys")
+        keys = ([k for k in skeys if type(k) is str and k]
+                if isinstance(skeys, list) else [])
         skey = payload.get("signal_key")
-        row = skey and ledger.db.execute(
-            """SELECT content FROM artifacts
-               WHERE kind='signal_v1' AND json_valid(meta)
-                 AND json_valid(content)
-                 AND json_extract(meta,'$.key')=?
-               ORDER BY artifact_id DESC LIMIT 1""", (skey,)).fetchone()
-        latest = (json.loads(row["content"])
-                  if row and row["content"] else {})
-        if not isinstance(latest, dict) or latest.get("state") != "open":
+        if not keys and type(skey) is str and skey:
+            keys = [skey]
+        open_sigs = []
+        for k in keys:
+            row = ledger.db.execute(
+                """SELECT content FROM artifacts
+                   WHERE kind='signal_v1' AND json_valid(meta)
+                     AND json_valid(content)
+                     AND json_extract(meta,'$.key')=?
+                   ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
+            s = (json.loads(row["content"])
+                 if row and row["content"] else {})
+            # a member that resolved while queued drops out of a merged
+            # notice; only a fully-resolved group cancels the send
+            if isinstance(s, dict) and s.get("state") == "open":
+                open_sigs.append(s)
+        if not open_sigs:
             raise _StaleSend("signal_not_open")
         # Legacy queued intents have no evidence fingerprint, and notes
         # can change while the evidence IDs stay the same. Rebuild both
         # from one current row; partial deliveries remain protected by
         # the delivery fingerprint below.
-        text = mcs_signals.signal_notice_text(latest)
+        latest = open_sigs[0]
+        merged = (mcs_signals.med_followup_group_notice(open_sigs)
+                  if len(open_sigs) > 1 else None)
+        sig_view = latest
+        if merged is not None:
+            mids = sorted({m for s in open_sigs
+                           for m in ((s.get("evidence") or {})
+                                     .get("message_ids") or [])
+                           if type(m) is int})
+            sig_view = {"evidence": {"message_ids": mids}}
+        text = merged or mcs_signals.signal_notice_text(latest)
         text = _signal_text(ledger,
                             {"text": text,
                              "project_id": payload.get("project_id")},
-                            latest)
+                            sig_view)
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
         return text, []
