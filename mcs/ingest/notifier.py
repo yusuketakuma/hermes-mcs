@@ -326,10 +326,13 @@ def _signal_text(ledger, payload: dict, latest: dict):
         ev = latest.get("evidence")
         mids = (ev.get("message_ids") if isinstance(ev, dict)
                 else None) or []
-        if mids and type(mids[-1]) is int:
+        mid = (mids[-1] if mids and type(mids[-1]) is int
+               else (ev.get("discharge_message_id")
+                     if isinstance(ev, dict) else None))
+        if type(mid) is int:
             m = ledger.db.execute(
                 "SELECT sender_name, posted_at, body_text FROM messages"
-                " WHERE message_id=?", (mids[-1],)).fetchone()
+                " WHERE message_id=?", (mid,)).fetchone()
             if m and m["body_text"]:
                 snippet = " ".join(str(m["body_text"]).split())[:120]
                 lines.append(
@@ -337,6 +340,27 @@ def _signal_text(ledger, payload: dict, latest: dict):
                     f"{m['sender_name'] or '?'}: {snippet}")
         lines.append(f"確認: /mcs {{\"op\":\"timeline\",\"project_id\":{pid}}}")
     return "\n".join(lines)
+
+
+def _signal_unit_text(ledger, sigs: list[dict]):
+    """Render ONE review unit for delivery — a single signal, or a
+    merged same-post med_change group. Display context (patient name,
+    latest-mention quote, timeline link) is resolved at send time."""
+    latest = sigs[0]
+    merged = (mcs_signals.med_followup_group_notice(sigs)
+              if len(sigs) > 1 else None)
+    sig_view = latest
+    if merged is not None:
+        mids = sorted({m for s in sigs
+                       for m in ((s.get("evidence") or {})
+                                 .get("message_ids") or [])
+                       if type(m) is int})
+        sig_view = {"evidence": {"message_ids": mids}}
+    return _signal_text(
+        ledger,
+        {"text": merged or mcs_signals.signal_notice_text(latest),
+         "project_id": latest.get("project_id")},
+        sig_view)
 
 
 def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
@@ -399,25 +423,21 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 open_sigs.append(s)
         if not open_sigs:
             raise _StaleSend("signal_not_open")
-        # Legacy queued intents have no evidence fingerprint, and notes
-        # can change while the evidence IDs stay the same. Rebuild both
-        # from one current row; partial deliveries remain protected by
-        # the delivery fingerprint below.
-        latest = open_sigs[0]
-        merged = (mcs_signals.med_followup_group_notice(open_sigs)
-                  if len(open_sigs) > 1 else None)
-        sig_view = latest
-        if merged is not None:
-            mids = sorted({m for s in open_sigs
-                           for m in ((s.get("evidence") or {})
-                                     .get("message_ids") or [])
-                           if type(m) is int})
-            sig_view = {"evidence": {"message_ids": mids}}
-        text = merged or mcs_signals.signal_notice_text(latest)
-        text = _signal_text(ledger,
-                            {"text": text,
-                             "project_id": payload.get("project_id")},
-                            sig_view)
+        # Rebuild text at send time: notes can change while evidence
+        # IDs stay the same, a digest re-groups its live members, and a
+        # merged med notice shrinks to whoever is still open.
+        if payload.get("digest") is True:
+            units = mcs_signals.sig_units(
+                [(mcs_signals.med_group_key(s), s) for s in open_sigs])
+            parts = [_signal_unit_text(ledger, us) for us in units]
+            text = (f"[MCS] レビュー候補ダイジェスト"
+                    f"（{len(open_sigs)}件）\n\n" + "\n\n".join(parts))
+        else:
+            text = _signal_unit_text(ledger, open_sigs)
+            if payload.get("urgent") is True:
+                head, _, tail = text.partition("\n")
+                text = f"{head} — 原投稿が urgency:high" \
+                       + (f"\n{tail}" if tail else "")
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
         return text, []

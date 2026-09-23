@@ -152,6 +152,27 @@ MED_PATIENT_CURRENT_SQL = (
     "AND COALESCE(json_extract(je.value,'$.status'),"
     "'current')!='past'")
 
+# Evidence spans reading as capability/feasibility statements rather
+# than actual prescription events — the LLM sometimes maps
+# 「〜は出来ない」「〜管理はできない」 onto a change action (stop etc.).
+# Change-claim readers (signals, transition stats) exclude these; the
+# adherence_concern detector picks the same mentions up as a
+# different, honestly-labelled signal.
+MED_NOT_CAPABILITY_SQL = (
+    "COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%出来ない%' "
+    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%できない%' "
+    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%出来ません%' "
+    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%できません%'")
+
+MED_CAPABILITY_PATTERNS = ("出来ない", "できない", "出来ません", "できません")
+
+
+def med_capability_evidence(ev) -> bool:
+    """Python twin of `NOT MED_NOT_CAPABILITY_SQL` — True when the
+    evidence span is a capability statement, not a prescription event."""
+    return isinstance(ev, str) and any(p in ev
+                                       for p in MED_CAPABILITY_PATTERNS)
+
 
 def iter_period_ends(content: str):
     """(period_dict, end_date) for each med_periods entry whose 'end'
@@ -199,7 +220,8 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
                   (SELECT 1 FROM json_each(a.content,'$.meds') je
                    WHERE json_extract(je.value,'$.action')
                        IN ({CHANGE_ACTIONS_SQL})
-                     AND {MED_PATIENT_CURRENT_SQL})
+                     AND {MED_PATIENT_CURRENT_SQL}
+                     AND {MED_NOT_CAPABILITY_SQL})
               {extra_where}
             ORDER BY d.message_id, m.message_id""",
         (win_s, win_s, *params)).fetchall()

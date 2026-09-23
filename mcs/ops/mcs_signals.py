@@ -23,12 +23,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from datetime import datetime
 
-from mcs_queries import (CHANGE_ACTIONS_SQL, DAY_S, JST,
-                         MED_PATIENT_CURRENT_SQL, current_fact_pred,
-                         iter_period_ends, med_period_artifacts,
+from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S, JST,
+                         MED_NOT_CAPABILITY_SQL, MED_PATIENT_CURRENT_SQL,
+                         TRANSITION_EVENTS_SQL, current_fact_pred,
+                         iter_period_ends, med_capability_evidence,
+                         med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
 
 ARTIFACT_KIND = "signal_v1"
@@ -40,6 +43,9 @@ CONC_WINDOW_H = 72         # comm_concentration window
 CONC_MIN_POSTS = 10        # comm_concentration threshold
 EXPIRY_AHEAD_DAYS = 14     # rx_period_expiry horizon
 REQ_AGE_DAYS = 30          # request_aging: open register items older than this
+REQ_RESPONSE_DAYS = 3      # pharmacist_request_unanswered response window
+FYI_MAX_AGE_D = 30         # horizon for FYI-type signals (request
+                           # visibility / adherence / symptom coupling)
 NOTIFY_COOLDOWN_S = 7 * DAY_S  # no second notify for the same key inside this
 TRANSITION_LOOKBACK_D = 60   # 退院 mentions within the last N days
 TRANSITION_MED_WINDOW_D = 14 # med change mentions within ±N days of it
@@ -60,6 +66,8 @@ THRESHOLDS = {
     "transition_lookback_d":    (TRANSITION_LOOKBACK_D,    7, 365),
     "transition_med_window_d":  (TRANSITION_MED_WINDOW_D,  1,  60),
     "notify_cooldown_d":        (NOTIFY_COOLDOWN_S // DAY_S, 1, 90),
+    "request_response_days":    (REQ_RESPONSE_DAYS,        1,  30),
+    "fyi_max_age_d":            (FYI_MAX_AGE_D,            7, 180),
 }
 
 
@@ -99,6 +107,78 @@ def _key(type_, pid, anchor):
     return f"{type_}:{pid}:{anchor}"
 
 
+def _self_sets(sig_cfg):
+    """Resolved 'us' identities from config signals.*:
+    - self_organizations: org names whose posts are OUR actions —
+      self-authored mentions are not review candidates for us, and
+      their posts count as responder engagement.
+    - self_professions: professions whose posts count as pharmacist
+      engagement for response checks (default 薬剤師).
+    - request_targets: extra requests.to values meaning 'addressed to
+      us' — 薬-containing targets match automatically."""
+    sc = sig_cfg if isinstance(sig_cfg, dict) else {}
+    def _lst(key, default=()):
+        v = sc.get(key, default)
+        if not isinstance(v, list):
+            return list(default)
+        return [x for x in v if isinstance(x, str) and x]
+    return (_lst("self_organizations"),
+            _lst("self_professions", ["薬剤師"]),
+            _lst("request_targets"))
+
+
+def _med_excludes(sig_cfg):
+    """signals.med_exclude_names: med surface forms never treated as
+    change candidates (e.g. 在宅酸素 — a therapy, not a dispensed
+    drug). Exact match after whitespace normalization."""
+    sc = sig_cfg if isinstance(sig_cfg, dict) else {}
+    v = sc.get("med_exclude_names")
+    if not isinstance(v, list):
+        return set()
+    return {re.sub(r"\s+", "", x) for x in v
+            if isinstance(x, str) and x.strip()}
+
+
+def _self_author_pred(organizations, alias="m"):
+    """SQL fragment + params excluding mentions authored by configured
+    own organizations — self-authored records aren't review candidates
+    FOR us. Empty config -> no exclusion."""
+    if not organizations:
+        return "", []
+    ph = ",".join("?" * len(organizations))
+    return (f" AND COALESCE({alias}.organization,'') NOT IN ({ph})",
+            list(organizations))
+
+
+def _self_post_exists(db, pid, ts, professions, organizations):
+    """A post authored by a responder identity (pharmacist profession
+    or a configured own-org) exists in the room after ts — visible
+    engagement on the record. No identity configured -> never counts."""
+    pred, params = [], []
+    if professions:
+        pred.append("profession IN ("
+                    + ",".join("?" * len(professions)) + ")")
+        params += list(professions)
+    if organizations:
+        pred.append("organization IN ("
+                    + ",".join("?" * len(organizations)) + ")")
+        params += list(organizations)
+    if not pred:
+        return False
+    return db.execute(
+        f"SELECT 1 FROM messages WHERE project_id=? AND posted_at_ts>?"
+        f" AND ({' OR '.join(pred)}) LIMIT 1",
+        (pid, ts, *params)).fetchone() is not None
+
+
+def _request_registered(db, mid):
+    """A registered request on the mention message is visible
+    engagement — someone already turned it into a tracked item."""
+    return db.execute(
+        "SELECT 1 FROM requests WHERE source_message_id=? LIMIT 1",
+        (mid,)).fetchone() is not None
+
+
 def _med_followup_note(meds, days):
     """med_change_no_followup note for one or several meds sharing a
     post — 「A」「B」 juxtaposition keeps the single-med wording intact."""
@@ -107,7 +187,7 @@ def _med_followup_note(meds, days):
             "でした（記録上の確認であり、対応の有無を示すものではありません）")
 
 
-def _med_followup(db, now, th):
+def _med_followup(db, now, th, sig_cfg):
     """Per (room, med surface form) episodes: flag when the LATEST
     change-action mention of a med in a non-archived room has passed the
     follow-up window with no later room post and no registered request
@@ -120,7 +200,16 @@ def _med_followup(db, now, th):
     one per message — repeated mentions of the same med were stacking
     into duplicate signals. The scan is deliberately unbounded over
     artifact history: the qualifying condition is time-dependent, and
-    trickle imports can land old posts inside any past window."""
+    trickle imports can land old posts inside any past window.
+
+    Exclusions beyond the shared patient-current predicate: mentions
+    authored by configured self_organizations (our own reports are not
+    review candidates for us), capability-evidence spans like
+    「〜は出来ない」 (those are adherence_concern, not changes), and
+    configured med_exclude_names (non-dispensed therapies)."""
+    orgs, _, _ = _self_sets(sig_cfg)
+    self_pred, self_params = _self_author_pred(orgs)
+    excludes = _med_excludes(sig_cfg)
     rows = db.execute(
         f"""WITH med_msgs AS (
                 SELECT m.project_id AS pid, m.message_id AS mid,
@@ -135,13 +224,16 @@ def _med_followup(db, now, th):
                   AND m.posted_at_ts IS NOT NULL
                   AND m.posted_at_ts >= ?
                   AND COALESCE(p.is_archived,0)=0
+                  {self_pred}
                   AND json_extract(je.value,'$.action')
                       IN ({CHANGE_ACTIONS_SQL})
                   AND json_type(je.value,'$.name')='text'
                   AND TRIM(json_extract(je.value,'$.name'))!=''
                   -- a negated / other-person / historical-report med
                   -- mention is not a change needing follow-up
-                  AND {MED_PATIENT_CURRENT_SQL}),
+                  AND {MED_PATIENT_CURRENT_SQL}
+                  -- 「〜は出来ない」 capability spans are not changes
+                  AND {MED_NOT_CAPABILITY_SQL}),
             latest AS (
                 SELECT pid, med, MAX(ts) AS lts FROM med_msgs
                 GROUP BY pid, med)
@@ -168,13 +260,15 @@ def _med_followup(db, now, th):
                                 AND m3.posted_at_ts > lm.ts
                                 AND m3.posted_at_ts <= lm.ts + ?)
             ORDER BY mm.pid, mm.med, mm.mid""",
-        (now - th["followup_max_age_d"] * DAY_S,
+        (now - th["followup_max_age_d"] * DAY_S, *self_params,
          now - th["followup_days"] * DAY_S,
          th["followup_days"] * DAY_S,
          now - th["followup_days"] * DAY_S,
          th["followup_days"] * DAY_S)).fetchall()
     episodes = {}
     for pid, med, mid in rows:
+        if re.sub(r"\s+", "", med) in excludes:
+            continue                 # configured non-dispensed name
         key = (pid, " ".join(med.split()))
         episodes.setdefault(key, []).append(mid)
     for (pid, med), mids in episodes.items():
@@ -186,7 +280,7 @@ def _med_followup(db, now, th):
             "note": _med_followup_note([med], th["followup_days"])}
 
 
-def _comm_concentration(db, now, th):
+def _comm_concentration(db, now, th, sig_cfg):
     """Non-archived rooms whose post count in the last 72h exceeds a
     fixed threshold. Volume is not severity."""
     rows = db.execute(
@@ -207,7 +301,7 @@ def _comm_concentration(db, now, th):
                     "います（件数の集中であり重症度ではありません）"}
 
 
-def _request_overdue(db, now, th):
+def _request_overdue(db, now, th, sig_cfg):
     """Formal register fact: open/in_progress requests past due_date."""
     rows = db.execute(
         "SELECT request_id, project_id, due_date FROM requests "
@@ -231,7 +325,7 @@ def _request_overdue(db, now, th):
                     "確認が必要です）"}
 
 
-def _request_aging(db, now, th):
+def _request_aging(db, now, th, sig_cfg):
     """Open register items whose created_at is older than the aging
     threshold — regardless of due_date (register fact only)."""
     rows = db.execute(
@@ -248,7 +342,7 @@ def _request_aging(db, now, th):
                     "す（登録上の状態です）"}
 
 
-def _rx_period_expiry(db, now, th):
+def _rx_period_expiry(db, now, th, sig_cfg):
     """extract_v1 med_periods whose end date lands within the horizon.
     These are parsed surface expressions (e.g. '4/8-4/21'), not
     verified prescription periods. Scans all current artifacts — the
@@ -274,19 +368,24 @@ def _rx_period_expiry(db, now, th):
                         "ありません）"}
 
 
-def _transition_reconciliation(db, now, th):
+def _transition_reconciliation(db, now, th, sig_cfg):
     """Rooms where a typed discharge/transfer event (extract_llm
     `events`, not a body substring — '退院できません' etc. does not
     match) co-occurs with a med change-action mention within ±N days.
     Co-occurrence is a review prompt — whether reconciliation is needed
     is a human decision. Coverage is limited to messages carrying a
-    current extract_llm artifact, same as the med side."""
+    current extract_llm artifact, same as the med side. Discharge posts
+    authored by configured self_organizations are excluded — our own
+    reports are not review candidates for us."""
     lookback = now - th["transition_lookback_d"] * DAY_S
     win = th["transition_med_window_d"] * DAY_S
+    orgs, _, _ = _self_sets(sig_cfg)
+    self_pred, self_params = _self_author_pred(orgs, "d")
     grouped = transition_cooccurrences(
         db, win_s=win,
-        extra_where="AND d.posted_at_ts >= ? AND d.posted_at_ts <= ?",
-        params=(lookback, now), exclude_archived=True)
+        extra_where="AND d.posted_at_ts >= ? AND d.posted_at_ts <= ?"
+                    + self_pred,
+        params=(lookback, now, *self_params), exclude_archived=True)
     for dmid, (pid, mids) in grouped.items():
         change_ids = sorted(mids)
         if change_ids:
@@ -300,9 +399,306 @@ def _transition_reconciliation(db, now, th):
                         "てください（自動判定ではありません）"}
 
 
+def _pharmacist_request(db, now, th, sig_cfg):
+    """extract_llm requests addressed to the pharmacy (any 薬-containing
+    target or configured request_targets) whose mention passed the
+    response window with no visible responder post — 'no response could
+    be confirmed on the record', never 'ignored'. Response = a post by
+    self_professions/self_organizations or a registered request."""
+    orgs, profs, targets = _self_sets(sig_cfg)
+    # '薬' in the target covers 薬剤師/薬局/etc.; request_targets adds
+    # exact spellings like 「八幡薬剤師会薬局さま」. Empty/不明 targets
+    # never count as pharmacist-addressed.
+    tgt_pred = (f" OR json_extract(je.value,'$.to') IN "
+                f"({','.join('?' * len(targets))})") if targets else ""
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
+                   json_extract(je.value,'$.action') AS act
+            FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN json_each(a.content,'$.requests') je
+            WHERE a.kind IN ('extract_llm','canonical_projection')
+              {current_fact_pred()}
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts >= ?
+              AND m.posted_at_ts <= ?
+              AND COALESCE(p.is_archived,0)=0
+              AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
+              AND (json_extract(je.value,'$.to') LIKE '%薬%'
+                   {tgt_pred})
+            ORDER BY m.project_id, m.message_id""",
+        (now - th["fyi_max_age_d"] * DAY_S,
+         now - th["request_response_days"] * DAY_S,
+         *targets)).fetchall()
+    groups = {}
+    for pid, mid, ts, act in rows:
+        groups.setdefault((pid, mid, ts), []).append(act)
+    for (pid, mid, ts), acts in groups.items():
+        if _request_registered(db, mid):
+            continue
+        if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        days = int((now - ts) / DAY_S)
+        acts = [a for a in acts if isinstance(a, str) and a]
+        if not acts:
+            continue                 # an action-less request is too thin
+        yield _key("pharmacist_request_unanswered", pid, mid), {
+            "type": "pharmacist_request_unanswered", "project_id": pid,
+            "evidence": {"message_ids": [mid], "request_actions": acts},
+            "context": {"days_unanswered": days},
+            "note": f"薬剤師宛の依頼・相談の言及（「{'」「'.join(acts)}」）"
+                    f"から{th['request_response_days']}日以上経過し、記録上"
+                    "の応答を確認できませんでした（記録上の確認であり、"
+                    "対応の有無を示すものではありません）"}
+
+
+def _rx_request_visibility(db, now, th, sig_cfg):
+    """Med-related requests directed at OTHER professions — early
+    visibility into the prescription pipeline (a nurse asking the
+    doctor for a drug is tomorrow's dispense). FYI only; pharmacist-
+    addressed requests belong to pharmacist_request_unanswered."""
+    orgs, profs, targets = _self_sets(sig_cfg)
+    extra = "".join(",?" for _ in targets)
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
+                   json_extract(je.value,'$.to') AS rto,
+                   json_extract(je.value,'$.action') AS act
+            FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN json_each(a.content,'$.requests') je
+            WHERE a.kind IN ('extract_llm','canonical_projection')
+              {current_fact_pred()}
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts >= ?
+              AND COALESCE(p.is_archived,0)=0
+              AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
+              AND json_extract(je.value,'$.to') NOT LIKE '%薬%'
+              AND COALESCE(json_extract(je.value,'$.to'),'')
+                  NOT IN ('','不明'{extra})
+              AND (json_extract(je.value,'$.action') LIKE '%処方%'
+                   OR json_extract(je.value,'$.action') LIKE '%薬%'
+                   OR json_extract(je.value,'$.action') LIKE '%内服%'
+                   OR json_extract(je.value,'$.action') LIKE '%残薬%'
+                   OR json_extract(je.value,'$.action') LIKE '%一包化%')
+            ORDER BY m.project_id, m.message_id""",
+        (now - th["fyi_max_age_d"] * DAY_S, *targets)).fetchall()
+    groups = {}
+    for pid, mid, ts, rto, act in rows:
+        groups.setdefault((pid, mid, ts), []).append((rto, act))
+    for (pid, mid, ts), reqs in groups.items():
+        if _request_registered(db, mid):
+            continue
+        if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        detail = "」「".join(
+            f"{a}（{t}宛）" if isinstance(t, str) and t else f"{a}"
+            for t, a in reqs if isinstance(a, str) and a)
+        if not detail:
+            continue
+        yield _key("rx_request_visibility", pid, mid), {
+            "type": "rx_request_visibility", "project_id": pid,
+            "evidence": {"message_ids": [mid],
+                         "request_actions": [a for _, a in reqs]},
+            "context": {},
+            "note": f"他職種宛の処方関連依頼の言及があります — 「{detail}」"
+                    "（薬局側の準備・照合の機会としての記録上の言及です）"}
+
+
+# body phrases that flag adherence/management difficulty even when the
+# extractor never produced a meds item — chosen in affirming forms so
+# plain negations (〜なし/ない/ありません) do not match
+ADHERENCE_PATTERNS = ("飲み忘れ", "飲みのこし", "飲んでいない",
+                      "飲めていない", "飲みきれない", "残薬が",
+                      "残薬あり", "残薬がある", "自己中断", "自己中止",
+                      "服薬管理が難し", "服薬管理でき", "管理できな")
+_NEGATE_RE = re.compile(r"^[はがも、。\s]*(ない|なし|ありません|なく)")
+
+
+def _adherence_phrases(text):
+    hits = []
+    for pat in ADHERENCE_PATTERNS:
+        i = text.find(pat)
+        while i >= 0:
+            tail = text[i + len(pat): i + len(pat) + 10]
+            if not _NEGATE_RE.match(tail):
+                hits.append(pat)
+                break
+            i = text.find(pat, i + 1)
+    return hits
+
+
+def _adherence_concern(db, now, th, sig_cfg):
+    """Medication-management difficulty / non-use mentions — the
+    dispensing pharmacist's intervention domain (一包化・管理支援・
+    残薬調整の検討余地). Sources: extracted meds marked negated or
+    carrying capability evidence (「〜は出来ない」 — the same spans
+    med_change_no_followup now excludes), and body phrases that never
+    become meds items. Self-authored mentions are excluded."""
+    orgs, profs, _ = _self_sets(sig_cfg)
+    self_pred, self_params = _self_author_pred(orgs)
+    horizon = now - th["fyi_max_age_d"] * DAY_S
+    groups = {}
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
+                   TRIM(json_extract(je.value,'$.name')) AS med
+            FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN json_each(a.content,'$.meds') je
+            WHERE a.kind IN ('extract_llm','canonical_projection')
+              {current_fact_pred()}
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts >= ?
+              AND COALESCE(p.is_archived,0)=0
+              {self_pred}
+              AND json_type(je.value,'$.name')='text'
+              AND TRIM(json_extract(je.value,'$.name'))!=''
+              AND COALESCE(json_extract(je.value,'$.subject'),
+                           'patient')='patient'
+              AND (json_extract(je.value,'$.negated') IS 1
+                   OR NOT {MED_NOT_CAPABILITY_SQL})
+            ORDER BY m.project_id, m.message_id""",
+        (horizon, *self_params)).fetchall()
+    for pid, mid, ts, med in rows:
+        groups.setdefault((pid, mid, ts), []).append(med)
+    phrase_rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
+                   m.body_text
+            FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            WHERE m.posted_at_ts IS NOT NULL AND m.posted_at_ts >= ?
+              AND COALESCE(p.is_archived,0)=0 AND m.body_text IS NOT NULL
+              {self_pred}""",
+        (horizon, *self_params)).fetchall()
+    for pid, mid, ts, body in phrase_rows:
+        hits = _adherence_phrases(body or "")
+        if hits:
+            groups.setdefault((pid, mid, ts), []).extend(hits)
+    for (pid, mid, ts), found in groups.items():
+        if _request_registered(db, mid):
+            continue
+        if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        detail = "」「".join(dict.fromkeys(found))
+        yield _key("adherence_concern", pid, mid), {
+            "type": "adherence_concern", "project_id": pid,
+            "evidence": {"message_ids": [mid],
+                         "mentions": list(dict.fromkeys(found))},
+            "context": {},
+            "note": f"服薬管理・残薬等に関する言及があります — 「{detail}」"
+                    "（介入の検討余地を示す記録上の言及です）"}
+
+
+def _discharge_notice(db, now, th, sig_cfg):
+    """Bare discharge/transfer mentions with no med-change
+    co-occurrence (co-occurring ones are transition_reconciliation) —
+    the heads-up that a prescription-reconciliation window may be
+    open. Resolves when a co-occurrence appears (the sibling signal
+    takes over), when a responder posts, or at the lookback edge."""
+    lookback = now - th["transition_lookback_d"] * DAY_S
+    win = th["transition_med_window_d"] * DAY_S
+    orgs, profs, _ = _self_sets(sig_cfg)
+    self_pred, self_params = _self_author_pred(orgs, "d")
+    grouped = transition_cooccurrences(
+        db, win_s=win,
+        extra_where="AND d.posted_at_ts >= ? AND d.posted_at_ts <= ?",
+        params=(lookback, now), exclude_archived=True)
+    covered = set(grouped)
+    rows = db.execute(
+        f"""SELECT DISTINCT d.project_id, d.message_id, d.posted_at_ts
+            FROM messages d
+            JOIN patients p ON p.project_id=d.project_id
+            JOIN artifacts da ON da.message_id=d.message_id
+            JOIN json_each(da.content,'$.events') ev
+            WHERE da.kind IN ('extract_llm','canonical_projection')
+              {current_fact_pred('da', 'd')}
+              AND ev.value IN ({TRANSITION_EVENTS_SQL})
+              AND d.posted_at_ts >= ?
+              AND COALESCE(p.is_archived,0)=0
+              {self_pred}
+            ORDER BY d.project_id, d.message_id""",
+        (lookback, *self_params)).fetchall()
+    for pid, mid, ts in rows:
+        if mid in covered:
+            continue                    # transition_reconciliation owns it
+        if _request_registered(db, mid):
+            continue
+        if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        yield _key("discharge_notice", pid, mid), {
+            "type": "discharge_notice", "project_id": pid,
+            "evidence": {"discharge_message_id": mid},
+            "context": {},
+            "note": "退院・転院の言及があります — 処方変更の有無を原記録"
+                    "で確認する機会です（自動判定ではありません）"}
+
+
+def _symptom_after_med(db, now, th, sig_cfg):
+    """Same-post coupling: a change-action med mention AND a new or
+    ongoing non-negated patient symptom in ONE message — an ADR-triage
+    prompt. Coupling is deliberately strict (same extraction): a loose
+    room-level window paired almost everything and meant nothing."""
+    orgs, profs, _ = _self_sets(sig_cfg)
+    self_pred, self_params = _self_author_pred(orgs)
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
+            FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            JOIN patients p ON p.project_id=m.project_id
+            WHERE a.kind IN ('extract_llm','canonical_projection')
+              {current_fact_pred()}
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts >= ?
+              AND COALESCE(p.is_archived,0)=0
+              {self_pred}
+            ORDER BY m.project_id, m.message_id""",
+        (now - th["fyi_max_age_d"] * DAY_S, *self_params)).fetchall()
+    for pid, mid, ts, content_s in rows:
+        try:
+            content = json.loads(content_s)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(content, dict):
+            continue
+        meds = [m2["name"].strip() for m2 in content.get("meds") or []
+                if isinstance(m2, dict)
+                and m2.get("action") in CHANGE_ACTIONS
+                and med_is_patient_current(m2)
+                and not med_capability_evidence(m2.get("evidence"))
+                and isinstance(m2.get("name"), str) and m2["name"].strip()]
+        if not meds:
+            continue
+        symps = [s["text"].strip() for s in content.get("symptoms") or []
+                 if isinstance(s, dict) and not s.get("negated")
+                 and s.get("status") in ("new", "ongoing")
+                 and s.get("subject", "patient") in ("patient", None)
+                 and isinstance(s.get("text"), str) and s["text"].strip()]
+        if not symps:
+            continue
+        if _request_registered(db, mid):
+            continue
+        if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        yield _key("symptom_after_med_change", pid, mid), {
+            "type": "symptom_after_med_change", "project_id": pid,
+            "evidence": {"message_ids": [mid], "meds": meds,
+                         "symptoms": symps},
+            "context": {},
+            "note": f"薬変更言及（{'・'.join(meds)}）と同じ投稿で症状言及"
+                    f"（{'・'.join(symps)}）があります — 関連は人が原記録"
+                    "で判断してください（自動判定ではありません）"}
+
+
 DETECTORS = (("request_overdue", _request_overdue),
              ("request_aging", _request_aging),
              ("med_change_no_followup", _med_followup),
+             ("pharmacist_request_unanswered", _pharmacist_request),
+             ("rx_request_visibility", _rx_request_visibility),
+             ("adherence_concern", _adherence_concern),
+             ("discharge_notice", _discharge_notice),
+             ("symptom_after_med_change", _symptom_after_med),
              ("comm_concentration", _comm_concentration),
              ("rx_period_expiry", _rx_period_expiry),
              ("transition_reconciliation", _transition_reconciliation))
@@ -336,7 +732,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
         if deadline is not None and time.monotonic() >= deadline:
             break
         try:
-            found = dict(det(ledger.db, now, th))
+            found = dict(det(ledger.db, now, th, sig_cfg))
         except Exception as e:
             errors.append(f"{stype}:{type(e).__name__}")
             continue
@@ -363,7 +759,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                                              "dismissed")):
             existing[meta["key"]] = content
 
-    opened = superseded = resolved = enqueued = 0
+    opened = superseded = resolved = enqueued = dig_merged = 0
     newly = []
     with ledger.db:
         for key, sig in current.items():
@@ -403,10 +799,13 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 _insert(ledger.db, key, row)
                 resolved += 1
         if notify:
-            enqueued = _notify_opened(ledger, newly, now, th)
+            enqueued, dig_merged = _notify_opened(
+                ledger, newly, now, th, sig_cfg)
     return {"open": len(current), "opened": opened,
             "superseded": superseded, "resolved": resolved,
-            "notify_enqueued": enqueued, "notify_enabled": notify,
+            "notify_enqueued": enqueued,
+            "notify_digest_merged": dig_merged,
+            "notify_enabled": notify,
             "detectors_ran": sorted(ran_types), "errors": errors}
 
 
@@ -463,36 +862,156 @@ def med_followup_group_notice(sigs):
             + _med_followup_note(meds, days))
 
 
-def _notify_opened(ledger, items, now, th):
-    """Enqueue notify intents for signals opened this evaluation —
-    one per signal, EXCEPT med_change_no_followup members sharing a
-    latest-mention message: a per-med burst off one post reads as a
-    duplicate send, so they coalesce into ONE intent listing every
-    med. Signal rows/keys stay per-med — only the notification merges.
-    A med whose mention lands in a later evaluation still notifies on
-    its own (merging into an already-queued intent would rewrite a
-    pending payload — kept simple on purpose). Returns rows added."""
+# notification tier per signal type — 'immediate' sends its own intent
+# now; 'digest' accumulates into ONE periodic digest intent listing
+# every still-open member. urgency:high on the source mention
+# escalates any type to immediate. signals.tiers overrides per type;
+# signals.digest:false turns batching off (everything immediate);
+# signals.digest_interval_h sets the flush delay (default 24h).
+SIGNAL_TIERS = {
+    "pharmacist_request_unanswered": "immediate",
+    "discharge_notice": "immediate",
+    "transition_reconciliation": "immediate",
+    "med_change_no_followup": "digest",
+    "rx_request_visibility": "digest",
+    "adherence_concern": "digest",
+    "symptom_after_med_change": "digest",
+    "request_overdue": "digest",
+    "request_aging": "digest",
+    "comm_concentration": "digest",
+    "rx_period_expiry": "digest",
+}
+DIGEST_INTERVAL_H = 24
+
+
+def med_group_key(sig):
+    """Grouping key for same-post med_change_no_followup signals —
+    (project_id, latest mention mid); None for anything else."""
+    ev = sig.get("evidence") or {}
+    mids = ev.get("message_ids")
+    if (sig.get("type") == "med_change_no_followup"
+            and isinstance(mids, list) and mids
+            and type(mids[-1]) is int):
+        return (sig["project_id"], mids[-1])
+    return None
+
+
+def sig_units(pairs):
+    """[(group_key|None, item)] -> [[item...]] — items sharing a
+    non-None group key merge into one render/enqueue unit (insertion
+    order kept). Shared by the enqueue path and the send-time
+    digest/merged renderer."""
     units, groups = [], {}
-    for key, sig in items:
-        gkey = None
-        ev = sig.get("evidence") or {}
-        mids = ev.get("message_ids")
-        if (sig.get("type") == "med_change_no_followup"
-                and isinstance(mids, list) and mids
-                and type(mids[-1]) is int):
-            gkey = (sig["project_id"], mids[-1])
+    for gkey, item in pairs:
         if gkey is None:
-            units.append([(key, sig)])
+            units.append([item])
         elif gkey in groups:
-            groups[gkey].append((key, sig))
+            groups[gkey].append(item)
         else:
-            members = [(key, sig)]
+            members = [item]
             groups[gkey] = members
             units.append(members)
-    n = 0
-    for members in units:
+    return units
+
+
+def _urgency_high(db, sig):
+    """True when the signal's primary evidence message carries a
+    high-urgency extraction — escalates a digest-tier signal to
+    immediate delivery."""
+    ev = sig.get("evidence") or {}
+    mids = ev.get("message_ids")
+    mid = ((mids[-1] if isinstance(mids, list) and mids else None)
+           or ev.get("discharge_message_id"))
+    if type(mid) is not int:
+        return False
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE message_id=? "
+        "AND kind='extract_llm' ORDER BY artifact_id DESC LIMIT 1",
+        (mid,)).fetchone()
+    if not row or not row["content"]:
+        return False
+    try:
+        doc = json.loads(row["content"])
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(doc, dict) and doc.get("urgency") == "high"
+
+
+def _digest_text(n):
+    return f"[MCS] レビュー候補ダイジェスト（{n}件）"
+
+
+def _digest_add(ledger, key, now, th, interval_h):
+    """Fold a digest-tier signal into the pending digest intent (or
+    start one scheduled interval_h out). Pending-payload merge is safe:
+    an unsent intent carries ids only, and the send-time renderer
+    regroups same-post meds and drops members that resolved meanwhile.
+    Returns (rows_added, merged_into_pending)."""
+    if _notify_suppressed(ledger.db, key, now, th):
+        return 0, False
+    row = ledger.db.execute(
+        """SELECT event_id, payload FROM notify_outbox
+           WHERE kind='signal' AND state IN ('pending','failed')
+             AND json_valid(payload)
+             AND json_extract(payload,'$.digest')=1
+           ORDER BY event_id DESC LIMIT 1""").fetchone()
+    if row:
+        pl = json.loads(row["payload"])
+        keys = pl.setdefault("signal_keys", [])
+        if key not in keys:
+            keys.append(key)
+            pl["text"] = _digest_text(len(keys))
+            ledger.db.execute(
+                "UPDATE notify_outbox SET payload=?,updated_at=? "
+                "WHERE event_id=?",
+                (json.dumps(pl, ensure_ascii=False), now,
+                 row["event_id"]))
+            return 0, True
+        return 0, False
+    ledger.outbox_add_tx(
+        "signal", None,
+        {"digest": True, "type": "signal_digest",
+         "signal_keys": [key], "text": _digest_text(1)},
+        next_try=now + interval_h * 3600)
+    return 1, False
+
+
+def _notify_opened(ledger, items, now, th, sig_cfg):
+    """Enqueue notify intents for signals opened this evaluation —
+    immediate-tier signals get their own intent (same-post med_change
+    members coalesce into ONE merged intent listing every med, since a
+    per-med burst off one post reads as a duplicate send); digest-tier
+    signals fold into the pending digest intent instead of pinging
+    one-by-one. Signal rows/keys stay per-signal — only notifications
+    merge. A med whose mention lands in a later evaluation still
+    notifies on its own (merging into an already-queued NON-digest
+    intent would rewrite a pending payload — kept simple on purpose).
+    Returns (rows_added, keys_merged_into_digest)."""
+    sc = sig_cfg if isinstance(sig_cfg, dict) else {}
+    digest_on = sc.get("digest", True) is not False
+    ih = sc.get("digest_interval_h")
+    interval_h = (ih if type(ih) in (int, float) and ih > 0
+                  else DIGEST_INTERVAL_H)
+    overrides = sc.get("tiers") if isinstance(sc.get("tiers"), dict) else {}
+    imm, dig = [], []
+    for key, sig in items:
+        tier = overrides.get(sig.get("type"),
+                             SIGNAL_TIERS.get(sig.get("type"),
+                                              "immediate"))
+        if digest_on and tier == "digest" \
+                and not _urgency_high(ledger.db, sig):
+            dig.append((key, sig))
+        else:
+            imm.append((key, sig))
+    n = merged = 0
+    for members in sig_units(
+            [(med_group_key(s), (k, s)) for k, s in imm]):
         n += _notify(ledger, members, now, th)
-    return n
+    for key, sig in dig:
+        added, m = _digest_add(ledger, key, now, th, interval_h)
+        n += added
+        merged += 1 if m else 0
+    return n, merged
 
 
 def _notify_suppressed(db, key, now, th):
@@ -538,25 +1057,31 @@ def _notify(ledger, members, now, th):
         # singleton unit, or a member that can't render merged — fall
         # back to per-signal intents rather than losing a medication
         for key, sig in live:
-            ledger.outbox_add_tx("signal", sig["project_id"], {
+            payload = {
                 "text": signal_notice_text(sig),
                 "signal_key": key, "type": sig["type"],
                 "project_id": sig["project_id"],
-                "evidence_fp": evidence_fp(sig["evidence"])})
+                "evidence_fp": evidence_fp(sig["evidence"])}
+            if _urgency_high(ledger.db, sig):
+                payload["urgent"] = True
+            ledger.outbox_add_tx("signal", sig["project_id"], payload)
         return len(live)
     sigs = [s for _, s in live]
     mids = sorted({m for s in sigs
                    for m in ((s.get("evidence") or {})
                              .get("message_ids") or [])
                    if type(m) is int})
-    ledger.outbox_add_tx("signal", sigs[0]["project_id"], {
+    payload = {
         "text": text,
         "signal_keys": [k for k, _ in live],
         "type": "med_change_no_followup",
         "project_id": sigs[0]["project_id"],
         "evidence_fp": evidence_fp(
             {"meds": [s["evidence"]["med"] for s in sigs],
-             "message_ids": mids})})
+             "message_ids": mids})}
+    if any(_urgency_high(ledger.db, s) for s in sigs):
+        payload["urgent"] = True
+    ledger.outbox_add_tx("signal", sigs[0]["project_id"], payload)
     return 1
 
 
