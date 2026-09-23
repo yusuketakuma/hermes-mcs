@@ -121,7 +121,7 @@ G2/G6/G7を、この成功件数で代替しない。
 | 004 | test_attachment_only_post_remains_full_and_explicitly_unparsedで実parser→save_patient→再open→bundle→summarizeを検証 | 空文字本文をfullとして保持し添付metadataとsemantic jobが残る。空claimsの合成LLM応答にも添付未解析limitationsを明示。実添付内容の解析はしない |
 | 005 | test_history_returns_saved_pages_and_errorは2ページ目schema失敗で1ページ目保持・reached=falseを確認 | test_backfill_page_failure_keeps_saved_page_without_coverageで実pagination→backfill→再openを通し、2ページ目401/timeoutでも1ページ目と解析jobを保持、coverage不変を確認。401は上位へ再throw、timeoutはerrorとして返す。次tickの再試行全体はこの試験の対象外 |
 | 006 | stage_backfillはconfirmed coverageまで照合する入口。test_backfill_seeds_read_arrivalsが存在 | test_backfill_recovers_read_reply_on_old_parent_without_hiding_gapsでcutoff以前の親と新しい既読返信を実history parserから保存。snippetならreply jobを残しcoverage不変、fullなら前進、通知なし。UI表示全体は別途照合 |
-| 007 | mark_patient_readはsnapshot timestamp必須。実tick回帰はmark_read無効でread_marks=0 | サーバ側のACK対象集合は未実測。GAは必須外、現在の自動ACKなし方針を維持 |
+| 007 | mark_patient_readはsnapshot timestamp必須。実tick回帰はmark_read無効でread_marks=0 | サーバ側のACK対象集合は未実測。GAは必須外、当時の自動ACKなし方針を維持（2026-09-23 明示承認で定期実行に --mark-read 追加済み） |
 | 008 | mark_patient_readは200空objectや矛盾をunknown扱い。stage_unreadは送信前にunknownを保存 | 同testで200空objectとnetwork_errorを注入し、実mark_patient_read経路→再open後unknown、was_marked=falseを確認 |
 | 009 | test_identical_text_and_time_preserve_distinct_message_ids_and_projectsで同本文・同時刻の4投稿を2projectに保存し再配送 | 全messageとproject別outbox、4解析jobを保持し重複なし。現schemaはmessage_idをglobal PKとするため、複数accountの同ID共存はこの証拠の範囲外 |
 | 010 | ambiguous migration試験は旧/新両tableを残してMigrationError、duplicate attachment試験はjournal変更前に停止 | 新規DBは全temp fixture、旧v4はtest_snapshot_migration_readonly_and_generation、中断v6→v7はtest_interrupted_v7_migration_reruns_backfillで既存成功証拠あり。全DDL箇所での強制終了は未実施 |

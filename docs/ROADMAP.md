@@ -120,6 +120,9 @@ thinking=Pro). 回答全文: `~/.oracle/briefs/mcs-system-review-answer.md`、
 7. PDF 報告書・高度集計(取得未完了範囲の明示付き)
 8. 複数端末(読取専用 view/snapshot 配布から)
 9. mark_as_read 意味論検証(検証しても手動限定は維持、自動化は別途明示承認)
+   → 2026-09-23 明示承認により定期実行に `--mark-read` を追加
+   (mcs_check.sh・local.mcs-cmd.plist)。snapshot_ts 必須・
+   fetch_state=complete ゲート・intent 先行記録は維持
 
 ## 既存データの修復順
 

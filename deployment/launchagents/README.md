@@ -4,11 +4,11 @@
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
-| 未読チェック `run_check.py --json --download-files` | `*/15 * * * *` | hermes cron (`mcs_check.sh`) |
+| 未読チェック `run_check.py --json --download-files --mark-read` | `*/15 * * * *` | hermes cron (`mcs_check.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
 | semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（window ~5h→03:30） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
-| コマンド取込 `run_check.py --json --download-files` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
+| コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | extract_llm 常駐drainer（shard 0/2・slot 0） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer` |
 | extract_llm RT貸与drainer（shard 1/2・`--lend-rt`） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer-rt` |
 

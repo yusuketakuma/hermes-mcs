@@ -9,6 +9,7 @@
     <string>__REPO__/mcs/ingest/run_check.py</string>
     <string>--json</string>
     <string>--download-files</string>
+    <string>--mark-read</string>
   </array>
   <key>WatchPaths</key>
   <array>
