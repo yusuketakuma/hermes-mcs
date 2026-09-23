@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+import semantic_audit
 import semantic_extraction as extraction
 from semantic_runtime import RuntimeGuardError
 from test_mcs_semantic import BODY, _FakeJev, _ledger, _llm, _seeded, _cfg
@@ -111,7 +112,7 @@ def test_source_fact_coverage_reports_findings_and_unknown_technical_state(tmp_p
             return super().evaluate(state, questions, deadline)
 
     missing = CaptureJev("missing")
-    result = extraction.evaluate_source_fact_coverage(
+    result = semantic_audit.evaluate_source_fact_coverage(
         missing, source, facts, time.monotonic() + 5, target_id="m7")
     assert result["evaluated"] and result["status"] != "PASS"
     assert result["findings"] == [{"code": "source_fact_coverage_missing"}]
@@ -121,18 +122,18 @@ def test_source_fact_coverage_reports_findings_and_unknown_technical_state(tmp_p
         "source_fact_coverage"]["instructions"]
 
     ambiguous = CaptureJev("ambiguous")
-    result = extraction.evaluate_source_fact_coverage(
+    result = semantic_audit.evaluate_source_fact_coverage(
         ambiguous, source, facts, time.monotonic() + 5)
     assert result["status"] != "PASS"
     assert result["findings"] == [{"code": "source_fact_coverage_ambiguous"}]
 
     complete = CaptureJev("complete")
-    result = extraction.evaluate_source_fact_coverage(
+    result = semantic_audit.evaluate_source_fact_coverage(
         complete, source, facts, time.monotonic() + 5)
     assert result["status"] == "PASS" and result["findings"] == []
 
     strict = CaptureJev("complete")
-    result = extraction.evaluate_source_fact_coverage(
+    result = semantic_audit.evaluate_source_fact_coverage(
         strict, source, facts, time.monotonic() + 5, match_threshold=0.95)
     assert result["status"] == "NEEDS_REVIEW"
     assert result["findings"] == [{"code": "source_fact_coverage_low_confidence"}]
@@ -142,10 +143,10 @@ def test_source_fact_coverage_reports_findings_and_unknown_technical_state(tmp_p
             raise RuntimeGuardError("off")
 
     with pytest.raises(RuntimeGuardError):
-        extraction.evaluate_source_fact_coverage(
+        semantic_audit.evaluate_source_fact_coverage(
             GuardJev(), source, facts, time.monotonic() + 5)
 
-    unknown = extraction.evaluate_source_fact_coverage(
+    unknown = semantic_audit.evaluate_source_fact_coverage(
         None, source, facts, time.monotonic() + 5)
     assert not unknown["evaluated"]
     assert unknown["status"] == "INCOMPLETE"

@@ -59,11 +59,17 @@ def _record(source="synthetic"):
             "facts": [
                 {"fact_id": "f1", "important": True,
                  "medication": "drug-a", "negation": "affirmed",
-                 "time": "tomorrow", "speaker_relation": "doctor"},
+                 "time": "tomorrow", "speaker_relation": "doctor",
+                 "evidence_ids": ["ev-1"]},
                 {"fact_id": "f2", "important": True,
                  "medication": "drug-b", "negation": "negated",
-                 "time": "today", "speaker_relation": "nurse"},
+                 "time": "today", "speaker_relation": "nurse",
+                 "evidence_ids": ["ev-2"]},
             ],
+            "rendered_fact_ids": ["f1", "f2"],
+            "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
+                           "type": "COMPLEMENTS"}],
+            "unresolved": [],
             "claims": [
                 {"claim_id": "c1", "critical": False,
                  "fact_refs": ["f1"], "attachment_refs": ["att-1"]},
@@ -80,13 +86,15 @@ def _record(source="synthetic"):
             "version": "label-v1",
             "source": source,
             "facts": [
-                {"fact_id": "f1", "important": True,
+                {"fact_id": "f1", "important": True, "mandatory": True,
                  "medication": "drug-a", "negation": "affirmed",
                  "time": "tomorrow", "speaker_relation": "doctor"},
                 {"fact_id": "f2", "important": True,
                  "medication": "drug-b", "negation": "negated",
                  "time": "today", "speaker_relation": "nurse"},
             ],
+            "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
+                           "type": "COMPLEMENTS"}],
             "claims": [
                 {"claim_id": "c1", "critical": True, "supported": True,
                  "final": True, "covered_gold_fact_ids": ["f1"]},
@@ -132,9 +140,13 @@ def test_zero_denominators_cannot_pass_gate():
     record["label"]["facts"] = []
     record["label"]["claims"] = []
     record["label"]["loops"] = []
+    record["label"]["relations"] = []
     record["candidate"]["facts"] = []
     record["candidate"]["claims"] = []
     record["candidate"]["loops"] = []
+    record["candidate"]["relations"] = []
+    record["candidate"]["rendered_fact_ids"] = []
+    record["candidate"]["unresolved"] = []
     report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
     assert not report["gate"]["pass"]
     assert "denominator_zero:important_fact_recall" in report["gate"]["reasons"]

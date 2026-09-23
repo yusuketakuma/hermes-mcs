@@ -146,6 +146,34 @@ def _run(db, monkeypatch, result):
     return extract_llm.run_pending(db, limit=10, budget_s=30)
 
 
+def test_shard_selects_disjoint_partition(tmp_path, monkeypatch):
+    """--shard I/N partitions the pending set by message_id so two
+    concurrent drainers never re-process each other's rows."""
+    db = _ledger(tmp_path)
+    for mid in (1, 2, 3, 4):
+        db.save_messages([_message(mid=mid, body=f"msg {mid}")])
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+
+    seen = set()
+    for shard in ((0, 2), (1, 2)):
+        before = db.db.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'"
+        ).fetchone()[0]
+        res = extract_llm.run_pending(db, limit=10, budget_s=30,
+                                      shard=shard)
+        assert res["done"] == 2
+        rows = db.db.execute(
+            "SELECT message_id FROM artifacts WHERE kind='extract_llm'"
+        ).fetchall()
+        new = {r[0] for r in rows} - seen
+        assert all(mid % 2 == shard[0] for mid in new)
+        seen |= {r[0] for r in rows}
+        assert len(rows) - before == 2
+    assert seen == {1, 2, 3, 4}
+    db.close()
+
+
 def test_v1_row_is_replaced_atomically(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="プレドニン中止の連絡")])
@@ -258,6 +286,24 @@ def test_rollup_resolved_symptom_cancels_positive(tmp_path):
     names = [s["symptom"] for s in
              rollup.build_rollup(db, 1).get("recent_symptoms", [])]
     assert names == []
+    db.close()
+
+
+def test_rollup_symptom_null_ts_shows_posted_at_not_zero(tmp_path):
+    """An unparseable posted_at stores posted_at_ts=NULL; the symptom's
+    'last' must come from the message, never the literal string "0"
+    (FIX-RU1)."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1, body="頭痛が続く",
+                               posted_at="bad-date")])
+    db.db.execute("UPDATE messages SET posted_at_ts=NULL "
+                  "WHERE message_id=1")
+    db.db.commit()
+    db.artifact_add("extract_v1", json.dumps({"symptoms": ["頭痛"]}),
+                    project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+    syms = rollup.build_rollup(db, 1).get("recent_symptoms", [])
+    assert syms and syms[0]["last"] == "bad-date"
     db.close()
 
 

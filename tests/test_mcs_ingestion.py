@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import sqlite3
+from datetime import datetime
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -576,6 +578,92 @@ def test_invalid_history_date_does_not_certify_cutoff():
     batch = Adapter().fetch_history(1, 123, max_pages=1)
     assert not batch.reached
     assert isinstance(batch.error, mcs_adapter.SchemaError)
+
+
+_CUTOFF = int(datetime.fromisoformat(
+    "2026-09-21T00:00:00+09:00").timestamp())
+
+
+def test_history_ordered_cutoff_still_walks_to_natural_end():
+    """FIX-AD1: under sort=pinned a below-cutoff tail never certifies
+    'reached' — the walk continues until has_next is false, because a
+    page-boundary pinned straggler could resume above the cutoff."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            if params["page"] == 1:
+                return {"messages": [
+                    {"id": 3, "comment": "n2",
+                     "created_at": "2026-09-22T00:00:00+09:00"},
+                    {"id": 2, "comment": "n1",
+                     "created_at": "2026-09-21T12:00:00+09:00"},
+                    {"id": 1, "comment": "old",
+                     "created_at": "2020-01-01T00:00:00+09:00"}],
+                    "paginate": {"has_next": True}}
+            return {"messages": [
+                {"id": 4, "comment": "older",
+                     "created_at": "2019-01-01T00:00:00+09:00"}],
+                    "paginate": {"has_next": False}}
+
+    batch = Adapter().fetch_history(1, _CUTOFF, max_pages=5)
+    assert [m.message_id for m in batch.messages] == [3, 2]
+    assert batch.reached and batch.pages == 2 and batch.error is None
+
+
+def test_history_pinned_straggler_at_page_boundary_keeps_walking():
+    """FIX-AD1 regression: an old item ending a page must not terminate
+    the walk — the next page can resume above the cutoff."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            if params["page"] == 1:
+                return {"messages": [
+                    {"id": 3, "comment": "new",
+                     "created_at": "2026-09-22T00:00:00+09:00"},
+                    {"id": 9, "comment": "pinned-old-at-boundary",
+                     "created_at": "2020-01-01T00:00:00+09:00"}],
+                    "paginate": {"has_next": True}}
+            return {"messages": [
+                {"id": 2, "comment": "new-on-page-2",
+                     "created_at": "2026-09-21T12:00:00+09:00"}],
+                    "paginate": {"has_next": False}}
+
+    batch = Adapter().fetch_history(1, _CUTOFF, max_pages=5)
+    assert [m.message_id for m in batch.messages] == [3, 2]
+    assert batch.reached and batch.pages == 2
+
+
+def test_history_pinned_order_violation_walks_to_natural_end():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            if params["page"] == 1:
+                return {"messages": [
+                    {"id": 9, "comment": "pinned-old",
+                     "created_at": "2020-01-01T00:00:00+09:00"},
+                    {"id": 3, "comment": "new",
+                     "created_at": "2026-09-22T00:00:00+09:00"}],
+                    "paginate": {"has_next": True}}
+            return {"messages": [
+                {"id": 2, "comment": "new2",
+                 "created_at": "2026-09-21T12:00:00+09:00"}],
+                "paginate": {"has_next": False}}
+
+    batch = Adapter().fetch_history(1, _CUTOFF, max_pages=5)
+    assert [m.message_id for m in batch.messages] == [3, 2]
+    assert batch.reached and batch.pages == 2 and batch.error is None
+
+
+def test_history_order_violation_without_end_is_not_certified():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {"messages": [
+                {"id": 9 - params["page"], "comment": "pinned-old",
+                 "created_at": "2020-01-01T00:00:00+09:00"},
+                {"id": 100 + params["page"], "comment": "new",
+                 "created_at": "2026-09-22T00:00:00+09:00"}],
+                "paginate": {"has_next": True}}
+
+    batch = Adapter().fetch_history(1, _CUTOFF, max_pages=2)
+    assert [m.message_id for m in batch.messages] == [101, 102]
+    assert not batch.reached and batch.pages == 2
 
 
 def test_invalid_refetch_preserves_both_date_representations(tmp_path):
@@ -2349,3 +2437,250 @@ def test_ws_eval_roundtrip_and_id_match(monkeypatch):
     assert mcs_adapter._ws_eval("ws://127.0.0.1:9/x", "1+1", 5) == "tok123"
     assert request["method"] == "Runtime.evaluate"
     assert request["params"]["returnByValue"] is True
+
+
+def test_keychain_password_returns_secret(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="pw123\n",
+                                        stderr=""))
+    assert a._keychain_password() == "pw123"
+
+
+def test_keychain_password_missing_returns_none(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=44, stdout="",
+                                        stderr="could not be found"))
+    assert a._keychain_password() is None
+
+
+def test_keychain_password_locked_raises(monkeypatch, tmp_path):
+    """A locked keychain (rc 36 / interaction-not-allowed) must surface as
+    KeychainLocked — it is recoverable by unlock, NOT a missing entry."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=36, stdout="", stderr=""))
+    with pytest.raises(mcs_adapter.KeychainLocked):
+        a._keychain_password()
+
+
+def test_keychain_password_locked_by_stderr_text(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(
+            returncode=1, stdout="",
+            stderr="User interaction is not allowed"))
+    with pytest.raises(mcs_adapter.KeychainLocked):
+        a._keychain_password()
+
+
+def test_auto_login_reports_keychain_locked(monkeypatch, tmp_path):
+    """auto_login must distinguish a locked keychain from a missing
+    credential — the run alert then names the real recovery action."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(mcs_adapter.time, "sleep", lambda s: None)
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_login_page",
+                        lambda: {"webSocketDebuggerUrl": "ws://x"})
+    monkeypatch.setattr(a, "_cdp_eval", lambda ws, expr: "need_both")
+
+    def locked(*a, **k):
+        raise mcs_adapter.KeychainLocked("mcs-adapter")
+    monkeypatch.setattr(a, "_keychain_password", locked)
+    assert a.auto_login() == "keychain_locked"
+
+
+def test_auto_login_reports_manual_required_when_entry_missing(
+        monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(mcs_adapter.time, "sleep", lambda s: None)
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_login_page",
+                        lambda: {"webSocketDebuggerUrl": "ws://x"})
+    monkeypatch.setattr(a, "_cdp_eval", lambda ws, expr: "need_both")
+    monkeypatch.setattr(a, "_keychain_password", lambda *a, **k: None)
+    assert a.auto_login() == "manual_required"
+
+
+def test_err_str_includes_structured_detail():
+    e = mcs_adapter.SessionExpired("auto_login=keychain_locked")
+    assert run_check._err_str(e) == \
+        "session_expired: auto_login=keychain_locked"
+    e2 = mcs_adapter.MCSError("http_error", "GET /x", status=500)
+    assert run_check._err_str(e2) == "http_error(status=500): GET /x"
+    assert run_check._err_str(ValueError("v")) == "ValueError"
+
+
+def test_projects_malformed_last_message_timestamp_is_schema_error():
+    """A malformed created_at must not silently become epoch 0 — that
+    would make a live project look inactive to init_data (FIX-ID2)."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {
+                "projects": [{
+                    "id": 1, "type": "medical",
+                    "karte": {"last_name": "S", "first_name": "T",
+                              "station": {"name": "st"}},
+                    "last_message": {"created_at": "not-a-date"},
+                }],
+                "paginate": {"has_next": False},
+            }
+
+    with pytest.raises(mcs_adapter.SchemaError,
+                       match="last_message.created_at"):
+        Adapter().list_projects()
+
+
+def test_projects_without_last_message_get_zero_activity():
+    """Absent last_message is legitimate — last_activity=0 simply skips
+    the project in init_data's active filter."""
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {
+                "projects": [{
+                    "id": 1, "type": "medical",
+                    "karte": {"last_name": "S", "first_name": "T",
+                              "station": {"name": "st"}},
+                }],
+                "paginate": {"has_next": False},
+            }
+
+    ps = Adapter().list_projects()
+    assert len(ps) == 1 and ps[0].last_activity == 0
+
+
+# ---------- init_data re-authentication (FIX-ID1) ----------
+
+
+class _InitAdapter:
+    """Canned fetch_history batches; fetch_thread never needed (no
+    messages). auto_login records each attempt."""
+
+    def __init__(self, batches, login_result="ok"):
+        self._batches = list(batches)
+        self.login_result = login_result
+        self.fetches = 0
+        self.logins = 0
+
+    def list_projects(self):
+        p = mcs_adapter.UnreadPatient(
+            project_id=7, project_type="medical", patient_name="S T",
+            disease="d", station_name="s", url="u")
+        p.last_activity = int(time.time())
+        return [p]
+
+    def auto_login(self, **kw):
+        self.logins += 1
+        return self.login_result
+
+    def fetch_history(self, pid, since, max_pages=1, start_page=1):
+        self.fetches += 1
+        return self._batches.pop(0)
+
+
+def _run_init_data(monkeypatch, tmp_path, adapter):
+    import init_data
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda **kw: adapter)
+    monkeypatch.setattr(init_data, "DB", str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(init_data, "LOCKFILE", str(tmp_path / "run.lock"))
+    monkeypatch.setattr(
+        sys, "argv", ["init_data.py", "--days", "1", "--delay", "0"])
+    return init_data.main()
+
+
+def test_init_data_reauths_embedded_session_expired(
+        monkeypatch, tmp_path, capsys):
+    """An embedded (non-raised) SessionExpired must trigger one re-login
+    and the walk must resume from the cursor (FIX-ID1)."""
+    adapter = _InitAdapter([
+        mcs_adapter.MessageBatch(
+            [], pages=0, error=mcs_adapter.SessionExpired("expired")),
+        mcs_adapter.MessageBatch([], pages=1, reached=True),
+    ])
+    assert _run_init_data(monkeypatch, tmp_path, adapter) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    result = json.loads(out[-1])
+    assert adapter.logins == 1 and adapter.fetches == 2
+    assert result["ok"] and result["done"] == 1
+
+
+def test_init_data_reauth_failure_aborts_patient(
+        monkeypatch, tmp_path, capsys):
+    """A failed re-auth records the failure in the JSON contract instead
+    of looping or crashing."""
+    adapter = _InitAdapter(
+        [mcs_adapter.MessageBatch(
+            [], error=mcs_adapter.SessionExpired("expired"))],
+        login_result="manual_required")
+    assert _run_init_data(monkeypatch, tmp_path, adapter) == 1
+    out = capsys.readouterr().out.strip().splitlines()
+    result = json.loads(out[-1])
+    assert adapter.logins == 1 and adapter.fetches == 1
+    assert not result["ok"]
+    assert any("auto_login=manual_required" in e for e in result["errors"])
+    assert any("session_expired" in e for e in result["errors"])
+
+
+def test_init_data_second_list_projects_failure_is_json(
+        monkeypatch, tmp_path, capsys):
+    """After a re-login, a second list_projects failure surfaces as the
+    JSON error contract, not a traceback (FIX-ID1)."""
+    class Adapter(_InitAdapter):
+        def __init__(self):
+            super().__init__([])
+            self.calls = 0
+
+        def list_projects(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise mcs_adapter.SessionExpired("first")
+            raise mcs_adapter.MCSError("boom")
+
+    adapter = Adapter()
+    assert _run_init_data(monkeypatch, tmp_path, adapter) == 1
+    out = capsys.readouterr().out.strip().splitlines()
+    assert adapter.logins == 1
+    assert json.loads(out[-1]) == {"ok": False, "error": "boom"}
+
+
+def test_login_password_keychain_primary(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(a, "_keychain_password", lambda: "kc_pw")
+    monkeypatch.setattr(mcs_adapter, "env_value", lambda *a, **k: "env_pw")
+    assert a._login_password() == ("kc_pw", False)
+
+
+def test_login_password_env_fallback_when_locked(monkeypatch, tmp_path):
+    """Rebooted-Mac path: keychain locked but .env has MCS_PASSWORD —
+    the credential still resolves so auto_login can proceed."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+
+    def locked(**kw):
+        raise mcs_adapter.KeychainLocked("mcs-adapter")
+
+    monkeypatch.setattr(a, "_keychain_password", locked)
+    monkeypatch.setattr(mcs_adapter, "env_value", lambda *a, **k: "env_pw")
+    assert a._login_password() == ("env_pw", True)
+
+
+def test_login_password_locked_and_no_env(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+
+    def locked(**kw):
+        raise mcs_adapter.KeychainLocked("mcs-adapter")
+
+    monkeypatch.setattr(a, "_keychain_password", locked)
+    monkeypatch.setattr(mcs_adapter, "env_value", lambda *a, **k: None)
+    assert a._login_password() == (None, True)
+
+
+def test_login_password_missing_entry_env_fallback(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(a, "_keychain_password", lambda: None)
+    monkeypatch.setattr(mcs_adapter, "env_value", lambda *a, **k: "env_pw")
+    assert a._login_password() == ("env_pw", False)

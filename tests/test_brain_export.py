@@ -189,6 +189,53 @@ def test_updated_rollup_changes_file(env):
     assert "SYNTH summary v1" not in patient
 
 
+def test_hostile_name_does_not_break_front_matter_or_tables(env):
+    snap, out = env
+    conn = sqlite3.connect(str(snap))
+    conn.execute("UPDATE patients SET patient_name=? WHERE project_id=1",
+                 ("evil: name\n---\ninjected: yes",))
+    conn.execute(
+        "UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
+        (json.dumps({"project_id": 1, "generated_at": SNAP_TS,
+                     "msg_count": 1, "last_activity": "2026-09-20",
+                     "last_activity_ts": SNAP_TS, "summary": None,
+                     "medications": [{"name": "a|b\nc", "dose": "x",
+                                      "last": "d"}],
+                     "recent_symptoms": [], "recent_requests": [],
+                     "top_senders": [], "possibly_deleted": []}),))
+    conn.commit()
+    conn.close()
+    res = brain_export.run(out, snap)
+    assert res["ok"]
+    text = (out / "patients" / "p1.md").read_text()
+    fm = text.split("---\n")[1]
+    assert "\ninjected:" not in fm
+    title_line = next(line for line in fm.splitlines()
+                      if line.startswith("title:"))
+    assert json.loads(title_line.split(":", 1)[1].strip()) == \
+        "MCS evil: name\n---\ninjected: yes"
+    assert "a|b\nc" not in text  # table cells cannot inject a row break
+    assert "a\\|b c" in text
+
+
+def test_stale_cleanup_never_deletes_foreign_files(env, tmp_path):
+    """--out may point at a shared knowledge store — only generated
+    p<int>.md names are collected; anything else is left alone (FIX-BE2)."""
+    snap, out = env
+    brain_export.run(out, snap)
+    pdir = out / "patients"
+    foreign = pdir / "p-notes.md"
+    foreign.write_text("user content")
+    also_foreign = pdir / "p.md"
+    also_foreign.write_text("user content")
+    stale = pdir / "p999.md"
+    stale.write_text("old generated page")
+    brain_export.run(out, snap)
+    assert foreign.read_text() == "user content"
+    assert also_foreign.read_text() == "user content"
+    assert not stale.exists()
+
+
 def test_stale_patient_removed(env, tmp_path):
     snap, out = env
     brain_export.run(out, snap)

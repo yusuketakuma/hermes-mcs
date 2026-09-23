@@ -1,0 +1,174 @@
+"""Candidate relation reconciliation tests (T6).
+
+Relations are candidates only — reconciliation never mutates the active
+set, never drops a fact, and never resolves a conflict by latest-wins.
+Contradictions, temporal order, and repetition are all preserved as
+typed relations between surviving facts.
+"""
+import copy
+
+
+import semantic_facts as sf
+import semantic_relations as sr
+
+
+def _fact(fid, statement, *, kind="medication_event", subject="patient:1",
+          action="unknown", polarity="affirmed", workflow="performed",
+          event_time="unknown", evidence=()):
+    fact = {"fact_id": fid, "kind": kind, "subject": subject,
+            "actor": "sender:s1", "statement": statement,
+            "polarity": polarity, "epistemic": "asserted",
+            "workflow_status": workflow, "event_time": event_time,
+            "valid_time": "unknown",
+            "evidence_ids": list(evidence), "obligation_ids": [],
+            "importance": "T2", "provenance": "local_llm",
+            "validation_status": "verified" if evidence else "unverified"}
+    if kind == "medication_event":
+        fact["action"] = action
+    return fact
+
+
+def test_exact_duplicate_same_statement():
+    left = _fact("fact_aaaa", "アムロジピン5mg継続")
+    right = _fact("fact_bbbb", "アムロジピン5mg継続")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXACT_DUPLICATE"
+    sf.validate_relation(rel)
+
+
+def test_ordered_action_pair_supersedes():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 event_time="2026-09-01")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  event_time="2026-09-10")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    assert rel["left_fact_id"] == "fact_aaaa"
+    assert rel["right_fact_id"] == "fact_bbbb"
+
+
+def test_reversed_temporal_order_swaps_relation_direction():
+    left = _fact("fact_aaaa", "アムロジピン中止", action="stop",
+                 event_time="2026-09-10")
+    right = _fact("fact_bbbb", "アムロジピン開始", action="start",
+                  event_time="2026-09-01")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    # The temporally earlier fact is always the superseding source.
+    assert rel["left_fact_id"] == "fact_bbbb"
+    assert rel["right_fact_id"] == "fact_aaaa"
+
+
+def test_unordered_action_pair_is_contradiction_not_latest_wins():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "CONTRADICTION"
+    assert rel["reason"] == "unordered_action_pair"
+
+
+def test_polarity_conflict_orders_or_contradicts():
+    affirmed = _fact("fact_aaaa", "頭痛あり", kind="symptom_state",
+                     polarity="affirmed", event_time="2026-09-01")
+    negated = _fact("fact_bbbb", "頭痛なし", kind="symptom_state",
+                    polarity="negated", event_time="2026-09-05")
+    # Shared entity token 頭痛, ordered affirmed->negated.
+    rel = sr.classify_pair(affirmed, negated)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    unordered = _fact("fact_cccc", "頭痛あり", kind="symptom_state",
+                      polarity="affirmed")
+    rel = sr.classify_pair(unordered, negated)
+    assert rel["type"] == "CONTRADICTION"
+
+
+def test_workflow_progression_is_transition():
+    planned = _fact("fact_aaaa", "CT検査予定", kind="care_event",
+                    workflow="planned", event_time="2026-09-01")
+    done = _fact("fact_bbbb", "CT検査実施", kind="care_event",
+                 workflow="done", event_time="2026-09-03")
+    rel = sr.classify_pair(planned, done)
+    assert rel["type"] == "TRANSITION"
+
+
+def test_complements_for_distinct_same_entity_facts():
+    left = _fact("fact_aaaa", "アムロジピン5mg継続", action="continue")
+    right = _fact("fact_bbbb", "アムロジピン朝食後服用", action="continue")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "COMPLEMENTS"
+
+
+def test_unrelated_facts_have_no_relation():
+    left = _fact("fact_aaaa", "アムロジピン継続")
+    right = _fact("fact_bbbb", "散歩を実施", kind="care_event")
+    assert sr.classify_pair(left, right) is None
+
+
+def test_reconcile_preserves_everything_and_fingerprints():
+    active = [
+        _fact("fact_aaaa", "アムロジピン開始", action="start",
+              event_time="2026-09-01", evidence=["ev_1"]),
+        _fact("fact_bbbb", "頭痛あり", kind="symptom_state"),
+    ]
+    new = [
+        _fact("fact_cccc", "アムロジピン中止", action="stop",
+              event_time="2026-09-10", evidence=["ev_2"]),
+        _fact("fact_dddd", "頭痛なし", kind="symptom_state",
+              polarity="negated"),
+    ]
+    active_snapshot = copy.deepcopy(active)
+    new_snapshot = copy.deepcopy(new)
+    result = sr.reconcile_facts(active, new)
+    # Inputs untouched — nothing deactivated or rewritten.
+    assert active == active_snapshot and new == new_snapshot
+    assert result["active_preserved"] == 2
+    assert result["new_preserved"] == 2
+    types = {r["type"] for r in result["relations"]}
+    assert "EXPLICIT_SUPERSESSION" in types  # ordered start->stop
+    assert "CONTRADICTION" in types          # 頭痛 polarity flip unordered
+    for rel in result["relations"]:
+        sf.validate_relation(rel)
+    # Fingerprint is stable for identical sets and changes on mutation.
+    fp = result["fingerprint"]
+    assert fp == sr.relation_set_fingerprint(result["relations"])
+    changed = result["relations"] + [
+        _fact("fact_eeee", "x") and
+        {"relation_id": "rel_x", "left_fact_id": "fact_aaaa",
+         "right_fact_id": "fact_eeee", "type": "UNRESOLVED",
+         "evidence_ids": [], "status": "candidate"}]
+    assert sr.relation_set_fingerprint(changed) != fp
+
+
+def test_intra_batch_contradiction_captured():
+    new = [
+        _fact("fact_aaaa", "アムロジピン開始", action="start"),
+        _fact("fact_bbbb", "アムロジピン中止", action="stop"),
+    ]
+    result = sr.reconcile_facts([], new)
+    assert result["relations"][0]["type"] == "CONTRADICTION"
+
+
+def test_relation_evidence_unions_both_facts():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 event_time="2026-09-01", evidence=["ev_1"])
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  event_time="2026-09-10", evidence=["ev_2"])
+    rel = sr.classify_pair(left, right)
+    assert rel["evidence_ids"] == ["ev_1", "ev_2"]
+    assert rel["status"] == "candidate"
+
+
+def test_different_subjects_do_not_supersede():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 subject="patient:1", event_time="2026-09-01")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  subject="person:family01", event_time="2026-09-10")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "COMPLEMENTS"
+
+
+def test_malformed_inputs_are_safe():
+    assert sr.classify_pair(None, {}) is None
+    assert sr.classify_pair({"fact_id": "a"}, {"fact_id": "a"}) is None
+    result = sr.reconcile_facts([{"bad": 1}], [{"fact_id": "fact_x"}])
+    assert result["relations"] == []
+    assert sr.relation_set_fingerprint(None).startswith("relset_")

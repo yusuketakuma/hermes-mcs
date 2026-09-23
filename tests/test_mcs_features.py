@@ -194,6 +194,38 @@ def test_candidates_only_current_latest_valid_full_artifacts(tmp_path):
     db.close()
 
 
+def test_candidates_canonical_projection_shadows_extract_llm(tmp_path):
+    """T12 consumer migration: a hash-current canonical_projection feeds
+    request suggestions in place of extract_llm; a stale projection must
+    not shadow anything."""
+    db = _source(tmp_path)
+    msg = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    db.artifact_add("extract_llm",
+                    '{"requests":[{"to":"看護師","action":"legacy確認"}]}',
+                    project_id=1, message_id=1,
+                    meta={"hash": msg["content_hash"]})
+    assert "extract_llm" in {r["extraction_kind"]
+                             for r in requests.candidates(db.db, msg)}
+    db.artifact_add("canonical_projection",
+                    '{"requests":[{"to":"不明","action":"canonical依頼"}]}',
+                    project_id=1, message_id=1,
+                    meta={"hash": msg["content_hash"]})
+    kinds = {r["extraction_kind"] for r in requests.candidates(db.db, msg)}
+    assert "canonical_projection" in kinds and "extract_llm" not in kinds
+    # stale projection (old hash) — extract_llm stays visible
+    msg2 = db.db.execute("SELECT * FROM messages WHERE message_id=4").fetchone()
+    db.artifact_add("extract_llm",
+                    '{"requests":[{"to":"看護師","action":"確認4"}]}',
+                    project_id=1, message_id=4,
+                    meta={"hash": msg2["content_hash"]})
+    db.artifact_add("canonical_projection",
+                    '{"requests":[{"to":"不明","action":"古い"}]}',
+                    project_id=1, message_id=4, meta={"hash": "stale"})
+    kinds2 = {r["extraction_kind"] for r in requests.candidates(db.db, msg2)}
+    assert "extract_llm" in kinds2 and "canonical_projection" not in kinds2
+    db.close()
+
+
 def test_request_atomicity_replay_revisions_source_edits(tmp_path):
     db = _source(tmp_path)
     create = _create(db)
@@ -336,7 +368,7 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     view.close()
     inbox = tmp_path / "cmd"
     inbox.mkdir()
-    command = [sys.executable, str(Path(__file__).parent.parent / "mcs" / "mcs_view.py"),
+    command = [sys.executable, str(Path(__file__).parent.parent / "mcs" / "ops" / "mcs_view.py"),
                "--snapshot", str(tmp_path / "snapshots/ledger-snapshot.db"), "--cmd-dir", str(inbox)]
     for malformed_args in (["status", "--project", "SYNTHETIC_PRIVATE_CANARY"],
                            ["requests", "list", "--project", "1", "--status", "SYNTHETIC_PRIVATE_CANARY"],

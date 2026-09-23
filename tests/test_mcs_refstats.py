@@ -42,7 +42,7 @@ def _capture(tmp_path, name="base"):
 
 
 def _pending_hash(tmp_path, name="base"):
-    return mcs_refstats._sha256(
+    return mcs_refstats.file_sha256(
         mcs_refstats._ref_path(tmp_path, name, "pending"))
 
 

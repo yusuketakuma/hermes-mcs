@@ -347,3 +347,81 @@ def test_qc_questions_cap_and_layout():
 def test_qc_questions_empty_extraction():
     questions, layout, ctx = semantic_drain._qc_questions({})
     assert questions == {} and layout == [] and ctx == {}
+
+
+def _drain_result(status="PENDING"):
+    return {"summary": {"summary_id": "sum_x", "claims": [],
+                        "audit_status": status},
+            "findings": [{"code": "summary_unavailable"}],
+            "repaired": False, "jev_requests": 0}
+
+
+def test_write_result_is_idempotent_for_identical_outcome(tmp_path):
+    """FIX-SD1: a deferred job re-derives the same outcome on every pass;
+    the durable summary+audit pair must be recorded once, not once per
+    attempt (production showed 3 identical PENDING rows in 13 min)."""
+    db = _ledger(tmp_path)
+    members = {7: {"revision": 3}}
+    r = _drain_result()
+    for _ in range(3):
+        with db.db:
+            semantic_drain._write_result(
+                db, 1, 7, r, "fp1", members, "PENDING", "pol1", "shadow")
+    rows = db.db.execute(
+        "SELECT kind, COUNT(*) c FROM artifacts "
+        "WHERE kind IN ('semantic_summary','semantic_audit') "
+        "GROUP BY kind").fetchall()
+    assert {x["kind"]: x["c"] for x in rows} == {
+        "semantic_summary": 1, "semantic_audit": 1}
+    db.close()
+
+
+def test_write_result_records_status_transition(tmp_path):
+    """Dedup keys on the outcome — a real status change must still
+    append a new pair."""
+    db = _ledger(tmp_path)
+    members = {7: {"revision": 3}}
+    with db.db:
+        semantic_drain._write_result(
+            db, 1, 7, _drain_result(), "fp1", members, "PENDING",
+            "pol1", "shadow")
+    r2 = _drain_result("PASS")
+    r2["findings"] = []
+    with db.db:
+        semantic_drain._write_result(
+            db, 1, 7, r2, "fp1", members, "PASS", "pol1", "shadow")
+    rows = db.db.execute(
+        "SELECT kind, COUNT(*) c FROM artifacts "
+        "WHERE kind IN ('semantic_summary','semantic_audit') "
+        "GROUP BY kind").fetchall()
+    assert {x["kind"]: x["c"] for x in rows} == {
+        "semantic_summary": 2, "semantic_audit": 2}
+    db.close()
+
+
+# ---------- queue fairness (T13) ----------
+
+def test_semantic_jobs_outrank_qc_backfill(tmp_path):
+    """Both kinds pending & ineligible -> the semantic job is claimed
+    before the QC backfill inside the same max_jobs window."""
+    from test_mcs_semantic import _llm
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    _v2_artifact(db, 1, _hash(db))
+    semantic_drain._qc_seed(db, time.time())          # QC job first (job_id smaller)
+    db.job_add("semantic", 1, 1, payload={
+        "targets": [1], "origin": {"source": "history_import"}})
+    client = _FakeJev()
+    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+                           {"errors": []}, time.monotonic() + 300,
+                           jev_client=client, llm_fn=_llm, max_jobs=1)
+    assert out["job_metrics"][0]["kind"] == "semantic"
+    assert "extract_qc" not in out["done_by_kind"]
+    assert _qc_job(db)["state"] == "pending"
+    # Second pass: the QC backfill runs once semantic work is done.
+    out2 = semantic.run_due(db, _cfg(extract_qc="annotate"),
+                            {"errors": []}, time.monotonic() + 300,
+                            jev_client=client, llm_fn=_llm, max_jobs=1)
+    assert out2["job_metrics"][0]["kind"] == "extract_qc"
+    assert out2["done_by_kind"] == {"extract_qc": 1}
+    db.close()

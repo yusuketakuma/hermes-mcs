@@ -279,7 +279,7 @@ def test_explicit_snapshot_cli_survives_foreign_cwd_and_home(tmp_path):
     result = subprocess.run(
         [
             sys.executable,
-            str(Path(__file__).parent.parent / "mcs" / "mcs_view.py"),
+            str(Path(__file__).parent.parent / "mcs" / "ops" / "mcs_view.py"),
             "--snapshot",
             str(snapshot),
             "status",
