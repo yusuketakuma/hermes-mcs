@@ -1368,7 +1368,14 @@ def main() -> int:
                     if budget <= 0:
                         total["stopped"] = "stop_after"
                         break
-                r = run_pending(led, limit=50, budget_s=budget,
+                # Small batches keep DESC re-selection responsive: a
+                # whole-batch upfront claim holds ~50 rows for the serial
+                # processing time (~45-60 s each), so a new message
+                # arriving mid-batch would otherwise wait tens of minutes
+                # despite newest-first ordering. 8 rows bounds the wait
+                # to a few minutes; the budget cap additionally bounds a
+                # cycle degraded by slow calls.
+                r = run_pending(led, limit=8, budget_s=min(budget, 900),
                                 per_write_lock=True,
                                 workers=max(1, min(args.workers, 8)),
                                 shard=shard)
