@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.mcs.extract-drainer-rt</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__REPO__/mcs/extract/extract_llm.py</string>
+    <string>--all</string>
+    <string>--workers</string><string>1</string>
+    <string>--shard</string><string>1/2</string>
+    <string>--lend-rt</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>__DATA__/extract_drain_rt.log</string>
+  <key>StandardErrorPath</key><string>__DATA__/extract_drain_rt.log</string>
+</dict>
+</plist>

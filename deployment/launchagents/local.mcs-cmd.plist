@@ -6,7 +6,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
-    <string>__REPO__/mcs/run_check.py</string>
+    <string>__REPO__/mcs/ingest/run_check.py</string>
     <string>--json</string>
     <string>--download-files</string>
   </array>
