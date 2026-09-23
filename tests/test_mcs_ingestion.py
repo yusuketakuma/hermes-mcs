@@ -417,6 +417,7 @@ def test_backfill_does_not_advance_past_missing_reply():
     parent = _message(mid=10)
     parent.reply_count = 1
     covered = []
+    reserved = []
 
     class Adapter:
         def fetch_history(self, *args, **kwargs):
@@ -429,15 +430,22 @@ def test_backfill_does_not_advance_past_missing_reply():
         def frontier_patients(self): return [{"project_id": 1}]
         def high_watermark(self, pid): return 100
         def coverage_ts(self, pid): return 0
+        def coverage_lag(self, pid): return 100
         def save_messages(self, *args, **kwargs): return []
         def pending_reply_jobs(self, pid): return 0
         def set_coverage(self, pid, ts): covered.append((pid, ts))
+        def job_add(self, kind, pid, **kwargs):
+            reserved.append((kind, pid, kwargs["payload"]))
 
     result = {"errors": [], "backfilled": 0}
     run_check.stage_backfill(Adapter(), Store(), result,
                              time.monotonic() + 60, 1)
 
     assert covered == []
+    assert reserved == [("history_head", 1,
+                         {"since": 0, "page": 1,
+                          "pages": run_check.BACKFILL_MAX_PAGES,
+                          "trickle": False})]
 
 
 def test_invalid_nested_text_is_reported_as_schema_error():
@@ -549,6 +557,83 @@ def test_attachment_refetch_refreshes_existing_url(tmp_path):
     ).fetchone()
     assert (row["name"], row["url"]) == (
         "new", "https://www.medical-care.net/new")
+    db.close()
+
+
+def test_deleted_tombstone_replaces_stored_full_body(tmp_path):
+    """F02: a deleted post must not keep serving its old body as the
+    current version — state/body/hash all transition."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="secret body", state="full")])
+    db.save_messages([_message(body="", state="deleted")])
+    row = db.db.execute(
+        "SELECT body_state,body_html,body_text,content_hash FROM messages"
+        " WHERE message_id=1").fetchone()
+    assert row["body_state"] == "deleted"
+    assert row["body_html"] == "" and row["body_text"] == ""
+    assert row["content_hash"] == hashlib.sha256(b"").hexdigest()
+    db.save_messages([_message(body="old snippet", state="snippet")])
+    assert tuple(db.db.execute(
+        "SELECT body_state,body_html,body_text,content_hash FROM messages "
+        "WHERE message_id=1").fetchone()) == tuple(row)
+    db.close()
+
+
+def _att(file_id, name="f", url="https://www.medical-care.net/f"):
+    return mcs_adapter.Attachment(file_id=file_id, name=name, url=url)
+
+
+def test_attachment_set_reconciles_on_complete_listing(tmp_path):
+    """F10: a complete `files` enumeration withdraws stored attachments
+    the server no longer lists; a file that reappears is restored."""
+    db = _ledger(tmp_path)
+    m = _message()
+    m.files_present = True
+    m.attachments = [_att("a"), _att("b")]
+    db.save_messages([m])
+    m.attachments = [_att("a")]
+    db.save_messages([m])
+    rows = {r["file_id"]: r["state"] for r in db.db.execute(
+        "SELECT file_id,state FROM attachments WHERE message_id=1")}
+    assert rows == {"a": "pending", "b": "withdrawn"}
+    # b reappears -> restored (pending since never downloaded)
+    m.attachments = [_att("a"), _att("b")]
+    db.save_messages([m])
+    rows = {r["file_id"]: r["state"] for r in db.db.execute(
+        "SELECT file_id,state FROM attachments WHERE message_id=1")}
+    assert rows == {"a": "pending", "b": "pending"}
+    db.close()
+
+
+def test_attachment_absent_files_key_never_withdraws(tmp_path):
+    """A response that omitted `files` must not retract stored rows —
+    absence of the key is not an empty set."""
+    db = _ledger(tmp_path)
+    m = _message()
+    m.files_present = True
+    m.attachments = [_att("a")]
+    db.save_messages([m])
+    m2 = _message()
+    m2.files_present = False            # files key absent this response
+    m2.attachments = []
+    db.save_messages([m2])
+    assert db.db.execute(
+        "SELECT state FROM attachments WHERE message_id=1"
+    ).fetchone()["state"] == "pending"
+    db.close()
+
+
+def test_deleted_post_withdraws_all_attachments(tmp_path):
+    db = _ledger(tmp_path)
+    m = _message()
+    m.files_present = True
+    m.attachments = [_att("a"), _att("b")]
+    db.save_messages([m])
+    tomb = _message(body="", state="deleted")
+    db.save_messages([tomb])
+    states = {r["state"] for r in db.db.execute(
+        "SELECT state FROM attachments WHERE message_id=1")}
+    assert states == {"withdrawn"}
     db.close()
 
 
@@ -734,7 +819,7 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
                         drain(db, result, str(data / "cmd")))
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
-    monkeypatch.setattr(extract_llm, "_llm_up", lambda: False)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: False)
     monkeypatch.setattr(notifier, "flush", lambda *a, **k:
                         pytest.fail("notification forbidden"))
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify", "--no-backfill"])
@@ -1862,7 +1947,7 @@ def test_notify_file_rejection_falls_back_to_text(tmp_path, monkeypatch):
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
-    def fake_send(argv, content, files=None):
+    def fake_send(argv, content, files=None, **kw):
         calls.append(bool(files))
         if files:
             raise notifier._SendUsage("media rejected")
@@ -1924,7 +2009,7 @@ def test_notify_no_fallback_on_ambiguous_errors(tmp_path, monkeypatch):
                         lambda led, ev: ("body text", [("f.txt", str(f))]))
     calls = []
 
-    def fake_send(argv, content, files=None):
+    def fake_send(argv, content, files=None, **kw):
         calls.append(bool(files))
         raise notifier._SendFailed("delivery failed")
 
@@ -2684,3 +2769,911 @@ def test_login_password_missing_entry_env_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(a, "_keychain_password", lambda: None)
     monkeypatch.setattr(mcs_adapter, "env_value", lambda *a, **k: "env_pw")
     assert a._login_password() == ("env_pw", False)
+
+
+def test_prune_attachments_14d_retention(tmp_path):
+    """Payloads older than 14 days are unlinked and marked 'pruned'
+    (row survives with name/bytes/sha256 for provenance); fresh
+    downloads and failed/pending rows are untouched."""
+    import maintenance
+    dbp = tmp_path / "ledger.db"
+    db = _ledger(tmp_path)
+    old_file = tmp_path / "old.bin"
+    old_file.write_bytes(b"old-payload")
+    new_file = tmp_path / "new.bin"
+    new_file.write_bytes(b"new-payload")
+    now = time.time()
+    db.db.executemany("""
+      INSERT INTO attachments(message_id,file_id,name,url,local_path,
+        bytes,sha256,state,downloaded_at,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)""", [
+        (1, 'f_old', 'old.jpg', 'http://x/o', str(old_file), 100, 'h1',
+         'downloaded', now - 15 * 86400, now - 15 * 86400),
+        (1, 'f_new', 'new.jpg', 'http://x/n', str(new_file), 100, 'h2',
+         'downloaded', now - 86400, now - 86400),
+        (1, 'f_pend', 'p.pdf', 'http://x/p', None, None, None,
+         'pending', None, now - 20 * 86400),
+        (1, 'f_fail', 'x.pdf', 'http://x/f', None, None, None,
+         'failed', None, now - 20 * 86400)])
+    db.db.commit()
+    db.close()
+
+    n = maintenance.prune_attachments(str(dbp))
+    assert n == 1
+    assert not old_file.exists() and new_file.exists()
+    rows = {r[0]: r[1:] for r in sqlite3.connect(dbp).execute(
+        "SELECT file_id,state,local_path,name,bytes FROM attachments")}
+    assert rows['f_old'][0] == 'pruned' and rows['f_old'][1] is None
+    assert rows['f_old'][2] == 'old.jpg' and rows['f_old'][3] == 100
+    assert rows['f_new'][0] == 'downloaded'
+    assert rows['f_pend'][0] == 'pending' and rows['f_fail'][0] == 'failed'
+
+
+def test_reply_job_window_resumes_across_pages(tmp_path):
+    """F03: a thread longer than one window resumes at its durable
+    cursor instead of restarting at page 1."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.job_add("reply", 1, message_id=30, parent_id=10)
+    calls = []
+
+    class Adapter:
+        def fetch_thread_window(self, pid, mid, start_page=1,
+                                max_pages=10):
+            calls.append(start_page)
+            if start_page == 1:
+                return mcs_adapter.MessageBatch(
+                    [_message(mid=20, parent_id=10)], pages=10)
+            return mcs_adapter.MessageBatch(
+                [_message(mid=30, parent_id=10)], pages=1, reached=True)
+
+    result = {"errors": []}
+    job_ops.run_reply_jobs(Adapter(), db, result,
+                           time.monotonic() + 100)
+
+    assert calls == [1]
+    assert db.job_state("reply", 1, 30) == "pending"
+    payload = json.loads(db.job_pending("reply", 1, 30)["payload"])
+    assert payload["page"] == 11
+    assert db.db.execute(
+        "SELECT body_state FROM messages WHERE message_id=20"
+    ).fetchone()[0] == "full"
+    assert result["reply_windows"] == [{"mid": 30, "next_page": 11}]
+
+    job_ops.run_reply_jobs(Adapter(), db, {"errors": []},
+                           time.monotonic() + 100)
+    assert calls == [1, 11]
+    assert db.job_state("reply", 1, 30) == "done"
+    db.close()
+
+
+def test_snippet_parent_blocks_mark_read(tmp_path):
+    """F05: a truncated parent body must not be ACKed — the patient
+    stays incomplete until a later fetch upgrades it."""
+    db = _ledger(tmp_path)
+    marks = []
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[_message(mid=10, unread=True, state="snippet")],
+            reached=True),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        mark_patient_read=lambda *a: marks.append(a),
+    )
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": []}
+    run_check.stage_unread(
+        adapter, db, SimpleNamespace(mark_read=True), result,
+        time.monotonic() + 30, db.begin_run(None))
+
+    assert marks == []
+    assert result["marked_read"] == []
+    assert result["incomplete"] == [1]
+    assert "parent_body_incomplete" in result["errors"][0]
+    db.close()
+
+
+def test_snippet_message_is_not_extracted(tmp_path, monkeypatch):
+    """F05: extraction consumes only complete bodies — a 'snippet'
+    row stays pending instead of producing partial-input facts."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="partial...", state="snippet")])
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: {})
+    result = extract_llm.run_pending(db, limit=10, budget_s=5)
+    assert result["done"] == 0
+    db.close()
+
+
+def test_reconcile_job_rewalks_history_without_since(tmp_path):
+    """F04: reconcile is the only surface that refetches below the
+    since-cutoff — edits/deletions on old posts become visible."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.job_add("reconcile", 1, payload={"page": 1})
+    calls = []
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=1,
+                          start_page=None):
+            calls.append((pid, since, start_page))
+            return mcs_adapter.MessageBatch(
+                [_message(mid=50)], pages=2, reached=False)
+
+    result = {"errors": []}
+    job_ops.run_reconcile_jobs(Adapter(), db, result,
+                               time.monotonic() + 100)
+
+    assert calls == [(1, 0, 1)]
+    payload = json.loads(db.job_pending("reconcile", 1)["payload"])
+    assert payload["page"] == 3
+    assert db.db.execute(
+        "SELECT count(*) FROM messages WHERE message_id=50"
+    ).fetchone()[0] == 1
+    db.close()
+
+
+def test_reconcile_full_pass_parks_then_rotates(tmp_path):
+    """F04: after a complete pass the job idles for the rotation
+    interval and restarts at page 1."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.job_add("reconcile", 1, payload={"page": 5})
+
+    class Adapter:
+        def fetch_history(self, *a, **k):
+            return mcs_adapter.MessageBatch([], pages=0, reached=True)
+
+    job_ops.run_reconcile_jobs(Adapter(), db, {"errors": []},
+                               time.monotonic() + 100)
+    job = db.job_pending("reconcile", 1)
+    payload = json.loads(job["payload"])
+    assert payload["page"] == 1
+    assert job["next_try"] > \
+        time.time() + job_ops.RECONCILE_INTERVAL_S - 60
+    db.close()
+
+
+def test_seed_reconcile_only_floored_patients(tmp_path):
+    """F04: only a completed deep import earns a reconcile job —
+    mid-import patients are still covered by their own cursor."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.ensure_patient(2)
+    db.ensure_patient(3)
+    db.set_history_floor(1, 100)
+    db.set_history_floor(3, 0)
+    job_ops.seed_reconcile(db)
+    assert db.job_pending("reconcile", 1) is not None
+    assert db.job_pending("reconcile", 2) is None
+    assert db.job_pending("reconcile", 3) is not None
+    db.close()
+
+
+def test_adapter_request_raises_deadline_exceeded():
+    """F13: a propagated deadline cuts HTTP work before the wire —
+    retries never extend past it."""
+    a = mcs_adapter.MCSAdapter()
+    a._token = "t"
+    a.set_deadline(time.monotonic() - 1)
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        a._request("GET", "/projects")
+    assert e.value.kind == "deadline_exceeded"
+
+
+# ---------- F11: attachment failure classes, url revival, follow-up ----------
+
+def test_attachment_permanent_failure_quarantines_immediately(tmp_path):
+    """F11: a 404 on the signed url can never succeed on retry — the row
+    is failed now, not after six attempts."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    m = _message(mid=5)
+    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    db.save_messages([m])
+    aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
+    db.attachment_failed(aid, "http_404")
+    row = db.db.execute(
+        "SELECT state,error FROM attachments WHERE attachment_id=?",
+        (aid,)).fetchone()
+    assert row["state"] == "failed" and row["error"] == "http_404"
+    # transient kinds still back off instead of quarantining
+    m2 = _message(mid=6)
+    m2.attachments = [mcs_adapter.Attachment("f2", "b.pdf", "https://x/9")]
+    db.save_messages([m2])
+    aid2 = db.db.execute(
+        "SELECT attachment_id FROM attachments WHERE message_id=6"
+        ).fetchone()[0]
+    db.attachment_failed(aid2, "network_error")
+    row2 = db.db.execute(
+        "SELECT state,next_try FROM attachments WHERE attachment_id=?",
+        (aid2,)).fetchone()
+    assert row2["state"] == "pending" and row2["next_try"] > time.time()
+    db.close()
+
+
+def test_attachment_fresh_url_revives_failed_row(tmp_path):
+    """F11: the server re-issues signed urls; a re-saved message carrying
+    a NEW url puts a failed download back on the queue with attempts
+    cleared. Same-url re-saves do not resurrect it."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    m = _message(mid=5)
+    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    db.save_messages([m])
+    aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
+    db.attachment_failed(aid, "http_404")
+    # same url -> stays failed
+    db.save_messages([m])
+    assert db.db.execute(
+        "SELECT state FROM attachments WHERE attachment_id=?",
+        (aid,)).fetchone()[0] == "failed"
+    # fresh url -> pending again, attempts reset
+    m2 = _message(mid=5)
+    m2.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/2")]
+    db.save_messages([m2])
+    row = db.db.execute(
+        "SELECT state,attempts,url,error FROM attachments "
+        "WHERE attachment_id=?", (aid,)).fetchone()
+    assert (row["state"], row["attempts"], row["url"], row["error"]) == \
+        ("pending", 0, "https://x/2", None)
+    db.close()
+
+
+def test_attachment_followup_after_accepted_notice(tmp_path):
+    """F11: a body notice accepted BEFORE the file downloaded provably
+    went out without it — one attachment-only follow-up is queued."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    m = _message(mid=5)
+    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    db.save_messages([m])
+    aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
+    # accepted notice for mid 5 in the PAST
+    eid = db.outbox_add("new_messages", 1, {"message_ids": [5]})
+    db.db.execute(
+        "UPDATE notify_outbox SET state='accepted',updated_at=? "
+        "WHERE event_id=?", (time.time() - 60, eid))
+    db.db.commit()
+    path = tmp_path / "att" / "5"
+    path.parent.mkdir()
+    path.write_bytes(b"data")
+    db.attachment_saved(aid, str(path), 4, "h")
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox "
+        "WHERE kind='attachment_followup'").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["attachment_id"] == aid
+    # a second save does not duplicate the follow-up
+    db.attachment_saved(aid, str(path), 4, "h")
+    assert db.db.execute(
+        "SELECT count(*) FROM notify_outbox "
+        "WHERE kind='attachment_followup'").fetchone()[0] == 1
+    db.close()
+
+
+def test_no_followup_when_notice_still_pending(tmp_path):
+    """F11: an UNSENT notice still gets its file through the priority
+    queue — no follow-up for a send that hasn't happened yet."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    m = _message(mid=5)
+    m.attachments = [mcs_adapter.Attachment("f1", "a.pdf", "https://x/1")]
+    db.save_messages([m])
+    aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
+    db.outbox_add("new_messages", 1, {"message_ids": [5]})   # pending
+    path = tmp_path / "5"
+    path.write_bytes(b"data")
+    db.attachment_saved(aid, str(path), 4, "h")
+    assert db.db.execute(
+        "SELECT count(*) FROM notify_outbox "
+        "WHERE kind='attachment_followup'").fetchone()[0] == 0
+    db.close()
+
+
+def test_attachment_followup_format_and_stale(tmp_path):
+    """F11: the follow-up renders text+file while downloaded, and is a
+    terminal drop once the file is gone."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    h = hashlib.sha256(b"data").hexdigest()
+    path = tmp_path / "7"
+    path.write_bytes(b"data")
+    db.db.execute(
+        "INSERT INTO attachments(attachment_id,message_id,file_id,name,"
+        "url,local_path,bytes,sha256,state,downloaded_at,created_at)"
+        " VALUES(9,5,'f1','a.pdf','https://x',?,?,?,'downloaded',0,0)",
+        (str(path), 4, h))
+    db.db.commit()
+    ev = {"kind": "attachment_followup",
+          "payload": json.dumps({"attachment_id": 9, "message_id": 5}),
+          "project_id": 1}
+    text, files = notifier._format_event(db, ev)
+    assert "添付ファイル（後送）" in text and files == [("a.pdf", str(path))]
+    db.db.execute(
+        "UPDATE attachments SET state='pruned',local_path=NULL "
+        "WHERE attachment_id=9")
+    db.db.commit()
+    with pytest.raises(notifier._StaleSend):
+        notifier._format_event(db, ev)
+    db.close()
+
+
+# ---------- F12: attachment prune aliases + unsent-reference protection ------
+
+def test_prune_removes_alias_and_keeps_pending_refs(tmp_path):
+    """F12: the notifier's <path><ext> alias is the same asset and must
+    be unlinked with the payload; a file still referenced by an unsent
+    notice is kept, and only real deletions count."""
+    import maintenance
+    db = _ledger(tmp_path)
+    old = time.time() - maintenance.ATTACHMENT_KEEP_S - 1
+    att = tmp_path / "att"
+    att.mkdir()
+    live = att / "1"
+    live.write_bytes(b"x")
+    (att / "1.pdf").write_bytes(b"x")            # notifier alias
+    db.db.execute(
+        "INSERT INTO attachments(attachment_id,message_id,name,"
+        "local_path,state,downloaded_at,created_at)"
+        " VALUES(1,10,'a.pdf',?,'downloaded',?,0)", (str(live), old))
+    # mid 11 is still referenced by a PENDING notice -> keep
+    keep = att / "2"
+    keep.write_bytes(b"y")
+    db.db.execute(
+        "INSERT INTO attachments(attachment_id,message_id,name,"
+        "local_path,state,downloaded_at,created_at)"
+        " VALUES(2,11,'b.pdf',?,'downloaded',?,0)", (str(keep), old))
+    db.outbox_add("new_messages", 1, {"message_ids": [11]})
+    db.db.commit()
+    n = maintenance.prune_attachments(str(db.db.execute(
+        "PRAGMA database_list").fetchone()[2]))
+    assert n == 1
+    assert not live.exists() and not (att / "1.pdf").exists()
+    assert keep.exists()
+    states = {r[0]: r[1] for r in db.db.execute(
+        "SELECT attachment_id,state FROM attachments")}
+    assert states == {1: "pruned", 2: "downloaded"}
+    db.close()
+
+
+# ---------- F18: signal evidence fingerprint ----------
+
+def test_signal_notice_rerenders_on_evidence_move(tmp_path, monkeypatch):
+    """F18: queued signal text is pinned to an evidence fingerprint —
+    a superseded signal re-renders the WHOLE body from the current row
+    instead of mixing the frozen note with new evidence."""
+    import mcs_signals
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    sig_old = {"type": "t", "project_id": 1, "note": "old note",
+               "evidence": {"message_id": 5}}
+    sig_new = {"type": "t", "project_id": 1, "note": "new note",
+               "evidence": {"message_id": 9}}
+    payload = {"signal_key": "k1", "project_id": 1,
+               "text": mcs_signals.signal_notice_text(sig_old),
+               "evidence_fp": mcs_signals.evidence_fp(sig_old["evidence"])}
+    db.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
+        " VALUES('signal_v1',1,?,json_object('key','k1'),0)",
+        (json.dumps(dict(sig_new, state="open")),))
+    db.db.commit()
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    text, _ = notifier._format_event(
+        db, {"kind": "signal", "payload": json.dumps(payload),
+             "project_id": 1})
+    assert "new note" in text and "old note" not in text
+    # A legacy intent without a fingerprint and a note update over the
+    # same evidence must also use one coherent current signal row.
+    for fp in (None, mcs_signals.evidence_fp(sig_new["evidence"])):
+        if fp is None:
+            payload.pop("evidence_fp")
+        else:
+            payload["evidence_fp"] = fp
+        text2, _ = notifier._format_event(
+            db, {"kind": "signal", "payload": json.dumps(payload),
+                 "project_id": 1})
+        assert "new note" in text2 and "old note" not in text2
+    db.close()
+
+
+# ---------- F19: uncertain in-flight delivery ----------
+
+def test_flush_holds_uncertain_inflight_send(tmp_path, monkeypatch):
+    """F19: a progress row whose last write marked a chunk in-flight but
+    never recorded the ack = possible duplicate — hold it for human
+    reconciliation, never blind-resend."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    m = _message(mid=5)
+    db.save_messages([m])
+    eid = db.outbox_add("new_messages", 1, {"message_ids": [5]})
+    fp = "x" * 64
+    db.outbox_progress(eid, 0, [], fp, sending=1)
+    calls = []
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
+    monkeypatch.setattr(notifier, "_send",
+                        lambda *a, **k: calls.append(a) or None)
+    res = notifier.flush(db)
+    assert calls == [] and res.get("uncertain") == 1
+    assert db.db.execute(
+        "SELECT state FROM notify_outbox WHERE event_id=?",
+        (eid,)).fetchone()[0] == "failed"
+    db.close()
+
+
+def test_send_marked_clears_marker_on_reported_failure(tmp_path):
+    """F19: a REPORTED send failure clears the in-flight marker so the
+    scheduled retry is not held as an uncertain crash-window send."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    eid = db.outbox_add("new_messages", 1, {"message_ids": [5]})
+    ev = {"event_id": eid}
+    def boom(*a, **k):
+        raise notifier._SendFailed("down")
+    old = notifier._send
+    notifier._send = boom
+    try:
+        with pytest.raises(notifier._SendFailed):
+            notifier._send_marked(db, ev, 0, [], "fp",
+                                  ["hermes", "send"], "chunk", None, None)
+    finally:
+        notifier._send = old
+    progress = json.loads(db.db.execute(
+        "SELECT progress FROM notify_outbox WHERE event_id=?",
+        (eid,)).fetchone()[0])
+    assert progress["sending"] is None and progress["next"] == 0
+    db.close()
+
+
+# ---------- F21: resident-writer log rotation ----------
+
+def test_rotate_log_copytruncate_keeps_writer_on_live_path(tmp_path):
+    """F21: a launchd-held fd must keep appending to the CURRENT file —
+    copy the content aside, truncate in place, and the writer resumes at
+    offset 0 on the live path."""
+    import maintenance
+    log = tmp_path / "drain.log"
+    fd = os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        os.write(fd, b"x" * (maintenance.LOG_MAX + 10))
+        maintenance.rotate_log(paths=[str(log)])
+        os.write(fd, b"tail")
+        os.fsync(fd)
+        assert os.path.getsize(str(log)) == 4
+        assert os.path.getsize(str(log) + ".1") == \
+            maintenance.LOG_MAX + 10
+    finally:
+        os.close(fd)
+
+
+def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=100)])
+    db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
+    items = [{"id": mid, "comment": "synthetic post",
+              "created_at": "2026-09-19T01:00:00+09:00"}
+             for mid in range(1, 33)]
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            start = (params["page"] - 1) * params["per_page"]
+            return {"messages": items[start:start + params["per_page"]],
+                    "paginate": {"has_next": start + params["per_page"] < len(items)}}
+
+    result = {"errors": [], "backfilled": 0}
+    adapter = Adapter()
+    run_check.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
+    assert db.job_pending("history_head", 1)
+    assert result["coverage_gaps"]
+    assert db.db.execute("SELECT 1 FROM messages WHERE message_id=32").fetchone() is None
+    job_ops.run_history_jobs(adapter, db, result, time.monotonic() + 300)
+    assert db.db.execute("SELECT 1 FROM messages WHERE message_id=32").fetchone()
+    assert db.job_state("history_head", 1) == "done"
+    assert db.history_floor(1) == -1
+    db.close()
+
+
+def test_reconcile_hydrates_changed_reply_and_rotates_patients(tmp_path):
+    db = _ledger(tmp_path)
+    for pid in (1, 2, 3):
+        db.ensure_patient(pid)
+        db.job_add("reconcile", pid, payload={"page": 1})
+    root = _message(mid=10)
+    root.reply_count = 1
+    root.replies = [_message(mid=11, parent_id=10, body="previous")]
+    db.save_messages([root])
+    calls = []
+
+    class Adapter:
+        def fetch_history(self, pid, since, **kwargs):
+            calls.append(pid)
+            if pid != 1:
+                return mcs_adapter.MessageBatch([], pages=2, reached=False)
+            post = _message(mid=10)
+            post.reply_count = 1
+            post.replies = [_message(mid=11, parent_id=10, state="snippet")]
+            return mcs_adapter.MessageBatch([post], pages=2, reached=False)
+
+        def fetch_thread(self, *args):
+            return [_message(mid=11, parent_id=10, body="corrected")]
+
+    adapter = Adapter()
+    job_ops.run_reconcile_jobs(adapter, db, {"errors": []}, time.monotonic() + 300)
+    job_ops.run_reconcile_jobs(adapter, db, {"errors": []}, time.monotonic() + 300)
+    assert calls[:3] == [1, 2, 3]
+    assert db.db.execute("SELECT body_text FROM messages WHERE message_id=11").fetchone()[0] == "corrected"
+    db.close()
+
+
+def test_reply_target_found_early_keeps_thread_tail_work(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.job_add("reply", 1, 11, parent_id=10)
+
+    class Adapter:
+        def fetch_thread_window(self, pid, root, start_page=1):
+            if start_page == 1:
+                return mcs_adapter.MessageBatch(
+                    [_message(mid=11, parent_id=10)], pages=10)
+            assert start_page == 11
+            return mcs_adapter.MessageBatch(
+                [_message(mid=111, parent_id=10)], pages=1, reached=True)
+
+    adapter = Adapter()
+    job_ops.run_reply_jobs(adapter, db, {"errors": []}, time.monotonic() + 300)
+    assert db.job_state("reply", 1, 11) == "done"
+    assert db.pending_reply_jobs(1) == 1
+    job_ops.run_reply_jobs(adapter, db, {"errors": []}, time.monotonic() + 300)
+    assert db.db.execute("SELECT 1 FROM messages WHERE message_id=111").fetchone()
+    assert db.pending_reply_jobs(1) == 0
+    db.close()
+
+
+@pytest.mark.parametrize("status,expected", [(404, "failed"), (429, "pending")])
+def test_download_failure_status_reaches_retry_policy(tmp_path, monkeypatch, status, expected):
+    import urllib.error
+    import mcs_transport
+    db = _ledger(tmp_path)
+    message = _message()
+    message.attachments = [_att("file")]
+    db.save_messages([message])
+    def fail(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, status, "synthetic", {}, None)
+
+    monkeypatch.setattr(mcs_adapter, "no_proxy_opener",
+                        lambda *handlers: SimpleNamespace(open=fail))
+    adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
+        mcs_transport._execute(dict(payload, timeout=timeout)))
+    adapter._token = "synthetic"
+    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    run_check.stage_attachments(adapter, db, {"errors": []}, time.monotonic() + 100)
+    row = db.db.execute("SELECT state,error FROM attachments").fetchone()
+    assert tuple(row) == (expected, f"http_{status}")
+    assert not (tmp_path / "1.part").exists()
+    adapter.set_deadline(time.monotonic() - 1)
+    with pytest.raises(mcs_adapter.MCSError) as exc:
+        adapter.download("https://www.medical-care.net/f", str(tmp_path / "later"))
+    assert exc.value.kind == "deadline_exceeded"
+    db.close()
+
+
+def test_prune_preserves_followup_and_retires_withdrawn_payload(tmp_path):
+    import maintenance
+    db = _ledger(tmp_path)
+    old = time.time() - maintenance.ATTACHMENT_KEEP_S - 60
+    for aid, state in ((1, "downloaded"), (2, "withdrawn")):
+        path = tmp_path / str(aid)
+        path.write_bytes(b"synthetic")
+        db.db.execute(
+            "INSERT INTO attachments(attachment_id,message_id,name,local_path,state,downloaded_at) "
+            "VALUES(?,?, 'file.pdf',?,?,?)", (aid, aid, str(path), state, old))
+    db.outbox_add("attachment_followup", 1, {"attachment_id": 1, "message_id": 1})
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
+    assert (tmp_path / "1").exists()
+    assert not (tmp_path / "2").exists()
+    assert db.db.execute("SELECT state FROM attachments WHERE attachment_id=2").fetchone()[0] == "withdrawn"
+    db.close()
+
+
+@pytest.mark.parametrize("change", ["reply", "attachment"])
+def test_context_change_invalidates_projection_even_with_semantic_off(tmp_path, change):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    root = _message(mid=10)
+    root.attachments = [_att("file")]
+    db.save_messages([root])
+    db.artifact_add("canonical_projection", '{"meds":[]}', project_id=1,
+                    message_id=10, meta={"hash": "kept", "fingerprint": "previous"})
+    db.artifact_add("patient_rollup", '{}', project_id=1)
+    if change == "reply":
+        db.save_thread_replies([_message(mid=11, parent_id=10)], 1, semantic=False)
+    else:
+        aid = db.db.execute("SELECT attachment_id FROM attachments").fetchone()[0]
+        db.attachment_saved(aid, str(tmp_path / "file"), 1, "synthetic-hash", semantic=False)
+    meta = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='canonical_projection'").fetchone()[0])
+    assert meta["invalidated"] is True and meta["hash"] == "kept"
+    assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind='patient_rollup'").fetchone()
+    assert not db.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    db.close()
+
+
+def test_health_counts_held_sends_and_age_from_creation(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    db.db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES('extract_llm',1,'{}','{')")
+    db.db.commit()
+    db.job_add("extract_qc", 1, 1)
+    eid = db.outbox_add("new_messages", 1, {"message_ids": [1]})
+    db.outbox_hold(eid)
+    other = db.outbox_add("new_messages", 1, {"message_ids": [2]})
+    now = time.time()
+    db.db.execute("UPDATE notify_outbox SET created_at=?,next_try=? WHERE event_id=?",
+                  (now - 1000, now + 500, other))
+    db.db.execute("UPDATE fetch_jobs SET created_at=?,next_try=? WHERE kind='extract_qc'",
+                  (now - 1000, now + 500))
+    db.db.commit()
+    health = run_check._health(db, {"notify": {}, "errors": [], "coverage_gaps": [{}]}, "partial")
+    assert health["overall"] == "degraded" and health["collection"] == "incomplete"
+    assert health["notify"]["held"] == 1
+    assert health["notify"]["oldest_age_s"] >= 1000
+    assert health["extract_qc_jobs"]["pending"] == 1
+    assert health["extract_qc_jobs"]["oldest_age_s"] >= 1000
+    coverage = health["extract_v2_coverage"]
+    assert coverage["eligible"] == 1 and coverage["current"] == 0
+    assert coverage["poison_gated"] == 1 and coverage["ratio"] == 0
+    assert coverage["extract_version"] == extract_llm.EXTRACT_VERSION
+    db.close()
+
+
+def test_thread_partial_pages_survive_session_loss(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.job_add("reply", 1, 11, parent_id=10)
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            if params["page"] == 2:
+                raise mcs_adapter.SessionExpired(status=401)
+            return {"messages": [{"id": 11, "comment": "synthetic"}],
+                    "paginate": {"has_next": True}}
+
+    with pytest.raises(mcs_adapter.SessionExpired):
+        job_ops.run_reply_jobs(Adapter(), db, {"errors": []}, time.monotonic() + 300)
+    assert db.db.execute("SELECT body_state FROM messages WHERE message_id=11").fetchone()[0] == "full"
+    pending = db.job_pending("thread", 1, 10)
+    assert json.loads(pending["payload"])["page"] == 2
+    assert pending["attempts"] == 0
+    db.close()
+
+
+def test_unread_thread_larger_than_default_window_can_complete():
+    pages = []
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            page = params["page"]
+            pages.append(page)
+            start = (page - 1) * 10 + 1
+            return {"messages": [{"id": mid, "comment": "synthetic"}
+                                 for mid in range(start, min(start + 10, 102))],
+                    "paginate": {"has_next": page < 11}}
+
+    parent = _message(mid=1000)
+    parent.reply_count = 101
+    parent.replies = [_message(mid=101, parent_id=1000, state="snippet", unread=True)]
+    batch = Adapter().fetch_unread_replies(parent)
+    assert batch.missing == [] and batch.messages[0].body_state == "full"
+    assert pages == list(range(1, 12))
+
+
+@pytest.mark.parametrize("operation", ["api", "download", "bootstrap"])
+def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operation):
+    """A blocked read cannot retain a worker or a partial attachment."""
+    import mcs_transport
+    script = tmp_path / "slow_worker.py"
+    started_file = tmp_path / "reader-started"
+    module_root = Path(mcs_adapter.__file__).resolve().parents[1]
+    script.write_text(
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(module_root)!r})\n"
+        "import _mcs_path, mcs_adapter, mcs_transport, mcs_util\n"
+        "class SlowResponse:\n"
+        "    status = 200\n"
+        "    headers = {}\n"
+        "    def __enter__(self): return self\n"
+        "    def __exit__(self, *args): pass\n"
+        "    def read(self, *args):\n"
+        f"        with open({str(started_file)!r}, 'w') as f: f.write('started')\n"
+        "        while True: time.sleep(0.02)\n"
+        "class Opener:\n"
+        "    def open(self, *args, **kwargs): return SlowResponse()\n"
+        "mcs_adapter.no_proxy_opener = lambda *args: Opener()\n"
+        "mcs_util.no_proxy_opener = lambda *args: Opener()\n"
+        "raise SystemExit(mcs_transport.worker_main())\n", encoding="utf-8")
+    monkeypatch.setattr(mcs_transport, "_worker_command",
+                        lambda: [sys.executable, str(script)])
+    processes = []
+    original_popen = subprocess.Popen
+
+    def spawn(command, **kwargs):
+        assert "synthetic-bearer" not in repr(command)
+        assert "SYNTHETIC_PASSWORD" not in kwargs["env"]
+        process = original_popen(command, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setenv("SYNTHETIC_PASSWORD", "synthetic-only")
+    monkeypatch.setattr(mcs_transport.subprocess, "Popen", spawn)
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._token = None if operation == "bootstrap" else "synthetic-bearer"
+    adapter.set_deadline(time.monotonic() + 2)
+    destination = tmp_path / "downloaded"
+    destination.write_bytes(b"previous-complete-file")
+    started = time.monotonic()
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        if operation == "download":
+            adapter.download("https://www.medical-care.net/f", str(destination))
+        else:
+            adapter._request("GET", "/projects", retries=0)
+    assert error.value.kind == "deadline_exceeded"
+    assert time.monotonic() - started < 6
+    assert started_file.exists()
+    assert len(processes) == 1 and processes[0].poll() is not None
+    assert destination.read_bytes() == b"previous-complete-file"
+    assert not Path(str(destination) + ".part").exists()
+
+
+def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
+    import base64
+    import io
+    import urllib.error
+    import mcs_transport
+    import mcs_util
+
+    observed = []
+    response_body = b'{"project":{"is_unread":false}}'
+
+    class Response(io.BytesIO):
+        status = 200
+        headers = {}
+
+    class Opener:
+        def open(self, request, timeout):
+            observed.append(request)
+            return Response(response_body)
+
+    def opener(*handlers):
+        assert handlers == (mcs_util.NoRedirect,)
+        return Opener()
+
+    monkeypatch.setattr(mcs_util, "no_proxy_opener", opener)
+    adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
+        mcs_transport._execute(dict(payload, timeout=timeout)))
+    adapter._token = "synthetic-bearer"
+    assert adapter.mark_patient_read(1, 123)["project"]["is_unread"] is False
+    assert observed[0].data == b"timestamp=123"
+    assert observed[0].get_header("Authorization") == "Bearer synthetic-bearer"
+    assert observed[0].get_header("Content-type") == "application/x-www-form-urlencoded"
+
+    class ErrorBody:
+        def read(self, *args):
+            raise AssertionError("error body must never be read")
+
+        def close(self):
+            pass
+
+    def denied(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 401, "synthetic", {}, ErrorBody())
+
+    monkeypatch.setattr(mcs_util, "no_proxy_opener",
+                        lambda *handlers: SimpleNamespace(open=denied))
+    with pytest.raises(mcs_adapter.SessionExpired) as error:
+        adapter._request("GET", "/projects", retries=0)
+    assert error.value.status == 401
+
+    # The explicit worker seam keeps retry policy in the parent adapter.
+    statuses = iter([503, 200])
+    adapter._worker = lambda payload, **kwargs: {
+        "status": next(statuses), "headers": {},
+        "body": base64.b64encode(response_body).decode("ascii")}
+    monkeypatch.setattr(adapter, "_sleep_bounded", lambda seconds: None)
+    assert adapter._request("GET", "/projects")[1] == response_body
+
+
+def test_attachment_worker_keeps_redirect_and_atomic_file_contract(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+    import mcs_transport
+    urls = []
+    authorizations = []
+
+    class Opener:
+        def open(self, request, timeout):
+            urls.append(request.full_url)
+            authorizations.append(request.get_header("Authorization"))
+            if len(urls) == 1:
+                raise urllib.error.HTTPError(request.full_url, 302, "synthetic", {
+                    "location": "https://files.medical-care.net/signed"}, None)
+            return io.BytesIO(b"synthetic-attachment")
+
+    monkeypatch.setattr(mcs_adapter, "no_proxy_opener", lambda *handlers: Opener())
+    destination = tmp_path / "file"
+    destination.write_bytes(b"old")
+
+    def worker(payload, timeout, deadline):
+        result = mcs_transport._execute(dict(payload, timeout=timeout))
+        assert destination.read_bytes() == b"old"
+        assert Path(payload["partial"]).read_bytes() == b"synthetic-attachment"
+        return result
+
+    adapter = mcs_adapter.MCSAdapter(worker=worker)
+    adapter._token = "synthetic-bearer"
+    result = adapter.download("https://www.medical-care.net/f", str(destination))
+    assert authorizations == ["Bearer synthetic-bearer", None]
+    assert destination.read_bytes() == b"synthetic-attachment"
+    assert result == {"bytes": len(b"synthetic-attachment"),
+                      "sha256": hashlib.sha256(b"synthetic-attachment").hexdigest()}
+    assert not Path(str(destination) + ".part").exists()
+
+    monkeypatch.setattr(mcs_adapter, "_MAX_DOWNLOAD_BYTES", 2)
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter.download("https://www.medical-care.net/f", str(destination))
+    assert error.value.kind == "download_too_large"
+    assert not Path(str(destination) + ".part").exists()
+    assert destination.read_bytes() == b"synthetic-attachment"
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter.download("https://outside.invalid/f", str(destination))
+    assert error.value.kind == "url_not_allowed"
+
+
+def test_bootstrap_and_keychain_use_remaining_budget(monkeypatch):
+    observed = []
+
+    def worker(payload, timeout, deadline):
+        observed.append((payload["operation"], timeout))
+        assert 0 < timeout <= 1
+        if payload["operation"] == "cdp_json":
+            return {"value": [{"type": "page", "url": "https://www.medical-care.net/",
+                              "webSocketDebuggerUrl": "ws://127.0.0.1:9333/x"}]}
+        return {"value": '"synthetic-token"'}
+
+    adapter = mcs_adapter.MCSAdapter(worker=worker)
+    adapter.set_deadline(time.monotonic() + 1)
+    assert adapter.bootstrap_token() == "synthetic-token"
+    assert [operation for operation, _ in observed] == ["cdp_json", "cdp_eval"]
+
+    def keychain(command, **kwargs):
+        assert 0 < kwargs["timeout"] <= 1
+        return SimpleNamespace(returncode=0, stdout="synthetic-password", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", keychain)
+    assert adapter._keychain_password() == "synthetic-password"
+    adapter.set_deadline(time.monotonic() - 1)
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter.bootstrap_token()
+    assert error.value.kind == "deadline_exceeded"
+    assert len(observed) == 2
+
+
+def test_keychain_timeout_preserves_fallback_only_with_run_budget(monkeypatch):
+    adapter = mcs_adapter.MCSAdapter()
+
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    monkeypatch.setattr(mcs_adapter, "env_value", lambda key: "synthetic-fallback")
+    adapter.set_deadline(time.monotonic() + 60)
+    assert adapter._login_password() == ("synthetic-fallback", True)
+    adapter.set_deadline(time.monotonic() - 1)
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter._login_password()
+    assert error.value.kind == "deadline_exceeded"

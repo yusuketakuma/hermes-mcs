@@ -23,11 +23,14 @@ def _ledger(tmp_path):
     return ledger.Ledger(str(tmp_path / "ledger.db"))
 
 
-def _message(mid=1, body="プレドニンを中止しました", project_id=1):
+def _message(mid=1, body="プレドニンを中止しました", project_id=1,
+             posted_at=None):
     return mcs_adapter.Message(
         message_id=mid, project_id=project_id, parent_id=None,
         sender_id=1, sender_name="sender", sender_type="user",
-        profession="", organization="", posted_at="2026-09-19T00:00:00+09:00",
+        profession="", organization="",
+        posted_at=posted_at or time.strftime(
+            "%Y-%m-%dT%H:%M:%S+09:00", time.localtime()),
         body_html=body, body_state="full", is_unread=False,
         reply_count=0)
 
@@ -39,7 +42,7 @@ def _hash(db, mid=1):
 
 
 def _v2_artifact(db, mid, chash, content=None):
-    db.artifact_add(
+    return db.artifact_add(
         "extract_llm",
         json.dumps(content or {"meds": [{"name": "プレドニン",
                                          "action": "stop",
@@ -116,9 +119,11 @@ def test_seed_skips_when_qc_artifact_exists_for_same_hash(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     h = _hash(db)
-    _v2_artifact(db, 1, h)
+    source_id = _v2_artifact(db, 1, h)
     db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
-                    meta={"hash": h})
+        meta={"hash": h,
+                          "extract_version": extract_llm.EXTRACT_VERSION,
+                          "source_artifact_id": source_id})
     assert semantic_drain._qc_seed(db, time.time()) == 0
     assert _qc_job(db) is None
     db.close()
@@ -171,6 +176,141 @@ def test_seed_keeps_failed_job_for_same_hash(tmp_path):
     semantic_drain._qc_seed(db, time.time())
     job = _qc_job(db)
     assert job["state"] == "failed" and job["attempts"] == 3
+    db.close()
+
+
+def test_seed_skips_archive_posts(tmp_path):
+    """QC is realtime-only — a backfilled old post never seeds a job
+    while a recent post still does."""
+    db = _ledger(tmp_path)
+    old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                        time.localtime(time.time() - 30 * 86400))
+    db.save_messages([_message(1, posted_at=old), _message(2)])
+    _v2_artifact(db, 1, _hash(db, 1))
+    _v2_artifact(db, 2, _hash(db, 2))
+    assert semantic_drain._qc_seed(db, time.time()) == 1
+    assert _qc_job(db, 1) is None
+    assert _qc_job(db, 2) is not None
+    db.close()
+
+
+def test_seed_reaps_stale_archive_jobs(tmp_path):
+    """A pending QC job whose post aged out of the realtime window is
+    reaped on the next seed pass, not evaluated late."""
+    db = _ledger(tmp_path)
+    old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                        time.localtime(time.time() - 30 * 86400))
+    db.save_messages([_message(1, posted_at=old)])
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+        "state,next_try,created_at,updated_at) "
+        "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
+    db.db.commit()
+    semantic_drain._qc_seed(db, time.time())
+    assert _qc_job(db, 1) is None
+    db.close()
+
+
+def test_seed_window_does_not_consume_pending_rows(tmp_path):
+    """F15: rows already pending must not eat the LIMIT window — a
+    second seed pass still reaches artifacts behind them."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1), _message(2)])
+    _v2_artifact(db, 1, _hash(db, 1))
+    _v2_artifact(db, 2, _hash(db, 2))
+    assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+    assert _qc_job(db, 2) is not None        # newest artifact first
+    # pending job for m2 is excluded from the window -> m1 seeds now
+    assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+    assert _qc_job(db, 1) is not None
+    db.close()
+
+
+def test_failed_seed_does_not_starve_older_work(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1), _message(2)])
+        _v2_artifact(db, 1, _hash(db, 1))
+        _v2_artifact(db, 2, _hash(db, 2))
+        semantic_drain._qc_seed(db, time.time(), limit=1)
+        db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=6")
+        db.db.commit()
+        assert semantic_drain._qc_seed(db, time.time(), limit=1) == 1
+        assert _qc_job(db, 1)["state"] == "pending"
+        assert _qc_job(db, 2)["state"] == "failed"
+    finally:
+        db.close()
+
+
+def test_qc_requeues_changed_extraction_with_same_hash_and_version(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message()])
+        _v2_artifact(db, 1, _hash(db))
+        semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
+                         time.monotonic() + 60, jev_client=_FakeJev())
+        old_id = json.loads(_qc_artifact(db)["meta"])["source_artifact_id"]
+        new_id = _v2_artifact(db, 1, _hash(db), content={"symptoms": []})
+        assert new_id != old_id
+        assert semantic_drain._qc_seed(db, time.time()) == 1
+        payload = json.loads(_qc_job(db)["payload"])
+        assert payload["source_artifact_id"] == new_id
+    finally:
+        db.close()
+
+
+def test_qc_seed_and_drain_use_same_valid_source(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message()])
+        source_id = _v2_artifact(db, 1, _hash(db))
+        for content in ("broken json", "[]"):
+            db.artifact_add("extract_llm", content, project_id=1, message_id=1,
+                            meta={"hash": _hash(db),
+                                  "extract_version": extract_llm.EXTRACT_VERSION})
+        out = semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
+                               time.monotonic() + 60, jev_client=_FakeJev())
+        assert out["done"] == 1
+        assert json.loads(_qc_artifact(db)["meta"])["source_artifact_id"] == source_id
+        assert semantic_drain._qc_seed(db, time.time()) == 0
+    finally:
+        db.close()
+
+
+def test_seed_repends_done_job_on_version_bump_same_hash(tmp_path):
+    """F16: QC identity includes the extractor generation — a job whose
+    payload predates 'ver' tracking re-pends even when the content hash
+    is unchanged."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    _v2_artifact(db, 1, _hash(db))
+    semantic_drain._qc_seed(db, time.time())
+    # simulate a job row written before 'ver' existed + done state
+    db.db.execute("UPDATE fetch_jobs SET state='done',"
+                  " payload=json_object('hash',"
+                  " json_extract(payload,'$.hash'))"
+                  " WHERE kind='extract_qc'")
+    db.db.commit()
+    assert semantic_drain._qc_seed(db, time.time()) == 1
+    job = _qc_job(db)
+    assert job["state"] == "pending" and job["attempts"] == 0
+    assert json.loads(job["payload"])["ver"] == \
+        extract_llm.EXTRACT_VERSION
+    db.close()
+
+
+def test_seed_skips_when_qc_exists_for_same_hash_and_version(tmp_path):
+    """F16: a QC artifact from an OLDER extractor generation must not
+    satisfy the existence check for the current one."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    h = _hash(db)
+    _v2_artifact(db, 1, h)
+    db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
+                    meta={"hash": h,
+                          "extract_version": extract_llm.EXTRACT_VERSION
+                          - 1})
+    assert semantic_drain._qc_seed(db, time.time()) == 1
     db.close()
 
 
@@ -232,6 +372,55 @@ def test_drain_skips_qc_when_not_annotate(tmp_path):
                            time.monotonic() + 60, jev_client=client)
     assert out["done"] == 0 and client.requests_made == 0
     assert _qc_job(db) is None
+    db.close()
+
+
+def test_process_qc_job_skips_aged_post(tmp_path):
+    """A queued job whose post aged past the realtime window completes
+    without spending a Jev request or writing an artifact."""
+    from semantic_policy import semantic_config
+    db = _ledger(tmp_path)
+    old = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                        time.localtime(time.time() - 30 * 86400))
+    db.save_messages([_message(1, posted_at=old)])
+    _v2_artifact(db, 1, _hash(db))
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+        "state,next_try,created_at,updated_at) "
+        "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
+    db.db.commit()
+    job = db.db.execute(
+        "SELECT * FROM fetch_jobs WHERE kind='extract_qc'").fetchone()
+    scfg, _ = semantic_config(_cfg(extract_qc="annotate"))
+    client = _FakeJev()
+    out = semantic_drain._process_qc_job(
+        db, scfg, job, client, time.monotonic() + 60)
+    assert out == "done" and client.requests_made == 0
+    assert _qc_artifact(db) is None
+    db.close()
+
+
+def test_qc_artifact_reports_item_coverage(tmp_path):
+    """F17: qc=done must disclose how many extracted items were actually
+    checked (cap + missing answers leave unchecked items)."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    _v2_artifact(db, 1, _hash(db),
+                 content={"meds": [{"name": f"m{i}"}
+                                   for i in range(20)],
+                          "urgency": "routine"})
+    client = _FakeJev(noul=0.9, choice="routine")
+    out = semantic.run_due(db, _cfg(extract_qc="annotate"),
+                           {"errors": []}, time.monotonic() + 60,
+                           jev_client=client)
+    assert out["done"] == 1
+    content = json.loads(_qc_artifact(db)["content"])
+    cov = content["coverage"]
+    assert cov["checked"] == semantic_drain.QC_MAX_ITEMS + 1
+    assert cov["total"] == 21
+    assert cov["unchecked"] == 20 - semantic_drain.QC_MAX_ITEMS
+    assert cov["capped"] is True
+    assert cov["by_field"]["urgency"]["checked"] == 1
     db.close()
 
 

@@ -24,6 +24,7 @@ import semantic_loops
 from gateway.config import Platform, PlatformConfig
 from gateway.run import GatewayRunner
 from gateway.run_inbound import GatewayInboundMixin
+from gateway.platforms.event import MessageEvent, MessageType
 from plugins.platforms.discord.adapter import DiscordAdapter
 
 MCS_ROOT = Path(__file__).resolve().parents[1]
@@ -79,17 +80,31 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
     monkeypatch.setenv('GATEWAY_ALLOW_ALL_USERS', 'false')
     monkeypatch.delenv('GATEWAY_ALLOWED_USERS', raising=False)
 
-    async def invoke(payload, *, internal=False):
-        event = adapter._build_slash_event(interaction, '/mcs ' + json.dumps(payload))
+    async def invoke(payload, *, internal=False, bot_message=False):
+        text = '/mcs ' + json.dumps(payload)
+        event = adapter._build_slash_event(interaction, text)
+        if bot_message:
+            # Normal Discord messages carry is_bot through build_source;
+            # native slash interactions do not populate that field.
+            event = MessageEvent(
+                text=text, message_type=MessageType.COMMAND,
+                message_id=str(interaction.id),
+                source=adapter.build_source(
+                    chat_id=str(interaction.channel_id), chat_type='group',
+                    user_id=str(interaction.user.id), is_bot=True))
         event.internal = internal
+        admitted = await GatewayInboundMixin._hm_admit_event(runner, event)
+        if admitted is None:
+            return {'ok': False, 'error': 'gateway_admission_rejected'}
+        event, source, _ = admitted
         handled, result, _ = await GatewayInboundMixin._hm_dispatch_quick_and_plugin_commands(
-            runner, event, event.source, 'mcs')
+            runner, event, source, 'mcs')
         assert handled, 'actual discovered plugin must handle the command'
         return json.loads(result)
 
     try:
         status = await invoke({'op': 'status', 'project_id': 1})
-        assert status['ok']
+        assert status['ok'], status
         preview = await invoke({'op': 'request', 'phase': 'preview', 'action': 'create',
                                 'project_id': 1, 'source_message_id': 1,
                                 'title': 'Synthetic explicitly approved task',
@@ -103,9 +118,7 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         monkeypatch.setenv('DISCORD_ALLOWED_USERS', '43')
         assert not (await invoke(confirmation))['ok']  # current Hermes allowlist is rechecked
         monkeypatch.setenv('DISCORD_ALLOWED_USERS', '42')
-        interaction.user.bot = True
-        assert not (await invoke(confirmation))['ok']
-        interaction.user.bot = False
+        assert not (await invoke(confirmation, bot_message=True))['ok']
         interaction.channel_id = 124
         interaction.channel.id = 124
         assert not (await invoke(confirmation))['ok']  # both chats allowed, origin still bound

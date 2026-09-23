@@ -246,8 +246,14 @@ class View:
         least one item or could not run. With --message-id: the full
         per-item verdicts for that message."""
         import extract_llm
+        from mcs_queries import current_qc_pred, qc_source_id
+        version = extract_llm.EXTRACT_VERSION
         if mid is not None:
             msg = self._message(pid, mid)
+            source = self.db.execute(
+                f"SELECT {qc_source_id(version=version)} FROM messages m "
+                "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+            source_id = source[0] if source else None
             rows = []
             for r in self.db.execute(
                     "SELECT artifact_id,content,meta,model,created_at "
@@ -267,12 +273,14 @@ class View:
                 rows.append({"artifact_id": r["artifact_id"],
                              "model": r["model"], "meta": meta,
                              "content": content,
-                             "current": meta.get("hash") == msg["content_hash"],
+                             "current": source_id is not None
+                                 and meta.get("hash") == msg["content_hash"]
+                                 and meta.get("extract_version") == version
+                                 and meta.get("source_artifact_id") == source_id,
                              "created_at": r["created_at"]})
             return {"message": msg, "qc": rows}
         cur = ("a.kind='extract_qc' AND m.project_id=? "
-               "AND json_valid(a.meta) AND json_valid(a.content) "
-               "AND json_extract(a.meta,'$.hash')=m.content_hash")
+               + current_qc_pred(version=version))
         base = ("FROM artifacts a JOIN messages m "
                 "ON m.message_id=a.message_id WHERE " + cur)
         summary = dict(self.db.execute(
@@ -285,7 +293,9 @@ class View:
             "    IS NOT NULL"
             "    AND json_extract(a.content,'$.urgency.jev') IS NOT"
             "        json_extract(a.content,'$.urgency.extracted')),0)"
-            "   urgency_mismatch " + base, (pid,)).fetchone())
+            "   urgency_mismatch,"
+            " COALESCE(SUM(json_extract(a.content,'$.coverage.unchecked')),0)"
+            "   unchecked_items " + base, (pid,)).fetchone())
         for r in self.db.execute(
                 "SELECT COALESCE(json_extract(je.value,'$.verdict'),'?') v,"
                 " COUNT(*) c FROM artifacts a"
@@ -294,26 +304,21 @@ class View:
                 " GROUP BY v", (pid,)):
             summary.setdefault("verdicts", {})[r["v"]] = r["c"]
         summary.setdefault("verdicts", {})
-        # pending mirrors _qc_seed: current v2 extraction, no QC row for
-        # the same body hash yet (queued or not)
-        summary["pending"] = self.db.execute("""
+        # Match seed eligibility, including re-extraction of the same body.
+        summary["pending"] = self.db.execute(f"""
           SELECT COUNT(*) FROM artifacts a JOIN messages m
             ON m.message_id=a.message_id
-          WHERE a.kind='extract_llm' AND m.project_id=?
-            AND json_valid(a.meta)
-            AND json_extract(a.meta,'$.hash')=m.content_hash
-            AND json_extract(a.meta,'$.extract_version')=?
-            AND json_extract(a.meta,'$.error') IS NULL
+          WHERE m.project_id=?
+            AND a.artifact_id={qc_source_id(version=version)}
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                 WHERE q.kind='extract_qc' AND q.message_id=a.message_id
-                  AND json_valid(q.meta)
-                  AND json_extract(q.meta,'$.hash')
-                      =json_extract(a.meta,'$.hash'))
-        """, (pid, extract_llm.EXTRACT_VERSION)).fetchone()[0]
+                  {current_qc_pred('q', version=version)})
+        """, (pid,)).fetchone()[0]
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
             "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
             " AND (json_extract(a.content,'$.qc')='unevaluated'"
+            "  OR json_extract(a.content,'$.coverage.unchecked')>0"
             "  OR EXISTS(SELECT 1 FROM json_each(a.content,'$.items') je"
             "            WHERE json_extract(je.value,'$.verdict')"
             "                  IS NOT 'MATCH')"
@@ -329,6 +334,7 @@ class View:
             if not isinstance(content, dict):
                 content = {}
             row["qc_state"] = content.get("qc")
+            row["coverage"] = content.get("coverage")
             row["flagged_items"] = [
                 it for it in (content.get("items") or [])
                 if isinstance(it, dict) and it.get("verdict") != "MATCH"]
@@ -349,7 +355,8 @@ class View:
                 "UNDETERMINED": "本文だけでは判断できない"},
             "qc_state": {"done": "判定済み",
                          "unevaluated": "判定を実行できなかった"},
-            "pending": "v2抽出済みだがQC未実施の件数（キュー済みを含む）",
+            "pending": "現在の抽出結果に対するQC未実施件数（キュー済みを含む）",
+            "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
         }
         return {**page, "summary": summary, "legend": legend}
 

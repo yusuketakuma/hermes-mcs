@@ -12,4 +12,9 @@ terminal:
   docker_extra_args: []
   docker_volumes:
     - /Users/yusuke/.mcs/data/snapshots:/mcs/snapshots:ro
-    - /Users/yusuke/.mcs/data/cmd:/mcs/cmd:rw
+    # Proposals only — NEVER mount data/cmd rw here. The command queue
+    # applies any file carrying human_confirmed:true verbatim; an LLM
+    # that can write it can self-declare human approval. A human
+    # promotes a proposal into data/cmd via the plugin confirm path,
+    # which produces the receipt boundary.
+    - /Users/yusuke/.mcs/data/cmd-proposals:/mcs/cmd-proposals:rw

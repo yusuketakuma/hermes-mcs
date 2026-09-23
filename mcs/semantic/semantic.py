@@ -126,10 +126,12 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
         prompt, endpoint=LLM_ENDPOINT, model=LLM_MODEL, timeout=timeout,
         extra_payload={"id_slot": local_llm.request_slot()},
         request_fn=local_llm.bounded_request)
-    if response is None or response.get("status") != 200:
+    # canonical acceptance: a length-truncated or empty completion is an
+    # incomplete result, never a success payload — even when its text
+    # happens to parse (C05)
+    if local_llm.acceptance_error(response) is not None:
         return None
-    text = response.get("text")
-    return text if isinstance(text, str) else None
+    return response["text"]
 
 
 # ---------- open loop candidates (spec §17) ----------
@@ -157,20 +159,14 @@ def seed(ledger, message_id: int, origin: str = "replay",
     return row["r"]
 
 
-def status_report(ledger) -> dict:
+def status_report(ledger, cfg: dict | None = None) -> dict:
+    from semantic_metrics import audit_history, current_quality
     jobs = {"pending": 0, "failed": 0, "done": 0}
     for r in ledger.db.execute(
             "SELECT state,COUNT(*) c FROM fetch_jobs WHERE kind=? "
             "GROUP BY state", (JOB_KIND,)):
         jobs[r["state"]] = r["c"]
-    audits = {}
-    for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=?", (KIND_AUDIT,)):
-        try:
-            s = json.loads(r["meta"] or "{}").get("audit_status")
-        except (json.JSONDecodeError, TypeError):
-            s = None
-        audits[s or "unparsed"] = audits.get(s or "unparsed", 0) + 1
+    history = audit_history(ledger)
     loops = ledger.db.execute(
         "SELECT COUNT(*) c FROM artifacts WHERE kind=?",
         (KIND_LOOP,)).fetchone()["c"]
@@ -181,7 +177,9 @@ def status_report(ledger) -> dict:
     oldest = ledger.db.execute(
         "SELECT MIN(created_at) FROM fetch_jobs WHERE kind=? AND state='pending'",
         (JOB_KIND,)).fetchone()[0]
-    return {"semantic_jobs": jobs, "audit_statuses": audits,
+    return {"semantic_jobs": jobs, "audit_statuses": history["audit_statuses"],
+            "audit_statuses_scope": "history", "history": history,
+            "current_quality": current_quality(ledger, cfg),
             "oldest_pending_job_age_s": (max(0.0, time.time() - oldest)
                                          if oldest is not None else None),
             "semantic_paused_projects": paused_projects,
@@ -216,7 +214,8 @@ def main() -> int:
             print(json.dumps({"ok": False,
                               "error": type(e).__name__}))
             return 1
-        print(json.dumps(status_report(reader), ensure_ascii=False))
+        print(json.dumps(status_report(reader, load_config(CONF_PATH)),
+                         ensure_ascii=False))
         reader.close()
         return 0
     lock_fd = acquire_run_lock()

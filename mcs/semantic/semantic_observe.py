@@ -9,7 +9,7 @@ decide when assist/enforce is safe:
     python3 semantic_observe.py --json     # one JSON line (appendable)
 
 Gates to watch (phase-j-record §7):
-- audit PASS rate and NEEDS_REVIEW reason distribution
+- current audit completion/PASS rate; historical outcomes are labelled separately
 - jev_requests_today vs daily_request_budget (read from config)
 - pending drain rate vs new-arrival rate
 - failed job count staying at 0
@@ -19,6 +19,7 @@ import os
 import sqlite3
 import sys
 import time
+from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -30,33 +31,29 @@ HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 
 
-def observe(db_path: str = DB) -> dict:
+def observe(db_path: str = DB, cfg: dict | None = None) -> dict:
     c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    c.row_factory = sqlite3.Row
+    try:
+        return _observe(c, cfg)
+    finally:
+        c.close()
+
+
+def _observe(c, cfg) -> dict:
+    from semantic_metrics import audit_history, current_quality
+    ledger = SimpleNamespace(db=c)
+
     def q(sql, p=()):
         return c.execute(sql, p).fetchall()
 
     jobs = {s: n for s, n in q(
         "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
         "GROUP BY state")}
-    audits = {s or "unparsed": n for s, n in q(
-        "SELECT json_extract(meta,'$.audit_status'), COUNT(*) "
-        "FROM artifacts WHERE kind='semantic_audit' GROUP BY 1")}
-    findings = {}
-    for (code,) in q(
-            "SELECT json_extract(f.value,'$.code') "
-            "FROM artifacts a, json_each(a.content,'$.findings') f "
-            "WHERE a.kind='semantic_audit' AND json_valid(a.content)"):
-        if code:
-            findings[code] = findings.get(code, 0) + 1
+    history = audit_history(ledger)
     eligible_pending = q(
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
         "AND state='pending' AND json_extract(payload,'$.eligible')=1")[0][0]
-    # repair-path effectiveness: among audits that consumed a repair,
-    # how many still landed NEEDS_REVIEW vs recovered to PASS
-    repairs = {s or "?": n for s, n in q(
-        "SELECT json_extract(meta,'$.audit_status'), COUNT(*) "
-        "FROM artifacts WHERE kind='semantic_audit' "
-        "AND json_extract(meta,'$.repair_count')=1 GROUP BY 1")}
     # version-aware: counts the messages still lacking a CURRENT-schema
     # artifact — matches run_pending's `left`, so migration progress is
     # visible instead of reading 0 while the v2 backlog drains
@@ -80,26 +77,27 @@ def observe(db_path: str = DB) -> dict:
         "ts": int(time.time()),
         "jobs": jobs,
         "eligible_pending": eligible_pending,
-        "audit_statuses": audits,
-        "repaired_audits": repairs,
-        "finding_codes": findings,
+        **history,
+        "audit_statuses_scope": "history",
+        "history": history,
+        "current_quality": current_quality(ledger, cfg),
         "jev_requests_today": int(jev_today),
-        "jev_daily_budget": _daily_budget(),
+        "jev_daily_budget": _daily_budget(cfg),
         "extract_llm_left": extract_left,
     }
 
 
-def _daily_budget() -> int:
-    from mcs_util import load_config
+def _daily_budget(cfg) -> int:
     try:
-        return int(load_config().get("semantic", {})
+        return int((cfg or {}).get("semantic", {})
                    .get("daily_request_budget", 0))
     except (TypeError, ValueError):
         return 0
 
 
 def main() -> int:
-    snap = observe()
+    from mcs_util import load_config
+    snap = observe(cfg=load_config())
     if "--json" in sys.argv:
         print(json.dumps(snap, ensure_ascii=False))
         return 0
@@ -107,11 +105,18 @@ def main() -> int:
     print(f"jobs: done={j.get('done',0)} pending={j.get('pending',0)} "
           f"failed={j.get('failed',0)} "
           f"(notify-eligible pending: {snap['eligible_pending']})")
-    print(f"audit: {snap['audit_statuses'] or 'none yet'}")
+    print(f"audit history: {snap['audit_statuses'] or 'none yet'}")
     if snap["repaired_audits"]:
-        print(f"repaired: {snap['repaired_audits']}")
+        print(f"repaired history: {snap['repaired_audits']}")
     if snap["finding_codes"]:
-        print(f"findings: {snap['finding_codes']}")
+        print(f"findings history: {snap['finding_codes']}")
+    quality = snap["current_quality"]
+    if quality["available"]:
+        print(f"current audit coverage: {quality['complete']}/{quality['denominator']} "
+              f"complete, {quality['incomplete']} incomplete; "
+              f"{quality['audit_statuses']}")
+    else:
+        print(f"current audit coverage: unavailable ({quality['reason']})")
     print(f"jev today: {snap['jev_requests_today']}/"
           f"{snap['jev_daily_budget']} | "
           f"extract_llm backlog left: {snap['extract_llm_left']}")

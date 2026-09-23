@@ -102,7 +102,10 @@ def _validate_context(
     for key in _IDENTITY_KEYS:
         if key not in command_context:
             return None, "native_context_required"
-        if key in {"scope_id", "profile"} and command_context[key] is None:
+        # Native Discord slash interactions have no MessageEvent.message_id.
+        # It is transport metadata, not part of the confirmation origin;
+        # the authenticated user/chat/scope/profile still bind every command.
+        if key in {"scope_id", "profile", "message_id"} and command_context[key] is None:
             identity[key] = None
             continue
         value = _id_text(command_context[key])

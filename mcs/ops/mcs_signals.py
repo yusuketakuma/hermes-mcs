@@ -21,6 +21,7 @@ Honesty rules carried from the spec:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import datetime
@@ -401,6 +402,32 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             "detectors_ran": sorted(ran_types), "errors": errors}
 
 
+def evidence_fp(evidence) -> str:
+    """Fingerprint of a signal's evidence set — the outbox pins it so the
+    send path can tell 'the signal I queued' from 'the signal now' (F18)."""
+    return hashlib.sha256(json.dumps(
+        evidence, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def signal_notice_text(sig: dict) -> str:
+    """The notice body built from a signal ROW (not the frozen payload) —
+    enqueue and send-time re-render share this so an evidence update can
+    never mix an old explanation with new evidence (F18)."""
+    ev = sig.get("evidence") or {}
+    where = f"project {sig['project_id']}"
+    for label in ("request_id", "message_id", "discharge_message_id",
+                  "med"):
+        if ev.get(label):
+            where += f" / {label.split('_')[0]} {ev[label]}"
+            break
+    else:
+        mids = ev.get("message_ids")
+        if mids:
+            where += f" / message {mids[0]}"
+    return (f"[MCS] レビュー候補 ({sig['type']})\n"
+            f"{where}\n{sig['note']}")
+
+
 def _notify(ledger, sig, key, now, th):
     """Frozen-text notify intent via the existing outbox — payload
     carries ids and the fixed note, never message bodies. The send path
@@ -424,22 +451,11 @@ def _notify(ledger, sig, key, now, th):
                  AND updated_at > ? LIMIT 1""",
             (key, now - th["notify_cooldown_d"] * DAY_S)).fetchone():
         return False
-    ev = sig["evidence"]
-    where = f"project {sig['project_id']}"
-    for label in ("request_id", "message_id", "discharge_message_id",
-                  "med"):
-        if ev.get(label):
-            where += f" / {label.split('_')[0]} {ev[label]}"
-            break
-    else:
-        mids = ev.get("message_ids")
-        if mids:
-            where += f" / message {mids[0]}"
     ledger.outbox_add_tx("signal", sig["project_id"], {
-        "text": f"[MCS] レビュー候補 ({sig['type']})\n"
-                f"{where}\n{sig['note']}",
+        "text": signal_notice_text(sig),
         "signal_key": key, "type": sig["type"],
-        "project_id": sig["project_id"]})
+        "project_id": sig["project_id"],
+        "evidence_fp": evidence_fp(sig["evidence"])})
     return True
 
 

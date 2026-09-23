@@ -278,9 +278,13 @@ def _http_worker_main() -> int:
         finally:
             response.close()
     except Exception as error:
-        kind = "timeout" if (isinstance(error, TimeoutError)
-                             or type(error).__name__ == "socket.timeout") \
-            else "transport"
+        reason = getattr(error, "reason", error)
+        if isinstance(reason, ConnectionRefusedError):
+            kind = "connection_refused"
+        elif isinstance(reason, TimeoutError):
+            kind = "timeout"
+        else:
+            kind = "transport"
         result = {"ok": False, "error": kind}
     sys.stdout.write(json.dumps(result, separators=(",", ":")))
     sys.stdout.flush()
@@ -372,6 +376,8 @@ def bounded_http_request(endpoint: str, method: str, body,
     if not isinstance(result, dict) or not result.get("ok"):
         if isinstance(result, dict) and result.get("error") == "timeout":
             raise TimeoutError("http worker timeout")
+        if isinstance(result, dict) and result.get("error") == "connection_refused":
+            raise ConnectionRefusedError("http worker connection refused")
         raise OSError("http worker transport failed")
     try:
         status = int(result["status"])

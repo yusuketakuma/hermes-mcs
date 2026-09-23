@@ -6,6 +6,7 @@ and must each be independently failure-isolated by the caller.
 """
 import glob
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
 LOGFILE = os.path.join(HOME, "data", "run.log")
 BACKUP_KEEP = 7
 LOG_MAX = 5 * 1024 * 1024
+ATTACHMENT_KEEP_S = 14 * 86400
 
 
 def daily_backup(db_path: str):
@@ -56,13 +58,86 @@ def daily_backup(db_path: str):
             pass
 
 
-def rotate_log():
-    """Keep run.log bounded: >5MB -> run.log.1 (single generation)."""
+def rotate_log(paths=None):
+    """Keep the run/drain logs bounded: >5MB -> <name>.1 (single
+    generation). The drainer logs are held open by resident launchd
+    writers, so rename-rotation would strand them on the old inode —
+    copy the content aside then truncate the live file in place
+    (copytruncate): the writer's O_APPEND fd resumes at offset 0 (F21)."""
+    for path in paths or (LOGFILE,
+                          os.path.join(HOME, "data", "extract_drain.log"),
+                          os.path.join(HOME, "data",
+                                       "extract_drain_rt.log"),
+                          os.path.join(HOME, "data", "extract_llm.log"),
+                          os.path.join(HOME, "data",
+                                       "semantic_drain.log")):
+        try:
+            if os.path.getsize(path) > LOG_MAX:
+                shutil.copyfile(path, path + ".1")
+                with open(path, "w"):
+                    pass
+        except OSError:
+            pass
+
+
+def prune_attachments(db_path: str) -> int:
+    """Delete downloaded attachment payloads older than 14 days —
+    retention-bound the unbounded attachments/ dir (10GB in the first
+    week). The row survives as state='pruned' with name/bytes/sha256/url
+    intact so views still record that the attachment existed; only the
+    payload goes. 'pending'/'failed' rows are untouched — a failed
+    download keeps its retry path and never ages out mid-retry.
+
+    F12: the notifier aliases each file to `<path><ext>` for upload —
+    the alias is part of the same asset and is unlinked too. Files
+    still referenced by an unsent notification are kept. Returns the
+    number of payloads actually deleted."""
+    cutoff = time.time() - ATTACHMENT_KEEP_S
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
     try:
-        if os.path.getsize(LOGFILE) > LOG_MAX:
-            os.replace(LOGFILE, LOGFILE + ".1")
-    except OSError:
-        pass
+        keep_mids = {r[0] for r in con.execute("""
+          SELECT DISTINCT value FROM notify_outbox,
+            json_each(notify_outbox.payload, '$.message_ids')
+          WHERE kind='new_messages' AND state IN ('pending','failed')
+            AND json_valid(payload)""")}
+        keep_ids = {r[0] for r in con.execute("""
+          SELECT json_extract(payload,'$.attachment_id') FROM notify_outbox
+          WHERE kind='attachment_followup' AND state IN ('pending','failed')
+            AND json_valid(payload)""")}
+        rows = con.execute("""
+          SELECT attachment_id, message_id, name, local_path
+          FROM attachments
+          WHERE state IN ('downloaded','withdrawn')
+            AND local_path IS NOT NULL AND downloaded_at < ?""",
+          (cutoff,)).fetchall()
+        pruned = 0
+        for a in rows:
+            if a["message_id"] in keep_mids or a["attachment_id"] in keep_ids:
+                continue
+            path = a["local_path"]
+            try:
+                if path and os.path.isfile(path):
+                    os.unlink(path)
+                # notifier._media_path hardlink/copy alias — same asset
+                ext = os.path.splitext(a["name"] or "")[1].lower()
+                if (path and ext and len(ext) <= 9
+                        and ext[1:].isascii() and ext[1:].isalnum()):
+                    alias = path + ext
+                    if os.path.isfile(alias):
+                        os.unlink(alias)
+            except OSError:
+                continue   # unlink failed — retry next tick
+            con.execute("""
+              UPDATE attachments SET
+                state=CASE WHEN state='withdrawn' THEN 'withdrawn' ELSE 'pruned' END,
+                local_path=NULL
+              WHERE attachment_id=?""", (a["attachment_id"],))
+            pruned += 1
+        con.commit()
+        return pruned
+    finally:
+        con.close()
 
 
 def publish_snapshot(db_path: str) -> bool:

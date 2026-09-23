@@ -18,9 +18,22 @@
 - 収集は GET 中心、既読化は fetch_state=complete + ledger commit 済み +
   snapshot timestamp 必須の三重ゲート
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
-- ローカルLLM は loopback 固定・proxy 無効 — 患者記録は外部へ出ない
-- Jev 連携は `semantic.mode` 明示有効時のみ。本文は DATA 扱い
+- ローカルLLM の推論経路は loopback 固定・proxy 無効
+- 通知を設定した場合、本文・要約・送信対象の添付は Discord 等の設定先へ送る。
+  閲覧用 snapshot と `mcs_view` 出力にも PHI が含まれ得るため、閲覧権限と転送先を管理する
+- Jev 連携は `semantic.mode` 等の明示設定に従い、本文・必要なスレッド文脈を
+  外部 API へ送る。本文を DATA 扱いにしても匿名化されるわけではない
+- `brain_export.py` は患者名・病名・要約・薬剤等の PHI を含む Markdown を
+  ローカル出力する。出力後の知識ストア同期・LLM 利用は別のデータ経路であり、
+  エクスポート実行だけではそれらの外部送信を許可したことにならない
 - 人承認操作は `--confirm-human` + `reason` + receipt 記録が必須
+
+## 復旧と解析の限界
+
+日次 SQLite backup はローカル保存であり、別媒体の複製・端末喪失後の復元は
+未保証。患者 rollup は暫定集約、添付内容は未解析で、要約の入力上限を超える
+記録は処理を停止して要確認とする。解析履歴の PASS 件数を、全保存記録の
+現行品質や確定した臨床判断として扱わない。
 
 ## 報告
 

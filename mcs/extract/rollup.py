@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger
-from mcs_queries import med_is_patient_current
+from mcs_queries import current_fact_pred, med_is_patient_current
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -58,7 +58,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     out["last_activity_ts"] = newest["posted_at_ts"]
 
     arts = {}
-    for a in db.execute("""
+    for a in db.execute(f"""
       SELECT a.message_id, a.kind, a.content FROM artifacts a
       JOIN messages m ON m.message_id=a.message_id
       WHERE m.project_id=? AND a.kind IN
@@ -69,13 +69,19 @@ def build_rollup(ledger, project_id: int) -> dict:
         ELSE 0 END
         AND CASE WHEN json_valid(a.content)
                  THEN json_type(a.content)='object' ELSE 0 END
+        AND (a.kind='extract_v1' OR (1=1 {current_fact_pred()}))
       ORDER BY a.artifact_id
     """, (project_id,)):
         arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
 
     latest_vitals = None
     med_period = None
-    meds = {}
+    # name -> (bucket, item, posted_at): every med name resolves ONCE,
+    # on its newest mention — a stop/negation/past report newer than a
+    # 'current' mention suppresses it; an item missing status/subject
+    # and a rule-extracted name are candidates, never silently current
+    # (F06/F08)
+    med_state = {}
     sym_pos = {}   # term -> latest positive ts (msgs iterated newest-first)
     sym_neg = {}   # term -> latest negated ts
     requests = []
@@ -113,30 +119,51 @@ def build_rollup(ledger, project_id: int) -> dict:
         periods = _dicts(v1.get("med_periods"))
         if med_period is None and periods:
             med_period = periods[-1]
-        for x in _dicts(lm.get("meds")):
+        mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
+                          if isinstance(x.get("name"), str)}
+        # Chunk merging retains source order. The last mention within a
+        # post wins; another person's mention never changes this patient's state.
+        for x in reversed(_dicts(lm.get("meds"))):
             name = x.get("name")
-            # negated mentions, other people's meds, and past/planned
-            # mentions must not surface as the patient's CURRENT meds —
-            # the shared predicate still lets "planned" through, so the
-            # explicit status check below keeps current-meds strict
-            if not med_is_patient_current(x) \
-                    or x.get("status", "current") != "current":
+            if not isinstance(name, str) or name in ("", "処方薬", "薬"):
                 continue
-            if isinstance(name, str) and name not in ("", "処方薬", "薬"):
-                meds.setdefault(name, {"dose": x.get("dose"),
-                                       "last": m["posted_at"]})
+            if x.get("subject") in ("family", "other"):
+                continue
+            if name in med_state:
+                continue  # newest mention already decided this name
+            if x.get("unverified"):
+                med_state[name] = ("unverified", x, m["posted_at"])
+            elif x.get("action") == "stop" or x.get("negated") \
+                    or x.get("status") == "past":
+                med_state[name] = ("suppressed", x, m["posted_at"])
+            elif med_is_patient_current(x) \
+                    and x.get("status", "current") == "current":
+                med_state[name] = ("current", x, m["posted_at"])
+            elif not x.get("negated") \
+                    and x.get("subject", "patient") == "patient" \
+                    and x.get("status") == "planned":
+                med_state[name] = ("planned", x, m["posted_at"])
+            else:
+                # stop/past/negated/other-person — suppresses any older
+                # 'current' mention of the same name
+                med_state[name] = ("suppressed", x, m["posted_at"])
         for x in _dicts(v1.get("medications")):
-            if isinstance(x.get("name"), str) and x["name"]:
-                meds.setdefault(x["name"], {"dose": x.get("dose"),
-                                            "last": m["posted_at"]})
+            name = x.get("name")
+            if isinstance(name, str) and name and name not in med_state \
+                    and name not in mentioned_meds:
+                med_state[name] = ("unverified", x, m["posted_at"])
         for s in v1.get("symptoms") \
                 if isinstance(v1.get("symptoms"), list) else []:
             if not isinstance(s, str) or not s:
+                continue
+            if any(x.get("text") == s for x in _dicts(lm.get("symptoms"))):
                 continue
             sym_pos.setdefault(s, ts)
         for s in _dicts(lm.get("symptoms")):
             t = s.get("text")
             if not isinstance(t, str) or not t:
+                continue
+            if s.get("subject") in ("family", "other") or s.get("unverified"):
                 continue
             # LLM polarity: a negation newer than a positive mention
             # RESOLVES the symptom — it must cancel v1/rule positives,
@@ -168,9 +195,13 @@ def build_rollup(ledger, project_id: int) -> dict:
         out["latest_vitals"] = latest_vitals
     if med_period:
         out["current_med_period"] = med_period
-    if meds:
-        out["medications"] = [{"name": k, **v}
-                              for k, v in list(meds.items())[:20]]
+    for bucket, key, cap in (("current", "medications", 20),
+                             ("unverified", "unverified_medications", 20),
+                             ("planned", "planned_medications", 10)):
+        rows = [{"name": k, "dose": v[1].get("dose"), "last": v[2]}
+                for k, v in med_state.items() if v[0] == bucket][:cap]
+        if rows:
+            out[key] = rows
     if symptoms:
         out["recent_symptoms"] = [{"symptom": k, "last": v}
                                   for k, v in list(symptoms.items())[:20]]
@@ -226,7 +257,8 @@ def dirty_projects(ledger) -> list:
       SELECT p.project_id, r.g AS gen,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
-            AND a.kind IN ('extract_v1','extract_llm')) AS art_ts,
+            AND a.kind IN ('extract_v1','extract_llm',
+                           'canonical_projection')) AS art_ts,
         (SELECT MAX(m.updated_seen) FROM messages m
           WHERE m.project_id=p.project_id) AS msg_ts
       FROM patients p

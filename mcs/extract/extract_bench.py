@@ -43,10 +43,22 @@ DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "..", "..", "bench", "extract_cases.json")
 
 
+# safety-bearing med attributes — when a case SPECIFIES one it is part
+# of the match, not silently ignored (F23)
+_MED_ATTRS = ("dose", "status", "subject", "negated", "evidence")
+
+
+def _med_name_hit(expected: dict, m) -> bool:
+    """name(+action) identity — the anchor for attribute scoring."""
+    return (type(m) is dict
+            and m.get("name") == expected.get("name")
+            and expected.get("action") in (None, m.get("action")))
+
+
 def _match_med(expected: dict, got: list) -> bool:
-    return any(type(m) is dict
-               and m.get("name") == expected.get("name")
-               and (expected.get("action") in (None, m.get("action")))
+    return any(_med_name_hit(expected, m)
+               and all(expected.get(k) in (None, m.get(k))
+                       for k in _MED_ATTRS)
                for m in got)
 
 
@@ -77,8 +89,22 @@ def _score_case(case: dict, out: dict | None) -> dict:
     exp = case.get("expect", {})
     forbid = case.get("forbid", {})
     if out is None:
+        # a failed case is not "no fields" — every expected item is a
+        # miss, so extraction errors stay inside the recall denominator
+        # (F23). `error` still flags it for the errors list.
+        fields = {}
+        for f, items in (("meds", exp.get("meds")),
+                         ("symptoms", exp.get("symptoms")),
+                         ("events", exp.get("events"))):
+            fields[f] = {"tp": 0, "fp": 0, "fn": len(items or [])}
+        if "urgency" in exp:
+            fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
+        for key in _MED_ATTRS:
+            expected = sum(m.get(key) is not None for m in exp.get("meds", []))
+            if expected:
+                fields[f"med_{key}"] = {"tp": 0, "fp": 0, "fn": expected}
         return {"id": case["id"], "error": "extract_failed",
-                "fields": {}}
+                "fields": fields, "forbid_violations": []}
     got_meds = out.get("meds") or []
     got_syms = out.get("symptoms") or []
     got_events = out.get("events") or []
@@ -93,6 +119,23 @@ def _score_case(case: dict, out: dict | None) -> dict:
         ok = out.get("urgency") == exp["urgency"]
         fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
                              "fn": int(not ok)}
+    # safety-attribute scoring (F23): for each expected med that PINS
+    # an attribute, the name/action-matched output must carry the same
+    # value — a wrong status/subject/negated is a miss with its own
+    # per-attribute error rate, not an invisible pass
+    for k in _MED_ATTRS:
+        tp = fn = 0
+        for e in exp.get("meds", []):
+            if e.get(k) is None:
+                continue
+            hit = next((m for m in got_meds if _med_name_hit(e, m)),
+                       None)
+            if hit is not None and hit.get(k) == e[k]:
+                tp += 1
+            else:
+                fn += 1
+        if tp + fn:
+            fields[f"med_{k}"] = {"tp": tp, "fp": 0, "fn": fn}
     violations = []
     for fm in forbid.get("meds", []):
         if _match_med(fm, got_meds):
@@ -166,15 +209,23 @@ def cmd_run(args) -> int:
         print(f"  {c['id']}: "
               + ("FAIL" if scores[-1].get("error") else "ok"))
     agg = _aggregate(scores)
+    n_err = sum(1 for s in scores if s.get("error"))
     report = {"tag": args.tag, "created_at": int(time.time()),
               "elapsed_s": round(time.time() - t0, 1),
               "n_cases": len(cases),
+              # end-to-end success: extraction completed at all, over
+              # the WHOLE corpus — success-case F1 alone hides total
+              # pipeline failure (F23)
+              "e2e_success_rate": (round((len(cases) - n_err)
+                                         / len(cases), 3)
+                                   if cases else None),
               "errors": [s["id"] for s in scores if s.get("error")],
               "fields": agg, "cases": scores}
     with open(args.out, "w") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n{args.tag}: {len(cases)} cases, "
-          f"{len(report['errors'])} extraction errors -> {args.out}")
+          f"{len(report['errors'])} extraction errors "
+          f"(e2e {report['e2e_success_rate']}) -> {args.out}")
     for field, a in agg.items():
         print(f"  {field:9s} P={a['precision']:.3f} "
               f"R={a['recall']:.3f} F1={a['f1']:.3f}")

@@ -9,7 +9,7 @@ import time
 
 from mcs_requests import payload_hash
 import semantic_jev as jev
-from semantic_policy import (KIND_ASSESS, KIND_USAGE,
+from semantic_policy import (KIND_ASSESS, KIND_FACT_PROJ, KIND_USAGE,
                              POLICY_VERSION, SCHEMA_VERSION)
 
 
@@ -38,6 +38,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
     change, model/registry/schema bump invalidates prior results
     (INV-15). Canonical JSON — never a lossy string concat."""
     import semantic
+    import semantic_llm
     return payload_hash({
         # Target roles are selection metadata; artifacts are selected per
         # target ID. Everything used to interpret the source is versioned.
@@ -46,7 +47,8 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
         "model": model,
         "local_model": semantic.LLM_MODEL,
         "prompts": [semantic._FACT_PROMPT, semantic._SUMMARY_PROMPT,
-                    semantic._REPAIR_SUFFIX],
+                    semantic._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
+                    semantic_llm._FACT_V2_REPAIR_SUFFIX],
         "registry": jev.REGISTRY_VERSION,
         "schema": SCHEMA_VERSION,
         "policy": POLICY_VERSION,
@@ -78,7 +80,8 @@ def thread_bundle(ledger, project_id: int, root_id: int,
     for m in members:
         m["attachments"] = [dict(a) for a in ledger.db.execute(
             "SELECT attachment_id,file_id,name,bytes,sha256,state FROM attachments "
-            "WHERE message_id=? ORDER BY attachment_id", (m["message_id"],))]
+            "WHERE message_id=? AND state != 'withdrawn' "
+            "ORDER BY attachment_id", (m["message_id"],))]
         m["role"] = ("target" if target_ids
                      and m["message_id"] in target_ids else
                      "root" if m["parent_id"] is None else "context")
@@ -134,6 +137,8 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
             continue
         if kind == KIND_ASSESS and meta.get("fact_id") is not None:
             continue
+        if kind == KIND_FACT_PROJ and meta.get("invalidated"):
+            continue
         if meta.get("fingerprint") == fp and (
                 policy is None or meta.get("policy_fingerprint") == policy):
             try:
@@ -142,6 +147,41 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
                 return None
             return {"content": content, "meta": meta}
     return None
+
+
+def invalidate_projections(ledger, scfg: dict) -> int:
+    """Persist source/policy expiry for readers of the published snapshot."""
+    from semantic_policy import policy_fingerprint
+    policy = policy_fingerprint(scfg)
+    enabled = scfg.get("mode") != "off" and scfg.get("fact_source") == "canonical"
+    rows = ledger.db.execute("""
+      SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
+      FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
+      WHERE a.kind='canonical_projection' AND json_valid(a.meta)
+        AND json_type(a.meta)='object'
+        AND json_extract(a.meta,'$.invalidated') IS NOT 1
+    """).fetchall()
+    bundles, expired, projects = {}, [], set()
+    for row in rows:
+        meta = json.loads(row["meta"])
+        key = (row["project_id"], row["parent_id"] or row["message_id"])
+        if enabled and meta.get("policy_fingerprint") == policy:
+            if key not in bundles:
+                bundle = thread_bundle(ledger, *key)
+                bundles[key] = bundle["source_fingerprint"] if bundle else None
+            if bundles[key] is not None and meta.get("fingerprint") == bundles[key]:
+                continue
+        expired.append((row["artifact_id"],))
+        projects.add(row["project_id"])
+    if expired:
+        with ledger.db:
+            ledger.db.executemany(
+                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+                "WHERE artifact_id=?", expired)
+            ledger.db.executemany(
+                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
+                [(pid,) for pid in projects])
+    return len(expired)
 
 
 def _jst_day_start(now: float) -> float:

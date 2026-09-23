@@ -36,8 +36,9 @@ from semantic_store import _current, jev_state, jev_usage_today
 
 # extract_qc subsystem lives in semantic_qc.py; names stay re-exported
 # here so drain callers and tests keep one patch surface.
-from semantic_qc import (QC_MAX_ITEMS, _process_qc_job,  # noqa: F401
-                         _qc_questions, _qc_seed)  # noqa: F401
+from semantic_qc import (QC_MAX_ITEMS,  # noqa: F401
+                         _process_qc_job, _qc_questions,  # noqa: F401
+                         _qc_seed)  # noqa: F401
 
 def _eval_chunked(jev_client, state: dict, questions: dict,
                   deadline: float, limit: int) -> dict:
@@ -167,7 +168,16 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         from semantic_extraction import extract_facts_v2
         from semantic_projection import project_v2_facts
         prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
-        if prev_v2 is not None:
+        # C03: an adjudicated-but-incomplete stored doc must not be
+        # reused forever — one bounded re-extraction resumes from the
+        # missing chunks; if it still cannot complete, the generation
+        # parks as needs_review instead of silently deferring forever.
+        coverage_retry = (
+            fact_source == "canonical" and prev_v2 is not None
+            and prev_v2["meta"].get("coverage_status") not in
+                (None, "complete")
+            and not prev_v2["meta"].get("coverage_retry"))
+        if prev_v2 is not None and not coverage_retry:
             v2_doc = prev_v2["content"]
         else:
             if time.monotonic() > deadline - 5:
@@ -175,7 +185,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             v2_result = extract_facts_v2(
                 llm_fn, member, deadline - 5, ledger=ledger,
                 source_fingerprint=fp, project_id=pid,
-                jev_client=jev_client)
+                jev_client=jev_client, retry_coverage=coverage_retry)
             if not v2_result["extraction_complete"]:
                 if fact_source == "canonical":
                     return {"outcome": "retryable"
@@ -184,26 +194,43 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 v2_doc = None      # shadow: incomplete doc not stored
             else:
                 v2_doc = v2_result["doc"]
+                meta = {"fingerprint": fp,
+                        "policy_fingerprint": policy,
+                        "schema": SCHEMA_VERSION,
+                        "fact_source": fact_source,
+                        "coverage_status":
+                            v2_doc["coverage"]["status"],
+                        "facts": len(v2_doc["facts"]),
+                        "open_obligations": len(
+                            v2_doc["coverage"]
+                            ["open_obligation_ids"])}
+                if coverage_retry:
+                    # the bounded retry already ran — a still-incomplete
+                    # doc is flagged for human review and never
+                    # re-extracted again (C03)
+                    meta["coverage_retry"] = True
+                    if v2_doc["coverage"]["status"] != "complete":
+                        meta["needs_review"] = True
                 ledger.artifact_add(
                     KIND_FACTS_V2,
                     json.dumps(v2_doc, ensure_ascii=False,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=semantic.LLM_MODEL,
-                    meta={"fingerprint": fp,
-                          "policy_fingerprint": policy,
-                          "schema": SCHEMA_VERSION,
-                          "fact_source": fact_source,
-                          "coverage_status":
-                              v2_doc["coverage"]["status"],
-                          "facts": len(v2_doc["facts"]),
-                          "open_obligations": len(
-                              v2_doc["coverage"]
-                              ["open_obligation_ids"])})
+                    meta=meta)
         if fact_source == "canonical" and v2_doc is not None \
                 and v2_doc["coverage"]["status"] != "complete":
-            # Adjudicated-but-incomplete canonical coverage holds the
-            # generation — never degrade to the legacy projection.
+            if coverage_retry or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
+                ledger.artifact_add(
+                    KIND_AUDIT,
+                    json.dumps({"status": "NEEDS_REVIEW", "findings": [
+                        {"code": "canonical_coverage_incomplete"}],
+                        "target_message_id": mid}),
+                    project_id=pid, message_id=mid,
+                    meta={"fingerprint": fp, "policy_fingerprint": policy,
+                          "audit_status": "NEEDS_REVIEW",
+                          "technical_status": "needs_review"})
+                return {"outcome": "hard_fail", "v2_doc": v2_doc}
             return {"outcome": "incomplete", "v2_doc": v2_doc}
     if fact_source == "canonical":
         fail_kind = "incomplete"
@@ -217,9 +244,14 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         for _attempt in range(2):
             doc_hash = payload_hash(
                 {"f": v2_doc["facts"], "e": v2_doc["evidence"]})
-            prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp)
+            prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
+            # C04: only a COMPLETED evaluation is a reusable audit — a
+            # stored evaluated:false row (mid-audit outage) must be
+            # re-run, otherwise a transient failure pins the generation
+            # on a failed verdict forever and manual retry cannot clear it
             if prev_fa is not None \
-                    and prev_fa["meta"].get("doc_hash") == doc_hash:
+                    and prev_fa["meta"].get("doc_hash") == doc_hash \
+                    and prev_fa["content"].get("evaluated"):
                 fact_audit = prev_fa["content"]
             else:
                 if time.monotonic() > deadline - 5:
@@ -312,7 +344,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         # keeps working during migration — the artifact carries the
         # message hash so "current" predicates bind it like an
         # extract_llm row.
-        if _current(ledger, KIND_FACT_PROJ, mid, fp) is None:
+        if _current(ledger, KIND_FACT_PROJ, mid, fp, policy) is None:
             from semantic_projection import project_v2_doc_legacy
             ledger.artifact_add(
                 KIND_FACT_PROJ,
@@ -437,7 +469,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                    if any(m["message_id"] == t
                           for m in bundle["members"])]
     members = {m["message_id"]: m for m in bundle["members"]}
+    fact_source = scfg.get("fact_source", "legacy")
     facts_by_target: dict[int, list] = {}
+    v2_docs_by_target: dict[int, dict] = {}
     coverage_by_target: dict[int, list] = {}
     detail_findings: dict[int, list] = {}
     verdicts: dict[int, dict] = {}
@@ -531,8 +565,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             incomplete = True
             break
         facts = stage["facts"]
-        v2_doc = stage["v2_doc"]
-        fact_source = scfg.get("fact_source", "legacy")
+        if stage["v2_doc"] is not None:
+            v2_docs_by_target[mid] = stage["v2_doc"]
         facts_by_target[mid] = facts
         from semantic_assessment import evaluate_medication_events
         event_details = evaluate_medication_events(
@@ -703,11 +737,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 status = "NEEDS_REVIEW"
                 findings.append({"code": "repair_unavailable"})
             break
+        v2_doc = v2_docs_by_target.get(mid)
         if fact_source == "canonical" and v2_doc is not None:
             # T11: the adjudicated contract drives a mandatory render
             # layer — verified facts stay visible and non-terminal
             # obligations are disclosed as limitations even if the
-            # model summary dropped them.
+            # model summary dropped them. Per-target doc: the LAST
+            # member's doc must never leak into another target's
+            # summary (C02).
             from semantic_render import mandatory_render
             mandatory = mandatory_render(v2_doc)
             if mandatory["facts"]:
@@ -908,6 +945,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             result["errors"].append(e)
     out = {"mode": scfg["mode"], "done": 0, "deferred": 0,
            "failed": 0, "left": None, "budget_exhausted": False}
+    from semantic_store import invalidate_projections
+    invalidate_projections(ledger, scfg)
     if scfg["mode"] == "off":
         return out
     drain_started = time.perf_counter()

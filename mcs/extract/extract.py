@@ -55,7 +55,10 @@ _MED_TOKEN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(mg|μg|mcg|g|mL|単位|錠|cap|カプセル|包|枚|本)")
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
 # date range like 8/17-9/6 or 9/24-10/7 (med periods)
-_MED_PERIOD = re.compile(r"(\d{1,2}/\d{1,2})\s*[-–~〜]\s*(\d{1,2}/\d{1,2})")
+_MED_PERIOD = re.compile(
+    r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
+    r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
+RULE_VERSION = 2
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -91,6 +94,40 @@ def _ymd(month: int, day: int, year: int,
             continue        # pull to last year
         return d.isoformat()
     return None
+
+
+def _md_date(month: int, day: int, year: int):
+    try:
+        return datetime(year, month, day).date()
+    except ValueError:
+        return None
+
+
+def _period_dates(a, b, start_year, end_year, posted, context):
+    start_md = tuple(map(int, a.split("/")))
+    end_md = tuple(map(int, b.split("/")))
+    wraps = end_md < start_md
+    if start_year or end_year:
+        sy = int(start_year) if start_year else int(end_year) - wraps
+        ey = int(end_year) if end_year else sy + wraps
+        start, end = _md_date(*start_md, sy), _md_date(*end_md, ey)
+        return (start, end) if start and end and start <= end else (None, None)
+    if posted is None:
+        return None, None
+    candidates = [(_md_date(*start_md, y), _md_date(*end_md, y + wraps))
+                  for y in (posted.year - 1, posted.year, posted.year + 1)]
+    candidates = [(s, e) for s, e in candidates if s and e]
+    day = posted.date()
+    if re.search(r"予定|開始予定|投与予定", context):
+        candidates = [(s, e) for s, e in candidates if e >= day]
+    if not candidates:
+        return None, None
+    def distance(pair):
+        return max((pair[0] - day).days, (day - pair[1]).days, 0)
+    candidates.sort(key=distance)
+    if len(candidates) > 1 and distance(candidates[0]) == distance(candidates[1]):
+        return None, None
+    return candidates[0]
 
 
 def extract_message(body: str, posted_at: str) -> dict:
@@ -143,15 +180,18 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- med periods (date ranges, typically regimens) ---
     pers = []
-    for a, b in _MED_PERIOD.findall(body):
-        s = _ymd(int(a.split("/")[0]), int(a.split("/")[1]), year,
-                 posted, "past")
-        e = _ymd(int(b.split("/")[0]), int(b.split("/")[1]), year,
-                 posted, "future")
-        # a range whose end lands before its start is a year-wrap
-        # (12/28-1/10): end already resolved future-ward covers it
-        if s and e and s <= e:
-            pers.append({"start": s, "end": e, "raw": f"{a}-{b}"})
+    for pm in _MED_PERIOD.finditer(body):
+        sy, a, ey, b = pm.groups()
+        # the range must sit in a medication context — a bare date span
+        # (shift schedule, visit window) is not a regimen (F07)
+        ctx = body[max(0, pm.start() - 60):pm.end() + 60]
+        if not _MED_CTX.search(ctx):
+            continue
+        s, e = _period_dates(a, b, sy, ey, posted, ctx)
+        period = {"raw": pm.group(0)}
+        if s and e:
+            period.update(start=s.isoformat(), end=e.isoformat())
+        pers.append(period)
     if pers:
         out["med_periods"] = pers
 
@@ -254,8 +294,9 @@ def _delete_stale(ledger) -> int:
       WHERE a.kind=? AND CASE WHEN json_valid(a.meta) THEN
         json_extract(a.meta,'$.hash') IS NULL
         OR json_extract(a.meta,'$.hash') != m.content_hash
+        OR COALESCE(json_extract(a.meta,'$.rule_version'),0) != ?
       ELSE 0 END
-    """, (KIND,)).fetchall()
+    """, (KIND, RULE_VERSION)).fetchall()
     for r in stale:
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND message_id=?",
@@ -275,6 +316,7 @@ def run_pending(ledger) -> dict:
              m.content_hash
       FROM messages m
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
+        AND (m.body_state IS NULL OR m.body_state='full')
         AND m.message_id NOT IN (SELECT message_id FROM artifacts
                                  WHERE kind=? AND message_id IS NOT NULL)
       ORDER BY m.posted_at_ts DESC
@@ -285,7 +327,8 @@ def run_pending(ledger) -> dict:
         ledger.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
                             project_id=r["project_id"],
                             message_id=r["message_id"], model="rules-v1",
-                            meta={"hash": r["content_hash"]})
+                            meta={"hash": r["content_hash"],
+                                  "rule_version": RULE_VERSION})
         pids.add(r["project_id"])
     return {"done": len(rows), "pids": sorted(pids)}
 
@@ -315,7 +358,8 @@ def main() -> int:
     q = """SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
                   m.content_hash
            FROM messages m WHERE m.body_text IS NOT NULL
-             AND m.body_text != ''"""
+             AND m.body_text != ''
+             AND (m.body_state IS NULL OR m.body_state='full')"""
     params: list = []
     if args.project:
         q += " AND m.project_id=?"
@@ -344,7 +388,8 @@ def main() -> int:
         led.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
                        project_id=r["project_id"],
                        message_id=r["message_id"], model="rules-v1",
-                       meta={"hash": r["content_hash"]})
+                       meta={"hash": r["content_hash"],
+                             "rule_version": RULE_VERSION})
         n += 1
     print(json.dumps({"extracted": n, "skipped_existing": len(done),
                       "total_msgs": len(rows)}, ensure_ascii=False))

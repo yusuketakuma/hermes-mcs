@@ -117,7 +117,7 @@ def test_snapshot_read_preview_confirm_and_receipt_pipeline(tmp_path):
         assert status["ok"] is True
         optional_scope = _call(
             handler, {"op": "status", "project_id": 1},
-            _context(scope_id=None, profile=None))
+            _context(scope_id=None, profile=None, message_id=None))
         assert optional_scope["ok"] is True
         evidence = _call(handler, {
             "op": "read", "kind": "evidence", "project_id": 1,

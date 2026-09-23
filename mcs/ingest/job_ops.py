@@ -40,6 +40,12 @@ DISCOVERY_INTERVAL_S = 24 * 3600
 DISCOVERY_RETRY_S = 1800
 REPLY_JOB_LIMIT = 10
 HISTORY_JOB_LIMIT = 4
+# reconcile = the only surface that sees EDITS/DELETIONS on posts below
+# the since-cutoff: a slow rotating re-walk of the full history (no
+# since filter) that re-saves pages so upserts can detect changes.
+RECONCILE_PAGES = 2            # history pages per drain call
+RECONCILE_INTERVAL_S = 6*3600  # idle period after a full pass completes
+RECONCILE_JOB_LIMIT = 2        # patients per drain call
 # a history window that stays checkpoint-unsafe is re-walked on each
 # defer; after this many stalls the job fails visibly instead of looping
 # forever over an unresolvable blocker (e.g. a 'snippet' parent whose
@@ -216,7 +222,9 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                 and len({t.message_id for t in m.replies}) >= m.reply_count):
             continue
         try:
-            full = adapter.fetch_thread(m.project_id, m.message_id)
+            kwargs = ({"max_pages": (m.reply_count + 9) // 10}
+                      if m.reply_count > 100 else {})
+            full = adapter.fetch_thread(m.project_id, m.message_id, **kwargs)
         except SessionExpired as e:
             result.error = e
             result.checkpoint_safe = False
@@ -225,6 +233,9 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
             stats["errors"].append(
                 f"thread {m.project_id}/{m.message_id}: {e.kind}")
             if ledger:
+                if e.kind == "thread_incomplete":
+                    ledger.job_add("thread", m.project_id, m.message_id,
+                                   parent_id=m.message_id, payload={"page": 1})
                 for t in m.replies:
                     ledger.job_add("reply", m.project_id, t.message_id,
                                    parent_id=m.message_id)
@@ -272,12 +283,40 @@ def run_reply_jobs(adapter, ledger, result, deadline,
     for r in ledger.replies_without_job():
         ledger.job_add("reply", r["project_id"], r["message_id"],
                        parent_id=r["parent_id"])
-    for job in ledger.job_due(limit=REPLY_JOB_LIMIT, kind="reply"):
+    jobs = ledger.db.execute(
+        "SELECT * FROM fetch_jobs WHERE kind IN ('reply','thread') "
+        "AND state='pending' AND next_try <= ? "
+        "ORDER BY updated_at,job_id LIMIT ?",
+        (time.time(), REPLY_JOB_LIMIT)).fetchall()
+    for job in jobs:
         if time.monotonic() > deadline - 20:
             break
         try:
-            full = adapter.fetch_thread(job["project_id"],
-                                        job["parent_id"] or 0)
+            pl = json.loads(job["payload"] or "{}")
+            if not isinstance(pl, dict):
+                raise ValueError
+            page = pl.get("page", 1)
+            if type(page) is not int or page < 1:
+                raise ValueError
+        except (json.JSONDecodeError, TypeError, ValueError):
+            ledger.job_fail(job["job_id"])
+            result["errors"].append("reply: invalid_payload")
+            continue
+        try:
+            window_error = None
+            win = getattr(adapter, "fetch_thread_window", None)
+            if win is not None:
+                window = win(
+                    job["project_id"], job["parent_id"] or 0,
+                    start_page=page)
+                full = window.messages
+                next_page = None if window.reached else page + window.pages
+                window_error = window.error
+            else:
+                # stubs/simpler adapters: whole thread in one call
+                full = adapter.fetch_thread(
+                    job["project_id"], job["parent_id"] or 0)
+                next_page = None
         except SessionExpired:
             raise  # auth failure aborts the run — never consumed as job retry
         except MCSError as e:
@@ -285,30 +324,53 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             result["errors"].append(
                 f"reply {job['message_id']}: {e.kind}")
             continue
-        got = {m.message_id for m in full}
-        if job["message_id"] in got:
-            target = next(m for m in full
-                          if m.message_id == job["message_id"])
-            if target.body_state not in TERMINAL_BODY_STATES:
-                ledger.job_retry(job["job_id"])
-                result["errors"].append(
-                    f"reply {job['message_id']}: body_incomplete")
-                continue
-            # the thread fetch returned EVERY reply — persisting siblings
-            # too means a single successful fetch can retire several
-            # queued reply jobs at once (Oracle F3). The thread root
-            # itself is excluded from the save set (C2). save_thread_
-            # replies reconciles each sibling's job state in the same
-            # commit (F05) and queues an unread-only notify intent (R4)
-            replies = [m for m in full
-                       if m.message_id != job["parent_id"]]
-            for m in replies:
-                m.parent_id = job["parent_id"]
+        # persist THIS window's replies even mid-walk — partial progress
+        # is durable and save_thread_replies reconciles every sibling's
+        # reply-job state in the same commit (Oracle F3/F05). The thread
+        # root itself is excluded from the save set (C2).
+        replies = [m for m in full if m.message_id != job["parent_id"]]
+        for m in replies:
+            m.parent_id = job["parent_id"]
+        if replies:
             ledger.save_thread_replies(replies, job["project_id"],
                                        notify={"source": "reply_job"},
                                        semantic=semantic)
+        if window_error:
+            # Preserve the unwalked thread even if a target in an earlier
+            # page already retired its individual reply job.
+            ledger.job_add("thread", job["project_id"], job["parent_id"],
+                           parent_id=job["parent_id"],
+                           payload={"page": next_page})
+            if job["kind"] == "thread" or ledger.job_state(
+                    "reply", job["project_id"], job["message_id"]) == "pending":
+                pl["page"] = next_page
+                ledger.job_defer(job["job_id"], 300, payload=pl)
+                if not isinstance(window_error, SessionExpired):
+                    ledger.job_retry(job["job_id"])
+            result["errors"].append(f"thread {job['parent_id']}: {window_error.kind}")
+            if isinstance(window_error, SessionExpired):
+                raise window_error
+            continue
+        target_done = (job["kind"] == "reply" and ledger.job_state(
+            "reply", job["project_id"], job["message_id"]) != "pending")
+        if target_done:
+            if next_page is not None:
+                ledger.job_add("thread", job["project_id"], job["parent_id"],
+                               parent_id=job["parent_id"],
+                               payload={"page": next_page})
+            continue
+        if next_page is not None:
+            pl["page"] = next_page
+            ledger.job_defer(job["job_id"], 0, payload=pl)
+            result.setdefault("reply_windows", []).append(
+                {"mid": job["message_id"], "next_page": next_page})
+        elif job["kind"] == "thread":
             ledger.job_done(job["job_id"])
         else:
+            # An incomplete target on an earlier page must be revisited
+            # on the next attempt, not retried forever at the tail.
+            pl["page"] = 1
+            ledger.job_defer(job["job_id"], 0, payload=pl)
             ledger.job_retry(job["job_id"])
 
 
@@ -448,15 +510,99 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
     return done_n
 
 
+# ---------- reconcile (post-import edit/delete coverage) ----------
+
+def seed_reconcile(ledger):
+    """Ensure one durable reconcile job per floored patient. Only a
+    completed deep import gets a re-walk — mid-import patients are
+    still covered by their own history cursor."""
+    for r in ledger.db.execute(
+            "SELECT project_id FROM patients"
+            " WHERE history_floor IS NOT NULL AND history_floor != 0"):
+        pid = r["project_id"]
+        if not ledger.job_pending("reconcile", pid):
+            # stagger first runs so a fleet doesn't refetch together
+            ledger.job_add("reconcile", pid, payload={"page": 1},
+                           next_try=time.time()
+                           + (pid * 977) % RECONCILE_INTERVAL_S)
+
+
+def run_reconcile_jobs(adapter, ledger, result, deadline,
+                       semantic: bool = False):
+    """Re-walk floored patients' history in small page windows, with NO
+    since cutoff — the only path where an edit/deletion/tombstone on an
+    old post is observed (F04). Re-saving lets the upsert detect the
+    changed content_hash and retire derived artifacts as usual."""
+    done_n = 0
+    jobs = ledger.db.execute(
+        "SELECT * FROM fetch_jobs WHERE kind='reconcile' "
+        "AND state='pending' AND next_try <= ? "
+        "ORDER BY updated_at,job_id LIMIT ?",
+        (time.time(), RECONCILE_JOB_LIMIT)).fetchall()
+    for job in jobs:
+        if time.monotonic() > deadline - 30:
+            break
+        try:
+            pl = json.loads(job["payload"] or "{}")
+            if not isinstance(pl, dict):
+                raise ValueError
+            page = pl.get("page")
+            if type(page) is not int or page < 1:
+                raise ValueError
+        except (json.JSONDecodeError, TypeError, ValueError):
+            ledger.job_fail(job["job_id"])
+            result["errors"].append("reconcile: invalid_payload")
+            continue
+        pid = job["project_id"]
+        try:
+            batch = adapter.fetch_history(
+                pid, 0, max_pages=RECONCILE_PAGES, start_page=page)
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            ledger.job_retry(job["job_id"])
+            result["errors"].append(f"reconcile {pid}: {e.kind}")
+            continue
+        merged = merge_full_replies(adapter, batch.messages, 0, deadline,
+                                    result, ledger=ledger)
+        new_ids = ledger.save_messages(batch.messages, project_id=pid,
+                                       semantic=semantic)
+        if merged.error:
+            raise merged.error
+        if batch.pages and merged.checkpoint_safe:
+            pl["page"] = page + batch.pages
+        if batch.reached and not batch.error and merged.checkpoint_safe:
+            # full pass complete — restart the rotation after a pause
+            pl["page"] = 1
+            ledger.job_defer(job["job_id"], RECONCILE_INTERVAL_S,
+                             payload=pl)
+        elif batch.error:
+            if isinstance(batch.error, SessionExpired):
+                ledger.job_defer(job["job_id"], 300, payload=pl)
+                raise batch.error
+            ledger.job_defer(job["job_id"], 0, payload=pl)
+            ledger.job_retry(job["job_id"], 300)
+            result["errors"].append(f"reconcile {pid}: {batch.error.kind}")
+        else:
+            ledger.job_defer(job["job_id"],
+                             0 if merged.checkpoint_safe else 300, payload=pl)
+        result.setdefault("reconcile", []).append(
+            {"pid": pid, "new": len(new_ids), "page": pl["page"]})
+        done_n += 1
+    return done_n
+
+
 # ---------- discovery + trickle seeding ----------
 
 def seed_discovery(ledger):
     """Ensure the periodic discovery job exists (kept permanently pending
     with a daily next_try — never 'done', so it reschedules itself).
     A previously failed discovery row is revived — job_add's conflict
-    path resets attempts and state (Oracle F7)."""
+    path resets attempts and state (Oracle F7). Floored patients also
+    keep a durable reconcile job for post-import edits/deletions."""
     if not ledger.job_pending("discovery", 0):
         ledger.job_add("discovery", 0, payload={})
+    seed_reconcile(ledger)
 
 
 def run_discovery(adapter, ledger, result, deadline,

@@ -102,6 +102,17 @@ def test_doc_burden_empty_is_null(db):
     assert st["hhi"] is None and st["top1_share"]["value"] is None
 
 
+def test_doc_burden_separates_missing_identity_and_missing_name(db):
+    _msg(db, 1, sender=1, name="known")
+    _msg(db, 2, sender=1, name=None)
+    _msg(db, 3, sender=None, name="display name without identity")
+    _msg(db, 4, sender=None, name=None)
+    st = run(db, stat="doc_burden")["doc_burden"]
+    assert st["unknown_sender_posts"] == 2
+    assert st["nameless_sender_posts"] == 2
+    assert st["sender_count"] == 2
+
+
 # --- registry / capability gating ---
 
 def test_unknown_stat_rejected(db):

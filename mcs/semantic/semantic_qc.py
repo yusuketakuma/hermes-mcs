@@ -8,48 +8,77 @@ mutates the extraction artifact and never suppresses an item.
 from __future__ import annotations
 
 import json
+import time
 
 from mcs_util import load_config
+from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
 import semantic_runtime as runtime
 from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, semantic_config
 
 QC_MAX_ITEMS = 16
+# QC applies to realtime processing only — a backfill/archive fetch must
+# not turn stored history into Jev audit traffic (operator directive:
+# "QCはリアルタイム処理のみに適用する").  A pending job that ages past
+# the window is reaped rather than evaluated late.
+QC_REALTIME_MAX_AGE_S = 3 * 86400
 
 
 def _qc_seed(ledger, now: float, limit: int = 32) -> int:
     """Queue extract_qc jobs for current extract_llm artifacts lacking a
-    QC artifact for the same content hash. Re-extraction (hash change)
-    re-pends the row; a pending/failed row for the SAME hash is left
+    QC artifact for the same content hash and extractor generation.
+    Re-extraction (hash change) or an extractor version bump re-pends
+    the row; a pending/failed row for the SAME hash+version is left
     alone (failed inputs stay failed until an explicit retry).
-    json_valid guards keep poisoned meta rows from aborting the scan."""
+    Pending and exhausted jobs for the same extraction cannot consume
+    the seed window. A changed extraction replaces their generation."""
     import extract_llm
+    version = extract_llm.EXTRACT_VERSION
+    cutoff = now - QC_REALTIME_MAX_AGE_S
     with ledger.db:
-        cur = ledger.db.execute("""
+        ledger.db.execute(
+            "DELETE FROM fetch_jobs WHERE kind=? AND state='pending'"
+            " AND message_id IN (SELECT message_id FROM messages"
+            "  WHERE COALESCE(posted_at_ts,0) < ?)",
+            (QC_JOB_KIND, cutoff))
+        cur = ledger.db.execute(f"""
           INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
             payload,state,next_try,created_at,updated_at)
           SELECT ?, m.project_id, a.message_id, NULL,
-            json_object('hash', json_extract(a.meta,'$.hash')),
+            json_object('hash', json_extract(a.meta,'$.hash'),
+                        'ver', json_extract(a.meta,'$.extract_version'),
+                        'source_artifact_id', a.artifact_id),
             'pending', ?, ?, ?
           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-          WHERE a.kind='extract_llm' AND json_valid(a.meta)
-            AND json_extract(a.meta,'$.hash')=m.content_hash
-            AND json_extract(a.meta,'$.extract_version')=?
-            AND json_extract(a.meta,'$.error') IS NULL
+          WHERE a.artifact_id={qc_source_id(version=version)}
+            AND COALESCE(m.posted_at_ts,0) >= ?
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                            WHERE q.kind=? AND q.message_id=a.message_id
-                             AND json_valid(q.meta)
-                             AND json_extract(q.meta,'$.hash')
-                                 =json_extract(a.meta,'$.hash'))
+                             {current_qc_pred('q', version=version)})
+            AND NOT EXISTS(SELECT 1 FROM fetch_jobs j
+                           WHERE j.kind=? AND j.message_id=a.message_id
+                             AND j.state IN ('pending','failed')
+                             AND CASE WHEN json_valid(j.payload) THEN
+                               json_extract(j.payload,'$.source_artifact_id')
+                                   =a.artifact_id
+                               AND json_extract(j.payload,'$.hash')=m.content_hash
+                               AND json_extract(j.payload,'$.ver')={version}
+                             ELSE 0 END)
           ORDER BY a.artifact_id DESC LIMIT ?
           ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
             payload=excluded.payload,state='pending',attempts=0,
             next_try=excluded.next_try,updated_at=excluded.updated_at
-          WHERE fetch_jobs.state IN ('done','failed')
-            AND coalesce(json_extract(fetch_jobs.payload,'$.hash'),'')
+          WHERE fetch_jobs.state='done' OR CASE
+            WHEN json_valid(fetch_jobs.payload) THEN
+              coalesce(json_extract(fetch_jobs.payload,'$.source_artifact_id'),0)
+                !=json_extract(excluded.payload,'$.source_artifact_id')
+              OR coalesce(json_extract(fetch_jobs.payload,'$.hash'),'')
                 !=json_extract(excluded.payload,'$.hash')
-        """, (QC_JOB_KIND, now, now, now,
-              extract_llm.EXTRACT_VERSION, QC_ARTIFACT, limit))
+              OR coalesce(json_extract(fetch_jobs.payload,'$.ver'),0)
+                !=json_extract(excluded.payload,'$.ver')
+            ELSE 1 END
+        """, (QC_JOB_KIND, now, now, now, cutoff,
+              QC_ARTIFACT, QC_JOB_KIND, limit))
     return cur.rowcount
 
 
@@ -112,25 +141,27 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             else "stale"
 
     msg = ledger.db.execute(
-        "SELECT content_hash,body_text FROM messages WHERE message_id=?",
-        (mid,)).fetchone()
+        "SELECT content_hash,body_text,posted_at_ts FROM messages"
+        " WHERE message_id=?", (mid,)).fetchone()
     if msg is None:
         return done()
-    art = None
-    for r in ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind='extract_llm'"
-            " AND message_id=? ORDER BY artifact_id DESC", (mid,)):
-        try:
-            m = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if m.get("hash") == msg["content_hash"] \
-                and m.get("extract_version") == extract_llm.EXTRACT_VERSION \
-                and not m.get("error"):
-            art = (r["content"], m["hash"])
-            break
-    if art is None:
+    # Realtime-only: a queued job whose post aged past the window is
+    # completed without evaluation rather than audited late.
+    if (msg["posted_at_ts"] or 0) < time.time() - QC_REALTIME_MAX_AGE_S:
         return done()
+    source = ledger.db.execute(
+        "SELECT a.artifact_id,a.content,json_extract(a.meta,'$.hash') AS hash "
+        "FROM messages m JOIN artifacts a ON a.artifact_id="
+        f"{qc_source_id(version=extract_llm.EXTRACT_VERSION)} "
+        "WHERE m.message_id=?", (mid,)).fetchone()
+    if source is None:
+        return done()
+    art = (source["content"], source["hash"], source["artifact_id"])
+    payload = runtime.parse_payload(job)
+    if payload.get("source_artifact_id") != art[2] \
+            or payload.get("hash") != art[1] \
+            or payload.get("ver") != extract_llm.EXTRACT_VERSION:
+        return done()  # the seed pass will queue the new extraction
     try:
         ex = json.loads(art[0] or "{}")
     except (json.JSONDecodeError, TypeError):
@@ -145,11 +176,17 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                          for qid, text in ctx_items.items()]}
 
     def guard(stage):
+        def current_source():
+            row = ledger.db.execute(
+                f"SELECT content_hash,{qc_source_id(version=extract_llm.EXTRACT_VERSION)} "
+                "FROM messages m WHERE message_id=?", (mid,)).fetchone()
+            return f"{row[0]}:{row[1]}" if row else None
         runtime.guard(
             ledger, token, deadline=deadline,
             expected_config_generation=config_generation,
             expected_mode=scfg["mode"], cfg_path=cfg_path,
             load_cfg=load_config, parse_cfg=semantic_config,
+            source_fingerprint=f"{art[1]}:{art[2]}", current_source=current_source,
             stage=stage)
 
     req0 = jev_client.requests_made
@@ -170,6 +207,12 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             return "retry"
         # permanent failure: record why QC could not run instead of
         # retrying forever — the extraction artifact itself is untouched
+        try:
+            guard("qc:write")
+        except runtime.RuntimeStale:
+            return "stale"
+        except (runtime.RuntimeOff, runtime.RuntimeBudget):
+            return "deferred"
         with ledger.db:
             ledger.db.execute(
                 "DELETE FROM artifacts WHERE kind=? AND message_id=?"
@@ -183,6 +226,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                 meta={"hash": art[1],
                       "extract_version": extract_llm.EXTRACT_VERSION,
+                      "source_artifact_id": art[2],
                       "qc": "unevaluated"})
             if not runtime.transition_tx(ledger, token, "done"):
                 raise runtime.RuntimeStale("qc:write")
@@ -211,10 +255,29 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                               scfg["match_threshold"],
                               scfg["nomatch_threshold"]),
                           "noul": ans.get("noul")})
-    content = {"qc": "done", "items": items}
+    by_field = {}
+    for field in ("meds", "symptoms", "events", "requests", "vitals",
+                  "summary", "points", "urgency"):
+        value = ex.get(field)
+        total = len(value) if isinstance(value, (list, dict)) \
+            else int(isinstance(value, str) and bool(value))
+        checked = sum(item["section"] == field for item in items)
+        if field == "urgency":
+            checked = int(urgency is not None)
+        by_field[field] = {"checked": checked, "total": total,
+                           "unchecked": total - checked}
+    total_items = sum(v["total"] for v in by_field.values())
+    checked_items = sum(v["checked"] for v in by_field.values())
+    content = {"qc": "done", "items": items,
+               "coverage": {"checked": checked_items, "total": total_items,
+                            "unchecked": total_items - checked_items,
+                            "capped": sum(by_field[s]["total"] for s in
+                                ("meds", "symptoms", "events")) > QC_MAX_ITEMS,
+                            "by_field": by_field}}
     if urgency is not None:
         content["urgency"] = urgency
     try:
+        guard("qc:write")
         with ledger.db:
             # stale QC rows for a superseded hash are replaced in the
             # same tx; the job transition lands here too so the row is
@@ -229,12 +292,13 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                 meta={"hash": art[1],
                       "extract_version": extract_llm.EXTRACT_VERSION,
+                      "source_artifact_id": art[2],
                       "qc": "done",
                       "jev_requests": jev_client.requests_made - req0})
             if not runtime.transition_tx(ledger, token, "done"):
                 raise runtime.RuntimeStale("qc:write")
     except runtime.RuntimeStale:
         return "stale"
+    except (runtime.RuntimeOff, runtime.RuntimeBudget):
+        return "deferred"
     return "done"
-
-

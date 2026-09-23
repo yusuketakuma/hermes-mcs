@@ -38,8 +38,8 @@ import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
 
-from mcs_util import (NoRedirect, env_value, load_config,
-                      no_proxy_opener)
+from mcs_util import env_value, load_config, no_proxy_opener
+from mcs_transport import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
@@ -300,6 +300,10 @@ class Message:
     reply_count: int
     replies: list["Message"] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
+    # whether the response enumerated `files` at all — only a complete
+    # list (possibly empty) may reconcile the stored attachment set;
+    # an absent key means "not returned this call", never "no files"
+    files_present: bool = False
 
 
 @dataclass
@@ -445,6 +449,7 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
         is_unread=bool(m.get("is_unread")) if is_unread is None else is_unread,
         reply_count=reply_count,
         attachments=_attachments(m.get("files")),
+        files_present="files" in m,
     )
 
 
@@ -459,17 +464,45 @@ def _norm_threads(items, project_id: int, parent_id: int) -> list[Message]:
 
 class MCSAdapter:
     def __init__(self, cdp_url: str = "http://127.0.0.1:9333",
-                 token_cache: str | None = None, timeout: int = 20):
+                 token_cache: str | None = None, timeout: int = 20, *,
+                 worker=None):
         self.cdp_url = cdp_url
         self.timeout = timeout
         self._token: str | None = None
         self._token_cache = token_cache
-        self._opener = no_proxy_opener(NoRedirect)
         self._dl_opener = no_proxy_opener(_SameHostRedirect)
+        self._deadline: float | None = None
+        self._worker = bounded_call if worker is None else worker
+
+    def set_deadline(self, monotonic_deadline: float | None):
+        """Absolute run budget enforced by reaped I/O workers (F13)."""
+        self._deadline = monotonic_deadline
+
+    def _remaining_timeout(self, maximum: float) -> float:
+        if self._deadline is None:
+            return maximum
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise MCSError("deadline_exceeded", retryable=True)
+        return min(maximum, remaining)
+
+    def _io(self, operation: str, maximum: float, **payload) -> dict:
+        timeout = self._remaining_timeout(maximum)
+        try:
+            return self._worker(dict(payload, operation=operation),
+                                timeout=timeout, deadline=self._deadline)
+        except TimeoutError:
+            kind = "deadline_exceeded" if (self._deadline is not None
+                       and time.monotonic() >= self._deadline) else "network_error"
+            raise MCSError(kind, retryable=True) from None
+        except WorkerError as error:
+            raise MCSError(error.kind, status=error.status,
+                           retryable=error.retryable) from None
 
     # ---------- session ----------
 
     def bootstrap_token(self) -> str:
+        self._remaining_timeout(5)
         cached = self._read_cache()
         try:
             tok = self._token_via_cdp()
@@ -477,6 +510,7 @@ class MCSAdapter:
             self._write_cache(tok)
             return tok
         except Exception as e:
+            self._remaining_timeout(5)
             if cached:
                 self._token = cached
                 return cached
@@ -512,20 +546,16 @@ class MCSAdapter:
             pass
 
     def _token_via_cdp(self) -> str:
-        with urllib.request.urlopen(f"{self.cdp_url}/json/list", timeout=5) as r:
-            targets = json.load(r)
+        targets = self._cdp_json("/json/list")
         page = next((t for t in targets if t.get("type") == "page"
                      and urllib.parse.urlparse(t.get("url", "")).hostname
                      == "www.medical-care.net"), None)
         if not page:
-            req = urllib.request.Request(f"{self.cdp_url}/json/new?{BASE}/unreads",
-                                         method="PUT")
-            with urllib.request.urlopen(req, timeout=5) as r:
-                page = json.load(r)
-            time.sleep(3)
+            page = self._cdp_json(f"/json/new?{BASE}/unreads", method="PUT")
+            self._sleep_bounded(3)
 
-        raw = _ws_eval(page["webSocketDebuggerUrl"],
-                       f"localStorage.getItem('{LS_TOKEN_KEY}')", 15)
+        raw = self._cdp_eval(page["webSocketDebuggerUrl"],
+                            f"localStorage.getItem('{LS_TOKEN_KEY}')", 15)
         if not raw:
             raise BootstrapError("no session token in localStorage")
         try:
@@ -548,17 +578,16 @@ class MCSAdapter:
 
     def _cdp_up(self) -> bool:
         try:
-            with urllib.request.urlopen(
-                    f"{self.cdp_url}/json/version", timeout=3):
-                pass
+            self._cdp_json("/json/version", timeout=3)
             return True
-        except OSError:
+        except (OSError, MCSError):
             return False
 
     def _ensure_chrome(self, profile_dir: str, chrome_bin: str):
         if self._cdp_up():
             return
         import subprocess
+        self._remaining_timeout(1)
         subprocess.Popen([
             chrome_bin,
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
@@ -567,19 +596,23 @@ class MCSAdapter:
             f"{BASE}/authentication/login"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(30):
-            time.sleep(1)
+            self._sleep_bounded(1)
+            self._remaining_timeout(3)
             if self._cdp_up():
                 return
         raise BootstrapError("chrome launch timed out")
 
     def _cdp_eval(self, ws_url: str, expr: str, timeout: int = 15):
-        return _ws_eval(ws_url, expr, timeout)
+        return self._io("cdp_eval", timeout, url=ws_url, expression=expr)["value"]
+
+    def _cdp_json(self, path: str, method: str = "GET", timeout: float = 5):
+        return self._io("cdp_json", timeout, url=self.cdp_url + path,
+                        method=method)["value"]
 
     def _login_page(self):
         """Pick the login tab by STRICT origin+path — never fill credentials
         into a lookalike path on another host (Oracle B14)."""
-        with urllib.request.urlopen(f"{self.cdp_url}/json/list", timeout=5) as r:
-            targets = json.load(r)
+        targets = self._cdp_json("/json/list")
         for t in targets:
             if t.get("type") != "page":
                 continue
@@ -594,13 +627,10 @@ class MCSAdapter:
                     t.get("url", "")).hostname == "www.medical-care.net":
                 self._cdp_eval(t["webSocketDebuggerUrl"],
                                f"location.href='{BASE}/authentication/login'")
-                time.sleep(4)
+                self._sleep_bounded(4)
                 return t
-        req = urllib.request.Request(
-            f"{self.cdp_url}/json/new?{BASE}/authentication/login", method="PUT")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            page = json.load(r)
-        time.sleep(4)
+        page = self._cdp_json(f"/json/new?{BASE}/authentication/login", method="PUT")
+        self._sleep_bounded(4)
         return page
 
     def _keychain_password(self, service: str = "mcs-adapter") -> str | None:
@@ -611,9 +641,15 @@ class MCSAdapter:
         interaction is unavailable) — a recoverable operational state that
         must not be conflated with a missing credential."""
         import subprocess
-        r = subprocess.run(
-            ["security", "find-generic-password", "-s", service, "-w"],
-            capture_output=True, text=True)
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", service, "-w"],
+                capture_output=True, text=True, timeout=self._remaining_timeout(15))
+        except subprocess.TimeoutExpired:
+            self._remaining_timeout(1)
+            # A stalled ACL prompt is temporarily unreadable. Preserve the
+            # existing .env fallback only while the run still has time.
+            raise KeychainLocked(service) from None
         if r.returncode == 0:
             return r.stdout.strip() or None
         err = (r.stderr or "").lower()
@@ -659,7 +695,7 @@ class MCSAdapter:
         try:
             page = self._login_page()
             ws = page["webSocketDebuggerUrl"]
-            time.sleep(3)  # Angular render
+            self._sleep_bounded(3)  # Angular render
             state = self._cdp_eval(ws, """(() => {
               if (location.origin !== 'https://www.medical-care.net')
                 return 'bad_origin';
@@ -707,9 +743,11 @@ class MCSAdapter:
         except Exception:
             return "failed"
         # poll for a fresh session token
-        deadline = time.time() + wait_s
-        while time.time() < deadline:
-            time.sleep(2)
+        deadline = time.monotonic() + wait_s
+        if self._deadline is not None:
+            deadline = min(deadline, self._deadline)
+        while time.monotonic() < deadline:
+            self._sleep_bounded(min(2, max(0, deadline - time.monotonic())))
             try:
                 tok = self._token_via_cdp()
             except Exception:
@@ -727,6 +765,7 @@ class MCSAdapter:
     def _request(self, method: str, path: str, params: dict | None = None,
                  data: bytes | None = None, headers: dict | None = None,
                  extend_session: bool = True, retries: int = 2) -> tuple[int, bytes, dict]:
+        self._remaining_timeout(self.timeout)
         if not self._token:
             self.bootstrap_token()
         q = dict(params or {})
@@ -737,26 +776,36 @@ class MCSAdapter:
         h.update(headers or {})
         last: Exception | None = None
         for attempt in range(retries + 1):
-            req = urllib.request.Request(url, data=data, headers=h, method=method)
             try:
-                with self._opener.open(req, timeout=self.timeout) as res:
-                    return res.status, res.read(), dict(res.headers)
-            except urllib.error.HTTPError as e:
-                e.read()
-                if e.code in (401, 403):
-                    raise SessionExpired(f"{method} {path}", status=e.code)
-                if e.code in (429, 500, 502, 503, 504) and attempt < retries:
-                    last = e
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                raise MCSError("http_error", f"{method} {path}", status=e.code,
-                               retryable=e.code >= 500)
-            except (urllib.error.URLError, TimeoutError) as e:
+                result = self._io(
+                    "api", self.timeout, url=url, method=method, headers=h,
+                    data=None if data is None else base64.b64encode(data).decode("ascii"))
+            except MCSError as e:
+                if e.kind != "network_error":
+                    raise
                 last = e
                 if attempt < retries:
-                    time.sleep(1.5 * (attempt + 1))
+                    self._sleep_bounded(1.5 * (attempt + 1))
+                continue
+            status = result["status"]
+            if status in (401, 403):
+                raise SessionExpired(f"{method} {path}", status=status)
+            if status >= 300:
+                if status in (429, 500, 502, 503, 504) and attempt < retries:
+                    self._sleep_bounded(1.5 * (attempt + 1))
                     continue
+                raise MCSError("http_error", f"{method} {path}", status=status,
+                               retryable=status >= 500)
+            return status, base64.b64decode(result["body"], validate=True), result["headers"]
         raise MCSError("network_error", f"{method} {path}", retryable=True) from last
+
+    def _sleep_bounded(self, seconds: float):
+        """Retry backoff never sleeps past the propagated deadline — the
+        next loop iteration then raises deadline_exceeded (F13)."""
+        if self._deadline is not None:
+            seconds = min(seconds,
+                          max(0.0, self._deadline - time.monotonic()))
+        time.sleep(seconds)
 
     def _get(self, path: str, params: dict | None = None,
              extend_session: bool = True) -> dict:
@@ -870,6 +919,21 @@ class MCSAdapter:
                 "pages_exceeded", f"messages[{project_id}]", retryable=True)
         return MessageBatch(msgs, pages, reached, error)
 
+    def _thread_page(self, project_id: int, message_id: int,
+                     page: int) -> tuple[list[Message], bool]:
+        r = self._get(
+            f"/projects/{project_id}/messages/{message_id}/messages",
+            {"keep_read_status": 1, "page": page})
+        if "paginate" in r:
+            pag = r["paginate"]
+            if not isinstance(pag, dict):
+                raise SchemaError("thread: paginate invalid")
+            has_next = _has_next(pag, "thread")
+        else:
+            has_next = False
+        return (_norm_threads(r.get("messages"), project_id,
+                              message_id), has_next)
+
     def fetch_thread(self, project_id: int, message_id: int,
                      max_pages: int = 10) -> list[Message]:
         """All replies in the thread — the endpoint paginates (10/page)
@@ -880,24 +944,38 @@ class MCSAdapter:
         out: list[Message] = []
         seen: set[int] = set()
         for page in range(1, max_pages + 1):
-            r = self._get(
-                f"/projects/{project_id}/messages/{message_id}/messages",
-                {"keep_read_status": 1, "page": page})
-            if "paginate" in r:
-                pag = r["paginate"]
-                if not isinstance(pag, dict):
-                    raise SchemaError("thread: paginate invalid")
-                has_next = _has_next(pag, "thread")
-            else:
-                has_next = False
-            for m in _norm_threads(r.get("messages"), project_id,
-                                   message_id):
+            msgs, has_next = self._thread_page(project_id, message_id,
+                                               page)
+            for m in msgs:
                 if m.message_id not in seen:
                     seen.add(m.message_id)
                     out.append(m)
             if not has_next:
                 return out
         raise MCSError("thread_incomplete", retryable=True)
+
+    def fetch_thread_window(self, project_id: int, message_id: int,
+                            start_page: int = 1,
+                            max_pages: int = 10
+                            ) -> MessageBatch:
+        """Return completed thread pages with any later-page error so
+        callers can save progress before retrying or recovering auth."""
+        out: list[Message] = []
+        seen: set[int] = set()
+        pages = 0
+        for page in range(start_page, start_page + max_pages):
+            try:
+                msgs, has_next = self._thread_page(project_id, message_id, page)
+            except MCSError as error:
+                return MessageBatch(out, pages=pages, reached=False, error=error)
+            for m in msgs:
+                if m.message_id not in seen:
+                    seen.add(m.message_id)
+                    out.append(m)
+            pages += 1
+            if not has_next:
+                return MessageBatch(out, pages=pages, reached=True)
+        return MessageBatch(out, pages=pages, reached=False)
 
     def fetch_unread_replies(self, msg: Message) -> ReplyBatch:
         """Full bodies for replies flagged is_unread (list gives snippets only).
@@ -907,7 +985,9 @@ class MCSAdapter:
         as complete (Oracle B05)."""
         if not any(t.is_unread for t in msg.replies):
             return ReplyBatch([], [])
-        full = self.fetch_thread(msg.project_id, msg.message_id)
+        kwargs = ({"max_pages": (msg.reply_count + 9) // 10}
+                  if msg.reply_count > 100 else {})
+        full = self.fetch_thread(msg.project_id, msg.message_id, **kwargs)
         got_ids = {m.message_id for m in full
                    if m.body_state in ("full", "deleted")}
         unread_ids = {t.message_id for t in msg.replies if t.is_unread}
@@ -1103,7 +1183,7 @@ class MCSAdapter:
         req = urllib.request.Request(url)
         req.add_header("Authorization", f"Bearer {self._token}")
         try:
-            return self._dl_opener.open(req, timeout=60)
+            return self._dl_opener.open(req, timeout=self._remaining_timeout(60))
         except urllib.error.HTTPError as e:
             if e.code in (301, 302, 303, 307, 308):
                 loc = e.headers.get("location")
@@ -1119,7 +1199,8 @@ class MCSAdapter:
                         # signed CDN URL authenticates itself — follow with
                         # a fresh request carrying NO Authorization header
                         return self._dl_opener.open(
-                            urllib.request.Request(loc), timeout=60)
+                            urllib.request.Request(loc),
+                            timeout=self._remaining_timeout(60))
                     # a rejected/malformed redirect target is permanent —
                     # fail as url_not_allowed instead of retrying
                     raise MCSError("url_not_allowed",
@@ -1128,12 +1209,32 @@ class MCSAdapter:
 
     def download(self, url: str, dest: str) -> dict:
         _assert_allowed_url(url)
+        if not self._token:
+            raise MCSError("no_token")
+        tmp = dest + ".part"
+        try:
+            result = self._io("download", 60, url=url, token=self._token,
+                              partial=tmp)
+            self._remaining_timeout(60)
+            os.replace(tmp, dest)
+            return result
+        except BaseException:
+            # _io has already killed and reaped any timed-out writer.
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _download_to_part(self, url: str, tmp: str) -> dict:
+        """Worker-side stream; only the supervising parent may commit it."""
+        _assert_allowed_url(url)
         total = 0
         h = hashlib.sha256()
-        tmp = dest + ".part"
         try:
             with self._open_download(url) as res, open(tmp, "wb") as f:
                 while True:
+                    self._remaining_timeout(60)
                     chunk = res.read(1 << 16)
                     if not chunk:
                         break
@@ -1142,7 +1243,9 @@ class MCSAdapter:
                         raise MCSError("download_too_large")
                     h.update(chunk)
                     f.write(chunk)
-            os.replace(tmp, dest)
+            self._remaining_timeout(60)
+            if total == 0:
+                raise MCSError("download_empty")
             return {"bytes": total, "sha256": h.hexdigest()}
         except Exception as e:
             # every failure path must remove the partial file (Oracle B28)
@@ -1152,6 +1255,9 @@ class MCSAdapter:
                 pass
             if isinstance(e, MCSError):
                 raise
+            if isinstance(e, urllib.error.HTTPError):
+                raise MCSError("http_error", status=e.code,
+                               retryable=e.code in (408, 429) or e.code >= 500) from e
             raise MCSError("download_failed", retryable=True) from e
 
     # ---------- write (guarded) ----------

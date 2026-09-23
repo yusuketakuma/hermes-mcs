@@ -4,9 +4,7 @@ Fake loopback only — no real service is touched.  Canonical acceptance
 rejects truncation/empty/malformed output; legacy callers keep their
 existing ``{}`` result while recording bounded integrity metadata.
 """
-import io
 import json
-import urllib.error
 
 import pytest
 
@@ -90,13 +88,9 @@ def test_extract_llm_keeps_empty_object_contract_and_records_integrity(
         monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
 
-    class FakeOpener:
-        def open(self, req, timeout=None):
-            return io.BytesIO(json.dumps(_response(
-                "{}", usage={"prompt_tokens": 3, "completion_tokens": 1,
-                             "total_tokens": 4})).encode())
-
-    monkeypatch.setattr(extract_llm, "_OPENER", FakeOpener())
+    monkeypatch.setattr(extract_llm, "_opener_request", _fake_request(_response(
+        "{}", usage={"prompt_tokens": 3, "completion_tokens": 1,
+                     "total_tokens": 4})))
     extract_llm._note_list().clear()
     assert extract_llm._llm_call("prompt") == {}
     notes = extract_llm._note_list()
@@ -108,11 +102,8 @@ def test_extract_llm_valid_empty_object_still_empty(monkeypatch):
     error — canonical cutover decides later."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
 
-    class FakeOpener:
-        def open(self, req, timeout=None):
-            return io.BytesIO(json.dumps(_response("{}")).encode())
-
-    monkeypatch.setattr(extract_llm, "_OPENER", FakeOpener())
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        _fake_request(_response("{}")))
     assert extract_llm.llm_extract("なにも記載なし") == {}
 
 
@@ -120,14 +111,11 @@ def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
     calls = []
 
-    class Rejecting:
-        def open(self, req, timeout=None):
-            calls.append(json.loads(req.data.decode())
-                         .get("response_format"))
-            raise urllib.error.HTTPError(
-                req.full_url, 422, "unprocessable", {}, None)
+    def reject(endpoint, method, body, timeout, deadline=None):
+        calls.append(body.get("response_format"))
+        return 422, {}, b""
 
-    monkeypatch.setattr(extract_llm, "_OPENER", Rejecting())
+    monkeypatch.setattr(extract_llm, "_opener_request", reject)
     assert extract_llm._llm_call("prompt") is None
     assert calls == [{"type": "json_schema",
                       "json_schema": extract_llm._SCHEMA},
@@ -141,14 +129,9 @@ def test_llm_extract_attaches_bounded_integrity_to_nonempty_output(
     payload = {"meds": [{"name": "薬A", "status": "current",
                          "subject": "patient", "negated": False}]}
 
-    class FakeOpener:
-        def open(self, req, timeout=None):
-            return io.BytesIO(json.dumps(_response(
-                json.dumps(payload),
-                usage={"prompt_tokens": 9, "completion_tokens": 4,
-                       "total_tokens": 13})).encode())
-
-    monkeypatch.setattr(extract_llm, "_OPENER", FakeOpener())
+    monkeypatch.setattr(extract_llm, "_opener_request", _fake_request(_response(
+        json.dumps(payload), usage={"prompt_tokens": 9, "completion_tokens": 4,
+                                   "total_tokens": 13})))
     meta = {}
     out = extract_llm.llm_extract("薬Aを服用中", meta_out=meta)
     assert "_integrity" not in out       # visible dict unchanged
@@ -176,13 +159,12 @@ def test_probe_format_pins_background_slot():
     """probe_format request bodies also carry the background slot pin."""
     bodies = []
 
-    class CapOpener:
-        def open(self, req, timeout=0):
-            bodies.append(json.loads(req.data))
-            return io.BytesIO(json.dumps(_response('{"ok": true}')).encode())
+    def send(endpoint, method, body, timeout, deadline=None):
+        bodies.append(body)
+        return 200, {}, json.dumps(_response('{"ok": true}')).encode()
 
     mode = local_llm.probe_format("http://127.0.0.1:8080/v1/chat/completions",
-                                  "m", None, CapOpener())
+                                  "m", None, request_fn=send)
     assert mode == "object"
     assert bodies and all(b.get("id_slot") == local_llm.BACKGROUND_SLOT
                           for b in bodies)
@@ -200,3 +182,13 @@ def test_extract_llm_call_pins_background_slot(monkeypatch):
     monkeypatch.setattr(local_llm, "chat", fake_chat)
     extract_llm.llm_extract("test")
     assert seen["extra_payload"] == {"id_slot": local_llm.BACKGROUND_SLOT}
+
+
+def test_semantic_llm_chat_rejects_parseable_length_truncation(
+        monkeypatch):
+    """C05: finish_reason=length stays incomplete even when the text
+    happens to parse — llm_chat must return None, not the payload."""
+    monkeypatch.setattr(
+        local_llm, "bounded_request",
+        _fake_request(_response('{"facts": []}', finish="length")))
+    assert semantic.llm_chat("hello") is None

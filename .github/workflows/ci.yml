@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write   # readme-sync auto-commit on main
+  contents: read   # default read-only — write is granted per-job only
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,12 +21,20 @@ jobs:
         with:
           python-version: "3.12"
       - name: ruff
-        run: pip install ruff && ruff check mcs/ tests/
+        run: pip install "ruff==0.6.9" && ruff check mcs/ tests/ hermes_plugin/ integration/
       - name: pytest
-        run: pip install pytest && python -m pytest -x -q
+        run: pip install "pytest==8.3.3" && python -m pytest -x -q
+      - name: check README module table on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/update_readme.py
+          git diff --exit-code -- README.md
 
   readme-sync:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the only job that pushes (auto-commit on main)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,7 +84,7 @@ jobs:
             echo "::error::possible secret committed:"; echo "$bad"; exit 1
           fi
       - name: shellcheck
-        run: shellcheck install.sh scripts/*.sh || true
+        run: shellcheck install.sh scripts/*.sh deployment/scripts/*.sh
       - name: plugin manifest sanity
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml
@@ -93,3 +101,30 @@ jobs:
         run: python3 ci/gates.py
       - name: incident coverage from dev-records
         run: python3 ci/mine_gates.py --check
+
+  hermes-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: hermes-mcs
+      # the plugin contract is validated against ONE pinned Hermes ref —
+      # floating 'latest upstream' would let unrelated upstream drift
+      # break (or silently change) the lane (F23)
+      - uses: actions/checkout@v4
+        with:
+          repository: yusuketakuma/hermes-agent
+          ref: 11d7814deee1d573201e754128ea783b63ff03ba
+          path: hermes-agent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install hermes (pinned ref) + integration test deps
+        run: |
+          python -m venv hermes-agent/.venv
+          hermes-agent/.venv/bin/python -m pip install -e './hermes-agent[dev,messaging]'
+      - name: discord plugin integration
+        working-directory: hermes-agent
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hermes-agent
+        run: scripts/run_tests.sh ../hermes-mcs/integration/test_hermes_discord.py -x -q

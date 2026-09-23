@@ -45,10 +45,14 @@ def _v2(db, mid):
 
 
 def _qc(db, mid, content, chash=None):
+    source_id = db.db.execute(
+        "SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
+        "AND message_id=?", (mid,)).fetchone()[0]
     db.artifact_add(
         "extract_qc", json.dumps(content), project_id=1, message_id=mid,
         model="jev", meta={"hash": chash or _hash(db, mid),
                            "extract_version": extract_llm.EXTRACT_VERSION,
+                           "source_artifact_id": source_id,
                            "qc": content.get("qc")})
 
 
@@ -151,6 +155,31 @@ def test_qc_requires_project(tmp_path):
                 assert str(e) == "project_required"
             else:
                 raise AssertionError("expected project_required")
+        finally:
+            view.close()
+    finally:
+        db.close()
+
+
+def test_qc_view_binds_exact_extraction_and_discloses_unchecked_fields(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        _qc(db, 1, {"qc": "done", "items": [], "coverage": {
+            "checked": 0, "total": 1, "unchecked": 1,
+            "by_field": {"summary": {"checked": 0, "total": 1, "unchecked": 1}}}})
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+            assert out["summary"]["unchecked_items"] == 1
+            assert out["items"][0]["coverage"]["by_field"]["summary"]["unchecked"] == 1
+        finally:
+            view.close()
+        _v2(db, 1)  # same body/version, new result identity
+        view = _view(db, tmp_path)
+        try:
+            assert view.read("qc", project=1)["summary"]["pending"] == 4
+            detail = view.read("qc", project=1, message_id=1)
+            assert not any(r["current"] for r in detail["qc"])
         finally:
             view.close()
     finally:

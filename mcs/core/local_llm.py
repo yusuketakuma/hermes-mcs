@@ -13,15 +13,12 @@ tool access.  There is no cloud fallback and no service change.
 """
 from __future__ import annotations
 
-import http.client
 import json
 import math
 import time
 import urllib.error
-import urllib.request
 
 import semantic_jev as jev
-from mcs_util import NoRedirect, no_proxy_opener
 
 ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
 MODEL = "Qwen3.5-9B"
@@ -54,9 +51,6 @@ def request_slot() -> int:
         return int(v)
     return BACKGROUND_SLOT
 
-_OPENER = no_proxy_opener(NoRedirect)
-
-
 def bounded_request(endpoint: str, method: str, body, timeout: float,
                     deadline: float | None = None):
     """Pre-wired ``jev.bounded_http_request`` for unauthenticated
@@ -67,30 +61,8 @@ def bounded_request(endpoint: str, method: str, body, timeout: float,
 
 def _default_request(endpoint: str, method: str, body, timeout: float,
                      deadline: float | None):
-    """In-process loopback request returning ``(status, headers, raw)``.
-
-    Byte-bounded like ``jev.bounded_http_request`` but without worker
-    isolation — suitable where no credential rides the request.
-    """
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("local llm deadline exceeded")
-        timeout = min(timeout, remaining)
-    req = urllib.request.Request(
-        endpoint, data=json.dumps(body, ensure_ascii=False,
-                                  allow_nan=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method=method)
-    try:
-        with _OPENER.open(req, timeout=timeout) as resp:
-            raw = resp.read(jev.MAX_RESPONSE_BYTES + 1)
-            return resp.status, dict(resp.headers), raw
-    except urllib.error.HTTPError as error:
-        try:
-            raw = error.read(jev.MAX_RESPONSE_BYTES + 1)
-        except Exception:
-            raw = b""
-        return error.code, dict(error.headers or {}), raw
+    """Use a reaped worker so a slow response cannot extend the deadline."""
+    return bounded_request(endpoint, method, body, timeout, deadline)
 
 
 def _usage_dict(usage) -> dict | None:
@@ -108,7 +80,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
          max_tokens: int = MAX_TOKENS, timeout: float = TIMEOUT,
          deadline: float | None = None, response_format=None,
          extra_payload: dict | None = None,
-         request_fn=None) -> dict | None:
+         request_fn=None, error_out: dict | None = None) -> dict | None:
     """One chat-completions round trip.
 
     Returns ``{"text", "finish_reason", "usage", "status"}`` on a parsed
@@ -116,7 +88,11 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     is the ``(endpoint, method, body, timeout, deadline) ->
     (status, headers, raw)`` seam — tests inject a fake loopback here
     and ``semantic.llm_chat`` passes ``jev.bounded_http_request`` to keep
-    worker isolation.
+    worker isolation.  ``error_out``, when given, receives
+    ``{"kind": "unreachable"|"transport"}`` on the exception path —
+    "unreachable" means the server refused the connection outright
+    (never started / down), which callers may treat as free-of-cost
+    unlike a timeout that consumed real server work.
     """
     if not isinstance(prompt, str) or not prompt:
         raise ValueError("prompt_invalid")
@@ -152,6 +128,12 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         # propagate so budget/circuit stops are never swallowed.
         if error.__class__.__name__ == "RuntimeGuardError":
             raise
+        if error_out is not None:
+            reason = getattr(error, "reason", error)
+            error_out["kind"] = (
+                "unreachable"
+                if isinstance(reason, ConnectionRefusedError)
+                else "transport")
         return None
     if status != 200 or len(raw) > jev.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
@@ -199,7 +181,8 @@ def acceptance_error(response: dict | None) -> str | None:
 
 
 def probe_format(endpoint: str, model: str, schema: dict | None,
-                 opener, timeout: float = 10, verify=None) -> str | None:
+                 timeout: float = 10, verify=None,
+                 deadline: float | None = None, request_fn=None) -> str | None:
     """Detect the best ``response_format`` the server accepts.
 
     Ladder: json_schema (if *schema* given) -> json_object -> plain.
@@ -215,29 +198,27 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
         candidates.append(("schema", {"type": "json_schema",
                                       "json_schema": schema}))
     candidates.append(("object", {"type": "json_object"}))
+    operation_deadline = time.monotonic() + timeout
+    if deadline is not None:
+        operation_deadline = min(operation_deadline, deadline)
     for mode, rf in candidates:
-        req = urllib.request.Request(
-            endpoint,
-            data=json.dumps({
-                "model": model,
-                "messages": [{"role": "user",
-                              "content": 'Reply with {"ok": true}'}],
-                "max_tokens": 20, "temperature": 0,
-                "id_slot": BACKGROUND_SLOT,
-                "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": rf}).encode(),
-            headers={"Content-Type": "application/json"})
+        remaining = operation_deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            with opener.open(req, timeout=timeout) as resp:
-                out = json.load(resp)
-            content = (out.get("choices") or [{}])[0] \
-                .get("message", {}).get("content") \
-                if isinstance(out, dict) else None
+            response = chat(
+                'Reply with {"ok": true}', endpoint=endpoint, model=model,
+                max_tokens=20, timeout=remaining, deadline=operation_deadline,
+                response_format=rf, extra_payload={"id_slot": BACKGROUND_SLOT},
+                request_fn=request_fn)
+            if response is None:
+                break
+            if response["status"] != 200:
+                continue
+            content = response["text"]
             if isinstance(content, str) and verify(content):
                 return mode
-        except urllib.error.HTTPError:
-            continue                # format rejected — try the next
-        except (OSError, ValueError, http.client.HTTPException):
+        except (OSError, ValueError):
             break                   # transport dead — stop probing
     return "plain"
 

@@ -7,6 +7,7 @@ import stat
 import tempfile
 import time
 import uuid
+from contextlib import ExitStack
 from datetime import date
 from pathlib import Path
 
@@ -180,7 +181,8 @@ def apply_command(ledger, req):
     # the code — a floor check is the right contract here
     if db.execute("PRAGMA user_version").fetchone()[0] < 5:
         raise RuntimeError("request_schema_not_ready")
-    with db:
+    # SQLite exits first, so a failed COMMIT still unwinds file promotions.
+    with ExitStack() as filesystem_changes, db:
         db.execute("BEGIN IMMEDIATE")
         old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
                          (req["command_id"],)).fetchone()
@@ -204,7 +206,8 @@ def apply_command(ledger, req):
         if not error and isinstance(req.get("cmd"), str) \
                 and req["cmd"].startswith("ops."):
             from mcs_operations import apply_tx
-            error, extra = apply_tx(db, req, now=now)
+            error, extra = apply_tx(db, req, now=now,
+                                   filesystem_changes=filesystem_changes)
         elif not error:
             if req["cmd"] == "request.update":
                 row = db.execute("SELECT * FROM requests WHERE request_id=? AND project_id=?",
@@ -343,9 +346,13 @@ def candidates(db, message):
     if (message["body_state"] != "full" or not isinstance(message["body_text"], str)
             or not message["body_text"].strip() or not valid_hash(message["content_hash"])):
         return []
-    has_projection = db.execute("""
+    # Single-source predicate shared with the resolver in mcs_queries —
+    # an error/malformed/superseded projection must not shadow a usable
+    # extract_llm.
+    from mcs_queries import current_projection_pred
+    has_projection = db.execute(f"""
       SELECT 1 FROM artifacts WHERE message_id=? AND kind='canonical_projection'
-        AND json_valid(meta) AND json_extract(meta,'$.hash')=? LIMIT 1
+        AND {current_projection_pred('')} LIMIT 1
     """, (message["message_id"], message["content_hash"])).fetchone() is not None
     seen, result = set(), []
     for row in db.execute("""
@@ -364,6 +371,8 @@ def candidates(db, message):
             continue
         if (row["project_id"] != message["project_id"] or not isinstance(meta, dict)
                 or meta.get("hash") != message["content_hash"] or meta.get("error")
+                or (row["kind"] == "canonical_projection"
+                    and meta.get("invalidated"))
                 or not isinstance(content, dict) or content.get("_error")
                 or not isinstance(content.get("requests"), list)):
             continue

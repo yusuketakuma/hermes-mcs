@@ -8,13 +8,16 @@ receipt transaction.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 import re
+import stat
+import tempfile
 import time
 
 from mcs_requests import _text, canonical, payload_hash, positive, valid_hash
-from mcs_util import file_sha256
 
 
 _OPS_COMMON = {
@@ -471,18 +474,102 @@ def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict
                   "policy": dict(policy)}
 
 
-def _apply_refstat_approve_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+class _RefstatRejected(ValueError):
+    pass
+
+
+@contextmanager
+def _refstat_promotion(pending: str, approved: str, expected_hash: str):
+    """Keep rollback files until the enclosing receipt transaction commits.
+
+    Copy the claimed input into private staging so later writes through an
+    already-open pending fd cannot mutate approved bytes. A process crash
+    can leave recovery files; it must not destroy the previous baseline.
+    """
+    claimed = staged = backup = None
+    promoted = False
+    recovering = False
+    try:
+        fd, claim_path = tempfile.mkstemp(prefix=".refstat-", suffix=".pending",
+                                         dir=os.path.dirname(pending))
+        os.close(fd)
+        try:
+            os.replace(pending, claim_path)
+        except OSError:
+            os.unlink(claim_path)
+            raise
+        claimed = claim_path
+        os.makedirs(os.path.dirname(approved), exist_ok=True)
+        fd, staged = tempfile.mkstemp(prefix=".refstat-", suffix=".staged",
+                                     dir=os.path.dirname(approved))
+        with os.fdopen(fd, "wb") as dest:
+            source_fd = os.open(claimed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(source_fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise _RefstatRejected("refstat_not_pending")
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: source.read(65536), b""):
+                    dest.write(chunk)
+                    digest.update(chunk)
+            dest.flush()
+            os.fsync(dest.fileno())
+        if digest.hexdigest() != expected_hash:
+            raise _RefstatRejected("refstat_hash_mismatch")
+        if os.path.lexists(approved):
+            if not stat.S_ISREG(os.lstat(approved).st_mode):
+                raise _RefstatRejected("refstat_approved_not_regular")
+            fd, backup_path = tempfile.mkstemp(prefix=".refstat-", suffix=".previous",
+                                              dir=os.path.dirname(approved))
+            os.close(fd)
+            os.unlink(backup_path)
+            os.link(approved, backup_path, follow_symlinks=False)
+            backup = backup_path
+        os.replace(staged, approved)
+        staged = None
+        promoted = True
+        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+        yield
+    except BaseException:
+        recovering = True
+        if promoted:
+            if backup is not None:
+                os.replace(backup, approved)
+                backup = None
+            else:
+                os.unlink(approved)
+        if claimed is not None:
+            # A newer capture may already occupy pending. Never overwrite it.
+            try:
+                os.link(claimed, pending, follow_symlinks=False)
+            except FileExistsError:
+                claimed = None  # Retain the separate recovery input.
+            else:
+                os.unlink(claimed)
+                claimed = None
+        raise
+    finally:
+        # Only private staging/recovery files are disposable. Cleanup errors
+        # after a committed receipt must not turn success into a retry.
+        for path in ((staged,) if recovering else (staged, backup, claimed)):
+            if path is not None:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+
+def _apply_refstat_approve_tx(db, req: dict, now: float,
+                             filesystem_changes) -> tuple[str | None, dict]:
     """Human-approved promotion of a captured stats reference set:
     <data-dir>/refstats/pending/<name>.json -> approved/<name>.json plus
     a refstat_approval_v1 artifact pinning the exact approved bytes.
 
-    Ordering: move pending -> approved first, then hash the approved
-    file at rest and roll the move back when it differs from the
-    human-pinned digest, then insert the artifact.  An artifact failure
-    propagates and rolls back the whole receipt tx (the renamed file
-    then shows up in verify as an approved file without matching
-    artifact — a visible tamper/inconsistency signal, never a silent
-    pass)."""
+    File rollback remains armed through artifact/receipt insertion and
+    the caller's COMMIT; only then can previous bytes be discarded."""
     name, file_hash = req["name"], req["file_hash"]
     # re-asserted here too: apply_tx is public and this field reaches
     # the filesystem, unlike sibling ops' SQL-bound fields
@@ -494,28 +581,18 @@ def _apply_refstat_approve_tx(db, req: dict, now: float) -> tuple[str | None, di
     base = os.path.join(os.path.dirname(os.path.abspath(main)), "refstats")
     pending = os.path.join(base, "pending", name + ".json")
     approved = os.path.join(base, "approved", name + ".json")
+    if filesystem_changes is None:
+        raise RuntimeError("refstat_transaction_scope_required")
+    if not os.path.isfile(pending) or os.path.islink(pending):
+        return "refstat_not_pending", {
+            "approved_exists": os.path.isfile(approved)}
     try:
-        # isfile follows links — reject links so the approved path is a
-        # regular file, not an alias whose target was never hashed
-        if not os.path.isfile(pending) or os.path.islink(pending):
-            return "refstat_not_pending", {
-                "approved_exists": os.path.isfile(approved)}
-        os.makedirs(os.path.dirname(approved), exist_ok=True)
-        os.replace(pending, approved)
-        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
-        actual = file_sha256(approved)
+        filesystem_changes.enter_context(
+            _refstat_promotion(pending, approved, file_hash))
+    except _RefstatRejected as error:
+        return str(error), {}
     except OSError:
         return "refstat_io_error", {}
-    if actual != file_hash:
-        try:
-            os.replace(approved, pending)
-        except OSError:
-            pass  # verify flags the unmatching bytes — never silent
-        return "refstat_hash_mismatch", {}
     content = {"name": name, "file_hash": file_hash,
                "actor": req["actor"], "reason": req["reason"],
                "command_id": req["command_id"], "approved_at": now}
@@ -533,7 +610,8 @@ def _apply_refstat_approve_tx(db, req: dict, now: float) -> tuple[str | None, di
                   "name": name, "file_hash": file_hash}
 
 
-def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]:
+def apply_tx(db, req: dict, now: float | None = None, *,
+             filesystem_changes=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
     db = getattr(db, "db", db)
     current = time.time() if now is None else float(now)
@@ -550,7 +628,7 @@ def apply_tx(db, req: dict, now: float | None = None) -> tuple[str | None, dict]
     if req["cmd"] == "ops.signal_policy":
         return _apply_signal_policy_tx(db, req, current)
     if req["cmd"] == "ops.refstat_approve":
-        return _apply_refstat_approve_tx(db, req, current)
+        return _apply_refstat_approve_tx(db, req, current, filesystem_changes)
     return "unknown_ops_cmd", {}
 
 

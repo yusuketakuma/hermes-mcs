@@ -50,10 +50,18 @@ def project_v2_facts(doc: dict) -> list:
     Facts without verified evidence keep ``evidence_refs`` empty and
     ``validation_status`` ``unverified`` — projection never upgrades.
     """
+    def _mid(v):
+        # v2 doc JSON carries message ids as strings; bundle members key
+        # on ints — a string id makes audit lookup fail on good evidence
+        # (C01). Normalize at the projection boundary.
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return v
     evidence_by_id = {e["evidence_id"]: e
                       for e in doc.get("evidence", [])
                       if isinstance(e, dict) and e.get("evidence_id")}
-    message_id = doc.get("source", {}).get("message_id", "")
+    message_id = _mid(doc.get("source", {}).get("message_id", ""))
     revision = doc.get("source", {}).get("revision", "")
     out = []
     for fact in doc.get("facts", []):
@@ -67,7 +75,7 @@ def project_v2_facts(doc: dict) -> list:
             and event_time[:1].isdigit() else None
         legacy_ev = {
             "evidence_id": ev["evidence_id"],
-            "message_id": ev.get("message_id", message_id),
+            "message_id": _mid(ev.get("message_id", message_id)),
             "revision_id": ev.get("revision", revision),
             "start_codepoint": ev["start"],
             "end_codepoint": ev["end"],
@@ -172,6 +180,9 @@ def project_v2_doc_legacy(doc: dict) -> dict:
         kind = fact.get("kind")
         quote = quote_of(fact)
         negated = fact.get("polarity") == "negated"
+        uncertain = (fact.get("polarity") not in ("affirmed", "negated")
+                     or fact.get("epistemic") not in ("asserted", "reported")
+                     or fact.get("workflow_status") in (None, "unknown"))
         if kind in ("medication_event", "medication_exposure",
                     "adherence_administration"):
             name = _v2_drug_ref(fact.get("statement") or "")
@@ -187,6 +198,8 @@ def project_v2_doc_legacy(doc: dict) -> dict:
                     "status": _v2_med_status(fact),
                     "subject": _v2_llm_subject(fact.get("subject")),
                     "negated": negated}
+            if uncertain:
+                item["unverified"] = True
             if quote:
                 item["evidence"] = quote
             out.setdefault("meds", []).append(item)
@@ -195,11 +208,21 @@ def project_v2_doc_legacy(doc: dict) -> dict:
             status = "resolved" if workflow in ("done", "cancelled") \
                 else "new" if workflow == "reported" else "ongoing"
             item = {"text": fact.get("statement") or "",
-                    "negated": negated, "status": status}
+                    "negated": negated, "status": status,
+                    "subject": _v2_llm_subject(fact.get("subject"))}
+            if uncertain:
+                item["unverified"] = True
             if quote:
                 item["evidence"] = quote
             out.setdefault("symptoms", []).append(item)
         elif kind == "care_event":
+            # Legacy events have no subject, uncertainty, or plan fields.
+            # Their consumers count completed patient care transitions.
+            if fact.get("polarity") != "affirmed" \
+                    or fact.get("epistemic") not in ("asserted", "reported") \
+                    or _v2_llm_subject(fact.get("subject")) != "patient" \
+                    or fact.get("workflow_status") not in ("performed", "done"):
+                continue
             statement = fact.get("statement") or ""
             for event, needles in _CARE_EVENT_KEYWORDS:
                 if any(n in statement for n in needles):

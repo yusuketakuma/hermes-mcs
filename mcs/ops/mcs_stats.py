@@ -299,7 +299,7 @@ def st_doc_burden(db, scope):
     # group by sender_id — same display name ≠ same sender
     rows = db.execute(
         f"""SELECT COALESCE(m.sender_id,-1) sid, COUNT(*) n,
-                   MAX(m.sender_name IS NULL) nameless
+                   SUM(m.sender_name IS NULL) nameless
             FROM messages m WHERE 1=1{w}
             GROUP BY sid ORDER BY n DESC""", p).fetchall()
     total = sum(n for _, n, _ in rows)
@@ -312,8 +312,12 @@ def st_doc_burden(db, scope):
         "hhi": round(hhi, 4) if hhi is not None else None,
         "hhi_reason": None if hhi is not None else "denominator_zero",
         "sender_count": len(rows),
-        "unknown_sender_posts": sum(n for _, n, nameless in rows
-                                    if nameless),
+        # F24: identity missing is a ROW-level sender_id absence (the -1
+        # bucket), not "some post lacked a display name"; name gaps are
+        # a separate metric now — one NULL name no longer marks every
+        # post by that sender unknown
+        "unknown_sender_posts": sum(n for sid, n, _ in rows if sid == -1),
+        "nameless_sender_posts": sum(nl or 0 for _, _, nl in rows),
         "notes": ["post count is not a performance score; "
                   "delegate posting and division of labour skew it",
                   "grouped by sender_id — distinct senders sharing a "

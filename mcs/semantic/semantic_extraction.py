@@ -851,7 +851,7 @@ def extract_facts_v2(llm_fn, member: dict,
                      deadline: float | None = None, *,
                      ledger=None, source_fingerprint: str | None = None,
                      project_id=None, chunk_size: int = 3000,
-                     jev_client=None) -> dict:
+                     jev_client=None, retry_coverage: bool = False) -> dict:
     """Extract a contract-validated ``semantic-facts/v2`` document.
 
     Returns ``{"doc", "complete", "coverage", ...}``.  ``doc`` is always
@@ -881,9 +881,10 @@ def extract_facts_v2(llm_fn, member: dict,
     specs = _manifest_specs(manifest)
     _persist_manifest(ledger, project_id, message_id, semantic.LLM_MODEL,
                       source_fp, manifest, len(source))
+    cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
-                            kind=KIND_CHUNK_V2, schema=SCHEMA_VERSION_V2,
+                            kind=KIND_CHUNK_V2, schema=cache_schema,
                             extra=_v2_chunk_ok)
 
     atom_owner = {}
@@ -1004,7 +1005,7 @@ def extract_facts_v2(llm_fn, member: dict,
         _persist_chunk(ledger, project_id, message_id, model, source_fp,
                        body_hash, revision, spec, chunk_facts,
                        chunk_dropped, len(specs), kind=KIND_CHUNK_V2,
-                       schema=SCHEMA_VERSION_V2, extra_content=extra)
+                       schema=cache_schema, extra_content=extra)
         facts.extend(chunk_facts)
         presence[cid] = clean_verdicts
         chunk_status[cid] = "complete"
@@ -1444,4 +1445,3 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     return {"doc": new_doc, "repaired": True,
             "repaired_fact_ids": repaired_fact_ids,
             "owner_chunk_ids": dispatched}
-

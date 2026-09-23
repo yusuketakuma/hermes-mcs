@@ -1,18 +1,9 @@
 """Slot routing: local_llm.request_slot env override and
 extract_llm._choose_slot --lend-rt / --slot precedence."""
-import io
 import json
 
 import extract_llm
 import local_llm
-
-
-class _FakeResp(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
 
 
 def test_request_slot_default(monkeypatch):
@@ -51,8 +42,8 @@ def test_choose_slot_lend_idle(monkeypatch):
     _set_state(monkeypatch, lend=True)
     slots = [{"id": local_llm.BACKGROUND_SLOT, "is_processing": True},
              {"id": local_llm.REALTIME_SLOT, "is_processing": False}]
-    monkeypatch.setattr(extract_llm.urllib.request, "urlopen",
-                        lambda *a, **k: _FakeResp(json.dumps(slots).encode()))
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        lambda *a, **k: (200, {}, json.dumps(slots).encode()))
     assert extract_llm._choose_slot() == local_llm.REALTIME_SLOT
 
 
@@ -60,8 +51,8 @@ def test_choose_slot_lend_busy_falls_back(monkeypatch):
     _set_state(monkeypatch, lend=True)
     slots = [{"id": local_llm.BACKGROUND_SLOT, "is_processing": True},
              {"id": local_llm.REALTIME_SLOT, "is_processing": True}]
-    monkeypatch.setattr(extract_llm.urllib.request, "urlopen",
-                        lambda *a, **k: _FakeResp(json.dumps(slots).encode()))
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        lambda *a, **k: (200, {}, json.dumps(slots).encode()))
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
 
 
@@ -71,5 +62,5 @@ def test_choose_slot_lend_probe_failure_falls_back(monkeypatch):
     def boom(*a, **k):
         raise OSError("server down")
 
-    monkeypatch.setattr(extract_llm.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(extract_llm, "_opener_request", boom)
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT

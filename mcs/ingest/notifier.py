@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import time
 
+import mcs_signals
 from mcs_queries import med_is_patient_current
 from mcs_util import html_to_text, load_config
 
@@ -149,8 +150,13 @@ def _structured_lines(ledger, mid: int) -> list[str]:
         if parts:
             lines.append("バイタル: " + "  ".join(parts))
     syms, neg, seen, neg_seen = [], [], set(), set()
-    for s in llm.get("symptoms") or []:
+    llm_symptoms = [s for s in llm.get("symptoms") or []
+                    if isinstance(s, dict) and isinstance(s.get("text"), str)
+                    and s["text"]]
+    for s in llm_symptoms:
         if isinstance(s, dict) and s.get("text"):
+            if s.get("subject") in ("family", "other") or s.get("unverified"):
+                continue
             # resolved/past/negated all cancel an earlier positive —
             # they enter neg_seen so a v1 positive below is contradicted
             # (same resolver semantics as rollup.py)
@@ -163,6 +169,10 @@ def _structured_lines(ledger, mid: int) -> list[str]:
                 seen.add(s["text"])
                 syms.append(s["text"])
     for s in v1.get("symptoms") or []:
+        if not isinstance(s, str):
+            continue
+        if any(x["text"] in s or s in x["text"] for x in llm_symptoms):
+            continue  # Typed polarity/subject must not reappear through rules.
         contradicted = any(n in s or s in n for n in neg_seen)
         if s and s not in seen and not contradicted:
             syms.append(s)
@@ -186,20 +196,24 @@ def _structured_lines(ledger, mid: int) -> list[str]:
         if m.get("status") == "planned":
             d += "[予定]"
         meds.append(d)
+    unverified_meds = []
     if not llm.get("meds"):
         # v1 fallback only when the LLM saw NO meds — if it saw meds
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
         for m in v1.get("medications") or []:
             if isinstance(m, dict) and m.get("name"):
-                meds.append(str(m["name"]) +
-                            (f" {m['dose']}" if m.get("dose") else ""))
-    rx = [f"{_RX_LABEL[a['action']]}:{a['ctx'][:18]}"
-          for a in v1.get("rx_actions") or []
-          if isinstance(a, dict) and a.get("action") in _RX_LABEL
-          and a.get("ctx")]
-    if meds or rx:
-        lines.append("薬剤: " + "、".join((meds + rx)[:6]))
+                unverified_meds.append(str(m["name"]) +
+                                       (f" {m['dose']}" if m.get("dose") else ""))
+        unverified_meds.extend(
+            f"{_RX_LABEL[a['action']]}:{a['ctx'][:18]}"
+            for a in v1.get("rx_actions") or []
+            if isinstance(a, dict) and a.get("action") in _RX_LABEL
+            and a.get("ctx"))
+    if meds:
+        lines.append("薬剤: " + "、".join(meds[:6]))
+    if unverified_meds:
+        lines.append("薬剤候補（未確認）: " + "、".join(unverified_meds[:6]))
     reqs = []
     for r in llm.get("requests") or []:
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
@@ -243,7 +257,7 @@ def _attachments_map(ledger, mids: list[int]) -> dict:
         return {}
     q = ("SELECT message_id,file_id,name,state,local_path,bytes,sha256 "
          f"FROM attachments WHERE message_id IN ({','.join('?' * len(mids))}) "
-         "ORDER BY attachment_id")
+         "AND state != 'withdrawn' ORDER BY attachment_id")
     out: dict[int, list] = {}
     for r in ledger.db.execute(q, mids):
         out.setdefault(r["message_id"], []).append(r)
@@ -353,7 +367,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             raise ValueError("payload_invalid")
         return text, []
     if ev["kind"] == "signal":
-        # review-candidate notice — frozen text + ids at enqueue time.
+        # Review-candidate notice: resolve the current explanation/evidence.
         # Last-moment gates like semantic_notice: the flag may have been
         # turned off, or the signal may have resolved while queued —
         # both are terminal drops, not retries.
@@ -372,10 +386,34 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                   if row and row["content"] else {})
         if not isinstance(latest, dict) or latest.get("state") != "open":
             raise _StaleSend("signal_not_open")
-        text = _signal_text(ledger, payload, latest)
+        # Legacy queued intents have no evidence fingerprint, and notes
+        # can change while the evidence IDs stay the same. Rebuild both
+        # from one current row; partial deliveries remain protected by
+        # the delivery fingerprint below.
+        text = mcs_signals.signal_notice_text(latest)
+        text = _signal_text(ledger,
+                            {"text": text,
+                             "project_id": payload.get("project_id")},
+                            latest)
         if not isinstance(text, str) or not text:
             raise ValueError("payload_invalid")
         return text, []
+    if ev["kind"] == "attachment_followup":
+        # a body notice went out before this file downloaded — deliver
+        # just the file now (F11). If the file is no longer sendable
+        # (pruned/withdrawn/never finished) the intent is terminal.
+        aid = payload.get("attachment_id")
+        if type(aid) is not int:
+            raise ValueError("payload_invalid")
+        a = ledger.db.execute(
+            "SELECT message_id,file_id,name,state,local_path,bytes,sha256"
+            " FROM attachments WHERE attachment_id=?", (aid,)).fetchone()
+        if not a or a["state"] != "downloaded" or not a["local_path"]:
+            raise _StaleSend("attachment_not_ready")
+        files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
+        if not files:
+            raise _StaleSend("attachment_unsendable")
+        return (f"[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
     ids = payload.get("message_ids") or []
     if (not isinstance(ids, list)
             or any(type(mid) is not int or mid <= 0 for mid in ids)):
@@ -811,8 +849,11 @@ def _has_sent_progress(ev) -> bool:
 
 
 class _SendFailed(OSError):
-    """`hermes send` exited non-zero — the retryable failure class:
-    outbox backoff and a later flush retry the event."""
+    """Delivery did not begin; the outbox may safely retry."""
+
+
+class _SendUncertain(OSError):
+    """Delivery began but acceptance is unknown; never retry automatically."""
 
 
 class _SendUsage(Exception):
@@ -844,24 +885,58 @@ def _media_path(name: str, path: str) -> str:
     return alias
 
 
-def _send(argv: list[str], content: str,
-          files: list[tuple[str, str]] | None = None) -> None:
-    """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
-    references — the adapter owns upload limits and mention policy)."""
-    body = content
+# `hermes send` parses MEDIA:/voice/document directives from the WHOLE
+# stdin stream — untrusted content (post bodies, sender names, LLM
+# output) must never form one, or a crafted post could attach any
+# readable local file to the notification. The keyword is defused to a
+# fullwidth form (visible, non-parsing); the [[...]] directives get
+# single brackets. Verified attachments are appended afterwards as
+# genuine directives — see _compose_body.
+_CONTROL_TAG_RE = re.compile(r"(?i)([`\"'*_]{0,3})MEDIA:")
+_DOUBLE_BRACKET_RE = re.compile(
+    r"\[\[(as_document|audio_as_voice)\]\]", re.IGNORECASE)
+
+
+def _defuse_control_syntax(text: str) -> str:
+    text = _CONTROL_TAG_RE.sub(r"\1MEDIA：", text)
+    return _DOUBLE_BRACKET_RE.sub(r"[\1]", text)
+
+
+def _compose_body(content: str,
+                  files: list[tuple[str, str]] | None) -> str:
+    body = _defuse_control_syntax(content)
     if files:
         body += "".join(f"\nMEDIA:{_media_path(fn, path)}"
                         for fn, path in files)
+    return body
+
+
+def _send(argv: list[str], content: str,
+          files: list[tuple[str, str]] | None = None,
+          deadline: float | None = None) -> None:
+    """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
+    references — the adapter owns upload limits and mention policy)."""
+    body = _compose_body(content, files)
+    timeout = 180
+    if deadline is not None:
+        remain = deadline - time.monotonic()
+        if remain <= 0:
+            raise _SendFailed("deadline_exceeded")
+        timeout = min(timeout, remain)
     try:
         r = subprocess.run(argv, input=body, text=True,
-                           capture_output=True, timeout=180)
+                           capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        raise _SendFailed("hermes send timed out") from e
+        raise _SendUncertain("hermes send timed out") from e
+    except OSError as e:
+        raise _SendFailed("hermes send could not start") from e
     detail = (r.stderr or r.stdout or "").strip()[:400]
     if r.returncode == 2:
         raise _SendUsage(detail or "hermes send usage error")
     if r.returncode != 0:
-        raise _SendFailed(detail or f"hermes send exit {r.returncode}")
+        # A failed child can have delivered text or some attachments
+        # before losing its response. Its exit status is not a negative ACK.
+        raise _SendUncertain(detail or f"hermes send exit {r.returncode}")
 
 
 def _delivery_fingerprint(target: str, chunks: list[str],
@@ -879,7 +954,23 @@ def _delivery_fingerprint(target: str, chunks: list[str],
     return h.hexdigest()
 
 
-def _progress(raw: str, count: int) -> tuple[int, list[str], str | None]:
+def _send_marked(ledger, ev, i: int, sent_ids: list[str],
+                 fingerprint: str, argv: list[str], chunk: str,
+                 files: list[tuple[str, str]] | None,
+                 deadline: float | None) -> None:
+    """Retain the in-flight marker unless non-delivery is established."""
+    ledger.outbox_progress(ev["event_id"], i, list(sent_ids),
+                           fingerprint, i + 1)
+    try:
+        _send(argv, chunk, files, deadline=deadline)
+    except (_SendFailed, _SendUsage):
+        ledger.outbox_progress(ev["event_id"], len(sent_ids),
+                               list(sent_ids), fingerprint)
+        raise
+
+
+def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
+                                            int | None]:
     try:
         d = json.loads(raw or "{}")
     except json.JSONDecodeError as e:
@@ -889,12 +980,14 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None]:
     next_chunk = d.get("next", 0)
     sent = d.get("sent", [])
     fingerprint = d.get("fingerprint")
+    sending = d.get("sending")
     if (next_chunk < 0 or next_chunk > count or not isinstance(sent, list)
             or len(sent) != next_chunk
             or any(not isinstance(x, str) or not x.isdigit() for x in sent)
-            or (fingerprint is not None and not isinstance(fingerprint, str))):
+            or (fingerprint is not None and not isinstance(fingerprint, str))
+            or (sending is not None and type(sending) is not int)):
         raise ValueError("progress_invalid")
-    return next_chunk, sent, fingerprint
+    return next_chunk, sent, fingerprint, sending
 
 
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
@@ -933,7 +1026,16 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                        for i in range(0, len(content), _MAX_LEN)])
             # resume at the first unacknowledged chunk — a crash after a
             # partial send must not duplicate accepted chunks (B25)
-            start, sent_ids, previous = _progress(ev["progress"], len(chunks))
+            start, sent_ids, previous, sending = _progress(
+                ev["progress"], len(chunks))
+            if sending is not None and sending > start:
+                # a previous attempt began chunk `sending` and died before
+                # recording the ack — delivery is UNCERTAIN: resending
+                # could duplicate a post that did go out. Hold it for
+                # human reconciliation instead (F19)
+                ledger.outbox_hold(ev["event_id"])
+                res["uncertain"] = res.get("uncertain", 0) + 1
+                continue
             fingerprint = _delivery_fingerprint(target, chunks, files)
             if start and previous != fingerprint:
                 ledger.outbox_hold(ev["event_id"])
@@ -963,8 +1065,10 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 # and retries text-only so a bad attachment can never
                 # sink the notification itself
                 try:
-                    _send(argv, chunks[i],
-                          post_files if i == 0 else None)
+                    _send_marked(ledger, ev, i, sent_ids, fingerprint,
+                                 argv, chunks[i],
+                                 post_files if i == 0 else None,
+                                 deadline)
                 except _SendUsage:
                     if i != 0 or not post_files:
                         raise
@@ -975,7 +1079,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                     elif render_state:
                         _semantic_render_gate(ledger, ev, render_state,
                                               in_progress=bool(start or i))
-                    _send(argv, chunks[i])
+                    _send_marked(ledger, ev, i, sent_ids, fingerprint,
+                                 argv, chunks[i], None, deadline)
                 sent_ids.append(str(i + 1))
                 ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                        fingerprint)
@@ -1013,6 +1118,10 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # invocation itself refused (exit 2) — a CLI/config contract
             # problem; retrying cannot fix it, quarantine the event
             ledger.outbox_hold(ev["event_id"])
+            res["failed"] += 1
+        except _SendUncertain:
+            ledger.outbox_hold(ev["event_id"])
+            res["uncertain"] = res.get("uncertain", 0) + 1
             res["failed"] += 1
         except ValueError:
             ledger.outbox_hold(ev["event_id"])

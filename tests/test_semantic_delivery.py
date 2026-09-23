@@ -284,7 +284,10 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
         first_attempt.append(args[1])
         if len(first_attempt) == 1:
             return "1"
-        raise OSError("synthetic transport failure")
+        # the classified send-path failure — a raw OSError escaping
+        # _send would instead leave the in-flight marker and hold as
+        # an uncertain delivery (F19)
+        raise notifier._SendFailed("synthetic transport failure")
 
     monkeypatch.setattr(notifier, "_send", fail_after_first)
     result = notifier.flush(db)

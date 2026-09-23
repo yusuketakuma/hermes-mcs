@@ -38,6 +38,11 @@ HEAD_SYNC_OVERLAP_S = 120
 # ledger's job-reconciliation and the walk checkpoint logic
 TERMINAL_BODY_STATES = ("full", "deleted")
 
+# attachment download failures that retrying the SAME url can never fix
+# (a fresh url from the server revives the row — see _save_attachments)
+_ATTACH_PERMANENT = frozenset({
+    "download_too_large", "url_not_allowed", "download_empty"})
+
 
 class MigrationError(RuntimeError):
     """Fail closed when an existing schema cannot be migrated losslessly."""
@@ -430,8 +435,55 @@ class Ledger:
               VALUES(?,?,?,?,?)
               ON CONFLICT(message_id,file_id) DO UPDATE SET
                 name=COALESCE(NULLIF(excluded.name,''),attachments.name),
-                url=COALESCE(NULLIF(excluded.url,''),attachments.url)
+                url=COALESCE(NULLIF(excluded.url,''),attachments.url),
+                -- a file listed again after being withdrawn is current
+                -- server-side: restore it with its download state intact.
+                -- A FRESH url (signed links rotate) revives a row that
+                -- failed on the stale one — back to pending, attempts
+                -- cleared (F11)
+                state=CASE WHEN attachments.state='withdrawn'
+                           THEN CASE WHEN attachments.local_path IS NOT NULL
+                                     THEN 'downloaded' ELSE 'pending' END
+                           WHEN attachments.state IN ('pending','failed')
+                                AND NULLIF(excluded.url,'') IS NOT NULL
+                                AND excluded.url <> attachments.url
+                           THEN 'pending'
+                           ELSE attachments.state END,
+                attempts=CASE WHEN attachments.state='withdrawn' THEN 0
+                              WHEN attachments.state IN ('pending','failed')
+                                AND NULLIF(excluded.url,'') IS NOT NULL
+                                AND excluded.url <> attachments.url
+                              THEN 0 ELSE attachments.attempts END,
+                next_try=CASE WHEN attachments.state='withdrawn' THEN NULL
+                              WHEN attachments.state IN ('pending','failed')
+                                AND NULLIF(excluded.url,'') IS NOT NULL
+                                AND excluded.url <> attachments.url
+                              THEN NULL ELSE attachments.next_try END,
+                error=CASE WHEN attachments.state='withdrawn' THEN NULL
+                           WHEN attachments.state IN ('pending','failed')
+                                AND NULLIF(excluded.url,'') IS NOT NULL
+                                AND excluded.url <> attachments.url
+                           THEN NULL ELSE attachments.error END
             """, (m.message_id, a.file_id, a.name, a.url, now))
+        # reconcile the set only when the response enumerated `files`
+        # (complete list, possibly empty) or the post is deleted —
+        # a response that simply omitted the key must not withdraw rows
+        if not getattr(m, "files_present", False) \
+                and m.body_state != "deleted":
+            return
+        keep = [a.file_id for a in m.attachments
+                if getattr(m, "body_state", "") != "deleted"]
+        if keep:
+            self.db.execute(f"""
+              UPDATE attachments SET state='withdrawn'
+              WHERE message_id=? AND state NOT IN ('withdrawn')
+                AND file_id NOT IN ({','.join('?' * len(keep))})
+            """, (m.message_id, *keep))
+        else:
+            self.db.execute("""
+              UPDATE attachments SET state='withdrawn'
+              WHERE message_id=? AND state != 'withdrawn'
+            """, (m.message_id,))
 
     def _save_tree(self, m, new_ids: list, now: float):
         """One message + its attachments + replies (with their attachments).
@@ -473,6 +525,25 @@ class Ledger:
             )
         return snapshot
 
+    def _has_canonical_projections(self) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind='canonical_projection' LIMIT 1"
+        ).fetchone() is not None
+
+    def _invalidate_thread_projections(self, project_id: int, root: int):
+        changed = self.db.execute("""
+          UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))
+          WHERE kind='canonical_projection' AND project_id=?
+            AND json_valid(meta)
+            AND json_extract(meta,'$.invalidated') IS NOT 1
+            AND message_id IN (SELECT message_id FROM messages
+              WHERE project_id=? AND (message_id=? OR parent_id=?))
+        """, (project_id, project_id, root, root)).rowcount
+        if changed:
+            self.db.execute(
+                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
+                (project_id,))
+
     def _semantic_changed_ids(self, before: dict) -> dict[int, list[int]]:
         """Return touched message IDs whose thread input actually changed."""
         changed: dict[int, list[int]] = {}
@@ -487,6 +558,7 @@ class Ledger:
             row_after = self._semantic_message_fingerprint(project_id, message_id)
             if current != previous and row_after != row_before:
                 changed.setdefault(project_id, []).append(message_id)
+                self._invalidate_thread_projections(project_id, root)
         for ids in changed.values():
             ids.sort()
         return changed
@@ -526,7 +598,7 @@ class Ledger:
         now = time.time()
         new_ids = []
         before_semantic = (self._semantic_generation_snapshot(p.messages)
-                           if semantic else {})
+                           if semantic or self._has_canonical_projections() else {})
         with self.db:  # commit on success, rollback on exception
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
@@ -554,7 +626,7 @@ class Ledger:
             for m in p.messages:
                 self._save_tree(m, new_ids, now)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
-                                if semantic else {})
+                                if before_semantic else {})
             if notify and not self.is_archived(p.project_id):
                 # new_ids: every newly stored message is notification-
                 # worthy in the unread path; PLUS messages THIS fetch
@@ -769,12 +841,12 @@ class Ledger:
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
-                           if semantic else {})
+                           if semantic or self._has_canonical_projections() else {})
         with self.db:
             for m in msgs:
                 self._save_tree(m, new_ids, now)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
-                                if semantic else {})
+                                if before_semantic else {})
             if notify and project_id \
                     and not self.is_archived(project_id):
                 # backfill/reply-job context: "new to the ledger" is NOT
@@ -835,7 +907,7 @@ class Ledger:
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(replies)
-                           if semantic else {})
+                           if semantic or self._has_canonical_projections() else {})
         with self.db:
             for m in replies:
                 self._save_tree(m, new_ids, now)
@@ -858,7 +930,7 @@ class Ledger:
                     self._job_add_tx("reply", project_id, m.message_id,
                                      parent_id=m.parent_id)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
-                                if semantic else {})
+                                if before_semantic else {})
             if notify and not self.is_archived(project_id):
                 notify_ids = self._unnotified(
                     [m.message_id for m in replies if m.is_unread])
@@ -929,24 +1001,28 @@ class Ledger:
               WHEN excluded.posted_at_ts IS NOT NULL THEN excluded.posted_at
               ELSE messages.posted_at END,
             body_html=CASE
+              WHEN excluded.body_state='deleted' THEN ''
               WHEN excluded.body_state='full' THEN excluded.body_html
-              WHEN messages.body_state='full' THEN messages.body_html
+              WHEN messages.body_state IN ('full','deleted') THEN messages.body_html
               ELSE excluded.body_html END,
             body_text=CASE
+              WHEN excluded.body_state='deleted' THEN ''
               WHEN excluded.body_state='full' THEN excluded.body_text
-              WHEN messages.body_state='full' THEN messages.body_text
+              WHEN messages.body_state IN ('full','deleted') THEN messages.body_text
               ELSE excluded.body_text END,
             body_state=CASE
+              WHEN excluded.body_state='deleted' THEN 'deleted'
               WHEN excluded.body_state='full' THEN 'full'
-              WHEN messages.body_state='full' THEN 'full'
+              WHEN messages.body_state IN ('full','deleted') THEN messages.body_state
               ELSE excluded.body_state END,
             is_unread=MAX(COALESCE(messages.is_unread,0),
                           COALESCE(excluded.is_unread,0)),
             posted_at_ts=COALESCE(excluded.posted_at_ts,
                                   messages.posted_at_ts),
             content_hash=CASE
+              WHEN excluded.body_state='deleted' THEN excluded.content_hash
               WHEN excluded.body_state='full' THEN excluded.content_hash
-              WHEN messages.body_state='full' THEN messages.content_hash
+              WHEN messages.body_state IN ('full','deleted') THEN messages.content_hash
               ELSE excluded.content_hash END,
             reply_count=excluded.reply_count,
             updated_seen=excluded.updated_seen
@@ -1150,7 +1226,8 @@ class Ledger:
     def _semantic_attachments(self, message_id: int) -> list:
         return [dict(row) for row in self.db.execute(
             "SELECT attachment_id,file_id,name,bytes,sha256,state FROM attachments "
-            "WHERE message_id=? ORDER BY attachment_id", (message_id,))]
+            "WHERE message_id=? AND state != 'withdrawn' "
+            "ORDER BY attachment_id", (message_id,))]
 
     def _semantic_source_generation(self, project_id: int, root: int) -> str:
         """Digest the stored thread input used by a semantic seed.
@@ -1306,6 +1383,7 @@ class Ledger:
                 attempts = (0 if input_changed
                              else int(existing["attempts"] or 0))
                 if input_changed:
+                    self._invalidate_thread_projections(project_id, root)
                     # A source edit is a new budget and may not inherit a
                     # human retry extension or the command token that
                     # invalidated the prior worker.
@@ -1356,7 +1434,7 @@ class Ledger:
         would block floor certification forever on a burnt-out job."""
         r = self.db.execute("""
           SELECT COUNT(*) c FROM fetch_jobs
-          WHERE kind='reply' AND project_id=? AND state='pending'
+          WHERE kind IN ('reply','thread') AND project_id=? AND state='pending'
         """, (project_id,)).fetchone()
         return r["c"]
 
@@ -1379,41 +1457,92 @@ class Ledger:
     def attachment_saved(self, attachment_id: int, path: str,
                          nbytes: int, sha256: str, semantic: bool = False):
         with self.db:
-            source = self.db.execute(
-                "SELECT m.project_id,m.message_id FROM attachments a "
+            row = self.db.execute(
+                "SELECT m.project_id,m.message_id,COALESCE(m.parent_id,m.message_id) root "
+                "FROM attachments a "
                 "JOIN messages m ON m.message_id=a.message_id WHERE attachment_id=?",
-                (attachment_id,)).fetchone() if semantic else None
-            before = self._semantic_message_fingerprint(*source) if source else None
+                (attachment_id,)).fetchone()
+            before = (self._semantic_message_fingerprint(
+                row["project_id"], row["message_id"])
+                if row and (semantic or self._has_canonical_projections()) else None)
+            now = time.time()
             self.db.execute("""
               UPDATE attachments SET local_path=?,bytes=?,sha256=?,
                 state='downloaded',downloaded_at=?,error=NULL
               WHERE attachment_id=?
-            """, (path, nbytes, sha256, time.time(), attachment_id))
-            if source and before != self._semantic_message_fingerprint(*source):
-                self._semantic_seed_tx(source["project_id"], [source["message_id"]],
-                                       {"source": "attachment"})
+            """, (path, nbytes, sha256, now, attachment_id))
+            if row and before is not None and before != self._semantic_message_fingerprint(
+                    row["project_id"], row["message_id"]):
+                self._invalidate_thread_projections(row["project_id"], row["root"])
+                if semantic:
+                    self._semantic_seed_tx(row["project_id"], [row["message_id"]],
+                                           {"source": "attachment"})
+            if row:
+                self._attachment_followup_tx(row, attachment_id, now)
+
+    def _attachment_followup_tx(self, row, attachment_id: int, now: float):
+        """The body notice for this message was already ACCEPTED before
+        this file finished downloading — it provably went out without
+        the file, so queue an attachment-only follow-up receipt (F11).
+        Deduped on payload.attachment_id: one follow-up per file ever."""
+        sent = self.db.execute("""
+          SELECT 1 FROM notify_outbox
+          WHERE kind='new_messages' AND state='accepted'
+            AND updated_at < ? AND json_valid(payload)
+            AND EXISTS(SELECT 1 FROM json_each(
+                         json_extract(payload,'$.message_ids'))
+                       WHERE value=?)
+          LIMIT 1""", (now, row["message_id"])).fetchone()
+        if not sent:
+            return
+        dup = self.db.execute("""
+          SELECT 1 FROM notify_outbox
+          WHERE kind='attachment_followup' AND state != 'suppressed'
+            AND json_valid(payload)
+            AND json_extract(payload,'$.attachment_id')=?
+          LIMIT 1""", (attachment_id,)).fetchone()
+        if dup:
+            return
+        self.outbox_add_tx("attachment_followup", row["project_id"], {
+            "attachment_id": attachment_id,
+            "message_id": row["message_id"]})
 
     def attachment_failed(self, attachment_id: int, kind: str,
                           retry_in: float = 900, max_attempts: int = 6,
                           semantic: bool = False):
-        """Retryable failure -> backoff; attempts exhausted -> 'failed'
-        (quarantined out of the pending queue instead of retrying forever)."""
+        """Classified failure recording (F11). PERMANENT kinds (4xx other
+        than 408/429, oversize, policy blocks) can never succeed on the
+        same url -> 'failed' now; a fresh signed url on re-save revives
+        the row (see _save_attachments). Transient kinds back off to the
+        attempt cap as before."""
+        permanent = (
+            kind in _ATTACH_PERMANENT
+            or (kind.startswith("http_")
+                and kind[5:].isdigit()
+                and 400 <= int(kind[5:]) < 500
+                and int(kind[5:]) not in (408, 429)))
         with self.db:
             source = self.db.execute(
-                "SELECT m.project_id,m.message_id,a.state FROM attachments a "
+                "SELECT m.project_id,m.message_id,a.state,"
+                "COALESCE(m.parent_id,m.message_id) root FROM attachments a "
                 "JOIN messages m ON m.message_id=a.message_id WHERE attachment_id=?",
-                (attachment_id,)).fetchone() if semantic else None
+                (attachment_id,)).fetchone() if (
+                    semantic or self._has_canonical_projections()) else None
             self.db.execute("""
               UPDATE attachments SET attempts=attempts+1,next_try=?,error=?,
-                state=CASE WHEN attempts+1>=? THEN 'failed' ELSE 'pending' END
+                state=CASE WHEN ? OR attempts+1>=? THEN 'failed'
+                           ELSE 'pending' END
               WHERE attachment_id=?
-            """, (time.time() + retry_in, kind[:80], max_attempts, attachment_id))
+            """, (time.time() + retry_in, kind[:80], permanent,
+                  max_attempts, attachment_id))
             if source:
                 state = self.db.execute("SELECT state FROM attachments WHERE attachment_id=?",
                                         (attachment_id,)).fetchone()[0]
                 if state != source["state"]:
-                    self._semantic_seed_tx(source["project_id"], [source["message_id"]],
-                                           {"source": "attachment"})
+                    self._invalidate_thread_projections(source["project_id"], source["root"])
+                    if semantic:
+                        self._semantic_seed_tx(source["project_id"], [source["message_id"]],
+                                               {"source": "attachment"})
 
     def attachments_due(self, limit: int = 50,
                         priority_mids: list[int] | None = None) -> list:
@@ -1477,13 +1606,18 @@ class Ledger:
         """, (time.time(), limit)).fetchall()
 
     def outbox_progress(self, event_id: int, next_chunk: int,
-                        sent_ids: list, fingerprint: str):
+                        sent_ids: list, fingerprint: str,
+                        sending: int | None = None):
         """Partial-send receipt: resume a multi-chunk event where it stopped
-        instead of resending already-accepted chunks (Oracle B25)."""
+        instead of resending already-accepted chunks (Oracle B25).
+        `sending` marks the chunk whose send just began but is not yet
+        acknowledged — a crash inside that window leaves an uncertain
+        delivery the next flush must hold, not resend (F19)."""
         self.db.execute("""
           UPDATE notify_outbox SET progress=?,updated_at=? WHERE event_id=?
         """, (json.dumps({"next": next_chunk, "sent": sent_ids,
-                           "fingerprint": fingerprint}),
+                           "fingerprint": fingerprint,
+                           "sending": sending}),
               time.time(), event_id))
         self.db.commit()
 

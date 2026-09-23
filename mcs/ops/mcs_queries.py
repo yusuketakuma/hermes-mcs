@@ -42,7 +42,7 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
         parts.append(f"json_valid({art}.content)")
     parts.append(f"json_valid({art}.meta)")
     if error_check:
-        parts.append(f"json_extract({art}.meta,'$.error') IS NOT 1")
+        parts.append(f"COALESCE(json_extract({art}.meta,'$.error'),0)=0")
     parts.append(f"json_extract({art}.meta,'$.hash')={msg}.content_hash")
     return " AND " + " AND ".join(parts)
 
@@ -50,22 +50,65 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
 CANONICAL_PROJECTION_KIND = "canonical_projection"
 
 
+def qc_source_id(msg: str = "m", *, version: int) -> str:
+    """Newest valid extraction for the QC generation being evaluated."""
+    if type(version) is not int or version < 0:
+        raise ValueError("extract_version_invalid")
+    return ("(SELECT MAX(qx.artifact_id) FROM artifacts qx"
+            f" WHERE qx.kind='extract_llm' AND qx.message_id={msg}.message_id"
+            f" {current_extract_pred('qx', msg)}"
+            " AND json_type(qx.content)='object'"
+            f" AND json_extract(qx.meta,'$.extract_version')={version})")
+
+
+def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
+    """QC belongs to an exact extraction, including same-body re-extraction."""
+    return (current_extract_pred(art, msg)
+            + f" AND json_extract({art}.meta,'$.extract_version')={version}"
+              f" AND json_extract({art}.meta,'$.source_artifact_id')="
+              f"{qc_source_id(msg, version=version)}")
+
+
+def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
+    """AND-fragment: a canonical_projection row is usable right now —
+    valid payloads, no error, hash-current to the source message, and not
+    superseded by a later source save (meta.invalidated).  Shared by
+    _current_projection_id and mcs_requests.candidates — the T12 shadow
+    rule must be identical on every read path."""
+    col = f"{art}." if art else ""
+    return (f"json_valid({col}content) AND json_valid({col}meta) "
+            f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
+            f"AND json_extract({col}meta,'$.hash')={hash_ref} "
+            f"AND json_extract({col}meta,'$.invalidated') IS NOT 1")
+
+
+def _current_projection_id(art: str, msg: str) -> str:
+    """Subquery: THE current canonical-projection row for a message —
+    the newest valid artifact_id among hash-current, unexpired projections.
+    The writer expires source/context/policy generations explicitly; a
+    newer projection of the same generation supersedes older ones, and a new
+    EMPTY projection legitimately replaces an old non-empty one (C06).
+    Returns the artifact_id or NULL."""
+    return (f"(SELECT MAX(c.artifact_id) FROM artifacts c"
+            f" JOIN messages cm ON cm.message_id=c.message_id"
+            f" WHERE c.kind='{CANONICAL_PROJECTION_KIND}'"
+            f" AND c.message_id={art}.message_id"
+            f" AND {current_projection_pred('c', 'cm.content_hash')})")
+
+
 def current_fact_pred(art: str = "a", msg: str = "m", *,
                       error_check: bool = True) -> str:
     """AND-fragment for fact-extraction reads (T12 consumer migration):
-    a hash-current ``canonical_projection`` row shadows ``extract_llm``
-    for the same message; either kind must satisfy current_extract_pred.
-    The caller's FROM clause must admit both kinds —
+    the CURRENT-generation ``canonical_projection`` row (see
+    _current_projection_id) shadows ``extract_llm`` for the same
+    message; either kind must satisfy current_extract_pred. The
+    caller's FROM clause must admit both kinds —
     ``<art>.kind IN ('extract_llm','canonical_projection')``."""
     return (current_extract_pred(art, msg, error_check=error_check)
-            + f" AND ({art}.kind='{CANONICAL_PROJECTION_KIND}'"
-              f" OR NOT EXISTS (SELECT 1 FROM artifacts c"
-              f" JOIN messages cm ON cm.message_id=c.message_id"
-              f" WHERE c.kind='{CANONICAL_PROJECTION_KIND}'"
-              f" AND c.message_id={art}.message_id"
-              f" AND json_valid(c.meta)"
-              f" AND json_extract(c.meta,'$.hash')"
-              f"=cm.content_hash))")
+            + f" AND CASE WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"
+              f" THEN {art}.artifact_id="
+              f"{_current_projection_id(art, msg)}"
+              f" ELSE {_current_projection_id(art, msg)} IS NULL END")
 
 
 def med_period_artifacts(db):
@@ -87,6 +130,7 @@ def med_is_patient_current(med) -> bool:
     filters (med_change_no_followup / transition co-occurrence)."""
     return isinstance(med, dict) \
         and not med.get("negated") \
+        and not med.get("unverified") \
         and med.get("subject", "patient") == "patient" \
         and med.get("status", "current") != "past"
 
@@ -98,6 +142,7 @@ def med_is_patient_current(med) -> bool:
 # absent keys on pre-v2 rows read as NULL and pass.
 MED_PATIENT_CURRENT_SQL = (
     "json_extract(je.value,'$.negated') IS NOT 1 "
+    "AND json_extract(je.value,'$.unverified') IS NOT 1 "
     "AND COALESCE(json_extract(je.value,'$.subject'),"
     "'patient')='patient' "
     "AND COALESCE(json_extract(je.value,'$.status'),"

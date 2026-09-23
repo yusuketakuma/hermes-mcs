@@ -4,9 +4,12 @@ capture -> human-approved ops.refstat_approve -> verify. Uses a real
 Ledger + published snapshot in tmp_path; no network, no live data.
 """
 import json
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
 
@@ -169,6 +172,54 @@ def test_approve_rejects_hash_mismatch(tmp_path):
         tmp_path, "base", "pending")).is_file()
     assert not db.artifacts("refstat_approval_v1")
     db.close()
+
+
+@pytest.mark.parametrize("failure", ["hash", "artifact", "receipt", "commit"])
+def test_failed_reapproval_preserves_previous_baseline(tmp_path, failure):
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        _capture(tmp_path)
+        requests.apply_command(db, _approve_req("base", _pending_hash(tmp_path)))
+        approved = Path(mcs_refstats._ref_path(tmp_path, "base", "approved"))
+        previous = approved.read_bytes()
+        db.save_messages([_msg(2, "new synthetic record")])
+        _capture(tmp_path)
+        pending = Path(mcs_refstats._ref_path(tmp_path, "base", "pending"))
+        proposed = pending.read_bytes()
+        req = _approve_req("base", "0" * 64 if failure == "hash"
+                           else _pending_hash(tmp_path))
+
+        def authorize(action, name, *unused):
+            table = {"artifact": "artifacts", "receipt": "command_receipts"}.get(failure)
+            if action == sqlite3.SQLITE_INSERT and name == table:
+                return sqlite3.SQLITE_DENY
+            if (failure == "commit" and action == sqlite3.SQLITE_TRANSACTION
+                    and name == "COMMIT"):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        db.db.set_authorizer(authorize)
+        try:
+            if failure == "hash":
+                assert requests.apply_command(db, req)["error"] == "refstat_hash_mismatch"
+            else:
+                with pytest.raises(sqlite3.DatabaseError):
+                    requests.apply_command(db, req)
+        finally:
+            db.db.set_authorizer(None)
+        assert approved.read_bytes() == previous
+        assert pending.read_bytes() == proposed
+        assert len(db.artifacts("refstat_approval_v1")) == 1
+        row = db.db.execute(
+            "SELECT outcome FROM command_receipts WHERE command_id=?",
+            (req["command_id"],)).fetchone()
+        if failure == "hash":
+            assert row["outcome"] == "rejected"
+        else:
+            assert row is None
+    finally:
+        db.close()
 
 
 def test_approve_rejects_missing_pending(tmp_path):

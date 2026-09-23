@@ -977,3 +977,139 @@ fallback で auto_login が動作）。スクリプトは
 - `mcs_setup check` — LaunchAgent 3件（drainer×2 + local.mcs-cmd）未設置時に
   warning を追加（容量系のため error ではない）
 - `install.sh` 末尾案内を新構成に更新
+
+## 全体レビュー(多角監査) — 発見と修復
+
+**修復済み**:
+- `~/.gbrain/nightly-maintenance.sh`(孤立旧コピー)のbrain_exportパスを
+  `mcs/ops/`へ修正 — 実稼働の`gbrain_nightly.sh`は正しかった
+- transport失敗の区別: `local_llm.chat(error_out=)`追加、
+  connection-refusedは`_DEFERRED`(attempts非消費)・timeoutは従来通り失敗
+  — 再起動/llama起動中のバッチがattemptsを踏み襲う設計を解消
+  (既存endpoint_downガードもあるがDEFERRED経路でfailed計上も回避)
+- `run_pending`結果に`deferred`追加 → drainerは全件deferred時30sバックオフ
+  (旧来: `_next_retry=None`でexit→KeepAlive 30s churn再発の恐れ)
+- `maintenance.rotate_log`をdrain log群(extract_drain[_rt]/extract_llm/
+  semantic_drain)にも拡張 — 常駐drainerの無制限増大を防止
+- 死骸清掃: `adapter/`(空dir)・`data/mcs.db`(0B)・`.env.save`・
+  旧backup shm/wal・`mcs/.pytest_cache`/`mcs/.ruff_cache`
+- docs SVG内の旧パス `mcs/mcs_view.py` → `mcs/ops/mcs_view.py`
+
+**観測(対応保留・正直な報告)**:
+- attachments 10GB・5268件 — 保持ポリシー無し(archive設計だが無制限成長)
+- decode ~3t/s(16GB・swap~9GBのメモリ圧)が根本律速 → >900tok出力は
+  TIMEOUT=300に届き失敗するケースが残る
+- extract_llm 24h実績 ~708件/日(backlog ~6.8K) — 予測~1,500/日を下回る
+  (再起動直後の失敗バッチ+メモリ圧の影響)
+- gbrain側のnightly失敗(transcripts ingest/dream "legacy writer"拒否)は
+  mcs管轄外だが併記
+
+## 残課題対応(ユーザー判断)
+
+- **①attachments 14日TTL**: `maintenance.prune_attachments`新設 —
+  downloaded_at>14dのpayloadをunlink、`state='pruned'`+local_path=NULL
+  (name/bytes/sha256/urlは保持)。pending/failedは不触。housekeeping
+  stageで毎tick実行。`attachments_pruned`をrun結果に記録
+- **②decode低速の原因特定**: llamacpp.log全履歴分析で —
+  np=1時代 17.1t/s → np=2 16.6t/s → **np=3時代 7.4t/s** → np=2復帰後も
+  7.7→5.9→3.7→**3.6t/s**と漸次低下。`-c 49152`(差戻し済)や`-ub 1024`
+  ではなく、**PhysMem 15G中 13G wired・残73MB**の蓄積的メモリ圧が主因
+  (Metal確保がwired計上・np=3期以降の他プロセス成長+swap蓄積)。
+  再起動後もswap 9GBで回復せず。恒久策はHW増設のみ、現状は
+  backlog消化による自然緩和待ち
+- **③実効~708/日**: 様子見(安定後に再計測)
+- **④gbrain nightly失敗**: mcs管轄外として様子見
+
+## canonical有効化前修正 C01–C07(監査報告対応)
+
+- **C01** `semantic_projection._mid()`: v2 JSONのmessage_id(string)を
+  projection境界でint正規化 — evidence/bundleのintキー照合が
+  文字列idで常に失敗していた。回帰: test_canonical_projection
+- **C02** `semantic_drain._process_job_inner`: `v2_docs_by_target`新設 —
+  複数target処理時に最終memberのv2_docが全targetのmandatory_renderに
+  漏れていた。回帰: test_canonical_drain(2target・別薬剤で隔離検証)
+- **C03** coverage不完全docの有界再開: 保存済みincomplete docは
+  1回だけ再抽出(coverage_retry meta記録)。retry済はneeds_reviewで
+  駐留し永久ループしない。回帰: resume→retry記録→park をE2E検証
+- **C04** fact監査はevaluated:trueのみ再利用 — evaluated:falseの
+  途中失敗artifactがverdict扱いで世代を固定するのを解消。
+  回帰: evaluated:false seed→drainで再監査artifact確認
+- **C05** `semantic.llm_chat`に`local_llm.acceptance_error`接続 —
+  finish_reason=lengthのJSONパース可能応答もincomplete扱い(None)
+- **C06** `mcs_queries._current_projection_id`: projection現行版を
+  MAX(artifact_id)で一意化 — 同bodyの旧世代(旧policy/schema)が
+  残存しても最新generationのみ読取。新しい空projectionが旧非空を
+  正当に置換。rollup dirty監視にcanonical_projection追加で
+  世代変更→再生成を連動。回帰: 2世代projectionで最新のみ選択
+- **C07** care_event射影に型付きゲート: polarity=negated・
+  非patient主体(family/person等)・workflow cancelled/on_holdを
+  keyword分類の前に除外 — 否定退院・家族退院・計画取消が
+  患者イベントに混入しない。回帰: 5ケース否定+1陽性
+
+検証: pytest **757 passed** · ruff clean · README regen(69 test files)
+· gates 8/8 · mine_gates clean · shellcheck clean
+
+未解決(正直な報告): canonical有効化は依然ゲート未設定のまま。
+実データでのE2E(shadow比較bench)は未実施 — 合成drain検証のみ。
+
+## 継続レビュー(他エージェント並行変更との統合後) N01–N04 + R系
+
+### N系 — 統合後に発見・修復した欠陥
+
+- **N01/N02** `invalidated` projectionが読み側を素通り:
+  `semantic_store.invalidate_projections`・ledger側
+  `_invalidate_thread_projections` が `meta.invalidated` を立てても、
+  `mcs_requests.candidates` の `has_projection` EXISTSとartifact選択が
+  フラグを見ず、失効projectionがextract_llmをshadowし続け、かつ
+  全projection失効時はELSE側`IS NULL`もfalseになり事実カバレッジが
+  完全喪失し得た。`_current_projection_id`(mcs_queries)側は並行作業で
+  既に`IS NOT 1`済。candidates側に invalidated 除外を適用した上で、
+  「現行projection妥当性述語」を`mcs_queries.current_projection_pred`
+  として単一ソース化 — `_current_projection_id`・`candidates`双方が
+  同一片を共有し、error/malformed projectionによるshadow喪失経路も
+  閉塞(N02のdrift元を構造的に排除)。
+- **N03** `semantic_metrics.current_quality`: `members[mid]`が
+  cross-project parent等のデータ異常でKeyError → status_report全体
+  停止の余地。`.get`+`thread_member_missing` reasonへ変更。
+- **N04** `semantic_drain._process_job_inner`: `fact_source`をmember
+  ループ外へhoist(scfg由来の定数を毎iteration再取得していた)。
+
+### QC realtime-only の再適用(ユーザー指示との衝突を解決)
+
+- 並行エージェントの書換えで`QC_REALTIME_MAX_AGE_S`ゲートが消失し、
+  全期間QC(`test_seed_preserves_archive_coverage`等が旧投稿のQCを
+  許可)へ変更されていた。ユーザー明示指示「QCはリアルタイム処理のみに
+  適用する」が優位と判断し、改善済みの`source_artifact_id`世代bind
+  設計を維持したままゲートを再適用:
+  - `_qc_seed`: `COALESCE(m.posted_at_ts,0) >= now-3日`で絞込み
+    (posted_at不明はfail-closedで除外) + 窓外投稿のpending jobを
+    seed毎にDELETEでreap
+  - `_process_qc_job`: 処理時点で窓外へ老化したjobはJev request
+    不发・artifact不書で`done`化
+  - テスト3本をrealtime-only仕様へ反転
+    (`test_seed_skips_archive_posts`/`test_seed_reaps_stale_archive_jobs`/
+    `test_process_qc_job_skips_aged_post`)
+- **記録上の齟齬**: review-20260923.mdは「QC F15–F17 全期間の
+  未登録仕事を公平に処理」を意図的決定と明記。アーカイブ全期間QCを
+  望む場合は設定knob化が妥当 — 現状はユーザー指示のrealtime-only。
+
+### 新規モジュール監査(並行作業分)
+
+- `mcs_transport.py`: 子プロセスworkerで絶対期限・env allowlist・
+  stderr遮断・kill+reap。`_loopback_url`でcdp系をloopback限定、
+  api opは`API+"/"`prefix限定 — 健全。
+- `semantic_metrics.py`: 履歴artifact集計と現行世代品質を分離 — 健全
+  (N03のguard追加のみ)。
+- `semantic_observe.py`: read-only snapshot、config非供給時は
+  `config_not_supplied`でfail-closed — 健全。
+- `mcs_adapter._io`: 全network経路(cdp_json/cdp_eval/api/download)が
+  bounded_call経由でdeadline伝播 — 健全。
+
+検証: pytest **829 passed** · ruff clean · README --check clean ·
+shellcheck clean · gates **8/8** · mine_gates --check clean ·
+git diff --check clean
+
+未解決(正直な報告): コミット/プッシュ/デプロイ未実施。実MCS/Jev/
+Discord/Keychainへの実E2E未実施(全テスト合成)。O01バックアップ復元
+手順・O02臨床状態統合・O03添付OCRは未実装のまま。通知のexactly-onceは
+非保証(不確実配送はholdで照合待ち)。canonical有効化ゲート未設定。

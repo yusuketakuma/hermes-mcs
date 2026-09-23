@@ -14,5 +14,20 @@ PY=__PYTHON__
 rc=$?
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs check: run_check exited %d — see %s\n' "$rc" "$LOG"
+elif [ "$rc" -eq 0 ]; then
+  # F20: a partial run exits 0 — the per-subsystem state lives in
+  # health.json. Surface the one state that risks silent data loss
+  # (collection incomplete); capacity lag stays in health.json for
+  # the monitor rather than alerting every tick.
+  "$PY" - "__DATA__/health.json" <<'PYEOF' || true
+import json, sys
+try:
+    h = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+if h.get("collection") == "incomplete":
+    print("mcs check: collection incomplete — projects "
+          + ",".join(str(p) for p in h.get("incomplete_projects", [])))
+PYEOF
 fi
 exit "$rc"
