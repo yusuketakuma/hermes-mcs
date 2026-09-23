@@ -85,6 +85,7 @@ CONFIG_RULES = {
     "discover_archived":     (False, _bool),
     "deep_history":          (False, _bool),
     "trickle_pages":         (False, _int_range(1, 40)),
+    "notify_max_age_h":      (False, _num),
     "job_budget_seconds":    (False, _num),
     "signals":               (False, _dict),
     "semantic":              (False, _dict),

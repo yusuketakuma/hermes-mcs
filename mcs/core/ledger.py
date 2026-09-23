@@ -590,13 +590,21 @@ class Ledger:
         return cur.lastrowid
 
     def save_patient(self, p, notify: dict | None = None,
-                     semantic: bool = False) -> list:
+                     semantic: bool = False,
+                     notify_max_age_s: float | None = None) -> list:
         """Whole patient block + optional notify intent in ONE transaction —
         a crash between message save and outbox insert must not be able to
         lose the notification (Oracle B11). notify is a payload template;
         message_ids is filled with the new ids. semantic=True also seeds
         durable semantic-eval jobs for the same messages in the SAME
-        commit (INV-06)."""
+        commit (INV-06).
+
+        notify_max_age_s drops messages posted more than this many
+        seconds ago from the notification (bulk-added patients surface
+        as 'unread' with months-old history — those are imported and
+        consumed, never announced). A NULL/unparseable posted_at cannot
+        be proven old, so it still notifies. Stale ids are marked
+        notified so they never resurface as candidates."""
         now = time.time()
         new_ids = []
         before_semantic = (self._semantic_generation_snapshot(p.messages)
@@ -643,6 +651,18 @@ class Ledger:
                     if t.is_unread]
                 notify_ids = list(dict.fromkeys(
                     new_ids + self._unnotified(fresh_unread)))
+                if notify_ids and notify_max_age_s is not None:
+                    q = ("SELECT message_id FROM messages WHERE "
+                         "message_id IN ("
+                         + ",".join("?" * len(notify_ids)) + ") AND "
+                         "(posted_at_ts IS NULL OR posted_at_ts >= ?)")
+                    keep = {r["message_id"] for r in self.db.execute(
+                        q, (*notify_ids, now - notify_max_age_s))}
+                    stale = [i for i in notify_ids if i not in keep]
+                    # imported but never announced — consumed so a
+                    # later unread report cannot resurrect them
+                    self._mark_notified(stale, now)
+                    notify_ids = [i for i in notify_ids if i in keep]
                 ev_id = None
                 if notify_ids:
                     pl = dict(notify)
