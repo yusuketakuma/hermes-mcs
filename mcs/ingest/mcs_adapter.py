@@ -50,6 +50,11 @@ _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # the origin host), so it is handled manually in _open_download.
 _ALLOWED_REDIRECT_HOSTS = _ALLOWED_DOWNLOAD_HOSTS | {"files.medical-care.net"}
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+# The unread set can move between page requests (a post arrives, or a
+# read happens on another device) — restart a drifted walk instead of
+# failing the run on a transient race.
+_UNREAD_DRIFT = "unread: timestamp changed during pagination"
+_UNREAD_LIST_ATTEMPTS = 3
 
 
 class MCSError(Exception):
@@ -820,6 +825,16 @@ class MCSAdapter:
     # ---------- reads ----------
 
     def list_unread(self, per_page: int = 10, max_pages: int = 50) -> UnreadSnapshot:
+        for _ in range(_UNREAD_LIST_ATTEMPTS):
+            try:
+                return self._list_unread_once(per_page, max_pages)
+            except SchemaError as e:
+                if e.detail != _UNREAD_DRIFT:
+                    raise
+        raise SchemaError(_UNREAD_DRIFT)
+
+    def _list_unread_once(self, per_page: int,
+                          max_pages: int) -> UnreadSnapshot:
         patients: list[UnreadPatient] = []
         ts = None
         prev_page_ids: set[int] | None = None
@@ -835,7 +850,7 @@ class MCSAdapter:
                 raise SchemaError("unread: projects missing")
             page_ts = pag.get("timestamp")
             if ts is not None and page_ts != ts:
-                raise SchemaError("unread: timestamp changed during pagination")
+                raise SchemaError(_UNREAD_DRIFT)
             ts = page_ts if ts is None else ts
             ids = set()
             for p in projs:

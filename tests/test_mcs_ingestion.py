@@ -186,6 +186,69 @@ def test_contradictory_mark_read_response_is_unknown(monkeypatch):
     assert error.value.kind == "mark_result_unknown"
 
 
+def _unread_project(pid: int) -> dict:
+    return {"id": pid, "type": "medical",
+            "karte": {"last_name": "T", "first_name": "P", "disease": "",
+                      "station": {"name": "st"}}}
+
+
+class _UnreadListAdapter(mcs_adapter.MCSAdapter):
+    """Serves /projects/unread pages from a schedule of
+    (timestamp, has_next) tuples, one entry per request."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.calls = []
+
+    def _get(self, path, params=None, extend_session=True):
+        ts, has_next = self.pages[len(self.calls)]
+        self.calls.append(params["page"])
+        return {"projects": [_unread_project(100 + params["page"])],
+                "paginate": {"timestamp": ts, "has_next": has_next}}
+
+
+def test_list_unread_restarts_when_snapshot_drifts():
+    adapter = _UnreadListAdapter([
+        (1, True), (2, False),   # attempt 1: timestamp moves mid-walk
+        (7, True), (7, False),   # attempt 2: consistent snapshot
+    ])
+
+    snap = adapter.list_unread()
+
+    assert snap.timestamp == 7
+    assert adapter.calls == [1, 2, 1, 2]
+    assert [p.project_id for p in snap.patients] == [101, 102]
+
+
+def test_list_unread_fails_after_bounded_drift():
+    adapter = _UnreadListAdapter([
+        (1, True), (2, False),
+        (3, True), (4, False),
+        (5, True), (6, False),   # every attempt drifts
+    ])
+
+    with pytest.raises(mcs_adapter.SchemaError) as error:
+        adapter.list_unread()
+    assert error.value.kind == "schema_error"
+    assert "timestamp changed" in error.value.detail
+    assert adapter.calls == [1, 2] * 3
+
+
+def test_list_unread_does_not_retry_other_schema_errors():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def __init__(self):
+            self.calls = 0
+
+        def _get(self, path, params=None, extend_session=True):
+            self.calls += 1
+            return {"projects": []}  # paginate missing
+
+    adapter = Adapter()
+    with pytest.raises(mcs_adapter.SchemaError):
+        adapter.list_unread()
+    assert adapter.calls == 1
+
+
 def test_attachment_destination_uses_ledger_identity(tmp_path, monkeypatch):
     seen = []
     adapter = SimpleNamespace(
