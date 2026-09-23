@@ -651,18 +651,8 @@ class Ledger:
                     if t.is_unread]
                 notify_ids = list(dict.fromkeys(
                     new_ids + self._unnotified(fresh_unread)))
-                if notify_ids and notify_max_age_s is not None:
-                    q = ("SELECT message_id FROM messages WHERE "
-                         "message_id IN ("
-                         + ",".join("?" * len(notify_ids)) + ") AND "
-                         "(posted_at_ts IS NULL OR posted_at_ts >= ?)")
-                    keep = {r["message_id"] for r in self.db.execute(
-                        q, (*notify_ids, now - notify_max_age_s))}
-                    stale = [i for i in notify_ids if i not in keep]
-                    # imported but never announced — consumed so a
-                    # later unread report cannot resurrect them
-                    self._mark_notified(stale, now)
-                    notify_ids = [i for i in notify_ids if i in keep]
+                notify_ids = self._filter_notify_age(
+                    notify_ids, now, notify_max_age_s)
                 ev_id = None
                 if notify_ids:
                     pl = dict(notify)
@@ -690,6 +680,28 @@ class Ledger:
                     self._semantic_seed_tx(p.project_id, seed_ids,
                                            {"source": "history_import"})
         return new_ids
+
+    def _filter_notify_age(self, ids: list, now: float,
+                           max_age_s: float | None) -> list:
+        """Drop ids posted more than max_age_s ago from the candidate
+        set — bulk-added patients surface as 'unread' carrying
+        months-old history; those are imported and consumed, never
+        announced. NULL/unparseable posted_at cannot be proven old, so
+        it is kept. Stale ids are marked notified in the SAME commit so
+        a later fetch reporting them unread cannot resurrect them.
+        Shared by every notify path (unread, backfill, reply_job) —
+        an old post is equally stale no matter which fetch saw it.
+        Caller holds `with self.db`."""
+        if not ids or max_age_s is None:
+            return ids
+        q = ("SELECT message_id FROM messages WHERE message_id IN ("
+             + ",".join("?" * len(ids)) + ") AND "
+             "(posted_at_ts IS NULL OR posted_at_ts >= ?)")
+        keep = {r["message_id"] for r in self.db.execute(
+            q, (*ids, now - max_age_s))}
+        stale = [i for i in ids if i not in keep]
+        self._mark_notified(stale, now)
+        return [i for i in ids if i in keep]
 
     def _unnotified(self, ids: list) -> list:
         """Of `ids` (already filtered to this fetch's unread messages),
@@ -856,10 +868,13 @@ class Ledger:
 
     def save_messages(self, msgs, project_id: int | None = None,
                       notify: dict | None = None,
-                      semantic: bool = False) -> list:
+                      semantic: bool = False,
+                      notify_max_age_s: float | None = None) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
-        same transaction. Returns ids of newly-inserted messages."""
+        same transaction. Returns ids of newly-inserted messages.
+        notify_max_age_s drops stale posts from the intent (bulk-added
+        patients carry months-old unread history)."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -878,7 +893,8 @@ class Ledger:
                                 if m.is_unread] + [
                     t.message_id for m in msgs for t in m.replies
                     if t.is_unread]
-                notify_ids = self._unnotified(fresh_unread)
+                notify_ids = self._filter_notify_age(
+                    self._unnotified(fresh_unread), now, notify_max_age_s)
                 ev_id = None
                 if notify_ids:
                     pl = dict(notify)
@@ -920,12 +936,16 @@ class Ledger:
 
     def save_thread_replies(self, replies: list, project_id: int,
                             notify: dict | None = None,
-                            semantic: bool = False) -> list:
+                            semantic: bool = False,
+                            notify_max_age_s: float | None = None) -> list:
         """Reply-job drain path: persist a fetched thread's replies AND
         reconcile their reply-job states in the SAME commit (Oracle F05).
         A reply whose body is now terminal retires its queued job (a
         burnt-out one would otherwise block floor certification forever);
-        a still-incomplete reply reserves a durable retry."""
+        a still-incomplete reply reserves a durable retry.
+        notify_max_age_s drops stale replies from the intent — a thread
+        drained for a bulk-added patient can carry months-old unread
+        replies that must not announce."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(replies)
@@ -954,8 +974,10 @@ class Ledger:
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
             if notify and not self.is_archived(project_id):
-                notify_ids = self._unnotified(
-                    [m.message_id for m in replies if m.is_unread])
+                notify_ids = self._filter_notify_age(
+                    self._unnotified(
+                        [m.message_id for m in replies if m.is_unread]),
+                    now, notify_max_age_s)
                 ev_id = None
                 if notify_ids:
                     pl = dict(notify)

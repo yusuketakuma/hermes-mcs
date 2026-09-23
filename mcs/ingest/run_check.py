@@ -305,7 +305,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
 # ---------- stage: coverage backfill ----------
 
 def stage_backfill(adapter, ledger, result, deadline, run_id,
-                   semantic: bool = False):
+                   semantic: bool = False,
+                   notify_max_age_s: float | None = None):
     """Catch posts the unread API misses (e.g. read by another human).
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
@@ -333,8 +334,10 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
         hist = batch.messages
         merged = job_ops.merge_full_replies(
             adapter, hist, 0, deadline, result, ledger=ledger)
-        new_ids = ledger.save_messages(hist, project_id=pid, notify={
-            "run_id": run_id, "source": "history"}, semantic=semantic)
+        new_ids = ledger.save_messages(
+            hist, project_id=pid,
+            notify={"run_id": run_id, "source": "history"},
+            semantic=semantic, notify_max_age_s=notify_max_age_s)
         if new_ids:
             result["backfilled"] += len(new_ids)
         if merged.error:
@@ -500,21 +503,22 @@ def main() -> int:
 
     try:
         # -- priority fetch work -------------------------------------
+        mah = cfg.get("notify_max_age_h")
+        if mah is not None and not (type(mah) in (int, float)
+                                    and mah > 0):
+            result["errors"].append("config: notify_max_age_h_invalid")
+            mah = None
+        notify_max_age_s = (mah * 3600
+                            if type(mah) in (int, float) and mah > 0
+                            else None)
         if not args.jobs_only:
-            mah = cfg.get("notify_max_age_h")
-            if mah is not None and not (type(mah) in (int, float)
-                                        and mah > 0):
-                result["errors"].append("config: notify_max_age_h_invalid")
-                mah = None
-            notify_max_age_s = (mah * 3600
-                                if type(mah) in (int, float) and mah > 0
-                                else None)
             stage_unread(adapter, ledger, args, result, deadline, run_id,
                          semantic=sem_on,
                          notify_max_age_s=notify_max_age_s)
             if not args.no_backfill:
                 stage_backfill(adapter, ledger, result, deadline, run_id,
-                               semantic=sem_on)
+                               semantic=sem_on,
+                               notify_max_age_s=notify_max_age_s)
         else:
             result["jobs_only"] = True
 
@@ -530,7 +534,8 @@ def main() -> int:
         job_ops.run_discovery(adapter, ledger, result, deadline,
                               include_archived=discover_archived)
         job_ops.run_reply_jobs(adapter, ledger, result, deadline,
-                               semantic=sem_on)
+                               semantic=sem_on,
+                               notify_max_age_s=notify_max_age_s)
         job_ops.run_history_jobs(adapter, ledger, result, deadline,
                                  trickle=False, semantic=sem_on)
 

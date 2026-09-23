@@ -3935,3 +3935,41 @@ def test_save_patient_no_age_limit_unchanged(tmp_path):
     assert db.db.execute(
         "SELECT COUNT(*) c FROM notify_outbox").fetchone()["c"] == 1
     db.close()
+
+
+def test_save_messages_stale_unread_not_notified(tmp_path):
+    """The backfill path must apply the same age cutoff — a history
+    walk over a bulk-added patient meets unread posts older than the
+    cutoff and must import them silently."""
+    db = _ledger(tmp_path)
+    pid = 84
+    db.upsert_patient_info(_unread_patient(pid))
+    msgs = [_msg_at(1, pid, _iso(60)), _msg_at(2, pid, _iso(0.01))]
+    db.save_messages(msgs, project_id=pid,
+                     notify={"source": "history"},
+                     notify_max_age_s=12 * 3600)
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["message_ids"] == [2]
+    db.close()
+
+
+def test_save_thread_replies_stale_unread_not_notified(tmp_path):
+    """The reply-job drain path likewise: an old unread reply in a
+    bulk-added patient's thread is imported+consumed, not announced."""
+    db = _ledger(tmp_path)
+    pid = 85
+    db.upsert_patient_info(_unread_patient(pid))
+    replies = [_msg_at(10, pid, _iso(30)),
+               _msg_at(11, pid, _iso(0.01))]
+    for r in replies:
+        r.parent_id = 1
+    db.save_thread_replies(replies, pid,
+                           notify={"source": "reply_job"},
+                           notify_max_age_s=12 * 3600)
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["message_ids"] == [11]
+    db.close()

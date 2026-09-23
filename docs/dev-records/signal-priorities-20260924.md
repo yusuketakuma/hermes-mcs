@@ -123,3 +123,20 @@
 評価は従来通り走る — 抑制されるのは Discord 通知だけ。
 本番 config: `notify_max_age_h: 48`（未設定=従来通り全通知）。
 `discover_archived` は既に有効済みだった。
+
+## 追記3: 年齢フィルタを全通知経路へ適用（同日・レビュー指摘）
+
+`notify_max_age_s` は当初 `save_patient`（未読 stage）にのみ適用
+されていたが、`new_messages` intent は `save_messages`
+（backfill、source="history"）と `save_thread_replies`
+（reply_job）でも生成される。`fetch_history`/`_thread_page` も
+`keep_read_status=1` で `is_unread` を保持するため、未読取得が
+200件上限を超えた患者や、未読返信を持つスレッドの drain が
+古い投稿を通知してしまう抜け道だった。`--jobs-only` run は
+stage_unread を通らないため消費マークも間に合わない。
+
+`_filter_notify_age` を共有化し3経路すべてに適用 — 古い投稿は
+どの fetch が拾っても同じく「取り込み＋消費、通知なし」。
+`run_reply_jobs`/`stage_backfill` へ `notify_max_age_s` を配管
+（main() の config 解釈を jobs_only 分岐の外へ移動し、jobs-only
+run にも有効化）。
