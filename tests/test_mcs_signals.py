@@ -689,12 +689,15 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     _extract_llm(led.db, 1, "h1", [{"name": "インスリン", "action": "stop"},
                                    {"name": "在宅酸素", "action": "stop"}])
     res = _ev(led, cfg={"signals": {"notify": True}})
-    assert res["open"] == 2 and res["notify_enqueued"] == 1
+    # 2 med_change + 1 adherence_concern — the body phrase
+    # 「管理は出来ない」 is itself an adherence mention
+    assert res["open"] == 3 and res["notify_enqueued"] == 1
     pls = _outbox_payloads(led)
     assert len(pls) == 1
     pl = pls[0]
     assert pl["digest"] is True
     assert sorted(pl["signal_keys"]) == [
+        "adherence_concern:1:1",
         "med_change_no_followup:1:インスリン",
         "med_change_no_followup:1:在宅酸素"]
     assert "signal_key" not in pl
@@ -707,7 +710,7 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     text, files = notifier._format_event(led, ev)
-    assert "ダイジェスト（2件）" in text
+    assert "ダイジェスト（3件）" in text
     assert "med インスリン・在宅酸素" in text
     assert "薬「インスリン」「在宅酸素」の変更言及後" in text
     assert "対応の有無を示すものではありません" in text
@@ -1255,3 +1258,162 @@ def test_record_self_profile_dedupes(led):
     latest = mcs_signals._latest_self_profile(led.db)
     assert latest["organizations"] == ["みどり薬局", "そら薬局"]
     assert latest["name"] == "山田 薬剤"
+
+
+# --- review fixes: negation handling, v1 urgency, salvage, archived ---
+
+def test_adherence_negations_do_not_flag(led):
+    """Explicit negations must not fire adherence_concern; affirmative
+    capability/difficulty reports still do."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY, body="残薬ありません")
+    _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2",
+         body="飲み忘れていない")
+    _msg(led.db, 3, ts=NOW - 1 * DAY, chash="h3",
+         body="インスリン管理は出来ない")
+    _msg(led.db, 4, ts=NOW - 1 * DAY, chash="h4",
+         body="飲み忘れてしまったとのこと")
+    _ev(led)
+    items = [s for s in mcs_signals.current_open(led.db)["items"]
+             if s["type"] == "adherence_concern"]
+    mids = sorted(m for s in items
+                  for m in s["evidence"]["message_ids"])
+    assert mids == [3, 4]
+
+
+def test_adherence_past_status_excluded(led):
+    """A negated med reported as PAST history is not a current
+    adherence concern."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY, body="記録のみ")
+    _extract_doc(led.db, 1, "h1", meds=[
+        {"name": "薬A", "action": None, "negated": True,
+         "status": "past"}])
+    _ev(led)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] == "adherence_concern"]
+
+
+def test_task_like_to_not_pharmacist_addressed(led):
+    """A free-text requests.to that merely contains 薬 (「薬の確認」)
+    is not pharmacist-addressed — it is other-profession visibility."""
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬の確認", "残薬の確認")])
+    _ev(led)
+    items = mcs_signals.current_open(led.db)["items"]
+    assert not [s for s in items
+                if s["type"] == "pharmacist_request_unanswered"]
+    assert [s for s in items if s["type"] == "rx_request_visibility"]
+
+
+def test_urgency_high_from_extract_v1_escalates(led):
+    """extract_v1 (rule extractor) carries urgency too — a message
+    the LLM never processed still escalates its signal."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    led.db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES ('extract_v1',?,?,'{}')",
+        (1, json.dumps({"urgency": "high"})))
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 1
+    pl = _outbox_payloads(led)[0]
+    assert pl.get("digest") is not True and pl["urgent"] is True
+
+
+def test_self_sets_explicit_empty_is_not_unset(led):
+    """signals.self_organizations=[] means 'no self org' — distinct
+    from unset, which would fall back to the fetched profile."""
+    mcs_signals.record_self_profile(
+        led.db, {"sender_id": 1, "name": "n",
+                 "professions": ["薬剤師"], "organizations": ["orgX"]})
+    orgs, profs, _ = mcs_signals._self_sets(
+        {"self_organizations": []}, led.db)
+    assert orgs == [] and profs == ["薬剤師"]
+
+
+def test_self_sets_empty_profile_professions_authoritative(led):
+    """A fetched profile with no specialist categories means 'no
+    listed profession' — the 薬剤師 default only applies when NO
+    profile exists."""
+    mcs_signals.record_self_profile(
+        led.db, {"sender_id": 1, "name": "n",
+                 "professions": [], "organizations": ["orgX"]})
+    orgs, profs, _ = mcs_signals._self_sets({}, led.db)
+    assert orgs == ["orgX"] and profs == []
+
+
+def test_held_digest_members_salvaged(led):
+    """A quarantined digest intent must not strand its member keys —
+    still-open members fold into a fresh scheduled digest."""
+    import notifier
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _ev(led, cfg={"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    assert json.loads(ev["payload"])["digest"] is True
+    # quarantine with NO send receipt — nothing was ever delivered
+    notifier._hold_event(
+        led, {"event_id": ev["event_id"], "payload": ev["payload"],
+              "progress": ev["progress"]}, {"signals": {}})
+    rows = led.db.execute(
+        "SELECT state,payload,next_try FROM notify_outbox "
+        "ORDER BY event_id").fetchall()
+    assert len(rows) == 2
+    # quarantine = failed state with no retry timer
+    assert rows[0]["state"] == "failed" and rows[0]["next_try"] is None
+    pl = json.loads(rows[1]["payload"])
+    assert rows[1]["state"] == "pending" and rows[1]["next_try"] > NOW
+    assert pl["digest"] is True
+    assert pl["signal_keys"] == ["med_change_no_followup:1:薬A"]
+
+
+def test_held_digest_with_send_progress_not_salvaged(led):
+    """A digest that may have partially delivered must NOT respawn —
+    duplication risk outweighs the stranded-member fix."""
+    import notifier
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _ev(led, cfg={"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    led.outbox_progress(ev["event_id"], 0, [], "fp", sending=1)
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    notifier._hold_event(
+        led, {"event_id": ev["event_id"], "payload": ev["payload"],
+              "progress": ev["progress"]}, {"signals": {}})
+    assert led.db.execute(
+        "SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 1
+
+
+def test_signal_unit_text_renders_every_member(led):
+    """A unit that cannot merge must render each member — never
+    silently collapse to the first signal."""
+    import notifier
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2")
+    s1 = {"type": "adherence_concern", "project_id": 1,
+          "evidence": {"message_ids": [1]}, "note": "note-one"}
+    s2 = {"type": "adherence_concern", "project_id": 1,
+          "evidence": {"message_ids": [2]}, "note": "note-two"}
+    text = notifier._signal_unit_text(led, [s1, s2])
+    assert "note-one" in text and "note-two" in text
+
+
+def test_digest_render_drops_archived_member(led, monkeypatch):
+    """A digest member whose patient was archived after enqueue must
+    not render — digest intents carry project_id=None and bypass
+    flush's per-event archived gate."""
+    import notifier
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    _ev(led, cfg={"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    assert len(json.loads(ev["payload"])["signal_keys"]) == 2
+    led.db.execute("UPDATE patients SET is_archived=1 "
+                   "WHERE project_id=2")
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    text, _ = notifier._format_event(led, ev)
+    assert "薬A" in text and "薬B" not in text
+    assert "ダイジェスト（1件）" in text

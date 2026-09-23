@@ -158,23 +158,29 @@ def _self_sets(sig_cfg, db=None):
     - self_professions: professions whose posts count as pharmacist
       engagement for response checks (config/artifact, else 薬剤師).
     - request_targets: extra requests.to values meaning 'addressed to
-      us' — 薬-containing targets match automatically (config only)."""
+      us' — pharmacist-role targets match automatically (config only).
+    An explicitly configured list wins even when EMPTY — `[]` is how an
+    operator says 'no self org/profession', distinct from 'unset'."""
     sc = sig_cfg if isinstance(sig_cfg, dict) else {}
     def _lst(key):
         v = sc.get(key)
         if not isinstance(v, list):
-            return []
+            return None          # unset or invalid -> fall back
         return [x for x in v if isinstance(x, str) and x]
     orgs, profs = _lst("self_organizations"), _lst("self_professions")
-    if (not orgs or not profs) and db is not None:
+    if (orgs is None or profs is None) and db is not None:
         art = _latest_self_profile(db)
-        if not orgs:
+        if orgs is None:
             orgs = [x for x in (art.get("organizations") or [])
                     if isinstance(x, str) and x]
-        if not profs:
+        if profs is None and art:
+            # a fetched profile is authoritative — an empty
+            # specialist list means 'no listed profession', not
+            # 'unset'
             profs = [x for x in (art.get("professions") or [])
                      if isinstance(x, str) and x]
-    return (orgs, profs or ["薬剤師"], _lst("request_targets"))
+    return (orgs or [], (["薬剤師"] if profs is None else profs),
+            _lst("request_targets") or [])
 
 
 def _med_excludes(sig_cfg):
@@ -449,16 +455,25 @@ def _transition_reconciliation(db, now, th, sig_cfg):
                         "てください（自動判定ではありません）"}
 
 
+# requests.to spellings meaning 'addressed to a pharmacist/pharmacy' —
+# a bare 薬 match would sweep in task-like free-text targets (「薬の
+# 確認」), so it is restricted to role/facility words. Config
+# request_targets adds exact spellings on top; _rx_request_visibility
+# must mirror this negatively.
+PHARM_TARGET_SQL = ("json_extract(je.value,'$.to') LIKE '%薬剤師%' "
+                    "OR json_extract(je.value,'$.to') LIKE '%薬局%' "
+                    "OR json_extract(je.value,'$.to') LIKE '%調剤%'")
+
+
 def _pharmacist_request(db, now, th, sig_cfg):
-    """extract_llm requests addressed to the pharmacy (any 薬-containing
+    """extract_llm requests addressed to the pharmacy (a pharmacist-role
     target or configured request_targets) whose mention passed the
     response window with no visible responder post — 'no response could
     be confirmed on the record', never 'ignored'. Response = a post by
     self_professions/self_organizations or a registered request."""
     orgs, profs, targets = _self_sets(sig_cfg, db)
-    # '薬' in the target covers 薬剤師/薬局/etc.; request_targets adds
-    # exact spellings like 「〇〇薬局さま」. Empty/不明 targets
-    # never count as pharmacist-addressed.
+    # request_targets adds exact spellings like 「〇〇薬局さま」.
+    # Empty/不明 targets never count as pharmacist-addressed.
     tgt_pred = (f" OR json_extract(je.value,'$.to') IN "
                 f"({','.join('?' * len(targets))})") if targets else ""
     rows = db.execute(
@@ -475,7 +490,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
               AND m.posted_at_ts <= ?
               AND COALESCE(p.is_archived,0)=0
               AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
-              AND (json_extract(je.value,'$.to') LIKE '%薬%'
+              AND ({PHARM_TARGET_SQL}
                    {tgt_pred})
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S,
@@ -524,7 +539,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
               AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
-              AND json_extract(je.value,'$.to') NOT LIKE '%薬%'
+              AND NOT ({PHARM_TARGET_SQL})
               AND COALESCE(json_extract(je.value,'$.to'),'')
                   NOT IN ('','不明'{extra})
               AND (json_extract(je.value,'$.action') LIKE '%処方%'
@@ -558,16 +573,25 @@ def _rx_request_visibility(db, now, th, sig_cfg):
 
 # body phrases that flag adherence/management difficulty even when the
 # extractor never produced a meds item — chosen in affirming forms so
-# plain negations (〜なし/ない/ありません) do not match
+# plain negations (〜なし/ない/ありません/ません/ていない) do not match
 ADHERENCE_PATTERNS = ("飲み忘れ", "飲みのこし", "飲んでいない",
-                      "飲めていない", "飲みきれない", "残薬が",
+                      "飲めていない", "飲めない", "飲みきれない", "残薬が",
                       "残薬あり", "残薬がある", "自己中断", "自己中止",
                       "服薬管理が難し", "服薬管理でき", "管理できな")
-_NEGATE_RE = re.compile(r"^[はがも、。\s]*(ない|なし|ありません|なく)")
+# capability claims ending in a negation ARE the concern — the tail
+# check would eat the ない that completes them, so these match as-is
+ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
+                      "管理は出来ません", "管理はできません",
+                      "管理が出来ない", "管理ができない",
+                      "管理が出来ません", "管理ができません")
+# てい/してい covers 「飲み忘れていない」「飲み忘れはしていない」;
+# ません covers 「残薬ありません」 (the pattern consumes the あり)
+_NEGATE_RE = re.compile(
+    r"^[はがも、。\s]*(?:してい|てい|て)?(ない|なし|ありません|なく|ません)")
 
 
 def _adherence_phrases(text):
-    hits = []
+    hits = [p for p in ADHERENCE_TERMINAL if p in text]
     for pat in ADHERENCE_PATTERNS:
         i = text.find(pat)
         while i >= 0:
@@ -607,12 +631,19 @@ def _adherence_concern(db, now, th, sig_cfg):
               AND TRIM(json_extract(je.value,'$.name'))!=''
               AND COALESCE(json_extract(je.value,'$.subject'),
                            'patient')='patient'
+              AND COALESCE(json_extract(je.value,'$.status'),
+                           'current')!='past'
               AND (json_extract(je.value,'$.negated') IS 1
                    OR NOT {MED_NOT_CAPABILITY_SQL})
             ORDER BY m.project_id, m.message_id""",
         (horizon, *self_params)).fetchall()
     for pid, mid, ts, med in rows:
         groups.setdefault((pid, mid, ts), []).append(med)
+    # SQL-side prefilter narrows the Python phrase scan to rows that
+    # could contain a pattern at all (LIKE on the raw pattern text)
+    like_pred = " OR ".join(
+        ["m.body_text LIKE ?"] * (len(ADHERENCE_PATTERNS)
+                                + len(ADHERENCE_TERMINAL)))
     phrase_rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
                    m.body_text
@@ -620,8 +651,11 @@ def _adherence_concern(db, now, th, sig_cfg):
             JOIN patients p ON p.project_id=m.project_id
             WHERE m.posted_at_ts IS NOT NULL AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0 AND m.body_text IS NOT NULL
+              AND ({like_pred})
               {self_pred}""",
-        (horizon, *self_params)).fetchall()
+        (horizon,
+         *(f"%{p}%" for p in ADHERENCE_PATTERNS + ADHERENCE_TERMINAL),
+         *self_params)).fetchall()
     for pid, mid, ts, body in phrase_rows:
         hits = _adherence_phrases(body or "")
         if hits:
@@ -967,28 +1001,75 @@ def sig_units(pairs):
 def _urgency_high(db, sig):
     """True when the signal's primary evidence message carries a
     high-urgency extraction — escalates a digest-tier signal to
-    immediate delivery."""
+    immediate delivery. Mirrors notifier._urgency: either extractor
+    kind (rule extract_v1 or extract_llm) can carry the flag."""
     ev = sig.get("evidence") or {}
     mids = ev.get("message_ids")
     mid = ((mids[-1] if isinstance(mids, list) and mids else None)
            or ev.get("discharge_message_id"))
     if type(mid) is not int:
         return False
-    row = db.execute(
-        "SELECT content FROM artifacts WHERE message_id=? "
-        "AND kind='extract_llm' ORDER BY artifact_id DESC LIMIT 1",
-        (mid,)).fetchone()
-    if not row or not row["content"]:
-        return False
-    try:
-        doc = json.loads(row["content"])
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return isinstance(doc, dict) and doc.get("urgency") == "high"
+    for kind in ("extract_llm", "extract_v1"):
+        row = db.execute(
+            "SELECT content FROM artifacts WHERE message_id=? "
+            "AND kind=? ORDER BY artifact_id DESC LIMIT 1",
+            (mid, kind)).fetchone()
+        if not row or not row["content"]:
+            continue
+        try:
+            doc = json.loads(row["content"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(doc, dict) and doc.get("urgency") == "high":
+            return True
+    return False
 
 
 def _digest_text(n):
     return f"[MCS] レビュー候補ダイジェスト（{n}件）"
+
+
+def open_signal_rows(db, keys):
+    """signal_keys -> [(key, latest content)] for keys still open. The
+    send path's member check and the digest-rescue path share this —
+    'open' is always the latest artifact row's state, never the frozen
+    payload's."""
+    out = []
+    for k in keys:
+        row = db.execute(
+            """SELECT content FROM artifacts
+               WHERE kind='signal_v1' AND json_valid(meta)
+                 AND json_valid(content)
+                 AND json_extract(meta,'$.key')=?
+               ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
+        try:
+            s = json.loads(row["content"]) if row and row["content"] \
+                else {}
+        except (json.JSONDecodeError, TypeError):
+            s = {}
+        if isinstance(s, dict) and s.get("state") == "open":
+            out.append((k, s))
+    return out
+
+
+def rescue_digest_members(ledger, payload, now, interval_h):
+    """A quarantined digest intent strands its member keys — signals
+    notify only at the open transition, so members of a held digest
+    would never be re-enqueued. Fold the still-open ones into a fresh
+    scheduled digest. Caller decides it's safe (no sent progress —
+    salvage after a partial send could duplicate a delivered post).
+    Returns the rescued keys."""
+    keys = [k for k in ((payload or {}).get("signal_keys") or [])
+            if type(k) is str and k]
+    live = [k for k, _ in open_signal_rows(ledger.db, keys)]
+    if not live:
+        return []
+    ledger.outbox_add_tx(
+        "signal", None,
+        {"digest": True, "type": "signal_digest", "signal_keys": live,
+         "text": _digest_text(len(live))},
+        next_try=now + interval_h * 3600)
+    return live
 
 
 def _digest_add(ledger, key, now, th, interval_h):
@@ -1002,6 +1083,7 @@ def _digest_add(ledger, key, now, th, interval_h):
     row = ledger.db.execute(
         """SELECT event_id, payload FROM notify_outbox
            WHERE kind='signal' AND state IN ('pending','failed')
+             AND next_try IS NOT NULL
              AND json_valid(payload)
              AND json_extract(payload,'$.digest')=1
            ORDER BY event_id DESC LIMIT 1""").fetchone()
@@ -1073,9 +1155,12 @@ def _notify_suppressed(db, key, now, th):
                "json_type(payload,'$.signal_keys')='array' THEN "
                "json_extract(payload,'$.signal_keys') ELSE '[]' END) je "
                "WHERE je.value=?))")
+    # quarantined intents (state='failed', next_try NULL) never
+    # deliver — they must NOT count as covering the key
     if db.execute(
             "SELECT 1 FROM notify_outbox WHERE kind='signal' "
-            "AND state IN ('pending','failed') AND json_valid(payload) "
+            "AND state IN ('pending','failed') AND next_try IS NOT NULL"
+            " AND json_valid(payload) "
             f"AND {covered} LIMIT 1", (key, key)).fetchone():
         return True
     return db.execute(
