@@ -3,7 +3,7 @@
   <circle cx="24" cy="22" r="6" fill="#ff5f57"/>
   <circle cx="44" cy="22" r="6" fill="#febc2e"/>
   <circle cx="64" cy="22" r="6" fill="#28c840"/>
-  <text x="24" y="56" font-size="12" fill="#6a9955">$ mcs/ops/mcs_view.py signals --project 123</text>
+  <text x="24" y="56" font-size="12" fill="#6a9955">$ mcs/views/mcs_view.py signals --project 123</text>
   <text x="24" y="80" font-size="12" fill="#d4d4d4">{</text>
   <text x="24" y="100" font-size="12" fill="#d4d4d4">  &quot;signals&quot;: [</text>
   <text x="24" y="120" font-size="12" fill="#d4d4d4">    {</text>

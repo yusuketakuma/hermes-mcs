@@ -576,11 +576,11 @@ FileVault/物理セキュリティ前提)。頻発する場合は自動ロック
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ops/mcs_view.py status                    # 取込状況
-$PY mcs/ops/mcs_view.py search --project 123 --query '確認'
-$PY mcs/ops/mcs_view.py timeline --project 123 --limit 50
-$PY mcs/ops/mcs_view.py stats --preset operational
-$PY mcs/ops/mcs_view.py signals                   # open なレビュー候補
+$PY mcs/views/mcs_view.py status                    # 取込状況
+$PY mcs/views/mcs_view.py search --project 123 --query '確認'
+$PY mcs/views/mcs_view.py timeline --project 123 --limit 50
+$PY mcs/views/mcs_view.py stats --preset operational
+$PY mcs/views/mcs_view.py signals                   # open なレビュー候補
 ```
 
 人承認の依頼登録・却下・閾値ポリシーなどの詳細は下記「閲覧・依頼管理」。
@@ -632,15 +632,11 @@ Private repository — 現時点で公開・再配布は想定していない。
 | `mcs/ingest/run_check.py` | cron/launchd entry point (orchestrator only). |
 | `mcs/ops/brain_export.py` | snapshot summaries as markdown for external knowledge stores. |
 | `mcs/ops/mcs_operations.py` | Bounded, human-confirmed CCO operations for the MCS ledger. |
-| `mcs/ops/mcs_queries.py` | scan contract for the read side. |
 | `mcs/ops/mcs_refstats.py` | Approved reference set statistics workflow (ops tooling). |
 | `mcs/ops/mcs_requests.py` | confirmed local requests; no network or automatic task creation. |
 | `mcs/ops/mcs_setup.py` | MCS environment setup + required-condition validation. |
 | `mcs/ops/mcs_signals.py` | MCS-STAT-PROSPECTIVE T2. |
-| `mcs/ops/mcs_stats.py` | project statistics over the published ledger snapshot. |
-| `mcs/ops/mcs_view.py` | approved inbox commands (JSON CLI). |
 | `mcs/ops/request_loops.py` | only validation for adopting a current Open Loop candidate. |
-| `mcs/ops/summary_review.py` | only comparison of the local extraction and audited summaries. |
 | `mcs/semantic/semantic.py` | Jev-assisted meaning evaluation (Phase J). |
 | `mcs/semantic/semantic_assessment.py` | event detail assessment. |
 | `mcs/semantic/semantic_audit.py` | Semantic audit gates (spec §16): code-level checks, per-claim Jev |
@@ -663,6 +659,10 @@ Private repository — 現時点で公開・再配布は想定していない。
 | `mcs/semantic/semantic_render.py` | Semantic notice rendering (spec §20, §19.3): the human-readable |
 | `mcs/semantic/semantic_runtime.py` | Durable execution guards for the semantic worker. |
 | `mcs/semantic/semantic_store.py` | Semantic input bundle + artifact read helpers (spec §12.1): |
+| `mcs/views/mcs_queries.py` | scan contract for the read side. |
+| `mcs/views/mcs_stats.py` | project statistics over the published ledger snapshot. |
+| `mcs/views/mcs_view.py` | approved inbox commands (JSON CLI). |
+| `mcs/views/summary_review.py` | only comparison of the local extraction and audited summaries. |
 
 <!-- END GENERATED:modules -->
 
@@ -777,18 +777,18 @@ $PY mcs/core/init_data.py --project <id>       # 患者個別
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ops/mcs_view.py status
-$PY mcs/ops/mcs_view.py status --project 123
-$PY mcs/ops/mcs_view.py search --project 123 --query '確認'
-$PY mcs/ops/mcs_view.py timeline --project 123 --limit 50
-$PY mcs/ops/mcs_view.py evidence --project 123 --message-id 456
-$PY mcs/ops/mcs_view.py thread --project 123 --message-id 456
-$PY mcs/ops/mcs_view.py attachments --project 123 --message-id 456
-$PY mcs/ops/mcs_view.py candidates --project 123
-$PY mcs/ops/mcs_view.py qc --project 123                    # 抽出チェックの集計+要注意一覧
-$PY mcs/ops/mcs_view.py qc --project 123 --message-id 456   # 1件の項目別の確認結果
-$PY mcs/ops/mcs_view.py requests list --project 123 --status open
-$PY mcs/ops/mcs_view.py requests show --project 123 --request-id 1
+$PY mcs/views/mcs_view.py status
+$PY mcs/views/mcs_view.py status --project 123
+$PY mcs/views/mcs_view.py search --project 123 --query '確認'
+$PY mcs/views/mcs_view.py timeline --project 123 --limit 50
+$PY mcs/views/mcs_view.py evidence --project 123 --message-id 456
+$PY mcs/views/mcs_view.py thread --project 123 --message-id 456
+$PY mcs/views/mcs_view.py attachments --project 123 --message-id 456
+$PY mcs/views/mcs_view.py candidates --project 123
+$PY mcs/views/mcs_view.py qc --project 123                    # 抽出チェックの集計+要注意一覧
+$PY mcs/views/mcs_view.py qc --project 123 --message-id 456   # 1件の項目別の確認結果
+$PY mcs/views/mcs_view.py requests list --project 123 --status open
+$PY mcs/views/mcs_view.py requests show --project 123 --request-id 1
 ```
 
 コマンド一覧:
@@ -850,10 +850,10 @@ $PY mcs/ops/mcs_view.py requests show --project 123 --request-id 1
 ### 統計（読み取り専用）
 
 ```bash
-$PY mcs/ops/mcs_view.py stats --list                     # 登録済み統計の一覧
-$PY mcs/ops/mcs_view.py stats --stat overview            # 単一統計
-$PY mcs/ops/mcs_view.py stats --preset operational       # プリセット束
-$PY mcs/ops/mcs_view.py stats --stat patient_activity \
+$PY mcs/views/mcs_view.py stats --list                     # 登録済み統計の一覧
+$PY mcs/views/mcs_view.py stats --stat overview            # 単一統計
+$PY mcs/views/mcs_view.py stats --preset operational       # プリセット束
+$PY mcs/views/mcs_view.py stats --stat patient_activity \
     --since 2026-09-01 --until 2026-10-01 --project 123 --limit 20
 ```
 
@@ -912,7 +912,7 @@ $PY mcs/ops/mcs_refstats.py capture --name nightly --preset operational
 $PY mcs/ops/mcs_refstats.py pending --name nightly   # file_hash を表示
 echo '{"command_id":"<uuid>","actor":"<人>","name":"nightly",
        "file_hash":"<hash>","reason":"<理由>"}' |
-  $PY mcs/ops/mcs_view.py control refstat_approve --project 1 --confirm-human
+  $PY mcs/views/mcs_view.py control refstat_approve --project 1 --confirm-human
 
 # 3. 以後、任意の snapshot で再計算して突合
 $PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unverified/superseded
@@ -937,8 +937,8 @@ $PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unv
 ### レビュー候補シグナル（T2）
 
 ```bash
-$PY mcs/ops/mcs_view.py signals                # openな候補一覧
-$PY mcs/ops/mcs_view.py signals --project 123
+$PY mcs/views/mcs_view.py signals                # openな候補一覧
+$PY mcs/views/mcs_view.py signals --project 123
 ```
 
 - `run_check` の derive 段階で `mcs_signals.evaluate()` が候補を再計算し、
@@ -1036,7 +1036,7 @@ $PY mcs/ops/mcs_view.py signals --project 123
 ```
 
 ```bash
-$PY mcs/ops/mcs_view.py requests create --project 123 --confirm-human < approved-request.json
+$PY mcs/views/mcs_view.py requests create --project 123 --confirm-human < approved-request.json
 ```
 
 更新用JSONは `request_id`、表示された `expected_revision`、人が確認した最新本文の
@@ -1049,8 +1049,8 @@ $PY mcs/ops/mcs_view.py requests create --project 123 --confirm-human < approved
 ```
 
 ```bash
-$PY mcs/ops/mcs_view.py requests update --project 123 --confirm-human < approved-update.json
-$PY mcs/ops/mcs_view.py receipt --project 123 --command-id UUID --payload-hash HASH
+$PY mcs/views/mcs_view.py requests update --project 123 --confirm-human < approved-update.json
+$PY mcs/views/mcs_view.py receipt --project 123 --command-id UUID --payload-hash HASH
 ```
 
 - 状態は `open / in_progress / done / cancelled`。人の承認による再開も可能。

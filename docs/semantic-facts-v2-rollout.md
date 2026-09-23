@@ -106,7 +106,7 @@ Per target message, inside the shared drain queue:
 
 ```sh
 python3 -m mcs.mcs_setup jev-value \
-  --cases bench/semantic_completeness_cases.json \
+  --cases evaluation/semantic_completeness_cases.json \
   --out /tmp/jev-value.json
 ```
 

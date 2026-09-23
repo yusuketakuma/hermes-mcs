@@ -9,7 +9,7 @@ import semantic_evaluation as evaluation
 import semantic_facts as sf
 
 
-CORPUS = Path(__file__).resolve().parent.parent / "bench" / \
+CORPUS = Path(__file__).resolve().parents[2] / "evaluation" / \
     "semantic_completeness_cases.json"
 
 

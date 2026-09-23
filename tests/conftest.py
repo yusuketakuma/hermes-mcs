@@ -18,8 +18,16 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcs"))
-import _mcs_path  # noqa: F401  registers every subdir as import root
+_TESTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TESTS.parent / "mcs"))
+import _mcs_path  # noqa: E402,F401  registers every subdir as import root
+
+# tests/ mirrors mcs/'s area subdirs; register each as an import root so
+# cross-file helper imports (`from test_mcs_semantic import _seeded`)
+# keep working regardless of which area dir a test lives in.
+for _d in sorted(_TESTS.iterdir()):
+    if _d.is_dir() and not _d.name.startswith((".", "_")):
+        sys.path.insert(0, str(_d))
 
 
 _SENSITIVE_ENV = (

@@ -72,7 +72,7 @@ def gen_modules() -> str:
     for f in files:
         desc = _clean(_mod_docline(f), strip_prefix=True) or "(docstring なし)"
         rows.append(f"| `{f.relative_to(ROOT)}` | {desc} |")
-    n_tests = len(list(TESTS_DIR.glob("test_*.py")))
+    n_tests = len(list(TESTS_DIR.rglob("test_*.py")))
     return "\n".join(
         [f"{len(rows)} modules / {n_tests} test files — auto-generated "
          "by `scripts/update_readme.py`.", "",
