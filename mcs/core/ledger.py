@@ -576,15 +576,17 @@ class Ledger:
                 "AND state != 'done'",
                 (now, m.project_id, m.message_id))
 
-    def _outbox_insert(self, kind, project_id, payload):
-        """In-transaction outbox insert — caller must hold `with self.db`."""
+    def _outbox_insert(self, kind, project_id, payload, next_try=None):
+        """In-transaction outbox insert — caller must hold `with self.db`.
+        next_try delays when the drain first picks the event up
+        (scheduled digests); default is immediately."""
         now = time.time()
         cur = self.db.execute("""
           INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
             created_at,updated_at)
           VALUES(?,?,?,'pending',?,?,?)
         """, (kind, project_id, json.dumps(payload, ensure_ascii=False),
-              now, now, now))
+              next_try if next_try is not None else now, now, now))
         return cur.lastrowid
 
     def save_patient(self, p, notify: dict | None = None,
@@ -1586,11 +1588,12 @@ class Ledger:
     # ---------- notify outbox ----------
 
     def outbox_add_tx(self, kind: str, project_id: int | None,
-                      payload: dict) -> int:
+                      payload: dict, next_try: float | None = None) -> int:
         """outbox_add's INSERT without the commit — callers holding
         `with self.db` can land a notification intent in the same
-        transaction as the artifacts that justify it (spec §18.3)."""
-        return self._outbox_insert(kind, project_id, payload)
+        transaction as the artifacts that justify it (spec §18.3).
+        next_try delays first pickup (scheduled digests)."""
+        return self._outbox_insert(kind, project_id, payload, next_try)
 
     def outbox_add(self, kind: str, project_id: int | None, payload: dict) -> int:
         rid = self.outbox_add_tx(kind, project_id, payload)

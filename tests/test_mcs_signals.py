@@ -21,14 +21,15 @@ def led(tmp_path):
     lg.db.close()
 
 
-def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b"):
+def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b",
+         prof="看護師", org="org", parent=None):
     db.execute(
         "INSERT INTO messages(message_id,project_id,parent_id,sender_id,"
         "sender_name,sender_type,profession,organization,posted_at,"
         "posted_at_ts,body_text,body_state,content_hash,reply_count,"
         "is_unread,first_seen,updated_seen) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (mid, pid, None, 1, "n", "staff", "看護師", "org",
+        (mid, pid, parent, 1, "n", "staff", prof, org,
          "2026-08-22T10:00:00+09:00", ts, body, "full", chash, 0, 0,
          ts, ts))
     db.execute(
@@ -44,6 +45,15 @@ def _extract_llm(db, mid, chash, meds, events=None):
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
         (mid, json.dumps(content), json.dumps({"hash": chash})))
+
+
+def _extract_doc(db, mid, chash, **fields):
+    """extract_llm artifact with an arbitrary v2 document — requests,
+    symptoms, urgency, events, meds."""
+    db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES ('extract_llm',?,?,?)",
+        (mid, json.dumps(fields), json.dumps({"hash": chash})))
 
 
 def _extract_v1(db, mid, chash, periods):
@@ -214,11 +224,19 @@ def test_transition_ignores_surface_only_text(led):
 
 
 def test_transition_requires_med_change(led):
+    """A bare discharge with no med change co-occurrence is NOT a
+    transition_reconciliation signal (it IS a discharge_notice — that
+    sibling owns bare transitions now)."""
     _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました", chash="h1")
     _extract_llm(led.db, 1, "h1", [], events=["discharge"])
     _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2")
     _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "none"}])
-    assert _ev(led)["open"] == 0
+    _ev(led)
+    sigs = mcs_signals.current_open(led.db)["items"]
+    assert not [s for s in sigs if s["type"] == "transition_reconciliation"]
+    dn = [s for s in sigs if s["type"] == "discharge_notice"]
+    assert len(dn) == 1
+    assert dn[0]["evidence"]["discharge_message_id"] == 1
 
 
 def test_rx_period_expiry(led):
@@ -294,13 +312,26 @@ def test_notify_requires_strict_true(led):
 
 
 def test_notify_enqueues_signal_kind_when_enabled(led):
+    """request_overdue is digest-tier: the intent is a pending digest
+    row holding the key, scheduled for delayed delivery."""
     _req(led.db, "open", due="2026-09-10")
     res = _ev(led, cfg={"signals": {"notify": True}})
-    row = led.db.execute("SELECT kind, payload FROM notify_outbox"
-                         ).fetchone()
+    row = led.db.execute(
+        "SELECT kind, payload, next_try FROM notify_outbox").fetchone()
     assert res["notify_enqueued"] == 1 and row["kind"] == "signal"
     pl = json.loads(row["payload"])
-    assert "レビュー候補" in pl["text"] and pl["signal_key"]
+    assert pl["digest"] is True
+    assert pl["signal_keys"] == ["request_overdue:1:1"]
+    assert "ダイジェスト" in pl["text"]
+    assert row["next_try"] > NOW          # delayed, not immediate
+    # signals.digest:false restores per-signal immediate intents
+    led.db.execute("DELETE FROM notify_outbox")
+    led.db.execute("DELETE FROM artifacts WHERE kind='signal_v1'")
+    res = _ev(led, cfg={"signals": {"notify": True, "digest": False}})
+    pl = json.loads(led.db.execute(
+        "SELECT payload FROM notify_outbox").fetchone()["payload"])
+    assert res["notify_enqueued"] == 1
+    assert pl.get("digest") is not True and pl["signal_key"]
 
 
 def test_signal_notice_renders_patient_and_snippet(led, monkeypatch):
@@ -581,7 +612,7 @@ def test_deadline_stop_never_resolves_unrun_types(led):
 def test_crashed_detector_type_is_not_resolved(led, monkeypatch):
     _req(led.db, "open", due="2026-09-10")
     _ev(led)
-    def boom(db, now, th):
+    def boom(db, now, th, sig_cfg):
         raise RuntimeError("detector exploded")
         yield
     monkeypatch.setattr(mcs_signals, "DETECTORS", (
@@ -648,9 +679,9 @@ def _outbox_payloads(led):
 
 
 def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
-    """Two meds change-mentioned in the SAME post produce ONE merged
-    intent, not two near-identical sends — while per-med signal rows
-    keep their own open state and keys."""
+    """Two meds change-mentioned in the SAME post fold into ONE digest
+    intent and render as ONE merged unit inside it — per-med signal
+    rows keep their own open state and keys."""
     _msg(led.db, 1, ts=NOW - 30 * DAY,
          body="インスリン管理は出来ない。在宅酸素は出来ない。")
     led.db.execute("UPDATE patients SET patient_name='合成 患者' "
@@ -662,25 +693,41 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     pls = _outbox_payloads(led)
     assert len(pls) == 1
     pl = pls[0]
+    assert pl["digest"] is True
     assert sorted(pl["signal_keys"]) == [
         "med_change_no_followup:1:インスリン",
         "med_change_no_followup:1:在宅酸素"]
     assert "signal_key" not in pl
-    assert pl["type"] == "med_change_no_followup"
     # per-med lifecycle untouched
     assert _states(led.db)["med_change_no_followup:1:インスリン"] == "open"
     assert _states(led.db)["med_change_no_followup:1:在宅酸素"] == "open"
-    # sent text lists both meds in ONE notice
+    # digest render re-groups: both meds appear as ONE merged unit
     import notifier
     monkeypatch.setattr(notifier, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     text, files = notifier._format_event(led, ev)
+    assert "ダイジェスト（2件）" in text
     assert "med インスリン・在宅酸素" in text
     assert "薬「インスリン」「在宅酸素」の変更言及後" in text
     assert "対応の有無を示すものではありません" in text
     assert "合成 患者" in text and "最新言及" in text
     assert '"op":"timeline"' in text and files == []
+
+
+def test_same_post_meds_merge_immediate_tier(led):
+    """The same-post merge is the shared unit machinery — with
+    digest off the merged intent is an immediate signal_keys payload."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"},
+                                   {"name": "薬B", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True, "digest": False}})
+    assert res["notify_enqueued"] == 1
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1 and pls[0].get("digest") is not True
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"]
+    assert pls[0]["type"] == "med_change_no_followup"
 
 
 def test_shared_latest_mention_merges_despite_history(led):
@@ -706,35 +753,46 @@ def test_shared_latest_mention_merges_despite_history(led):
 
 
 def test_single_med_notice_unchanged(led, monkeypatch):
-    """One med in the post -> original single-med payload + wording."""
+    """One med in the post -> one digest member rendering as a single
+    unit with the original wording."""
     _msg(led.db, 1, ts=NOW - 30 * DAY, body="薬Aを中止しました")
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _ev(led, cfg={"signals": {"notify": True}})
     pls = _outbox_payloads(led)
     assert len(pls) == 1
-    assert pls[0]["signal_key"] == "med_change_no_followup:1:薬A"
-    assert "signal_keys" not in pls[0]
+    assert pls[0]["signal_keys"] == ["med_change_no_followup:1:薬A"]
+    assert pls[0]["digest"] is True
     import notifier
     monkeypatch.setattr(notifier, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     text, _ = notifier._format_event(led, ev)
+    assert "ダイジェスト（1件）" in text
     assert "med 薬A" in text and "薬「薬A」の変更言及後" in text
     assert "・" not in text
 
 
-def test_distinct_posts_not_merged(led):
-    """Meds whose LATEST mentions are different posts keep separate
-    notices — only the same triggering post coalesces."""
+def test_distinct_posts_not_merged(led, monkeypatch):
+    """Meds whose LATEST mentions are different posts share the digest
+    intent but render as SEPARATE units — only the same triggering
+    post coalesces."""
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2")
     _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
     res = _ev(led, cfg={"signals": {"notify": True}})
-    assert res["notify_enqueued"] == 2
+    assert res["notify_enqueued"] == 1
     pls = _outbox_payloads(led)
-    assert {p["signal_key"] for p in pls} == {
-        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"}
+    assert len(pls) == 1 and pls[0]["digest"] is True
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"]
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, _ = notifier._format_event(led, ev)
+    assert "med 薬A・薬B" not in text          # no coalesced unit
+    assert "med 薬A" in text and "med 薬B" in text
 
 
 def test_different_projects_not_merged(led):
@@ -743,22 +801,26 @@ def test_different_projects_not_merged(led):
     _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2")
     _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
     res = _ev(led, cfg={"signals": {"notify": True}})
-    assert res["notify_enqueued"] == 2
-    assert len(_outbox_payloads(led)) == 2
+    assert res["notify_enqueued"] == 1         # one digest, two keys
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "med_change_no_followup:2:薬B"]
 
 
 def test_other_signal_types_not_merged(led):
-    """Coalescing applies only to med_change_no_followup — other types
-    keep one intent each even in the same evaluation."""
+    """Different signal TYPES never coalesce into a merged unit — the
+    digest lists them individually (same-post meds are the only
+    mergeable unit)."""
     _req(led.db, "open", due="2026-09-10", src_mid=999)
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     res = _ev(led, cfg={"signals": {"notify": True}})
-    assert res["notify_enqueued"] == 2
+    assert res["notify_enqueued"] == 1
     pls = _outbox_payloads(led)
-    assert all("signal_key" in p for p in pls)
-    assert {p["type"] for p in pls} == {
-        "request_overdue", "med_change_no_followup"}
+    assert len(pls) == 1 and pls[0]["digest"] is True
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "request_overdue:1:1"]
 
 
 def test_merged_intent_not_duplicated_on_reeval(led):
@@ -851,3 +913,296 @@ def test_group_intent_cooldown_covers_members(led):
     assert res["notify_enqueued"] == 1          # merged again, one row
     assert len(_outbox_payloads(led)) == 2
     assert "signal_keys" in _outbox_payloads(led)[-1]
+
+
+# --- self identity / capability / exclusions (priority 1+3+4) ---
+
+def test_self_org_med_mention_excluded(led):
+    """A med-change mention authored by the pharmacy itself is not a
+    review candidate — our own reports need no follow-up ping to us.
+    Without self_organizations configured nothing is suppressed."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY, org="八幡薬剤師会薬局")
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    res = _ev(led)
+    assert res["open"] == 1            # unconfigured: org is just an org
+    # configure self -> self-authored mentions drop out of the
+    # evidence set entirely: new ones open nothing, and the
+    # already-open one RESOLVES (evidence gone) — that is exactly how
+    # the self-authored backlog cleans itself up, append-only.
+    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+    _msg(led.db, 2, ts=NOW - 20 * DAY, chash="h2",
+         org="八幡薬剤師会薬局")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    _ev(led, cfg=cfg)
+    states = _states(led.db)
+    assert "med_change_no_followup:1:薬B" not in states
+    assert states["med_change_no_followup:1:薬A"] == "resolved"
+
+
+def test_capability_evidence_is_not_med_change(led):
+    """「〜管理は出来ない」 is a capability statement, not a
+    prescription change — the insulin false positive must not recur."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_doc(led.db, 1, "h1", meds=[
+        {"name": "インスリン", "action": "stop",
+         "evidence": "薬、インスリン管理は出来ない"},
+        {"name": "在宅酸素", "action": "stop",
+         "evidence": "在宅酸素は出来ない"},
+        {"name": "薬C", "action": "stop", "evidence": "薬Cを中止した"}])
+    _ev(led)
+    states = _states(led.db)
+    assert "med_change_no_followup:1:薬C" in states
+    assert "med_change_no_followup:1:インスリン" not in states
+    assert "med_change_no_followup:1:在宅酸素" not in states
+    # the capability mentions land in adherence_concern instead
+    ad = [s for s in mcs_signals.current_open(led.db)["items"]
+          if s["type"] == "adherence_concern"]
+    assert len(ad) == 1
+    assert set(ad[0]["evidence"]["mentions"]) == {"インスリン", "在宅酸素"}
+    assert "服薬管理" in ad[0]["note"]
+
+
+def test_med_exclude_names(led):
+    """Configured non-dispensed names never produce med_change
+    signals; matching is whitespace-insensitive."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "在宅酸素", "action": "stop"},
+                                   {"name": "薬A", "action": "stop"}])
+    cfg = {"signals": {"med_exclude_names": ["在宅 酸素"]}}
+    _ev(led, cfg=cfg)
+    states = _states(led.db)
+    assert "med_change_no_followup:1:薬A" in states
+    assert "med_change_no_followup:1:在宅酸素" not in states
+
+
+# --- pharmacist_request_unanswered / rx_request_visibility ---
+
+def _req_item(to, action, unverified=None):
+    r = {"to": to, "action": action}
+    if unverified is not None:
+        r["unverified"] = unverified
+    return r
+
+
+def test_pharmacist_request_unanswered(led):
+    """A pharmacist-addressed request past the response window with no
+    responder post and no registered request -> review candidate with
+    honest 'no record' wording."""
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+    _ev(led)
+    items = mcs_signals.current_open(led.db)["items"]
+    ph = [s for s in items if s["type"] == "pharmacist_request_unanswered"]
+    assert len(ph) == 1
+    assert "記録上の確認" in ph[0]["note"]
+    assert "残薬調整の確認" in ph[0]["note"]
+    # a pharmacist-profession post after the mention counts as a
+    # responder -> no signal
+    led.db.execute("DELETE FROM artifacts WHERE kind='signal_v1'")
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2", prof="薬剤師")
+    _ev(led)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] == "pharmacist_request_unanswered"]
+
+
+def test_pharmacist_request_registered_or_unverified(led):
+    """Registered requests and unverified extractions are not
+    unanswered-request candidates."""
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+    _req(led.db, "open", src_mid=1)
+    _msg(led.db, 2, ts=NOW - 4 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2",
+                 requests=[_req_item("薬局", "確認", unverified=True)])
+    _ev(led)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] == "pharmacist_request_unanswered"]
+
+
+def test_pharmacist_request_recent_not_flagged(led):
+    """Inside the response window the request is not yet a candidate."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+    _ev(led)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] == "pharmacist_request_unanswered"]
+
+
+def test_rx_request_visibility(led):
+    """Med-related requests aimed at OTHER professions are FYI-visible
+    to the pharmacy; pharmacist-addressed ones belong to the
+    unanswered detector instead."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("医師", "フロセミド処方"),
+                           _req_item("看護師", "バイタル測定")])
+    _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+    _ev(led)
+    items = mcs_signals.current_open(led.db)["items"]
+    rx = [s for s in items if s["type"] == "rx_request_visibility"]
+    assert len(rx) == 1
+    assert rx[0]["evidence"]["message_ids"] == [1]
+    assert "フロセミド処方" in rx[0]["note"]
+    assert "記録上の言及" in rx[0]["note"]
+
+
+# --- discharge_notice / symptom_after_med_change ---
+
+def test_discharge_notice_bare(led):
+    """A bare discharge mention is a pharmacy-relevant heads-up even
+    without a med-change co-occurrence; a co-occurring one stays with
+    transition_reconciliation only."""
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました")
+    _extract_doc(led.db, 1, "h1", events=["discharge"])
+    _ev(led)
+    items = mcs_signals.current_open(led.db)["items"]
+    dn = [s for s in items if s["type"] == "discharge_notice"]
+    assert len(dn) == 1 and dn[0]["evidence"]["discharge_message_id"] == 1
+    # add a med change inside the window -> transition takes over,
+    # the bare notice resolves
+    _msg(led.db, 2, ts=NOW - 4 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬A", "action": "change"}])
+    _ev(led)
+    states = _states(led.db)
+    assert states.get("transition_reconciliation:1:1") == "open"
+    assert states.get("discharge_notice:1:1") == "resolved"
+
+
+def test_discharge_notice_self_authored_excluded(led):
+    _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院報告",
+         org="八幡薬剤師会薬局")
+    _extract_doc(led.db, 1, "h1", events=["discharge"])
+    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+    _ev(led, cfg=cfg)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] in ("discharge_notice",
+                                 "transition_reconciliation")]
+
+
+def test_symptom_after_med_change_same_post(led):
+    """Strict same-post coupling: med change + new symptom in ONE
+    extraction -> ADR-triage prompt; a symptom in a DIFFERENT post
+    does not couple."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 meds=[{"name": "薬A", "action": "start"}],
+                 symptoms=[{"text": "浮腫", "status": "new",
+                            "negated": False}])
+    _msg(led.db, 2, pid=2, ts=NOW - 1 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2", meds=[{"name": "薬B", "action": "stop"}])
+    _msg(led.db, 3, pid=2, ts=NOW - 1 * DAY, chash="h3")
+    _extract_doc(led.db, 3, "h3",
+                 symptoms=[{"text": "倦怠感", "status": "ongoing",
+                            "negated": False}])
+    _ev(led)
+    items = [s for s in mcs_signals.current_open(led.db)["items"]
+             if s["type"] == "symptom_after_med_change"]
+    assert len(items) == 1
+    assert items[0]["project_id"] == 1
+    assert items[0]["evidence"]["meds"] == ["薬A"]
+    assert items[0]["evidence"]["symptoms"] == ["浮腫"]
+    assert "関連は人が原記録で判断" in items[0]["note"]
+
+
+# --- adherence body phrases ---
+
+def test_adherence_body_phrases(led):
+    """Body-level adherence phrases that never become meds items are
+    still candidates; plain negations do not match."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY, body="飲み忘れが多いとのこと")
+    _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2", body="残薬はありません")
+    _ev(led)
+    items = [s for s in mcs_signals.current_open(led.db)["items"]
+             if s["type"] == "adherence_concern"]
+    assert len(items) == 1
+    assert items[0]["evidence"]["message_ids"] == [1]
+
+
+# --- tiers / urgency / digest machinery ---
+
+def test_urgency_high_escalates_to_immediate(led, monkeypatch):
+    """urgency:high on the source mention promotes a digest-tier
+    signal to an immediate intent carrying the urgent flag."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_doc(led.db, 1, "h1", urgency="high",
+                 meds=[{"name": "薬A", "action": "stop"}])
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 1 and res["notify_digest_merged"] == 0
+    pl = _outbox_payloads(led)[0]
+    assert pl.get("digest") is not True
+    assert pl["urgent"] is True
+    assert pl["signal_key"] == "med_change_no_followup:1:薬A"
+    import notifier
+    monkeypatch.setattr(notifier, "_config",
+                        lambda: {"signals": {"notify": True}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, _ = notifier._format_event(led, ev)
+    assert "urgency:high" in text
+
+
+def test_tier_override_config(led):
+    """signals.tiers can pull a type back to immediate delivery."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    cfg = {"signals": {"notify": True,
+                       "tiers": {"med_change_no_followup": "immediate"}}}
+    _ev(led, cfg=cfg)
+    pl = _outbox_payloads(led)[0]
+    assert pl.get("digest") is not True
+    assert pl["signal_key"] == "med_change_no_followup:1:薬A"
+
+
+def test_digest_accumulates_across_evals(led):
+    """A second digest-tier signal folds into the SAME pending digest
+    intent — no second row — until the digest delivers."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    _msg(led.db, 2, ts=NOW - 29 * DAY, chash="h2")
+    _extract_llm(led.db, 2, "h2", [{"name": "薬B", "action": "stop"}])
+    res = _ev(led, cfg=cfg)
+    assert res["notify_enqueued"] == 0
+    assert res["notify_digest_merged"] == 1
+    pls = _outbox_payloads(led)
+    assert len(pls) == 1
+    assert sorted(pls[0]["signal_keys"]) == [
+        "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"]
+    assert "2件" in pls[0]["text"]
+
+
+def test_digest_send_drops_resolved_members(led, monkeypatch):
+    """At send time a digest member that resolved is dropped; the
+    still-open members still render (the mixed-type case)."""
+    _req(led.db, "open", due="2026-09-10", src_mid=999)
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    cfg = {"signals": {"notify": True}}
+    _ev(led, cfg=cfg)
+    led.db.execute("UPDATE requests SET status='done'")
+    _ev(led, cfg=cfg)              # request_overdue resolved
+    import notifier
+    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    text, _ = notifier._format_event(led, ev)
+    assert "ダイジェスト（1件）" in text
+    assert "med 薬A" in text and "request_overdue" not in text
+
+
+def test_self_org_request_responder(led):
+    """A post by the configured self organization counts as a
+    responder for pharmacist-directed requests."""
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2", prof="その他",
+         org="八幡薬剤師会薬局")
+    cfg = {"signals": {"self_organizations": ["八幡薬剤師会薬局"]}}
+    _ev(led, cfg=cfg)
+    assert not [s for s in mcs_signals.current_open(led.db)["items"]
+                if s["type"] == "pharmacist_request_unanswered"]

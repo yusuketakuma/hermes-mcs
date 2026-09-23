@@ -70,7 +70,7 @@ _PROMPT_HEAD = """あなたは在宅医療の多職種チャット記録を構�
 「参考コンテキスト」がある場合は意味解釈の参考にのみ使い、そこから項目やevidenceを引用してはいけません。
 
 出力キー(全て任意):
-- "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true
+- "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
 - "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
 - "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
 - "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "依頼者(職種・家族等) または null", "action": "依頼内容を15字以内で", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null"}]
@@ -94,6 +94,13 @@ JSON:{"meds":[{"name":"ロキソプロフェン","dose":null,"action":"stop","st
 看護師より: 夜間の疼痛が続いています。医師にトラマドールの追加を相談したところ「明日の往診で検討する」との回答でした。介護士さんはそれまで現行のカロナールで対応をお願いします。再評価は2026-10-05のカンファレンスで行います。
 >>>
 JSON:{"meds":[{"name":"トラマドール","dose":null,"action":null,"status":"planned","subject":"patient","negated":false,"evidence":"トラマドールの追加を相談"},{"name":"カロナール","dose":null,"action":"none","status":"current","subject":"patient","negated":false,"evidence":"現行のカロナールで対応"}],"symptoms":[{"text":"疼痛","negated":false,"status":"ongoing","evidence":"夜間の疼痛が続いています"}],"requests":[{"to":"介護士","from":"看護師","action":"現行薬で対応","due":null}],"summary":"疼痛持続。トラマドール追加は往診で検討。介護士は現行薬対応","points":["トラマドールは検討段階で未開始","10-05のカンファレンスで再評価"],"urgency":"routine"}
+
+例3:
+対象本文:
+<<<
+ベッドで臥床中でしたがお話は饒舌。薬、インスリン管理は出来ない。喫煙するとのことで在宅酸素は出来ない。内服の飲み忘れが多いとのことです。
+>>>
+JSON:{"meds":[{"name":"インスリン","dose":null,"action":"none","status":"current","subject":"patient","negated":false,"evidence":"インスリン管理は出来ない"}],"summary":"臥床中だが会話は明瞭。インスリンの自己管理が困難。在宅酸素は喫煙のため実施不可。内服の飲み忘れあり","points":["インスリン管理は出来ない=処方変更ではなく管理困難","在宅酸素は調剤対象外","飲み忘れが多い"],"urgency":"routine"}
 
 """
 

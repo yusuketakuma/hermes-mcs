@@ -940,13 +940,18 @@ $PY mcs/ops/mcs_view.py signals --project 123
 
 <!-- BEGIN GENERATED:signals -->
 
-6 detectors — auto-generated from `mcs_signals.DETECTORS`.
+11 detectors — auto-generated from `mcs_signals.DETECTORS`.
 
 | 検知器 | 概要 |
 |---|---|
 | `request_overdue` | Formal register fact: open/in_progress requests past due_date. |
 | `request_aging` | Open register items whose created_at is older than the aging threshold — regardless of due_date (register fact only). |
 | `med_change_no_followup` | Per (room, med surface form) episodes: flag when the LATEST change-action mention of a med in a non-archived room has… |
+| `pharmacist_request_unanswered` | extract_llm requests addressed to the pharmacy (any 薬-containing target or configured request_targets) whose mention … |
+| `rx_request_visibility` | Med-related requests directed at OTHER professions — early visibility into the prescription pipeline (a nurse asking … |
+| `adherence_concern` | Medication-management difficulty / non-use mentions — the dispensing pharmacist's intervention domain (一包化・管理支援・ 残薬調整… |
+| `discharge_notice` | Bare discharge/transfer mentions with no med-change co-occurrence (co-occurring ones are transition_reconciliation) —… |
+| `symptom_after_med_change` | Same-post coupling: a change-action med mention AND a new or ongoing non-negated patient symptom in ONE message — an … |
 | `comm_concentration` | Non-archived rooms whose post count in the last 72h exceeds a fixed threshold. Volume is not severity. |
 | `rx_period_expiry` | extract_v1 med_periods whose end date lands within the horizon. |
 | `transition_reconciliation` | Rooms where a typed discharge/transfer event (extract_llm `events`, not a body substring — '退院できません' etc. does not ma… |
@@ -957,12 +962,34 @@ $PY mcs/ops/mcs_view.py signals --project 123
   （登録から30日超の未完了依頼）、`med_change_no_followup`（チャットルーム×薬の
   エピソード単位。同一薬の最新言及が7日窓を過ぎても後続記録・依頼登録を
   確認できない場合のみ — 後で応答のあった言及はその薬を追跡中とみなし
-  抑制）、`comm_concentration`（直近72hの記録集中）、`rx_period_expiry`
-  （期間表現の終了間近）、`transition_reconciliation`（extract_llm の
-  型付き discharge/transfer イベント±14日の薬変更言及の共起 —
-  「退院」文字列ではなく抽出イベントを使う）。
+  抑制）、`pharmacist_request_unanswered`（薬剤師宛の抽出依頼が応答窓を
+  過ぎても記録上の応答を確認できない場合 — 「対応がなかった」とは
+  言わない）、`rx_request_visibility`（医師等他職種宛の処方関連依頼の
+  言及 — 処方パイプラインの先行可視化・FYI）、`adherence_concern`
+  （「管理できない」・飲み忘れ・残薬等の服薬管理困難の言及 — 処方変更
+  ではなく介入検討の提示）、`discharge_notice`（薬変更共起のない退院・
+  転院の言及 — 共起ありは transition_reconciliation が担当）、
+  `symptom_after_med_change`（同一投稿内の薬変更言及＋新規/継続症状 —
+  因果は人が原記録で判断）、`comm_concentration`（直近72hの記録集中）、
+  `rx_period_expiry`（期間表現の終了間近）、`transition_reconciliation`
+  （extract_llm の型付き discharge/transfer イベント±14日の薬変更言及の
+  共起 — 「退院」文字列ではなく抽出イベントを使う）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
+- 自己同一性の設定（config `signals.*`）:
+  `self_organizations`（薬局自身の組織名 — その組織の投稿由来の言及は
+  レビュー候補にせず、その投稿は応答者として数える）、
+  `self_professions`（応答者とみなす職種、既定 `["薬剤師"]`）、
+  `request_targets`（「薬剤師宛」とみなす追加の宛先表記 —
+  「薬」を含む宛先は自動で対象）。
+- `signals.med_exclude_names`（空白無視の完全一致）に列挙した薬剤名は
+  med_change_no_followup の対象外 — 在宅酸素など調剤対象でない療法用。
+- 通知階層: 即時 tier は `pharmacist_request_unanswered`・
+  `discharge_notice`・`transition_reconciliation`。他は既定で digest
+  tier — 未送信のダイジェスト intent に畳み込まれ、
+  `signals.digest_interval_h`（既定24h）遅延で1通にまとめて送る。
+  言及元の抽出が `urgency:high` のシグナルは即時化される。
+  `signals.digest:false` で全件即時、`signals.tiers` で型ごとに上書き可。
 - 人による却下: `mcs_view.py control signal_dismiss --confirm-human` に
   `{"project_id":…, "signal_key":"…", "reason":"…"}` を渡すと、理由・
   実行者付きの dismissed 遷移行を追加する。同じ証跡の間は再検出を
