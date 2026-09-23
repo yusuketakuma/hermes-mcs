@@ -696,7 +696,8 @@ class Ledger:
             return ids
         q = ("SELECT message_id FROM messages WHERE message_id IN ("
              + ",".join("?" * len(ids)) + ") AND "
-             "(posted_at_ts IS NULL OR posted_at_ts >= ?)")
+             "(posted_at_ts IS NULL OR posted_at_ts=0 "
+             "OR posted_at_ts >= ?)")
         keep = {r["message_id"] for r in self.db.execute(
             q, (*ids, now - max_age_s))}
         stale = [i for i in ids if i not in keep]

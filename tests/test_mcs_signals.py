@@ -1353,7 +1353,8 @@ def test_held_digest_members_salvaged(led):
     assert json.loads(ev["payload"])["digest"] is True
     # quarantine with NO send receipt — nothing was ever delivered
     notifier._hold_event(
-        led, {"event_id": ev["event_id"], "payload": ev["payload"],
+        led, {"event_id": ev["event_id"], "kind": "signal",
+              "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
     rows = led.db.execute(
         "SELECT state,payload,next_try FROM notify_outbox "
@@ -1378,7 +1379,8 @@ def test_held_digest_with_send_progress_not_salvaged(led):
     led.outbox_progress(ev["event_id"], 0, [], "fp", sending=1)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     notifier._hold_event(
-        led, {"event_id": ev["event_id"], "payload": ev["payload"],
+        led, {"event_id": ev["event_id"], "kind": "signal",
+              "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
     assert led.db.execute(
         "SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 1
@@ -1417,3 +1419,54 @@ def test_digest_render_drops_archived_member(led, monkeypatch):
     text, _ = notifier._format_event(led, ev)
     assert "薬A" in text and "薬B" not in text
     assert "ダイジェスト（1件）" in text
+
+
+def test_held_merged_intent_members_salvaged(led):
+    """A quarantined NON-digest merged med_change intent must also
+    rescue its members — they strand identically otherwise. Rescue
+    preserves the non-digest shape (immediate, no 24h delay)."""
+    import notifier
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1",
+                 [{"name": "薬A", "action": "stop"},
+                  {"name": "薬B", "action": "stop"}])
+    _ev(led, cfg={"signals": {"notify": True, "tiers":
+                              {"med_change_no_followup": "immediate"}}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    pl = json.loads(ev["payload"])
+    assert len(pl["signal_keys"]) == 2 and "digest" not in pl
+    notifier._hold_event(
+        led, {"event_id": ev["event_id"], "kind": "signal",
+              "payload": ev["payload"],
+              "progress": ev["progress"]}, {"signals": {}})
+    rows = led.db.execute(
+        "SELECT state,payload,next_try FROM notify_outbox "
+        "ORDER BY event_id").fetchall()
+    assert len(rows) == 2
+    assert rows[0]["state"] == "failed" and rows[0]["next_try"] is None
+    new = json.loads(rows[1]["payload"])
+    # immediate re-enqueue (not a digest delay) carrying every open key
+    assert "digest" not in new and rows[1]["next_try"] <= time.time()
+    assert set(new["signal_keys"]) == set(pl["signal_keys"])
+
+
+def test_held_single_signal_key_salvaged(led):
+    """A quarantined single signal_key intent re-enqueues its key —
+    a legacy-shape payload is rescued via signal_key, not signal_keys."""
+    import notifier
+    _req(led.db, "open", created=NOW - 400 * DAY)
+    led.db.execute("UPDATE requests SET status='open'")
+    _ev(led, cfg={"signals": {"notify": True, "tiers":
+                              {"request_aging": "immediate"}}})
+    ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
+    pl = json.loads(ev["payload"])
+    assert "signal_key" in pl
+    notifier._hold_event(
+        led, {"event_id": ev["event_id"], "kind": "signal",
+              "payload": ev["payload"],
+              "progress": ev["progress"]}, {"signals": {}})
+    rows = led.db.execute(
+        "SELECT payload FROM notify_outbox ORDER BY event_id").fetchall()
+    assert len(rows) == 2
+    new = json.loads(rows[1]["payload"])
+    assert new["signal_key"] == pl["signal_key"]

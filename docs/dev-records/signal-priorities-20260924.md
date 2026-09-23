@@ -140,3 +140,21 @@ stage_unread を通らないため消費マークも間に合わない。
 `run_reply_jobs`/`stage_backfill` へ `notify_max_age_s` を配管
 （main() の config 解釈を jobs_only 分岐の外へ移動し、jobs-only
 run にも有効化）。
+
+## 追記4: hold 救出の全kind化 + 原子化（同日・多角レビュー指摘）
+
+前回の digest 救出は `digest:true` payload のみ対象だったが、同一の
+沈黙喪失は merged signal_keys intent・単一 signal_key intent・
+`new_messages` intent（notified_at は intent 生成時に消費済みの
+ため再通知経路が存在しない）にもあった。`rescue_digest_members`
+を汎用化し signal 系は open メンバーのみ再エンキュー（非digestは
+遅延なし・urgent 引継ぎ・単一なら signal_key 形に戻す）、
+`new_messages` は同一 message_ids を再エンキュー。
+
+救出と hold を同一 commit に統合（間でクラッシュすると旧intentと
+救出intentが両方 live になり二重送信し得た）。rescue 生成物には
+`rescue_of` マーカーを付与し、救出済み intent が再度 quarantine
+されても再救出しない単発化 — 救出の無限連鎖を防ぐ。
+
+`posted_at_ts=0`（migration が「解析不能」として扱う値）を年齢
+フィルタで NULL と同じく fail-open 扱いに修正。

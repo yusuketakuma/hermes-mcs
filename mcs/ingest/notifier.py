@@ -924,15 +924,49 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False):
             payload = json.loads(ev["payload"])
         except (json.JSONDecodeError, TypeError):
             payload = None
-        if isinstance(payload, dict) and payload.get("digest") is True:
-            sc = cfg.get("signals")
-            ih = sc.get("digest_interval_h") \
-                if isinstance(sc, dict) else None
-            interval_h = (ih if type(ih) in (int, float) and ih > 0
-                          else mcs_signals.DIGEST_INTERVAL_H)
-            with ledger.db:
-                mcs_signals.rescue_digest_members(
-                    ledger, payload, time.time(), interval_h)
+        if isinstance(payload, dict):
+            rescuable = (
+                payload.get("digest") is True
+                or payload.get("signal_keys")
+                or payload.get("signal_key")
+                or (ev["kind"] == "new_messages"
+                    and payload.get("rescue_of") is None
+                    and any(type(m) is int
+                            for m in (payload.get("message_ids") or []))))
+            if rescuable:
+                sc = cfg.get("signals")
+                ih = sc.get("digest_interval_h") \
+                    if isinstance(sc, dict) else None
+                interval_h = (ih if type(ih) in (int, float) and ih > 0
+                              else mcs_signals.DIGEST_INTERVAL_H)
+                # rescue + hold in ONE commit — a crash between them
+                # would leave both the old intent and the rescue live,
+                # sending the same members twice
+                with ledger.db:
+                    if ev["kind"] == "new_messages":
+                        # a held new_messages intent strands its ids the
+                        # same way — notified_at was already consumed, so
+                        # nothing can ever re-announce them. Proven
+                        # undelivered, so re-enqueue the same id set —
+                        # single-shot: a rescued intent that also
+                        # quarantines does not respawn (rescue_of marks
+                        # the lineage)
+                        mids = [m for m in (payload.get("message_ids")
+                                            or []) if type(m) is int]
+                        ledger.outbox_add_tx(
+                            "new_messages", ev["project_id"],
+                            {"message_ids": mids,
+                             "source": payload.get("source"),
+                             "rescue_of": ev["event_id"]})
+                    else:
+                        mcs_signals.rescue_digest_members(
+                            ledger, payload, time.time(), interval_h,
+                            origin_id=ev["event_id"])
+                    ledger.db.execute(
+                        "UPDATE notify_outbox SET state='failed',"
+                        "next_try=NULL,updated_at=? WHERE event_id=?",
+                        (time.time(), ev["event_id"]))
+                return
     ledger.outbox_hold(ev["event_id"])
 
 
