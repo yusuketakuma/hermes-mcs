@@ -1,0 +1,504 @@
+{
+  "version": 1,
+  "note": "All bodies and labels are fully synthetic fixtures written for the semantic-facts/v2 contract. Never place real message text, real patient identifiers, or operational ledger content here.",
+  "source": "synthetic",
+  "cases": [
+    {
+      "id": "med-transition-chain-3msg",
+      "project_id": "proj-a",
+      "thread_id": "thread-a1",
+      "messages": [
+        {"message_id": "m1", "revision": "r1",
+         "body": "本日の訪問でアムロジピン5mgを開始しました。血圧は142/86でした。"},
+        {"message_id": "m2", "revision": "r1",
+         "body": "血圧が156/90まで上昇したため、アムロジピンを10mgへ増量しました。"},
+        {"message_id": "m3", "revision": "r1",
+         "body": "浮腫が出たためアムロジピンを中止し、別剤への変更を検討中です。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "f1", "message_id": "m1", "kind": "medication_event",
+           "subject": "patient", "statement": "アムロジピン5mg開始",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "本日", "mandatory": true,
+           "evidence_quote": "アムロジピン5mgを開始しました"},
+          {"id": "f2", "message_id": "m1", "kind": "vital_lab",
+           "subject": "patient", "statement": "BP 142/86",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "本日", "mandatory": true,
+           "evidence_quote": "血圧は142/86でした"},
+          {"id": "f3", "message_id": "m2", "kind": "vital_lab",
+           "subject": "patient", "statement": "BP 156/90",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "血圧が156/90まで上昇した"},
+          {"id": "f4", "message_id": "m2", "kind": "medication_event",
+           "subject": "patient", "statement": "アムロジピン10mgへ増量",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "アムロジピンを10mgへ増量しました"},
+          {"id": "f5", "message_id": "m3", "kind": "symptom_state",
+           "subject": "patient", "statement": "浮腫が出現",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "浮腫が出たため"},
+          {"id": "f6", "message_id": "m3", "kind": "medication_event",
+           "subject": "patient", "statement": "アムロジピン中止",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "アムロジピンを中止し"},
+          {"id": "f7", "message_id": "m3", "kind": "request_pending",
+           "subject": "patient", "statement": "別剤への変更を検討中",
+           "polarity": "affirmed", "workflow_status": "considering",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "別剤への変更を検討中です"}
+        ],
+        "relations": [
+          {"left_fact_id": "f1", "right_fact_id": "f4",
+           "type": "TRANSITION"},
+          {"left_fact_id": "f4", "right_fact_id": "f6",
+           "type": "TRANSITION"},
+          {"left_fact_id": "f2", "right_fact_id": "f3",
+           "type": "COMPLEMENTS"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 7
+      }
+    },
+    {
+      "id": "dense-multi-drug-16plus",
+      "project_id": "proj-a",
+      "thread_id": "thread-a2",
+      "messages": [
+        {"message_id": "m10", "revision": "r1",
+         "body": "定期訪問。現在の処方はアムロジピン10mg朝食後、メトホルミン500mg朝夕食後、リハゾリン0.5g朝のみ、ロキソプロフェン頓服です。メトホルミンは腎機能低下のため中止を指示しました。リハゾリンはあと2日で終了予定です。膝の痛みが続いており昨夜は睡眠が浅かったとのこと。食事量は7割に減少。体温36.8度、SpO2 97%、脈拍78回です。ロキソプロフェンは痛み時のみ使用とのことで、湿布への切替を希望されています。次回の血液検査は来週火曜に予定しています。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "g1", "message_id": "m10", "kind": "medication_exposure",
+           "subject": "patient", "statement": "アムロジピン10mg朝食後服用中",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "アムロジピン10mg朝食後"},
+          {"id": "g2", "message_id": "m10", "kind": "medication_exposure",
+           "subject": "patient", "statement": "メトホルミン500mg朝夕食後",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "メトホルミン500mg朝夕食後"},
+          {"id": "g3", "message_id": "m10", "kind": "medication_event",
+           "subject": "patient", "statement": "メトホルミン中止指示(腎機能低下)",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "本日", "mandatory": true,
+           "evidence_quote": "メトホルミンは腎機能低下のため中止を指示しました"},
+          {"id": "g4", "message_id": "m10", "kind": "medication_exposure",
+           "subject": "patient", "statement": "リハゾリン0.5g朝のみ",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "リハゾリン0.5g朝のみ"},
+          {"id": "g5", "message_id": "m10", "kind": "request_pending",
+           "subject": "patient", "statement": "リハゾリンあと2日で終了予定",
+           "polarity": "affirmed", "workflow_status": "planned",
+           "event_time": "2日後", "mandatory": true,
+           "evidence_quote": "あと2日で終了予定です"},
+          {"id": "g6", "message_id": "m10", "kind": "medication_exposure",
+           "subject": "patient", "statement": "ロキソプロフェン頓服",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "ロキソプロフェン頓服です"},
+          {"id": "g7", "message_id": "m10", "kind": "symptom_state",
+           "subject": "patient", "statement": "膝の痛み継続",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "膝の痛みが続いており"},
+          {"id": "g8", "message_id": "m10", "kind": "symptom_state",
+           "subject": "patient", "statement": "睡眠浅い(昨夜)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "昨夜", "mandatory": true,
+           "evidence_quote": "昨夜は睡眠が浅かった"},
+          {"id": "g9", "message_id": "m10", "kind": "symptom_state",
+           "subject": "patient", "statement": "食事量7割へ減少",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "食事量は7割に減少"},
+          {"id": "g10", "message_id": "m10", "kind": "vital_lab",
+           "subject": "patient", "statement": "BT 36.8度",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "体温36.8度"},
+          {"id": "g11", "message_id": "m10", "kind": "vital_lab",
+           "subject": "patient", "statement": "SpO2 97%",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "SpO2 97%"},
+          {"id": "g12", "message_id": "m10", "kind": "vital_lab",
+           "subject": "patient", "statement": "脈拍78回",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "脈拍78回です"},
+          {"id": "g13", "message_id": "m10", "kind": "adherence_administration",
+           "subject": "patient", "statement": "ロキソプロフェンは痛み時のみ使用",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "痛み時のみ使用とのこと"},
+          {"id": "g14", "message_id": "m10", "kind": "preference",
+           "subject": "patient", "statement": "湿布への切替希望",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "湿布への切替を希望されています"},
+          {"id": "g15", "message_id": "m10", "kind": "request_pending",
+           "subject": "patient", "statement": "来週火曜に血液検査予定",
+           "polarity": "affirmed", "workflow_status": "planned",
+           "event_time": "来週火曜", "mandatory": true,
+           "evidence_quote": "次回の血液検査は来週火曜に予定しています"},
+          {"id": "g16", "message_id": "m10", "kind": "care_event",
+           "subject": "patient", "statement": "定期訪問",
+           "polarity": "affirmed", "workflow_status": "performed",
+           "event_time": "本日", "mandatory": false,
+           "evidence_quote": "定期訪問"}
+        ],
+        "relations": [
+          {"left_fact_id": "g2", "right_fact_id": "g3",
+           "type": "EXPLICIT_SUPERSESSION"},
+          {"left_fact_id": "g6", "right_fact_id": "g13",
+           "type": "COMPLEMENTS"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 15
+      }
+    },
+    {
+      "id": "duplicate-quote-disambiguation",
+      "project_id": "proj-b",
+      "thread_id": "thread-b1",
+      "messages": [
+        {"message_id": "m20", "revision": "r1",
+         "body": "アムロジピンを処方しました。なお先月もアムロジピンを処方しています。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "h1", "message_id": "m20", "kind": "medication_event",
+           "subject": "patient", "statement": "アムロジピン処方(今回)",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "本日", "mandatory": true,
+           "evidence_quote": "アムロジピンを処方しました"},
+          {"id": "h2", "message_id": "m20", "kind": "medication_event",
+           "subject": "patient", "statement": "アムロジピン処方(先月)",
+           "polarity": "affirmed", "workflow_status": "performed",
+           "event_time": "先月", "mandatory": true,
+           "evidence_quote": "アムロジピンを処方しています"}
+        ],
+        "relations": [
+          {"left_fact_id": "h2", "right_fact_id": "h1",
+           "type": "TRANSITION"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 2,
+        "note": "同一語句が2箇所 — evidence spanは所有atomへ解決し別factを維持"
+      }
+    },
+    {
+      "id": "family-medication-no-link",
+      "project_id": "proj-b",
+      "thread_id": "thread-b2",
+      "messages": [
+        {"message_id": "m30", "revision": "r1",
+         "body": "患者さんの母親が同じアムロジピンを服用しており、管理方法を聞かれました。本人の薬はロキソプロフェンです。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "k1", "message_id": "m30", "kind": "medication_exposure",
+           "subject": "family:mother", "statement": "母親がアムロジピン服用",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "母親が同じアムロジピンを服用しており"},
+          {"id": "k2", "message_id": "m30", "kind": "medication_exposure",
+           "subject": "patient", "statement": "本人はロキソプロフェン",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "本人の薬はロキソプロフェンです"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 2,
+        "note": "generic/家族subjectは患者チェーンへ連結しない"
+      }
+    },
+    {
+      "id": "negation-uncertainty-preserved",
+      "project_id": "proj-b",
+      "thread_id": "thread-b3",
+      "messages": [
+        {"message_id": "m40", "revision": "r1",
+         "body": "アレルギー歴はありません。胸痛は否定しますが、動悸はあるかもしれません。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "n1", "message_id": "m40", "kind": "allergy_intolerance",
+           "subject": "patient", "statement": "アレルギー歴なし",
+           "polarity": "negated", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "アレルギー歴はありません"},
+          {"id": "n2", "message_id": "m40", "kind": "symptom_state",
+           "subject": "patient", "statement": "胸痛を否定",
+           "polarity": "negated", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "胸痛は否定します"},
+          {"id": "n3", "message_id": "m40", "kind": "symptom_state",
+           "subject": "patient", "statement": "動悸の可能性",
+           "polarity": "uncertain", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "動悸はあるかもしれません"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 3
+      }
+    },
+    {
+      "id": "adr-and-allergy-history",
+      "project_id": "proj-c",
+      "thread_id": "thread-c1",
+      "messages": [
+        {"message_id": "m50", "revision": "r1",
+         "body": "以前セファレンで蕁麻疹が出た既往があります。今回のカルボシステイン開始後に胃部不快感を訴えており、薬剤性の可能性を検討します。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "a1", "message_id": "m50", "kind": "allergy_intolerance",
+           "subject": "patient", "statement": "セファレンで蕁麻疹の既往",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "過去", "mandatory": true,
+           "evidence_quote": "セファレンで蕁麻疹が出た既往があります"},
+          {"id": "a2", "message_id": "m50", "kind": "medication_event",
+           "subject": "patient", "statement": "カルボシステイン開始",
+           "polarity": "affirmed", "workflow_status": "ordered",
+           "event_time": "過去", "mandatory": true,
+           "evidence_quote": "カルボシステイン開始後"},
+          {"id": "a3", "message_id": "m50", "kind": "adverse_drug_event",
+           "subject": "patient", "statement": "胃部不快感(薬剤性疑い)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "胃部不快感を訴えており"},
+          {"id": "a4", "message_id": "m50", "kind": "request_pending",
+           "subject": "patient", "statement": "薬剤性の可能性を検討中",
+           "polarity": "affirmed", "workflow_status": "considering",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "薬剤性の可能性を検討します"}
+        ],
+        "relations": [
+          {"left_fact_id": "a2", "right_fact_id": "a3",
+           "type": "COMPLEMENTS"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 4
+      }
+    },
+    {
+      "id": "adherence-admin-difficulty",
+      "project_id": "proj-c",
+      "thread_id": "thread-c2",
+      "messages": [
+        {"message_id": "m60", "revision": "r1",
+         "body": "朝の薬を何度か飲み忘れています。大きい錠剤は嚥下が難しく、粉砕して服薬しています。残薬は1週間分ほど余っています。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "d1", "message_id": "m60", "kind": "adherence_administration",
+           "subject": "patient", "statement": "朝の薬を飲み忘れ(複数回)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "最近", "mandatory": true,
+           "evidence_quote": "朝の薬を何度か飲み忘れています"},
+          {"id": "d2", "message_id": "m60", "kind": "adherence_administration",
+           "subject": "patient", "statement": "大きい錠剤は嚥下困難",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "嚥下が難しく"},
+          {"id": "d3", "message_id": "m60", "kind": "adherence_administration",
+           "subject": "patient", "statement": "粉砕して服薬",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "粉砕して服薬しています"},
+          {"id": "d4", "message_id": "m60", "kind": "adherence_administration",
+           "subject": "patient", "statement": "残薬1週間分",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "残薬は1週間分ほど余っています"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 4
+      }
+    },
+    {
+      "id": "repeated-vitals-no-collapse",
+      "project_id": "proj-c",
+      "thread_id": "thread-c3",
+      "messages": [
+        {"message_id": "m70", "revision": "r1",
+         "body": "朝の体温は38.2度でした。午後は37.1度まで下がりました。SpO2は朝93%、午後96%でした。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "v1", "message_id": "m70", "kind": "vital_lab",
+           "subject": "patient", "statement": "BT 38.2度(朝)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "朝", "mandatory": true,
+           "evidence_quote": "朝の体温は38.2度でした"},
+          {"id": "v2", "message_id": "m70", "kind": "vital_lab",
+           "subject": "patient", "statement": "BT 37.1度(午後)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "午後", "mandatory": true,
+           "evidence_quote": "午後は37.1度まで下がりました"},
+          {"id": "v3", "message_id": "m70", "kind": "vital_lab",
+           "subject": "patient", "statement": "SpO2 93%(朝)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "朝", "mandatory": true,
+           "evidence_quote": "SpO2は朝93%"},
+          {"id": "v4", "message_id": "m70", "kind": "vital_lab",
+           "subject": "patient", "statement": "SpO2 96%(午後)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "午後", "mandatory": true,
+           "evidence_quote": "午後96%でした"}
+        ],
+        "relations": [
+          {"left_fact_id": "v1", "right_fact_id": "v2",
+           "type": "TRANSITION"},
+          {"left_fact_id": "v3", "right_fact_id": "v4",
+           "type": "TRANSITION"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 4,
+        "note": "複数測定値は全件保持し「最新値」へ潰さない"
+      }
+    },
+    {
+      "id": "care-transition-events",
+      "project_id": "proj-d",
+      "thread_id": "thread-d1",
+      "messages": [
+        {"message_id": "m80", "revision": "r1",
+         "body": "昨夜廊下で転倒しました。受診の結果骨折はありませんでしたが、本日入院となりました。退院後の訪問再開は未定です。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "c1", "message_id": "m80", "kind": "care_event",
+           "subject": "patient", "statement": "廊下で転倒",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "昨夜", "mandatory": true,
+           "evidence_quote": "昨夜廊下で転倒しました"},
+          {"id": "c2", "message_id": "m80", "kind": "care_event",
+           "subject": "patient", "statement": "受診(骨折なし)",
+           "polarity": "negated", "workflow_status": "performed",
+           "event_time": "過去", "mandatory": true,
+           "evidence_quote": "受診の結果骨折はありませんでした"},
+          {"id": "c3", "message_id": "m80", "kind": "care_event",
+           "subject": "patient", "statement": "本日入院",
+           "polarity": "affirmed", "workflow_status": "performed",
+           "event_time": "本日", "mandatory": true,
+           "evidence_quote": "本日入院となりました"},
+          {"id": "c4", "message_id": "m80", "kind": "request_pending",
+           "subject": "patient", "statement": "退院後の訪問再開は未定",
+           "polarity": "affirmed", "workflow_status": "pending",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "退院後の訪問再開は未定です"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 4
+      }
+    },
+    {
+      "id": "pending-request-followup",
+      "project_id": "proj-d",
+      "thread_id": "thread-d2",
+      "messages": [
+        {"message_id": "m90", "revision": "r1",
+         "body": "Drへインスリン用量の相談を依頼しましたが回答待ちです。副作用モニタリングのため3日後に再評価を予定しています。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "p1", "message_id": "m90", "kind": "request_pending",
+           "subject": "patient", "statement": "インスリン用量の相談をDrへ依頼",
+           "polarity": "affirmed", "workflow_status": "pending",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "インスリン用量の相談を依頼しましたが回答待ちです"},
+          {"id": "p2", "message_id": "m90", "kind": "request_pending",
+           "subject": "patient", "statement": "副作用モニタリング3日後に再評価予定",
+           "polarity": "affirmed", "workflow_status": "planned",
+           "event_time": "3日後", "mandatory": true,
+           "evidence_quote": "3日後に再評価を予定しています"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 2
+      }
+    },
+    {
+      "id": "state-change-chain-3msg",
+      "project_id": "proj-d",
+      "thread_id": "thread-d3",
+      "messages": [
+        {"message_id": "m100", "revision": "r1",
+         "body": "咳が悪化しており夜間も続いています。"},
+        {"message_id": "m101", "revision": "r1",
+         "body": "咳は改善傾向ですが痰が残っています。"},
+        {"message_id": "m102", "revision": "r1",
+         "body": "咳は消失しました。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "s1", "message_id": "m100", "kind": "symptom_state",
+           "subject": "patient", "statement": "咳が悪化(夜間継続)",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "咳が悪化しており夜間も続いています"},
+          {"id": "s2", "message_id": "m101", "kind": "symptom_state",
+           "subject": "patient", "statement": "咳は改善傾向",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "咳は改善傾向です"},
+          {"id": "s3", "message_id": "m101", "kind": "symptom_state",
+           "subject": "patient", "statement": "痰が残存",
+           "polarity": "affirmed", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "痰が残っています"},
+          {"id": "s4", "message_id": "m102", "kind": "symptom_state",
+           "subject": "patient", "statement": "咳は消失",
+           "polarity": "negated", "workflow_status": "reported",
+           "event_time": "現在", "mandatory": true,
+           "evidence_quote": "咳は消失しました"}
+        ],
+        "relations": [
+          {"left_fact_id": "s1", "right_fact_id": "s2",
+           "type": "TRANSITION"},
+          {"left_fact_id": "s2", "right_fact_id": "s4",
+           "type": "TRANSITION"}
+        ],
+        "rendered_mandatory": true,
+        "mandatory_count": 4
+      }
+    },
+    {
+      "id": "unknown-fields-preserved",
+      "project_id": "proj-e",
+      "thread_id": "thread-e1",
+      "messages": [
+        {"message_id": "m110", "revision": "r1",
+         "body": "薬を変更しました。"}
+      ],
+      "expect": {
+        "facts": [
+          {"id": "u1", "message_id": "m110", "kind": "medication_event",
+           "subject": "unknown", "statement": "薬を変更",
+           "polarity": "affirmed", "workflow_status": "unknown",
+           "event_time": "unknown", "mandatory": true,
+           "evidence_quote": "薬を変更しました"}
+        ],
+        "relations": [],
+        "rendered_mandatory": true,
+        "mandatory_count": 1,
+        "note": "subject/status未記載をpatient/currentへ暗黙補完しない"
+      }
+    }
+  ]
+}

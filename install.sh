@@ -123,12 +123,14 @@ full command surface and the preview/confirm flow.
 For a full machine setup (MCS credentials into macOS Keychain, config.json,
 .env secrets, local-LLM and typesafe/Jev requirements) run:
 
-  python3 $REPO/mcs/mcs_setup.py init      # interactive provisioning
-  python3 $REPO/mcs/mcs_setup.py check    # validate all conditions
+  python3 $REPO/mcs/ops/mcs_setup.py init      # interactive provisioning
+  python3 $REPO/mcs/ops/mcs_setup.py check    # validate all conditions
 
-Scheduled collection: the 15-minute unread check and the twice-hourly
-durable-job drain are hermes cron jobs (`--no-agent` scripts under
-$HERMES_HOME/scripts/); only the event-driven command drain stays on
-launchd (local.mcs-cmd, WatchPaths) — template in
-$REPO/deployment/launchagents/.
+Scheduled collection: unread check (15min), durable drain, the nightly
+semantic/QC catch-up and the llama restart guard are hermes cron jobs —
+wrapper script canonical copies live in $REPO/deployment/scripts/.
+launchd runs three jobs: the event-driven command drain (local.mcs-cmd)
+and the two resident extract_llm drainers (ai.mcs.extract-drainer[-rt]).
+Install steps and placeholder substitution for all of them:
+$REPO/deployment/launchagents/README.md
 EOF
