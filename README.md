@@ -678,14 +678,21 @@ Private repository — 現時点で公開・再配布は想定していない。
 - `data/cmd/*.json`         — bot コマンドキュー (WatchPaths で即時実行)
 - `token_cache.json`        — bearer cache (0600; data/ 外=サンドボックス非公開)
 - `config.json`             — {discord_channel_id, mcs_login_id,
-                              notify_bot_profile?, discover_archived?} —
+                              notify_bot_profile?, discover_archived?,
+                              notify_max_age_h?} —
                               notify_bot_profile 設定時は通知投稿を
                               ~/.hermes/profiles/<name>/.env のボット名義に固定
                               (既定は ~/.hermes/.env = ジャービス)。
                               discover_archived は保管/削除でアーカイブ
                               された患者の「新規列挙と取り込み予約」だけを
                               止めるスイッチ — 既にpendingの取り込みジョブは
-                              false でも消化され続ける(完全停止ではない)
+                              false でも消化され続ける(完全停止ではない)。
+                              notify_max_age_h を設定すると、投稿から
+                              N時間以上経過した未読メッセージは通知せず
+                              取り込む(既読化のみ。一括追加された患者は
+                              過去分が未読として列挙されるため)。投稿日時が
+                              不明なメッセージは従来通り通知される
+                              (古い証明が無い限り落とさない)
 
 ## 運用
 

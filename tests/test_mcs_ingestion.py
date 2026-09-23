@@ -3847,3 +3847,91 @@ def test_self_profile_normalizes_sender_id():
     assert p["name"] == "山田 太郎"
     assert p["professions"] == ["薬剤師"]
     assert p["organizations"] == ["みどり薬局"]
+
+
+def _msg_at(mid, project_id, posted_at, unread=True):
+    return mcs_adapter.Message(
+        message_id=mid, project_id=project_id, parent_id=None,
+        sender_id=1, sender_name="sender", sender_type="user",
+        profession="", organization="", posted_at=posted_at,
+        body_html="b", body_state="full", is_unread=unread,
+        reply_count=0)
+
+
+def _iso(days_ago):
+    from datetime import timezone, timedelta
+    return datetime.fromtimestamp(
+        time.time() - days_ago * 86400,
+        tz=timezone(timedelta(hours=9))).isoformat(timespec="seconds")
+
+
+def test_save_patient_stale_unread_not_notified(tmp_path):
+    """Bulk-added patients arrive 'unread' carrying months-old posts —
+    with notify_max_age_s they are imported and CONSUMED (marked
+    notified so they never resurface) but no notification intent is
+    created for them. Genuinely recent unread still notifies."""
+    db = _ledger(tmp_path)
+    p = _unread_patient(80)
+    p.messages = [_msg_at(1, 80, _iso(90)),      # 3 months old
+                  _msg_at(2, 80, _iso(0.05))]    # ~1h ago — real-time
+    p.fetch_state = "complete"
+    db.save_patient(p, notify={"source": "unread"},
+                    notify_max_age_s=48 * 3600)
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["message_ids"] == [2]
+    # the stale message is consumed — marked notified with no intent
+    n = db.db.execute(
+        "SELECT notified_at FROM messages WHERE message_id=1").fetchone()
+    assert n["notified_at"] is not None
+    db.close()
+
+
+def test_save_patient_all_stale_no_intent(tmp_path):
+    """When every unread message is old, the import creates no intent
+    at all — and a re-fetch reporting the same unread cannot resurrect
+    them (notified_at is consumed)."""
+    db = _ledger(tmp_path)
+    p = _unread_patient(81)
+    p.messages = [_msg_at(1, 81, _iso(200))]
+    p.fetch_state = "complete"
+    db.save_patient(p, notify={"source": "unread"},
+                    notify_max_age_s=48 * 3600)
+    assert db.db.execute(
+        "SELECT COUNT(*) c FROM notify_outbox").fetchone()["c"] == 0
+    # same message still unread on a later fetch — no intent, again
+    db.save_patient(p, notify={"source": "unread"},
+                    notify_max_age_s=48 * 3600)
+    assert db.db.execute(
+        "SELECT COUNT(*) c FROM notify_outbox").fetchone()["c"] == 0
+    db.close()
+
+
+def test_save_patient_unknown_date_still_notifies(tmp_path):
+    """An unparseable posted_at cannot be proven old — it notifies
+    (fail-open), since 'past' must be established, not assumed."""
+    db = _ledger(tmp_path)
+    p = _unread_patient(82)
+    p.messages = [_msg_at(1, 82, "not-a-date")]
+    p.fetch_state = "complete"
+    db.save_patient(p, notify={"source": "unread"},
+                    notify_max_age_s=48 * 3600)
+    rows = db.db.execute(
+        "SELECT payload FROM notify_outbox").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["message_ids"] == [1]
+    db.close()
+
+
+def test_save_patient_no_age_limit_unchanged(tmp_path):
+    """notify_max_age_s=None keeps legacy behavior — every unread
+    notifies regardless of age."""
+    db = _ledger(tmp_path)
+    p = _unread_patient(83)
+    p.messages = [_msg_at(1, 83, _iso(365))]
+    p.fetch_state = "complete"
+    db.save_patient(p, notify={"source": "unread"})
+    assert db.db.execute(
+        "SELECT COUNT(*) c FROM notify_outbox").fetchone()["c"] == 1
+    db.close()

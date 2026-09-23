@@ -111,3 +111,15 @@
   authoritative（プロフィール自体が無い時のみ薬剤師既定）
 - `self_profile` の sender_id 型正規化（int/str 以外→None）
 - `_adherence_concern` の meds 経路に status!='past' を追加
+
+## 追記2: 未読通知の古日付抑制（同日）
+
+一括追加される患者は過去分のチャットが「未読」として列挙される
+ため、投稿から `notify_max_age_h` 時間以上経過した未読メッセージは
+通知 intent を作らず取り込む（`save_patient(notify_max_age_s=)`）。
+古いメッセージは `notified_at` を記録して消費済みにし、後の再
+未取得で復活しない。投稿日時不明（posted_at_ts NULL）は古い証明
+がないため従来通り通知する fail-open 設計。既読化・抽出・シグナル
+評価は従来通り走る — 抑制されるのは Discord 通知だけ。
+本番 config: `notify_max_age_h: 48`（未設定=従来通り全通知）。
+`discover_archived` は既に有効済みだった。

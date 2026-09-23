@@ -173,10 +173,13 @@ def _write_health(ledger, result: dict, status: str) -> None:
 # ---------- stage: unread pipeline ----------
 
 def stage_unread(adapter, ledger, args, result, deadline, run_id,
-                 semantic: bool = False):
+                 semantic: bool = False,
+                 notify_max_age_s: float | None = None):
     """list_unread -> per-patient unread fetch -> reply merge -> save
     (notify intent in the same tx) -> optional gated mark-read.
-    Returns the snapshot for downstream stages."""
+    notify_max_age_s: unread messages older than this are imported
+    without notification (bulk-added patients surface as unread with
+    months-old history). Returns the snapshot for downstream stages."""
     try:
         snap = adapter.list_unread()
     except SessionExpired:
@@ -268,7 +271,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
         try:
             new_ids = ledger.save_patient(p, notify={
                 "run_id": run_id, "source": "unread",
-                "snapshot_ts": snap.timestamp}, semantic=semantic)
+                "snapshot_ts": snap.timestamp}, semantic=semantic,
+                notify_max_age_s=notify_max_age_s)
         except Exception as e:
             ledger.patient_fetch_failed(p.project_id, type(e).__name__)
             result["errors"].append(
@@ -497,8 +501,17 @@ def main() -> int:
     try:
         # -- priority fetch work -------------------------------------
         if not args.jobs_only:
+            mah = cfg.get("notify_max_age_h")
+            if mah is not None and not (type(mah) in (int, float)
+                                        and mah > 0):
+                result["errors"].append("config: notify_max_age_h_invalid")
+                mah = None
+            notify_max_age_s = (mah * 3600
+                                if type(mah) in (int, float) and mah > 0
+                                else None)
             stage_unread(adapter, ledger, args, result, deadline, run_id,
-                         semantic=sem_on)
+                         semantic=sem_on,
+                         notify_max_age_s=notify_max_age_s)
             if not args.no_backfill:
                 stage_backfill(adapter, ledger, result, deadline, run_id,
                                semantic=sem_on)
