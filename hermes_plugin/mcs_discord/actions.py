@@ -216,7 +216,17 @@ class Actions:
                 "token": token, "action": action, "actor": actor,
                 "origin": origin, "context": ctx.get("context") or {},
                 "params": (result or {}).get("params") or {}})
-            await interaction.response.send_modal(modal)
+            try:
+                await interaction.response.send_modal(modal)
+            except Exception:
+                # the ~3s initial-response window can expire while the
+                # preflight drain ran — a dead modal entry must not stay
+                # claimable, and the click still deserves an answer via
+                # the 15-minute followup token
+                self._reg.drop_modal(modal_id)
+                await self._followup(
+                    interaction,
+                    "応答が期限切れになりました。もう一度操作してください。")
             return
 
         # everything else: type-6 defer, then the notification command

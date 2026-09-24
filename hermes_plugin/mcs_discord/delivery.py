@@ -327,12 +327,13 @@ class DeliveryWorker:
                         "error_code": "no_target"}
             try:
                 msg = await channel.fetch_message(int(mid))
+                await msg.delete()
             except Exception as exc:
-                if _is_definitive_reject(exc):
+                status = getattr(exc, "status", None)
+                if isinstance(status, int) and status in REVOKE_GONE_STATUS:
                     # already gone — the revoke goal holds
                     return {"result": "delivered", "message_id": mid}
                 raise
-            await msg.delete()
             return {"result": "delivered", "message_id": mid}
         view = cards.build_view(spec)
         if op == "update":
@@ -512,8 +513,20 @@ class DeliveryWorker:
             try:
                 with open(path, "rb") as handle:
                     spec = json.loads(handle.read().decode("utf-8"))
-            except (OSError, ValueError):
-                continue                       # mid-write — next tick
+            except ValueError:
+                # publication is atomic — a readable file that fails to
+                # parse is permanently corrupt; quarantine instead of
+                # re-reading it every tick (the runner re-publishes a
+                # queued render whose spec vanished)
+                self._log("spec_corrupt",
+                          delivery_id=os.path.basename(path)[:-5])
+                try:
+                    os.replace(path, path + ".invalid")
+                except OSError:
+                    pass
+                continue
+            except OSError:
+                continue                       # transient — next tick
             try:
                 cards.validate(spec)
             except ValueError as e:

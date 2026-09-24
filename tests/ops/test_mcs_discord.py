@@ -1019,3 +1019,487 @@ def test_supervisor_registers_and_stops(world):
         assert not bot.listeners
 
     asyncio.run(run())
+
+
+# ---------- D3: authorization depth (RC01) ---------------------------------
+
+def test_action_denies_wrong_channel_and_project(world):
+    """allowed_user_ids alone is not the gate — a click from an
+    unlisted channel or for an unlisted project dies before any file
+    is written, even though the adapter's own auth may allow-all."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "ack")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+
+    ix = FakeInteraction(f"mcs:a:{tok}", channel_id=99,
+                         message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    assert "権限" in ix.response.message["content"]
+    # a token whose pinned project is outside project_ids
+    reg.put_tokens({"aa" * 16: {"action": "ack", "card_key": "x",
+                                "kind": "signal", "project_id": 2,
+                                "context": {"project_id": 2},
+                                "channel_id": "42"}})
+    ix = FakeInteraction("mcs:a:" + "aa" * 16, message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    assert "権限" in ix.response.message["content"]
+    assert not list((world.data / "cmd_int").glob("*.json"))
+
+
+def test_ack_idempotent_per_actor(world):
+    """RC13 — the same actor re-clicking is one acknowledgement
+    (deterministic command_id replays the stored receipt); a second
+    allowed actor's ack on the same card stands alongside it."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "ack")
+    act = actions_mod.Actions(
+        bot=bot, settings={**SETTINGS,
+                           "allowed_user_ids": {"1001", "2002"}},
+        root=str(world.data), reg=reg,
+        worker_id=registry.new_worker_id(),
+        log=lambda e, **f: world.logs.append((e, f)))
+    msg = bot.channels[42].sent[0]
+
+    for uid in (1001, 1001, 2002):
+        ix = FakeInteraction(f"mcs:a:{tok}", user_id=uid,
+                             message_id=msg.id)
+        asyncio.run(world.interact(act, ix))
+    rows = world.led.db.execute(
+        "SELECT actor FROM notification_acknowledgements "
+        "ORDER BY actor").fetchall()
+    assert [r["actor"] for r in rows] == ["discord:1001",
+                                          "discord:2002"]
+
+
+# ---------- D3: confirm hardening (RC14) -------------------------------------
+
+def _drive_to_confirm(world, act, tok, msg):
+    """request click -> modal -> submit -> returns the confirm id."""
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    submit = FakeInteraction(
+        f"mcs:m:{modal_id}", message_id=msg.id,
+        components=[{"components": [
+            {"custom_id": "title", "value": "服薬確認"},
+            {"custom_id": "reason", "value": "フォロー要"},
+            {"custom_id": "assignee", "value": ""},
+            {"custom_id": "due_date", "value": ""}]}])
+    asyncio.run(world.interact(act, submit))
+    preview = submit.followup.sent[-1]
+    return next(b.custom_id for b in preview["view"].items
+                if b.custom_id.startswith("mcs:c:")
+                and not b.custom_id.endswith(":cancel"))
+
+
+def test_confirm_wrong_actor_and_replay(world):
+    """Only the preview's own actor may confirm; once consumed the
+    confirm id is dead — a replayed click reports expiry."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    bad = FakeInteraction(cid, user_id=2002, message_id=msg.id)
+    asyncio.run(act.on_interaction(bad))
+    assert "本人" in bad.response.message["content"]
+    assert reg.confirm(cid[len("mcs:c:"):]) is not None
+
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(world.interact(act, ok))
+    assert world.led.db.execute(
+        "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 1
+    again = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(again))
+    assert "期限切れ" in again.response.message["content"]
+
+
+def test_confirm_cancel_drops_pending(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(cancel))
+    assert "取り消し" in cancel.response.message["content"]
+    assert reg.confirm(cid[len("mcs:c:"):]) is None
+    assert not world.led.db.execute(
+        "SELECT COUNT(*) c FROM requests").fetchone()["c"]
+    # the cancelled confirm cannot be resurrected
+    late = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(late))
+    assert "期限切れ" in late.response.message["content"]
+
+
+def test_send_modal_failure_releases_modal(world):
+    """send_modal past the ~3s window raises — the modal entry must be
+    dropped (a dead modal_id is not claimable state) and the click gets
+    a best-effort followup instead of silence."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+
+    async def boom(modal):
+        raise FakeHTTP(400)
+    ix.response.send_modal = boom
+    asyncio.run(act.on_interaction(ix))
+    assert not reg._data["pending_modals"]
+    assert ix.followup.sent \
+        and "期限切れ" in ix.followup.sent[-1]["content"]
+
+
+# ---------- D3: dismiss staleness (RC05) -------------------------------------
+
+def test_dismiss_rejected_when_signal_moved(world):
+    """The confirm pins the artifact the card displayed — when the
+    signal gains a newer transition between preview and confirm the
+    runner refuses and the signal stays open."""
+    world.seed(mids=(100,))
+    world.signal("sig-1", mids=[100])
+    world.dispatch(kind="signal", pid=1,
+                   payload={"signal_keys": ["sig-1"], "project_id": 1,
+                            "type": "med_followup"})
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "dismiss")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    submit = FakeInteraction(
+        f"mcs:m:{modal_id}", message_id=msg.id,
+        components=[{"components": [
+            {"custom_id": "reason", "value": "対応済み"}]}])
+    asyncio.run(world.interact(act, submit))
+    preview = submit.followup.sent[-1]
+    cid = next(b.custom_id for b in preview["view"].items
+               if b.custom_id.startswith("mcs:c:")
+               and not b.custom_id.endswith(":cancel"))
+
+    # evidence moved after the preview — the pin no longer names HEAD
+    world.signal("sig-1", mids=[100, 101])
+
+    confirm = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(world.interact(act, confirm))
+    assert "やり直してください" in confirm.followup.sent[-1]["content"]
+    rows = world.led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='signal_v1' "
+        "ORDER BY artifact_id").fetchall()
+    assert len(rows) == 2            # open + re-opened — no dismissal
+    assert json.loads(rows[-1]["content"])["state"] == "open"
+
+
+# ---------- D3: internal-op isolation (RC06) ---------------------------------
+
+def test_cmd_int_rejects_foreign_and_internal_ops(world):
+    """cmd_int carries only transport/notification envelopes and the
+    two card human commands — ops.* and unknown verbs are refused."""
+    world.seed()
+    world.dispatch()                  # materializes the notify dirs
+    int_dir = str(world.data / "cmd_int")
+    res_dir = str(world.data / "cmd_results")
+    for env in ({"version": 1, "op": "ops.scan",
+                 "command_id":
+                 "00000000-0000-4000-8000-0000000000aa"},
+                {"version": 1, "cmd": "ops.card_resolve",
+                 "command_id":
+                 "00000000-0000-4000-8000-0000000000bb"},
+                {"version": 1, "cmd": "request.update",
+                 "command_id":
+                 "00000000-0000-4000-8000-0000000000cc"}):
+        envelopes.publish_command(int_dir, env)
+    world.drain()
+    for suffix in ("aa", "bb", "cc"):
+        cid = "00000000-0000-4000-8000-0000000000" + suffix
+        res = paths.read_result(res_dir, cid)
+        assert res["outcome"] == "rejected"
+        assert res["error"] == "unknown_op"
+        # refused commands are quarantined, not re-drained
+        assert (world.data / "cmd_int"
+                / (cid + ".json.invalid")).exists()
+
+
+def test_mcs_command_rejects_internal_ops(world):
+    """The /mcs surface keeps the same wall — a confirm envelope that
+    smuggles a foreign cmd (request.* into control, ops.* into request)
+    is refused before anything is queued."""
+    import hermes_plugin
+
+    class FakeCtx:
+        def get_config(self, key, default=None):
+            cfg = {"snapshot": str(world.data / "snap"
+                                   / "ledger-snapshot.db"),
+                   "inbox": str(world.data / "cmd"),
+                   "allowed_user_ids": ["1001"],
+                   "allowed_chat_ids": ["42"], "project_ids": [1]}
+            return cfg.get(key, default)
+
+    handler = hermes_plugin._make_handler(FakeCtx())
+    ctx = {"platform": "discord", "authorized": True, "internal": False,
+           "is_bot": False, "via_upstream_relay": False,
+           "native_input": True, "user_id": "1001", "chat_id": "42",
+           "scope_id": None, "profile": None, "message_id": None}
+    origin = {"user_id": "1001", "chat_id": "42", "scope_id": None,
+              "profile": None}
+    import mcs_requests
+
+    def _confirm(op, cmd):
+        payload = {"cmd": cmd, "version": 1, "command_id":
+                   "00000000-0000-4000-8000-0000000000dd",
+                   "actor": "discord:1001", "human_confirmed": True,
+                   "project_id": 1}
+        return json.loads(handler(json.dumps({
+            "op": op, "phase": "confirm", "payload": payload,
+            "payload_hash": mcs_requests.payload_hash(
+                {"payload": payload, "origin": origin}),
+            "origin": origin}), ctx))
+
+    res = _confirm("control", "request.create")
+    assert res["ok"] is False and res["error"] == "invalid_command"
+    res = _confirm("request", "ops.scan")
+    assert res["ok"] is False and res["error"] == "invalid_command"
+
+
+# ---------- D3: notification_receipt via /mcs (RC27) -------------------------
+
+def test_mcs_notification_receipt_scoped(world):
+    """The card-UX receipt query is reachable through /mcs after the
+    interaction token dies — narrowed to the caller's actor, scope and
+    projects; operator receipts and foreign actors stay hidden."""
+    import hermes_plugin
+    import ledger as _ledger2
+
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "ack")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    cid = f"{tok}:{envelopes.actor_hash('discord:1001')}"
+    # an operator-only receipt and a digest-shaped (NULL project) row
+    world.led.db.execute(
+        "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+        ("00000000-0000-4000-8000-0000000000e1", "f" * 64, None, None,
+         "applied",
+         json.dumps({"kind": "ops.card_resolve", "actor": "op-user",
+                     "outcome": "applied"}), NOW))
+    world.led.db.execute(
+        "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+        ("00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:digest",
+         "e" * 64, None, None, "applied",
+         json.dumps({"kind": "notification", "actor": "discord:1001",
+                     "outcome": "applied", "origin": {
+                         "profile": "mcs", "application_id": "1",
+                         "guild_id": "7", "channel_id": "42",
+                         "message_id": str(msg.id)},
+                     "projects": []}), NOW))
+    world.led.db.commit()
+
+    snap = world.data / "snap"
+    snap.mkdir()
+    assert _ledger2.publish_snapshot(
+        str(world.data / "ledger.db"), str(snap))
+
+    class FakeCtx:
+        def get_config(self, key, default=None):
+            cfg = {"snapshot": str(snap / "ledger-snapshot.db"),
+                   "inbox": str(world.data / "cmd"),
+                   "allowed_user_ids": ["1001", "2002"],
+                   "allowed_chat_ids": ["42", "99"],
+                   "project_ids": [1],
+                   "application_id": "1", "guild_id": "7"}
+            return cfg.get(key, default)
+
+    handler = hermes_plugin._make_handler(FakeCtx())
+
+    def ask(user="1001", chat="42", profile="mcs", **kw):
+        ctx = {"platform": "discord", "authorized": True,
+               "internal": False, "is_bot": False,
+               "via_upstream_relay": False, "native_input": True,
+               "user_id": user, "chat_id": chat,
+               "scope_id": None, "profile": profile,
+               "message_id": None}
+        data = {"op": "read", "kind": "notification_receipt",
+                "command_id": cid, **kw}
+        return json.loads(handler(json.dumps(data), ctx))
+
+    res = ask()
+    assert res["ok"] is True
+    assert res["result"]["outcome"] == "applied"
+    # digest-style receipt — NULL project is not an error
+    res = ask(command_id="00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:digest")
+    assert res["ok"] and res["result"]["outcome"] == "applied"
+    # snapshot lag reports as not_processed, never failure
+    res = ask(command_id="deadbeef")
+    assert res["result"]["outcome"] == "not_processed_or_not_in_snapshot"
+    # hash tamper -> conflict
+    res = ask(payload_hash="0" * 64)
+    assert res["result"]["error"] == "command_id_conflict"
+    # another actor -> refused
+    res = ask(user="2002")
+    assert res["result"]["error"] == "actor_mismatch"
+    # another allowed channel -> scope refused
+    res = ask(chat="99")
+    assert res["result"]["error"] == "scope_mismatch"
+    # another profile -> refused
+    res = ask(profile="other")
+    assert res["result"]["error"] == "scope_mismatch"
+    # operator-only receipts stay operator-only
+    res = ask(command_id="00000000-0000-4000-8000-0000000000e1")
+    assert res["result"]["error"] == "operator_only"
+    # unlisted user -> refused at the gate
+    res = ask(user="9999")
+    assert res["ok"] is False and res["error"] == "user_not_allowed"
+
+
+# ---------- D3: revoke/corrupt-spec fixes ------------------------------------
+
+def test_revoke_delete_404_is_delivered(world):
+    """fetch succeeds but delete finds the message already gone —
+    the revoke goal holds, so the attempt settles delivered, not
+    a misleading not_sent that leaves the message bound."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        sent = await _deliver(world, worker)
+        msg = sent[0]
+        msg.deleted = True            # gone by the time delete lands
+        world.led.db.execute(
+            "UPDATE patients SET is_archived=1 WHERE project_id=1")
+        world.led.db.commit()
+        notify_cards.sweep(world.led, CFG)
+        await _deliver(world, worker)
+
+    asyncio.run(run())
+    assert world.card()["delivery_state"] == "revoked"
+    attempt = world.led.db.execute(
+        "SELECT state FROM notification_delivery_attempts "
+        "ORDER BY attempt_id DESC LIMIT 1").fetchone()
+    assert attempt["state"] == "delivered"
+
+
+def test_corrupt_spec_quarantined(world):
+    """A readable spec file that fails to parse is permanent
+    corruption (publication is atomic) — quarantine it like a corrupt
+    cmd_int instead of re-reading it every tick."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    bad = world.data / "discord_render" / \
+        "00000000-0000-4000-8000-00000000dead.json"
+    bad.write_text("{not json")
+
+    async def run():
+        await worker.tick()
+
+    asyncio.run(run())
+    assert not bad.exists()
+    assert (world.data / "discord_render"
+            / (bad.name + ".invalid")).exists()
+    assert any(e == "spec_corrupt" for e, _ in world.logs)
+
+
+# ---------- D3: supervisor scope isolation (RC17) ------------------------------
+
+def test_supervisor_profile_scopes_do_not_mix(world):
+    """A->B->A: two profiles on the same data root hold separate scope
+    locks; unload removes only its own listener; a duplicate worker on
+    an owned scope reports visible-stopped instead of racing sends."""
+    world.seed()
+    world.dispatch()
+    spawned = []
+
+    class FakeCtx:
+        def spawn_task(self, coro, *, name=None):
+            t = asyncio.ensure_future(coro)
+            spawned.append(t)
+            return t
+
+        def on_unload(self, cb):
+            self._unload = cb
+
+    def _sup(bot, profile):
+        return tasks.Supervisor(
+            ctx=FakeCtx(), bot=bot, adapter=None,
+            settings={**SETTINGS, "data_root": str(world.data),
+                      "profile": profile},
+            log=lambda e, **f: world.logs.append((e, f)))
+
+    async def run():
+        bot_a, bot_b = FakeBot(), FakeBot()
+        sup_a = _sup(bot_a, "mcs")
+        sup_b = _sup(bot_b, "other")
+        assert sup_a.start() and sup_b.start()
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if len(list((world.data / "discord_state")
+                        .glob("send-*.lock"))) == 2:
+                break
+        locks = list((world.data / "discord_state")
+                     .glob("send-*.lock"))
+        assert len(locks) == 2        # different profiles, both live
+
+        # a second worker on A's owned scope gets a visible stop
+        bot_dup = FakeBot()
+        sup_dup = _sup(bot_dup, "mcs")
+        assert sup_dup.start()
+        dup_task = spawned[-1]
+        await asyncio.wait_for(dup_task, 5)
+        assert any(e == "scope_lock_unavailable"
+                   for e, _ in world.logs)
+
+        # unload A -> its listener goes; B is untouched
+        sup_a.unload()
+        assert not bot_a.listeners and len(bot_b.listeners) == 1
+        # A returns -> exactly one listener on the fresh binding
+        sup_a2 = _sup(bot_a, "mcs")
+        assert sup_a2.start()
+        assert len(bot_a.listeners) == 1
+
+        sup_b.unload()
+        sup_a2.unload()
+        for t in spawned:
+            t.cancel()
+        for t in spawned:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(run())

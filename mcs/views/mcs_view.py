@@ -654,7 +654,8 @@ class View:
         if actor is not None and actor != context.get("actor"):
             return {"outcome": "rejected", "error": "actor_mismatch"}
         scope = receipt.get("origin") or receipt.get("scope") or {}
-        for key in ("application_id", "channel_id"):
+        for key in ("application_id", "channel_id", "guild_id",
+                    "profile"):
             if scope.get(key) and context.get(key) \
                     and scope[key] != context[key]:
                 return {"outcome": "rejected", "error": "scope_mismatch"}

@@ -38,6 +38,9 @@ _READ_FIELDS = frozenset({
     "op", "kind", "project_id", "limit", "cursor", "query", "message_id",
     "request_id", "status", "command_id", "payload_hash", "since", "until",
 })
+_RECEIPT_FIELDS = frozenset({
+    "op", "kind", "command_id", "payload_hash",
+})
 _CREATE_FIELDS = frozenset({
     "op", "phase", "action", "project_id", "source_message_id", "title",
     "assignee", "due_date", "reason", "loop_artifact_id",
@@ -151,11 +154,18 @@ def _settings(ctx) -> dict[str, Any] | None:
     projects = _config_ids(raw["project_ids"], projects=True)
     if users is None or chats is None or projects is None:
         return None
-    return {
+    settings = {
         "snapshot": raw["snapshot"], "inbox": raw["inbox"],
         "allowed_user_ids": users, "allowed_chat_ids": chats,
         "project_ids": projects,
     }
+    # receipt scoping can only compare fields we actually know — the
+    # interactive card config is optional for the /mcs surface
+    for key in ("application_id", "guild_id"):
+        value = ctx.get_config(key, None)
+        if isinstance(value, str) and value.strip():
+            settings[key] = value.strip()
+    return settings
 
 
 def _project(value: Any) -> int | None:
@@ -702,6 +712,43 @@ def _confirm(data: dict, settings: dict[str, Any],
                 payload_hash=supplied_hash)
 
 
+def _notification_receipt(data: dict, settings: dict[str, Any],
+                          identity: dict[str, str | None]) -> str:
+    """Projectless receipt lookup — the card UX answer to 'what happened
+    to my click' after the interaction token expired. User/chat gate is
+    the same as any read; the receipt itself narrows by actor, delivery
+    scope, and the caller's allowed projects."""
+    if set(data) - _RECEIPT_FIELDS:
+        return _deny("unknown_field")
+    if identity["user_id"] not in settings["allowed_user_ids"]:
+        return _deny("user_not_allowed")
+    if identity["chat_id"] not in settings["allowed_chat_ids"]:
+        return _deny("chat_not_allowed")
+    command_id = _id_text(data.get("command_id"))
+    if command_id is None:
+        return _deny("bad_receipt_identity")
+    payload_hash = data.get("payload_hash")
+    if payload_hash is not None and _id_text(payload_hash) is None:
+        return _deny("bad_receipt_identity")
+    _, mcs_view = _adapter_modules()
+    context = {"actor": _actor(identity),
+               "channel_id": identity["chat_id"],
+               "application_id": settings.get("application_id"),
+               "guild_id": settings.get("guild_id"),
+               "profile": identity["profile"],
+               "projects": settings["project_ids"],
+               "operator": False}
+    view = None
+    try:
+        view = mcs_view.View(settings["snapshot"])
+        result = view.notification_receipt(
+            command_id, payload_hash, context)
+    finally:
+        if view is not None:
+            view.close()
+    return _ok(operation="receipt", result=result)
+
+
 def _dispatch(data: dict, settings: dict[str, Any],
               identity: dict[str, str | None]) -> str:
     op = data.get("op")
@@ -712,6 +759,8 @@ def _dispatch(data: dict, settings: dict[str, Any],
         return (_deny(error) if error
                 else _view_read(settings, data, project_id, "status"))
     if op == "read":
+        if data.get("kind") == "notification_receipt":
+            return _notification_receipt(data, settings, identity)
         if set(data) - _READ_FIELDS or data.get("kind") not in _READ_KINDS:
             return _deny("bad_read")
         project_id, error = _authorize(settings, identity, data.get("project_id"))
