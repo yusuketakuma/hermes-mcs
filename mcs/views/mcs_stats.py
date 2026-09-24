@@ -28,15 +28,12 @@ from mcs_queries import (CHANGE_ACTIONS, DAY_S, JST, MED_ACTIONS,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
 DEFINITION_VERSION = "2026-09-21"
-STATS_SCHEMA = "stats_v1"
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
 DETAIL_LIMIT = 100
 CATEGORY_LIMIT = 100
 BUCKET_LIMIT = 120
-
-STATUSES = ("ok", "partial", "unavailable", "unsupported", "not_implemented")
 
 
 def _ratio(num: int, den: int, unit: str) -> dict:

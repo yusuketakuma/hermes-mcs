@@ -300,7 +300,7 @@ def world(tmp_path, monkeypatch):
         reg = registry.Registry(str(data / "discord_state"))
         bot = bot or FakeBot()
         worker = delivery.DeliveryWorker(
-            bot=bot, adapter=None, settings=SETTINGS, root=str(data),
+            bot=bot, settings=SETTINGS, root=str(data),
             reg=reg, worker_id=worker_id or registry.new_worker_id(),
             log=lambda e, **f: logs.append((e, f)))
         return worker, reg, bot
@@ -1046,7 +1046,7 @@ def test_supervisor_registers_and_stops(world):
     async def run():
         bot = FakeBot()
         sup = tasks.Supervisor(
-            ctx=FakeCtx(), bot=bot, adapter=None,
+            ctx=FakeCtx(), bot=bot,
             settings={**SETTINGS, "data_root": str(world.data)},
             log=lambda e, **f: world.logs.append((e, f)))
         assert sup.start() is True
@@ -1499,7 +1499,7 @@ def test_supervisor_profile_scopes_do_not_mix(world):
 
     def _sup(bot, profile):
         return tasks.Supervisor(
-            ctx=FakeCtx(), bot=bot, adapter=None,
+            ctx=FakeCtx(), bot=bot,
             settings={**SETTINGS, "data_root": str(world.data),
                       "profile": profile},
             log=lambda e, **f: world.logs.append((e, f)))

@@ -180,7 +180,6 @@ def build_manifest(source: str, source_fp: str,
     if core:
         chunks.append(core)
     chunk_rows = []
-    position = 0
     for index, core_ids in enumerate(chunks):
         first = by_id[core_ids[0]]
         last = by_id[core_ids[-1]]
@@ -204,7 +203,6 @@ def build_manifest(source: str, source_fp: str,
             "text": source[first["start"]:last["end"]],
             "hash": _sha256(source[first["start"]:last["end"]]),
         })
-        position += 1
     manifest = {
         "version": MANIFEST_VERSION,
         "source_fingerprint": source_fp,

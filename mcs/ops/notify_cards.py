@@ -56,14 +56,6 @@ RENDER_SCHEMA = "mcs-card-render/v1"
 # on; everything else (ops alerts, semantic notices) stays legacy text.
 INTERACTIVE_KINDS = frozenset({"new_messages", "signal"})
 
-CARD_KINDS = ("thread", "signal", "digest")
-CARD_STATES = ("pending", "delivered", "update_failed",
-               "delivery_unknown", "message_deleted", "revoked")
-RENDER_STATES = ("queued", "sending", "delivered", "not_sent",
-                 "unknown", "held", "cancelled")
-ATTEMPT_STATES = ("granted", "delivered", "not_sent", "unknown")
-# an attempt that still owns the card's send exclusivity
-UNSETTLED_ATTEMPT = ("granted", "unknown")
 # renders whose spec file must be available to a claiming worker
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
 
@@ -1852,7 +1844,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             "republished": len(specs)}
 
 
-def gc(ledger, cfg=None, now=None, token_keep_s=0, limit=500) -> dict:
+def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     """Delete expired action tokens and strip PHI-bearing spec_json from
     renders that are fully settled (cancelled/not_sent, a delivered
     successor, no unsettled attempt, no references). Rows, hashes and

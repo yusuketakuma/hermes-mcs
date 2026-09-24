@@ -237,12 +237,3 @@ def _json_obj(text: str):
         return json.loads(text)
     except (json.JSONDecodeError, ValueError):
         return None
-
-
-def chat_text(prompt: str, **kwargs) -> str | None:
-    """``semantic.llm_chat``-compatible helper: text or ``None``."""
-    response = chat(prompt, **kwargs)
-    if response is None or response.get("status") != 200:
-        return None
-    text = response.get("text")
-    return text if isinstance(text, str) else None

@@ -59,11 +59,10 @@ def _is_definitive_reject(exc: BaseException) -> bool:
 
 
 class DeliveryWorker:
-    def __init__(self, *, bot: Any, adapter: Any, settings: dict,
+    def __init__(self, *, bot: Any, settings: dict,
                  root: str, reg: registry.Registry,
                  worker_id: str, log) -> None:
         self._bot = bot
-        self._adapter = adapter
         self._settings = settings
         self._root = root
         self._dirs = paths.notify_dirs(root)
@@ -130,7 +129,7 @@ class DeliveryWorker:
         for aid, info in journal.unreported(records).items():
             row = info["record"]
             claim = self._reg.claims().get(row.get("delivery_id"))
-            env = self._receipt_env(aid, info["rows"], row, claim)
+            env = self._receipt_env(aid, info["rows"], claim)
             if env is None:
                 continue
             env["result"] = row.get("result", "unknown")
@@ -147,7 +146,7 @@ class DeliveryWorker:
         for aid, info in journal.unfinished(records).items():
             row = info["record"]
             claim = self._reg.claims().get(row.get("delivery_id"))
-            env = self._receipt_env(aid, info["rows"], row, claim)
+            env = self._receipt_env(aid, info["rows"], claim)
             if env is None:
                 continue
             if info["phase"] == "pre_http":
@@ -165,8 +164,7 @@ class DeliveryWorker:
                           result=env["result"], reconcile=True)
         return stats
 
-    def _receipt_env(self, attempt_id, rows, journal_row,
-                     claim) -> dict | None:
+    def _receipt_env(self, attempt_id, rows, claim) -> dict | None:
         """Rebuild a receipt envelope from claim state or the envelope
         the journal recorded at begin — never from memory alone."""
         import uuid

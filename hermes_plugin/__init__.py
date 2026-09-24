@@ -866,7 +866,7 @@ def _make_discord_factory(ctx):
                      json.dumps(fields, ensure_ascii=False,
                                 sort_keys=True, default=str))
         from .mcs_discord.tasks import Supervisor
-        supervisor = Supervisor(ctx=ctx, bot=native, adapter=adapter,
+        supervisor = Supervisor(ctx=ctx, bot=native,
                                 settings=settings, log=_event)
         supervisor.start()
         return supervisor

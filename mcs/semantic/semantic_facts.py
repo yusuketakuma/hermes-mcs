@@ -23,10 +23,6 @@ from mcs_requests import payload_hash
 
 CONTRACT_VERSION = "semantic-facts/v2"
 
-CANDIDATE_STATUSES = ("VALIDATED", "PENDING", "NEEDS_REVIEW", "STALE")
-FACTS_STATUSES = ("VERIFIED", "PENDING", "NEEDS_REVIEW", "STALE")
-PUBLICATION_STATUSES = ("PASS", "PENDING", "NEEDS_REVIEW", "STALE")
-
 ATOM_KINDS = ("clause", "list_item", "table_row", "heading", "attachment_ref")
 IMPORTANCE_TIERS = ("T0", "T1", "T2", "T3", "unknown")
 IMPORTANCE_RANK = {tier: index for index, tier in enumerate(IMPORTANCE_TIERS)}
@@ -89,7 +85,6 @@ RELATION_TYPES = (
 CONTENT_QUALITIES = ("full", "partial")
 
 UNKNOWN = "unknown"
-NOT_STATED = "not_stated"
 
 _ID_RE = re.compile(r"^[a-z]+_[0-9a-f]{16}$")
 

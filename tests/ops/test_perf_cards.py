@@ -219,7 +219,7 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
     led.db.commit()
     reg = registry.Registry(str(data / "discord_state"))
     worker = delivery.DeliveryWorker(
-        bot=FakeBot(), adapter=None, settings=SETTINGS,
+        bot=FakeBot(), settings=SETTINGS,
         root=str(data), reg=reg,
         worker_id=registry.new_worker_id(),
         log=lambda e, **f: None)
@@ -249,7 +249,7 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
     notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
     reg = registry.Registry(str(data / "discord_state"))
     worker = delivery.DeliveryWorker(
-        bot=FakeBot(), adapter=None, settings=SETTINGS,
+        bot=FakeBot(), settings=SETTINGS,
         root=str(data), reg=reg,
         worker_id=registry.new_worker_id(),
         log=lambda e, **f: None)
