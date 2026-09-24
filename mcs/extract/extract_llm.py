@@ -1543,9 +1543,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 continue
             seen.add(i)
             index, r = tups[i][0], tups[i][1]
+            drops: dict = {}
             v = _validate({k: val for k, val in item.items() if k != "i"},
-                          r["body_text"])
-            if v is not None:
+                          r["body_text"], drops)
+            # an item that validates only with drops joins the residue:
+            # the single lane's repair pass gets one feedback re-ask at
+            # recovering the lost evidence/items — batch items must not
+            # settle for the degraded output a single would have repaired
+            if v is not None and not drops:
                 out[index] = v
         return "ok", out, meta
 
