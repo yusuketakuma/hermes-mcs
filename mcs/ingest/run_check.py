@@ -494,6 +494,7 @@ def _commands_only(lock_fd, deadline) -> int:
         notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=time.monotonic() + 30)
         notify_cards.publish_flags(cfg, root)
+        notify_cards.gc(ledger, cfg)
         if notify_cards.snapshot_dirty(ledger):
             result["snapshot"] = maintenance.publish_snapshot(DB)
             if result["snapshot"]:
@@ -690,6 +691,11 @@ def main() -> int:
                 ledger, cfg, limit=50)
         except Exception as e:
             result["errors"].append(f"card_sweep: {type(e).__name__}")
+        try:
+            # expired tokens + settled spec payloads — bounded per tick
+            result["card_gc"] = notify_cards.gc(ledger, cfg)
+        except Exception as e:
+            result["errors"].append(f"card_gc: {type(e).__name__}")
 
         # -- semantic layer (Phase J, feature-gated) --------------------
         # drains durable 'semantic' jobs on the same lock + remaining
