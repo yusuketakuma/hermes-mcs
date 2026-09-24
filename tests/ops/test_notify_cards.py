@@ -55,7 +55,7 @@ def _msg(led, mid, pid=1, parent=None, body="本文", ts=None):
         "posted_at,posted_at_ts,body_text,content_hash,body_state,"
         "parent_id) VALUES(?,?,?,?,?,?,?,?,?)",
         (mid, pid, "職員", f"2026-09-24T08:{mid % 60:02d}", ts, body,
-         f"h{mid}", "full", parent))
+         f"{mid:064x}", "full", parent))
     led.db.commit()
 
 
@@ -109,14 +109,16 @@ def _receipt(led, render, attempt_id, result="delivered",
         "result": result, "message_id": message_id}, CFG, now=NOW)
 
 
-def _signal_row(led, key, pid=1, state="open", stype="med_followup"):
+def _signal_row(led, key, pid=1, state="open", stype="med_followup",
+                mids=None):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,"
         "model,meta,created_at) VALUES('signal_v1',?,?,?,'test',?,?)",
         (pid, None, json.dumps({"type": stype, "state": state,
                                 "project_id": pid, "severity": "info",
                                 "note": f"note {key}",
-                                "evidence": {"message_ids": []}}),
+                                "evidence":
+                                    {"message_ids": mids or []}}),
          json.dumps({"key": key, "type": stype}), NOW))
 
 
@@ -1065,9 +1067,11 @@ def test_refresh_on_revoked_card_rejected(led, tmp_path):
 
 def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
     """request/dismiss tokens authorize opening the modal — applied,
-    modal flag — while the actual human command arrives separately."""
+    modal flag, stored params echoed — while the actual human command
+    arrives separately."""
     _patient(led, 1)
-    _signal_row(led, "sig-modal")
+    _msg(led, 100, 1)
+    _signal_row(led, "sig-modal", mids=[100])
     ev = _intent(led, kind="signal", pid=1,
                  payload={"signal_keys": ["sig-modal"], "project_id": 1,
                           "type": "med_followup"})
@@ -1076,6 +1080,13 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
     spec = json.loads(
         (tmp_path / "data" / "discord_render"
          / (render["delivery_id"] + ".json")).read_text())
+    # the render pins modal context — the plugin confirms against what
+    # was shown, never a snapshot that may lag the render
+    ctx = spec["parts"]["context"]
+    assert ctx["project_id"] == 1
+    assert ctx["source_message_id"] == 100
+    assert ctx["source_hash"] == f"{100:064x}"
+    assert ctx["signals"]["sig-modal"]["artifact_id"] > 0
     for i, action in enumerate(("request", "dismiss")):
         tok = _token_for(spec, action)
         r = notify_cards.apply_notification(
@@ -1084,9 +1095,29 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
             CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
         assert r["action"] == action and r["modal"] is True
+        assert isinstance(r["params"], dict)
     # nothing was mutated — no request row, signal still open
     assert led.db.execute(
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 0
+
+
+def test_signal_without_source_suppresses_request(led, tmp_path):
+    """A signal whose evidence cannot pin a source message gets no
+    request button — a permanently-failing button is worse than none."""
+    _patient(led, 1)
+    _signal_row(led, "sig-nosrc")          # evidence.message_ids empty
+    ev = _intent(led, kind="signal", pid=1,
+                 payload={"signal_keys": ["sig-nosrc"], "project_id": 1,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    render = _latest_render(led)
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    actions = {b["id"] for row in spec["parts"]["action_rows"]
+               for b in row}
+    assert "request" not in actions
+    assert "dismiss" in actions           # signal artifact pinnable
 
 
 def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):

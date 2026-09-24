@@ -769,10 +769,62 @@ def _make_handler(ctx):
     return handler
 
 
+def _interactive_settings(ctx) -> dict[str, Any] | None:
+    """Card-worker config — absent/incomplete means the plugin still
+    serves /mcs but never binds the Discord interaction surface."""
+    if ctx.get_config("interactive", False) is not True:
+        return None
+    data_root = ctx.get_config("data_root", None)
+    application_id = ctx.get_config("application_id", None)
+    channel_id = ctx.get_config("channel_id", None)
+    if not all(isinstance(v, str) and v.strip()
+               for v in (data_root, application_id, channel_id)):
+        return None
+    settings = _settings(ctx)
+    if settings is None:
+        return None
+    return {**settings, "data_root": data_root.strip(),
+            "profile": ctx.get_config("profile", None)
+            or getattr(ctx, "profile_name", None) or "default",
+            "application_id": application_id.strip(),
+            "channel_id": channel_id.strip(),
+            "guild_id": (ctx.get_config("guild_id", None) or "").strip()
+            or None}
+
+
+def _make_discord_factory(ctx):
+    def factory(native, adapter):
+        """Bound at connect() per Bot instance — registers the
+        interaction listener and the supervised delivery worker. SDK
+        imports stay inside so /mcs works without discord.py."""
+        settings = _interactive_settings(ctx)
+        if settings is None:
+            return None
+        import logging
+        log = logging.getLogger("hermes.plugin.mcs_discord")
+
+        def _event(event: str, **fields: Any) -> None:
+            log.info("mcs_discord %s %s", event,
+                     json.dumps(fields, ensure_ascii=False,
+                                sort_keys=True, default=str))
+        from .mcs_discord.tasks import Supervisor
+        supervisor = Supervisor(ctx=ctx, bot=native, adapter=adapter,
+                                settings=settings, log=_event)
+        supervisor.start()
+        return supervisor
+    return factory
+
+
 def register(ctx) -> None:
-    """Register only the structured ``/mcs`` command; no model tools/hooks."""
+    """Register the structured ``/mcs`` command and the Discord card
+    worker; no model tools/hooks."""
     ctx.register_command(
         "mcs", handler=_make_handler(ctx),
         description="Read the configured MCS snapshot or preview/confirm a request.",
         args_hint="<json>", argument_mode="text",
     )
+    # platform handlers are a gateway-era API — hosts without it still
+    # get the /mcs command surface, just no card worker
+    register_platform = getattr(ctx, "register_platform_handler", None)
+    if callable(register_platform):
+        register_platform("discord", _make_discord_factory(ctx))
