@@ -4171,6 +4171,42 @@ def test_self_probe_unfetchable_id_not_retried(tmp_path):
     db.close()
 
 
+def test_self_probe_incomplete_walk_retries_latest_id(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(97))
+    db.save_messages([_msg_at(100, 97, _iso(0), unread=False)])
+
+    class Adapter:
+        def __init__(self):
+            self.history_calls = 0
+
+        def fetch_latest(self, pid):
+            return {"message_id": 555, "is_self_only": False}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            self.history_calls += 1
+            if self.history_calls == 1:
+                return mcs_adapter.MessageBatch([], pages=2, reached=False)
+            return mcs_adapter.MessageBatch(
+                [_msg_at(555, 97, _iso(1), unread=False)],
+                pages=1, reached=True)
+
+    adapter = Adapter()
+    first = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(adapter, db, first,
+                               time.monotonic() + 300, run_id=1)
+    assert db.probe_marker(97) is None
+    assert "probe 97: history_incomplete" in first["errors"]
+
+    second = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(adapter, db, second,
+                               time.monotonic() + 300, run_id=2)
+    assert adapter.history_calls == 2
+    assert db.has_message(555)
+    assert second["new_messages"] == 1
+    db.close()
+
+
 def test_save_messages_notify_all_new_includes_read_posts(tmp_path):
     """Default backfill save announces only this fetch's unread posts;
     notify_all_new adds every newly-stored row (own/missed posts)."""

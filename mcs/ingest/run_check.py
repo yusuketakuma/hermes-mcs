@@ -434,8 +434,12 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
         if new_ids:
             result["new_messages"] += len(new_ids)
         result.setdefault("self_probe_fetched", []).append(pid)
-        if not batch.error:
+        # A page-limited walk has not established that the latest id is
+        # unfetchable. Only a completed walk may suppress later probes.
+        if not batch.error and batch.reached:
             ledger.set_probe_marker(pid, mid)
+        elif not batch.error and not ledger.has_message(mid):
+            result["errors"].append(f"probe {pid}: history_incomplete")
         if merged.error:
             raise merged.error
         if batch.error:
