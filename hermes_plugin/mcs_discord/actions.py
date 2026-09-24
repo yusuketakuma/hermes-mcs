@@ -167,14 +167,30 @@ class Actions:
     # -- component actions ------------------------------------------------
 
     async def _on_action(self, interaction, token: str) -> None:
-        ctx = self._reg.token(token)
-        if ctx is None:
-            await self._ephemeral(interaction,
-                                  "この操作は無効化されています。")
-            return
         actor = _actor(interaction)
         profile = self._settings.get("profile")
         origin = _origin(interaction, profile)
+        ctx = self._reg.token(token)
+        if ctx is None:
+            # token context lost/expired — an authorized click on a real
+            # card message may still be worth a self-heal: refresh is
+            # bound to the native origin, and the runner re-issues the
+            # render (with fresh tokens) only when the origin resolves
+            # to a live card. An unauthorized click earns no refresh.
+            if self._authorized(interaction) is not None:
+                await self._ephemeral(interaction, "権限がありません。")
+                return
+            try:
+                await asyncio.to_thread(
+                    envelopes.publish_command, self._dirs["cmd_int"],
+                    envelopes.refresh(actor, origin))
+            except OSError:
+                pass
+            await self._ephemeral(
+                interaction,
+                "この操作は無効化されています。カードを更新しますので、"
+                "しばらくしてから最新の表示でやり直してください。")
+            return
         action = ctx.get("action")
 
         projects = ([ctx.get("project_id")] if ctx.get("project_id")

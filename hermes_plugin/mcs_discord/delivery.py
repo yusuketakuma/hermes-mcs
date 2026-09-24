@@ -28,6 +28,7 @@ POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
 RETRY_IN_FLIGHT_S = 15.0       # denied_in_flight re-begin backoff
 MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
+CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 
 # HTTP statuses that prove the send was rejected outright — never
 # committed server-side. Timeouts/cancellations are unknown instead.
@@ -541,6 +542,7 @@ class DeliveryWorker:
     async def tick(self) -> None:
         if self._stopping:
             return
+        now = time.time()
         await asyncio.to_thread(self._reg.expire)
         scanned = await asyncio.to_thread(self._scan_specs)
         # the runner-published flag is the cheap local kill switch —
@@ -551,65 +553,91 @@ class DeliveryWorker:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         claimable = flags.get("interactive") is not False
         live_ids = set()
-        for path, spec in scanned:
-            delivery_id = spec["delivery_id"]
-            live_ids.add(delivery_id)
-            if self._reg.is_dead(delivery_id) \
-                    and self._reg.claimed(delivery_id) is None:
-                continue          # dropped claims never re-claim
-            claim = self._reg.claimed(delivery_id)
-            if claim is None and not claimable:
-                continue
-            if claim is None:
-                if await asyncio.to_thread(
-                        os.path.exists, self._claim_path(path)):
-                    continue        # another worker claimed it first
-                try:
-                    await self._claim_spec(path, spec)
-                except OSError as e:
-                    self._log("claim_failed", delivery_id=delivery_id,
-                              error=type(e).__name__)
-                    continue
+        # batch registry saves across the whole pass — one flush per
+        # tick instead of ~3 full-file rewrites per claim (RC20: the
+        # O(n^2) serialization was the delivery bottleneck at 1k cards)
+        with self._reg.batch():
+            for path, spec in scanned:
+                delivery_id = spec["delivery_id"]
+                live_ids.add(delivery_id)
+                if self._reg.is_dead(delivery_id) \
+                        and self._reg.claimed(delivery_id) is None:
+                    continue          # dropped claims never re-claim
                 claim = self._reg.claimed(delivery_id)
-            if claim is not None:
+                if claim is None and not claimable:
+                    continue
+                if claim is None:
+                    marker = self._claim_path(path)
+                    if await asyncio.to_thread(os.path.exists, marker):
+                        # the scope lock makes us the only live sender,
+                        # so a marker without a registry claim is an
+                        # orphan left by a worker that died mid-claim.
+                        # Age it past CLAIM_STALE_S before reclaiming —
+                        # a fresher one could still belong to a
+                        # just-started peer whose lock acquisition we
+                        # can't see here.
+                        try:
+                            st = await asyncio.to_thread(
+                                os.stat, marker)
+                        except OSError:
+                            st = None
+                        if st is None:
+                            continue            # vanished — next tick
+                        if now - st.st_mtime < CLAIM_STALE_S:
+                            continue            # fresh claim in flight
+                        try:
+                            await asyncio.to_thread(os.unlink, marker)
+                        except OSError:
+                            continue            # vanished — next tick
+                        self._log("claim_stale_reclaimed",
+                                  delivery_id=delivery_id)
+                    try:
+                        await self._claim_spec(path, spec)
+                    except OSError as e:
+                        self._log("claim_failed",
+                                  delivery_id=delivery_id,
+                                  error=type(e).__name__)
+                        continue
+                    claim = self._reg.claimed(delivery_id)
+                if claim is not None:
+                    try:
+                        await self._step_claim(claim)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._log("claim_step_error",
+                                  delivery_id=delivery_id,
+                                  error=type(e).__name__)
+            # settle claims whose spec vanished mid-flight — the runner
+            # may have cancelled the render; a granted attempt must not
+            # hang as an unsettled row forever
+            for delivery_id, claim in list(self._reg.claims().items()):
+                if delivery_id in live_ids:
+                    continue
+                if claim["phase"] == "begin_sent":
+                    result, code = "not_sent", "spec_withdrawn"
+                elif claim["phase"] == "granted":
+                    started = await asyncio.to_thread(
+                        self._started, claim)
+                    result = "unknown" if started else "not_sent"
+                    code = "spec_withdrawn" if not started \
+                        else "worker_crash"
+                else:
+                    await self._drop_claim(claim)
+                    continue
+                env = envelopes.transport_receipt(
+                    claim, result, error_code=code)
                 try:
-                    await self._step_claim(claim)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    self._log("claim_step_error",
-                              delivery_id=delivery_id,
-                              error=type(e).__name__)
-        # settle claims whose spec vanished mid-flight — the runner may
-        # have cancelled the render; a granted attempt must not hang as
-        # an unsettled row forever
-        for delivery_id, claim in list(self._reg.claims().items()):
-            if delivery_id in live_ids:
-                continue
-            if claim["phase"] == "begin_sent":
-                result, code = "not_sent", "spec_withdrawn"
-            elif claim["phase"] == "granted":
-                started = await asyncio.to_thread(
-                    self._started, claim)
-                result = "unknown" if started else "not_sent"
-                code = "spec_withdrawn" if not started \
-                    else "worker_crash"
-            else:
+                    await asyncio.to_thread(
+                        envelopes.publish_command,
+                        self._dirs["cmd_int"], env)
+                    self._journal("receipt",
+                                  attempt_id=claim["attempt_id"],
+                                  delivery_id=delivery_id,
+                                  result=result, error_code=code)
+                except OSError:
+                    continue                     # keep claim — retry next
                 await self._drop_claim(claim)
-                continue
-            env = envelopes.transport_receipt(
-                claim, result, error_code=code)
-            try:
-                await asyncio.to_thread(
-                    envelopes.publish_command,
-                    self._dirs["cmd_int"], env)
-                self._journal("receipt",
-                              attempt_id=claim["attempt_id"],
-                              delivery_id=delivery_id,
-                              result=result, error_code=code)
-            except OSError:
-                continue                     # keep claim — retry next
-            await self._drop_claim(claim)
 
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'

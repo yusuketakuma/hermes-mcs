@@ -47,6 +47,24 @@ def _default() -> dict:
             "followups": {}, "capabilities": {}, "dead": {}}
 
 
+class _RegistryBatch:
+    """Context manager returned by Registry.batch — defers save() calls
+    and flushes once on exit."""
+
+    def __init__(self, reg: "Registry") -> None:
+        self._reg = reg
+
+    def __enter__(self):
+        self._reg._batch_depth += 1
+        return self._reg
+
+    def __exit__(self, *exc):
+        self._reg._batch_depth -= 1
+        if self._reg._batch_depth == 0 and self._reg._dirty:
+            self._reg.save()
+        return False
+
+
 class Registry:
     def __init__(self, state_dir: str):
         self._path = os.path.join(state_dir, "registry.json")
@@ -58,8 +76,23 @@ class Registry:
         self._data = data if isinstance(data, dict) else _default()
         for key, default in _default().items():
             self._data.setdefault(key, default)
+        self._batch_depth = 0
+        self._dirty = False
+
+    def batch(self):
+        """Coalesce per-record saves into one flush — for the worker's
+        hot loop where hundreds of claims/sends per tick would each
+        rewrite the whole file. Durability does NOT depend on this
+        index: the journal (fsync per line), claim markers and the
+        runner ledger carry the evidence, so a crash mid-batch only
+        replays work the transport layer already idempotents."""
+        return _RegistryBatch(self)
 
     def save(self) -> None:
+        if self._batch_depth:
+            self._dirty = True
+            return
+        self._dirty = False
         raw = json.dumps(self._data, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
         fd, temp = None, None
