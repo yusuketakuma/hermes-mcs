@@ -350,9 +350,10 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 | 添付ファイル | ファイル名・サイズ・hash・取得状態（原本への一時URLやサーバ内パスは残さない） |
 | 取得状態 | 本文を取得済みか・一部だけか、内容hash（編集されたかの検知用）、最初に見つけた日時・最後に更新を確認した日時 |
 
-#### B. 機械が自動で整理する項目（2段階）
+#### B. 機械が自動で整理する項目（2レーン）
 
-**1段目・ルール抽出（全投稿・常時実行）** — 決まった文字パターンで拾う:
+**スピードレーン・ルール抽出（全投稿・常時実行）** — 決まった文字パターンで拾う。
+即時解析で通知・シグナルがLLM待ちにならない:
 
 | 項目 | 内容 |
 |---|---|
@@ -363,7 +364,9 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
 | 依頼・登場者 | 依頼（宛先・内容）、家族の発言・患者本人の声・対話の有無 |
 | 記録の形 | SOAP の各要素の有無、緊急度フラグ |
 
-**2段目・ローカルLLM 抽出（差分のみ・このマシン上で実行）** — 文脈を読んで整理:
+**品質レーン・ローカルLLM 抽出 v3（差分のみ・このマシン上で実行）** —
+文脈を読んで整理。ルール抽出結果を候補としてプロンプトに載せ、
+同じパスで `extract_v1` artifact も保証する（v1+v2 の処理を v3 が兼務）:
 
 | 項目 | 内容 |
 |---|---|
@@ -787,12 +790,15 @@ $PY mcs/core/init_data.py --project <id>       # 患者個別
 - `extract.py` — ルールベース構造化 (kind='extract_v1'): events/visit_date/
   next_planned/med_periods/medications/rx_actions/vitals/symptoms/
   adherence_flags/requests/actors/soap/urgency をJSON化。run_check が毎回
-  差分抽出 (`run_pending`)。再抽出は全件削除→`--all` 再実行で冪等
+  差分抽出 (`run_pending`) — 即時解析のスピードレーン。同じ出力は v3
+  パスのヒント入力にもなり、semantic 抽出の決定的ヒントにも使われる
 - `extract_llm.py` — ローカルLLM (Qwen3.5-9B @ llama.cpp :8080) による
   高度抽出 (kind='extract_llm'): 用量なし薬剤名・否定極性・依頼宛先・
-  30字要約・要点points。schema検証済み出力のみ保存、失敗は
-  meta.error+backoff で retry (上限5)。loopback固定・proxy無効。
-  run_check が残予算で差分処理、全量は `--all` で drain (中断安全)。
+  30字要約・要点points。ルール抽出結果を候補としてプロンプト注入し、
+  同パスで extract_v1 artifact も保証（v1+v2 兼務）。schema検証済み
+  出力のみ保存、失敗は meta.error+backoff で retry (上限5)。
+  loopback固定・proxy無効。run_check が残予算で差分処理、全量は
+  `--all` で drain (中断安全)。
   `--all` は per-write lock のみで run.lock を長期保持しない
   (tick を阻害しない)。`--shard I/N` で message_id%N による分割
   drain、`--slot N` で wire id_slot pin、`--lend-rt` で RT slot の
