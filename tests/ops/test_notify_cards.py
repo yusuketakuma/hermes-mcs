@@ -620,6 +620,26 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     assert "本文" in joined
 
 
+def test_card_deleted_message_hides_structured_data(led, tmp_path):
+    """A deleted message shows （削除済み） — its extraction must never
+    leak through the 📋 block even if the artifact's hash still matches
+    (the body_state gate lives in the artifact SQL itself)."""
+    _seed_thread(led)
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]})
+    led.db.execute(
+        "UPDATE messages SET body_state='deleted', body_text='' "
+        "WHERE message_id=100")        # hash unchanged — worst case
+    led.db.commit()
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "（削除済み）" in joined
+    assert "📋 構造化" not in joined and "疼痛" not in joined
+
+
 def test_card_signal_structured_evidence(led, tmp_path):
     """Signal/digest cards show the evidence message's structured block
     (LLM summary labelled as such via the shared formatter)."""

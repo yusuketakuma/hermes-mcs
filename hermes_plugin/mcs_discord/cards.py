@@ -104,7 +104,7 @@ def validate(spec) -> dict:
         if c["type"] in ("heading", "text", "quote"):
             if not _text(c.get("text"), MAX_TEXT):
                 _err("container_too_long")
-            text_budget -= len(c["text"]) + 4   # "## " / "> " wrappers
+            text_budget -= len(c["text"]) + 4   # "## " / ">>> " wrappers
         elif c["type"] == "field":
             if not _text(c.get("name"), 256) \
                     or not _text(c.get("value"), MAX_TEXT):
