@@ -65,7 +65,7 @@ Keychain 'mcs-adapter'               MCS パスワード
 常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
 `ai.mcs.extract-drainer{,-rt}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
 `org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
-定期: cron `mcs_check`（15分）・`mcs_deep`（durable drain）・
+定期: cron `mcs_check`（5分）・`mcs_deep`（durable drain）・
 `mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
 
 ## 4. 初期インストール仕様 ✅

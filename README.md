@@ -7,7 +7,7 @@
 > 見直せる形に整えるシステムです。**
 
 医療・介護向けメッセージ基盤 **MedicalCareStation（MCS）** の記録を
-15分ごとに自動で取り込み、自分のMac上に保存します。Discord への通知、
+5分ごとに自動で取り込み、自分のMac上に保存します。Discord への通知、
 全文検索、患者ごとの時系列表示、統計、「確認した方がよいかもしれない
 記録」の一覧提示までを一つの仕組みで行います。
 
@@ -21,7 +21,7 @@
 医療・介護の現場で起きがちな問題に対応します:
 
 - **見逃しを減らす** — MCS を開いて巡回しなくても、新しい連絡が
-  15分以内に Discord に届きます
+  5分以内に Discord に届きます
 - **「あの話はいつだっけ」をすぐ探せる** — 患者ごとの全履歴を保存
   するので、薬の話題が出た時期や経緯を全文検索・タイムラインで
   辿れます
@@ -35,7 +35,7 @@
 
 | できること | 内容 |
 |---|---|
-| 新着連絡の通知 | 15分ごとにMCSを確認し、新しい投稿をDiscordに転送（構造化要約カード。本文はボタンを押した本人のみ表示） |
+| 新着連絡の通知 | 5分ごとにMCSを確認し、新しい投稿をDiscordに転送（構造化要約カード。本文はボタンを押した本人のみ表示） |
 | 全履歴の保存 | 過去の投稿を遡って全件保存。途中で止まっても続きから再開 |
 | 検索・タイムライン | 患者ごとの時系列表示と全文検索（日本語の表記ゆれに対応） |
 | 内容の自動整理 | 薬・症状・依頼・バイタル値などを機械が拾って構造化 |
@@ -49,7 +49,7 @@
 
 ![全体の流れ](docs/assets/flow-overview.svg)
 
-1. **収集** — 15分ごとに MCS を確認し、新しい記録をマシン上の
+1. **収集** — 5分ごとに MCS を確認し、新しい記録をマシン上の
    データベースに保存します
 2. **整理** — 保存した記録から、薬・症状・依頼・バイタル値などを
    機械が拾って構造化します（間違えることもあるため「候補」扱い）
@@ -69,7 +69,7 @@
 MCS (MedicalCareStation)
    │  API-first / CDP(Chrome :9333) セッション自動再ログイン
    ▼
-run_check.py ──15分 tick──► ledger.db (SQLite/WAL)
+run_check.py ──5分 tick──► ledger.db (SQLite/WAL)
    │                          ├ messages + messages_fts(FTS5)
    │                          ├ artifacts(extract_v1 / extract_llm / signals)
    │                          └ requests / command_receipts(人承認操作)
@@ -742,7 +742,7 @@ Private repository — 現時点で公開・再配布は想定していない。
 
 ## 運用
 
-- スケジューラ: hermes cron `MCS unread check`（`*/15 * * * *`,
+- スケジューラ: hermes cron `MCS unread check`（`*/5 * * * *`,
   `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
   実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る
 - 深掘り trickle: hermes cron `MCS job drain`（`7,37 * * * *`, `--jobs-only`） —
