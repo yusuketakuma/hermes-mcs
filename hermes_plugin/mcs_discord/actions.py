@@ -58,6 +58,33 @@ def _ja(result: dict | None) -> str:
     return ERR_JA.get(str(err), f"拒否されました: {err}")
 
 
+BODY_CHUNK = 1900          # under the 2000-char message ceiling
+BODY_MAX_CHUNKS = 4        # runner caps ~6k chars; never spam a channel
+
+
+def _split_body(text: str, limit: int = BODY_CHUNK) -> list:
+    """Split a full-text answer on line boundaries into <=limit chunks,
+    hard-wrapping overlong lines. Bounded so a huge body stays a few
+    ephemeral messages, never a flood."""
+    out, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(line[:limit])
+            line = line[limit:]
+        cand = (cur + "\n" + line) if cur else line
+        if len(cand) > limit:
+            out.append(cur)
+            cur = line
+        else:
+            cur = cand
+    if cur or not out:
+        out.append(cur)
+    return out[:BODY_MAX_CHUNKS]
+
+
 def _origin(interaction, profile: str | None) -> dict:
     """Native origin from the interaction object — never from a payload
     the user could have written."""
@@ -268,6 +295,8 @@ class Actions:
             return
         outcome = result.get("outcome")
         if outcome == "applied" and not result.get("modal"):
+            if result.get("action") == "body" and result.get("body"):
+                await self._send_body(interaction, result)
             # silent ack — the card re-renders through the pipeline
             return
         await self._followup(interaction, _ja(result))
@@ -543,6 +572,18 @@ class Actions:
                 self._log("followup_failed", error=type(e).__name__)
 
     # -- response helpers --------------------------------------------------
+
+    async def _send_body(self, interaction, result: dict) -> None:
+        """Full-text answer for the 'body' action as chunked ephemeral
+        followups — text stays ephemeral (unlike a file attachment,
+        whose CDN URL is reachable by link alone)."""
+        body = str(result.get("body") or "")
+        title = str(result.get("title") or "本文")
+        chunks = _split_body(body)
+        for i, chunk in enumerate(chunks):
+            head = (f"**{title}**（{i + 1}/{len(chunks)}）\n"
+                    if len(chunks) > 1 else f"**{title}**\n")
+            await self._followup(interaction, head + chunk)
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:

@@ -407,6 +407,67 @@ def test_ack_assign_defer_persist(led, tmp_path):
     assert "確認" in footer and "保留中" in footer
 
 
+def test_body_action_returns_full_text(led, tmp_path):
+    """📄本文表示 is a view action: it answers the untruncated text of
+    the shown set and mutates nothing — no render, no triage rows."""
+    long_body = "詳細な記録。" * 40           # ~200 chars > MAX_SNIPPET
+    _patient(led, 1)
+    _msg(led, 100, 1, body=long_body)
+    _msg(led, 101, 1, parent=100, body="短い返信")
+    ev = _intent(led)
+    _dispatch(led, ev)
+    render = _latest_render(led)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    tok = _token_for(spec, "body")
+    n_renders = led.db.execute(
+        "SELECT COUNT(*) c FROM notification_renders").fetchone()["c"]
+    req = _notif(tok)
+    req["origin"] = dict(ORIGIN, message_id="m-9")
+    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied" and r["action"] == "body"
+    assert r["title"].endswith("本文")
+    assert long_body in r["body"] and "短い返信" in r["body"]
+    # view-only: no re-render is issued and nothing is mutated
+    assert "delivery_id" not in r
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_renders"
+    ).fetchone()["c"] == n_renders
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_triage"
+    ).fetchone()["c"] == 0
+
+
+def test_body_action_signal_full_evidence(led, tmp_path):
+    long_body = "退院後フォローの経過記録。" * 30
+    _patient(led, 1)
+    _msg(led, 100, 1, body=long_body)
+    _signal_row(led, "sig-body", mids=[100])
+    ev = _intent(led, kind="signal", pid=1,
+                 payload={"signal_keys": ["sig-body"], "project_id": 1,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    render = _latest_render(led)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    tok = _token_for(spec, "body")
+    req = _notif(tok)
+    req["origin"] = dict(ORIGIN, message_id="m-9")
+    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied" and r["action"] == "body"
+    # signal notice + the FULL evidence body — the card shows only a
+    # 120-char snippet of the quote
+    assert "note sig-body" in r["body"]
+    assert long_body in r["body"]
+    assert "患者A" in r["body"]
+
+
 def test_action_scope_and_stale_source_rejected(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
     tok = _token_for(spec, "assign")
