@@ -27,6 +27,57 @@ LEDGER_WRITERS = {
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin"}
 
+# These adapters use the messaging SDK already owned by Hermes. Core
+# collectors must remain dependency-free, and importing /mcs must work
+# without an SDK installed. No new client/token ownership is delegated.
+_SDK_FILES = {"mcs_discord/actions.py", "mcs_discord/cards.py"}
+_ASYNC_FILES = {"mcs_discord/actions.py", "mcs_discord/delivery.py",
+                "mcs_discord/tasks.py"}
+_ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
+_SDK_MEMBERS = {
+    "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
+    "ui.Modal", "ui.TextInput", "ui.View", "ButtonStyle",
+    "ButtonStyle.success", "ButtonStyle.secondary", "TextStyle.short",
+    "TextStyle.paragraph", "Webhook.partial",
+}
+
+
+def _plugin_path(path: Path) -> str:
+    return path.relative_to(PLUGIN).as_posix() if path.is_relative_to(PLUGIN) else ""
+
+
+def _lazy_sdk_import(path, node, parents) -> bool:
+    if (_plugin_path(path) not in _SDK_FILES or not isinstance(node, ast.Import)
+            or not all(a.name == "discord" for a in node.names)):
+        return False
+    ancestor = parents.get(node)
+    while ancestor is not None:
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        ancestor = parents.get(ancestor)
+    return False
+
+
+def _module_surface(tree, module: str, permitted: set[str]) -> list[str]:
+    """Check imported module aliases without granting dynamic API access."""
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    aliases = {alias.asname or module for node in ast.walk(tree)
+               if isinstance(node, ast.Import) for alias in node.names
+               if alias.name == module}
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name) or node.id not in aliases:
+            continue
+        member, current = [], node
+        while isinstance(parents.get(current), ast.Attribute) \
+                and parents[current].value is current:
+            current = parents[current]
+            member.append(current.attr)
+        if ".".join(member) not in permitted:
+            bad.append(f"{node.lineno} forbidden {module} surface")
+    return bad
+
 
 def _py_files(*dirs: Path) -> list[Path]:
     # mcs/ modules live in first-level subdirs (flat import namespace —
@@ -39,7 +90,7 @@ def _py_files(*dirs: Path) -> list[Path]:
 
 
 def gate_stdlib_only() -> list[str]:
-    """mcs/ + hermes_plugin/ must import stdlib or flat-local modules only."""
+    """Stdlib/local only, except deferred Hermes-owned Discord UI imports."""
     bad = []
     stdlib = sys.stdlib_module_names
     for path in _py_files(MCS, PLUGIN):
@@ -48,6 +99,8 @@ def gate_stdlib_only() -> list[str]:
         except SyntaxError as e:
             bad.append(f"{path.name}: unparseable ({e})")
             continue
+        parents = {child: parent for parent in ast.walk(tree)
+                   for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 mods = [a.name.split(".")[0] for a in node.names]
@@ -56,8 +109,12 @@ def gate_stdlib_only() -> list[str]:
             else:
                 continue
             for m in mods:
+                if m == "discord" and _lazy_sdk_import(path, node, parents):
+                    continue
                 if m not in stdlib and m not in _LOCAL_MODULES:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
+        bad.extend(f"{path.name}:{v}" for v in
+                   _module_surface(tree, "discord", _SDK_MEMBERS))
     return bad
 
 
@@ -94,8 +151,8 @@ _PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
 
 def gate_plugin_sandbox() -> list[str]:
     """The Hermes plugin is an untrusted-context adapter: no ambient env,
-    no network, no subprocess; DB access only via mcs_view (mode=ro) and
-    command files via mcs_requests.enqueue."""
+    no direct network, no subprocess; the native Discord adapter uses
+    only the host's client plus sleep/to_thread/cancellation primitives."""
     bad = []
     for path in _py_files(PLUGIN):
         text = path.read_text(encoding="utf-8")
@@ -112,8 +169,14 @@ def gate_plugin_sandbox() -> list[str]:
             else:
                 continue
             for m in mods:
+                if (m == "asyncio" and _plugin_path(path) in _ASYNC_FILES
+                        and isinstance(node, ast.Import)
+                        and all(a.name == "asyncio" for a in node.names)):
+                    continue
                 if m in _PLUGIN_FORBIDDEN_IMPORTS:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
+        bad.extend(f"{path.name}:{v}" for v in
+                   _module_surface(tree, "asyncio", _ASYNC_MEMBERS))
         for i, line in enumerate(text.splitlines(), 1):
             if _PLUGIN_FORBIDDEN_TEXT.search(line):
                 bad.append(f"{path.name}:{i} forbidden surface: "

@@ -26,7 +26,7 @@ class Supervisor:
         self._root = paths.data_root(settings)
         paths.ensure_dirs(self._root)
         self._dirs = paths.notify_dirs(self._root)
-        self._reg = registry.Registry(self._dirs["state"])
+        self._reg = registry.Registry(self._dirs["state"], scope=settings)
         self._worker_id = registry.new_worker_id()
         self._worker = delivery.DeliveryWorker(
             bot=bot, settings=settings,
@@ -34,7 +34,7 @@ class Supervisor:
             worker_id=self._worker_id, log=log)
         self._actions = actions.Actions(
             bot=bot, settings=settings, root=self._root,
-            reg=self._reg, worker_id=self._worker_id, log=log)
+            reg=self._reg, log=log)
         self._task = None
         self._stopping = False
 
@@ -44,8 +44,6 @@ class Supervisor:
         """Register the interaction listener on THIS Bot and spawn the
         supervised poll loop. Returns False when startup deterministically
         failed (visible stopped state, no silent retry)."""
-        self._bot.add_listener(
-            self._actions.on_interaction, "on_interaction")
         self._task = self._ctx.spawn_task(
             self._run(), name=f"mcs-discord:{self._worker_id}")
         # spawn_task returns the asyncio.Task; task is None or done()
@@ -80,9 +78,15 @@ class Supervisor:
                 # visible-stopped rather than racing sends
                 self._log("scope_lock_unavailable")
                 return
-            stats = await self._worker.reconcile()
+            self._reg.reload()
+            with self._reg.batch():
+                stats = await self._worker.reconcile()
             if any(stats.values()):
                 self._log("reconciled", **stats)
+            if self._stopping:
+                return
+            self._bot.add_listener(
+                self._actions.on_interaction, "on_interaction")
             while not self._stopping:
                 try:
                     await self._worker.tick()
@@ -97,4 +101,5 @@ class Supervisor:
         finally:
             # released only when the task is truly done — in-flight
             # cancellation mid-send is an 'unknown' the journal keeps
+            self._stop_listener()
             self._worker.release_scope_lock()

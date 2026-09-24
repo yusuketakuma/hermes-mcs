@@ -40,17 +40,22 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 ## コマンド
 
 ```bash
-python -m pytest                    # 全テスト（pyproject: testpaths=tests）
-ruff check mcs/ tests/              # lint（pyproject: select=E4,E7,E9,F）
+scripts/run_tests.sh                # 全テスト（一時HOME・認証環境の隔離）
+ruff check mcs/ tests/ hermes_plugin/ integration/  # CIと同じ範囲
 python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
 python3 mcs/ops/mcs_setup.py check  # 実機の必須条件検証
 ```
 
 `make test|lint|readme|check` も利用可（uv があれば ephemeral 実行）。
+テスト対象を絞る場合も `scripts/run_tests.sh tests/<領域>/` を使う。
 
 ## 絶対ルール
 
-- **依存は標準ライブラリのみ**。新しい外部 import を加えない
+- **収集・解析コアの依存は標準ライブラリのみ**。新しい外部依存を加えない。
+  `hermes_plugin/mcs_discord/{actions,cards}.py` だけは Hermes 同梱の
+  `discord.py` を関数内で遅延 import し、UI と既存 interaction の
+  followup に使う。独自 Bot・認証情報・REST 接続は作らない。
+  adapter の `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する
 - テストは一時DB+スタブのみ。実 MCS・Discord・Keychain・原本DB・
   ローカルLLM・Jev へ**一切アクセスしない**
 - 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）

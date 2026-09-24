@@ -16,7 +16,7 @@ KINDS = ("thread", "signal", "digest")
 
 # Components V2 budgets (discord.py 2.7 enforced limits) — a spec over
 # budget is rejected whole, never truncated into a misleading card.
-MAX_TOP_LEVEL = 40            # LayoutView item ceiling
+MAX_COMPONENTS = 40           # LayoutView counts rows and their buttons
 MAX_TOTAL_TEXT = 4000         # summed across all TextDisplay items
 MAX_TEXT = 4000               # single TextDisplay content limit
 MAX_ROWS = 5                  # ActionRow per view
@@ -95,7 +95,7 @@ def validate(spec) -> dict:
     containers = parts.get("containers")
     if not isinstance(containers, list):
         _err("bad_containers")
-    budget = MAX_TOP_LEVEL
+    budget = MAX_COMPONENTS
     text_budget = MAX_TOTAL_TEXT
     for c in containers:
         if not isinstance(c, dict) \
@@ -109,8 +109,9 @@ def validate(spec) -> dict:
             if not _text(c.get("name"), 256) \
                     or not _text(c.get("value"), MAX_TEXT):
                 _err("field_too_long")
-            text_budget -= len(c["name"]) + len(c["value"]) + 5
-        budget -= 1
+            text_budget -= len(c["name"]) + len(c["value"]) + 6
+        if c["type"] != "meta":
+            budget -= 1
     footer = parts.get("footer") or []
     if not isinstance(footer, list):
         _err("bad_footer")
@@ -133,6 +134,7 @@ def validate(spec) -> dict:
         if not isinstance(row, list) or not row \
                 or len(row) > MAX_BUTTONS:
             _err("bad_action_row")
+        budget -= len(row)
         for b in row:
             if not isinstance(b, dict) or b.get("ui") != "button":
                 _err("bad_button")

@@ -130,3 +130,36 @@ def test_webhook_partial_accepts_client_for_followup():
     assert "client" in params
     send = inspect.signature(discord.Webhook.send).parameters
     assert "ephemeral" in send and "view" in send
+
+
+def test_validator_matches_nested_components_budget():
+    spec = _spec()
+    # 34 text items + one action row + five buttons reach the SDK limit.
+    spec["parts"]["containers"] = [{"type": "text", "text": "x"}] * 34
+    spec["parts"]["footer"] = []
+    spec["parts"]["action_rows"] = [[
+        {"ui": "button", "id": "ack", "label": "確認", "style": "success",
+         "token": f"{i:032x}"} for i in range(5)]]
+    cards.validate(spec)
+    cards.build_view(spec)
+    spec["parts"]["containers"].append({"type": "text", "text": "overflow"})
+    with pytest.raises(ValueError):
+        cards.build_view(spec)
+    with pytest.raises(ValueError, match="component_budget"):
+        cards.validate(spec)
+
+
+@pytest.mark.parametrize("wire_length", [4000, 4001])
+def test_field_text_budget_counts_markdown_wrapper(wire_length):
+    spec = _spec()
+    spec["parts"]["containers"] = [
+        {"type": "field", "name": "N", "value": "x" * (wire_length - 7)}]
+    spec["parts"]["footer"] = []
+    spec["parts"]["action_rows"] = []
+    view = cards.build_view(spec)
+    assert sum(len(item["content"]) for item in view.to_components()) == wire_length
+    if wire_length == 4000:
+        cards.validate(spec)
+    else:
+        with pytest.raises(ValueError, match="text_budget"):
+            cards.validate(spec)

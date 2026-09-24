@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -99,3 +101,42 @@ def test_mine_gates_extracts_ids_from_nested_records(monkeypatch, tmp_path):
     (sub / "record.md").write_text("fix: FIX-NEST9 landed here")
     monkeypatch.setattr(mg, "RECORDS", tmp_path)
     assert "FIX-NEST9" in mg.extract_ids()["defects"]
+
+
+@pytest.mark.parametrize("relative,source,allowed", [
+    ("mcs_discord/cards.py", "def make():\n import discord\n return discord.ui.View()\n", True),
+    ("mcs_discord/cards.py", "import discord\n", False),
+    ("other.py", "def make():\n import discord\n", False),
+    ("mcs_discord/actions.py", "def make():\n import discord\n return discord.Client()\n", False),
+    ("mcs_discord/actions.py", "def make():\n from discord import Client as Bot\n return Bot()\n", False),
+    ("mcs_discord/actions.py", "def make():\n import discord as d\n return getattr(d, 'Client')()\n", False),
+])
+def test_sdk_gate_allows_only_lazy_host_ui(monkeypatch, tmp_path, relative, source, allowed):
+    gates = _load("ci_sdk", "ci/gates.py")
+    plugin = tmp_path / "plugin"
+    path = plugin / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source)
+    monkeypatch.setattr(gates, "PLUGIN", plugin)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_stdlib_only()) is not allowed
+
+
+@pytest.mark.parametrize("relative,source,allowed", [
+    ("mcs_discord/tasks.py", "import asyncio\nasync def poll():\n await asyncio.sleep(1)\n", True),
+    ("other.py", "import asyncio\n", False),
+    ("mcs_discord/actions.py", "import asyncio as a\nasync def run():\n await a.create_subprocess_exec('bad')\n", False),
+    ("mcs_discord/delivery.py", "import asyncio\nasync def run():\n await asyncio.open_connection('host', 80)\n", False),
+    ("mcs_discord/tasks.py", "import asyncio\nrun = getattr(asyncio, 'create_subprocess_exec')\n", False),
+    ("mcs_discord/tasks.py", "from asyncio import create_subprocess_exec\n", False),
+    ("mcs_discord/tasks.py", "import subprocess\n", False),
+])
+def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_path, relative, source, allowed):
+    gates = _load("ci_async", "ci/gates.py")
+    plugin = tmp_path / "plugin"
+    path = plugin / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source)
+    monkeypatch.setattr(gates, "PLUGIN", plugin)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_plugin_sandbox()) is not allowed

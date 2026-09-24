@@ -37,13 +37,6 @@ NOT_SENT_STATUS = frozenset({400, 401, 403, 404, 405, 410})
 REVOKE_GONE_STATUS = frozenset({404, 410})
 
 
-def _scope_key(scope: dict) -> str:
-    import hashlib
-    raw = "|".join(str(scope.get(k) or "-") for k in
-                   ("profile", "application_id", "channel_id"))
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
 def _err_code(exc: BaseException) -> str:
     status = getattr(exc, "status", None)
     if isinstance(status, int):
@@ -88,7 +81,7 @@ class DeliveryWorker:
         worker's lifetime; released only when all tasks have stopped."""
         paths.ensure_dirs(self._root)
         path = os.path.join(self._dirs["state"],
-                            f"send-{_scope_key(self.scope())}.lock")
+                            f"send-{registry.scope_key(self.scope())}.lock")
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -130,7 +123,7 @@ class DeliveryWorker:
             row = info["record"]
             claim = self._reg.claims().get(row.get("delivery_id"))
             env = self._receipt_env(aid, info["rows"], claim)
-            if env is None:
+            if env is None or not self._ours(env):
                 continue
             env["result"] = row.get("result", "unknown")
             if row.get("message_id"):
@@ -143,11 +136,12 @@ class DeliveryWorker:
                           delivery_id=row.get("delivery_id"),
                           result=env["result"], reconcile=True)
             stats["receipt_republished"] += 1
+            await self._retire_reconciled(aid, env, claim)
         for aid, info in journal.unfinished(records).items():
             row = info["record"]
             claim = self._reg.claims().get(row.get("delivery_id"))
             env = self._receipt_env(aid, info["rows"], claim)
-            if env is None:
+            if env is None or not self._ours(env):
                 continue
             if info["phase"] == "pre_http":
                 env["result"] = "not_sent"
@@ -162,14 +156,30 @@ class DeliveryWorker:
             self._journal("receipt", attempt_id=aid,
                           delivery_id=row.get("delivery_id"),
                           result=env["result"], reconcile=True)
+            await self._retire_reconciled(aid, env, claim)
+        # A crash after receipt publication but before the registry flush
+        # leaves an old granted claim. Its journal still forbids resending.
+        for aid, rows in records.items():
+            if not any(r.get("phase") == "receipt" for r in rows):
+                continue
+            claim = self._reg.claimed(rows[-1].get("delivery_id"))
+            env = self._receipt_env(aid, rows, claim)
+            if env is not None and self._ours(env):
+                await self._retire_reconciled(aid, env, claim)
         return stats
+
+    async def _retire_reconciled(self, aid, env, claim) -> None:
+        if claim is not None and claim.get("attempt_id") == aid:
+            await self._drop_claim(claim)
+        elif claim is None and not self._reg.is_dead(env["delivery_id"]) \
+                and os.path.isfile(os.path.join(
+                    self._dirs["render"], env["delivery_id"] + ".json")):
+            self._reg.mark_dead(env["delivery_id"])
 
     def _receipt_env(self, attempt_id, rows, claim) -> dict | None:
         """Rebuild a receipt envelope from claim state or the envelope
         the journal recorded at begin — never from memory alone."""
         import uuid
-        if claim is not None:
-            return envelopes.transport_receipt(claim, "unknown")
         env = next((r["receipt_envelope"] for r in reversed(rows)
                     if isinstance(r.get("receipt_envelope"), dict)),
                    None)
@@ -178,6 +188,8 @@ class DeliveryWorker:
             env["command_id"] = str(uuid.uuid4())
             env["attempt_id"] = attempt_id
             return env
+        if claim is not None and claim.get("attempt_id") == attempt_id:
+            return envelopes.transport_receipt(claim, "unknown")
         return None
 
     # -- claim scan ----------------------------------------------------
@@ -273,16 +285,7 @@ class DeliveryWorker:
         cid = claim.get("begin_cid")
         if not cid:
             return None
-        path = os.path.join(self._dirs["cmd_results"],
-                            "".join(c if c.isalnum() or c in "._-"
-                                    else "_" for c in cid)[:120]
-                            + ".json")
-        try:
-            with open(path, "rb") as handle:
-                data = json.loads(handle.read().decode("utf-8"))
-        except (OSError, ValueError):
-            return None
-        return data if isinstance(data, dict) else None
+        return paths.read_result(self._dirs["cmd_results"], cid)
 
     def _verify_grant(self, claim: dict, result: dict) -> bool:
         """The grant is only ours if every echoed identity field matches
@@ -344,11 +347,9 @@ class DeliveryWorker:
             return {"result": "delivered", "message_id": mid}
         sent = await channel.send(view=view)      # create / notice
         return {"result": "delivered",
-                "message_id": str(sent.id),
-                "_sent_message": sent}
+                "message_id": str(sent.id)}
 
-    async def _maybe_thread(self, claim: dict, message_id: str,
-                            sent_message) -> None:
+    async def _maybe_thread(self, claim: dict, message_id: str) -> None:
         """Card companion thread — separated from the body send; a
         thread failure never resends the card itself (plan §3)."""
         spec = claim["spec"]
@@ -356,16 +357,13 @@ class DeliveryWorker:
                 if spec["op"] in ("create", "notice") else None)
         if not name or (spec["delivery"].get("thread_id")):
             return
-        scope_key = _scope_key(self.scope())
+        scope_key = registry.scope_key(self.scope())
         cap = self._reg.capability(scope_key)
         if cap is not None and cap.get("ok") is False:
             return                                 # negative-cached
         try:
-            if sent_message is None:
-                channel = await self._channel(
-                    spec["delivery"]["channel_id"])
-                sent_message = await channel.fetch_message(
-                    int(message_id))
+            channel = await self._channel(spec["delivery"]["channel_id"])
+            sent_message = await channel.fetch_message(int(message_id))
             thread = await sent_message.create_thread(name=name)
             self._reg.put_capability(scope_key, True)
             env = envelopes.thread_receipt(
@@ -446,6 +444,7 @@ class DeliveryWorker:
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
                           correlation=spec["delivery"]["correlation"])
+            claim["phase"] = "started"
             try:
                 outcome = await self._perform(claim)
             except asyncio.CancelledError:
@@ -457,6 +456,16 @@ class DeliveryWorker:
                 else:
                     outcome = {"result": "unknown",
                                "error_code": _err_code(exc)}
+            # Move past HTTP before any fallible journal/receipt I/O. A
+            # retry settles this outcome; it must never call Discord again.
+            claim["outcome"] = outcome
+            claim["phase"] = "result"
+        if claim["phase"] == "started":
+            claim["outcome"] = {"result": "unknown",
+                                "error_code": "worker_crash"}
+            claim["phase"] = "result"
+        if claim["phase"] == "result":
+            outcome = claim["outcome"]
             self._journal("result",
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
@@ -473,18 +482,11 @@ class DeliveryWorker:
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
                           result=outcome["result"])
+            claim["phase"] = "settled"
             mid = outcome.get("message_id")
             if outcome["result"] == "delivered" and mid:
-                self._reg.bind_message(
-                    str(mid),
-                    {"card_key": spec.get("card_key"),
-                     "delivery_id": spec["delivery_id"],
-                     "channel_id": spec["delivery"]["channel_id"],
-                     "application_id":
-                         spec["delivery"].get("application_id"),
-                     "guild_id": spec["delivery"].get("guild_id")})
-                await self._maybe_thread(
-                    claim, str(mid), outcome.get("_sent_message"))
+                await self._maybe_thread(claim, str(mid))
+        if claim["phase"] == "settled":
             await self._drop_claim(claim)
 
     async def _drop_claim(self, claim: dict, dead: bool = True) -> None:
@@ -541,7 +543,6 @@ class DeliveryWorker:
         if self._stopping:
             return
         now = time.time()
-        await asyncio.to_thread(self._reg.expire)
         scanned = await asyncio.to_thread(self._scan_specs)
         # the runner-published flag is the cheap local kill switch —
         # claiming during an interactive-off window only earns a
@@ -555,6 +556,7 @@ class DeliveryWorker:
         # tick instead of ~3 full-file rewrites per claim (RC20: the
         # O(n^2) serialization was the delivery bottleneck at 1k cards)
         with self._reg.batch():
+            self._reg.expire()
             for path, spec in scanned:
                 delivery_id = spec["delivery_id"]
                 live_ids.add(delivery_id)
@@ -611,6 +613,9 @@ class DeliveryWorker:
             # hang as an unsettled row forever
             for delivery_id, claim in list(self._reg.claims().items()):
                 if delivery_id in live_ids:
+                    continue
+                if claim["phase"] in ("started", "result", "settled"):
+                    await self._step_claim(claim)
                     continue
                 if claim["phase"] == "begin_sent":
                     result, code = "not_sent", "spec_withdrawn"
