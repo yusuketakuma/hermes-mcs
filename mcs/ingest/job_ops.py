@@ -126,7 +126,14 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 result["errors"].append("cmd_invalid: bad_request_identity")
                 continue
             # Storage exceptions propagate: do not consume a command whose commit failed.
-            receipt = mcs_requests.apply_command(ledger, req)
+            # ops.card_resolve carries no normal project_id — its scope is
+            # derived from the stored render/coverage — so it must branch
+            # before the common apply_command validation would reject it.
+            if req["cmd"] == "ops.card_resolve":
+                import notify_cards
+                receipt = notify_cards.apply_card_resolve(ledger, req)
+            else:
+                receipt = mcs_requests.apply_command(ledger, req)
             if receipt["outcome"] == "rejected":
                 result["errors"].append("cmd_invalid: " + receipt["error"])
             try:

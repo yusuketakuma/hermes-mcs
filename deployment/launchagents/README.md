@@ -9,6 +9,7 @@
 | semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（window ~5h→03:30） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
+| 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPaths（イベント駆動） | launchd `local.mcs-int` |
 | extract_llm 常駐drainer（shard 0/2・slot 0） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer` |
 | extract_llm RT貸与drainer（shard 1/2・`--lend-rt`） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer-rt` |
 
@@ -41,8 +42,8 @@ hermes cron create "30 22 * * *" --name "MCS LLM catchup" \
 hermes cron create "0 4 * * *"  --name "llamacpp daily restart" \
   --script llamacpp_restart_if_idle.sh --no-agent --deliver local
 
-# 3. launchd plist（3件とも同じ置換規則）
-for p in local.mcs-cmd ai.mcs.extract-drainer ai.mcs.extract-drainer-rt; do
+# 3. launchd plist（4件とも同じ置換規則）
+for p in local.mcs-cmd local.mcs-int ai.mcs.extract-drainer ai.mcs.extract-drainer-rt; do
   sed -e "s|__PYTHON__|$PY|g" -e "s|__REPO__|$REPO|g" -e "s|__DATA__|$DATA|g" \
       "$REPO/deployment/launchagents/$p.plist" > ~/Library/LaunchAgents/$p.plist
   launchctl load ~/Library/LaunchAgents/$p.plist
