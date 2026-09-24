@@ -483,8 +483,13 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
-    """extract_v1 (instant rules) -> extract_llm (bounded local LLM)
-    -> rollups for dirty patients."""
+    """extract_v1 (instant rules) -> extract_llm (v3) -> rollups.
+
+    Two lanes, one lineage: the rule pass is pure-pattern and instant —
+    it keeps real-time analysis at ingest speed so notifications and
+    signals never wait on the LLM queue. The v3 pass then folds the
+    same rule output in as prompt hints and mints the extract_v1
+    artifact itself, so v1+v2 work happens inside the v3 pass too."""
     try:
         import extract
         ex = extract.run_pending(ledger)

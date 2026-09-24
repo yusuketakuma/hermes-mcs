@@ -117,6 +117,19 @@ _CTX_TAIL = """
 
 """
 
+# Deterministic rule-parser candidates, injected between _HINT_HEAD/
+# _HINT_TAIL BEFORE the target label — the v3 pass performs the v1/v2
+# (rule) work in the same pass: the parsed fields ride the prompt as
+# confirmable candidates (quality lane) while _ensure_v1 writes the
+# extract_v1 artifact itself so speed-lane readers keep coverage.
+_HINT_HEAD = """決定的候補(同一本文へのルール抽出結果 — 機械的パターン一致のため未確定。確認・修正の参考に使い、ここからevidenceを引用してはいけない。候補に無い項目も本文から抽出してよい):
+<<<
+"""
+_HINT_TAIL = """
+>>>
+
+"""
+
 _TARGET_HEAD = """対象本文(投稿日時: {posted}):
 <<<
 """
@@ -630,6 +643,7 @@ _DEFERRED = object()
 
 
 def llm_extract(body: str, *, context: str | None = None,
+                hints: dict | None = None,
                 deadline: float | None = None,
                 meta_out: dict | None = None,
                 posted_at: str | None = None,
@@ -641,7 +655,10 @@ def llm_extract(body: str, *, context: str | None = None,
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
 
     `context` is an optional thread-context block (already formatted);
-    it is reference-only and never becomes evidence.
+    it is reference-only and never becomes evidence. `hints` is the
+    deterministic rule-parser output for the SAME body — injected as
+    confirmable candidates so the v3 pass folds the v1/v2 (rules) work
+    into one call instead of a second pipeline.
 
     Bodies longer than _CHUNK_SIZE are covered in full via _chunks;
     each chunk's output validates against the WHOLE body so evidence
@@ -653,6 +670,10 @@ def llm_extract(body: str, *, context: str | None = None,
     prompt = _PROMPT_HEAD
     if context:
         prompt += _CTX_HEAD + context + _CTX_TAIL
+    if hints:
+        block = _hint_block(hints)
+        if block:
+            prompt += _HINT_HEAD + block + _HINT_TAIL
     thead = _target_head(posted_at)
     chunks = _chunks(body, _CHUNK_SIZE)
     saved = chunks_in or {}
@@ -707,6 +728,27 @@ def _sanitize_ctx(text: str) -> str:
                 .replace("対象本文:", "対象本文：")
                 .replace("JSON:", "JSON：")
                 .replace("\n", " "))
+
+
+_HINT_MAX = 3500        # serialized rule-hints block cap — candidates
+                        # are bounded by pattern matches; oversize only
+                        # on pathological bodies, where a hard cut is
+                        # harmless (hints are best-effort, never cited)
+
+
+def _hint_block(hints: dict) -> str:
+    """Serialize rule-parser output for the hint block — values are
+    body substrings, i.e. the same trust class as the untrusted
+    context, so the rendered JSON is fence/label-sanitized too. The
+    parser's own version marker carries no signal for the model and
+    is stripped; an all-marker parse yields no block at all."""
+    hints = {k: v for k, v in hints.items() if k != "v"}
+    if not hints:
+        return ""
+    raw = json.dumps(hints, ensure_ascii=False)
+    if len(raw) > _HINT_MAX:
+        raw = raw[:_HINT_MAX] + "…"
+    return _sanitize_ctx(raw)
 
 
 def _ctx_lines(rows, root_id: int) -> list[str]:
@@ -1031,6 +1073,50 @@ def _owns_current_source(ledger, r, lease: float) -> bool:
         (r["message_id"], r["content_hash"], lease)).fetchone() is not None
 
 
+def _rule_hints(r):
+    """v1/v2 deterministic parse of this exact body — the v3 pass folds
+    the rule stage's work into itself: the same dict rides the LLM
+    prompt as candidates AND backs the extract_v1 artifact write, so
+    every covered message gets both analyses in one pass. Returns None
+    when the parser cannot produce a dict (pathological input) — the
+    LLM lane must never die on the hint path."""
+    try:
+        import extract
+        d = extract.extract_message(r["body_text"], r["posted_at"] or "")
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+def _ensure_v1(ledger, r, hints) -> None:
+    """extract_v1 artifact for this body, written inside the v3 pass —
+    v1+v2 work happens simultaneously with v3, keeping instant-analysis
+    fields (med_periods etc.) covered even on paths that bypass the
+    tick. A current artifact (same hash + rule_version) is left alone;
+    a stale one is atomically replaced."""
+    if hints is None:
+        return
+    import extract
+    if ledger.db.execute(
+        "SELECT 1 FROM artifacts WHERE kind='extract_v1'"
+        " AND message_id=? AND json_valid(meta)"
+        " AND json_extract(meta,'$.hash')=?"
+        " AND json_extract(meta,'$.rule_version')=? LIMIT 1",
+        (r["message_id"], r["content_hash"],
+         extract.RULE_VERSION)).fetchone():
+        return
+    with ledger.db:
+        ledger.db.execute(
+            "DELETE FROM artifacts WHERE kind='extract_v1'"
+            " AND message_id=?", (r["message_id"],))
+        ledger.artifact_add_tx(
+            "extract_v1", json.dumps(hints, ensure_ascii=False),
+            project_id=r["project_id"], message_id=r["message_id"],
+            model="rules-v1",
+            meta={"hash": r["content_hash"],
+                  "rule_version": extract.RULE_VERSION})
+
+
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 per_write_lock: bool = False, workers: int = 1,
                 shard: tuple[int, int] | None = None,
@@ -1123,14 +1209,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     jobs = []
     for r in rows:
         context = _thread_context(ledger, r)
-        jobs.append((r, context, _saved_chunks(ledger, r, context)))
+        jobs.append((r, context, _saved_chunks(ledger, r, context),
+                     _rule_hints(r)))
     metas = [None] * len(jobs)
     checkpoints = queue.SimpleQueue()
     parallel = workers > 1 and len(jobs) > 1
     leases = {}
 
     def _checkpoint(index, chunk, value):
-        r, ctx, _ = jobs[index]
+        r, ctx, _, _ = jobs[index]
         if _owns_current_source(ledger, r, leases[index]):
             _persist_chunks(ledger, r, {chunk: value}, ctx)
 
@@ -1143,13 +1230,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _checkpoint(*item)
 
     def _extract(item):
-        index, (r, ctx, saved) = item
+        index, (r, ctx, saved, hints) = item
         meta = {}
         metas[index] = meta
         chunks_out: dict = {}
         if time.monotonic() > deadline:
             return _DEFERRED, chunks_out
-        return llm_extract(r["body_text"], context=ctx,
+        return llm_extract(r["body_text"], context=ctx, hints=hints,
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
                            chunks_in=saved,
@@ -1213,12 +1300,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    for index, (r, ctx, saved) in enumerate(jobs):
+    for index, (r, ctx, saved, hints) in enumerate(jobs):
         lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
                                       deadline - time.monotonic() + TIMEOUT + 30))
         if lease is not None:
             leases[index] = lease
-            claimed.append((index, r, ctx, saved, lease))
+            # the v3 pass performs the v1/v2 (rule) work simultaneously —
+            # claimed rows mint/refresh their extract_v1 artifact here so
+            # speed-lane readers never wait on the LLM queue
+            _ensure_v1(ledger, r, hints)
+            claimed.append((index, r, ctx, saved, hints, lease))
 
     try:
         if parallel and claimed:
@@ -1228,9 +1319,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(workers, len(claimed))) as pool:
-                futs = {pool.submit(_extract, (index, (r, ctx, saved))):
-                        (index, r, ctx, saved, lease)
-                        for index, r, ctx, saved, lease in claimed}
+                futs = {pool.submit(_extract, (index, (r, ctx, saved, hints))):
+                        (index, r, ctx, saved, hints, lease)
+                        for index, r, ctx, saved, hints, lease in claimed}
                 # as_completed -> every finished item is persisted at once,
                 # not held until the whole batch resolves (F14)
                 pending = set(futs)
@@ -1239,18 +1330,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                              return_when=FIRST_COMPLETED)
                     _flush_checkpoints()
                     for fut in finished:
-                        index, r, ctx, saved, lease = futs[fut]
+                        index, r, ctx, saved, hints, lease = futs[fut]
                         d, chunks_out = fut.result()
                         _handle(r, ctx, d, metas[index], lease, chunks_out)
         else:
-            for index, r, ctx, saved, lease in claimed:
-                d, chunks_out = _extract((index, (r, ctx, saved)))
+            for index, r, ctx, saved, hints, lease in claimed:
+                d, chunks_out = _extract((index, (r, ctx, saved, hints)))
                 _handle(r, ctx, d, metas[index], lease, chunks_out)
     finally:
         try:
             _flush_checkpoints()
         finally:
-            for index, r, ctx, saved, lease in claimed:
+            for index, r, ctx, saved, hints, lease in claimed:
                 _release(ledger, r, lease)
     left = ledger.db.execute("""
       SELECT COUNT(*) FROM messages m

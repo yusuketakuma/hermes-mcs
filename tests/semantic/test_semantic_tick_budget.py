@@ -94,7 +94,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
             "SELECT COUNT(*) FROM messages").fetchone()[0] == 1
         assert ledger.db.execute(
             "SELECT COUNT(*) FROM artifacts WHERE kind='extract_v1'"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 1     # instant rule lane before notify
         return {"sent": 0}
 
     monkeypatch.setattr(notifier, "flush", flush)
@@ -105,6 +105,10 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
     assert run_check.main() == 0
     result = json.loads(capsys.readouterr().out)
     assert result["ok"] is True
+    # the derive stage still selected the message for extract_llm —
+    # endpoint-down just leaves it pending instead of an artifact
+    assert result["extract_llm"]["selected"] == 1
+    assert result["extract_llm"]["done"] == 0
     assert result["semantic"]["deferred"] == 1
     assert result["semantic"]["failed"] == 0
     assert _BudgetJev.instances and _BudgetJev.instances[0].calls > 0
@@ -119,7 +123,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
             "SELECT COUNT(*) FROM messages").fetchone()[0] == 1
         assert view.db.execute(
             "SELECT COUNT(*) FROM artifacts WHERE kind='extract_v1'"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 1    # instant rule lane stays live
         assert view.db.execute(
             "SELECT COUNT(*) FROM notify_outbox WHERE kind='new_messages'"
         ).fetchone()[0] == 1

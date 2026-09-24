@@ -2936,6 +2936,53 @@ def test_snippet_message_is_not_extracted(tmp_path, monkeypatch):
     db.close()
 
 
+def test_stage_derive_two_lanes(tmp_path, monkeypatch):
+    """Speed lane + quality lane in one stage: the instant rule pass
+    mints extract_v1 immediately (real-time analysis must not wait on
+    the LLM queue) and the bounded v3 pass covers the same message."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1)])
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "s"})
+    result = {"errors": []}
+    run_check.stage_derive(db, result, time.monotonic() + 60)
+    assert result["extracted"] == 1
+    assert result["extract_llm"]["done"] == 1
+    assert db.artifacts("extract_v1", message_id=1)
+    assert db.artifacts("extract_llm", message_id=1)
+    db.close()
+
+
+def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
+    """The v3 drain performs the v1/v2 rule work simultaneously: a
+    claimed row mints its extract_v1 artifact inside the pass AND its
+    rule parse rides the LLM call as `hints` — one pass, both lanes."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(
+        mid=1,
+        body="体温36.5度、SpO2 97%。カロナール500mgを9/1-9/21の期間服用。"
+             "次回9/25訪問予定。確認お願いします")])
+    seen = {}
+
+    def fake(body, **kw):
+        seen.update(kw)
+        return {"summary": "s"}
+
+    monkeypatch.setattr(extract_llm, "llm_extract", fake)
+    out = extract_llm.run_pending(db, limit=5, budget_s=10)
+    assert out["done"] == 1
+    v1 = db.artifacts("extract_v1", message_id=1)
+    assert v1 and "カロナール" in v1[0]["content"]
+    import extract
+    body = db.db.execute(
+        "SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]
+    assert seen["hints"] == extract.extract_message(
+        body, "2026-09-19T00:00:00+09:00")
+    db.close()
+
+
 def test_reconcile_job_rewalks_history_without_since(tmp_path):
     """F04: reconcile is the only surface that refetches below the
     since-cutoff — edits/deletions on old posts become visible."""
