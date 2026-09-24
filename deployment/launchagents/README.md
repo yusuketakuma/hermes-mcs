@@ -6,7 +6,7 @@
 |---|---|---|
 | 未読チェック `run_check.py --json --download-files --mark-read` | `*/15 * * * *` | hermes cron (`mcs_check.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
-| semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（window ~5h→03:30） | hermes cron (`mcs_llm_catchup.sh`) |
+| semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（drain 最大55分 — cron script timeout 3600s 内に収束） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
 | 更新チェック `mcs_update.py check` | `10 5 * * *` | hermes cron (`mcs_update.sh`) |
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
@@ -94,10 +94,14 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   RT 要求が来れば最大 1 call 分だけ queue 待ちさせる trade-off。
   `/slots` 照会失敗時は slot 0 に fallback するため、サーバ停止中も
   stall しない。
-- `mcs_llm_catchup.sh`（hermes cron・22:30–03:30）:
-  `MCS_LLM_SLOT=1` で `extract_qc --steps` → `semantic_drain.py --drain`
-  をループし、QC/semantic ジョブを深夜 window で slot 1 から消化する。
-  run lock は ~2 分 iteration 毎の取得なので定期 tick を餓死させない。
+- `mcs_llm_catchup.sh`（hermes cron・22:30 起動・最大55分）:
+  `MCS_LLM_SLOT=1` で `semantic_drain.py --drain` を走らせ、QC/semantic
+  ジョブを深夜 window で slot 1 から消化する。`WINDOW_S=3300` は
+  hermes cron の script timeout 既定 3600s 未満に収める上限 —
+  超過すると毎回 kill される（tests/ops/test_deployment_scripts.py
+  で固定）。extract drainer 死亡時は shard 0/2 の gap-fill を
+  background で併走する。run lock は ~2 分 iteration 毎の取得なので
+  定期 tick を餓死させない。残 backlog は翌晩に持ち越し。
 
 `MCS_LLM_SLOT=<N>` はプロセス単位の wire id_slot オーバーライド
 （`local_llm.request_slot()`）。llama-server は `-c 65536 -np 2 -fa on

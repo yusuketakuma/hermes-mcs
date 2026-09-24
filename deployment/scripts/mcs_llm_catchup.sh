@@ -23,7 +23,10 @@ if [ -f "__DATA__/update_in_progress.marker" ]; then
 fi
 DRAIN=__REPO__/mcs/semantic/semantic_drain.py
 LOG="__DATA__/semantic_drain.log"
-WINDOW_S=18000
+# Hermes cron のスクリプトタイムアウト既定は
+# cron.script_timeout_seconds=3600s。drain の業務上限は内部で 14h だが、
+# cron 配下で走るこのランチャは timeout 未満に収めないと毎回 kill される。
+WINDOW_S=3300
 
 # gap-fill: if the extract drainer died, cover shard 0/2 on slot 0 too
 if ! pgrep -f "extract_llm.py --all" >/dev/null 2>&1; then

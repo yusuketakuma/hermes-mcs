@@ -654,13 +654,46 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
                   "name": name, "file_hash": file_hash}
 
 
+def prepare_update_pins(req: dict) -> dict:
+    """Resolve update pin fields (target_sha via ls-remote, base_sha via
+    HEAD) BEFORE the write transaction — network I/O must never run
+    while apply_command holds the DB writer lock. Returns a copy with
+    resolvable pins filled; unresolvable pins stay absent so the in-tx
+    path rejects them with a stable reason. Non-apply commands pass
+    through untouched."""
+    if req.get("cmd") != "ops.update_apply":
+        return req
+    out = dict(req)
+    try:
+        import mcs_update
+    except Exception:
+        return out
+    if out.get("target_sha") is None and out.get("tag"):
+        try:
+            sha = mcs_update.remote_tag_sha(out["tag"])
+        except Exception:
+            sha = None
+        if sha is not None:
+            out["target_sha"] = sha
+    if out.get("base_sha") is None:
+        try:
+            base = mcs_update.current_version()[1]
+        except Exception:
+            base = None
+        if base is not None:
+            out["base_sha"] = base
+    return out
+
+
 def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     """Schedule an updater run — the receipt commit IS the approval
     boundary (R7/S9): nothing executes inside this transaction; the
     drain layer spawns the detached updater AFTER commit. The receipt
     pins tag + target/base sha so approval is for a specific commit.
     Rejects up front when the updater cannot possibly run — a receipt
-    that claims 'scheduled' while nothing can launch it is a lie (C)."""
+    that claims 'scheduled' while nothing can launch it is a lie (C).
+    sha pins must arrive resolved (prepare_update_pins pre-tx); this
+    function never performs network I/O inside the write transaction."""
     try:
         import mcs_update
         from mcs_util import load_config
@@ -687,12 +720,10 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     if req["cmd"] == "ops.update_apply":
         sha = req.get("target_sha")
         if sha is None:
-            try:
-                sha = mcs_update.remote_tag_sha(req["tag"])
-            except Exception:
-                sha = None
-            if sha is None:
-                return "update_tag_unresolvable", {}
+            # pins are resolved pre-tx by prepare_update_pins; absent
+            # here means resolution failed there — never ls-remote
+            # while holding the DB writer lock
+            return "update_tag_unresolvable", {}
         extra["target_sha"] = sha
         base = req.get("base_sha")
         if base is None:

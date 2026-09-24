@@ -1268,7 +1268,9 @@ def rollback(command_id: str | None = None) -> int:
             rb_error = None
             try:
                 _rollback_tree(entry)
-            except UpdateError as e:
+            except Exception as e:
+                # not just UpdateError — any failure here must still
+                # reach restart_agents() below (drainers are quiesced)
                 rb_error = e
             # restart ALWAYS runs after quiesce — a failed rollback
             # must never leave drainers down (H4)
@@ -1349,16 +1351,22 @@ def _restore_db(backup_path: str) -> None:
         except OSError:
             pass
     tmp = LEDGER + ".restore-tmp"
-    with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-        dst.flush()
-        os.fsync(dst.fileno())
-    os.replace(tmp, LEDGER)
-    dfd = os.open(os.path.dirname(LEDGER), os.O_RDONLY)
     try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+        with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(tmp, LEDGER)
+        dfd = os.open(os.path.dirname(LEDGER), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as e:
+        # callers catch UpdateError (apply bail / recover escalate /
+        # rollback rb_error); a raw OSError would slip past them and
+        # leave quiesced drainers down
+        raise UpdateError(f"restore_failed: {e}") from e
     if not ledger.valid_mcs_db(LEDGER):
         raise UpdateError("restore_verify_failed")
 

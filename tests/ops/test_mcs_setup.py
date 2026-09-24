@@ -380,6 +380,33 @@ def test_self_posts_and_notify_block_validated():
                     "guild_id": "2", "channel_id": "3"}}})
     assert errors == []
 
+    # slack transport is a first-class interactive value — the update
+    # precheck/postcheck runs validate_config, so a slack deployment
+    # must validate or every update is vetoed as a config error
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "slack"}})
+    assert any("notify.slack" in e for e in errors)
+
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "slack",
+        "slack": {"profile": "p", "application_id": "1",
+                  "team_id": "T1", "channel_id": "C1"}}})
+    assert errors == []
+
+    # slack scope must not carry a discord tenant field
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "slack",
+        "slack": {"profile": "p", "application_id": "1",
+                  "team_id": "T1", "channel_id": "C1",
+                  "guild_id": "9"}}})
+    assert any("guild_id" in e for e in errors)
+
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "slack",
+        "slack": {"profile": "p", "application_id": "1",
+                  "channel_id": "C1"}}})
+    assert any("team_id" in e for e in errors)
+
 
 def _init_env(monkeypatch, tmp_path, cfg):
     """Common stubs for init tests — no real FS/keychain/prompts."""
@@ -748,6 +775,37 @@ def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
     mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG),
                                         _plugin_args())
     assert ("", "DISCORD_BOT_TOKEN", "tok") in sets
+
+
+def test_plugin_integration_token_written_to_serving_profile(
+        monkeypatch):
+    """The bot token is a PROFILE-scoped secret — under multiplex a
+    named profile never falls through to the default .env, so the
+    token must land where the plugin actually serves (F-token)."""
+    sets = _plugin_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
+    mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco"))
+    assert ("cco", "DISCORD_BOT_TOKEN", "tok") in sets
+    assert not any(k == "DISCORD_BOT_TOKEN" and p == ""
+                   for p, k, _ in sets)
+
+
+def test_plugin_integration_token_check_reads_serving_profile(
+        monkeypatch):
+    """'Already set' detection must query the serving profile — a
+    token present only in the default .env must NOT silence setup for
+    profile cco (it would leave the serving profile unable to auth)."""
+    sets = _plugin_env(monkeypatch)
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_config_get",
+        lambda e, p, k: "tok" if (p, k) == ("cco", "DISCORD_BOT_TOKEN")
+        else None)
+    mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco"))
+    # token seen on cco -> reported set, no write attempted
+    assert not any(k == "DISCORD_BOT_TOKEN" for _, k, _ in sets)
 
 
 def test_check_warns_when_gateway_unsupervised(monkeypatch):
