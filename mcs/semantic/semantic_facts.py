@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import re
 import unicodedata
 
 from mcs_requests import payload_hash
@@ -85,8 +84,6 @@ RELATION_TYPES = (
 CONTENT_QUALITIES = ("full", "partial")
 
 UNKNOWN = "unknown"
-
-_ID_RE = re.compile(r"^[a-z]+_[0-9a-f]{16}$")
 
 
 class ContractError(ValueError):

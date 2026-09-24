@@ -1292,6 +1292,50 @@ def test_adherence_past_status_excluded(led):
                 if s["type"] == "adherence_concern"]
 
 
+@pytest.mark.parametrize("body,expected", [
+    ("服薬管理できています", False),
+    ("服薬管理できるようになりました", False),
+    ("服薬管理できません", True),
+    ("服薬管理できない", True),
+])
+def test_adherence_capability_distinguishes_ability(led, body, expected):
+    _msg(led.db, 1, ts=NOW - DAY, body=body)
+    _ev(led)
+    found = any(s["type"] == "adherence_concern"
+                for s in mcs_signals.current_open(led.db)["items"])
+    assert found is expected
+
+
+@pytest.mark.parametrize("evidence", [
+    "薬Aを受け取り出来ない", "薬Aを受け取りできない",
+    "薬Aを受け取り出来ません", "薬Aを受け取りできません",
+])
+def test_adherence_extracted_capability_spellings(led, evidence):
+    _msg(led.db, 1, ts=NOW - DAY, body=evidence)
+    _extract_doc(led.db, 1, "h1", meds=[
+        {"name": "薬A", "action": "none", "evidence": evidence}])
+    _ev(led)
+    assert _states(led.db).get("adherence_concern:1:1") == "open"
+
+
+@pytest.mark.parametrize("state", ["snippet", "unknown", "deleted"])
+def test_adherence_body_scan_requires_available_full_record(led, state):
+    _msg(led.db, 1, ts=NOW - DAY, body="飲み忘れが多い")
+    led.db.execute("UPDATE messages SET body_state=?", (state,))
+    _ev(led)
+    assert "adherence_concern:1:1" not in _states(led.db)
+
+
+def test_deleted_responder_does_not_resolve_unanswered_request(led):
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1", requests=[_req_item("薬剤師", "残薬確認")])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2", prof="薬剤師")
+    led.db.execute("UPDATE messages SET body_state='deleted',body_text='' "
+                   "WHERE message_id=2")
+    _ev(led)
+    assert _states(led.db).get("pharmacist_request_unanswered:1:1") == "open"
+
+
 def test_task_like_to_not_pharmacist_addressed(led):
     """A free-text requests.to that merely contains 薬 (「薬の確認」)
     is not pharmacist-addressed — it is other-profession visibility."""
@@ -1312,12 +1356,25 @@ def test_urgency_high_from_extract_v1_escalates(led):
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     led.db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES ('extract_v1',?,?,'{}')",
-        (1, json.dumps({"urgency": "high"})))
+        "VALUES ('extract_v1',?,?,?)",
+        (1, json.dumps({"urgency": "high"}), json.dumps({"hash": "h1"})))
     res = _ev(led, cfg={"signals": {"notify": True}})
     assert res["notify_enqueued"] == 1
     pl = _outbox_payloads(led)[0]
     assert pl.get("digest") is not True and pl["urgent"] is True
+
+
+@pytest.mark.parametrize("kind", ["extract_llm", "extract_v1"])
+def test_stale_high_urgency_does_not_escalate_current_signal(led, kind):
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    led.db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) VALUES(?,1,?,?)",
+        (kind, json.dumps({"urgency": "high"}), json.dumps({"hash": "old-body"})))
+    res = _ev(led, cfg={"signals": {"notify": True}})
+    assert res["notify_enqueued"] == 1
+    pl = _outbox_payloads(led)[0]
+    assert pl.get("digest") is True and not pl.get("urgent")
 
 
 def test_self_sets_explicit_empty_is_not_unset(led):
