@@ -140,6 +140,38 @@ def test_llm_extract_attaches_bounded_integrity_to_nonempty_output(
     assert meta["length_stops"] == 0
 
 
+def test_chat_returns_llama_timings_sanitized():
+    """llama.cpp `timings` rides the response dict — prompt eval and
+    decode are measured separately so throughput tuning has data."""
+    payload = _response('{"a": 1}')
+    payload["timings"] = {"prompt_n": 900, "prompt_ms": 3100.5,
+                          "predicted_n": 40, "predicted_ms": 2200,
+                          "cache_n": 800, "text": "ignored",
+                          "nope": -1}
+    response = local_llm.chat("prompt", request_fn=_fake_request(payload))
+    assert response["timings"] == {
+        "prompt_n": 900, "prompt_ms": 3100.5, "predicted_n": 40,
+        "predicted_ms": 2200, "cache_n": 800}
+    # absent timings -> absent key content, never a crash
+    response = local_llm.chat("prompt",
+                              request_fn=_fake_request(_response("{}")))
+    assert response["timings"] is None
+
+
+def test_llm_extract_integrity_aggregates_timings(monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    payload = _response('{"summary": "s"}')
+    payload["timings"] = {"prompt_n": 100, "prompt_ms": 500,
+                          "predicted_n": 10, "predicted_ms": 200,
+                          "cache_n": 60}
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        _fake_request(payload))
+    meta = {}
+    extract_llm.llm_extract("本文", meta_out=meta)
+    assert meta["timings"]["cache_n"] == 60
+    assert meta["timings"]["predicted_ms"] == 200
+
+
 def test_llm_chat_pins_background_slot(monkeypatch):
     """semantic.llm_chat must pin every call to slot 1 (wire id_slot 0)
     so slot 2 stays reserved for real-time traffic."""

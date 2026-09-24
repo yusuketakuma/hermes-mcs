@@ -2943,6 +2943,9 @@ def test_stage_derive_two_lanes(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     db.save_messages([_message(mid=1)])
+    # batch off keeps this test on the llm_extract seam — the batch
+    # path would reach the real server through its worker subprocess
+    monkeypatch.setattr(extract_llm, "_BATCH_K", 0)
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "s"})
     result = {"errors": []}

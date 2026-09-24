@@ -130,10 +130,16 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
   `mcs/core/local_llm.py` の `SLOT_1`/`SLOT_2`/`request_slot()` が
   規約の正本
 - パラメータ: `temperature: 0`・`enable_thinking: false` で決定的出力。
-  extract_llm は `max_tokens: 1400`・timeout 90s。長文は全文をチャンク
+  extract_llm は `max_tokens: 1400`・timeout 300s。長文は全文をチャンク
   分割して全区間を処理(先頭打ち切りなし)。サーバ対応を合成ペイロードで
   probe し `json_schema → json_object → plain` の順で出力形式を選択、
   拒否時は1段降格して再試行
+- スループット: context 無し・単一チャンクの本文は `--batch K` (既定4、
+  0-8) で1コールに集約 — キュー待ちと仕様評価を K 件で償却。item 毎に
+  各本文へ検証・evidence 照合し、欠落/無効 item はその場で単発 retry。
+  検証で drop が出た出力は修復プロンプト(問題点+却下出力を提示)で
+  1回だけ再問し、改善した場合のみ採用。llama.cpp `timings`
+  (prompt_ms/predicted_ms/cache_n) は artifact meta に集計される
 - 抽出スキーマ v2: 薬剤は `action`(start/stop/…/none)・`status`
   (current/past/planned)・`subject`(patient/family/other)・`negated`、
   症状は `status`(new/ongoing/resolved/past)・`negated`、依頼は
@@ -802,8 +808,10 @@ $PY mcs/core/init_data.py --project <id>       # 患者個別
   `--all` は per-write lock のみで run.lock を長期保持しない
   (tick を阻害しない)。`--shard I/N` で message_id%N による分割
   drain、`--slot N` で wire id_slot pin、`--lend-rt` で RT slot の
-  idle 時借用(polite lending) — 2系統の常駐drainerが shard 0/2 と
-  1/2 を分担する (deployment/launchagents/README.md 参照)
+  idle 時借用(polite lending)、`--batch K` で context 無し単一
+  チャンク本文の集約呼出し(既定4、0 で単発固定) — 2系統の常駐
+  drainerが shard 0/2 と 1/2 を分担する
+  (deployment/launchagents/README.md 参照)
 - `rollup.py` — 患者ロールアップ (kind='patient_rollup'): 最新バイタル・
   現在の薬期間・薬剤一覧・直近症状(否定統合済み)・未解決依頼・次回予定・
   possibly_deleted を患者毎に原子的再構築。`dirty_projects()` で
