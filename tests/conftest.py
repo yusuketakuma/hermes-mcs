@@ -114,6 +114,34 @@ _install(socket.socket, "connect_ex", _blocked)
 _install(subprocess, "run", _guarded_run)
 _install(subprocess, "Popen", _guarded_popen)
 
+# The jev transport spawns a fresh interpreter for every request, so the
+# in-process socket guard cannot reach it — a call that slips past a
+# test's fakes would hit the real local LLM / Jev for real. Synthetic
+# loopback servers stay allowed (real-transport tests exercise the
+# worker against their own fixture endpoints); only the production
+# endpoints are denied at the boundary.
+import local_llm  # noqa: E402
+import semantic_jev as _jev  # noqa: E402
+
+_LIVE_ENDPOINTS = frozenset(
+    {local_llm.ENDPOINT, _jev.JEV_ENDPOINT, _jev.JEV_MODELS_URL}
+    | set(_jev.JEV_ALLOWED_ENDPOINTS))
+
+
+def _guarded_http_request(endpoint, *args, **kwargs):
+    # Only a real spawn can reach a live endpoint — tests that stub
+    # Popen (wire-replay fakes, synthetic workers) never touch the
+    # network, so they pass through and exercise the transport contract.
+    if (endpoint in _LIVE_ENDPOINTS
+            and subprocess.Popen is _guarded_popen):
+        raise RuntimeError(
+            "live LLM/Jev endpoints are disabled in MCS tests")
+    return _ORIG_HTTP_REQUEST(endpoint, *args, **kwargs)
+
+
+_ORIG_HTTP_REQUEST = _jev.bounded_http_request
+_install(_jev, "bounded_http_request", _guarded_http_request)
+
 
 def _restore() -> None:
     while _ORIGINALS:
