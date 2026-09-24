@@ -33,6 +33,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S, JST,
                          iter_period_ends, med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
+from structured_view import latest_artifact
 
 ARTIFACT_KIND = "signal_v1"
 
@@ -223,6 +224,7 @@ def _self_post_exists(db, pid, ts, professions, organizations):
         return False
     return db.execute(
         f"SELECT 1 FROM messages WHERE project_id=? AND posted_at_ts>?"
+        " AND body_state IS NOT 'deleted'"
         f" AND ({' OR '.join(pred)}) LIMIT 1",
         (pid, ts, *params)).fetchone() is not None
 
@@ -577,13 +579,15 @@ def _rx_request_visibility(db, now, th, sig_cfg):
 ADHERENCE_PATTERNS = ("飲み忘れ", "飲みのこし", "飲んでいない",
                       "飲めていない", "飲めない", "飲みきれない", "残薬が",
                       "残薬あり", "残薬がある", "自己中断", "自己中止",
-                      "服薬管理が難し", "服薬管理でき", "管理できな")
+                      "服薬管理が難し", "管理できな")
 # capability claims ending in a negation ARE the concern — the tail
 # check would eat the ない that completes them, so these match as-is
 ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
                       "管理は出来ません", "管理はできません",
                       "管理が出来ない", "管理ができない",
-                      "管理が出来ません", "管理ができません")
+                      "管理が出来ません", "管理ができません",
+                      "服薬管理出来ない", "服薬管理できない",
+                      "服薬管理出来ません", "服薬管理できません")
 # てい/してい covers 「飲み忘れていない」「飲み忘れはしていない」;
 # ません covers 「残薬ありません」 (the pattern consumes the あり)
 _NEGATE_RE = re.compile(
@@ -634,7 +638,7 @@ def _adherence_concern(db, now, th, sig_cfg):
               AND COALESCE(json_extract(je.value,'$.status'),
                            'current')!='past'
               AND (json_extract(je.value,'$.negated') IS 1
-                   OR NOT {MED_NOT_CAPABILITY_SQL})
+                   OR NOT ({MED_NOT_CAPABILITY_SQL}))
             ORDER BY m.project_id, m.message_id""",
         (horizon, *self_params)).fetchall()
     for pid, mid, ts, med in rows:
@@ -651,6 +655,7 @@ def _adherence_concern(db, now, th, sig_cfg):
             JOIN patients p ON p.project_id=m.project_id
             WHERE m.posted_at_ts IS NOT NULL AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0 AND m.body_text IS NOT NULL
+              AND m.body_state='full'
               AND ({like_pred})
               {self_pred}""",
         (horizon,
@@ -1010,17 +1015,8 @@ def _urgency_high(db, sig):
     if type(mid) is not int:
         return False
     for kind in ("extract_llm", "extract_v1"):
-        row = db.execute(
-            "SELECT content FROM artifacts WHERE message_id=? "
-            "AND kind=? ORDER BY artifact_id DESC LIMIT 1",
-            (mid, kind)).fetchone()
-        if not row or not row["content"]:
-            continue
-        try:
-            doc = json.loads(row["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(doc, dict) and doc.get("urgency") == "high":
+        doc = latest_artifact(db, kind, mid)
+        if doc and doc.get("urgency") == "high":
             return True
     return False
 

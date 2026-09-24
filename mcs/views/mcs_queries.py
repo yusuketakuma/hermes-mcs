@@ -158,13 +158,10 @@ MED_PATIENT_CURRENT_SQL = (
 # Change-claim readers (signals, transition stats) exclude these; the
 # adherence_concern detector picks the same mentions up as a
 # different, honestly-labelled signal.
-MED_NOT_CAPABILITY_SQL = (
-    "COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%出来ない%' "
-    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%できない%' "
-    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%出来ません%' "
-    "AND COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%できません%'")
-
 MED_CAPABILITY_PATTERNS = ("出来ない", "できない", "出来ません", "できません")
+MED_NOT_CAPABILITY_SQL = " AND ".join(
+    f"COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%{pattern}%'"
+    for pattern in MED_CAPABILITY_PATTERNS)
 
 
 def med_capability_evidence(ev) -> bool:
