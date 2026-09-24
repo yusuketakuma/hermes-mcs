@@ -4,7 +4,7 @@
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
-| 未読チェック `run_check.py --json --download-files --mark-read` | `*/15 * * * *` | hermes cron (`mcs_check.sh`) |
+| 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *` | hermes cron (`mcs_check.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
 | semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（drain 最大55分 — cron script timeout 3600s 内に収束） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
@@ -53,7 +53,7 @@ for s in mcs_check mcs_deep mcs_llm_catchup llamacpp_restart_if_idle mcs_update;
 done
 
 # 2. hermes cron 登録（--no-agent: stdout空=成功時沈黙、alert行のみ通知）
-hermes cron create "*/15 * * * *" --name "MCS unread check" \
+hermes cron create "*/5 * * * *" --name "MCS unread check" \
   --script mcs_check.sh --no-agent --deliver local
 hermes cron create "7,37 * * * *" --name "MCS durable drain" \
   --script mcs_deep.sh --no-agent --deliver local
@@ -88,7 +88,7 @@ done
 backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 導入）:
 
 - `ai.mcs.extract-drainer`: `--all --shard 0/2 --slot 0` — 日中も常駐し、
-  15分 tick は `oldest_first` で反対側から進むため選択が重ならない。
+  5分 tick は `oldest_first` で反対側から進むため選択が重ならない。
 - `ai.mcs.extract-drainer-rt`: `--all --shard 1/2 --lend-rt` — 全call前に
   `/slots` を照会し、RT slot が空いていれば借用する（polite lending）。
   RT 要求が来れば最大 1 call 分だけ queue 待ちさせる trade-off。

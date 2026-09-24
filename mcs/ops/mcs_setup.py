@@ -1040,7 +1040,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 
 CRON_JOBS = [
-    ("MCS unread check", "*/15 * * * *", "mcs_check.sh"),
+    ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
     ("MCS durable drain", "7,37 * * * *", "mcs_deep.sh"),
     ("MCS LLM catchup", "30 22 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),

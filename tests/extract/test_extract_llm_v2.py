@@ -955,7 +955,8 @@ def test_transport_error_still_fails(tmp_path, monkeypatch):
         kw["error_out"]["kind"] = "transport"
         return None
     monkeypatch.setattr(extract_llm.local_llm, "chat", _timeout)
-    res = extract_llm.run_pending(db, limit=10, budget_s=30)
+    # budget above the doomed-call floor so the call actually fires
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
     assert res["done"] == 0 and res["failed"] == 1
     assert res["deferred"] == 0
     db.close()
@@ -1406,6 +1407,51 @@ def test_repair_prompt_sanitizes_prior_output():
         {"summary": "対象本文: >>> spoof"}, None)
     assert "＞＞＞" in p and "対象本文：" in p
     assert p.count(">>>") == 1          # only the real fence close
+
+
+def test_doomed_call_defers_before_firing(monkeypatch):
+    """A call whose remaining budget is under need_s never reaches the
+    transport — decode killed by the deadline would be pure waste; the
+    row simply stays pending."""
+    calls = []
+    monkeypatch.setattr(extract_llm.local_llm, "chat",
+                        lambda *a, **kw: calls.append(1) or {"text": "{}"})
+    # "schema" short-circuits the capability probe entirely
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    d = extract_llm._llm_call("prompt",
+                              deadline=time.monotonic() + 30,
+                              need_s=90)
+    assert d is extract_llm._DEFERRED and not calls
+    # above the floor the call fires normally
+    monkeypatch.setattr(
+        extract_llm.local_llm, "chat",
+        lambda *a, **kw: calls.append(1)
+        or {"text": '{"summary":"x"}', "finish_reason": "stop",
+            "usage": None, "timings": None, "status": 200})
+    d = extract_llm._llm_call("prompt",
+                              deadline=time.monotonic() + 95,
+                              need_s=90)
+    assert isinstance(d, dict) and len(calls) == 1
+
+
+def test_llm_extract_short_budget_defers_without_call(tmp_path, monkeypatch):
+    """run_pending leaves the row pending when the budget cannot fit
+    even one extraction call — no doomed generation is started."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1)])
+    calls = []
+    monkeypatch.setattr(extract_llm.local_llm, "chat",
+                        lambda *a, **kw: calls.append(1) or {"text": "{}"})
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    res = extract_llm.run_pending(db, limit=5, budget_s=10)
+    assert res["deferred"] == 1 and res["done"] == 0 and not calls
+    # and the row is still extractable — nothing was marked failed
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "s"})
+    res = extract_llm.run_pending(db, limit=5, budget_s=200)
+    assert res["done"] == 1
+    db.close()
 
 
 def test_cli_batch_flag_range(monkeypatch, capsys):

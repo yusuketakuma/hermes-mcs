@@ -662,7 +662,8 @@ def _integrity_summary(notes: list) -> dict:
 
 def _llm_call(prompt: str, deadline: float | None = None,
               schema: dict | None = None,
-              max_tokens: int = MAX_TOKENS) -> dict | None:
+              max_tokens: int = MAX_TOKENS,
+              need_s: float | None = None) -> dict | None:
     """One chat-completions round-trip -> the model's JSON object, or
     None on transport/parse failure. Applies the probed
     response_format; a format rejected mid-run (server restart/model
@@ -670,11 +671,16 @@ def _llm_call(prompt: str, deadline: float | None = None,
     retries — the global mode follows the degrade so later calls stop
     paying the rejected round-trip, and _probe_format's cooldown
     re-probes upward again.  `schema` overrides the single-message
-    contract (the batch path pins _SCHEMA_BATCH).  Response integrity
-    metadata is appended to thread-local integrity notes consumed by
-    ``llm_extract``; the visible result is unchanged."""
+    contract (the batch path pins _SCHEMA_BATCH).  `need_s` is the
+    estimated seconds the call needs to finish — when less than that
+    remains before `deadline`, the call is deferred BEFORE firing: a
+    request killed mid-decode by the deadline wastes the whole
+    generation, while a deferred row just stays pending.  Response
+    integrity metadata is appended to thread-local integrity notes
+    consumed by ``llm_extract``; the visible result is unchanged."""
     global _FMT_MODE
-    if deadline is not None and time.monotonic() >= deadline:
+    if deadline is not None \
+            and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
     fmt = _probe_format(deadline=deadline)
     while True:
@@ -854,7 +860,7 @@ def llm_extract(body: str, *, context: str | None = None,
             outs.append(saved[i])
             continue
         d = _llm_call(prompt + thead + piece + _PROMPT_TAIL,
-                      deadline=deadline)
+                      deadline=deadline, need_s=_MIN_CALL_S)
         if d is _DEFERRED:
             return _DEFERRED
         drops: dict = {}
@@ -871,7 +877,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 rd = _llm_call(
                     _repair_prompt(posted_at, issues, d, hints)
                     + piece + _PROMPT_TAIL,
-                    deadline=deadline)
+                    deadline=deadline, need_s=_MIN_REPAIR_S)
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
@@ -1168,6 +1174,23 @@ _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
 
 _BATCH_K = 4                     # context-free bodies per batched call
 _BATCH_MAX_TOKENS = MAX_TOKENS * 2   # K outputs share one envelope
+
+# Doomed-call floors (llama timings, Sep 2026: ~8s prompt eval, ~3.6
+# tok/s decode -> ~80s for a typical single, ~120-180s for a 4-batch).
+# A call whose remaining budget is below its floor would almost
+# certainly be killed mid-decode — server-side generation cancelled,
+# every produced token wasted. Deferring costs nothing: the row stays
+# pending and a drainer with a real budget picks it up next cycle.
+_MIN_CALL_S = 90.0      # one full extraction call (eval + decode)
+_MIN_REPAIR_S = 60.0    # repair re-ask (same body, fresh full output)
+_BATCH_PER_ITEM_S = 30.0  # decode share per item inside a batch call
+
+
+def _batch_need_s(n: int) -> float:
+    """Estimated wall time a batch call needs to actually finish —
+    a floor proportional to items because decode dominates and scales
+    with output size, not with the shared prompt."""
+    return 60.0 + _BATCH_PER_ITEM_S * n
 
 
 def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
@@ -1522,7 +1545,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
                            for _, r, _c, _s, hints, _l in tups]),
             deadline=deadline, schema=_SCHEMA_BATCH,
-            max_tokens=_BATCH_MAX_TOKENS)
+            max_tokens=_BATCH_MAX_TOKENS,
+            need_s=_batch_need_s(len(tups)))
         meta = _integrity_summary(notes[start:])
         meta["batch"] = len(tups)
         if d is _DEFERRED:
