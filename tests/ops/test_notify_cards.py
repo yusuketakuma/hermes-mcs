@@ -499,6 +499,41 @@ def test_card_body_oversized_item_capped_marked(led, tmp_path):
     assert seen == {100, 101} and marked
 
 
+def test_card_page_indicator_shows_position(led, tmp_path):
+    """F05: a multi-page card must display order and count, not just
+    nav buttons — the reader must see which page they are on."""
+    _patient(led, 1)
+    body = "記録の本文です。" * 40
+    _msg(led, 100, 1, body=body)
+    for m in range(101, 114):
+        _msg(led, m, 1, parent=100, body=body)
+    ev = _intent(led, payload={"message_ids": list(range(100, 114))})
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    assert c["pages"] > 1
+    ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
+    assert "ページ" in ftxt and "全14件" in ftxt
+    # last page shows the final range
+    card["ui_state"] = json.dumps({"page": c["pages"] - 1})
+    c = notify_cards._card_content(led.db, card)
+    ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
+    assert f"{c['pages']}/{c['pages']} ページ" in ftxt
+    # single-page card carries no page line at all
+    _patient(led, 2)
+    _msg(led, 200, 2)
+    ev2 = _intent(led, pid=2, payload={"message_ids": [200]})
+    _dispatch(led, ev2)
+    card2 = dict(led.db.execute(
+        "SELECT * FROM notification_cards ORDER BY card_id DESC LIMIT 1"
+        ).fetchone())
+    c2 = notify_cards._card_content(led.db, card2)
+    assert c2["pages"] == 1
+    assert "ページ" not in "\n".join(
+        b.get("text") or "" for b in c2["footer"])
+
+
 def test_fit_item_field_shrinks_as_last_resort(led):
     """Pathological input (huge field value, no shrinkable text) still
     fits the page budget — an over-budget item must never make the

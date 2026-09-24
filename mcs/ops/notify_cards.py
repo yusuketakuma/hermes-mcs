@@ -704,6 +704,16 @@ def _card_content(db, card) -> dict:
             containers.extend(sig_blocks[k])
         shown_kind = "signal_keys"
     footer = _footer(db, card)
+    if pages > 1:
+        # F05: 順序・件数を表示 — a multi-page card must say where the
+        # reader is, not just offer nav buttons
+        idx = pages_idx[page]
+        if shown_kind == "message_ids":
+            pos = f"{idx[0] + 1}〜{idx[-1] + 1}件目 / 全{len(msgs)}件"
+        else:
+            pos = f"候補 {idx[0] + 1}〜{idx[-1] + 1} / {len(ordered)}件"
+        footer.append({"type": "text",
+                       "text": f"{page + 1}/{pages} ページ（{pos}）"})
     return {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
