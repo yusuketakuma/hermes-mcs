@@ -423,7 +423,9 @@ def _cap_card_text(text, cap=PAGE_TEXT_BUDGET) -> str:
 def _fit_item(blocks) -> list:
     """Bound one pageable item (a signal's block set) to the per-page
     budget: the largest text/quote block shrinks first — structured
-    fields are never cut. Converges within len(blocks) passes."""
+    fields yield only as a last resort, since an item left over budget
+    would make the whole spec fail validation and the card render
+    nothing at all."""
     for _ in range(len(blocks)):
         over = _blocks_len(blocks) - PAGE_TEXT_BUDGET
         if over <= 0:
@@ -435,6 +437,13 @@ def _fit_item(blocks) -> list:
             break
         keep = len(target["text"]) - over - 40
         target["text"] = _cap_card_text(target["text"], keep)
+    for b in blocks:
+        over = _blocks_len(blocks) - PAGE_TEXT_BUDGET
+        if over <= 0:
+            break
+        if b["type"] == "field" and len(b.get("value") or "") > 120:
+            keep = len(b["value"]) - over - 40
+            b["value"] = _cap_card_text(b["value"], keep)
     return blocks
 
 
