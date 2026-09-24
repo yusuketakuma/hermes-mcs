@@ -1,0 +1,241 @@
+"""Durable worker registry — one JSON document under discord_state.
+
+Holds what the snapshot cannot: deliveries claimed since the last
+snapshot publish, message -> card bindings learned at send time, the
+token context carried by each rendered button, in-flight modal /
+confirm flows, followup tokens (15-minute Discord ceiling), and the
+per-scope capability cache. Rewritten atomically on every mutation;
+a lost file is rebuilt from the snapshot — never invented.
+"""
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import time
+
+CONFIRM_TTL_S = 600          # pending_confirms: preview -> confirm
+FOLLOWUP_TTL_S = 840         # Discord interaction tokens die ~15 min
+CAPABILITY_NEG_S = 900       # negative thread-capability cache
+
+
+def new_worker_id() -> str:
+    return secrets.token_hex(8)
+
+
+def new_attempt_id() -> str:
+    return secrets.token_hex(8)
+
+
+def new_modal_id() -> str:
+    return secrets.token_hex(8)
+
+
+def new_confirm_id() -> str:
+    return secrets.token_hex(8)
+
+
+DEAD_TTL_S = 86400          # dropped delivery_ids — one-shot by design
+
+
+def _default() -> dict:
+    return {"v": 1,
+            "claims": {}, "messages": {}, "tokens": {},
+            "pending_modals": {}, "pending_confirms": {},
+            "followups": {}, "capabilities": {}, "dead": {}}
+
+
+class Registry:
+    def __init__(self, state_dir: str):
+        self._path = os.path.join(state_dir, "registry.json")
+        try:
+            with open(self._path, "rb") as handle:
+                data = json.loads(handle.read().decode("utf-8"))
+        except (OSError, ValueError):
+            data = None
+        self._data = data if isinstance(data, dict) else _default()
+        for key, default in _default().items():
+            self._data.setdefault(key, default)
+
+    def save(self) -> None:
+        raw = json.dumps(self._data, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+        fd, temp = None, None
+        import tempfile
+        fd, temp = tempfile.mkstemp(prefix=".reg-", suffix=".tmp",
+                                    dir=os.path.dirname(self._path))
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temp, 0o600)
+            os.replace(temp, self._path)
+            dfd = os.open(os.path.dirname(self._path),
+                          os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+            raise
+
+    # -- claims ----------------------------------------------------
+
+    def claim(self, delivery_id: str, record: dict) -> None:
+        self._data["claims"][delivery_id] = record
+        self.save()
+
+    def claimed(self, delivery_id: str) -> dict | None:
+        return self._data["claims"].get(delivery_id)
+
+    def drop_claim(self, delivery_id: str) -> None:
+        if self._data["claims"].pop(delivery_id, None) is not None:
+            self.save()
+        self.mark_dead(delivery_id)
+
+    def release_claim(self, delivery_id: str) -> None:
+        """Drop WITHOUT a dead tombstone — for transient denials where
+        the spec stays legitimately claimable (e.g. interactive_off)."""
+        if self._data["claims"].pop(delivery_id, None) is not None:
+            self.save()
+
+    # a dropped claim is final: every render mints a fresh delivery_id,
+    # so re-claiming the same spec file can only churn denied begins
+    def mark_dead(self, delivery_id: str) -> None:
+        self._data["dead"][str(delivery_id)] = time.time()
+        self.save()
+
+    def is_dead(self, delivery_id: str) -> bool:
+        return str(delivery_id) in self._data["dead"]
+
+    def claims(self) -> dict:
+        return self._data["claims"]
+
+    # -- message index ---------------------------------------------
+
+    def bind_message(self, message_id: str, record: dict) -> None:
+        self._data["messages"][str(message_id)] = record
+        self.save()
+
+    def message(self, message_id: str) -> dict | None:
+        return self._data["messages"].get(str(message_id))
+
+    def drop_message(self, message_id: str) -> None:
+        if self._data["messages"].pop(str(message_id), None) is not None:
+            self.save()
+
+    # -- token context (spec action_rows capture) ------------------
+
+    def put_tokens(self, token_map: dict) -> None:
+        """token -> {action, params, card_key, message_id, channel_id}."""
+        changed = False
+        for token, ctx in token_map.items():
+            if self._data["tokens"].get(token) != ctx:
+                self._data["tokens"][token] = ctx
+                changed = True
+        if changed:
+            self.save()
+
+    def token(self, token: str) -> dict | None:
+        return self._data["tokens"].get(token)
+
+    # -- pending modal / confirm flows -----------------------------
+
+    def put_modal(self, modal_id: str, record: dict) -> None:
+        self._data["pending_modals"][modal_id] = {
+            **record, "expires": time.time() + CONFIRM_TTL_S}
+        self.save()
+
+    def modal(self, modal_id: str) -> dict | None:
+        rec = self._data["pending_modals"].get(modal_id)
+        if rec and rec.get("expires", 0) <= time.time():
+            self._data["pending_modals"].pop(modal_id, None)
+            self.save()
+            return None
+        return rec
+
+    def drop_modal(self, modal_id: str) -> None:
+        if self._data["pending_modals"].pop(modal_id, None) is not None:
+            self.save()
+
+    def put_confirm(self, confirm_id: str, record: dict) -> None:
+        self._data["pending_confirms"][confirm_id] = {
+            **record, "expires": time.time() + CONFIRM_TTL_S}
+        self.save()
+
+    def confirm(self, confirm_id: str) -> dict | None:
+        rec = self._data["pending_confirms"].get(confirm_id)
+        if rec and rec.get("expires", 0) <= time.time():
+            self._data["pending_confirms"].pop(confirm_id, None)
+            self.save()
+            return None
+        return rec
+
+    def drop_confirm(self, confirm_id: str) -> None:
+        if self._data["pending_confirms"].pop(confirm_id,
+                                              None) is not None:
+            self.save()
+
+    # -- followups --------------------------------------------------
+
+    def put_followup(self, command_id: str, record: dict) -> None:
+        self._data["followups"][command_id] = {
+            **record, "expires": time.time() + FOLLOWUP_TTL_S}
+        self.save()
+
+    def followup(self, command_id: str) -> dict | None:
+        rec = self._data["followups"].get(command_id)
+        if rec and rec.get("expires", 0) <= time.time():
+            self._data["followups"].pop(command_id, None)
+            self.save()
+            return None
+        return rec
+
+    def drop_followup(self, command_id: str) -> None:
+        if self._data["followups"].pop(command_id, None) is not None:
+            self.save()
+
+    def followups(self) -> dict:
+        return dict(self._data["followups"])
+
+    # -- capability cache ------------------------------------------
+
+    def capability(self, scope_key: str) -> dict | None:
+        rec = self._data["capabilities"].get(scope_key)
+        if not rec:
+            return None
+        if rec.get("ok") is False \
+                and rec.get("at", 0) + CAPABILITY_NEG_S <= time.time():
+            return None                     # negative entries age out
+        return rec
+
+    def put_capability(self, scope_key: str, ok: bool) -> None:
+        self._data["capabilities"][scope_key] = {
+            "ok": ok, "at": time.time()}
+        self.save()
+
+    # -- sweep -------------------------------------------------------
+
+    def expire(self) -> None:
+        """Drop dead followups/modals/confirms — the 14-minute Discord
+        ceiling means a followup older than that can never send."""
+        now = time.time()
+        changed = False
+        stale = [k for k, v in self._data["dead"].items()
+                 if v + DEAD_TTL_S <= now]
+        for k in stale:
+            del self._data["dead"][k]
+            changed = True
+        for table in ("pending_modals", "pending_confirms", "followups"):
+            dead = [k for k, v in self._data[table].items()
+                    if v.get("expires", 0) <= now]
+            for k in dead:
+                del self._data[table][k]
+                changed = True
+        if changed:
+            self.save()

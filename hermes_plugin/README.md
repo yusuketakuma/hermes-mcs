@@ -137,6 +137,43 @@ preview応答のpayload/origin/hashを確認し、`op:"control", phase:"confirm"
 controlはJSONをstdinから読み、既存requests CLIと同様にローカル操作者の明示確認を前提とする。
 Discord利用時はこのCLIのactor自己申告ではなく、上記native platform認証を使う。
 
+## インタラクティブカード（mcs_discord）
+
+`notify.interactive: discord` を有効にした runner が発行するカード render spec を、
+常駐 gateway の Discord Bot が配送・更新・削除し、ボタン／モーダル操作を
+`data/cmd_int` 経由で runner に返す worker。`/mcs` コマンドとは独立に登録され、
+SDK や設定がなくても `/mcs` 側は従来どおり動く。
+
+```yaml
+      settings:
+        interactive: true            # card worker を有効化
+        data_root: /path/to/.mcs/data
+        profile: mcs                 # runner 側 discord scope と一致させる
+        application_id: "<discord app id>"
+        channel_id: "<配送先 channel id>"
+        guild_id: "<guild id>"       # scope が guild を pin する場合
+```
+
+`data_root` には runner が管理する `discord_render/` `discord_state/` `flags/`
+`cmd_int/` `cmd_results/` が必要。**この機能は gateway 常駐が前提** — Hermes の
+「gateway なしで送信」経路ではカードの配送もボタン応答も動かない。
+
+動作の要点:
+
+- 配送は claim → `transport_begin` → runner の永続 grant → `started` fsync →
+  Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
+  クラッシュは `not_sent`、以降は `unknown` として記録し、unknown は自動再送しない
+  （operator の `card_resolve` で解決）。
+- journal(`discord_state/journal-*.jsonl`)と registry(`registry.json`)は
+  fsync 永続化。再起動時に未レポート結果の receipt 再送と未完 attempt の
+  保守的決済を行う。scope ごとの fcntl lock で同一配送先の sender は1つ。
+- ボタンは `mcs:a:`、モーダルは `mcs:m:`、確認は `mcs:c:` の custom_id のみを
+  処理し、他の interaction は一切応答しない。actor・application・guild・channel
+  （modal submit では message も）は各段階で再検証する。
+- `依頼`/`却下` は runner が返す pin 済み params + render context から
+  `request.create` / `ops.signal_dismiss` を組み立て、preview → 本人確認
+  → enqueue の順で、既存の human_confirmed ゲートを通す。
+
 ## 合成入力での検証
 
 MCSから通常の`scripts/run_tests.sh adapter`を実行する。

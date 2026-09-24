@@ -39,7 +39,8 @@ import tempfile
 import time
 import uuid
 
-from mcs_requests import canonical, payload_hash, positive, valid_uuid
+from mcs_requests import canonical, payload_hash, positive, valid_hash, \
+    valid_uuid
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 
@@ -642,10 +643,13 @@ def _mint_token(db, card_id, action, params, need, now) -> str:
     return token
 
 
-def _action_rows(db, card, content, now):
-    """Button rows for a render; every button carries a fresh token."""
+def _action_rows(db, card, content, now, context=None):
+    """Button rows for a render; every button carries a fresh token.
+    Buttons whose modal flow cannot pin a source (no context) are not
+    emitted — a button that can never succeed is worse than none."""
     kind = card["kind"]
     keys = _anchor_keys(card)
+    context = context or {}
     rows, row = [], []
     need = {"source_gen": card["source_generation"],
             "manifest_id": content["manifest_id"],
@@ -665,8 +669,14 @@ def _action_rows(db, card, content, now):
     btn("defer")
     rows.append(list(row))
     row.clear()
-    btn("request", {"project_id": card["project_id"]})
-    if kind == "signal" and len(keys) == 1:
+    if positive(card["project_id"]) \
+            and positive(context.get("source_message_id")) \
+            and context.get("source_hash"):
+        # a digest spans projects — a card-level request cannot pin a
+        # single source, so the button is only emitted where it can work
+        btn("request", {"project_id": card["project_id"]})
+    if kind == "signal" and len(keys) == 1 \
+            and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
     if row:
         rows.append(list(row))
@@ -731,6 +741,13 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
                  and latest["route_epoch"] == route_epoch(cfg))
     needed = force or bool(gens) or latest is None \
         or (latest["state"] in ("not_sent", "cancelled") and not suspended)
+    if card["delivery_state"] == "revoked" and card["message_id"]:
+        # a delivered card that is revoked owes Discord a delete —
+        # without this, archive-revoke left the message up forever.
+        # An already-delivered revoke render must not re-issue.
+        needed = not (latest is not None
+                      and latest["op"] == "revoke"
+                      and latest["state"] == "delivered")
     if not needed:
         return None                        # delivered/terminal & no drift
 
@@ -792,13 +809,15 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     for k in ("message_id", "thread_id"):
         if card[k]:
             spec["delivery"][k] = card[k]
+    context = _render_context(db, card)
     spec["parts"] = {
         "containers": content["containers"],
-        "action_rows": _action_rows(db, card, content, now),
+        "action_rows": _action_rows(db, card, content, now, context),
         "footer": content["footer"]
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],
         "page": content["page"], "pages": content["pages"],
+        "context": context,
     }
     if notify_cfg(cfg).get("card_thread") is True and card["kind"] != "digest":
         spec["parts"]["thread_name"] = _thread_name(db, card)
@@ -845,6 +864,56 @@ def _thread_name(db, card) -> str:
 
 def _digest_thread_name(content) -> str:
     return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
+
+
+def _render_context(db, card) -> dict:
+    """Modal-flow context pinned at render time — the plugin builds
+    request.create/ops.signal_dismiss from THIS, so a confirmed command
+    always refers to what the card actually showed (snapshot lag safe).
+
+    - ``source_message_id``/``source_hash``: thread cards pin the root
+      message; signal cards pin the representative signal's displayed
+      evidence message (the same 最新言及 the user sees).
+    - ``signals``: rendered signal_key -> artifact_id — dismiss's
+      ``expected_signal_artifact_id`` must equal what was rendered.
+    Digests span projects, so no card-level source pin is emitted."""
+    ctx: dict = {}
+    if card["kind"] == "thread":
+        mid = card["root_message_id"]
+        if positive(mid):
+            ctx["project_id"] = card["project_id"]
+            ctx["source_message_id"] = mid
+            r = db.execute(
+                "SELECT content_hash,body_state FROM messages "
+                "WHERE message_id=?", (mid,)).fetchone()
+            if r and r["body_state"] == "full" \
+                    and valid_hash(r["content_hash"]):
+                ctx["source_hash"] = r["content_hash"]
+        return ctx
+    keys = _anchor_keys(card)
+    sigs = _latest_signals(db, keys)
+    if not sigs:
+        return ctx
+    ctx["signals"] = {k: {"artifact_id": s["artifact_id"],
+                          "project_id": s["content"].get("project_id")}
+                      for k, s in sigs.items()}
+    if not positive(card["project_id"]):
+        return ctx                       # digest — no card-level pin
+    rep = sigs.get(keys[0]) or next(iter(sigs.values()))
+    ev = rep["content"].get("evidence") or {}
+    mids = ev.get("message_ids") or []
+    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
+        or ev.get("discharge_message_id") or ev.get("message_id")
+    if type(mid) is int:
+        ctx["project_id"] = card["project_id"]
+        ctx["source_message_id"] = mid
+        r = db.execute(
+            "SELECT content_hash,body_state FROM messages "
+            "WHERE message_id=?", (mid,)).fetchone()
+        if r and r["body_state"] == "full" \
+                and valid_hash(r["content_hash"]):
+            ctx["source_hash"] = r["content_hash"]
+    return ctx
 
 
 def _publish_specs(db, dirs, specs, now) -> list:
@@ -1351,10 +1420,16 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
                 "defer_until": until}
     # request/dismiss tokens authorize the plugin-side modal — nothing
     # is applied here; the human command itself arrives separately as
-    # request.create/ops.signal_dismiss with the full envelope
+    # request.create/ops.signal_dismiss with the full envelope. The
+    # stored params go back to the caller so the plugin builds the modal
+    # against what was rendered — user input never picks the target.
     if action in ("request", "dismiss"):
+        try:
+            params = json.loads(tok["params"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            params = {}
         return {**base, "outcome": "applied", "action": action,
-                "modal": True}
+                "modal": True, "params": params}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
 
@@ -1443,7 +1518,10 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
         reason = _begin_check(db, req, cfg)
         if reason == "unknown_delivery":
             # nothing to reference — a denied attempt row needs the
-            # render FK; the result file carries the audit instead
+            # render FK; the result file carries the audit instead.
+            # The spec file is definitively dead — remove it so a
+            # worker stops re-claiming bytes that can never grant.
+            _unlink_spec(ledger, req["delivery_id"])
             return {"granted": False, "error": "denied_unknown_delivery",
                     "command_id": cid, "attempt_id": req["attempt_id"],
                     "delivery_id": req["delivery_id"]}
@@ -1462,9 +1540,47 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
                 "updated_at=? WHERE delivery_id=? AND state='queued'",
                 (now, req["delivery_id"]))
         mark_snapshot_dirty(db)
-        return _begin_result(db, db.execute(
+        result = _begin_result(db, db.execute(
             "SELECT * FROM notification_delivery_attempts "
             "WHERE begin_command_id=?", (cid,)).fetchone())
+    if reason is not None and _denial_is_final(
+            db, req["delivery_id"], reason):
+        _unlink_spec(ledger, req["delivery_id"])
+    return result
+
+
+_FINAL_DENIALS = frozenset({
+    "hash_mismatch", "rev_mismatch", "epoch_mismatch",
+    "render_cancelled", "card_revoked"})
+
+
+def _denial_is_final(db, delivery_id, reason) -> bool:
+    """Whether a denied begin means the spec bytes can never grant —
+    stale/forged content, a cancelled render, a revoked card, or a
+    render that already reached a terminal state. Transient answers
+    (in_flight, interactive_off, sending) and scope_mismatch — the spec
+    may simply be addressed to another worker — keep the file."""
+    if reason in _FINAL_DENIALS:
+        return True
+    if reason == "not_queued":
+        r = db.execute(
+            "SELECT state FROM notification_renders WHERE delivery_id=?",
+            (delivery_id,)).fetchone()
+        return r is not None and r["state"] in (
+            "delivered", "not_sent", "cancelled")
+    return False
+
+
+def _unlink_spec(ledger, delivery_id) -> None:
+    """Remove a definitively dead spec file. The runner owns
+    discord_render; a missing file just means 'nothing to claim' —
+    the watchdog republishes a live render's spec_json if needed."""
+    try:
+        os.unlink(os.path.join(
+            notify_dirs(data_root(ledger))["discord_render"],
+            str(delivery_id) + ".json"))
+    except OSError:
+        pass
 
 
 def _begin_check(db, req, cfg) -> str | None:
@@ -1491,7 +1607,10 @@ def _begin_check(db, req, cfg) -> str | None:
     card = _card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
-        if card["delivery_state"] == "revoked":
+        if card["delivery_state"] == "revoked" \
+                and render["op"] != "revoke":
+            # a revoke render against a revoked card is exactly the
+            # delete Discord is owed — every other op is refused
             return "card_revoked"
         if _unsettled_attempt(db, card["card_id"]):
             return "in_flight"

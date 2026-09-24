@@ -28,3 +28,27 @@ config_schema:
     type: list
     required: true
     description: MCS project IDs visible to this command.
+  interactive:
+    type: bool
+    required: false
+    description: Enable the interactive card worker (delivery + actions).
+  data_root:
+    type: str
+    required: false
+    description: MCS data dir holding cmd_int/, discord_render/, discord_state/.
+  profile:
+    type: str
+    required: false
+    description: MCS delivery-scope profile name (defaults to Hermes profile).
+  application_id:
+    type: str
+    required: false
+    description: Discord application ID this worker is bound to.
+  channel_id:
+    type: str
+    required: false
+    description: Discord channel this worker delivers cards into.
+  guild_id:
+    type: str
+    required: false
+    description: Discord guild (server) ID, when the scope pins one.
