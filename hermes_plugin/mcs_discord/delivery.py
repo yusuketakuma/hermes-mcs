@@ -52,6 +52,8 @@ def _is_definitive_reject(exc: BaseException) -> bool:
 
 
 class DeliveryWorker:
+    transport = "discord"
+
     def __init__(self, *, bot: Any, settings: dict,
                  root: str, reg: registry.Registry,
                  worker_id: str, log) -> None:
@@ -79,7 +81,7 @@ class DeliveryWorker:
         """fcntl lock keyed on (profile, application_id, channel_id) —
         one live sender per delivery scope, process-wide. Held for the
         worker's lifetime; released only when all tasks have stopped."""
-        paths.ensure_dirs(self._root)
+        self._ensure_dirs()
         path = os.path.join(self._dirs["state"],
                             f"send-{registry.scope_key(self.scope())}.lock")
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -90,6 +92,9 @@ class DeliveryWorker:
             return False
         self._lock_fd = fd
         return True
+
+    def _ensure_dirs(self) -> None:
+        paths.ensure_dirs(self._root)
 
     def release_scope_lock(self) -> None:
         if self._lock_fd is not None:
@@ -529,7 +534,7 @@ class DeliveryWorker:
             except OSError:
                 continue                       # transient — next tick
             try:
-                cards.validate(spec)
+                self._validate_spec(spec)
             except ValueError as e:
                 self._log("spec_rejected",
                           delivery_id=os.path.basename(path)[:-5],
@@ -538,6 +543,9 @@ class DeliveryWorker:
             if self._ours(spec["delivery"]):
                 out.append((path, spec))
         return out
+
+    def _validate_spec(self, spec: dict) -> None:
+        cards.validate(spec)
 
     async def tick(self) -> None:
         if self._stopping:
@@ -550,7 +558,8 @@ class DeliveryWorker:
         # window, stranding the queued render. Skip new claims; in-
         # flight claims still step (settlement is not a send).
         flags = await asyncio.to_thread(paths.read_flags, self._root)
-        claimable = flags.get("interactive") is not False
+        claimable = flags.get("interactive") is not False \
+            and flags.get("transport", "discord") == self.transport
         live_ids = set()
         # batch registry saves across the whole pass — one flush per
         # tick instead of ~3 full-file rewrites per claim (RC20: the

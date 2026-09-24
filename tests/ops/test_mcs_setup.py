@@ -345,3 +345,425 @@ def test_init_self_identity_flags(monkeypatch, tmp_path):
     sig = cfg["signals"]
     assert sig["self_organizations"] == ["みどり薬局", "そら薬局", "梅薬局"]
     assert sig["self_professions"] == ["薬剤師", "管理薬剤師"]
+
+
+def test_self_posts_and_notify_block_validated():
+    base = {"mcs_login_id": "u", "notify_target": "slack"}
+    errors, _ = mcs_setup.validate_config({**base, "self_posts": "yes"})
+    assert any("self_posts" in e for e in errors)
+    errors, _ = mcs_setup.validate_config({**base, "self_posts": True})
+    assert errors == []
+
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "cards",                    # invalid enum
+        "card_thread": "yes",                      # not bool
+        "route_epoch": 0,                          # not positive
+        "card_thread_archive_min": -5,
+        "operator": 5,                             # not str
+        "discord": {"profile": "p"},               # partial scope
+    }})
+    for k in ("interactive", "card_thread", "route_epoch",
+              "card_thread_archive_min", "operator",
+              "application_id", "guild_id", "channel_id"):
+        assert any(k in e for e in errors), k
+
+    # interactive=discord without a scope is an error
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "discord"}})
+    assert any("notify.discord" in e for e in errors)
+
+    errors, _ = mcs_setup.validate_config({**base, "notify": {
+        "interactive": "discord", "card_thread": True,
+        "route_epoch": 2, "card_thread_archive_min": 10080,
+        "operator": "111",
+        "discord": {"profile": "p", "application_id": "1",
+                    "guild_id": "2", "channel_id": "3"}}})
+    assert errors == []
+
+
+def _init_env(monkeypatch, tmp_path, cfg):
+    """Common stubs for init tests — no real FS/keychain/prompts."""
+    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "c.json"))
+    monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    # plugin integration is tested separately — keep init tests off the
+    # real hermes CLI entirely
+    monkeypatch.setattr(mcs_setup, "_apply_plugin_integration",
+                        lambda c, a: None)
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: dict(cfg))
+
+
+def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):
+    """--set KEY=JSON writes arbitrary (dotted) keys under --yes."""
+    import json
+    _init_env(monkeypatch, tmp_path,
+              {"mcs_login_id": "u1", "notify_target": "slack"})
+    monkeypatch.setattr(
+        mcs_setup.sys, "argv",
+        ["mcs_setup", "init", "--yes",
+         "--set", "self_posts=true",
+         "--set", 'notify.interactive="discord"',
+         "--set", "notify.card_thread=false"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert cfg["self_posts"] is True
+    assert cfg["notify"] == {"interactive": "discord",
+                             "card_thread": False}
+
+
+def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
+    """Enter-on-everything accepts defaults; gated blocks stay out."""
+    import json
+    _init_env(monkeypatch, tmp_path,
+              {"mcs_login_id": "u1", "notify_target": "slack"})
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert cfg["self_posts"] is False
+    assert cfg["deep_history"] is True
+    assert cfg["trickle_pages"] == 3
+    # interactive defaults to off -> discord/card keys never asked
+    assert cfg["notify"] == {"interactive": "off"}
+    # signals.notify off -> digest items gated out
+    assert cfg["signals"] == {"notify": False}
+    # semantic.mode off -> detail keys gated out
+    assert cfg["semantic"] == {"mode": "off"}
+
+
+def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
+    """Choosing interactive=discord unlocks the scope prompts; typed
+    answers are validated and stored under the nested key."""
+    import json
+    _init_env(monkeypatch, tmp_path,
+              {"mcs_login_id": "u1", "notify_target": "slack"})
+
+    def answer(prompt=""):
+        if "notify.interactive" in prompt:
+            return "discord"
+        if "notify.discord." in prompt:
+            return {"notify.discord.profile": "main",
+                    "notify.discord.application_id": "app1",
+                    "notify.discord.guild_id": "g1",
+                    "notify.discord.channel_id": "c1"}[
+                        prompt.split(" ")[2]]
+        if "self_posts" in prompt:
+            return "y"
+        if "trickle_pages" in prompt:
+            return "5"
+        return ""
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    n = cfg["notify"]
+    assert n["interactive"] == "discord"
+    assert n["discord"] == {"profile": "main", "application_id": "app1",
+                            "guild_id": "g1", "channel_id": "c1"}
+    assert n["card_thread"] is True            # default kept via Enter
+    assert cfg["self_posts"] is True           # typed bool answer
+    assert cfg["trickle_pages"] == 5           # typed int answer
+
+
+def test_wizard_keeps_current_values(monkeypatch, tmp_path):
+    """An existing config value is shown and kept on Enter."""
+    import json
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "u1", "notify_target": "discord:9",
+        "self_posts": True, "trickle_pages": 7})
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert cfg["self_posts"] is True and cfg["trickle_pages"] == 7
+
+
+def test_wizard_dash_removes_optional_key(monkeypatch, tmp_path):
+    """Typing '-' on an optional key deletes it from the config."""
+    import json
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "u1", "notify_target": "slack",
+        "notify_max_age_h": 24})
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt="": "-" if "notify_max_age_h" in prompt else "")
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert "notify_max_age_h" not in cfg
+
+
+# ---- services (launchd + hermes cron automation) --------------------
+
+def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
+                  loaded=frozenset(), cron_entries=None):
+    """Isolate cmd_services: temp dirs, no real launchctl/hermes.
+    `cron_names` is legacy sugar: it fabricates verified `cron list`
+    entries whose schedules match CRON_JOBS (=> 'exists', no edit)."""
+    from types import SimpleNamespace
+    calls = []
+    loaded = set(loaded)
+    entries = list(cron_entries or [])
+    sched_by_script = {s: sched for _, sched, s in mcs_setup.CRON_JOBS}
+    for i, name in enumerate(cron_names):
+        entries.append({"id": f"9{i:05d}", "name": name,
+                        "schedule": sched_by_script.get(name,
+                                                        "0 0 * * *"),
+                        "script": name})
+    monkeypatch.setattr(mcs_setup, "SCRIPTS_DIR", str(tmp_path / "scripts"))
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path / "agents"))
+    monkeypatch.setattr(mcs_setup, "MANIFEST_PATH",
+                        str(tmp_path / "data" / "service_manifest.json"))
+    monkeypatch.setattr(mcs_setup, "HERMES_PY", "/h/venv/bin/python")
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda label: label in loaded)
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "/x/hermes")
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: entries)
+    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(mcs_setup.os, "getuid", lambda: 501)
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        # simulate launchd: bootstrap registers the label, bootout drops it
+        if argv[:2] == ["launchctl", "bootstrap"]:
+            loaded.add(argv[3].rsplit("/", 1)[-1][:-6])
+        elif argv[:2] == ["launchctl", "bootout"]:
+            loaded.discard(argv[2].rsplit("/", 1)[-1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
+    return calls, SimpleNamespace(dry_run=False)
+
+
+def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
+    # dedupe is by SCRIPT filename — deployed job names drifted
+    # ("MCS job drain" vs canonical "MCS durable drain")
+    calls, args = _services_env(
+        monkeypatch, tmp_path, cron_names={"mcs_check.sh"})
+    assert mcs_setup.cmd_services(args) == 0
+    # wrapper scripts rendered with placeholders substituted
+    s = (tmp_path / "scripts" / "mcs_check.sh").read_text()
+    assert "__PYTHON__" not in s and "/h/venv/bin/python" in s
+    # all 4 launchd plists rendered and bootstrapped
+    for label in mcs_setup.AGENT_LABELS:
+        body = (tmp_path / "agents" / f"{label}.plist").read_text()
+        assert "__REPO__" not in body
+    boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
+    assert len(boots) == 4
+    # cron: the job whose script is already registered is skipped;
+    # the other 4 (incl. the update check) are created
+    creates = [" ".join(a) for a in calls
+               if a[:3] == ["/x/hermes", "cron", "create"]]
+    assert len(creates) == 4
+    assert not any("mcs_check.sh" in c for c in creates)
+    assert any("mcs_deep.sh" in c for c in creates)
+    assert any("mcs_update.sh" in c for c in creates)
+    # the service manifest was written with all rendered identities
+    import json as _json
+    manifest = _json.load(open(tmp_path / "data" / "service_manifest.json"))
+    assert len(manifest["scripts"]) == 5
+    assert len(manifest["agents"]) == 4
+    assert len(manifest["cron"]) == 5
+
+
+def test_services_skips_loaded_agents_and_existing_cron(
+        monkeypatch, tmp_path):
+    loaded = set(mcs_setup.AGENT_LABELS)
+    calls, args = _services_env(
+        monkeypatch, tmp_path, loaded=loaded,
+        cron_names={s for _, _, s in mcs_setup.CRON_JOBS},
+        cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
+                       "script": sc}
+                      for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)])
+    # pre-render identical plists so 'loaded + unchanged' is exercised
+    subs = {"PYTHON": mcs_setup.HERMES_PY, "REPO": mcs_setup.REPO_ROOT,
+            "DATA": str(tmp_path / "data")}
+    (tmp_path / "agents").mkdir(parents=True)
+    for label in mcs_setup.AGENT_LABELS:
+        body = mcs_setup._render_template(open(
+            mcs_setup.REPO_ROOT + "/deployment/launchagents/"
+            + label + ".plist").read(), subs)
+        (tmp_path / "agents" / f"{label}.plist").write_text(body)
+    assert mcs_setup.cmd_services(args) == 0
+    assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+    assert not any(a[:3] == ["/x/hermes", "cron", "create"]
+                   for a in calls)
+
+
+def test_services_dry_run_writes_nothing(monkeypatch, tmp_path):
+    calls, args = _services_env(monkeypatch, tmp_path)
+    args.dry_run = True
+    assert mcs_setup.cmd_services(args) == 0
+    assert not (tmp_path / "scripts").exists()
+    assert not (tmp_path / "agents").exists()
+    assert calls == []
+
+
+def test_services_hermes_missing_reports_problem(monkeypatch, tmp_path):
+    calls, args = _services_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: False)
+    assert mcs_setup.cmd_services(args) == 1
+
+
+def test_services_installs_gateway_when_interactive(
+        monkeypatch, tmp_path):
+    """interactive=discord + unsupervised gateway -> install + start
+    through the public `hermes gateway` CLI."""
+    calls, args = _services_env(
+        monkeypatch, tmp_path,
+        loaded=set(mcs_setup.AGENT_LABELS),
+        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+    monkeypatch.setattr(
+        mcs_setup, "load_config",
+        lambda: {"notify": {"interactive": "discord"}})
+    calls.clear()
+    # fake_run returns empty stdout -> "supervised" absent -> install
+    assert mcs_setup.cmd_services(args) == 0
+    gw = [a for a in calls if "gateway" in a]
+    assert ["/x/hermes", "gateway", "install"] in gw
+    assert ["/x/hermes", "gateway", "start"] in gw
+
+
+def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    calls, args = _services_env(
+        monkeypatch, tmp_path,
+        loaded=set(mcs_setup.AGENT_LABELS),
+        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+    monkeypatch.setattr(
+        mcs_setup, "load_config",
+        lambda: {"notify": {"interactive": "discord"}})
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        return SimpleNamespace(
+            returncode=0,
+            stdout="✓ Gateway is supervised by launchd (PID 1)",
+            stderr="")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    gw = [a for a in calls if "gateway" in a]
+    assert gw == [["/x/hermes", "gateway", "status"]]
+
+
+def test_services_gateway_skipped_when_off(monkeypatch, tmp_path):
+    calls, args = _services_env(
+        monkeypatch, tmp_path,
+        loaded=set(mcs_setup.AGENT_LABELS),
+        cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    assert not any("gateway" in a for a in calls)
+
+
+# ---- plugin integration (hermes config CLI, never hermes internals) --
+
+def _plugin_args(**kw):
+    from types import SimpleNamespace
+    base = dict(yes=True, plugin_profile="", plugin_user_ids=None,
+                plugin_chat_ids=None, plugin_project_ids=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _plugin_env(monkeypatch, existing=None):
+    """Stub the hermes CLI surface; `existing` maps config keys that
+    `config get` already resolves."""
+    sets = []
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda c: "/x/hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda e: True)
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_config_get",
+        lambda e, p, k: (existing or {}).get(k))
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_config_set",
+        lambda e, p, k, v: sets.append((p, k, str(v))) or True)
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    return sets
+
+
+_DISCORD_CFG = {"notify": {"interactive": "discord", "discord": {
+    "profile": "cco", "application_id": "app",
+    "guild_id": "g", "channel_id": "ch"}}}
+
+
+def test_plugin_integration_writes_scope_and_lists(monkeypatch):
+    """Fixed settings mirror notify.discord + known paths; csv flags
+    become YAML list literals; writes go to the serving profile."""
+    sets = _plugin_env(monkeypatch)
+    mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG),
+        _plugin_args(plugin_profile="cco",
+                     plugin_user_ids="u1,u2",
+                     plugin_project_ids="1,2"))
+    keys = {k for _, k, _ in sets}
+    for want in ("snapshot", "inbox", "data_root", "interactive",
+                 "profile", "application_id", "guild_id",
+                 "channel_id", "allowed_user_ids", "project_ids"):
+        assert f"{mcs_setup.PLUGIN_SETTINGS}.{want}" in keys
+    assert all(p == "cco" for p, k, _ in sets
+               if k != "DISCORD_BOT_TOKEN")
+    assert ("cco", f"{mcs_setup.PLUGIN_SETTINGS}.allowed_user_ids",
+            '["u1", "u2"]') in sets
+    # allowed_chat_ids: no flag, no existing value, --yes -> skipped
+    assert all(not k.endswith("allowed_chat_ids") for _, k, _ in sets)
+
+
+def test_plugin_integration_off_is_noop(monkeypatch):
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_exe",
+        lambda c: (_ for _ in ()).throw(AssertionError("must not run")))
+    mcs_setup._apply_plugin_integration(
+        {"notify": {"interactive": "off"}}, _plugin_args())
+
+
+def test_plugin_integration_existing_allowlist_kept(monkeypatch):
+    """A configured allowlist is reported as set and not rewritten."""
+    sets = _plugin_env(
+        monkeypatch,
+        existing={f"{mcs_setup.PLUGIN_SETTINGS}.allowed_user_ids":
+                  "- u1"})
+    mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG),
+                                        _plugin_args())
+    assert all(not k.endswith("allowed_user_ids") for _, k, _ in sets)
+
+
+def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
+    """DISCORD_BOT_TOKEN goes through `config set` (routes *_TOKEN to
+    the profile .env) on the launch profile, never via argv flag."""
+    sets = _plugin_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
+    mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG),
+                                        _plugin_args())
+    assert ("", "DISCORD_BOT_TOKEN", "tok") in sets
+
+
+def test_check_warns_when_gateway_unsupervised(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/h")
+    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+
+    def fake_cli(exe, profile, *argv, **kw):
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+    monkeypatch.setattr(mcs_setup, "_hermes_cli", fake_cli)
+    monkeypatch.setattr(mcs_setup.urllib.request, "urlopen",
+                        lambda *a, **k: SimpleNamespace(close=lambda: None))
+    _, warnings = mcs_setup.check_environment(
+        {"mcs_login_id": "u", "notify_target": "discord:1",
+         "notify": {"interactive": "discord"}})
+    assert any("gateway" in w for w in warnings)

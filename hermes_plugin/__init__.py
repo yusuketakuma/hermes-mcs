@@ -1,4 +1,4 @@
-"""Hermes Discord command surface for the offline MCS snapshot.
+"""Hermes Discord commands and opt-in Slack interactive cards for MCS.
 
 The plugin is deliberately a narrow adapter.  Hermes supplies a trusted native
 Discord ``command_context`` mapping; all MCS reads go through ``mcs_view.View``
@@ -62,7 +62,14 @@ _CONTROL_FIELDS = {
     "adopt_summary": _CONTROL_COMMON_FIELDS | {
         "message_id", "summary_artifact_id", "reason",
     },
+    "update_apply": _CONTROL_COMMON_FIELDS | {
+        "tag", "reason", "target_sha", "base_sha",
+    },
+    "update_rollback": _CONTROL_COMMON_FIELDS | {"tag", "reason"},
 }
+# Lifecycle ops are system-wide — they carry no project_id and get the
+# user/chat allowlist only (project check would always deny them).
+_PROJECTLESS_OPS = frozenset({"ops.update_apply", "ops.update_rollback"})
 _CONFIRM_FIELDS = frozenset({"op", "phase", "payload", "payload_hash", "origin"})
 _ORIGIN_KEYS = ("user_id", "chat_id", "scope_id", "profile")
 
@@ -184,6 +191,17 @@ def _authorize(settings: dict[str, Any], identity: dict[str, str | None], value:
     if project_id not in settings["project_ids"]:
         return None, "project_not_allowed"
     return project_id, None
+
+
+def _authorize_system(settings: dict[str, Any],
+                      identity: dict[str, str | None]) -> str | None:
+    """User/chat allowlist for projectless lifecycle ops — identical
+    gates minus the project check (S1/S2: update_* are system-wide)."""
+    if identity["user_id"] not in settings["allowed_user_ids"]:
+        return "user_not_allowed"
+    if identity["chat_id"] not in settings["allowed_chat_ids"]:
+        return "chat_not_allowed"
+    return None
 
 
 def _adapter_modules():
@@ -442,6 +460,14 @@ def _new_control(
             "comparison_hash": comparison["comparison_hash"],
             "reason": fields["reason"],
         })
+    elif command in _PROJECTLESS_OPS:
+        # project_id stays None in the envelope — validate() routes
+        # these cmds before the positive-pid gate and the receipt lands
+        # with project_id NULL (command_receipts.project_id is nullable).
+        payload["reason"] = fields["reason"]
+        for key in ("tag", "target_sha", "base_sha"):
+            if key in fields:
+                payload[key] = fields[key]
     else:
         payload["feature"] = fields.get("feature")
     error = requests.validate(payload)
@@ -522,6 +548,27 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
                            identity: dict[str, str | None]) -> str:
     retry_budget = None
     action = data.get("action")
+    if action in ("update_apply", "update_rollback"):
+        # Projectless lifecycle ops — user/chat allowlist only; no view
+        # needed (there is no project scope to resolve against).
+        error = _authorize_system(settings, identity)
+        if error:
+            return _deny(error)
+        reason_error = _reason_error(data)
+        if reason_error:
+            return _deny(reason_error)
+        requests, _ = _adapter_modules()
+        try:
+            payload = _new_control(requests, identity, data, None,
+                                   f"ops.{action}")
+        except ValueError as e:
+            return _deny(str(e))
+        origin = _confirmation_origin(identity)
+        confirmation = requests.payload_hash(
+            {"payload": payload, "origin": origin})
+        return _ok(operation="control", phase="preview", payload=payload,
+                   payload_hash=confirmation, origin=origin, queued=False,
+                   confirmation_required=True)
     project_id, error = _authorize(settings, identity, data.get("project_id"))
     if error:
         return _deny(error)
@@ -640,7 +687,12 @@ def _confirm(data: dict, settings: dict[str, Any],
             return _deny("invalid_command")
     elif command not in {"request.create", "request.update"}:
         return _deny("invalid_command")
-    project_id, error = _authorize(settings, identity, payload.get("project_id"))
+    if command in _PROJECTLESS_OPS:
+        error = _authorize_system(settings, identity)
+        project_id = None
+    else:
+        project_id, error = _authorize(
+            settings, identity, payload.get("project_id"))
     if error:
         return _deny(error)
     if not is_control:
@@ -651,7 +703,8 @@ def _confirm(data: dict, settings: dict[str, Any],
         return _deny("invalid_command")
     view = None
     try:
-        view = mcs_view.View(settings["snapshot"])
+        view = None if command in _PROJECTLESS_OPS \
+            else mcs_view.View(settings["snapshot"])
         if not is_control:
             if command == "request.create":
                 source = _source_row(
@@ -699,7 +752,8 @@ def _confirm(data: dict, settings: dict[str, Any],
                     or comparison["comparison_hash"]
                     != payload.get("comparison_hash")):
                 return _deny("comparison_changed")
-        elif command not in {"ops.pause", "ops.resume"}:
+        elif command not in {"ops.pause", "ops.resume",
+                             "ops.update_apply", "ops.update_rollback"}:
             return _deny("invalid_command")
     finally:
         if view is not None:
@@ -873,9 +927,64 @@ def _make_discord_factory(ctx):
     return factory
 
 
+def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
+    """Only a complete opt-in can start Slack card delivery."""
+    if ctx.get_config("slack_adapter_enabled", False) is not True:
+        return None
+    keys = ("slack_team_id", "slack_application_id", "slack_channel_id")
+    scope = {key: ctx.get_config(key, None) for key in keys}
+    if any(not isinstance(value, str) or not value.strip()
+           or "\x00" in value for value in scope.values()):
+        return None
+    users = _config_ids(ctx.get_config("slack_allowed_user_ids", None),
+                        projects=False)
+    projects = _config_ids(ctx.get_config("project_ids", None),
+                           projects=True)
+    if users is None or projects is None:
+        return None
+    data_root = ctx.get_config("data_root", None)
+    if not isinstance(data_root, str) or not data_root.strip() \
+            or "\x00" in data_root:
+        return None
+    profile = (ctx.get_config("slack_profile", None)
+               or getattr(ctx, "profile_name", None) or "default")
+    if not isinstance(profile, str) or not profile.strip():
+        return None
+    return {"transport": "slack", "data_root": data_root.strip(),
+            "team_id": scope["slack_team_id"].strip(),
+            "application_id": scope["slack_application_id"].strip(),
+            "channel_id": scope["slack_channel_id"].strip(),
+            "profile": profile.strip(), "allowed_user_ids": users,
+            "project_ids": projects}
+
+
+def _make_slack_factory(ctx):
+    def factory(native, adapter):
+        settings = _slack_adapter_settings(ctx)
+        if settings is None:
+            return None
+        from .mcs_discord import paths
+        flags = paths.read_flags(settings["data_root"])
+        if flags.get("interactive") is not True \
+                or flags.get("transport") != "slack":
+            return None
+        import logging
+        log = logging.getLogger("hermes.plugin.mcs_slack")
+
+        def _event(event: str, **fields: Any) -> None:
+            log.info("mcs_slack %s %s", event,
+                     json.dumps(fields, ensure_ascii=False,
+                                sort_keys=True, default=str))
+        from .mcs_slack.tasks import Supervisor
+        supervisor = Supervisor(ctx=ctx, app=native,
+                                settings=settings, log=_event)
+        supervisor.start()
+        return supervisor
+    return factory
+
+
 def register(ctx) -> None:
-    """Register the structured ``/mcs`` command and the Discord card
-    worker; no model tools/hooks."""
+    """Register native Discord commands and optional platform adapters."""
     ctx.register_command(
         "mcs", handler=_make_handler(ctx),
         description="Read the configured MCS snapshot or preview/confirm a request.",
@@ -886,3 +995,4 @@ def register(ctx) -> None:
     register_platform = getattr(ctx, "register_platform_handler", None)
     if callable(register_platform):
         register_platform("discord", _make_discord_factory(ctx))
+        register_platform("slack", _make_slack_factory(ctx))

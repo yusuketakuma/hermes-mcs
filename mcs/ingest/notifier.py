@@ -70,7 +70,7 @@ def _target(cfg: dict, kind: str) -> str | None:
     config must never spill bodies into a fallback destination
     (Oracle B15). System alerts may override via notify_system_target."""
     t = cfg.get("notify_target")
-    if kind in ("session_expired", "run_failed"):
+    if kind in ("session_expired", "run_failed", "update_notice"):
         st = cfg.get("notify_system_target")
         if isinstance(st, str) and st.strip():
             t = st
@@ -227,6 +227,13 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
+    if ev["kind"] == "update_notice":
+        # Frozen text like semantic_notice — sanitized at enqueue time
+        # (mentions defused), the sender just relays it.
+        text = payload.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError("payload_invalid")
+        return text, []
     if ev["kind"] == "semantic_notice":
         # audited/degraded semantic notice — the payload carries the
         # final text frozen at enqueue time; the sender never re-derives

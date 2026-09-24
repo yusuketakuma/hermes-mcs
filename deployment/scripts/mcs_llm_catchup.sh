@@ -15,6 +15,12 @@ set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 PY=__PYTHON__
+
+# quiesce guard: while an update owns the process lifecycle this
+# launcher must never respawn drainers (S8)
+if [ -f "__DATA__/update_in_progress.marker" ]; then
+  exit 0
+fi
 DRAIN=__REPO__/mcs/semantic/semantic_drain.py
 LOG="__DATA__/semantic_drain.log"
 WINDOW_S=18000

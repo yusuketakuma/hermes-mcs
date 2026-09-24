@@ -136,6 +136,18 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 receipt = mcs_requests.apply_command(ledger, req)
             if receipt["outcome"] == "rejected":
                 result["errors"].append("cmd_invalid: " + receipt["error"])
+            elif receipt.get("scheduled") is True \
+                    and receipt.get("cmd") in (
+                        "ops.update_apply", "ops.update_rollback"):
+                # The committed receipt is the approval boundary — spawn
+                # the detached updater only AFTER commit, never inside
+                # apply_tx (S9). The spawned process re-verifies via
+                # receipt scan; argv/loop state is never trusted.
+                try:
+                    import mcs_update
+                    mcs_update.spawn_detached()
+                except Exception:
+                    result["errors"].append("update_spawn_failed")
             try:
                 os.unlink(path)
             except OSError:

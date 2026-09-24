@@ -49,15 +49,26 @@ def _id_str(v, n=64) -> bool:
 
 
 def _fields(req, allowed) -> str | None:
+    if req.get("version") == 2:
+        allowed = (allowed - {"guild_id"}) | {"transport"}
+        if req.get("op") in TRANSPORT_OPS:
+            allowed |= {"team_id"}
     return None if req.keys() <= allowed else "unknown_field"
 
 
-def _origin(v) -> bool:
+def _origin(v, slack=False) -> bool:
     """Verified native origin the plugin supplies from the interaction —
     application/channel/message identify the card; guild/profile pin
     the deployment."""
     if not isinstance(v, dict):
         return False
+    if slack:
+        return v.keys() <= {"transport", "profile", "application_id", "team_id",
+                            "channel_id", "message_id"} \
+            and v.get("transport") == "slack" \
+            and all(_text(v.get(k), 200 if k == "profile" else 64)
+                    for k in ("profile", "application_id", "team_id",
+                              "channel_id", "message_id"))
     if v.keys() - {"profile", "application_id", "guild_id",
                    "channel_id", "message_id"}:
         return False
@@ -73,9 +84,21 @@ def validate_int(req) -> str | None:
     UUID validator must never see."""
     if not isinstance(req, dict):
         return "bad_command"
-    if type(req.get("version")) is not int or req["version"] != 1:
+    if type(req.get("version")) is not int or req["version"] not in (1, 2):
         return "bad_version"
     op = req.get("op")
+    slack = req["version"] == 2
+    if slack:
+        if req.get("transport") != "slack":
+            return "bad_transport"
+        if not isinstance(op, str) or op not in _VALID_OPS:
+            return "unknown_op"
+        if "guild_id" in req:
+            return "unknown_field"
+        if op in TRANSPORT_OPS and not _text(req.get("team_id"), 64):
+            return "bad_team_id"
+    elif "transport" in req or "team_id" in req:
+        return "unknown_field"
     if (not isinstance(op, str) or op not in _VALID_OPS) \
             and req.get("cmd") not in HUMAN_CMDS:
         return "unknown_op"
@@ -98,7 +121,7 @@ def validate_int(req) -> str | None:
             # applies — a mismatched pair could otherwise replay one
             # token under another action's receipt identity
             return "command_id_mismatch"
-        if not _origin(req.get("origin")):
+        if not _origin(req.get("origin"), slack):
             return "bad_origin"
         return None
     if op == "refresh":
@@ -109,7 +132,7 @@ def validate_int(req) -> str | None:
             return "bad_command_id"
         if not _text(req.get("actor"), 120):
             return "bad_actor"
-        if not _origin(req.get("origin")):
+        if not _origin(req.get("origin"), slack):
             return "bad_origin"
         return None
     if op == "transport_begin":
@@ -177,8 +200,14 @@ def validate_int(req) -> str | None:
             return "bad_result_fields"
         return None
     if op == "thread_receipt":
-        if _fields(req, {"version", "op", "command_id", "delivery_id",
-                         "message_id", "thread_id", "error_code"}):
+        allowed = {"version", "op", "command_id", "delivery_id",
+                   "message_id", "thread_id", "error_code"}
+        if slack:
+            allowed |= {"profile", "application_id", "channel_id"}
+            for k in ("profile", "application_id", "channel_id"):
+                if not _text(req.get(k), 200 if k == "profile" else 64):
+                    return f"bad_{k}"
+        if _fields(req, allowed):
             return "unknown_field"
         if not valid_uuid(cid):
             return "bad_command_id"
