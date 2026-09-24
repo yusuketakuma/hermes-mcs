@@ -845,6 +845,42 @@ def test_action_ack_round_trip(world):
     assert rows and rows[0]["actor"] == "discord:1001"
 
 
+def test_action_body_ephemeral_full_text(world):
+    """📄本文表示 answers with chunked ephemeral followups carrying the
+    untruncated shown-set text — the card itself is untouched."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "body")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    assert ix.followup.sent
+    assert all(m["ephemeral"] for m in ix.followup.sent)
+    joined = "\n".join(m["content"] for m in ix.followup.sent)
+    # sender names + bodies — content only the full-text answer has,
+    # since the card itself shows a snippet
+    assert "職員" in joined and "本文" in joined
+    card = world.card()
+    assert card["desired_render_rev"] == card["applied_render_rev"]
+
+
+def test_split_body_chunks_bounded():
+    text = "\n".join(f"line-{i} " + "x" * 100 for i in range(80))
+    chunks = actions_mod._split_body(text)
+    assert 1 < len(chunks) <= actions_mod.BODY_MAX_CHUNKS
+    assert all(len(c) <= actions_mod.BODY_CHUNK for c in chunks)
+    assert chunks[0].startswith("line-0")
+    one = actions_mod._split_body("短い")
+    assert one == ["短い"]
+    long_line = "y" * 5000
+    chunks = actions_mod._split_body(long_line)
+    assert all(len(c) <= actions_mod.BODY_CHUNK for c in chunks)
+
+
 def test_action_ignores_foreign_and_denies(world):
     world.seed()
     world.dispatch()

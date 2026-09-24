@@ -197,6 +197,7 @@ _ACTIONS = {
     "ack":     ("✅ 確認", "success", "write"),
     "assign":  ("👤 担当", "primary", "write"),
     "defer":   ("⏸ 保留", "secondary", "write"),
+    "body":    ("📄 本文表示", "secondary", "view"),
     "request": ("📝 依頼作成", "secondary", "write"),
     "dismiss": ("🚫 却下", "danger", "write"),
     "prev":    ("◀ 前へ", "secondary", "view"),
@@ -466,6 +467,75 @@ def _signal_display(db, sig: dict) -> list:
     return blocks
 
 
+BODY_MAX_CHARS = 6000
+
+
+def _signal_body(db, sig: dict) -> str:
+    """Full-text view of one signal for the 'body' action — the same
+    fields _signal_display shows on the card, but the evidence quote is
+    the untruncated message body."""
+    import mcs_signals
+    lines = [mcs_signals.signal_notice_text(sig)]
+    name = _patient_name(db, sig.get("project_id"))
+    if name:
+        lines.append(f"患者: {name}")
+    ev = sig.get("evidence") or {}
+    mids = ev.get("message_ids") or []
+    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
+        or ev.get("discharge_message_id") or ev.get("message_id")
+    if type(mid) is int:
+        m = db.execute(
+            "SELECT sender_name,posted_at,body_text,body_state "
+            "FROM messages WHERE message_id=?", (mid,)).fetchone()
+        if m and m["body_text"]:
+            body = ("（削除済み）" if m["body_state"] == "deleted"
+                    else m["body_text"])
+            lines.append(f"最新言及 {m['posted_at'] or '?'} "
+                         f"{m['sender_name'] or '?'}: {body}")
+    state = sig.get("state")
+    if state and state != "open":
+        lines.append(f"状態: {state}")
+    return "\n".join(lines)
+
+
+def _card_body_text(db, card, man) -> tuple:
+    """Full text of the shown set frozen into the click's manifest —
+    'body' answers what the button rendered, never the card's *current*
+    page, so a concurrent nav cannot swap the view under the click."""
+    try:
+        shown = json.loads(man["shown"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        shown = []
+    if card["kind"] == "thread":
+        lines = []
+        for mid in shown:
+            if type(mid) is not int:
+                continue
+            m = db.execute(
+                "SELECT sender_name,posted_at,body_text,body_state "
+                "FROM messages WHERE message_id=?", (mid,)).fetchone()
+            if m is None:
+                continue
+            body = ("（削除済み）" if m["body_state"] == "deleted"
+                    else (m["body_text"] or ""))
+            lines.append(f"{_hhmm(m['posted_at'])} "
+                         f"{m['sender_name'] or '?'}: {body}")
+        name = _patient_name(db, card["project_id"]) \
+            or "project " + str(card["project_id"])
+        title = f"💬 {name} — 本文"
+        text = "\n\n".join(lines)
+    else:
+        sigs = _latest_signals(db, shown)
+        text = "\n\n— — —\n\n".join(
+            _signal_body(db, sigs[k]["content"]) for k in shown
+            if k in sigs)
+        title = ("レビュー候補 — 本文" if card["kind"] == "digest"
+                 else "シグナル — 本文")
+    if len(text) > BODY_MAX_CHARS:
+        text = text[:BODY_MAX_CHARS - 1] + "…\n（省略 — 原本を参照）"
+    return title, text or "（表示できる本文がありません）"
+
+
 def _card_content(db, card) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
@@ -667,6 +737,7 @@ def _action_rows(db, card, content, now, context=None):
     btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label)
     btn("assign")
     btn("defer")
+    btn("body")
     rows.append(list(row))
     row.clear()
     if positive(card["project_id"]) \
@@ -1380,6 +1451,19 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
         new_render = _issue_render(db, card["card_id"], cfg, now, specs)
         return {**base, "outcome": "applied", "action": "page",
                 "page": page, "delivery_id": new_render}
+    if action == "body":
+        # view-only: answer with the untruncated text of the shown set
+        # the click's manifest froze — no state change, no re-render
+        man = db.execute(
+            "SELECT * FROM notification_view_manifests "
+            "WHERE manifest_id=? AND card_id=?",
+            (tok["need_manifest_id"], card["card_id"])).fetchone()
+        if man is None or man["invalidated"]:
+            return {**base, "outcome": "rejected",
+                    "error": "manifest_invalid"}
+        title, body_text = _card_body_text(db, card, man)
+        return {**base, "outcome": "applied", "action": "body",
+                "title": title, "body": body_text}
     if action == "ack":
         mid = tok["need_manifest_id"]
         man = db.execute(
