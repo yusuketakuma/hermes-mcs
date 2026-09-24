@@ -485,7 +485,16 @@ def _commands_only(lock_fd, deadline) -> int:
         notify_cards.recover(ledger, cfg, result)
         # dependency order: existing data/cmd traffic first (a resolve
         # may settle an attempt a receipt then reports), then cmd_int
+        cmds_before = result.get("command_commands", 0)
         job_ops.drain_commands(ledger, result)
+        if result.get("command_commands", 0) > cmds_before:
+            # drain_int sweeps after its own applies; data/cmd applies
+            # (card_resolve, request.create) drift cards the same way —
+            # re-render here or the change waits for the next tick
+            try:
+                notify_cards.sweep(ledger, cfg)
+            except Exception as e:
+                result["errors"].append(f"cmd_sweep:{type(e).__name__}")
         notify_cmds.drain_int_commands(
             ledger, result, cfg, root,
             deadline=time.monotonic() + min(120, max(
