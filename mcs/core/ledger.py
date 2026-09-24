@@ -363,6 +363,9 @@ class Ledger:
         if "history_page" not in cols("patients"):
             self.db.execute(
               "ALTER TABLE patients ADD COLUMN history_page INTEGER DEFAULT 0")
+        if "probe_mid" not in cols("patients"):
+            self.db.execute(
+              "ALTER TABLE patients ADD COLUMN probe_mid INTEGER")
         if "progress" not in cols("notify_outbox"):
             self.db.execute(
               "ALTER TABLE notify_outbox ADD COLUMN progress TEXT")
@@ -689,49 +692,45 @@ class Ledger:
                 self._save_tree(m, new_ids, now)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
-            if notify and not self.is_archived(p.project_id):
-                # new_ids: every newly stored message is notification-
-                # worthy in the unread path; PLUS messages THIS fetch
-                # still reports unread that were stored earlier without
-                # a notification — a reply pre-saved by a reply-job drain
-                # must still notify once here (R4). The stored is_unread
-                # column is sticky (MAX semantics = ever-unread), so the
-                # fetch's own flag is the authority for "unread NOW" (F04)
-                fresh_unread = [m.message_id for m in p.messages
-                                if m.is_unread] + [
-                    t.message_id for m in p.messages for t in m.replies
-                    if t.is_unread]
-                notify_ids = list(dict.fromkeys(
-                    new_ids + self._unnotified(fresh_unread)))
-                notify_ids = self._filter_notify_age(
-                    notify_ids, now, notify_max_age_s)
-                ev_id = None
-                if notify_ids:
-                    pl = dict(notify)
-                    pl["message_ids"] = notify_ids
-                    ev_id = self._outbox_insert("new_messages",
-                                                p.project_id, pl)
-                    self._mark_notified(notify_ids, now)
-                if semantic:
-                    seed_ids = sorted(set(new_ids) | set(notify_ids)
-                                      | set(changed_semantic.get(
-                                          p.project_id, [])))
-                    if seed_ids:
-                        origin = {"source": notify.get("source")}
-                        if ev_id is not None:
-                            origin["event_id"] = ev_id
-                        self._semantic_seed_tx(p.project_id, seed_ids,
-                                               origin)
-            elif semantic and not self.is_archived(p.project_id):
-                # notify-less path: same coverage rule as save_messages —
-                # every newly stored message is evaluation input with no
-                # notification eligibility (INV-20)
-                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
-                    p.project_id, [])))
-                if seed_ids:
-                    self._semantic_seed_tx(p.project_id, seed_ids,
-                                           {"source": "history_import"})
+            # The unread endpoint makes all newly stored posts eligible;
+            # previously stored posts are eligible only when THIS fetch
+            # still reports them unread (the stored flag is sticky).
+            fresh_unread = [m.message_id for m in p.messages
+                            if m.is_unread] + [
+                t.message_id for m in p.messages for t in m.replies
+                if t.is_unread]
+            notify_ids = (list(dict.fromkeys(
+                new_ids + self._unnotified(fresh_unread))) if notify else [])
+            self._queue_saved_messages_tx(
+                p.project_id, new_ids, changed_semantic.get(p.project_id, []),
+                notify_ids, notify=notify, semantic=semantic, now=now,
+                notify_max_age_s=notify_max_age_s)
         return new_ids
+
+    def _queue_saved_messages_tx(self, project_id, new_ids, changed_ids,
+                                  notify_ids, *, notify, semantic, now,
+                                  notify_max_age_s):
+        """Keep notification eligibility and semantic coverage in the save
+        transaction for unread, backfill and reply arrivals alike."""
+        if not (notify or semantic) or self.is_archived(project_id):
+            return
+        origin = {"source": "history_import"}
+        if notify:
+            origin = {"source": notify.get("source")}
+            notify_ids = self._filter_notify_age(
+                notify_ids, now, notify_max_age_s)
+            if notify_ids:
+                payload = dict(notify, message_ids=notify_ids)
+                origin["event_id"] = self._outbox_insert(
+                    "new_messages", project_id, payload)
+                self._mark_notified(notify_ids, now)
+        if semantic:
+            # Every new/changed post is evaluation input, including
+            # already-read and age-filtered arrivals. Notification
+            # eligibility is separately derived from the origin event.
+            seed_ids = sorted(set(new_ids) | set(notify_ids) | set(changed_ids))
+            if seed_ids:
+                self._semantic_seed_tx(project_id, seed_ids, origin)
 
     def _filter_notify_age(self, ids: list, now: float,
                            max_age_s: float | None) -> list:
@@ -922,12 +921,17 @@ class Ledger:
     def save_messages(self, msgs, project_id: int | None = None,
                       notify: dict | None = None,
                       semantic: bool = False,
-                      notify_max_age_s: float | None = None) -> list:
+                      notify_max_age_s: float | None = None,
+                      notify_all_new: bool = False) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages.
         notify_max_age_s drops stale posts from the intent (bulk-added
-        patients carry months-old unread history)."""
+        patients carry months-old unread history).
+        notify_all_new widens notification eligibility from this fetch's
+        unread posts to every newly-stored row — used by the self-post
+        probe, whose whole point is catching posts the unread set can
+        never contain (own posts are is_unread=0 by definition)."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -937,54 +941,21 @@ class Ledger:
                 self._save_tree(m, new_ids, now)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
-            if notify and project_id \
-                    and not self.is_archived(project_id):
-                # backfill/reply-job context: "new to the ledger" is NOT
-                # notification-worthy (old replies would spam); only
-                # messages THIS fetch reports unread are (R4/F04)
+            if project_id:
+                # Backfill arrivals may already be read: only this
+                # fetch's unread posts qualify for a notification.
                 fresh_unread = [m.message_id for m in msgs
                                 if m.is_unread] + [
                     t.message_id for m in msgs for t in m.replies
                     if t.is_unread]
-                notify_ids = self._filter_notify_age(
-                    self._unnotified(fresh_unread), now, notify_max_age_s)
-                ev_id = None
-                if notify_ids:
-                    pl = dict(notify)
-                    pl["message_ids"] = notify_ids
-                    ev_id = self._outbox_insert("new_messages",
-                                                project_id, pl)
-                    self._mark_notified(notify_ids, now)
-                if semantic:
-                    # semantic coverage is wider than notification
-                    # coverage: EVERY newly stored message — including
-                    # posts that arrived already-read, which are exactly
-                    # what this path exists to catch — is evaluation
-                    # input. Notification eligibility stays separate,
-                    # derived at drain time from stored origin events
-                    # (INV-20): a read-arrival seed can produce
-                    # artifacts but never a notice.
-                    seed_ids = sorted(set(new_ids) | set(notify_ids)
-                                      | set(changed_semantic.get(
-                                          project_id, [])))
-                    if seed_ids:
-                        origin = {"source": notify.get("source")}
-                        if ev_id is not None:
-                            origin["event_id"] = ev_id
-                        self._semantic_seed_tx(project_id, seed_ids,
-                                               origin)
-            elif semantic and project_id \
-                    and not self.is_archived(project_id):
-                # history-import path (no notify intent): every newly
-                # stored message still gets durable semantic coverage —
-                # open-loop/pending items in imported history are real
-                # findings, not just notification triggers. These jobs
-                # are drained AFTER arrival seeds (run_due ordering).
-                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
-                    project_id, [])))
-                if seed_ids:
-                    self._semantic_seed_tx(project_id, seed_ids,
-                                           {"source": "history_import"})
+                if notify_all_new:
+                    fresh_unread = list(dict.fromkeys(
+                        fresh_unread + new_ids))
+                notify_ids = self._unnotified(fresh_unread) if notify else []
+                self._queue_saved_messages_tx(
+                    project_id, new_ids, changed_semantic.get(project_id, []),
+                    notify_ids, notify=notify, semantic=semantic, now=now,
+                    notify_max_age_s=notify_max_age_s)
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -1026,37 +997,12 @@ class Ledger:
                                      parent_id=m.parent_id)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
-            if notify and not self.is_archived(project_id):
-                notify_ids = self._filter_notify_age(
-                    self._unnotified(
-                        [m.message_id for m in replies if m.is_unread]),
-                    now, notify_max_age_s)
-                ev_id = None
-                if notify_ids:
-                    pl = dict(notify)
-                    pl["message_ids"] = notify_ids
-                    ev_id = self._outbox_insert("new_messages",
-                                                project_id, pl)
-                    self._mark_notified(notify_ids, now)
-                if semantic:
-                    # widened like save_messages: a reply persisted
-                    # already-read is still evaluation input — its
-                    # facts and open-loop candidates are real findings
-                    seed_ids = sorted(set(new_ids) | set(notify_ids)
-                                      | set(changed_semantic.get(
-                                          project_id, [])))
-                    if seed_ids:
-                        origin = {"source": notify.get("source")}
-                        if ev_id is not None:
-                            origin["event_id"] = ev_id
-                        self._semantic_seed_tx(project_id, seed_ids,
-                                               origin)
-            elif semantic and not self.is_archived(project_id):
-                seed_ids = sorted(set(new_ids) | set(changed_semantic.get(
-                    project_id, [])))
-                if seed_ids:
-                    self._semantic_seed_tx(project_id, seed_ids,
-                                           {"source": "history_import"})
+            notify_ids = (self._unnotified(
+                [m.message_id for m in replies if m.is_unread]) if notify else [])
+            self._queue_saved_messages_tx(
+                project_id, new_ids, changed_semantic.get(project_id, []),
+                notify_ids, notify=notify, semantic=semantic, now=now,
+                notify_max_age_s=notify_max_age_s)
         return new_ids
 
     def _upsert_message(self, m) -> int:
@@ -1159,6 +1105,27 @@ class Ledger:
             "SELECT MAX(posted_at_ts) p FROM messages WHERE project_id=?",
             (project_id,)).fetchone()
         return int(r["p"] or 0) if r else 0
+
+    def has_message(self, message_id: int) -> bool:
+        return bool(self.db.execute(
+            "SELECT 1 FROM messages WHERE message_id=?",
+            (message_id,)).fetchone())
+
+    def probe_marker(self, project_id: int) -> int | None:
+        """Last `latest`-probed message id for this project — lets the
+        self-probe skip an id it already fetched for but could not store
+        (e.g. a reply only reachable via its thread), instead of
+        re-running the bounded history fetch every tick."""
+        r = self.db.execute(
+            "SELECT probe_mid FROM patients WHERE project_id=?",
+            (project_id,)).fetchone()
+        return r["probe_mid"] if r else None
+
+    def set_probe_marker(self, project_id: int, message_id: int):
+        self.db.execute(
+            "UPDATE patients SET probe_mid=? WHERE project_id=?",
+            (message_id, project_id))
+        self.db.commit()
 
     def coverage_ts(self, project_id: int) -> int:
         """Confirmed-complete history coverage watermark (epoch). Distinct

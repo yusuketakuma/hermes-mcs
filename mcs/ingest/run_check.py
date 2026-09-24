@@ -376,6 +376,75 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                     f"backfill {pid}: coverage_incomplete")
 
 
+# ---------- stage: self-post / missed-post probe ----------
+
+SELF_PROBE_PAGES = 2          # bounded history fetch per positive probe
+SELF_PROBE_MARGIN_S = 60      # keep the tail of the deadline for notify
+
+
+def stage_self_probe(adapter, ledger, result, deadline, run_id,
+                     semantic: bool = False,
+                     notify_max_age_s: float | None = None):
+    """Probe every active patient's `latest` message id against the
+    stored ledger. The unread set structurally cannot contain posts the
+    operator wrote (never unread for their author) or posts another
+    human already read — this per-project check is the only timely
+    signal for them; the deep walks catch up days later.
+    A positive probe triggers a bounded fetch_history; every newly
+    stored row notifies like an unread arrival (notify_all_new).
+    An id that a completed fetch still cannot store is remembered
+    (probe_mid) so it is not re-fetched every tick.
+    """
+    probed = 0
+    for row in ledger.frontier_patients():
+        pid = row["project_id"]
+        wm = ledger.high_watermark(pid)
+        if not wm:
+            continue  # never imported — the durable history jobs own it
+        if time.monotonic() > deadline - SELF_PROBE_MARGIN_S:
+            result["errors"].append("self_probe: deadline_exceeded")
+            break
+        try:
+            probe = adapter.fetch_latest(pid)
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            result["errors"].append(f"probe {pid}: {e.kind}")
+            continue
+        probed += 1
+        mid = probe["message_id"]
+        if mid is None or ledger.has_message(mid):
+            continue                     # nothing newer than stored
+        if ledger.probe_marker(pid) == mid:
+            continue                     # unfetchable id — already tried
+        try:
+            batch = adapter.fetch_history(pid, wm, max_pages=SELF_PROBE_PAGES)
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            result["errors"].append(f"probe {pid}: {e.kind}")
+            continue
+        merged = job_ops.merge_full_replies(
+            adapter, batch.messages, 0, deadline, result, ledger=ledger)
+        src = "self" if probe["is_self_only"] else "probe"
+        new_ids = ledger.save_messages(
+            batch.messages, project_id=pid, semantic=semantic,
+            notify={"run_id": run_id, "source": src},
+            notify_max_age_s=notify_max_age_s, notify_all_new=True)
+        if new_ids:
+            result["new_messages"] += len(new_ids)
+        result.setdefault("self_probe_fetched", []).append(pid)
+        if not batch.error:
+            ledger.set_probe_marker(pid, mid)
+        if merged.error:
+            raise merged.error
+        if batch.error:
+            result["errors"].append(f"probe {pid}: {batch.error.kind}")
+            if isinstance(batch.error, SessionExpired):
+                raise batch.error
+    result["self_probe"] = probed
+
+
 # ---------- stage: attachments ----------
 
 def stage_attachments(adapter, ledger, result, deadline, semantic=False):
@@ -600,6 +669,14 @@ def main() -> int:
                 stage_backfill(adapter, ledger, result, deadline, run_id,
                                semantic=sem_on,
                                notify_max_age_s=notify_max_age_s)
+            self_posts = cfg.get("self_posts", False)
+            if type(self_posts) is not bool:
+                result["errors"].append("config: self_posts_invalid")
+                self_posts = False
+            if self_posts:
+                stage_self_probe(adapter, ledger, result, deadline, run_id,
+                                 semantic=sem_on,
+                                 notify_max_age_s=notify_max_age_s)
         else:
             result["jobs_only"] = True
 

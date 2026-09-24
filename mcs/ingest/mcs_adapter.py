@@ -8,7 +8,7 @@ Verified contract (live session, 2026-09):
   messages: GET /api/v2t/projects/{id}/messages?unread=1&timestamp={ts}&keep_read_status=1
             &include_meta=1&exclude_terminated_ex_application=1&include_paginate_totals=1
   threads : GET /api/v2t/projects/{pid}/messages/{mid}/messages  (full reply bodies)
-  latest  : GET /api/v2t/projects/{id}/messages/latest?after={ts} -> {is_self_only,message}
+  latest  : GET /api/v2t/projects/{id}/messages/latest -> {is_self_only,message{id}}
   files   : GET {files[].url}  (anonymous 200 — no auth/cookie needed)
   mark    : POST /api/v2t/projects/{id}/mark_as_read  form: timestamp={ts}
             -> 200 {"project":{"is_unread":false}}   (timestamp OPTIONAL server-side:
@@ -1221,6 +1221,32 @@ class MCSAdapter:
                 reached = True
                 break
         return MessageBatch(out, pages, reached, error)
+
+    def fetch_latest(self, project_id: int) -> dict:
+        """Latest-activity probe for one project — sees posts the unread
+        set structurally cannot: the operator's own posts (never unread
+        for their author) and posts another human already read. The probe
+        only decides WHETHER a history fetch is warranted; message content
+        is always re-fetched through fetch_history, so a latest-shaped
+        object is never persisted directly.
+        The endpoint always returns the newest message identity — it does
+        not honor an `after` filter — so freshness is decided by comparing
+        the returned id against the ledger, not server-side.
+        Returns {"message_id": int|None, "is_self_only": bool} —
+        message_id is the server's newest message id (None when the
+        project has none)."""
+        r = self._get(f"/projects/{project_id}/messages/latest")
+        self_only = r.get("is_self_only")
+        if self_only is not None and type(self_only) is not bool:
+            raise SchemaError(f"latest[{project_id}]: is_self_only invalid")
+        msg = r.get("message")
+        if not msg:
+            # null/empty message object = no messages on the project
+            return {"message_id": None, "is_self_only": bool(self_only)}
+        if not isinstance(msg, dict) or not _valid_id(msg.get("id")):
+            raise SchemaError(f"latest[{project_id}]: message invalid")
+        return {"message_id": msg["id"],
+                "is_self_only": bool(self_only)}
 
     def _open_download(self, url: str):
         if not self._token:
