@@ -66,12 +66,18 @@ def _fake_discord():
         def add_item(self, item):
             self.children.append(item)
 
+    class Container:
+        def __init__(self, *children, accent_color=None, **_):
+            self.children = list(children)
+            self.accent_color = accent_color
+
     class Button:
         def __init__(self, style=None, label=None, custom_id=None):
             self.custom_id = custom_id
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, TextDisplay=TextDisplay,
-                             ActionRow=ActionRow, Button=Button)
+                             ActionRow=ActionRow, Container=Container,
+                             Button=Button)
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2,
                                       success=3, danger=4)
     return mod

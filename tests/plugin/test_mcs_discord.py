@@ -78,6 +78,11 @@ def _fake_discord():
         def add_item(self, item):
             self.children.append(item)
 
+    class Container:
+        def __init__(self, *children, accent_color=None, **_):
+            self.children = list(children)
+            self.accent_color = accent_color
+
     class Button:
         def __init__(self, style=None, label=None, custom_id=None):
             self.style = style
@@ -116,6 +121,7 @@ def _fake_discord():
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
+                             Container=Container,
                              Button=Button, Modal=Modal,
                              TextInput=TextInput)
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
@@ -449,9 +455,12 @@ def test_real_spec_validates_and_builds(world):
     _, spec = world.spec()
     assert cards.validate(spec) is spec
     view = cards.build_view(spec)
-    kinds = [type(i).__name__ for i in view.items]
+    # the face is one bordered Container carrying text + action rows
+    assert [type(i).__name__ for i in view.items] == ["Container"]
+    inner = view.items[0].children
+    kinds = [type(i).__name__ for i in inner]
     assert "TextDisplay" in kinds and "ActionRow" in kinds
-    ids = [b.custom_id for i in view.items if hasattr(i, "children")
+    ids = [b.custom_id for i in inner if hasattr(i, "children")
            for b in i.children]
     assert ids and all(i.startswith("mcs:a:") for i in ids)
     assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex

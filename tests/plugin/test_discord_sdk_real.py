@@ -68,15 +68,23 @@ def test_layout_view_serializes_components_v2():
     cards.validate(spec)
     view = cards.build_view(spec)
     comps = view.to_components()
-    types = [c["type"] for c in comps]
-    # TextDisplay=10, ActionRow=1; meta containers are never displayed
-    assert types == [10, 10, 10, 10, 10, 1]
-    assert all(b["type"] == 2 for b in comps[-1]["components"])
+    # the face is a single Container card (type 17) — bare TextDisplays
+    # on a LayoutView render as flat text with no card look
+    assert [c["type"] for c in comps] == [17]
+    assert comps[0]["accent_color"] == cards._ACCENTS["signal"]
+    inner = comps[0]["components"]
+    # merged TextDisplay=10 then ActionRow=1; meta is never displayed
+    assert [c["type"] for c in inner] == [10, 1]
+    assert all(b["type"] == 2 for b in inner[-1]["components"])
     assert all(b["custom_id"].startswith("mcs:a:")
-               for b in comps[-1]["components"])
+               for b in inner[-1]["components"])
     # multi-byte labels/contents survive the wire unchanged
-    assert "患者A" in comps[1]["content"]
-    assert comps[-1]["components"][0]["style"] \
+    assert "患者A" in inner[0]["content"]
+    # '>>>' would swallow the rest of the merged display — the quote
+    # must use the per-line '>' form
+    assert "> 発言: 嘔気が続く" in inner[0]["content"]
+    assert ">>>" not in inner[0]["content"]
+    assert inner[-1]["components"][0]["style"] \
         == discord.ButtonStyle.success.value
 
 
@@ -141,10 +149,11 @@ def test_validator_matches_nested_components_budget():
         {"ui": "button", "id": "ack", "label": "確認", "style": "success",
          "token": f"{i:032x}"} for i in range(5)]]
     cards.validate(spec)
-    cards.build_view(spec)
+    view = cards.build_view(spec)
+    # text merges inside the Container — the 10-child cap is never hit
+    inner = view.to_components()[0]["components"]
+    assert len(inner) == 2          # one merged TextDisplay + one row
     spec["parts"]["containers"].append({"type": "text", "text": "overflow"})
-    with pytest.raises(ValueError):
-        cards.build_view(spec)
     with pytest.raises(ValueError, match="component_budget"):
         cards.validate(spec)
 
@@ -157,7 +166,8 @@ def test_field_text_budget_counts_markdown_wrapper(wire_length):
     spec["parts"]["footer"] = []
     spec["parts"]["action_rows"] = []
     view = cards.build_view(spec)
-    assert sum(len(item["content"]) for item in view.to_components()) == wire_length
+    inner = view.to_components()[0]["components"]
+    assert sum(len(item["content"]) for item in inner) == wire_length
     if wire_length == 4000:
         cards.validate(spec)
     else:

@@ -154,6 +154,33 @@ def validate(spec) -> dict:
     return spec
 
 
+# accent bar colour per card kind — the visible card edge; a missing
+# kind (notice op) leaves the container unaccented
+_ACCENTS = {"thread": 0x5865F2, "signal": 0xF0A233, "digest": 0xF0A233}
+
+
+def _text_chunks(lines, limit=MAX_TEXT):
+    """Pack rendered lines into TextDisplay-sized chunks — a Container
+    caps at 10 children and each display at ``limit`` chars, so the
+    merged face must be split rather than emitted per container."""
+    chunks, cur = [], ""
+    for ln in lines:
+        while len(ln) > limit:                   # single oversized line
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(ln[:limit])
+            ln = ln[limit:]
+        if cur and len(cur) + 1 + len(ln) > limit:
+            chunks.append(cur)
+            cur = ln
+        else:
+            cur = ln if not cur else cur + "\n" + ln
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def build_view(spec: dict):
     """spec -> discord.ui.LayoutView. Called only after validate()."""
     import discord  # SDK required only inside the handler boundary
@@ -162,22 +189,28 @@ def build_view(spec: dict):
     # by custom_id, not on view-local callbacks — the view itself never
     # expires and holds no business logic
     view = discord.ui.LayoutView(timeout=None)
+    # The whole face lives inside one Container — bare TextDisplays on
+    # a LayoutView render as flat message text with no card look.
+    lines = []
     for c in spec["parts"]["containers"]:
         t = c["type"]
         if t == "heading":
-            view.add_item(discord.ui.TextDisplay(f"## {c['text']}"))
+            lines.append(f"## {c['text']}")
         elif t == "field":
-            view.add_item(
-                discord.ui.TextDisplay(f"**{c['name']}**: {c['value']}"))
+            lines.append(f"**{c['name']}**: {c['value']}")
         elif t == "quote":
-            view.add_item(discord.ui.TextDisplay(f">>> {c['text']}"))
+            # '>>>' swallows to the end of the TextDisplay — merged
+            # lines must use the per-line '>' form
+            lines.extend(f"> {ln}" for ln in c["text"].splitlines())
         elif t == "meta":
             continue                       # correlation — not displayed
         else:
-            view.add_item(discord.ui.TextDisplay(c["text"]))
+            lines.append(c["text"])
     for c in spec["parts"].get("footer") or []:
         if c.get("type") == "text":
-            view.add_item(discord.ui.TextDisplay(f"-# {c['text']}"))
+            lines.append(f"-# {c['text']}")
+    children = [discord.ui.TextDisplay(chunk)
+                for chunk in _text_chunks(lines)]
     for row in spec["parts"].get("action_rows") or []:
         ar = discord.ui.ActionRow()
         for b in row:
@@ -189,7 +222,11 @@ def build_view(spec: dict):
             # no callback — the native on_interaction listener is the
             # single dispatch point (plan §5)
             ar.add_item(btn)
-        view.add_item(ar)
+        children.append(ar)
+    if not children:
+        children.append(discord.ui.TextDisplay("—"))
+    view.add_item(discord.ui.Container(
+        *children, accent_color=_ACCENTS.get(spec.get("kind"))))
     return view
 
 
