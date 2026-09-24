@@ -59,8 +59,14 @@ UNSETTLED_ATTEMPT = ("granted", "unknown")
 # renders whose spec file must be available to a claiming worker
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
 
-PAGE_DIGEST = 5           # digest candidates per page
-PAGE_THREAD = 8           # messages per page on a thread card
+PAGE_DIGEST = 5           # digest candidates per page (count cap)
+PAGE_THREAD = 8           # messages per page on a thread card (count cap)
+# Components V2 hard ceiling: 4000 chars summed over all TextDisplay
+# items including heading/footer/wrappers (cards.py MAX_TOTAL_TEXT).
+# Pages pack items until this budget — full bodies need budget-driven
+# paging, not fixed counts; an item alone over budget gets its own page
+# and a hard cap marker.
+PAGE_TEXT_BUDGET = 3200
 RESEAT_S = 3600           # re-examine a dispatched pending intent hourly
 TOKEN_VIEW_S = 30 * 86400
 TOKEN_WRITE_S = 7 * 86400
@@ -392,6 +398,62 @@ def _snippet(text, n=MAX_SNIPPET) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _blocks_len(blocks) -> int:
+    """Rendered length of container blocks under the same accounting the
+    Components-V2 validator applies (text +4, field name+value +5)."""
+    n = 0
+    for b in blocks:
+        if b["type"] in ("heading", "text", "quote"):
+            n += len(b.get("text") or "") + 4
+        elif b["type"] == "field":
+            n += len(b.get("name") or "") + len(b.get("value") or "") + 5
+    return n
+
+
+def _cap_card_text(text, cap=PAGE_TEXT_BUDGET) -> str:
+    """Full text on the card, bounded only by the physical per-page
+    ceiling — an explicit marker points at 📄本文表示/原本 for the tail
+    that cannot physically fit."""
+    cap = max(cap, 80)
+    if len(text) <= cap:
+        return text
+    return text[:cap - 1] + "…\n（省略 — 📄本文表示または原本を参照）"
+
+
+def _fit_item(blocks) -> list:
+    """Bound one pageable item (a signal's block set) to the per-page
+    budget: the largest text/quote block shrinks first — structured
+    fields are never cut. Converges within len(blocks) passes."""
+    for _ in range(len(blocks)):
+        over = _blocks_len(blocks) - PAGE_TEXT_BUDGET
+        if over <= 0:
+            return blocks
+        target = max((b for b in blocks
+                      if b["type"] in ("text", "quote")),
+                     key=lambda b: len(b.get("text") or ""), default=None)
+        if target is None or len(target["text"]) <= 120:
+            break
+        keep = len(target["text"]) - over - 40
+        target["text"] = _cap_card_text(target["text"], keep)
+    return blocks
+
+
+def _pack_pages(lengths, max_count, budget=PAGE_TEXT_BUDGET) -> list:
+    """Group item indices into pages whose summed rendered length fits
+    the budget (and count cap) — an item alone over budget still takes
+    its own page; its emitted text is already capped."""
+    pages, cur, used = [], [], 0
+    for i, n in enumerate(lengths):
+        if cur and (used + n > budget or len(cur) >= max_count):
+            pages.append(cur)
+            cur, used = [], 0
+        cur.append(i)
+        used += n
+    if cur:
+        pages.append(cur)
+    return pages or [[]]
+
+
 def _source_fp(db, card) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
@@ -439,7 +501,9 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 
 def _signal_display(db, sig: dict) -> list:
     """Neutral display blocks for one signal row — shared by the signal
-    card and the digest's per-candidate rendering."""
+    card and the digest's per-candidate rendering. The evidence quote
+    carries the full message body; the whole item is bounded to the
+    page budget (the quote yields first)."""
     import mcs_signals
     pid = sig.get("project_id")
     blocks = [{"type": "text",
@@ -459,12 +523,12 @@ def _signal_display(db, sig: dict) -> list:
             blocks.append({"type": "quote", "text":
                            f"最新言及 {m['posted_at'] or '?'} "
                            f"{m['sender_name'] or '?'}: "
-                           f"{_snippet(m['body_text'], 120)}"})
+                           f"{m['body_text']}"})
     state = sig.get("state")
     if state and state != "open":
         blocks.append({"type": "field", "name": "状態",
                        "value": state})
-    return blocks
+    return _fit_item(blocks)
 
 
 BODY_MAX_CHARS = 6000
@@ -550,40 +614,48 @@ def _card_content(db, card) -> dict:
                ORDER BY posted_at_ts""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"]))]
-        pages = max(1, (len(msgs) + PAGE_THREAD - 1) // PAGE_THREAD)
-        page = _page(ui, pages, default=pages - 1)
         name = _patient_name(db, card["project_id"])
         first = msgs[0] if msgs else {}
         containers = [{"type": "heading", "text":
                        f"💬 {name or 'project ' + str(card['project_id'])}"
                        f" — {_mmdd(first.get('posted_at'))}"}]
-        shown = []
-        for m in msgs[page * PAGE_THREAD:(page + 1) * PAGE_THREAD]:
-            shown.append(m["message_id"])
+        # full bodies on the card — pages pack by rendered length so
+        # the page always fits the Components-V2 text budget
+        rendered = []
+        for m in msgs:
             body = ("（削除済み）" if m["body_state"] == "deleted"
-                    else _snippet(m["body_text"]))
-            containers.append({"type": "text", "text":
-                               f"{_hhmm(m['posted_at'])} "
-                               f"{m['sender_name'] or '?'}: {body}"})
+                    else (m["body_text"] or ""))
+            rendered.append(_cap_card_text(
+                f"{_hhmm(m['posted_at'])} {m['sender_name'] or '?'}: "
+                f"{body}"))
+        pages_idx = _pack_pages([len(t) for t in rendered],
+                                PAGE_THREAD)
+        pages = len(pages_idx)
+        page = _page(ui, pages, default=pages - 1)
+        shown = []
+        for i in pages_idx[page]:
+            shown.append(msgs[i]["message_id"])
+            containers.append({"type": "text", "text": rendered[i]})
         shown_kind = "message_ids"
     else:
         keys = _anchor_keys(card)
         sigs = _latest_signals(db, keys)
         ordered = [k for k in keys if k in sigs]
-        if kind == "digest":
-            pages = max(1, (len(ordered) + PAGE_DIGEST - 1) // PAGE_DIGEST)
-            page = _page(ui, pages)
-            name = ""
-            containers = [{"type": "heading",
-                           "text": f"💬 レビュー候補（{len(ordered)}件）"}]
-            slice_keys = ordered[page * PAGE_DIGEST:
-                                 (page + 1) * PAGE_DIGEST]
-        else:
-            pages, page, slice_keys = 1, 0, ordered
-            containers = [{"type": "heading", "text": "レビュー候補"}]
-        for k in slice_keys:
-            containers.extend(_signal_display(db, sigs[k]["content"]))
-        shown = slice_keys
+        sig_blocks = {k: _signal_display(db, sigs[k]["content"])
+                      for k in ordered}
+        containers = [{"type": "heading", "text":
+                       (f"💬 レビュー候補（{len(ordered)}件）"
+                        if kind == "digest" else "レビュー候補")}]
+        # full quotes make fixed-count paging unsafe — pack by the
+        # rendered length each signal actually occupies
+        pages_idx = _pack_pages(
+            [_blocks_len(sig_blocks[k]) for k in ordered],
+            PAGE_DIGEST if kind == "digest" else PAGE_THREAD)
+        pages = len(pages_idx)
+        page = _page(ui, pages)
+        shown = [ordered[i] for i in pages_idx[page]]
+        for k in shown:
+            containers.extend(sig_blocks[k])
         shown_kind = "signal_keys"
     footer = _footer(db, card)
     return {"containers": containers, "footer": footer,

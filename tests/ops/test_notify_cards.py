@@ -441,6 +441,63 @@ def test_body_action_returns_full_text(led, tmp_path):
     ).fetchone()["c"] == 0
 
 
+def test_card_renders_full_bodies_budget_packed(led, tmp_path):
+    """The card carries full message bodies (no snippet); pages pack by
+    rendered length so every page stays under the Components-V2 total
+    text ceiling — fixed-count paging could not promise that."""
+    _patient(led, 1)
+    body = "記録の本文です。" * 40            # ~280 chars each
+    _msg(led, 100, 1, body=body)
+    for m in range(101, 114):                # 13 msgs > PAGE_THREAD
+        _msg(led, m, 1, parent=100, body=body)
+    ev = _intent(led, payload={"message_ids": list(range(100, 114))})
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    assert c["pages"] > 1                    # budget forced extra pages
+    seen = set()
+    for p in range(c["pages"]):
+        card["ui_state"] = json.dumps({"page": p})
+        c = notify_cards._card_content(led.db, card)
+        assert c["page"] == p
+        total = (notify_cards._blocks_len(c["containers"])
+                 + notify_cards._blocks_len(c["footer"]))
+        assert total <= 4000, (p, total)     # hard Discord ceiling
+        joined = "\n".join(b.get("text") or "" for b in c["containers"])
+        assert body in joined                # full body, not a snippet
+        assert "省略" not in joined
+        seen.update(c["shown"])
+    assert seen == set(range(100, 114))      # nothing dropped
+
+
+def test_card_body_oversized_item_capped_marked(led, tmp_path):
+    """A single message bigger than the page budget gets its own page
+    and an explicit omission marker — the spec can never exceed the
+    4000-char ceiling and be rejected whole."""
+    _patient(led, 1)
+    _msg(led, 100, 1, body="長い記録。" * 900)   # ~4500 chars
+    _msg(led, 101, 1, parent=100, body="短い")
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    assert c["pages"] == 2                   # oversized msg alone
+    assert c["shown"] == [100]
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "省略" in joined and "本文表示" in joined
+    total = (notify_cards._blocks_len(c["containers"])
+             + notify_cards._blocks_len(c["footer"]))
+    assert total <= 4000
+    # the newest page still shows the short message fully
+    card["ui_state"] = json.dumps({"page": 1})
+    c = notify_cards._card_content(led.db, card)
+    assert c["shown"] == [101]
+    assert "短い" in "\n".join(
+        b.get("text") or "" for b in c["containers"])
+
+
 def test_body_action_signal_full_evidence(led, tmp_path):
     long_body = "退院後フォローの経過記録。" * 30
     _patient(led, 1)
