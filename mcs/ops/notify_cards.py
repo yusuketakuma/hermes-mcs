@@ -1403,8 +1403,13 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
             (card["card_id"], mid, actor, req["command_id"],
              req["command_id"], now))
         shown = json.loads(man["shown"] or "[]")
+        # the footer now shows the ack — re-render immediately like a
+        # nav click, not at the next sweep (§2: applied state must show
+        # in the card itself within the interaction budget)
+        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
         return {**base, "outcome": "applied", "action": "ack",
-                "manifest_id": mid, "shown": shown}
+                "manifest_id": mid, "shown": shown,
+                "delivery_id": new_render}
     if action == "assign":
         db.execute(
             """INSERT INTO notification_triage(
@@ -1415,8 +1420,9 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
                  revision=revision+1,last_actor=excluded.last_actor,
                  updated_at=excluded.updated_at""",
             (card["card_id"], actor, actor, now))
+        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
         return {**base, "outcome": "applied", "action": "assign",
-                "owner": actor}
+                "owner": actor, "delivery_id": new_render}
     if action == "defer":
         until = now + DEFER_S
         db.execute(
@@ -1428,8 +1434,9 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
                  revision=revision+1,last_actor=excluded.last_actor,
                  updated_at=excluded.updated_at""",
             (card["card_id"], until, actor, now))
+        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
         return {**base, "outcome": "applied", "action": "defer",
-                "defer_until": until}
+                "defer_until": until, "delivery_id": new_render}
     # request/dismiss tokens authorize the plugin-side modal — nothing
     # is applied here; the human command itself arrives separately as
     # request.create/ops.signal_dismiss with the full envelope. The

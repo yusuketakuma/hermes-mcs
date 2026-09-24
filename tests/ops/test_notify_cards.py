@@ -386,12 +386,25 @@ def test_ack_assign_defer_persist(led, tmp_path):
         r = notify_cards.apply_notification(led, req, CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
         assert r["action"] == action
+        # applied state must re-render immediately — a click can't wait
+        # for the next tick sweep to become visible on the card
+        assert r.get("delivery_id"), action
     tri = led.db.execute("SELECT * FROM notification_triage").fetchone()
     assert tri["state"] == "deferred" and tri["defer_until"] > NOW
     ack = led.db.execute(
         "SELECT actor,manifest_id FROM notification_acknowledgements"
     ).fetchone()
     assert ack["actor"] == "nurse-1"
+    latest = _latest_render(led)
+    assert latest["op"] == "update" and latest["state"] == "queued"
+    latest_spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (latest["delivery_id"] + ".json")).read_text())
+    footer = " ".join(
+        b.get("text", "") for b in latest_spec["parts"]["footer"])
+    # defer overwrote the assigned triage state, so 👤 is replaced by
+    # ⏸ — the last-applied state and the ack must both be visible
+    assert "確認" in footer and "保留中" in footer
 
 
 def test_action_scope_and_stale_source_rejected(led, tmp_path):

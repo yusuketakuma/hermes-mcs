@@ -307,4 +307,14 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             os.unlink(path)
         result["commands"] = result.get("commands", 0) + 1
         done += 1
+    if done:
+        # applied actions change card content (triage footer, signal
+        # state via request.create / ops.signal_dismiss, settle-side
+        # renders) — re-render drift in THIS drain so a click reflects
+        # in seconds, not at the next tick sweep (§7 op budget).
+        try:
+            notify_cards.sweep(ledger, cfg)
+        except Exception as e:
+            result.setdefault("errors", []).append(
+                f"cmd_int_sweep:{type(e).__name__}")
     return done
