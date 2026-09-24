@@ -684,7 +684,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
         return _DEFERRED
     fmt = _probe_format(deadline=deadline)
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
+        # the same floor gates retries: a format degrade (4xx) loops
+        # back here and would otherwise re-fire a full call that can
+        # no longer finish before the deadline
+        if deadline is not None \
+                and deadline - time.monotonic() < (need_s or 0):
             return _DEFERRED
         rf = None
         if fmt == "schema":
@@ -1175,15 +1179,16 @@ _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
 _BATCH_K = 4                     # context-free bodies per batched call
 _BATCH_MAX_TOKENS = MAX_TOKENS * 2   # K outputs share one envelope
 
-# Doomed-call floors (llama timings, Sep 2026: ~8s prompt eval, ~3.6
-# tok/s decode -> ~80s for a typical single, ~120-180s for a 4-batch).
-# A call whose remaining budget is below its floor would almost
-# certainly be killed mid-decode — server-side generation cancelled,
-# every produced token wasted. Deferring costs nothing: the row stays
-# pending and a drainer with a real budget picks it up next cycle.
+# Doomed-call floors from measured artifact timings (Sep 2026):
+# singles p50 ~23s / p90 ~45s / max 69s; batch calls p50 ~102s /
+# p90 ~228s / max 278s for K=4 (~55s per item at the tail). A call
+# fired below its floor is likely killed mid-decode — server-side
+# generation cancelled, every produced token wasted. Deferring costs
+# nothing: the row stays pending and a drainer with a real budget
+# picks it up next cycle.
 _MIN_CALL_S = 90.0      # one full extraction call (eval + decode)
-_MIN_REPAIR_S = 60.0    # repair re-ask (same body, fresh full output)
-_BATCH_PER_ITEM_S = 30.0  # decode share per item inside a batch call
+_MIN_REPAIR_S = 75.0    # repair re-ask — same shape as a single call
+_BATCH_PER_ITEM_S = 55.0  # decode share per item inside a batch call
 
 
 def _batch_need_s(n: int) -> float:
@@ -1582,18 +1587,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         """Persist batch outcomes row by row; return the residue —
         rows whose item was omitted/invalid or whose whole call
         failed — for an in-run single retry (with repair). A deferred
-        batch defers its rows without spending another call."""
-        nonlocal deferred
+        batch's rows take the same lane — the per-call floor keeps it
+        free when the remainder fits nothing."""
         residue = []
         for tup in tups:
             index, r, ctx, saved, hints, lease = tup
-            if status == "deferred":
-                deferred += 1
-                continue
             if status == "ok" and index in results:
                 metas[index] = meta
                 _handle(r, ctx, results[index], meta, lease, {})
             else:
+                # a deferred batch's rows also fall through: the single
+                # lane's preflight floor re-defers them for free when
+                # nothing fits, but a lone single (90s) can still finish
+                # inside a remainder too short for the batch (280s at
+                # K=4)
                 residue.append(tup)
         return residue
 
@@ -1627,8 +1634,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
         if parallel and units:
             # settle the probed output format before fanning out — the
-            # workers would otherwise race to mutate the global mode
-            _probe_format(deadline=deadline)
+            # workers would otherwise race to mutate the global mode.
+            # Below the smallest floor every unit defers anyway, so the
+            # probe would be a call nobody uses.
+            if deadline - time.monotonic() >= _MIN_CALL_S:
+                _probe_format(deadline=deadline)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(workers, len(units))) as pool:

@@ -1454,6 +1454,67 @@ def test_llm_extract_short_budget_defers_without_call(tmp_path, monkeypatch):
     db.close()
 
 
+def test_degrade_retry_respects_need_floor(monkeypatch):
+    """A format-degrade retry is still a full generation — the loop
+    gate applies need_s so a 4xx cannot re-fire a call that can no
+    longer finish before the deadline."""
+    now = [10_000.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    calls = []
+
+    def _chat(*a, **kw):
+        calls.append(1)
+        now[0] += 10                       # the round-trip ate 10s
+        return {"status": 400, "text": "", "usage": None,
+                "timings": None}
+    monkeypatch.setattr(extract_llm.local_llm, "chat", _chat)
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    d = extract_llm._llm_call("p", deadline=now[0] + 95, need_s=90)
+    # entry gate passes (95 >= 90) -> 400 -> degrade -> loop gate:
+    # 95-10 = 85 < 90 -> deferred after ONE call, not a ladder burn
+    assert d is extract_llm._DEFERRED and len(calls) == 1
+
+
+def test_deferred_batch_rows_fall_back_to_singles(tmp_path, monkeypatch):
+    """A batch deferred by the completion floor still tries its rows
+    as singles — a lone call can fit a remainder too short for the
+    batch."""
+    db = _batch_ledger(tmp_path)
+    calls = {"batch": 0, "single": 0}
+
+    def _call(prompt, **kw):
+        if kw.get("schema") is extract_llm._SCHEMA_BATCH:
+            calls["batch"] += 1
+            return extract_llm._DEFERRED
+        calls["single"] += 1
+        return {"summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", _call)
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4)
+    assert calls == {"batch": 1, "single": 4}
+    assert res["done"] == 4 and res["deferred"] == 0
+    db.close()
+
+
+def test_deferred_batch_fall_back_parallel(tmp_path, monkeypatch):
+    """Same residue routing under the thread-pool path: deferred batch
+    rows are re-submitted as singles, not dropped on the floor."""
+    db = _batch_ledger(tmp_path)
+    calls = {"batch": 0, "single": 0}
+
+    def _call(prompt, **kw):
+        if kw.get("schema") is extract_llm._SCHEMA_BATCH:
+            calls["batch"] += 1
+            return extract_llm._DEFERRED
+        calls["single"] += 1
+        return {"summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", _call)
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4,
+                                  workers=3)
+    assert calls["batch"] == 1 and calls["single"] == 4
+    assert res["done"] == 4
+    db.close()
+
+
 def test_cli_batch_flag_range(monkeypatch, capsys):
     """--batch accepts 0..8; anything else exits 2 with bad_batch —
     a mistyped value must not silently morph into a giant or disabled
