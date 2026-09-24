@@ -1278,8 +1278,9 @@ def test_batch_envelope_failure_residues_to_singles(
 
 def test_batch_item_evidence_validates_against_own_body(
         tmp_path, monkeypatch):
-    """An item quoting body B under index A loses its evidence —
-    batching cannot smuggle quotes across targets."""
+    """An item quoting body B under index A fails to locate its
+    evidence — and an item that only validates WITH drops joins the
+    residue so the single lane's repair pass gets a shot at it."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     db.save_messages([_message(mid=1, body="カロナール服用中"),
@@ -1291,15 +1292,21 @@ def test_batch_item_evidence_validates_against_own_body(
                                "evidence": "ロキソプロフェン中止"}]},
             {"i": 1, "meds": [{"name": "ロキソプロフェン",
                                "evidence": "ロキソプロフェン中止"}]}]})
+    singles = []
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **kw: singles.append(body) or {
+            "meds": [{"name": "カロナール", "evidence": "カロナール服用中"}]})
     res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4)
     assert res["done"] == 2
-    # selection is DESC: tups[0]=mid2 (quote locates), tups[1]=mid1
+    # selection is DESC: tups[0]=mid2 keeps its locating batch item;
+    # tups[1]=mid1 dropped (quote absent in its own body) -> single
+    assert singles == ["カロナール服用中"]
     a1 = json.loads(
         db.artifacts("extract_llm", message_id=1)[0]["content"])
     a2 = json.loads(
         db.artifacts("extract_llm", message_id=2)[0]["content"])
-    assert "evidence" not in a1["meds"][0] \
-        and a1["meds"][0]["unverified"]
+    assert a1["meds"][0]["evidence"] == "カロナール服用中"
     assert a2["meds"][0]["evidence"] == "ロキソプロフェン中止"
     db.close()
 
