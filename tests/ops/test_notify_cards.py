@@ -52,14 +52,15 @@ def _patient(led, pid=1, name="患者A", archived=0):
         "VALUES(?,?,?)", (pid, name, archived))
 
 
-def _msg(led, mid, pid=1, parent=None, body="本文", ts=None):
+def _msg(led, mid, pid=1, parent=None, body="本文", ts=None,
+         sender="職員", prof="", org=""):
     ts = ts if ts is not None else int(NOW) + mid
     led.db.execute(
         "INSERT INTO messages(message_id,project_id,sender_name,"
-        "posted_at,posted_at_ts,body_text,content_hash,body_state,"
-        "parent_id) VALUES(?,?,?,?,?,?,?,?,?)",
-        (mid, pid, "職員", f"2026-09-24T08:{mid % 60:02d}", ts, body,
-         f"{mid:064x}", "full", parent))
+        "profession,organization,posted_at,posted_at_ts,body_text,"
+        "content_hash,body_state,parent_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (mid, pid, sender, prof, org, f"2026-09-24T08:{mid % 60:02d}",
+         ts, body, f"{mid:064x}", "full", parent))
     led.db.commit()
 
 
@@ -648,6 +649,53 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除済み）" in joined
     assert "📋 構造化" not in joined and "疼痛" not in joined
+
+
+def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
+    """Thread card header lines carry write date+time plus the sender's
+    profession/organization; missing fields leave no dangling parens."""
+    _patient(led, 1)
+    _msg(led, 100, 1, prof="看護師", org="訪問看護ステーションX")
+    _msg(led, 101, 1, parent=100)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_render._card_content(led.db, card)
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "09-24 08:" in joined
+    assert "職員（看護師・訪問看護ステーションX）" in joined
+    assert "職員（）" not in joined and "（・" not in joined
+
+
+def test_body_manifest_shows_sender_metadata(led, tmp_path):
+    """The 📄本文表示 manifest header carries the same sender tag."""
+    _patient(led, 1)
+    _msg(led, 100, 1, prof="薬剤師", org="薬局Y")
+    _msg(led, 101, 1, parent=100)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    title, text = notify_render._card_body_text(
+        led.db, card, {"shown": "[100, 101]"})
+    assert "09-24 08:" in text
+    assert "職員（薬剤師・薬局Y）: 本文" in text
+    assert "職員: 本文" in text
+
+
+def test_signal_quote_shows_sender_metadata(led, tmp_path):
+    """Signal cards' 最新言及 evidence quote carries the sender tag."""
+    _patient(led, 1)
+    _msg(led, 100, 1, body="退院後フォローの記録", prof="薬剤師",
+         org="薬局Y")
+    _signal_row(led, "sig-meta", mids=[100])
+    ev = _intent(led, kind="signal", pid=1,
+                 payload={"signal_keys": ["sig-meta"], "project_id": 1,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    c = notify_render._card_content(led.db, _card(led))
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "薬剤師・薬局Y" in joined
 
 
 def test_card_signal_structured_evidence(led, tmp_path):
