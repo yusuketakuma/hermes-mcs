@@ -29,7 +29,7 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `semantic/`(semantic.py + semantic_* 20本) ·
   `views/`(読み取り専用: mcs_view・mcs_stats・mcs_queries・summary_review・structured_view) ·
   `ops/`(書き込み系: mcs_requests・mcs_operations・mcs_signals・mcs_setup・
-  mcs_refstats・request_loops・brain_export)
+  mcs_update・mcs_refstats・request_loops・brain_export)
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
   sys.path に挿れて `import _mcs_path`（全サブディレクトリを import root
   として登録）する2行ブートストラップを持つ。`mcs/` 直下に import 可能な

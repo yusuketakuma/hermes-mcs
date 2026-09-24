@@ -84,6 +84,8 @@ def transport_begin(claim: dict) -> dict:
            "channel_id": delivery.get("channel_id")}
     if delivery.get("guild_id"):
         env["guild_id"] = delivery["guild_id"]
+    if delivery.get("transport") == "slack":
+        env.update(version=2, transport="slack", team_id=delivery["team_id"])
     return env
 
 
@@ -106,6 +108,8 @@ def transport_receipt(claim: dict, result: str,
            "result": result}
     if delivery.get("guild_id"):
         env["guild_id"] = delivery["guild_id"]
+    if delivery.get("transport") == "slack":
+        env.update(version=2, transport="slack", team_id=delivery["team_id"])
     if message_id is not None:
         env["message_id"] = str(message_id)
     if error_code is not None:
@@ -132,7 +136,10 @@ def thread_receipt(delivery_id: str, message_id: str,
 def notification(token: str, actor: str, origin: dict) -> dict:
     """command_id = <token>:<actor_hash> — the runner's (token, actor)
     idempotency key, stable across retries of the same click."""
-    return {"version": 1, "op": "notification",
+    slack = origin.get("transport") == "slack"
+    return {"version": 2 if slack else 1,
+            **({"transport": "slack"} if slack else {}),
+            "op": "notification",
             "command_id": f"{token}:{actor_hash(actor)}",
             "request_id": str(uuid.uuid4()),
             "actor": actor, "token": token, "origin": origin}
@@ -140,7 +147,10 @@ def notification(token: str, actor: str, origin: dict) -> dict:
 
 def refresh(actor: str, origin: dict,
             command_id: str | None = None) -> dict:
-    return {"version": 1, "op": "refresh",
+    slack = origin.get("transport") == "slack"
+    return {"version": 2 if slack else 1,
+            **({"transport": "slack"} if slack else {}),
+            "op": "refresh",
             "command_id": command_id or str(uuid.uuid4()),
             "actor": actor, "origin": origin}
 

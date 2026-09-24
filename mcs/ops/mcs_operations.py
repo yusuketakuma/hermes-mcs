@@ -155,6 +155,39 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
         return None
+    if cmd in ("ops.update_apply", "ops.update_rollback"):
+        # System-wide lifecycle ops — no project_id (the mcs_requests
+        # early-return routes them here before the positive-pid gate).
+        # tag/target_sha/base_sha pin WHAT is being approved so a moved
+        # tag can never silently redirect the apply (F5/S18).
+        if req.get("project_id") is not None:
+            return "bad_project_id"
+        if cmd == "ops.update_apply":
+            allowed = base | {"tag", "reason", "target_sha", "base_sha"}
+        else:
+            # rollback only needs an optional tag hint — silently
+            # accepted-but-ignored fields are worse than a rejection
+            allowed = base | {"tag", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+        if cmd == "ops.update_apply" and (
+                not isinstance(req.get("tag"), str)
+                or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
+                                    req["tag"])):
+            return "bad_tag"
+        if "tag" in req and (
+                not isinstance(req["tag"], str)
+                or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
+                                    req["tag"])):
+            return "bad_tag"
+        for k in ("target_sha", "base_sha"):
+            if k in req and (not isinstance(req[k], str)
+                             or not re.fullmatch(r"[0-9a-f]{40}",
+                                                 req[k])):
+                return "bad_sha"
+        return None
     return "unknown_ops_cmd"
 
 
@@ -621,6 +654,56 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
                   "name": name, "file_hash": file_hash}
 
 
+def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
+    """Schedule an updater run — the receipt commit IS the approval
+    boundary (R7/S9): nothing executes inside this transaction; the
+    drain layer spawns the detached updater AFTER commit. The receipt
+    pins tag + target/base sha so approval is for a specific commit.
+    Rejects up front when the updater cannot possibly run — a receipt
+    that claims 'scheduled' while nothing can launch it is a lie (C)."""
+    try:
+        import mcs_update
+        from mcs_util import load_config
+    except Exception:
+        return "updater_not_deployed", {}
+    if not os.path.isfile(mcs_update.WRAPPER):
+        return "updater_not_deployed", {}
+    upd = {}
+    try:
+        cfg = load_config()
+        if isinstance(cfg.get("update"), dict):
+            upd = cfg["update"]
+    except Exception:
+        pass
+    if upd.get("mode", "off") == "off":
+        # fail fast: accepting a receipt under mode=off would leave it
+        # silently dormant while telling the user it was scheduled
+        return "update_disabled", {}
+    extra = {"cmd": req["cmd"], "scheduled": True}
+    if "tag" in req:
+        extra["tag"] = req["tag"]
+    if _text(req.get("reason"), 2000):
+        extra["reason"] = req["reason"]
+    if req["cmd"] == "ops.update_apply":
+        sha = req.get("target_sha")
+        if sha is None:
+            try:
+                sha = mcs_update.remote_tag_sha(req["tag"])
+            except Exception:
+                sha = None
+            if sha is None:
+                return "update_tag_unresolvable", {}
+        extra["target_sha"] = sha
+        base = req.get("base_sha")
+        if base is None:
+            try:
+                base = mcs_update.current_version()[1]
+            except Exception:
+                base = None
+        extra["base_sha"] = base
+    return None, extra
+
+
 def apply_tx(db, req: dict, now: float | None = None, *,
              filesystem_changes=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
@@ -640,6 +723,8 @@ def apply_tx(db, req: dict, now: float | None = None, *,
         return _apply_signal_policy_tx(db, req, current)
     if req["cmd"] == "ops.refstat_approve":
         return _apply_refstat_approve_tx(db, req, current, filesystem_changes)
+    if req["cmd"] in ("ops.update_apply", "ops.update_rollback"):
+        return _apply_update_op_tx(db, req, current)
     return "unknown_ops_cmd", {}
 
 

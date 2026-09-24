@@ -44,6 +44,7 @@ from notify_render import (
     _latest_signals, _mmdd, _patient_name, _source_fp)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
+SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
 
 # outbox kinds that become interactive cards when notify.interactive is
 # on; everything else (ops alerts, semantic notices) stays legacy text.
@@ -68,6 +69,8 @@ CREATE TABLE IF NOT EXISTS notification_cards(
   root_message_id INTEGER,
   anchor_key TEXT NOT NULL,
   profile TEXT, application_id TEXT, guild_id TEXT, channel_id TEXT,
+  transport TEXT NOT NULL DEFAULT 'discord',
+  team_id TEXT,
   message_id TEXT, thread_id TEXT,
   thread_state TEXT NOT NULL DEFAULT 'none'
     CHECK(thread_state IN ('none','created','failed','deleted')),
@@ -92,6 +95,8 @@ CREATE TABLE IF NOT EXISTS notification_intent_batches(
   frozen_payload TEXT NOT NULL,
   payload_hash TEXT NOT NULL,
   route_epoch INTEGER NOT NULL,
+  transport TEXT NOT NULL DEFAULT 'discord',
+  scope_json TEXT,
   sealed_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_intent_cards(
   event_id INTEGER NOT NULL REFERENCES notify_outbox(event_id),
@@ -112,6 +117,8 @@ CREATE TABLE IF NOT EXISTS notification_renders(
   manifest_id INTEGER REFERENCES notification_view_manifests(manifest_id),
   route_epoch INTEGER NOT NULL,
   profile TEXT, application_id TEXT, guild_id TEXT, channel_id TEXT,
+  transport TEXT NOT NULL DEFAULT 'discord',
+  team_id TEXT,
   spec_json TEXT,
   spec_published INTEGER NOT NULL DEFAULT 0,
   first_published_at REAL,
@@ -207,7 +214,7 @@ def data_root(ledger) -> str:
 
 def notify_dirs(root: str) -> dict:
     return {name: os.path.join(root, name) for name in
-            ("discord_render", "discord_state", "flags",
+            ("discord_render", "discord_state", "slack_render", "slack_state", "flags",
              "cmd_int", "cmd_results")}
 
 
@@ -222,7 +229,24 @@ def notify_cfg(cfg: dict) -> dict:
 
 
 def interactive_enabled(cfg: dict) -> bool:
-    return notify_cfg(cfg).get("interactive") == "discord"
+    return notify_cfg(cfg).get("interactive") in ("discord", "slack")
+
+
+def active_transport(cfg) -> str:
+    return "slack" if notify_cfg(cfg).get("interactive") == "slack" else "discord"
+
+
+def scope_fields(transport: str) -> tuple[str, ...]:
+    return ("profile", "application_id",
+            "team_id" if transport == "slack" else "guild_id", "channel_id")
+
+
+def stored_scope(row) -> dict[str, str | None]:
+    transport = row["transport"]
+    scope = {k: row[k] for k in scope_fields(transport)}
+    if transport == "slack":
+        scope["transport"] = transport
+    return scope
 
 
 def route_epoch(cfg: dict) -> int:
@@ -233,15 +257,20 @@ def route_epoch(cfg: dict) -> int:
 def delivery_scope(cfg: dict) -> dict | None:
     """The Discord destination the runner addresses — all four fields
     required; a partial scope is a config error, never a fallback."""
-    d = notify_cfg(cfg).get("discord")
+    transport = active_transport(cfg)
+    d = notify_cfg(cfg).get(transport)
     if not isinstance(d, dict):
         return None
     out = {}
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
+    for k in scope_fields(transport):
         v = d.get(k)
         if not isinstance(v, str) or not v.strip():
             return None
         out[k] = v.strip()
+    if transport == "slack":
+        if "guild_id" in d:
+            return None
+        out["transport"] = transport
     return out
 
 
@@ -298,6 +327,7 @@ def publish_flags(cfg: dict, root: str) -> bool:
     flags = {
         "interactive": interactive_enabled(cfg),
         "kill_switch": not interactive_enabled(cfg),
+        "transport": active_transport(cfg),
         "route_epoch": route_epoch(cfg),
         "card_thread": n.get("card_thread") is True,
         "at": time.time(),
@@ -333,14 +363,18 @@ def _unsettled_attempt(db, card_id: int):
            ORDER BY a.created_at DESC LIMIT 1""", (card_id,)).fetchone()
 
 
-def _find_signal_card(db, pid, keys):
+def _find_signal_card(db, pid, keys, scope):
     """A member key of an existing signal card resolves to that card —
     a fresh card_key must never fork a second card for the same unit."""
     keyset = set(keys)
     for r in db.execute(
-            "SELECT card_id,anchor_key FROM notification_cards "
+            "SELECT * FROM notification_cards "
             "WHERE kind='signal' AND project_id=? AND delivery_state!='revoked'",
             (pid,)).fetchall():
+        if r["transport"] != scope.get("transport", "discord"):
+            continue
+        if r["transport"] == "slack" and not _scope_match(r, scope):
+            continue
         try:
             anchor = json.loads(r["anchor_key"] or "{}")
         except (json.JSONDecodeError, TypeError):
@@ -353,7 +387,7 @@ def _find_signal_card(db, pid, keys):
 def _card_for(db, target, scope, now) -> int:
     if target["kind"] == "signal":
         found = _find_signal_card(db, target["project_id"],
-                                  target["anchor"]["signal_keys"])
+                                  target["anchor"]["signal_keys"], scope)
         if found is not None:
             # widen the anchor if this intent adds member keys
             row = db.execute("SELECT anchor_key FROM notification_cards "
@@ -371,22 +405,27 @@ def _card_for(db, target, scope, now) -> int:
                            (json.dumps({"signal_keys": merged},
                                        ensure_ascii=False), now, found))
             return found
+    key = target["card_key"]
+    if scope.get("transport") == "slack":
+        key = f"v2|slack|{payload_hash(scope)}|{key.removeprefix('v1|')}"
     row = db.execute("SELECT card_id FROM notification_cards "
-                     "WHERE card_key=?", (target["card_key"],)).fetchone()
+                     "WHERE card_key=?", (key,)).fetchone()
     if row is not None:
         return row["card_id"]
     cur = db.execute(
         """INSERT INTO notification_cards(
              card_key,kind,project_id,root_message_id,anchor_key,
              profile,application_id,guild_id,channel_id,
+             transport,team_id,
              ui_state,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (target["card_key"], target["kind"], target.get("project_id"),
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (key, target["kind"], target.get("project_id"),
          target.get("root_message_id"),
          json.dumps(target["anchor"], ensure_ascii=False,
                     sort_keys=True),
          scope.get("profile"), scope.get("application_id"),
          scope.get("guild_id"), scope.get("channel_id"),
+         scope.get("transport", "discord"), scope.get("team_id"),
          "{}", now, now))
     return cur.lastrowid
 
@@ -473,6 +512,11 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     factual result lands, so issuance here never races an HTTP call."""
     card = _card_row(db, card_id)
     if card is None:
+        return None
+    if card["transport"] != active_transport(cfg):
+        return None
+    if card["transport"] == "slack" \
+            and not _scope_match(card, delivery_scope(cfg) or {}):
         return None
     if _unsettled_attempt(db, card_id):
         return None
@@ -565,9 +609,9 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
          card["presentation_generation"], 1 if card["kind"] == "digest" else 0,
          json.dumps(content["shown"], ensure_ascii=False), now))
     content["manifest_id"] = cur.lastrowid
-    scope = ({k: card[k] for k in
-              ("profile", "application_id", "guild_id", "channel_id")}
-             if card["message_id"] and card["channel_id"]
+    scope = (stored_scope(card)
+             if card["transport"] == "slack"
+             or (card["message_id"] and card["channel_id"])
              else (delivery_scope(cfg) or {}))
     event_ids = sorted(
         r["event_id"] for r in db.execute(
@@ -575,7 +619,7 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
             "WHERE card_id=? AND state='pending'", (card_id,)))
     correlation = secrets.token_hex(16)
     spec = {
-        "schema": RENDER_SCHEMA,
+        "schema": SLACK_RENDER_SCHEMA if card["transport"] == "slack" else RENDER_SCHEMA,
         "delivery_id": str(uuid.uuid4()),
         "card_key": card["card_key"], "kind": card["kind"], "op": op,
         "render_rev": rev,
@@ -609,12 +653,14 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         """INSERT INTO notification_renders(
              delivery_id,card_id,op,render_rev,manifest_id,route_epoch,
              profile,application_id,guild_id,channel_id,
+             transport,team_id,
              spec_json,payload_hash,correlation,state,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)""",
         (spec["delivery_id"], card_id, op, rev, content["manifest_id"],
          spec["delivery"]["route_epoch"], scope.get("profile"),
          scope.get("application_id"), scope.get("guild_id"),
-         scope.get("channel_id"), canonical(spec).decode(),
+         scope.get("channel_id"), card["transport"], scope.get("team_id"),
+         canonical(spec).decode(),
          payload_hash(spec), correlation, now, now))
     db.execute(
         """UPDATE notification_intent_cards
@@ -703,7 +749,8 @@ def _publish_specs(db, dirs, specs, now) -> list:
     leaves spec_published=0; recovery republishes identical bytes."""
     published = []
     for spec in specs:
-        path = publish_file(dirs["discord_render"],
+        transport = spec["delivery"].get("transport", "discord")
+        path = publish_file(dirs[transport + "_render"],
                             spec["delivery_id"] + ".json",
                             canonical(spec))
         db.execute(
@@ -847,9 +894,26 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 or row["state"] not in ("pending", "failed"):
             return {"skipped": True}
         batch = db.execute(
-            "SELECT event_id FROM notification_intent_batches "
+            "SELECT * FROM notification_intent_batches "
             "WHERE event_id=?", (event_id,)).fetchone()
+        signals = cfg.get("signals")
+        if row["kind"] == "signal" and not (
+                isinstance(signals, dict)
+                and signals.get("notify") is True):
+            if batch is None:
+                db.execute(
+                    "UPDATE notify_outbox SET state='suppressed',"
+                    "next_try=NULL,updated_at=? WHERE event_id=?",
+                    (now, event_id))
+                mark_snapshot_dirty(db)
+                return {"suppressed": True}
+            return {"skipped": True}
         if batch is not None:
+            if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
+                return {"error": "transport_mismatch"}
+            if batch["transport"] == "slack" \
+                    and batch["scope_json"] != canonical(scope).decode():
+                return {"error": "scope_mismatch"}
             # sealed already — a flush re-entry only repairs + completes
             _complete_intent(db, event_id, now)
             for r in db.execute(
@@ -877,9 +941,12 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     (now, event_id))
                 return {"error": "payload_invalid"}
             db.execute(
-                "INSERT INTO notification_intent_batches VALUES(?,?,?,?,?)",
+                "INSERT INTO notification_intent_batches("
+                "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
+                "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
                 (event_id, canonical(frozen).decode(),
-                 payload_hash(frozen), epoch, now))
+                 payload_hash(frozen), epoch, now, active_transport(cfg),
+                 canonical(scope).decode() if active_transport(cfg) == "slack" else None))
             card_ids = []
             for target in _resolve_targets(db, row, frozen):
                 cid = _card_for(db, target, scope, now)
@@ -939,15 +1006,25 @@ def _origin_card(db, origin):
         return None
     row = db.execute(
         "SELECT * FROM notification_cards WHERE message_id=? "
-        "AND channel_id=? AND application_id=?",
-        (mid, ch, app)).fetchone()
+        "AND channel_id=? AND application_id=? AND transport=? "
+        "AND (transport='discord' OR (profile=? AND team_id=?))",
+        (mid, ch, app, origin.get("transport", "discord"),
+         origin.get("profile"), origin.get("team_id"))).fetchone()
     return dict(row) if row else None
 
 
 def _scope_match(card, origin) -> bool:
+    origin = origin or {}
+    transport = card["transport"]
+    if transport != origin.get("transport", "discord"):
+        return False
+    if transport == "slack" and "guild_id" in origin:
+        return False
+    if transport == "slack":
+        return all(card[k] and card[k] == origin.get(k)
+                   for k in scope_fields(transport))
     return all(not card[k] or card[k] == origin.get(k)
-               for k in ("profile", "application_id", "guild_id",
-                         "channel_id"))
+               for k in scope_fields(transport))
 
 
 def apply_notification(ledger, req, cfg, now=None) -> dict:
@@ -1012,7 +1089,8 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         # context that never rendered this card
         return {**base, "outcome": "rejected", "error": "origin_mismatch"}
     action = tok["action"]
-    if action in _WRITE_ACTIONS and not interactive_enabled(cfg):
+    if action in _WRITE_ACTIONS and (
+            not interactive_enabled(cfg) or card["transport"] != active_transport(cfg)):
         return {**base, "outcome": "rejected", "error": "interactive_off"}
     if card["delivery_state"] == "revoked":
         return {**base, "outcome": "rejected", "error": "card_revoked"}
@@ -1344,10 +1422,10 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         root = data_root(ledger)
         dirs = notify_dirs(root)
         for r in db.execute(
-                "SELECT delivery_id FROM notification_renders "
+                "SELECT delivery_id,transport FROM notification_renders "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "AND spec_published=1 ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
-            path = os.path.join(dirs["discord_render"],
+            path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             try:
                 os.unlink(path)
@@ -1396,16 +1474,16 @@ def recover(ledger, cfg, result) -> dict:
     with db:
         db.execute("BEGIN IMMEDIATE")
         for r in db.execute(
-                "SELECT delivery_id,spec_json FROM notification_renders "
+                "SELECT delivery_id,spec_json,transport FROM notification_renders "
                 "WHERE state IN ('queued','held')").fetchall():
-            path = os.path.join(dirs["discord_render"],
+            path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             if os.path.isfile(path):
                 db.execute(
                     "UPDATE notification_renders SET spec_published=1 "
                     "WHERE delivery_id=?", (r["delivery_id"],))
             elif r["spec_json"]:
-                publish_file(dirs["discord_render"],
+                publish_file(dirs[r["transport"] + "_render"],
                              r["delivery_id"] + ".json",
                              r["spec_json"].encode("utf-8"))
                 db.execute(
@@ -1415,15 +1493,16 @@ def recover(ledger, cfg, result) -> dict:
                     (now, now, r["delivery_id"]))
                 fixed["republished"] += 1
         try:
-            claimed = [n for n in os.listdir(dirs["discord_render"])
+            claimed = [os.path.join(dirs[t + "_render"], n)
+                       for t in ("discord", "slack")
+                       for n in os.listdir(dirs[t + "_render"])
                        if n.endswith(".json.claimed")]
         except OSError:
             claimed = []
         stale = 0
         for n in claimed:
             try:
-                if now - os.stat(os.path.join(
-                        dirs["discord_render"], n)).st_mtime > 60:
+                if now - os.stat(n).st_mtime > 60:
                     stale += 1
             except OSError:
                 pass

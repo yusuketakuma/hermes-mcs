@@ -78,10 +78,11 @@ def _settle_attempt(db, attempt, render, result, now,
                 db.execute(
                     """UPDATE notification_cards SET message_id=?,
                          profile=?,application_id=?,guild_id=?,
-                         channel_id=?,updated_at=? WHERE card_id=?""",
+                         channel_id=?,transport=?,team_id=?,updated_at=? WHERE card_id=?""",
                     (str(message_id), render["profile"],
                      render["application_id"], render["guild_id"],
-                     render["channel_id"], now, card["card_id"]))
+                     render["channel_id"], render["transport"], render["team_id"],
+                     now, card["card_id"]))
                 card["message_id"] = str(message_id)
             elif card["message_id"] != str(message_id):
                 conflict = True
@@ -163,6 +164,19 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
             "SELECT * FROM notification_delivery_attempts "
             "WHERE begin_command_id=?", (cid,)).fetchone()
         if old is not None:
+            render = db.execute(
+                "SELECT * FROM notification_renders WHERE delivery_id=?",
+                (old["delivery_id"],)).fetchone()
+            if not cards._scope_match(render, req):
+                return {"granted": False, "error": "denied_scope_mismatch",
+                        "command_id": cid}
+            if old["attempt_id"] != req["attempt_id"] \
+                    or old["delivery_id"] != req["delivery_id"] \
+                    or old["worker_id"] != req["worker_id"] \
+                    or any(render[k] != req.get(k) for k in
+                           ("render_rev", "payload_hash", "route_epoch")):
+                return {"granted": False, "error": "command_id_conflict",
+                        "command_id": cid}
             return _begin_result(db, old)
         clash = db.execute(
             "SELECT 1 FROM notification_delivery_attempts "
@@ -176,7 +190,7 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
             # render FK; the result file carries the audit instead.
             # The spec file is definitively dead — remove it so a
             # worker stops re-claiming bytes that can never grant.
-            _unlink_spec(ledger, req["delivery_id"])
+            _unlink_spec(ledger, req["delivery_id"], req.get("transport", "discord"))
             return {"granted": False, "error": "denied_unknown_delivery",
                     "command_id": cid, "attempt_id": req["attempt_id"],
                     "delivery_id": req["delivery_id"]}
@@ -200,7 +214,10 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
             "WHERE begin_command_id=?", (cid,)).fetchone())
     if reason is not None and _denial_is_final(
             db, req["delivery_id"], reason):
-        _unlink_spec(ledger, req["delivery_id"])
+        render = db.execute(
+            "SELECT transport FROM notification_renders WHERE delivery_id=?",
+            (req["delivery_id"],)).fetchone()
+        _unlink_spec(ledger, req["delivery_id"], render["transport"])
     return result
 
 
@@ -226,13 +243,13 @@ def _denial_is_final(db, delivery_id, reason) -> bool:
     return False
 
 
-def _unlink_spec(ledger, delivery_id) -> None:
+def _unlink_spec(ledger, delivery_id, transport) -> None:
     """Remove a definitively dead spec file. The runner owns
     discord_render; a missing file just means 'nothing to claim' —
     the watchdog republishes a live render's spec_json if needed."""
     try:
         os.unlink(os.path.join(
-            cards.notify_dirs(cards.data_root(ledger))["discord_render"],
+            cards.notify_dirs(cards.data_root(ledger))[transport + "_render"],
             str(delivery_id) + ".json"))
     except OSError:
         pass
@@ -246,6 +263,9 @@ def _begin_check(db, req, cfg) -> str | None:
         (req["delivery_id"],)).fetchone()
     if render is None:
         return "unknown_delivery"
+    if render["transport"] != cards.active_transport(cfg) \
+            or render["transport"] != req.get("transport", "discord"):
+        return "transport_mismatch"
     if render["payload_hash"] != req["payload_hash"]:
         return "hash_mismatch"
     if render["render_rev"] != req["render_rev"]:
@@ -253,9 +273,11 @@ def _begin_check(db, req, cfg) -> str | None:
     if render["route_epoch"] != req["route_epoch"] \
             or render["route_epoch"] != cards.route_epoch(cfg):
         return "epoch_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if render[k] and render[k] != req.get(k):
-            return "scope_mismatch"
+    if not cards._scope_match(render, req):
+        return "scope_mismatch"
+    if render["transport"] == "slack" \
+            and not cards._scope_match(render, cards.delivery_scope(cfg)):
+        return "scope_mismatch"
     if render["state"] == "cancelled":
         return "render_cancelled"
     if render["state"] != "queued":
@@ -263,6 +285,11 @@ def _begin_check(db, req, cfg) -> str | None:
     card = cards._card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
+        signals = cfg.get("signals")
+        if card["kind"] in ("signal", "digest") and not (
+                isinstance(signals, dict)
+                and signals.get("notify") is True):
+            return "signal_notify_off"
         if card["delivery_state"] == "revoked" \
                 and render["op"] != "revoke":
             # a revoke render against a revoked card is exactly the
@@ -278,7 +305,7 @@ def _begin_result(db, attempt) -> dict:
     echoes the render identity fields so the worker can verify the
     grant still matches the spec file it claimed."""
     render = db.execute(
-        "SELECT render_rev,payload_hash,route_epoch,correlation,op "
+        "SELECT * "
         "FROM notification_renders WHERE delivery_id=?",
         (attempt["delivery_id"],)).fetchone()
     granted = attempt["state"] == "granted"
@@ -292,6 +319,8 @@ def _begin_result(db, attempt) -> dict:
                    payload_hash=render["payload_hash"],
                    route_epoch=render["route_epoch"],
                    correlation=render["correlation"], op=render["op"])
+        if render["transport"] == "slack":
+            out.update(cards.stored_scope(render))
     if not granted:
         out["error"] = attempt["error_code"] or attempt["state"]
     return out
@@ -362,9 +391,8 @@ def _receipt_check(attempt, render, req) -> str | None:
                     ("correlation", render["correlation"])):
         if req.get(k) != want:
             return f"{k}_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if render[k] and render[k] != req.get(k):
-            return "scope_mismatch"
+    if not cards._scope_match(render, req):
+        return "scope_mismatch"
     if req["result"] == "delivered" \
             and not isinstance(req.get("message_id"), str):
         return "message_id_required"
@@ -386,6 +414,10 @@ def apply_thread_receipt(ledger, req, cfg, now=None) -> dict:
             (req["delivery_id"],)).fetchone()
         if render is None or render["card_id"] is None:
             return {"applied": False, "error": "unknown_delivery"}
+        if render["transport"] != req.get("transport", "discord") \
+                or (render["transport"] == "slack"
+                    and not cards._scope_match(render, req)):
+            return {"applied": False, "error": "scope_mismatch"}
         card = cards._card_row(db, render["card_id"])
         if card["message_id"] is not None \
                 and str(req["message_id"]) != card["message_id"]:
@@ -425,12 +457,17 @@ def validate_card_resolve(req) -> str | None:
                "reason", "delivery_id", "attempt_id", "result",
                "profile", "application_id", "guild_id", "channel_id",
                "message_id", "evidence"}
+    slack = req.get("version") == 2
+    if slack:
+        allowed = (allowed - {"guild_id"}) | {"transport", "team_id"}
     if req.keys() - allowed:
         return "unknown_field"
     if req.get("cmd") != "ops.card_resolve":
         return "unknown_cmd"
-    if type(req.get("version")) is not int or req["version"] != 1:
+    if type(req.get("version")) is not int or req["version"] not in (1, 2):
         return "bad_version"
+    if slack and req.get("transport") != "slack":
+        return "bad_transport"
     if not valid_uuid(req.get("command_id")):
         return "bad_command_id"
     if req.get("human_confirmed") is not True:
@@ -446,7 +483,7 @@ def validate_card_resolve(req) -> str | None:
         return "bad_attempt_id"
     if req.get("result") not in _RESOLVE_RESULTS:
         return "bad_result"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
+    for k in cards.scope_fields("slack" if slack else "discord"):
         if not _text(req.get(k), 200):
             return f"bad_{k}"
     if req["result"] == "mark_delivered" \
@@ -510,9 +547,7 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                     and render["card_id"] is not None else None)
             error = _resolve_check(attempt, render, card, req)
         if error is None:
-            receipt["scope"] = {k: render[k] for k in
-                                ("profile", "application_id",
-                                 "guild_id", "channel_id")}
+            receipt["scope"] = cards.stored_scope(render)
             receipt["projects"] = _card_projects(db, render, card)
             if attempt["state"] in ("delivered", "not_sent"):
                 same = (attempt["state"]
@@ -554,7 +589,9 @@ def _resolve_check(attempt, render, card, req) -> str | None:
         return "unknown_attempt"
     if render is None or attempt["delivery_id"] != req["delivery_id"]:
         return "delivery_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
+    if render["transport"] != req.get("transport", "discord"):
+        return "scope_mismatch"
+    for k in cards.scope_fields(render["transport"]):
         if render[k] != req.get(k):
             return "scope_mismatch"
     if req["result"] == "mark_delivered":

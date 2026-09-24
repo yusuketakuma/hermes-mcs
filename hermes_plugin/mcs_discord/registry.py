@@ -29,6 +29,8 @@ def scope_key(scope: dict) -> str:
     # Preserve the deployed lock namespace across upgrades.
     raw = "|".join(str(scope.get(k) or "-") for k in
                    ("profile", "application_id", "channel_id"))
+    if scope.get("transport") == "slack":
+        raw = f"slack|{scope['team_id']}|{raw}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 

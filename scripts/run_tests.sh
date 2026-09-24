@@ -28,7 +28,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 test_home=$(mktemp -d "${TMPDIR:-/tmp}/mcs-test-home.XXXXXX")
-trap 'rm -rf "$test_home"' EXIT
+trap 'rm -rf "$test_home" 2>/dev/null || :' EXIT
 mkdir -p "$test_home/tmp" "$test_home/config" "$test_home/cache" "$test_home/data"
 
 env -i \

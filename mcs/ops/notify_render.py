@@ -19,9 +19,8 @@ PAGE_DIGEST = 5           # digest candidates per page (count cap)
 PAGE_THREAD = 8           # messages per page on a thread card (count cap)
 # Components V2 hard ceiling: 4000 chars summed over all TextDisplay
 # items including heading/footer/wrappers (cards.py MAX_TOTAL_TEXT).
-# Pages pack items until this budget — full bodies need budget-driven
-# paging, not fixed counts; an item alone over budget gets its own page
-# and a hard cap marker.
+# Pages pack items until this budget — a signal item alone over budget
+# gets its own page and a hard cap marker.
 PAGE_TEXT_BUDGET = 3200
 BODY_MAX_CHARS = 6000
 
@@ -212,7 +211,7 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 
 # ---------- card content ----------
 
-def _signal_display(db, sig: dict) -> list:
+def _signal_display(db, sig: dict, transport: str) -> list:
     """Neutral display blocks for one signal row — shared by the signal
     card and the digest's per-candidate rendering. The evidence quote
     carries the full message body; the whole item is bounded to the
@@ -233,10 +232,11 @@ def _signal_display(db, sig: dict) -> list:
             "SELECT sender_name,posted_at,body_text,body_state "
             "FROM messages WHERE message_id=?", (mid,)).fetchone()
         if m and m["body_state"] != "deleted" and m["body_text"]:
-            blocks.append({"type": "quote", "text":
-                           f"最新言及 {m['posted_at'] or '?'} "
-                           f"{m['sender_name'] or '?'}: "
-                           f"{m['body_text']}"})
+            quote = (f"最新言及 {m['posted_at'] or '?'} "
+                     f"{m['sender_name'] or '?'}:")
+            if transport != "slack":
+                quote += f" {m['body_text']}"
+            blocks.append({"type": "quote", "text": quote})
             sblk = _structured_block(db, mid)
             if sblk:
                 blocks.append(sblk)
@@ -340,15 +340,14 @@ def _card_content(db, card) -> dict:
         containers = [{"type": "heading", "text":
                        f"💬 {name or 'project ' + str(card['project_id'])}"
                        f" — {_mmdd(first.get('posted_at'))}"}]
-        # full bodies on the card — pages pack by rendered length so
-        # the page always fits the Components-V2 text budget
+        # no body text on the card face — a per-message header line is
+        # all that renders; 📄本文表示 answers with the full shown set
         rendered = []
         for m in msgs:
-            body = ("（削除済み）" if m["body_state"] == "deleted"
-                    else (m["body_text"] or ""))
-            blocks = [{"type": "text", "text":
-                       f"{_hhmm(m['posted_at'])} "
-                       f"{m['sender_name'] or '?'}: {body}"}]
+            line = (f"{_hhmm(m['posted_at'])} {m['sender_name'] or '?'}"
+                    + (" （削除済み）" if m["body_state"] == "deleted"
+                       else ""))
+            blocks = [{"type": "text", "text": line}]
             sblk = _structured_block(db, m["message_id"])
             if sblk:
                 blocks.append(sblk)
@@ -366,7 +365,8 @@ def _card_content(db, card) -> dict:
         keys = _anchor_keys(card)
         sigs = _latest_signals(db, keys)
         ordered = [k for k in keys if k in sigs]
-        sig_blocks = {k: _signal_display(db, sigs[k]["content"])
+        sig_blocks = {k: _signal_display(db, sigs[k]["content"],
+                                         card["transport"])
                       for k in ordered}
         containers = [{"type": "heading", "text":
                        (f"💬 レビュー候補（{len(ordered)}件）"

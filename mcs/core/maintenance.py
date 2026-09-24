@@ -56,6 +56,64 @@ def daily_backup(db_path: str):
             os.unlink(old)
         except OSError:
             pass
+    prune_preupdate_backups()
+
+
+def preupdate_backup(db_path: str) -> str:
+    """Verified .backup before an apply — distinct 'preupdate-' prefix
+    so the daily ledger-* rotation can never evict a rollback point
+    (B3). Returns the published path."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(BACKUP_DIR, f"preupdate-{stamp}.db")
+    tmp = dest + ".tmp"
+    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
+                          uri=True)
+    dst = sqlite3.connect(tmp)
+    try:
+        src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        dst.close()
+        src.close()
+    if not valid_mcs_db(tmp):
+        os.unlink(tmp)
+        raise MCSError("backup_verify_failed")
+    os.replace(tmp, dest)
+    return dest
+
+
+def prune_preupdate_backups(state_path: str | None = None) -> int:
+    """Delete only preupdate-* backups NOT referenced by an actionable
+    applying/applied record — reference-based retention (B3): a flapping
+    fetch loop can never push out the backup a rollback still needs."""
+    import json
+    state_path = state_path or os.path.join(
+        HOME, "data", "update_state.json")
+    referenced: set[str] = set()
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        records = list(state.get("applied") or [])
+        if state.get("applying"):
+            records.append(state["applying"])
+        for rec in records:
+            bp = rec.get("backup_path") if isinstance(rec, dict) else None
+            if isinstance(bp, str):
+                referenced.add(os.path.abspath(bp))
+    except (OSError, json.JSONDecodeError, TypeError):
+        # unreadable state => keep EVERYTHING (fail-safe, S17)
+        return 0
+    removed = 0
+    for path in glob.glob(os.path.join(BACKUP_DIR, "preupdate-*.db")):
+        if os.path.abspath(path) in referenced:
+            continue
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def rotate_log(paths=None):

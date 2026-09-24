@@ -1,19 +1,22 @@
 #!/bin/sh
-# Install the MCS Discord command plugin into a Hermes profile's
-# user-plugin directory. The plugin reads the mcs/ package next to
-# hermes_plugin/ inside this repo — the whole checkout must stay in
-# place; only the plugin dir is symlinked.
+# Install everything MCS needs on a fresh machine, in idempotent stages:
 #
-#   ./install.sh [HERMES_HOME]
+#   1. Homebrew packages (git, python, uv, llama.cpp, Google Chrome)
+#   2. hermes-agent checkout + venv + ~/.local/bin/hermes shim
+#   3. Discord command plugin (symlink + `hermes plugins enable`)
+#   4. local LLM — llama-server on 127.0.0.1:8080 + Qwen3.5-9B model
+#   5. scheduled services — launchd agents + hermes cron jobs
+#      (delegated to `mcs_setup.py services`)
+#   6. update recovery — ~/.mcs-recovery tool + independent launchd
+#      watchdog (org.mcs.recovery), outside the repo so a broken new
+#      release can never take the recovery path down with it
 #
-# HERMES_HOME defaults to ~/.hermes (the gateway launch profile's home —
-# multiplexed gateways discover plugins under the LAUNCH profile, not the
-# routed one). Re-running is idempotent.
+#   ./install.sh [HERMES_HOME]     HERMES_HOME defaults to ~/.hermes
 #
-# When `hermes` is not installed, this bootstraps hermes-agent at a pinned
-# revision (the one this MCS deployment was validated against) into
-# $HERMES_HOME/hermes-agent with the messaging extra, then links
-# ~/.local/bin/hermes.
+# Re-running is safe: every stage checks first and skips what exists.
+# What is NOT automated (needs your secrets / interactive choices):
+# `mcs_setup.py init` (guided all-settings wizard), the Discord bot
+# token, and the plugin settings block — the final summary lists them.
 set -eu
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +27,42 @@ HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
 # including audit repairs and plugin command_context injection.
 HERMES_PIN="16390dc80d248b7b49554c0cde52caf22e1fc3d8"
 HERMES_BIN_DIR="$HOME/.local/bin"
+LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
+MODEL_DIR="$HERMES_HOME/models"
+MODEL_FILE="$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf"
+MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
 
+say()  { printf '\n=== %s ===\n' "$1"; }
+ok()   { echo "  ok: $*"; }
+skip() { echo "  skip: $*"; }
+warn() { echo "  warn: $*" >&2; }
+
+# ---------------------------------------------------------------- 1. brew
+say "1/6 Homebrew packages"
+if ! command -v brew >/dev/null 2>&1; then
+    warn "brew not found — install it first:"
+    warn '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    warn "then re-run this script."
+    exit 1
+fi
+for pkg in git python@3.13 uv llama.cpp; do
+    if brew list --versions "$pkg" >/dev/null 2>&1; then
+        skip "$pkg already installed"
+    else
+        echo "  install: $pkg"
+        brew install "$pkg"
+    fi
+done
+if brew list --cask --versions google-chrome >/dev/null 2>&1 \
+        || [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+    skip "google-chrome already installed"
+else
+    echo "  install: google-chrome (cask)"
+    brew install --cask google-chrome
+fi
+
+# ----------------------------------------------------------- 2. hermes
+say "2/6 hermes-agent"
 ensure_hermes() {
     if command -v hermes >/dev/null 2>&1; then
         echo "hermes already installed: $(command -v hermes)"
@@ -84,7 +122,10 @@ SHIM
 }
 
 ensure_hermes
+HERMES_BIN="$(command -v hermes || echo "$HERMES_BIN_DIR/hermes")"
 
+# -------------------------------------------------------- 3. plugin
+say "3/6 Discord command plugin"
 PLUGINS_DIR="$HERMES_HOME/plugins"
 LINK="$PLUGINS_DIR/mcs-discord-commands"
 
@@ -96,41 +137,130 @@ fi
 ln -sfn "$REPO/hermes_plugin" "$LINK"
 echo "linked: $LINK -> $REPO/hermes_plugin"
 
-cat <<'EOF'
+if "$HERMES_BIN" config get plugins.enabled 2>/dev/null \
+        | grep -q "mcs-discord-commands"; then
+    skip "plugin already enabled"
+else
+    "$HERMES_BIN" plugins enable mcs-discord-commands \
+        --no-allow-tool-override \
+        && ok "plugin enabled" \
+        || warn "plugins enable failed — add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml"
+fi
 
-Enable and configure it in the profile's config.yaml (all scopes are
-required — an unset value denies the command). Note: on a multiplexed
-gateway `plugins.enabled` is evaluated under the LAUNCH profile's home,
-while `entries.<id>.settings` are read under the profile the command was
-routed to — enable in the launch profile, set settings on the serving
-profile.
+# -------------------------------------------------- 4. local LLM server
+say "4/6 local LLM (llama-server :8080)"
+if curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1; then
+    skip "llama-server already answering on :8080"
+elif [ -f "$HOME/Library/LaunchAgents/ai.hermes.llamacpp.plist" ]; then
+    skip "a hermes-managed llamacpp LaunchAgent exists — it will serve :8080 once loaded"
+else
+    LLAMA_BIN="$(command -v llama-server || true)"
+    [ -n "$LLAMA_BIN" ] || LLAMA_BIN="$(brew --prefix)/bin/llama-server"
+    if [ ! -x "$LLAMA_BIN" ]; then
+        warn "llama-server not found even after brew — install manually"
+    else
+        if [ ! -f "$MODEL_FILE" ]; then
+            echo "  downloading model (~6 GB): $MODEL_FILE"
+            mkdir -p "$MODEL_DIR"
+            curl -fL --progress-bar -o "$MODEL_FILE.part" "$MODEL_URL" \
+                && mv "$MODEL_FILE.part" "$MODEL_FILE" \
+                || warn "model download failed — fetch $MODEL_URL into $MODEL_FILE"
+        else
+            skip "model already present"
+        fi
+        PLIST_SRC="$REPO/deployment/launchagents/ai.mcs.llamaserver.plist"
+        PLIST_DST="$HOME/Library/LaunchAgents/ai.mcs.llamaserver.plist"
+        mkdir -p "$HOME/Library/LaunchAgents" "$HERMES_HOME/logs"
+        sed -e "s|__LLAMA_BIN__|$LLAMA_BIN|g" \
+            -e "s|__MODEL__|$MODEL_FILE|g" \
+            -e "s|__HERMES_HOME__|$HERMES_HOME|g" \
+            "$PLIST_SRC" > "$PLIST_DST"
+        if launchctl print "gui/$(id -u)/ai.mcs.llamaserver" >/dev/null 2>&1; then
+            skip "ai.mcs.llamaserver already loaded"
+        else
+            launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" \
+                && ok "llama-server LaunchAgent started" \
+                || warn "launchctl bootstrap failed for ai.mcs.llamaserver"
+        fi
+    fi
+fi
 
-  plugins:
-    enabled: [mcs-discord-commands]
-    entries:
-      mcs-discord-commands:
-        settings:
-          snapshot: /path/to/mcs/snapshots/ledger-snapshot.db
-          inbox: /path/to/mcs/cmd
-          allowed_user_ids: ["<discord user id>"]
-          allowed_chat_ids: ["<discord chat/channel id>"]
-          project_ids: [1]
+# ------------------------------------------- 5. launchd + hermes cron
+say "5/6 scheduled services (launchd + hermes cron)"
+if python3 "$REPO/mcs/ops/mcs_setup.py" services; then
+    ok "services installed"
+else
+    warn "services reported problems — see deployment/launchagents/README.md"
+fi
 
-`mcs_view.py stats/signals` and the scraping pipeline keep their own
-data dir at ~/.mcs — see README.md. See hermes_plugin/README.md for the
-full command surface and the preview/confirm flow.
+# --------------------------------- 6. update recovery (independent)
+say "6/6 update recovery (watchdog + tool)"
+RECOVERY_DIR="$HOME/.mcs-recovery"
+mkdir -p "$RECOVERY_DIR"
+# preserve the prior generation — on a bad update it may be the only
+# thing that can still run
+if [ -f "$RECOVERY_DIR/mcs_recover.py" ]; then
+    cp -p "$RECOVERY_DIR/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py.prev"
+fi
+cp "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"
+chmod 755 "$RECOVERY_DIR/mcs_recover.py"
+ok "recovery tool: $RECOVERY_DIR/mcs_recover.py"
 
-For a full machine setup (MCS credentials into macOS Keychain, config.json,
-.env secrets, local-LLM and typesafe/Jev requirements) run:
+if [ "$(uname -s)" = "Darwin" ]; then
+    WATCH_PLIST="$HOME/Library/LaunchAgents/org.mcs.recovery.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.mcs/data"
+    sed -e "s|__RECOVERY__|$RECOVERY_DIR|g" \
+        -e "s|__DATA__|$HOME/.mcs/data|g" \
+        "$REPO/deployment/launchagents/org.mcs.recovery.plist" \
+        > "$WATCH_PLIST"
+    launchctl bootout "gui/$(id -u)/org.mcs.recovery" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$WATCH_PLIST" \
+        && ok "recovery watchdog loaded (StartInterval 900)" \
+        || warn "watchdog bootstrap failed — load manually: launchctl bootstrap gui/$(id -u) $WATCH_PLIST"
+else
+    skip "watchdog: not macOS — install the timer manually"
+fi
 
-  python3 $REPO/mcs/ops/mcs_setup.py init      # interactive provisioning
-  python3 $REPO/mcs/ops/mcs_setup.py check    # validate all conditions
+cat <<EOF
 
-Scheduled collection: unread check (15min), durable drain, the nightly
-semantic/QC catch-up and the llama restart guard are hermes cron jobs —
-wrapper script canonical copies live in $REPO/deployment/scripts/.
-launchd runs three jobs: the event-driven command drain (local.mcs-cmd)
-and the two resident extract_llm drainers (ai.mcs.extract-drainer[-rt]).
-Install steps and placeholder substitution for all of them:
-$REPO/deployment/launchagents/README.md
+============================================================
+Done. One guided step remains — it needs your secrets/choices:
+============================================================
+
+    python3 $REPO/mcs/ops/mcs_setup.py init
+
+The wizard covers EVERY config.json setting (Enter keeps the
+current/default). When you pick notify.interactive=discord it also,
+through the public hermes CLI only:
+
+  - writes the plugin settings block (snapshot/inbox/allowlists and
+    the notify.discord scope) into the hermes profile you name —
+    multiplex setups: the profile that serves Discord
+  - stores DISCORD_BOT_TOKEN in the profile .env (env var or prompt —
+    never an argv flag)
+  - and 'services' (already run above) installs the Discord gateway
+    via 'hermes gateway install' when interactive is configured
+
+Non-interactive equivalent:
+
+    python3 $REPO/mcs/ops/mcs_setup.py init --yes \
+        --login-id <ID> --notify-target discord:<channel> \
+        --set 'notify.interactive="discord"' \
+        --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
+        --plugin-profile <serving profile> \
+        --plugin-user-ids <uid> --plugin-chat-ids <chid> \
+        --plugin-project-ids <pid>
+    # DISCORD_BOT_TOKEN=<token> in the environment stores the token
+
+Then re-run services + validate:
+
+    python3 $REPO/mcs/ops/mcs_setup.py services   # picks up gateway
+    python3 $REPO/mcs/ops/mcs_setup.py check
+
+Notes:
+- node.js is NOT a dependency — the pipeline and plugin are pure
+  Python (stdlib + hermes-bundled discord.py).
+- Jev/typesafe needs only TYPESAFE_API_KEY — the init wizard stores
+  it in ~/.mcs/.env. Nothing to install.
+- ollama is shared embedding infra, not required by MCS itself.
 EOF

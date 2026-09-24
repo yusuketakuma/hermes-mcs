@@ -143,6 +143,13 @@ def validate(req):
         # validator.
         from notify_transport import validate_card_resolve
         return validate_card_resolve(req)
+    if req.get("cmd") in ("ops.update_apply", "ops.update_rollback"):
+        # System-wide lifecycle ops are projectless — they govern the
+        # whole install, not one patient. The shared identity fields
+        # (human_confirmed/actor/command_id) were already checked above;
+        # operation rules run in mcs_operations like every other ops.*.
+        from mcs_operations import validate_ops
+        return validate_ops(req, common)
     if not positive(req.get("project_id")):
         return "bad_project_id"
     if isinstance(req.get("cmd"), str) and req["cmd"].startswith("ops."):

@@ -37,7 +37,8 @@ NOW = 1_790_000_000.0
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user", "card_thread": True,
                   "discord": {"profile": "mcs", "application_id": "1",
-                              "guild_id": "7", "channel_id": "42"}}}
+                              "guild_id": "7", "channel_id": "42"}},
+       "signals": {"notify": True}}
 SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
             "guild_id": "7",
             "allowed_user_ids": {"1001"}, "allowed_chat_ids": {"42"},

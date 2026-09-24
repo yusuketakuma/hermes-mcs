@@ -24,7 +24,8 @@ NOW = 1_790_000_000.0
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user", "card_thread": True,
                   "discord": {"profile": "mcs", "application_id": "app1",
-                              "guild_id": "g1", "channel_id": "ch1"}}}
+                              "guild_id": "g1", "channel_id": "ch1"}},
+       "signals": {"notify": True}}
 CFG_OFF = {"notify": {"interactive": "off", "route_epoch": 1,
                       "discord": CFG["notify"]["discord"]}}
 SCOPE = {"profile": "mcs", "application_id": "app1",
@@ -443,12 +444,12 @@ def test_body_action_returns_full_text(led, tmp_path):
     ).fetchone()["c"] == 0
 
 
-def test_card_renders_full_bodies_budget_packed(led, tmp_path):
-    """The card carries full message bodies (no snippet); pages pack by
-    rendered length so every page stays under the Components-V2 total
-    text ceiling — fixed-count paging could not promise that."""
+def test_card_renders_headers_not_bodies(led, tmp_path):
+    """Thread cards show only per-message header lines (time + sender) —
+    no body text at all; 📄本文表示 serves the untruncated set. Pages
+    still pack by rendered length under the Components-V2 ceiling."""
     _patient(led, 1)
-    body = "記録の本文です。" * 40            # ~280 chars each
+    body = "記録の本文です。" * 40
     _msg(led, 100, 1, body=body)
     for m in range(101, 114):                # 13 msgs > PAGE_THREAD
         _msg(led, m, 1, parent=100, body=body)
@@ -457,7 +458,7 @@ def test_card_renders_full_bodies_budget_packed(led, tmp_path):
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
-    assert c["pages"] > 1                    # budget forced extra pages
+    assert c["pages"] > 1                    # PAGE_THREAD count cap
     seen = set()
     for p in range(c["pages"]):
         card["ui_state"] = json.dumps({"page": p})
@@ -467,38 +468,44 @@ def test_card_renders_full_bodies_budget_packed(led, tmp_path):
                  + notify_render._blocks_len(c["footer"]))
         assert total <= 4000, (p, total)     # hard Discord ceiling
         joined = "\n".join(b.get("text") or "" for b in c["containers"])
-        assert body in joined                # full body, not a snippet
-        assert "省略" not in joined
+        assert "記録の本文です" not in joined  # no body text on the card
+        assert "職員" in joined               # sender headers remain
         seen.update(c["shown"])
     assert seen == set(range(100, 114))      # nothing dropped
 
 
-def test_card_body_oversized_item_capped_marked(led, tmp_path):
-    """A single message bigger than the page budget is capped with an
-    explicit omission marker — the spec can never exceed the 4000-char
-    ceiling and be rejected whole."""
+def test_card_body_oversized_headers_and_full_action(led, tmp_path):
+    """A huge message renders as a bare header line on the card;
+    📄本文表示 answers with the full body (bounded by BODY_MAX_CHARS
+    with an explicit omission marker)."""
     _patient(led, 1)
-    _msg(led, 100, 1, body="長い記録。" * 900)   # ~4500 chars
+    long_body = "長い記録。" * 1400            # ~7000 chars > BODY_MAX
+    _msg(led, 100, 1, body=long_body)
     _msg(led, 101, 1, parent=100, body="短い")
     ev = _intent(led)
     _dispatch(led, ev)
     card = _card(led)
-    seen, marked = set(), False
-    for p in range(9):
-        card["ui_state"] = json.dumps({"page": p})
-        c = notify_render._card_content(led.db, card)
-        joined = "\n".join(b.get("text") or "" for b in c["containers"])
-        total = (notify_render._blocks_len(c["containers"])
-                 + notify_render._blocks_len(c["footer"]))
-        assert total <= 4000
-        if 100 in c["shown"]:
-            marked = "省略" in joined and "本文表示" in joined
-        if 101 in c["shown"]:
-            assert "短い" in joined           # short msg shown fully
-        seen.update(c["shown"])
-        if c["pages"] == p + 1:
-            break
-    assert seen == {100, 101} and marked
+    c = notify_render._card_content(led.db, card)
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    total = (notify_render._blocks_len(c["containers"])
+             + notify_render._blocks_len(c["footer"]))
+    assert total <= 4000
+    assert set(c["shown"]) == {100, 101}
+    assert "長い記録" not in joined and "短い" not in joined
+    assert "職員" in joined                   # header lines only
+    # the button still serves the untruncated set (BODY_MAX_CHARS cap)
+    render = _latest_render(led)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    req = _notif(_token_for(spec, "body"))
+    req["origin"] = dict(ORIGIN, message_id="m-9")
+    r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied" and r["action"] == "body"
+    assert "（省略" in r["body"] and "長い記録。" in r["body"]
+    assert len(r["body"]) <= notify_render.BODY_MAX_CHARS + 80
 
 
 def test_card_page_indicator_shows_position(led, tmp_path):
@@ -566,8 +573,7 @@ def _extract(led, mid, content, kind="extract_v1", stale=False):
 
 
 def test_card_thread_shows_structured_lines(led, tmp_path):
-    """A message with extract_v1 renders its structured block under the
-    body on the card — same content the text notifier would emit."""
+    """A message renders its structured block under a header, not its body."""
     _seed_thread(led)
     _extract(led, 100, {"v": 1, "symptoms": ["疼痛", "悪寒"],
                         "rx_actions": [{"action": "start",
@@ -580,8 +586,10 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     texts = [b.get("text") or "" for b in c["containers"]]
     struct = [t for t in texts if t.startswith("📋 構造化")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
-    # raw body still present alongside the structured block
-    assert any("本文" in t for t in texts)
+    # the header line remains alongside the structured block; the raw
+    # body itself stays off the card (📄本文表示 serves it)
+    assert any("職員" in t for t in texts) and not any(
+        "本文" in t for t in texts)
 
 
 def test_card_thread_structured_per_message(led, tmp_path):
@@ -618,8 +626,8 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "📋 構造化" not in joined and "疼痛" not in joined
-    # the card still renders the raw bodies
-    assert "本文" in joined
+    # the card still renders the message headers (bodies stay off-card)
+    assert "職員" in joined and "本文" not in joined
 
 
 def test_card_deleted_message_hides_structured_data(led, tmp_path):

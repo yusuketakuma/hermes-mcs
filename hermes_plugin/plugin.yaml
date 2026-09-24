@@ -7,6 +7,7 @@ author: Hermes Agent
 kind: standalone
 platforms:
   - discord
+  - slack
 config_schema:
   snapshot:
     type: str
@@ -53,3 +54,30 @@ config_schema:
     type: str
     required: false
     description: Discord guild (server) ID, when the scope pins one.
+  slack_adapter_enabled:
+    type: bool
+    required: false
+    description: Enable the Slack card worker only when MCS publishes
+      an active Slack transport scope. Disabled by default. Start or
+      restart the Hermes Gateway after changing Slack settings or
+      reloading this plugin; the connected Slack app is not rewired.
+  slack_team_id:
+    type: str
+    required: false
+    description: Workspace ID pinned to the staged Slack adapter.
+  slack_application_id:
+    type: str
+    required: false
+    description: Slack app ID pinned to the staged adapter.
+  slack_channel_id:
+    type: str
+    required: false
+    description: Slack channel ID pinned to the staged adapter.
+  slack_profile:
+    type: str
+    required: false
+    description: MCS delivery profile (defaults to Hermes profile).
+  slack_allowed_user_ids:
+    type: list
+    required: false
+    description: Explicit Slack user IDs required to decode native actions.

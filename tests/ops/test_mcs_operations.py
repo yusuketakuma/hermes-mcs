@@ -144,3 +144,92 @@ def test_drain_commands_routes_ops_through_receipt_path(tmp_path):
     assert receipt["outcome"] == "applied"
     assert not list(cmd_dir.glob("*.json"))
     db.close()
+
+
+# ---------------------------------------------------------- update ops
+
+def _update_command(cmd, **fields):
+    """Projectless lifecycle op — project_id stays None."""
+    req = _command(cmd, project_id=None, reason="go")
+    req.update(fields)
+    return req
+
+
+def test_update_apply_rejects_when_updater_not_deployed(
+        tmp_path, monkeypatch):
+    """A receipt claiming 'scheduled' while nothing can launch the
+    updater is a lie — reject before commit (C)."""
+    import mcs_update
+    import mcs_util
+    monkeypatch.setattr(mcs_update, "WRAPPER",
+                        str(tmp_path / "no-such-wrapper.sh"))
+    monkeypatch.setattr(mcs_util, "load_config",
+                        lambda: {"update": {"mode": "notify"}})
+    db = Ledger(str(tmp_path / "ledger.db"))
+    req = _update_command("ops.update_apply", tag="v1.2.3",
+                          target_sha="a" * 40)
+    receipt = mcs_requests.apply_command(db, req)
+    assert receipt["outcome"] == "rejected"
+    assert receipt["error"] == "updater_not_deployed"
+    db.close()
+
+
+def test_update_apply_rejects_when_mode_off(tmp_path, monkeypatch):
+    """mode=off must reject at intake — otherwise the receipt sits
+    dormant while the user believes it was scheduled (Q17)."""
+    import mcs_update
+    import mcs_util
+    wrapper = tmp_path / "mcs_update.sh"
+    wrapper.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    db = Ledger(str(tmp_path / "ledger.db"))
+    req = _update_command("ops.update_apply", tag="v1.2.3",
+                          target_sha="a" * 40)
+    receipt = mcs_requests.apply_command(db, req)
+    assert receipt["outcome"] == "rejected"
+    assert receipt["error"] == "update_disabled"
+    db.close()
+
+
+def test_update_apply_rejects_project_id_and_extra_fields(
+        tmp_path, monkeypatch):
+    """Lifecycle ops are projectless — a smuggled project_id or an
+    unused sha pin on rollback must be rejected, never silently
+    ignored (O/S2)."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    bad = _update_command("ops.update_apply", tag="v1.2.3",
+                          project_id=9)
+    assert mcs_requests.apply_command(db, bad)["error"] \
+        == "bad_project_id"
+    bad2 = _update_command("ops.update_rollback", target_sha="a" * 40)
+    receipt = mcs_requests.apply_command(db, bad2)
+    assert receipt["outcome"] == "rejected"
+    assert receipt["error"] == "unknown_field"
+    db.close()
+
+
+def test_update_apply_schedules_and_pins_sha(tmp_path, monkeypatch):
+    """Happy path: deployed wrapper + mode on => scheduled receipt
+    with tag/sha pins recorded."""
+    import mcs_update
+    import mcs_util
+    wrapper = tmp_path / "mcs_update.sh"
+    wrapper.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(mcs_update, "WRAPPER", str(wrapper))
+    monkeypatch.setattr(mcs_util, "load_config",
+                        lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_update, "remote_tag_sha",
+                        lambda t: "b" * 40)
+    monkeypatch.setattr(mcs_update, "current_version",
+                        lambda: ("v1.0.0", "c" * 40))
+    db = Ledger(str(tmp_path / "ledger.db"))
+    req = _update_command("ops.update_apply", tag="v1.2.3")
+    receipt = mcs_requests.apply_command(db, req)
+    assert receipt["outcome"] == "applied"
+    assert receipt["scheduled"] is True
+    assert receipt["cmd"] == "ops.update_apply"
+    assert receipt["target_sha"] == "b" * 40   # pinned at approval
+    assert receipt["base_sha"] == "c" * 40
+    assert receipt["reason"] == "go"
+    db.close()

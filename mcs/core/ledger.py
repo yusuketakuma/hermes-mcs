@@ -434,6 +434,17 @@ class Ledger:
               " DEFAULT 'text'")
         from notify_cards import SCHEMA as NOTIFY_CARDS_SCHEMA
         self._script(NOTIFY_CARDS_SCHEMA)
+        # Additive transport scope: old rows and immutable spec bytes remain
+        # Discord. A Slack workspace is never stored in the guild column.
+        for table in ("notification_cards", "notification_renders",
+                      "notification_intent_batches"):
+            if "transport" not in cols(table):
+                self.db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN transport TEXT "
+                    "NOT NULL DEFAULT 'discord'")
+            column = "scope_json" if table == "notification_intent_batches" else "team_id"
+            if column not in cols(table):
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
 
     def _backfill_v3(self):
         """Fill derived columns for pre-v3 rows (idempotent, chunked)."""
