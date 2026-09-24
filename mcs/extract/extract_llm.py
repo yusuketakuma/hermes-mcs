@@ -818,11 +818,6 @@ def _clear_error_tx(ledger, mid: int):
         (KIND, mid))
 
 
-def _clear_error(ledger, mid: int):
-    _clear_error_tx(ledger, mid)
-    ledger.db.commit()
-
-
 @contextlib.contextmanager
 def _write_lock(enabled: bool):
     """Hold the run lock only across a DB write when `enabled`.

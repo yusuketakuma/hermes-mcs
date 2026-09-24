@@ -17,11 +17,10 @@ POLL_S = delivery.POLL_S
 
 
 class Supervisor:
-    def __init__(self, *, ctx: Any, bot: Any, adapter: Any,
+    def __init__(self, *, ctx: Any, bot: Any,
                  settings: dict, log) -> None:
         self._ctx = ctx
         self._bot = bot
-        self._adapter = adapter
         self._settings = settings
         self._log = log
         self._root = paths.data_root(settings)
@@ -30,7 +29,7 @@ class Supervisor:
         self._reg = registry.Registry(self._dirs["state"])
         self._worker_id = registry.new_worker_id()
         self._worker = delivery.DeliveryWorker(
-            bot=bot, adapter=adapter, settings=settings,
+            bot=bot, settings=settings,
             root=self._root, reg=self._reg,
             worker_id=self._worker_id, log=log)
         self._actions = actions.Actions(

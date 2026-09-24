@@ -161,10 +161,6 @@ class Registry:
     def message(self, message_id: str) -> dict | None:
         return self._data["messages"].get(str(message_id))
 
-    def drop_message(self, message_id: str) -> None:
-        if self._data["messages"].pop(str(message_id), None) is not None:
-            self.save()
-
     # -- token context (spec action_rows capture) ------------------
 
     def put_tokens(self, token_map: dict) -> None:

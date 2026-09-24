@@ -283,7 +283,6 @@ class Attachment:
     file_id: str
     name: str
     url: str
-    thumbnail_url: str | None = None
 
 
 @dataclass
@@ -395,15 +394,9 @@ def _attachments(files: list | None) -> list[Attachment]:
             raise SchemaError("message: file invalid")
         url = _text(f.get("url"), "message: file url")
         fid = url.rstrip("/").rsplit("/", 1)[-1] if url else ""
-        thumb = f.get("thumbnail_file") or {}
-        if not isinstance(thumb, dict):
-            raise SchemaError("message: thumbnail invalid")
-        thumb_url = thumb.get("url")
         out.append(Attachment(
             file_id=str(fid), name=_text(f.get("name"), "message: file name"),
-            url=url,
-            thumbnail_url=(None if thumb_url is None else
-                           _text(thumb_url, "message: thumbnail url"))))
+            url=url))
     return out
 
 

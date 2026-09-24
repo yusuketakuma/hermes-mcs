@@ -3,6 +3,7 @@ data/
 chrome-profile/
 token_cache.json
 config.json
+config.json.*
 .env
 .env.*
 *.log
@@ -14,3 +15,4 @@ __pycache__/
 
 uv.lock
 .omo/
+.debug-journal.md
