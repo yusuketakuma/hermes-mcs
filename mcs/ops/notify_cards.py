@@ -1,17 +1,16 @@
 """Interactive notification cards — delivery ledger and neutral render specs.
 
-This module owns the MCS side of the Discord interactive notification
-pipeline (plan: .omo/plans/discord-interactive-cards.md):
+This module owns card intents, rendering, actions, and maintenance in the
+Discord interactive notification pipeline (plan: .omo/plans/discord-interactive-cards.md):
 
 - notify_outbox intents routed 'interactive' are FROZEN into sealed
   batches, fanned out to durable cards (1 intent -> N cards), and
   rendered as immutable, neutral specs published atomically to
   data/discord_render/<delivery_id>.json.
-- A plugin claims a spec file, asks permission with transport_begin,
-  receives a durable grant/denial, sends to Discord, then reports via
-  transport_receipt. Discord HTTP and the DB commit are never one
-  transaction: attempts hold exclusive per-card send ownership until
-  their factual result is settled (delivered/not_sent/unknown).
+- notify_transport owns delivery grants, receipts, and operator recovery.
+  Discord HTTP and the DB commit are never one transaction: attempts hold
+  exclusive per-card send ownership until their factual result is settled
+  (delivered/not_sent/unknown).
 - 'unknown' is a first-class state: time alone never moves it back to
   undelivered; only a real receipt or an operator ops.card_resolve does.
 
@@ -39,16 +38,10 @@ import tempfile
 import time
 import uuid
 
-from mcs_requests import canonical, payload_hash, positive, valid_hash, \
-    valid_uuid
-# display model (containers/footer/paging/fingerprints) lives in
-# notify_render — re-exported so callers and tests keep this surface
-from notify_render import (  # noqa: F401
-    BODY_MAX_CHARS, PAGE_DIGEST, PAGE_TEXT_BUDGET, PAGE_THREAD,
-    _anchor_keys, _blocks_len, _cap_card_text, _card_body_text,
-    _card_content, _content_fp, _fit_item, _footer, _hhmm,
-    _latest_signals, _mmdd, _pack_pages, _page, _patient_name,
-    _signal_body, _signal_display, _source_fp, _structured_block)
+from mcs_requests import canonical, payload_hash, positive, valid_hash
+from notify_render import (
+    _anchor_keys, _card_body_text, _card_content, _content_fp,
+    _latest_signals, _mmdd, _patient_name, _source_fp)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 
@@ -65,11 +58,6 @@ TOKEN_WRITE_S = 7 * 86400
 DEFER_S = 86400           # fixed 'hold' duration for v1
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
-# receipt error_codes proving the bound Discord message no longer
-# exists — an update/revoke against it must never retry as-is
-MESSAGE_GONE = frozenset(
-    {"http_404", "http_410", "unknown_message", "message_deleted",
-     "gone"})
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_cards(
@@ -505,8 +493,9 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     latest = db.execute(
         "SELECT * FROM notification_renders WHERE card_id=? "
         "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+    epoch_changed = latest is not None and latest["route_epoch"] != route_epoch(cfg)
     live = latest is not None and latest["state"] in LIVE_RENDER
-    if live and latest["state"] in ("queued", "held") and gens:
+    if live and latest["state"] in ("queued", "held") and (gens or epoch_changed):
         # a not-yet-sent render whose content is already stale is
         # cancelled — a sending/unknown render keeps its attempt's
         # exclusivity instead (guarded above)
@@ -524,15 +513,23 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     suspended = (card["delivery_state"] == "update_failed"
                  and latest is not None
                  and latest["route_epoch"] == route_epoch(cfg))
+    unbound_intent = db.execute(
+        "SELECT 1 FROM notification_intent_cards WHERE card_id=? "
+        "AND state='pending' AND delivery_id IS NULL LIMIT 1",
+        (card_id,)).fetchone() is not None
     needed = force or bool(gens) or latest is None \
-        or (latest["state"] in ("not_sent", "cancelled") and not suspended)
+        or (not suspended and (unbound_intent or epoch_changed
+                               or latest["state"] in ("not_sent", "cancelled")))
     if card["delivery_state"] == "revoked" and card["message_id"]:
         # a delivered card that is revoked owes Discord a delete —
         # without this, archive-revoke left the message up forever.
         # An already-delivered revoke render must not re-issue.
         needed = not (latest is not None
                       and latest["op"] == "revoke"
-                      and latest["state"] == "delivered")
+                      and (latest["state"] == "delivered"
+                           or (latest["state"] == "not_sent"
+                               and not epoch_changed and not force
+                               and _resend_exhausted(db, card_id))))
     if not needed:
         return None                        # delivered/terminal & no drift
 
@@ -721,45 +718,21 @@ def _publish_specs(db, dirs, specs, now) -> list:
 
 
 def _resend_exhausted(db, card_id: int) -> bool:
-    """MAX_RESEND lifetime real not_sents on a card suspends auto-retry —
+    """MAX_RESEND consecutive real not_sents on a card suspends auto-retry —
     denied begins (error_code 'denied_*') are not send failures and never
     count. Drift, a route_epoch bump, or an operator resolve re-opens."""
     return db.execute(
         """SELECT COUNT(*) c FROM notification_delivery_attempts a
            JOIN notification_renders r ON r.delivery_id=a.delivery_id
            WHERE r.card_id=? AND a.state='not_sent'
+             AND r.render_rev > COALESCE((
+               SELECT MAX(done.render_rev) FROM notification_renders done
+               JOIN notification_delivery_attempts sent
+                 ON sent.delivery_id=done.delivery_id
+               WHERE done.card_id=r.card_id AND sent.state='delivered'), 0)
              AND (a.error_code IS NULL
                   OR a.error_code NOT LIKE 'denied_%')""",
         (card_id,)).fetchone()["c"] >= MAX_RESEND
-
-
-def _not_sent_state(db, card, render, error_code):
-    """(delivery_state, unbind_message_id) after a factual not_sent.
-
-    - update/revoke reporting the bound message provably gone unbinds it:
-      revoke reaches its goal (stays revoked), update becomes
-      message_deleted so the next render re-creates rather than PATCHing
-      a ghost forever.
-    - a revoked card keeps its intent until the resend budget is spent.
-    - a failed create stays pending (nothing was ever posted); a failed
-      update on a live card keeps 'delivered' (old content still stands).
-    - MAX_RESEND real failures suspend auto-retry as update_failed."""
-    cur = card["delivery_state"]
-    gone = render["op"] in ("update", "revoke") \
-        and isinstance(error_code, str) and error_code in MESSAGE_GONE
-    if cur == "revoked":
-        state = "revoked"   # goal achieved iff gone, else retry pending
-        if gone:
-            return state, True
-        return ("update_failed" if _resend_exhausted(db, card["card_id"])
-                else state), False
-    if gone:
-        return "message_deleted", True
-    if _resend_exhausted(db, card["card_id"]):
-        return "update_failed", False
-    if render["op"] == "create":
-        return "pending", False
-    return cur, False
 
 
 def _complete_intent(db, event_id, now) -> str | None:
@@ -778,6 +751,10 @@ def _complete_intent(db, event_id, now) -> str | None:
             "UPDATE notify_outbox SET state='accepted',next_try=NULL,"
             "accepted_ref=?,updated_at=? WHERE event_id=?",
             (f"cards:{len(rows)}", now, event_id))
+        # Cards carry text, while attachments retain the existing file
+        # transport. Include files downloaded before card acceptance too.
+        from ledger import enqueue_ready_attachment_followups_tx
+        enqueue_ready_attachment_followups_tx(db, event_id, now)
         return "accepted"
     db.execute(
         "UPDATE notify_outbox SET state='suppressed',next_try=NULL,"
@@ -949,107 +926,6 @@ def revert_to_text(ledger, event_id, now=None) -> bool:
         return cur.rowcount == 1
 
 
-# ---------- settle (receipt / resolve shared finalization) ----------
-
-def _settle_attempt(db, attempt, render, result, now,
-                    message_id=None, error_code=None) -> dict:
-    """One attempt's factual result commits atomically with every
-    dependent: render state, card message binding, coverage rows, and
-    each owning intent's completion. A cancelled render's late success
-    records the fact (message binding, applied rev) without reviving the
-    cancelled render or rolling back a newer one."""
-    aid = attempt["attempt_id"]
-    card = (_card_row(db, render["card_id"])
-            if render["card_id"] is not None else None)
-    db.execute(
-        "UPDATE notification_delivery_attempts SET state=?,"
-        "message_id=?,error_code=?,finished_at=? WHERE attempt_id=?",
-        (result, message_id, error_code, now, aid))
-    if render["state"] != "cancelled":
-        db.execute(
-            "UPDATE notification_renders SET state=?,updated_at=? "
-            "WHERE delivery_id=?",
-            (result, now, render["delivery_id"]))
-    if result == "delivered" and card is not None:
-        applied = card["applied_render_rev"]
-        conflict = False
-        if render["op"] == "create":
-            if card["message_id"] is None:
-                db.execute(
-                    """UPDATE notification_cards SET message_id=?,
-                         profile=?,application_id=?,guild_id=?,
-                         channel_id=?,updated_at=? WHERE card_id=?""",
-                    (str(message_id), render["profile"],
-                     render["application_id"], render["guild_id"],
-                     render["channel_id"], now, card["card_id"]))
-                card["message_id"] = str(message_id)
-            elif card["message_id"] != str(message_id):
-                conflict = True
-        elif card["message_id"] is not None \
-                and str(message_id) != card["message_id"]:
-            conflict = True
-        if conflict:
-            db.execute(
-                "UPDATE notification_cards SET delivery_state="
-                "'delivery_unknown',last_delivery_error=?,updated_at=? "
-                "WHERE card_id=?",
-                ("message_id_conflict", now, card["card_id"]))
-        else:
-            new_applied = max(applied, render["render_rev"])
-            state = card["delivery_state"]
-            if state not in ("revoked",):
-                state = "delivered"
-            db.execute(
-                """UPDATE notification_cards SET applied_render_rev=?,
-                     delivery_state=?,last_delivery_error=NULL,updated_at=?
-                   WHERE card_id=?""",
-                (new_applied, state, now, card["card_id"]))
-        cov = "delivered"
-    elif result == "not_sent":
-        if card is not None:
-            state, unbind_mid = _not_sent_state(db, card, render,
-                                              error_code)
-            db.execute(
-                """UPDATE notification_cards SET delivery_state=?,
-                     message_id=?, thread_id=?, thread_state=?,
-                     last_delivery_error=?, updated_at=?
-                   WHERE card_id=?""",
-                (state,
-                 None if unbind_mid else card["message_id"],
-                 # the thread lived under the bound message — once the
-                 # message is proven gone its thread binding is stale
-                 # and must not carry into the re-created card
-                 None if unbind_mid else card["thread_id"],
-                 "none" if unbind_mid else card["thread_state"],
-                 error_code, now, card["card_id"]))
-        cov = "unbind"
-    else:  # unknown — never auto-resend; waits for reconcile/resolve
-        if card is not None and card["delivery_state"] not in (
-                "revoked", "delivered"):
-            db.execute(
-                "UPDATE notification_cards SET delivery_state="
-                "'delivery_unknown',last_delivery_error=?,updated_at=? "
-                "WHERE card_id=?",
-                (error_code or "unknown", now, card["card_id"]))
-        cov = "keep"
-    if cov == "delivered":
-        db.execute(
-            "UPDATE notification_intent_cards SET state='delivered' "
-            "WHERE delivery_id=?", (render["delivery_id"],))
-    elif cov == "unbind":
-        db.execute(
-            "UPDATE notification_intent_cards SET delivery_id=NULL,"
-            "required_render_rev=0 WHERE delivery_id=? AND state='pending'",
-            (render["delivery_id"],))
-    for r in db.execute(
-            "SELECT DISTINCT event_id FROM notification_intent_cards "
-            "WHERE card_id=?", (render["card_id"],)).fetchall() \
-            if render["card_id"] is not None else []:
-        _complete_intent(db, r["event_id"], now)
-    mark_snapshot_dirty(db)
-    return {"settled": result}
-
-
 # ---------- command-side apply ----------
 
 def _origin_card(db, origin):
@@ -1081,22 +957,26 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
     db = _db(ledger)
     now = time.time() if now is None else now
     command_id = req["command_id"]
+    digest = payload_hash({k: v for k, v in req.items() if k != "request_id"})
     specs = []
     with db:
         db.execute("BEGIN IMMEDIATE")
         old = db.execute(
             "SELECT payload_hash,receipt_json FROM command_receipts "
             "WHERE command_id=?", (command_id,)).fetchone()
+        stored = None
         if old:
             stored = json.loads(old["receipt_json"])
-            if old["payload_hash"] != payload_hash(req):
+            if old["payload_hash"] != digest:
                 return {"outcome": "rejected", "error": "command_id_conflict"}
-            return stored
-        receipt = _apply_notification_tx(db, req, cfg, now, specs)
-        db.execute(
-            "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
-            (command_id, payload_hash(req), receipt.get("project_id"),
-             None, receipt["outcome"], canonical(receipt).decode(), now))
+        # Idempotent writes retain their original result, but authorization
+        # and view responses are checked against live state on every click.
+        receipt = _apply_notification_tx(db, req, cfg, now, specs, replay=stored)
+        if old is None:
+            db.execute(
+                "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                (command_id, digest, receipt.get("project_id"),
+                 None, receipt["outcome"], canonical(receipt).decode(), now))
         mark_snapshot_dirty(db)
     if specs:
         root = data_root(ledger)
@@ -1105,7 +985,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
     return receipt
 
 
-def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
+def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
     actor, token, origin = req["actor"], req["token"], req.get("origin")
     base = {"kind": "notification", "command_id": req["command_id"],
             "actor": actor, "origin": origin, "processed_at": now}
@@ -1136,11 +1016,15 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
         return {**base, "outcome": "rejected", "error": "interactive_off"}
     if card["delivery_state"] == "revoked":
         return {**base, "outcome": "rejected", "error": "card_revoked"}
-    if action in _WRITE_ACTIONS \
-            and tok["need_source_gen"] is not None \
-            and tok["need_source_gen"] != card["source_generation"]:
+    if action in _WRITE_ACTIONS and (
+            (tok["need_source_gen"] is not None
+             and tok["need_source_gen"] != card["source_generation"])
+            or (card["source_fp"] is not None
+                and _source_fp(db, card) != card["source_fp"])):
         return {**base, "outcome": "rejected", "error": "stale_source",
                 "hint": "refresh"}
+    if replay is not None and action not in ("body", "request", "dismiss"):
+        return replay
     if action in ("prev", "next"):
         if tok["need_ui_rev"] is not None \
                 and tok["need_ui_rev"] != card["ui_revision"]:
@@ -1281,6 +1165,11 @@ def apply_refresh(ledger, req, cfg, now=None) -> dict:
                        "actor": req["actor"], "origin": req.get("origin"),
                        "outcome": "rejected", "error": "card_not_found",
                        "processed_at": now}
+        elif not _scope_match(card, req.get("origin") or {}):
+            receipt = {"kind": "refresh", "command_id": command_id,
+                       "actor": req["actor"], "origin": req.get("origin"),
+                       "outcome": "rejected", "error": "scope_mismatch",
+                       "processed_at": now}
         elif card["delivery_state"] == "revoked":
             # a refresh on a revoked card must not mint another revoke
             # render — the revocation stands until a new intent arrives
@@ -1310,442 +1199,6 @@ def apply_refresh(ledger, req, cfg, now=None) -> dict:
     ensure_dirs(root)
     _publish_specs(db, notify_dirs(root), specs, now)
     return receipt
-
-
-def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
-    """transport_begin: the runner re-verifies send eligibility and
-    commits the attempt BEFORE any grant. A file claim alone is never
-    send authorization; a denial is itself a durable not_sent attempt."""
-    db = _db(ledger)
-    now = time.time() if now is None else now
-    cid = req["command_id"]
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        old = db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE begin_command_id=?", (cid,)).fetchone()
-        if old is not None:
-            return _begin_result(db, old)
-        clash = db.execute(
-            "SELECT 1 FROM notification_delivery_attempts "
-            "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-        if clash is not None:
-            return {"granted": False, "error": "attempt_id_conflict",
-                    "command_id": cid}
-        reason = _begin_check(db, req, cfg)
-        if reason == "unknown_delivery":
-            # nothing to reference — a denied attempt row needs the
-            # render FK; the result file carries the audit instead.
-            # The spec file is definitively dead — remove it so a
-            # worker stops re-claiming bytes that can never grant.
-            _unlink_spec(ledger, req["delivery_id"])
-            return {"granted": False, "error": "denied_unknown_delivery",
-                    "command_id": cid, "attempt_id": req["attempt_id"],
-                    "delivery_id": req["delivery_id"]}
-        state = "granted" if reason is None else "not_sent"
-        db.execute(
-            """INSERT INTO notification_delivery_attempts(
-                 attempt_id,delivery_id,begin_command_id,state,
-                 error_code,worker_id,created_at,finished_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (req["attempt_id"], req["delivery_id"], cid, state,
-             None if reason is None else f"denied_{reason}",
-             req["worker_id"], now, None if reason is None else now))
-        if reason is None:
-            db.execute(
-                "UPDATE notification_renders SET state='sending',"
-                "updated_at=? WHERE delivery_id=? AND state='queued'",
-                (now, req["delivery_id"]))
-        mark_snapshot_dirty(db)
-        result = _begin_result(db, db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE begin_command_id=?", (cid,)).fetchone())
-    if reason is not None and _denial_is_final(
-            db, req["delivery_id"], reason):
-        _unlink_spec(ledger, req["delivery_id"])
-    return result
-
-
-_FINAL_DENIALS = frozenset({
-    "hash_mismatch", "rev_mismatch", "epoch_mismatch",
-    "render_cancelled", "card_revoked"})
-
-
-def _denial_is_final(db, delivery_id, reason) -> bool:
-    """Whether a denied begin means the spec bytes can never grant —
-    stale/forged content, a cancelled render, a revoked card, or a
-    render that already reached a terminal state. Transient answers
-    (in_flight, interactive_off, sending) and scope_mismatch — the spec
-    may simply be addressed to another worker — keep the file."""
-    if reason in _FINAL_DENIALS:
-        return True
-    if reason == "not_queued":
-        r = db.execute(
-            "SELECT state FROM notification_renders WHERE delivery_id=?",
-            (delivery_id,)).fetchone()
-        return r is not None and r["state"] in (
-            "delivered", "not_sent", "cancelled")
-    return False
-
-
-def _unlink_spec(ledger, delivery_id) -> None:
-    """Remove a definitively dead spec file. The runner owns
-    discord_render; a missing file just means 'nothing to claim' —
-    the watchdog republishes a live render's spec_json if needed."""
-    try:
-        os.unlink(os.path.join(
-            notify_dirs(data_root(ledger))["discord_render"],
-            str(delivery_id) + ".json"))
-    except OSError:
-        pass
-
-
-def _begin_check(db, req, cfg) -> str | None:
-    if not interactive_enabled(cfg):
-        return "interactive_off"
-    render = db.execute(
-        "SELECT * FROM notification_renders WHERE delivery_id=?",
-        (req["delivery_id"],)).fetchone()
-    if render is None:
-        return "unknown_delivery"
-    if render["payload_hash"] != req["payload_hash"]:
-        return "hash_mismatch"
-    if render["render_rev"] != req["render_rev"]:
-        return "rev_mismatch"
-    if render["route_epoch"] != req["route_epoch"]:
-        return "epoch_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if render[k] and render[k] != req.get(k):
-            return "scope_mismatch"
-    if render["state"] == "cancelled":
-        return "render_cancelled"
-    if render["state"] != "queued":
-        return "not_queued"
-    card = _card_row(db, render["card_id"]) \
-        if render["card_id"] is not None else None
-    if card is not None:
-        if card["delivery_state"] == "revoked" \
-                and render["op"] != "revoke":
-            # a revoke render against a revoked card is exactly the
-            # delete Discord is owed — every other op is refused
-            return "card_revoked"
-        if _unsettled_attempt(db, card["card_id"]):
-            return "in_flight"
-    return None
-
-
-def _begin_result(db, attempt) -> dict:
-    """The durable grant/denial record a worker consumes once — it
-    echoes the render identity fields so the worker can verify the
-    grant still matches the spec file it claimed."""
-    render = db.execute(
-        "SELECT render_rev,payload_hash,route_epoch,correlation,op "
-        "FROM notification_renders WHERE delivery_id=?",
-        (attempt["delivery_id"],)).fetchone()
-    granted = attempt["state"] == "granted"
-    out = {"granted": granted, "command_id": attempt["begin_command_id"],
-           "attempt_id": attempt["attempt_id"],
-           "delivery_id": attempt["delivery_id"],
-           "attempt_state": attempt["state"],
-           "worker_id": attempt["worker_id"]}
-    if render is not None:
-        out.update(render_rev=render["render_rev"],
-                   payload_hash=render["payload_hash"],
-                   route_epoch=render["route_epoch"],
-                   correlation=render["correlation"], op=render["op"])
-    if not granted:
-        out["error"] = attempt["error_code"] or attempt["state"]
-    return out
-
-
-def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
-    """transport_receipt: settle an attempt from the worker's factual
-    report. Echo fields must match the stored grant/render — an
-    arbitrary event_id or payload never marks anything accepted."""
-    db = _db(ledger)
-    now = time.time() if now is None else now
-    specs = []
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        attempt = db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-        render = None
-        if attempt is not None:
-            render = db.execute(
-                "SELECT * FROM notification_renders WHERE delivery_id=?",
-                (attempt["delivery_id"],)).fetchone()
-        error = _receipt_check(attempt, render, req)
-        if error:
-            receipt = {"applied": False, "error": error,
-                       "attempt_id": req["attempt_id"],
-                       "delivery_id": req["delivery_id"]}
-        else:
-            prior = attempt["state"]
-            result = req["result"]
-            if prior in ("delivered", "not_sent"):
-                # terminal already: same fact is idempotent, a different
-                # fact is a conflict — never silently overwrite (§4)
-                same = prior == result and (
-                    result != "delivered"
-                    or str(attempt["message_id"]) == str(req["message_id"]))
-                receipt = {"applied": same,
-                           "error": None if same else "attempt_conflict",
-                           "conflict": not same,
-                           "attempt_id": attempt["attempt_id"],
-                           "delivery_id": attempt["delivery_id"],
-                           "attempt_state": prior}
-            else:
-                _settle_attempt(db, attempt, render, result, now,
-                                message_id=req.get("message_id"),
-                                error_code=req.get("error_code"))
-                receipt = {"applied": True, "attempt_id": attempt["attempt_id"],
-                           "delivery_id": attempt["delivery_id"],
-                           "attempt_state": result}
-                if render["card_id"] is not None:
-                    _issue_render(db, render["card_id"], cfg, now, specs)
-        mark_snapshot_dirty(db)
-    if specs:
-        root = data_root(ledger)
-        ensure_dirs(root)
-        _publish_specs(db, notify_dirs(root), specs, now)
-    return receipt
-
-
-def _receipt_check(attempt, render, req) -> str | None:
-    if attempt is None or render is None:
-        return "unknown_attempt"
-    if attempt["delivery_id"] != req["delivery_id"]:
-        return "delivery_mismatch"
-    for k, want in (("render_rev", render["render_rev"]),
-                    ("payload_hash", render["payload_hash"]),
-                    ("route_epoch", render["route_epoch"]),
-                    ("correlation", render["correlation"])):
-        if req.get(k) != want:
-            return f"{k}_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if render[k] and render[k] != req.get(k):
-            return "scope_mismatch"
-    if req["result"] == "delivered" \
-            and not isinstance(req.get("message_id"), str):
-        return "message_id_required"
-    if req["result"] == "not_sent" \
-            and not req.get("error_code"):
-        return "error_code_required"
-    return None
-
-
-def apply_thread_receipt(ledger, req, cfg, now=None) -> dict:
-    """thread_receipt: thread creation is independent of the primary
-    card delivery — failure here never resends the card."""
-    db = _db(ledger)
-    now = time.time() if now is None else now
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        render = db.execute(
-            "SELECT * FROM notification_renders WHERE delivery_id=?",
-            (req["delivery_id"],)).fetchone()
-        if render is None or render["card_id"] is None:
-            return {"applied": False, "error": "unknown_delivery"}
-        card = _card_row(db, render["card_id"])
-        if card["message_id"] is not None \
-                and str(req["message_id"]) != card["message_id"]:
-            return {"applied": False, "error": "message_id_mismatch"}
-        tid, err = req.get("thread_id"), req.get("error_code")
-        if isinstance(tid, str) and tid:
-            if card["thread_state"] == "deleted":
-                state, thread_id = "deleted", card["thread_id"]
-            else:
-                state = "created"
-                thread_id = card["thread_id"] or tid   # bind once
-        elif err == "thread_deleted":
-            state, thread_id = "deleted", card["thread_id"]
-        else:
-            state, thread_id = "failed", card["thread_id"]
-        db.execute(
-            "UPDATE notification_cards SET thread_id=?,thread_state=?,"
-            "updated_at=? WHERE card_id=?",
-            (thread_id, state, now, card["card_id"]))
-        mark_snapshot_dirty(db)
-        return {"applied": True, "thread_state": state,
-                "thread_id": thread_id}
-
-
-# ---------- ops.card_resolve (operator recovery, data/cmd only) ----------
-
-_RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
-
-
-def validate_card_resolve(req) -> str | None:
-    """Dedicated validator — deliberately NOT routed through
-    mcs_requests.validate (its positive project_id rule does not apply:
-    the project set is derived from the stored render/coverage)."""
-    if not isinstance(req, dict):
-        return "bad_command"
-    allowed = {"version", "cmd", "command_id", "actor", "human_confirmed",
-               "reason", "delivery_id", "attempt_id", "result",
-               "profile", "application_id", "guild_id", "channel_id",
-               "message_id", "evidence"}
-    if req.keys() - allowed:
-        return "unknown_field"
-    if req.get("cmd") != "ops.card_resolve":
-        return "unknown_cmd"
-    if type(req.get("version")) is not int or req["version"] != 1:
-        return "bad_version"
-    if not valid_uuid(req.get("command_id")):
-        return "bad_command_id"
-    if req.get("human_confirmed") is not True:
-        return "human_confirmation_required"
-    from mcs_requests import _text
-    if not _text(req.get("actor"), 120):
-        return "bad_actor"
-    if not _text(req.get("reason"), 2000):
-        return "bad_reason"
-    if not valid_uuid(req.get("delivery_id")):
-        return "bad_delivery_id"
-    if not _text(req.get("attempt_id"), 120):
-        return "bad_attempt_id"
-    if req.get("result") not in _RESOLVE_RESULTS:
-        return "bad_result"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if not _text(req.get(k), 200):
-            return f"bad_{k}"
-    if req["result"] == "mark_delivered" \
-            and not _text(req.get("message_id"), 64):
-        return "bad_message_id"
-    ev = req.get("evidence")
-    if not isinstance(ev, dict) or not ev:
-        return "bad_evidence"
-    if not _text(ev.get("method"), 200):
-        return "bad_evidence_method"
-    if not _text(ev.get("ref"), 500):
-        return "bad_evidence_ref"
-    if req["result"] == "mark_not_sent":
-        if ev.get("worker_stopped") is not True:
-            return "worker_not_proven_stopped"
-        if ev.get("proof") not in ("no_journal_started", "api_rejected"):
-            return "bad_proof"
-    return None
-
-
-def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
-    """Operator-only recovery for an unsettled attempt. Verifies the
-    stored grant/render/card scope and evidence, then runs the SAME
-    shared settlement as a normal receipt — resolve never sends."""
-    db = _db(ledger)
-    now = time.time() if now is None else now
-    if cfg is None:
-        try:
-            from mcs_util import load_config
-            cfg = load_config(os.path.join(os.path.expanduser("~/.mcs"),
-                                           "config.json"))
-        except Exception:
-            cfg = {}
-    digest = payload_hash(req)
-    specs = []
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        old = db.execute(
-            "SELECT payload_hash,receipt_json FROM command_receipts "
-            "WHERE command_id=?", (req["command_id"],)).fetchone()
-        if old:
-            if old["payload_hash"] != digest:
-                return {"outcome": "rejected", "error": "command_id_conflict"}
-            return json.loads(old["receipt_json"])
-        error = validate_card_resolve(req)
-        receipt = {"kind": "ops.card_resolve", "command_id": req["command_id"],
-                   "actor": req.get("actor"), "reason": req.get("reason"),
-                   "delivery_id": req.get("delivery_id"),
-                   "attempt_id": req.get("attempt_id"),
-                   "processed_at": now}
-        attempt = render = None
-        if error is None:
-            attempt = db.execute(
-                "SELECT * FROM notification_delivery_attempts "
-                "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-            render = db.execute(
-                "SELECT * FROM notification_renders WHERE delivery_id=?",
-                (req["delivery_id"],)).fetchone() if attempt else None
-            card = (_card_row(db, render["card_id"])
-                    if render is not None
-                    and render["card_id"] is not None else None)
-            error = _resolve_check(attempt, render, card, req)
-        if error is None:
-            receipt["scope"] = {k: render[k] for k in
-                                ("profile", "application_id",
-                                 "guild_id", "channel_id")}
-            receipt["projects"] = _card_projects(db, render, card)
-            if attempt["state"] in ("delivered", "not_sent"):
-                same = (attempt["state"]
-                        == ("delivered" if req["result"] == "mark_delivered"
-                            else "not_sent"))
-                receipt["outcome"] = "applied" if same else "rejected"
-                if not same:
-                    receipt["error"] = "attempt_conflict"
-                receipt["attempt_state"] = attempt["state"]
-            else:
-                result = ("delivered" if req["result"] == "mark_delivered"
-                          else "not_sent")
-                _settle_attempt(db, attempt, render, result, now,
-                                message_id=req.get("message_id"),
-                                error_code=f"resolve:{req['result']}")
-                receipt["outcome"] = "applied"
-                receipt["attempt_state"] = result
-                if card is not None:
-                    _issue_render(db, card["card_id"], cfg, now, specs)
-        else:
-            receipt["outcome"] = "rejected"
-            receipt["error"] = error
-        db.execute(
-            "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
-            (req["command_id"], digest, None, None,
-             receipt["outcome"], canonical(receipt).decode(), now))
-        mark_snapshot_dirty(db)
-    if specs:
-        root = data_root(ledger)
-        ensure_dirs(root)
-        _publish_specs(db, notify_dirs(root), specs, now)
-    return receipt
-
-
-def _resolve_check(attempt, render, card, req) -> str | None:
-    if attempt is None:
-        return "unknown_attempt"
-    if render is None or attempt["delivery_id"] != req["delivery_id"]:
-        return "delivery_mismatch"
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if render[k] != req.get(k):
-            return "scope_mismatch"
-    if req["result"] == "mark_delivered":
-        # create binds a discovered message once; update/revoke must
-        # match the message the card already knows
-        if card is not None and render["op"] != "create" \
-                and card.get("message_id") is not None \
-                and str(req["message_id"]) != card["message_id"]:
-            return "message_id_mismatch"
-    return None
-
-
-def _card_projects(db, render, card) -> list:
-    """Project scope for the audit receipt — derived from the stored
-    render/coverage, never from operator input."""
-    projects = set()
-    if card is not None and positive(card["project_id"]):
-        projects.add(card["project_id"])
-    if render["card_id"] is not None:
-        for r in db.execute(
-                "SELECT coverage FROM notification_intent_cards "
-                "WHERE card_id=?", (render["card_id"],)).fetchall():
-            try:
-                cov = json.loads(r["coverage"] or "[]")
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if card is not None and card["kind"] in ("signal", "digest"):
-                sigs = _latest_signals(db, [k for k in cov
-                                          if type(k) is str])
-                projects.update(
-                    s["content"].get("project_id") for s in sigs.values())
-    return sorted(p for p in projects if positive(p))
 
 
 # ---------- sweep / GC / watchdog / health ----------
@@ -1801,8 +1254,8 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                  notification_cards
                WHERE delivery_state IN ('pending','delivered',
                                         'update_failed','delivery_unknown',
-                                        'message_deleted')
-               ORDER BY updated_at LIMIT ?""", (limit,)).fetchall()
+                                        'message_deleted','revoked')
+               ORDER BY updated_at,card_id LIMIT ?""", (limit,)).fetchall()
         scanned = len(cards)
         for row in cards:
             card = _card_row(db, row["card_id"])
@@ -1830,6 +1283,10 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:
                 updated += 1
+            # Rotate unchanged and in-flight cards too. Otherwise the first
+            # limit stable cards permanently starve every newer card.
+            db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
+                       (now, card["card_id"]))
         # watchdog: live renders whose spec never published (or whose
         # file vanished) get their stored bytes republished
         for r in db.execute(
@@ -1858,23 +1315,24 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             (now,)).rowcount
         cleared = 0
         for r in db.execute(
-                """SELECT delivery_id,card_id FROM notification_renders
-                   WHERE spec_json IS NOT NULL
-                     AND state IN ('cancelled','not_sent')
-                   LIMIT ?""", (limit,)).fetchall():
-            if _unsettled_attempt(db, r["card_id"]):
-                continue
-            referenced = db.execute(
-                "SELECT 1 FROM notification_intent_cards "
-                "WHERE delivery_id=? AND state='pending'",
-                (r["delivery_id"],)).fetchone()
-            if referenced:
-                continue
-            successor = db.execute(
-                "SELECT 1 FROM notification_renders WHERE card_id=? "
-                "AND state='delivered'", (r["card_id"],)).fetchone()
-            if successor is None:
-                continue
+                """SELECT r.delivery_id FROM notification_renders r
+                   WHERE r.spec_json IS NOT NULL
+                     AND r.state IN ('cancelled','not_sent')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM notification_delivery_attempts a
+                       JOIN notification_renders active
+                         ON active.delivery_id=a.delivery_id
+                       WHERE active.card_id=r.card_id
+                         AND a.state IN ('granted','unknown'))
+                     AND NOT EXISTS (
+                       SELECT 1 FROM notification_intent_cards ic
+                       WHERE ic.delivery_id=r.delivery_id AND ic.state='pending')
+                     AND EXISTS (
+                       SELECT 1 FROM notification_renders successor
+                       WHERE successor.card_id=r.card_id
+                         AND successor.render_rev>r.render_rev
+                         AND successor.state='delivered')
+                   ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
             db.execute(
                 "UPDATE notification_renders SET spec_json=NULL,"
                 "updated_at=? WHERE delivery_id=?",
@@ -1888,14 +1346,20 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         for r in db.execute(
                 "SELECT delivery_id FROM notification_renders "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
-                "ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall():
+                "AND spec_published=1 ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
             path = os.path.join(dirs["discord_render"],
                                 r["delivery_id"] + ".json")
             try:
                 os.unlink(path)
                 removed += 1
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError:
+                continue
+            # Terminal renders are never republished. Remember successful
+            # cleanup so a bounded GC can reach older files on later ticks.
+            db.execute("UPDATE notification_renders SET spec_published=0 "
+                       "WHERE delivery_id=?", (r["delivery_id"],))
         # cmd_results files are a transport artifact — the durable audit
         # lives in command_receipts. The plugin polls a result for
         # minutes at most; anything a week old is dead weight.

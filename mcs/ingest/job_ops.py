@@ -130,8 +130,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # derived from the stored render/coverage — so it must branch
             # before the common apply_command validation would reject it.
             if req["cmd"] == "ops.card_resolve":
-                import notify_cards
-                receipt = notify_cards.apply_card_resolve(ledger, req)
+                import notify_transport
+                receipt = notify_transport.apply_card_resolve(ledger, req)
             else:
                 receipt = mcs_requests.apply_command(ledger, req)
             if receipt["outcome"] == "rejected":

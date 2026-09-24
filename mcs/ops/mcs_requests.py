@@ -141,7 +141,7 @@ def validate(req):
         # envelope — the positive project_id rule does not apply and a
         # supplied one is rejected as an unknown field by the dedicated
         # validator.
-        from notify_cards import validate_card_resolve
+        from notify_transport import validate_card_resolve
         return validate_card_resolve(req)
     if not positive(req.get("project_id")):
         return "bad_project_id"

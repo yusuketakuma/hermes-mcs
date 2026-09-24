@@ -21,6 +21,7 @@ import time
 
 import mcs_requests
 import notify_cards
+import notify_transport
 from mcs_requests import canonical, positive, valid_hash, valid_uuid
 
 TRANSPORT_OPS = ("transport_begin", "transport_receipt",
@@ -75,13 +76,16 @@ def validate_int(req) -> str | None:
     if type(req.get("version")) is not int or req["version"] != 1:
         return "bad_version"
     op = req.get("op")
-    if op not in _VALID_OPS and req.get("cmd") not in HUMAN_CMDS:
+    if (not isinstance(op, str) or op not in _VALID_OPS) \
+            and req.get("cmd") not in HUMAN_CMDS:
         return "unknown_op"
     cid = req.get("command_id")
     if op == "notification":
         if _fields(req, {"version", "op", "command_id", "actor",
-                         "token", "origin"}):
+                         "token", "origin", "request_id"}):
             return "unknown_field"
+        if "request_id" in req and not valid_uuid(req["request_id"]):
+            return "bad_request_id"
         if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.match(cid):
             return "bad_command_id"
         if not _text(req.get("actor"), 120):
@@ -198,11 +202,11 @@ def dispatch(ledger, req, cfg, root, now=None):
     if op == "refresh":
         return notify_cards.apply_refresh(ledger, req, cfg, now)
     if op == "transport_begin":
-        return notify_cards.apply_transport_begin(ledger, req, cfg, now)
+        return notify_transport.apply_transport_begin(ledger, req, cfg, now)
     if op == "transport_receipt":
-        return notify_cards.apply_transport_receipt(ledger, req, cfg, now)
+        return notify_transport.apply_transport_receipt(ledger, req, cfg, now)
     if op == "thread_receipt":
-        return notify_cards.apply_thread_receipt(ledger, req, cfg, now)
+        return notify_transport.apply_thread_receipt(ledger, req, cfg, now)
     if req.get("cmd") in HUMAN_CMDS:
         error = _human_cmd_check(req)
         if error:
@@ -292,8 +296,15 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                        "command_id": cid}
         out.setdefault("command_id", cid)
         out["processed_at"] = time.time()
+        # Separate each click's response from the durable mutation identity.
+        # Reusing token:actor filenames exposes a prior response before this
+        # command has passed current authorization/source checks.
+        result_id = cid
+        if req.get("op") == "notification" and valid_uuid(req.get("request_id")):
+            result_id = req["request_id"]
+            out["request_id"] = result_id
         safe = "".join(c if c.isalnum() or c in "._-" else "_"
-                       for c in str(cid))[:120] or "unknown"
+                       for c in str(result_id))[:120] or "unknown"
         try:
             notify_cards.publish_file(res_dir, safe + ".json",
                                       canonical(out))

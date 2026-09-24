@@ -285,7 +285,7 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
         # receipt file exists => committed
         got = data / "cmd_results" / (
             "".join(c if c.isalnum() or c in "._-" else "_"
-                    for c in env["command_id"]) + ".json")
+                    for c in env["request_id"]) + ".json")
         assert got.exists()
         samples.append(time.perf_counter() - t0)
     print("\n== operation apply (click -> receipt commit) ==")
