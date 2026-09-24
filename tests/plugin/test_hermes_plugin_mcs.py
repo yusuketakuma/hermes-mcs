@@ -666,3 +666,31 @@ def test_control_preview_confirm_and_operations_read(tmp_path):
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0] == "running"
     finally:
         db.close()
+
+
+def test_interactive_settings_derives_application_id(tmp_path):
+    """application_id omitted: the connected bot's user id fills the
+    scope binding — a bot account's user id IS its application id."""
+    from types import SimpleNamespace
+
+    settings = _settings(tmp_path)
+    settings.update({
+        "interactive": True,
+        "data_root": str(tmp_path / "data"),
+        "channel_id": "42",
+    })
+    ctx = _Context(settings)
+    bot = SimpleNamespace(user=SimpleNamespace(id=123456789))
+    resolved = hermes_plugin._interactive_settings(ctx, bot)
+    assert resolved["application_id"] == "123456789"
+    assert resolved["channel_id"] == "42"
+
+    settings["application_id"] = "999"
+    resolved = hermes_plugin._interactive_settings(ctx, bot)
+    assert resolved["application_id"] == "999"
+
+    settings.pop("application_id")
+    assert hermes_plugin._interactive_settings(
+        ctx, SimpleNamespace(user=None)) is None
+    settings["interactive"] = False
+    assert hermes_plugin._interactive_settings(ctx, bot) is None
