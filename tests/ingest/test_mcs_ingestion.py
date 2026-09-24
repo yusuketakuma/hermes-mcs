@@ -18,6 +18,7 @@ import job_ops
 import ledger
 import mcs_adapter
 import notifier
+import structured_view
 import rollup
 import run_check
 
@@ -444,7 +445,7 @@ def test_notifier_ignores_artifact_for_old_body(tmp_path):
     db.artifact_add("extract_v1", '{"urgency":"high"}', project_id=1,
                     message_id=1, meta={"hash": "old"})
 
-    assert notifier._artifact(db, "extract_v1", 1) is None
+    assert structured_view.latest_artifact(db.db, "extract_v1", 1) is None
     db.close()
 
 

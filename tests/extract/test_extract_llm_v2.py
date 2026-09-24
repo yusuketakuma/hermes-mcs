@@ -21,7 +21,7 @@ import ledger
 import mcs_adapter
 import mcs_signals
 import mcs_stats
-import notifier
+import structured_view
 import rollup
 
 
@@ -230,7 +230,7 @@ def test_v1_row_stays_current_for_readers_until_replaced(tmp_path):
     _v1_artifact(db, 1, {"summary": "v1"}, _hash(db))
 
     # readers keep the hash-only contract -> v1 is still visible
-    assert notifier._artifact(db, "extract_llm", 1)["summary"] == "v1"
+    assert structured_view.latest_artifact(db.db, "extract_llm", 1)["summary"] == "v1"
     # but the write side treats it as pending
     assert not extract_llm._current(db, 1, _hash(db))
     db.close()
@@ -388,7 +388,7 @@ def test_notifier_filters_and_labels(tmp_path):
                       "action": "状態確認", "due": "2026-10-01"}],
     }, _hash(db))
 
-    lines = notifier._structured_lines(db, 1)
+    lines = structured_view.structured_lines(db.db, 1)
     joined = "\n".join(lines)
     assert "家族薬" not in joined
     assert "予定薬[予定]" in joined
@@ -450,7 +450,7 @@ def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
         lambda body, **_: pytest.fail("backoff must suppress"))
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 0 and res["selected"] == 0
-    assert notifier._artifact(db, "extract_llm", 1)["summary"] == "v1"
+    assert structured_view.latest_artifact(db.db, "extract_llm", 1)["summary"] == "v1"
     db.close()
 
 
@@ -465,7 +465,7 @@ def test_notifier_resolved_cancels_v1_positive(tmp_path):
     _llm_artifact(db, 1, {"symptoms": [{"text": "発熱",
                                        "status": "resolved"}]},
                   _hash(db))
-    joined = "\n".join(notifier._structured_lines(db, 1))
+    joined = "\n".join(structured_view.structured_lines(db.db, 1))
     assert "発熱" not in joined
     db.close()
 
@@ -480,7 +480,7 @@ def test_notifier_v1_fallback_skipped_when_llm_saw_meds(tmp_path):
                     project_id=1, message_id=1, meta={"hash": _hash(db)})
     _llm_artifact(db, 1, {"meds": [{"name": "家族薬",
                                     "subject": "family"}]}, _hash(db))
-    joined = "\n".join(notifier._structured_lines(db, 1))
+    joined = "\n".join(structured_view.structured_lines(db.db, 1))
     assert "家族薬" not in joined
     db.close()
 

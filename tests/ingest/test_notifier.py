@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import notifier
+import structured_view
 from ledger import Ledger
 
 
@@ -79,8 +80,9 @@ def test_typed_exclusions_do_not_reappear_through_rule_fallback(monkeypatch,
             "symptoms": ["合成症状"],
         },
     }
-    monkeypatch.setattr(notifier, "_artifact", lambda db, kind, mid: artifacts[kind])
-    lines = notifier._structured_lines(None, 1)
+    monkeypatch.setattr(structured_view, "latest_artifact",
+                       lambda db, kind, mid: artifacts[kind])
+    lines = structured_view.structured_lines(None, 1)
     assert not any(line.startswith(("薬剤", "症状:")) for line in lines)
 
 
@@ -92,8 +94,9 @@ def test_rule_only_medication_is_labeled_unverified(monkeypatch):
             "rx_actions": [{"action": "start", "ctx": "合成薬を開始"}],
         },
     }
-    monkeypatch.setattr(notifier, "_artifact", lambda db, kind, mid: artifacts[kind])
-    lines = notifier._structured_lines(None, 1)
+    monkeypatch.setattr(structured_view, "latest_artifact",
+                       lambda db, kind, mid: artifacts[kind])
+    lines = structured_view.structured_lines(None, 1)
     assert not any(line.startswith("薬剤:") for line in lines)
     assert any(line.startswith("薬剤候補（未確認）:") and "合成薬" in line
                for line in lines)
