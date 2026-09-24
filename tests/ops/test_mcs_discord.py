@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -853,18 +855,23 @@ def test_action_ignores_foreign_and_denies(world):
     ix = FakeInteraction("other:x")
     asyncio.run(act.on_interaction(ix))
     assert not ix.response.done and not ix.followup.sent
-    # unknown token -> ephemeral notice, no command written
+    # unknown token -> ephemeral notice + an origin-bound refresh so
+    # the card can rebuild its tokens (RC15)
     ix = FakeInteraction("mcs:a:" + "ff" * 16, message_id=1)
     asyncio.run(act.on_interaction(ix))
     assert ix.response.message["ephemeral"] is True
+    files = [json.loads(f.read_text())
+             for f in (world.data / "cmd_int").glob("*.json")]
+    assert [f["op"] for f in files] == ["refresh"]
     # disallowed user -> denied before any file write
     _, spec = world.spec()
     tok = world.token(spec, "ack")
+    before = len(list((world.data / "cmd_int").glob("*.json")))
     ix = FakeInteraction(f"mcs:a:{tok}", user_id=9999,
                          message_id=bot.channels[42].sent[0].id)
     asyncio.run(act.on_interaction(ix))
     assert "権限" in ix.response.message["content"]
-    assert not list((world.data / "cmd_int").glob("*.json"))
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == before
 
 
 def test_request_modal_full_flow(world):
@@ -1503,3 +1510,267 @@ def test_supervisor_profile_scopes_do_not_mix(world):
                 pass
 
     asyncio.run(run())
+
+
+# ---------- D4: stale claim reclaim (RC11) ------------------------------------
+
+def test_stale_claim_marker_reclaimed(world):
+    """RC11 — a worker that died between writing .claimed and the
+    registry claim leaves an orphan marker; the spec must not sit
+    forever. The new lock-holder reclaims markers older than
+    CLAIM_STALE_S; a fresh orphan is left for one more tick."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    _, spec = world.spec()
+    marker = (world.data / "discord_render"
+              / (spec["delivery_id"] + ".json.claimed"))
+    marker.write_text(json.dumps({"worker_id": "dead-worker",
+                                  "attempt_id": "ab" * 8,
+                                  "at": NOW}))
+
+    async def run():
+        await worker.tick()          # fresh marker -> not reclaimed yet
+        assert reg.claimed(spec["delivery_id"]) is None
+        assert not bot.channels[42].sent
+        old = time.time() - delivery.CLAIM_STALE_S - 1
+        os.utime(marker, (old, old))
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+
+    asyncio.run(run())
+    assert world.card()["delivery_state"] == "delivered"
+    assert any(e == "claim_stale_reclaimed" for e, _ in world.logs)
+
+
+# ---------- D4: begin republish idempotency (RC09) ----------------------------
+
+def test_begin_republishes_same_envelope(world, monkeypatch):
+    """RC09 — a begin whose result never arrives republishes the SAME
+    envelope: deterministic command_id lands on the same file and the
+    runner's idempotent replay answers the existing attempt."""
+    monkeypatch.setattr(delivery, "REPUBLISH_BEGIN_S", 0)
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        await worker.tick()              # claim + begin published
+        _, spec = world.spec()
+        claim = reg.claimed(spec["delivery_id"])
+        cid = claim["begin_cid"]
+        await worker.tick()              # no result -> republish
+        await worker.tick()              # again — still the same file
+        files = sorted((world.data / "cmd_int").glob("*.json"))
+        envs = [json.loads(f.read_text()) for f in files]
+        begins = [e for e in envs if e["op"] == "transport_begin"]
+        assert begins and all(e["command_id"] == cid for e in begins)
+        # the drained result applies normally — no conflict
+        world.drain()
+        claim2 = reg.claimed(spec["delivery_id"])
+        assert claim2["attempt_id"] == claim["attempt_id"]
+
+    asyncio.run(run())
+    attempt = world.led.db.execute(
+        "SELECT state FROM notification_delivery_attempts"
+    ).fetchone()
+    assert attempt["state"] == "granted"
+
+
+# ---------- D4: unknown token -> origin-bound refresh (RC15) ------------------
+
+def test_unknown_token_self_heals_via_refresh(world):
+    """RC15 — a click whose token context is gone (expired/GC'd) still
+    publishes a refresh bound to the native origin; the runner resolves
+    the card from that origin and re-issues the render with fresh
+    tokens — the card rebuilds itself instead of staying dead."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    dead = "ff" * 16                   # never registered / expired
+    ix = FakeInteraction(f"mcs:a:{dead}", message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    assert "無効化" in ix.response.message["content"] \
+        or "無効化" in ix.followup.sent[-1]["content"]
+    # a refresh command was published and applied — its receipt names
+    # the op; the runner re-issued the render from the origin
+    rows = world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts").fetchall()
+    kinds = {json.loads(r["receipt_json"]).get("kind") for r in rows}
+    assert "refresh" in kinds
+    # a fresh render with fresh tokens exists
+    r = world.led.db.execute(
+        "SELECT render_rev,state FROM notification_renders "
+        "ORDER BY render_rev DESC LIMIT 1").fetchone()
+    assert r["render_rev"] >= 2
+
+
+def test_unknown_token_unauthorized_no_refresh(world):
+    """An unauthorized click earns no refresh — the runner op has no
+    actor check of its own, so the gate must live here."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction("mcs:a:" + "ff" * 16, user_id=9999,
+                         message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    assert "権限" in ix.response.message["content"]
+    assert not list((world.data / "cmd_int").glob("*.json"))
+
+
+# ---------- D4: thread failure separation (RC18) ------------------------------
+
+def test_thread_failure_keeps_body(world, monkeypatch):
+    """RC18 — a definitive thread-create failure (403) negative-caches
+    the capability and reports via thread_receipt; the card body still
+    settles delivered and is never resent."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def boom(self, name=None):
+        raise FakeHTTP(403)
+    monkeypatch.setattr(FakeMessage, "create_thread", boom)
+
+    async def run():
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+        world.drain()                  # thread_receipt settles
+
+    asyncio.run(run())
+    card = world.card()
+    assert card["delivery_state"] == "delivered"
+    assert card["thread_state"] == "failed"
+    assert card["thread_id"] is None
+    assert len(bot.channels[42].sent) == 1      # no body resend
+    scope_key = delivery._scope_key(worker.scope())
+    assert reg.capability(scope_key)["ok"] is False
+
+
+def test_thread_capability_recovers_after_expiry(world, monkeypatch):
+    """RC18 — the negative capability cache ages out, so a permission
+    repair lets the NEXT card create its thread — without resending or
+    resurrecting anything."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    original = FakeMessage.create_thread
+
+    async def boom(self, name=None):
+        raise FakeHTTP(403)
+    monkeypatch.setattr(FakeMessage, "create_thread", boom)
+
+    async def run():
+        await _deliver(world, worker)
+        world.drain()
+
+    asyncio.run(run())
+    assert world.card()["thread_state"] == "failed"
+
+    # permission repaired + negative cache aged out
+    monkeypatch.setattr(FakeMessage, "create_thread", original)
+    monkeypatch.setattr(registry, "CAPABILITY_NEG_S", 0)
+
+    # second card on the same patient — new root, no patient re-insert
+    for m in (200, 201):
+        world.led.db.execute(
+            "INSERT INTO messages(message_id,project_id,sender_name,"
+            "posted_at,posted_at_ts,body_text,content_hash,body_state,"
+            "parent_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            (m, 1, "職員", f"2026-09-24T09:{m % 60:02d}",
+             int(NOW) + m, "本文", f"{m:064x}", "full",
+             200 if m != 200 else None))
+    world.led.db.commit()
+
+    async def run2():
+        world.dispatch(payload={"message_ids": [200, 201]})
+        sent = await _deliver(world, worker)
+        assert len(sent) == 2
+        world.drain()
+
+    asyncio.run(run2())
+    card2 = world.card(2)
+    assert card2["delivery_state"] == "delivered"
+    assert card2["thread_state"] == "created"
+    assert card2["thread_id"] is not None
+    # the first card's body was never resent nor its thread resurrected
+    assert world.card(1)["thread_state"] == "failed"
+
+
+# ---------- D4: unknown stays un-sent forever (RC23) ---------------------------
+
+def test_unknown_never_resends_late_success_binds_update(world):
+    """RC23 — an attempt that went unknown (post-HTTP uncertainty)
+    keeps exclusive send rights: the render is never re-issued until
+    ops.card_resolve lands. A late proven-success binds the discovered
+    message and the NEXT render is an update on it — the old render is
+    not resurrected."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        # force the send outcome to 'unknown' — a timeout that may
+        # have committed
+        async def hang(view=None):
+            raise TimeoutError("no response")
+        worker._bot.channels[42].send = hang
+        await worker.tick()
+        world.drain()
+        await worker.tick()            # send raises -> unknown
+        world.drain()                  # unknown receipt settles
+
+    asyncio.run(run())
+    card = world.card()
+    assert card["delivery_state"] == "delivery_unknown"
+    # the render stays terminal — no auto re-issue
+    r = world.led.db.execute(
+        "SELECT COUNT(*) c FROM notification_renders").fetchone()
+    assert r["c"] == 1
+    notify_cards.sweep(world.led, CFG)
+    assert world.led.db.execute(
+        "SELECT COUNT(*) c FROM notification_renders"
+    ).fetchone()["c"] == 1
+
+    # operator proves the send actually landed — mark_delivered binds
+    # the discovered message instead of reviving the dead render
+    attempt = world.led.db.execute(
+        "SELECT attempt_id,delivery_id FROM notification_delivery_attempts"
+    ).fetchone()
+    res = notify_cards.apply_card_resolve(world.led, {
+        "version": 1, "cmd": "ops.card_resolve",
+        "command_id": "00000000-0000-4000-8000-0000000000aa",
+        "actor": "op-user", "human_confirmed": True,
+        "reason": "found the message in channel history",
+        "delivery_id": attempt["delivery_id"],
+        "attempt_id": attempt["attempt_id"],
+        "result": "mark_delivered", "message_id": "m-late",
+        "profile": "mcs", "application_id": "1", "guild_id": "7",
+        "channel_id": "42",
+        "evidence": {"method": "api_lookup", "ref": "history-scan"}},
+        CFG, now=NOW)
+    assert res["outcome"] == "applied"
+    card = world.card()
+    assert card["delivery_state"] == "delivered"
+    assert card["message_id"] == "m-late"
+    # nothing changed content-wise — no render yet. When the source
+    # drifts the successor is an UPDATE on the bound message, never a
+    # re-create that would double-post the card
+    world.led.db.execute(
+        "UPDATE messages SET body_text='追記あり',content_hash=? "
+        "WHERE message_id=101", ("e" * 64,))
+    world.led.db.commit()
+    notify_cards.sweep(world.led, CFG)
+    r2 = world.led.db.execute(
+        "SELECT op,spec_json FROM notification_renders "
+        "ORDER BY render_rev DESC LIMIT 1").fetchone()
+    assert r2["op"] == "update"
+    spec = json.loads(r2["spec_json"])
+    assert spec["delivery"]["message_id"] == "m-late"

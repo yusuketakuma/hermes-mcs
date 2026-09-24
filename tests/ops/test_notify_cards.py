@@ -1245,3 +1245,125 @@ def test_drain_quarantines_corrupt_command(led, tmp_path):
     res2 = {"errors": []}
     assert notify_cmds.drain_int_commands(
         led, res2, CFG, str(tmp_path / "data")) == 0
+
+
+# ---------- D4: sweep change detection without intents (RC19) ----------
+
+def _deliver_card(led, cfg=CFG):
+    """dispatch + begin + delivered receipt -> a card bound to m-1."""
+    _dispatch(led, _intent(led), cfg)
+    r = _latest_render(led)
+    _begin(led, r)
+    _receipt(led, r, f"{1:016x}", message_id="m-1")
+    return r
+
+
+def test_sweep_detects_source_delete(led):
+    """RC19 — an upstream message delete (body_state flip) re-renders
+    the bound card with no new intent."""
+    _seed_thread(led)
+    r0 = _deliver_card(led)
+    led.db.execute(
+        "UPDATE messages SET body_state='deleted',content_hash=? "
+        "WHERE message_id=101", ("d" * 64,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 1
+    assert r["op"] == "update"
+    assert "（削除済み）" in json.dumps(r["spec_json"],
+                                     ensure_ascii=False)
+
+
+def test_sweep_detects_signal_lifecycle(led):
+    """RC19 — resolve / dismiss / supersede transitions on a rendered
+    signal re-render its card without a new intent."""
+    _patient(led)
+    _signal_row(led, "sig-1")
+    _dispatch(led, _intent(led, kind="signal",
+                           payload={"signal_keys": ["sig-1"],
+                                    "project_id": 1}))
+    r0 = _latest_render(led)
+    assert _card(led)["kind"] == "signal"
+    _begin(led, r0)
+    _receipt(led, r0, f"{1:016x}", message_id="m-1")
+
+    # resolved — the evaluator's terminal transition
+    _signal_row(led, "sig-1", state="resolved")
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 1
+    assert r["op"] == "update"
+
+    # superseded — a fresh open row on the same key
+    _signal_row(led, "sig-1", state="open", mids=[100, 101])
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 2
+
+    # dismissed — a human-gated transition row
+    _signal_row(led, "sig-1", state="dismissed")
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 3)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 3
+
+
+def test_sweep_defer_until_reopens_card(led):
+    """RC19 — a deferred triage flips back to open at defer_until and
+    the footer change re-renders the card."""
+    _seed_thread(led)
+    r0 = _deliver_card(led)
+    led.db.execute(
+        "INSERT INTO notification_triage(card_id,owner,defer_until,"
+        "state,revision,last_actor,updated_at) "
+        "VALUES(1,NULL,?,'deferred',1,'discord:1',?)",
+        (NOW + 5, NOW))
+    led.db.commit()
+    # deferring itself is a footer change — the card re-renders to show
+    # the hold before the deadline
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 1
+    assert "保留中" in json.dumps(r["spec_json"], ensure_ascii=False)
+    # past the deadline the hold lifts — another render drops the marker
+    notify_cards.sweep(led, CFG, now=NOW + 10)
+    r = _latest_render(led)
+    assert r["render_rev"] == r0["render_rev"] + 2
+    assert "保留中" not in json.dumps(r["spec_json"], ensure_ascii=False)
+    tri = led.db.execute(
+        "SELECT state FROM notification_triage WHERE card_id=1"
+    ).fetchone()
+    assert tri["state"] == "open"
+
+
+# ---------- D4: ops.card_resolve idempotency (RC25) ----------
+
+def test_card_resolve_reapply_is_idempotent(led):
+    """RC25 — re-running the same resolve command replays the stored
+    receipt; a second resolve with a different payload conflicts."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r0 = _latest_render(led)
+    _begin(led, r0)                      # granted, unsettled
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": _uuid(77), "actor": "op-user",
+           "human_confirmed": True, "reason": "audit",
+           "delivery_id": r0["delivery_id"], "attempt_id": f"{1:016x}",
+           "result": "mark_delivered", "message_id": "m-9", **SCOPE,
+           "evidence": {"method": "journal_review", "ref": "w1.jsonl"}}
+    first = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    assert first["outcome"] == "applied"
+    again = notify_cards.apply_card_resolve(led, dict(req), CFG,
+                                            now=NOW + 1)
+    assert again == first                     # stored receipt replay
+    conflict = notify_cards.apply_card_resolve(
+        led, {**req, "result": "mark_not_sent",
+              "evidence": {"method": "journal_review", "ref": "w1.jsonl",
+                           "worker_stopped": True,
+                           "proof": "no_journal_started"}},
+        CFG, now=NOW + 2)
+    assert conflict["outcome"] == "rejected"
+    assert conflict["error"] == "command_id_conflict"
