@@ -68,6 +68,14 @@ def _hhmm(posted_at) -> str:
     return "??:??"
 
 
+def _sender_tag(m) -> str:
+    """Message sender header — name plus profession・organization when
+    the ledger stores them (same metadata the text notify path shows)."""
+    name = m["sender_name"] or "?"
+    meta = "・".join(x for x in (m["profession"], m["organization"]) if x)
+    return f"{name}（{meta}）" if meta else name
+
+
 def _blocks_len(blocks) -> int:
     """Rendered length of container blocks under the same accounting the
     Components-V2 validator applies (text +4, field name+value +6)."""
@@ -229,11 +237,12 @@ def _signal_display(db, sig: dict, transport: str) -> list:
         or ev.get("discharge_message_id") or ev.get("message_id")
     if type(mid) is int:
         m = db.execute(
-            "SELECT sender_name,posted_at,body_text,body_state "
+            "SELECT sender_name,profession,organization,posted_at,"
+            "body_text,body_state "
             "FROM messages WHERE message_id=?", (mid,)).fetchone()
         if m and m["body_state"] != "deleted" and m["body_text"]:
             quote = (f"最新言及 {m['posted_at'] or '?'} "
-                     f"{m['sender_name'] or '?'}:")
+                     f"{_sender_tag(m)}:")
             if transport != "slack":
                 quote += f" {m['body_text']}"
             blocks.append({"type": "quote", "text": quote})
@@ -262,13 +271,14 @@ def _signal_body(db, sig: dict) -> str:
         or ev.get("discharge_message_id") or ev.get("message_id")
     if type(mid) is int:
         m = db.execute(
-            "SELECT sender_name,posted_at,body_text,body_state "
+            "SELECT sender_name,profession,organization,posted_at,"
+            "body_text,body_state "
             "FROM messages WHERE message_id=?", (mid,)).fetchone()
         if m and m["body_text"]:
             body = ("（削除済み）" if m["body_state"] == "deleted"
                     else m["body_text"])
             lines.append(f"最新言及 {m['posted_at'] or '?'} "
-                         f"{m['sender_name'] or '?'}: {body}")
+                         f"{_sender_tag(m)}: {body}")
             if m["body_state"] != "deleted":
                 sblk = _structured_block(db, mid)
                 if sblk:
@@ -293,14 +303,16 @@ def _card_body_text(db, card, man) -> tuple:
             if type(mid) is not int:
                 continue
             m = db.execute(
-                "SELECT sender_name,posted_at,body_text,body_state "
+                "SELECT sender_name,profession,organization,posted_at,"
+                "body_text,body_state "
                 "FROM messages WHERE message_id=?", (mid,)).fetchone()
             if m is None:
                 continue
             body = ("（削除済み）" if m["body_state"] == "deleted"
                     else (m["body_text"] or ""))
-            lines.append(f"{_hhmm(m['posted_at'])} "
-                         f"{m['sender_name'] or '?'}: {body}")
+            lines.append(f"{_mmdd(m['posted_at'])} "
+                         f"{_hhmm(m['posted_at'])} "
+                         f"{_sender_tag(m)}: {body}")
             if m["body_state"] != "deleted":
                 sblk = _structured_block(db, mid)
                 if sblk:
@@ -329,7 +341,8 @@ def _card_content(db, card) -> dict:
     ui = card["ui_state"]
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
-            """SELECT message_id,sender_name,posted_at,body_text,body_state,
+            """SELECT message_id,sender_name,profession,organization,
+                      posted_at,body_text,body_state,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
                ORDER BY posted_at_ts""",
@@ -344,7 +357,8 @@ def _card_content(db, card) -> dict:
         # all that renders; 📄本文表示 answers with the full shown set
         rendered = []
         for m in msgs:
-            line = (f"{_hhmm(m['posted_at'])} {m['sender_name'] or '?'}"
+            line = (f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
+                    f"{_sender_tag(m)}"
                     + (" （削除済み）" if m["body_state"] == "deleted"
                        else ""))
             blocks = [{"type": "text", "text": line}]
