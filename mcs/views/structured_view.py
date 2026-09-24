@@ -86,27 +86,22 @@ def structured_lines(db, mid: int) -> list[str]:
                     if isinstance(s, dict) and isinstance(s.get("text"), str)
                     and s["text"]]
     for s in llm_symptoms:
-        if isinstance(s, dict) and s.get("text"):
-            if s.get("subject") in ("family", "other") or s.get("unverified"):
-                continue
-            # resolved/past/negated all cancel an earlier positive —
-            # they enter neg_seen so a v1 positive below is contradicted
-            # (same resolver semantics as rollup.py)
-            if s.get("negated") or s.get("status") in ("resolved", "past"):
-                if s["text"] not in neg_seen:
-                    neg_seen.add(s["text"])
-                    if s.get("negated"):
-                        neg.append(s["text"])
-            elif s["text"] not in seen:
-                seen.add(s["text"])
-                syms.append(s["text"])
+        if s.get("subject") in ("family", "other") or s.get("unverified"):
+            continue
+        if s.get("negated") or s.get("status") in ("resolved", "past"):
+            if s["text"] not in neg_seen:
+                neg_seen.add(s["text"])
+                if s.get("negated"):
+                    neg.append(s["text"])
+        elif s["text"] not in seen:
+            seen.add(s["text"])
+            syms.append(s["text"])
     for s in v1.get("symptoms") or []:
         if not isinstance(s, str):
             continue
         if any(x["text"] in s or s in x["text"] for x in llm_symptoms):
             continue  # Typed polarity/subject must not reappear through rules.
-        contradicted = any(n in s or s in n for n in neg_seen)
-        if s and s not in seen and not contradicted:
+        if s and s not in seen:
             syms.append(s)
     if syms or neg:
         line = "症状: " + "、".join(syms[:6])
