@@ -1815,7 +1815,9 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     try:
         src.backup(dst)
         with dst:
-            dst.execute("INSERT OR REPLACE INTO snapshot_meta VALUES(1,?,?)",
+            dst.execute("INSERT OR REPLACE INTO snapshot_meta("
+                        "singleton,generation_id,generated_at) "
+                        "VALUES(1,?,?)",
                         (str(uuid.uuid4()), time.time()))
     finally:
         dst.close()
