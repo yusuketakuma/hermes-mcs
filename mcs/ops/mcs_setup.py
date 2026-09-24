@@ -110,8 +110,9 @@ def _validate_notify(ntf: dict) -> list[str]:
     all-or-nothing, and scope is required when cards are on."""
     errors = []
     if "interactive" in ntf \
-            and ntf["interactive"] not in ("discord", "off"):
-        errors.append('notify.interactive: must be "discord" or "off"')
+            and ntf["interactive"] not in ("discord", "slack", "off"):
+        errors.append('notify.interactive: must be "discord", '
+                      '"slack" or "off"')
     if "card_thread" in ntf and type(ntf["card_thread"]) is not bool:
         errors.append("notify.card_thread: must be a boolean")
     for key in ("route_epoch", "card_thread_archive_min"):
@@ -123,18 +124,26 @@ def _validate_notify(ntf: dict) -> list[str]:
         err = _nonempty_str(ntf["operator"])
         if err:
             errors.append(f"notify.operator: {err}")
-    d = ntf.get("discord")
-    if d is None:
-        if ntf.get("interactive") == "discord":
-            errors.append('notify.discord: required when '
-                          'interactive is "discord"')
-    elif not isinstance(d, dict):
-        errors.append("notify.discord: must be an object")
-    else:
-        for k in ("profile", "application_id", "guild_id", "channel_id"):
-            if not isinstance(d.get(k), str) or not d[k].strip():
-                errors.append(f"notify.discord.{k}: "
-                              "must be a non-empty string")
+    for transport, tenant in (("discord", "guild_id"),
+                              ("slack", "team_id")):
+        d = ntf.get(transport)
+        if d is None:
+            if ntf.get("interactive") == transport:
+                errors.append(f'notify.{transport}: required when '
+                              f'interactive is "{transport}"')
+        elif not isinstance(d, dict):
+            errors.append(f"notify.{transport}: must be an object")
+        else:
+            for k in ("profile", "application_id", tenant,
+                      "channel_id"):
+                if not isinstance(d.get(k), str) or not d[k].strip():
+                    errors.append(f"notify.{transport}.{k}: "
+                                  "must be a non-empty string")
+            # delivery_scope() rejects a slack block carrying
+            # guild_id outright — flag it at config time too
+            if transport == "slack" and "guild_id" in d:
+                errors.append("notify.slack.guild_id: not allowed "
+                              "(slack scope uses team_id)")
     return errors
 
 
@@ -314,9 +323,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         errors.append(f"hermes CLI not resolvable ({exe}) — "
                       "notifications cannot be sent")
     elif isinstance(cfg.get("notify"), dict) \
-            and cfg["notify"].get("interactive") == "discord":
+            and cfg["notify"].get("interactive") in ("discord", "slack"):
         # The gateway is hermes's own supervised service — cards and
-        # /mcs commands cannot deliver without it.
+        # /mcs commands cannot deliver without it (both transports).
         r = _hermes_cli(exe, "", "gateway", "status")
         if not (r and r.returncode == 0
                 and "supervised" in (r.stdout or "")):
@@ -735,13 +744,17 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
     # Bot token — `config set` routes *_TOKEN keys to the profile .env,
-    # so the secret never lands in argv history or config.json.
+    # so the secret never lands in argv history or config.json. It must
+    # land in the SERVING profile's .env: under multiplex each profile's
+    # secret scope is authoritative and a miss never falls through to
+    # the default profile's .env (agent/secret_scope.py).
     tok = os.environ.get("DISCORD_BOT_TOKEN")
     if tok:
-        ok = _hermes_config_set(exe, "", "DISCORD_BOT_TOKEN", tok)
+        ok = _hermes_config_set(exe, profile, "DISCORD_BOT_TOKEN", tok)
         print("  DISCORD_BOT_TOKEN: "
-              + ("hermes .env へ保存" if ok else "保存失敗"))
-    elif _hermes_config_get(exe, "", "DISCORD_BOT_TOKEN"):
+              + (f"hermes {'-p ' + profile if profile else '既定'} "
+                 ".env へ保存" if ok else "保存失敗"))
+    elif _hermes_config_get(exe, profile, "DISCORD_BOT_TOKEN"):
         print("  DISCORD_BOT_TOKEN: 設定済み")
     else:
         if not args.yes:
@@ -749,13 +762,15 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
                 "  Discord bot token（hermes .env へ保存。"
                 "空欄=スキップ）: ") or None
             if tok:
-                ok = _hermes_config_set(exe, "", "DISCORD_BOT_TOKEN",
-                                        tok)
+                ok = _hermes_config_set(exe, profile,
+                                        "DISCORD_BOT_TOKEN", tok)
                 print("  DISCORD_BOT_TOKEN: "
-                      + ("hermes .env へ保存" if ok else "保存失敗"))
+                      + (f"hermes {'-p ' + profile if profile else '既定'}"
+                         " .env へ保存" if ok else "保存失敗"))
         if not tok:
-            print("  DISCORD_BOT_TOKEN: 未設定 — `hermes config set "
-                  "DISCORD_BOT_TOKEN <token>` で後から設定")
+            print("  DISCORD_BOT_TOKEN: 未設定 — `hermes "
+                  + (f"-p {profile} " if profile else "")
+                  + "config set DISCORD_BOT_TOKEN <token>` で後から設定")
 
 
 def cmd_init(args) -> int:
@@ -1336,11 +1351,12 @@ def cmd_services(args) -> int:
                                  f"{(r.stderr or r.stdout).strip()}")
                             problems += 1
 
-        # 4. Discord gateway — only needed when interactive cards are on;
-        # `gateway install` creates the launchd service hermes owns.
+        # 4. hermes gateway — needed for either interactive transport
+        #    (Discord interactions / Slack socket mode); `gateway
+        #    install` creates the launchd service hermes owns.
         ntf = cfg.get("notify") if isinstance(cfg, dict) else None
         if isinstance(ntf, dict) \
-                and ntf.get("interactive") == "discord":
+                and ntf.get("interactive") in ("discord", "slack"):
             r = _hermes_cli(hermes, "", "gateway", "status")
             up = bool(r and r.returncode == 0
                       and "supervised" in (r.stdout or ""))

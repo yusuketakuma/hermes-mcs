@@ -215,3 +215,142 @@ def test_membership_reconcile_removes_undesired_agents(rec, tmp_path):
     assert not (agents / "ai.mcs.extract-old.plist").exists()
     assert (agents / "ai.mcs.llamaserver.plist").exists()
     assert (agents / "unrelated.other.plist").exists()
+
+
+# ---------------------------------------------------- _restore_db contract
+# Rollback recovery must FAIL CLOSED: an unreadable backup/live DB or a
+# failed copy can never be a silent "nothing to do" — that would report
+# success while old code runs against a newer schema (F-restore).
+
+def _mk_db(path, version):
+    import sqlite3
+    con = sqlite3.connect(str(path))
+    con.execute(f"PRAGMA user_version={version}")
+    con.execute("CREATE TABLE t(x)")
+    con.commit()
+    con.close()
+
+
+def test_restore_db_rejects_unreadable_backup(rec, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"
+    _mk_db(live, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    err = rec._restore_db(str(tmp_path / "data" / "missing.db"))
+    assert err and "backup_unreadable" in err
+    # live DB untouched
+    assert rec._db_version(str(live)) == 7
+
+
+def test_restore_db_rejects_unreadable_live(rec, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"          # absent
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    assert rec._restore_db(str(back)) == "live_db_unreadable"
+
+
+def test_restore_db_same_version_is_verified_noop(rec, tmp_path,
+                                                  monkeypatch):
+    """Live already at the backup schema — nothing copied, the live
+    rows stay exactly as they were."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 7)
+    _mk_db(back, 7)
+    import sqlite3
+    con = sqlite3.connect(str(live))
+    con.execute("INSERT INTO t VALUES('sentinel')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    assert rec._restore_db(str(back)) is None
+    con = sqlite3.connect("file:" + str(live) + "?mode=ro", uri=True)
+    assert con.execute("SELECT x FROM t").fetchone()[0] == "sentinel"
+    con.close()
+
+
+def test_restore_db_reports_copy_failure(rec, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    os.mkdir(str(live) + ".recover-tmp")      # blocks the tmp write
+    err = rec._restore_db(str(back))
+    assert err and err.startswith("restore_failed:")
+    assert rec._db_version(str(live)) == 8    # live DB untouched
+
+
+def test_restore_db_verify_mismatch(rec, tmp_path, monkeypatch):
+    """A restore that reads back the wrong schema must be reported —
+    claiming success on an unverified copy is the bug this fixes."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    calls = iter([8, 7, 8])     # live, backup, post-restore live
+    monkeypatch.setattr(rec, "_db_version", lambda p: next(calls))
+    assert rec._restore_db(str(back)) == "restore_verify_failed"
+
+
+def test_restore_db_replaces_and_verifies(rec, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    assert rec._restore_db(str(back)) is None
+    assert rec._db_version(str(live)) == 7
+
+
+def _rollback_state(rec, tmp_path, backup_path):
+    """Journal state for the post-merge rollback-recovery path:
+    HEAD == applying.sha (tree already converged), rollback flagged."""
+    repo = _make_repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying("0" * 40, sha=head, stage="applying")
+    state["applying"].update(
+        {"rollback": True, "command_id": "cid-rb",
+         "backup_path": backup_path})
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    return state
+
+
+def test_recover_escalates_on_rollback_db_restore(rec, tmp_path,
+                                                  monkeypatch):
+    """The silent-skip bug: backup unreadable during rollback recovery
+    must escalate, never 'resumed' (F-restore)."""
+    _rollback_state(rec, tmp_path, str(tmp_path / "data" / "gone.db"))
+    live = tmp_path / "data" / "ledger.db"
+    _mk_db(live, 8)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_notify", lambda *a: None)
+    assert rec.recover() == 1
+    report = json.load(open(rec.REPORT_PATH))
+    assert report["result"] == "escalate"
+    assert "backup_unreadable" in report["detail"]
+    after = json.load(open(rec.STATE_PATH))
+    assert after["executed"]["cid-rb"]["result"] == "escalated"
+    # applying record preserved for the human — not consumed
+    assert after["applying"]["rollback"] is True
+
+
+def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
+    """Happy path: converged tree + valid backup => restore runs and
+    the report may claim 'resumed'."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_notify", lambda *a: None)
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    assert rec.recover() == 0
+    assert rec._db_version(str(live)) == 7
+    report = json.load(open(rec.REPORT_PATH))
+    assert report["result"] == "resumed"
+    after = json.load(open(rec.STATE_PATH))
+    assert after["executed"]["cid-rb"]["result"] == "applied"

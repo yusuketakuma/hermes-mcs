@@ -189,6 +189,14 @@ def apply_command(ledger, req):
     if not isinstance(req, dict) or not valid_uuid(req.get("command_id")):
         raise ValueError("bad_command_id")
     digest = payload_hash(req)
+    if req.get("cmd") == "ops.update_apply":
+        # Network-bound sha resolution happens OUTSIDE the write
+        # transaction — an ls-remote inside BEGIN IMMEDIATE would hold
+        # the DB writer lock for the network round-trip (F-tx). The
+        # digest above covers the DELIVERED command so a retry still
+        # replays its original receipt even if the tag re-pointed.
+        from mcs_operations import prepare_update_pins
+        req = prepare_update_pins(req)
     db = ledger.db
     # requests/command_receipts landed in schema v5; newer versions still
     # carry them, and Ledger.__init__ already refuses schemas NEWER than

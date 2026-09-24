@@ -286,27 +286,43 @@ def _db_version(path):
 
 def _restore_db(backup_path):
     """Restore only when the live schema differs — removes WAL/SHM
-    sidecars FIRST so stale journals can't replay against the file."""
+    sidecars FIRST so stale journals can't replay against the file.
+    Returns an error string for the caller to escalate, or None on a
+    completed or verified-skipped restore — an unreadable backup during
+    rollback recovery is never a silent 'nothing to do' (the mcs_update
+    copy escalates backup_invalid in the same situation; a silent skip
+    here would leave OLD code running against a NEWER schema while the
+    report claims success)."""
     live = _db_version(LEDGER)
     back = _db_version(backup_path)
-    if live is None or back is None or live == back:
-        return
+    if back is None:
+        return "backup_unreadable: " + str(backup_path)
+    if live is None:
+        return "live_db_unreadable"
+    if live == back:
+        return None                     # already at backup schema
     for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
         try:
             os.unlink(side)
         except OSError:
             pass
     tmp = LEDGER + ".recover-tmp"
-    with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-        dst.flush()
-        os.fsync(dst.fileno())
-    os.replace(tmp, LEDGER)
-    dfd = os.open(DATA, os.O_RDONLY)
     try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+        with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(tmp, LEDGER)
+        dfd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as e:
+        return f"restore_failed: {e}"
+    if _db_version(LEDGER) != back:
+        return "restore_verify_failed"
+    return None
 
 
 def recover(if_stale=False):
@@ -393,7 +409,9 @@ def recover(if_stale=False):
                 if not _clean():
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
-                _restore_db(applying["backup_path"])
+                err = _restore_db(applying["backup_path"])
+                if err:
+                    return escalate("rollback db restore: " + err)
             problems = _reconcile_membership(
                 applying.get("manifest_snapshot")
                 or state.get("manifest_snapshot"))

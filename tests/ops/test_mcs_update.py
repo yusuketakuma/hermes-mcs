@@ -697,3 +697,60 @@ def test_restore_db_skips_same_version(updater, tmp_path, monkeypatch):
     row = con.execute("SELECT x FROM sentinel").fetchone()[0]
     con.close()
     assert row == live               # untouched — no copy happened
+
+
+def test_restore_db_io_error_is_update_error(updater, tmp_path,
+                                             monkeypatch):
+    """A raw OSError out of _restore_db would slip past every caller's
+    `except UpdateError` (apply bail, recover escalate, rollback
+    rb_error) — it must be converted so drainers are never left
+    quiesced by an unhandled raise."""
+    import ledger as _ledger
+    live = str(tmp_path / "ledger.db")
+    back = str(tmp_path / "backup.db")
+    mcs_update.LEDGER = live
+    for path, ver in ((live, 8), (back, 7)):
+        con = sqlite3.connect(path)
+        con.execute(f"PRAGMA user_version={ver}")
+        con.execute("CREATE TABLE t(x)")
+        con.commit()
+        con.close()
+    monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
+    os.mkdir(live + ".restore-tmp")        # blocks the tmp write
+    with pytest.raises(mcs_update.UpdateError):
+        mcs_update._restore_db(back)
+    con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 8
+    con.close()
+
+
+def test_rollback_restarts_agents_on_unexpected_error(
+        updater, tmp_path, monkeypatch):
+    """_rollback_tree raising ANY exception (not just UpdateError) must
+    still reach restart_agents — quiesced drainers can never be left
+    down by an unhandled raise (H4)."""
+    repo, _ = _make_repo(tmp_path)           # fixture REPO == this
+    monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
+                        lambda **kw: os.open(mcs_update.RUN_LOCK,
+                                             os.O_WRONLY | os.O_CREAT))
+    monkeypatch.setattr(mcs_update, "quiesce", lambda: None)
+    restarted = []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda: restarted.append(1) or [])
+    monkeypatch.setattr(
+        mcs_update, "_rollback_tree",
+        lambda e: (_ for _ in ()).throw(OSError("disk gone")))
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "_gateway_restart_if_needed",
+                        lambda s: None)
+    state = updater._default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": "t" * 40,
+                         "prev_sha": _git(repo, "rev-parse", "HEAD")
+                         .stdout.strip(), "at": time.time()}]
+    updater.save_state(state)
+    rc = updater.rollback("cid-rb")
+    assert rc == 1
+    assert restarted == [1]                  # drainers brought back up
+    after = updater.load_state()
+    assert after["executed"]["cid-rb"]["result"] == "rollback_failed"
