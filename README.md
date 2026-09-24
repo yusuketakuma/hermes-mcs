@@ -139,7 +139,12 @@ notifier.py ──► Discord #mcs      mcs_view.py ──► 検索/統計/シ�
   各本文へ検証・evidence 照合し、欠落/無効 item はその場で単発 retry。
   検証で drop が出た出力は修復プロンプト(問題点+却下出力を提示)で
   1回だけ再問し、改善した場合のみ採用。llama.cpp `timings`
-  (prompt_ms/predicted_ms/cache_n) は artifact meta に集計される
+  (prompt_ms/predicted_ms/cache_n) は artifact meta に集計される。
+  残予算が呼出し完了見込み(実測 timings 由来の下限: 単発90s・修復
+  75s・バッチ 60+55s/item)を下回る場合は発火せず deferred — 途中
+  kill される生成の浪費を避け、行は pending のまま次サイクルへ。
+  バッチ自体が deferred の場合も各行は単発レーンへ回り、バッチ分に
+  足りない残り時間で収まる単発だけが走る
 - 抽出スキーマ v2: 薬剤は `action`(start/stop/…/none)・`status`
   (current/past/planned)・`subject`(patient/family/other)・`negated`、
   症状は `status`(new/ongoing/resolved/past)・`negated`、依頼は
