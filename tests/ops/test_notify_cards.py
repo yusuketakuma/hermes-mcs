@@ -526,7 +526,10 @@ def test_sweep_revokes_archived_card(led):
     notify_cards.sweep(led, CFG)
     card = _card(led)
     assert card["delivery_state"] == "revoked"
-    assert _latest_render(led)["op"] == "revoke"
+    # never delivered -> nothing on Discord to delete: the queued create
+    # is cancelled outright, no revoke render is issued
+    r = _latest_render(led)
+    assert r["render_rev"] == 1 and r["state"] == "cancelled"
 
 
 def test_queued_render_cancelled_when_stale(led):
@@ -881,3 +884,222 @@ def test_refresh_reissues_from_origin(led, tmp_path):
         "actor": "nurse-1", "origin": dict(ORIGIN, message_id="nope")},
         CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "card_not_found"
+
+
+# ---------- adversarial fixes (post-D1 review) ----------
+
+def _deliver_update(led, tmp_path, message_id="m-9"):
+    """Deliver the create, drift the source, and return the UPDATE
+    render row (still queued)."""
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id=message_id)
+    _msg(led, 103, 1, parent=100)          # drift -> update render
+    notify_cards.sweep(led, CFG)
+    nxt = _latest_render(led)
+    assert nxt["op"] == "update" and nxt["render_rev"] == 2
+    return nxt
+
+
+def test_page_nav_issues_new_render_and_tokens(led, tmp_path):
+    """prev/next must produce a new revision/token/render — the plan's
+    view-op contract (a nav that only bumps ui_revision leaves the
+    card frozen and every other button dead on stale_ui)."""
+    card, spec = _delivered_card(led, tmp_path)
+    # single-page card mints no nav buttons — grow it to two pages
+    assert all(b["id"] not in ("prev", "next")
+               for row in spec["parts"]["action_rows"] for b in row)
+    for m in range(110, 120):
+        _msg(led, m, 1, parent=100)
+    notify_cards.sweep(led, CFG)
+    spec2 = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (_latest_render(led)["delivery_id"] + ".json")).read_text())
+    assert spec2["parts"]["pages"] > 1
+    # a card opens on its newest page — only 'prev' is actionable there
+    tok = _token_for(spec2, "prev")
+    r = notify_cards.apply_notification(
+        led, {**_notif(tok), "command_id": f"{tok}:{'ab' * 8}",
+              "origin": dict(ORIGIN, message_id="m-9")}, CFG, now=NOW)
+    assert r["outcome"] == "applied" and r["action"] == "page"
+    # a successor UPDATE render carrying the new page + fresh tokens
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == spec2["render_rev"] + 1
+    assert nxt["state"] == "queued" and nxt["op"] == "update"
+    spec3 = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (nxt["delivery_id"] + ".json")).read_text())
+    assert spec3["parts"]["page"] == spec2["parts"]["page"] - 1
+    assert spec3["ui_revision"] == spec2["ui_revision"] + 1
+    # fresh tokens are minted — the consumed ones never recur
+    nav3 = [b["token"] for row in spec3["parts"]["action_rows"]
+            for b in row if b["id"] in ("prev", "next")]
+    assert nav3 and tok not in nav3
+
+
+def test_update_and_revoke_specs_carry_message_identity(led, tmp_path):
+    """update/revoke must name the bound message + thread so the worker
+    aims without any registry lookup (registry loss must not orphan)."""
+    nxt = _deliver_update(led, tmp_path)
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (nxt["delivery_id"] + ".json")).read_text())
+    assert spec["delivery"]["message_id"] == "m-9"
+    # archive -> revoke render also carries it
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    r3 = _latest_render(led)
+    assert r3["op"] == "revoke"
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (r3["delivery_id"] + ".json")).read_text())
+    assert spec["delivery"]["message_id"] == "m-9"
+
+
+def test_revoke_undelivered_card_completes_intent(led, tmp_path):
+    """A card revoked before its first delivery must not leave the
+    owning intent pending forever — coverage suppresses, intent ends."""
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    card = _card(led)
+    assert card["delivery_state"] == "revoked"
+    # never delivered -> no Discord message to delete -> no render
+    assert _latest_render(led)["render_rev"] == 1
+    ic = led.db.execute(
+        "SELECT state FROM notification_intent_cards").fetchone()
+    assert ic["state"] == "suppressed"
+    ev2 = led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
+                         (ev["event_id"],)).fetchone()
+    assert ev2["state"] == "suppressed"
+
+
+def test_update_404_unbinds_and_recreates(led, tmp_path):
+    """A proven message-gone on update must not livelock PATCHes —
+    unbind, mark message_deleted, and the successor render is a fresh
+    create."""
+    nxt = _deliver_update(led, tmp_path)
+    _begin(led, nxt, n=2)
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(9),
+           "attempt_id": f"{2:016x}",
+           "delivery_id": nxt["delivery_id"],
+           "render_rev": nxt["render_rev"],
+           "payload_hash": nxt["payload_hash"], "route_epoch": 1,
+           "correlation": nxt["correlation"], **SCOPE,
+           "result": "not_sent", "error_code": "http_404"}
+    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    assert r["applied"]
+    card = _card(led)
+    assert card["delivery_state"] == "message_deleted"
+    assert card["message_id"] is None
+    # the auto-issued successor re-creates instead of patching a ghost
+    r3 = _latest_render(led)
+    assert r3["render_rev"] == 3 and r3["op"] == "create"
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (r3["delivery_id"] + ".json")).read_text())
+    assert "message_id" not in spec["delivery"]
+
+
+def test_resend_budget_suspends_until_epoch_bump(led, tmp_path):
+    """MAX_RESEND real not_sents suspend auto-retry as update_failed —
+    a permanent Discord fault must not spin renders forever."""
+    _deliverable(led, tmp_path)
+    for i in range(1, notify_cards.MAX_RESEND + 1):
+        r = _latest_render(led)
+        assert r["state"] == "queued"
+        _begin(led, r, n=10 + i)
+        req = {"version": 1, "op": "transport_receipt",
+               "command_id": _uuid(20 + i),
+               "attempt_id": f"{10 + i:016x}",
+               "delivery_id": r["delivery_id"],
+               "render_rev": r["render_rev"],
+               "payload_hash": r["payload_hash"], "route_epoch": 1,
+               "correlation": r["correlation"], **SCOPE,
+               "result": "not_sent", "error_code": "channel_not_found"}
+        out = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+        assert out["applied"]
+    card = _card(led)
+    assert card["delivery_state"] == "update_failed"
+    # suspended: no auto-successor while the epoch is unchanged
+    assert _latest_render(led)["render_rev"] == notify_cards.MAX_RESEND
+    notify_cards.sweep(led, CFG)
+    assert _latest_render(led)["render_rev"] == notify_cards.MAX_RESEND
+    # a route_epoch bump (operator changed routing config) re-opens it
+    cfg2 = dict(CFG, notify=dict(CFG["notify"], route_epoch=2))
+    notify_cards.sweep(led, cfg2)
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == notify_cards.MAX_RESEND + 1
+
+
+def test_denied_begins_do_not_burn_retry_budget(led, tmp_path):
+    """denied_* begins are authorization outcomes, not send failures —
+    they must never count toward MAX_RESEND."""
+    render = _deliverable(led, tmp_path)
+    for i in range(notify_cards.MAX_RESEND + 2):
+        r = _begin(led, render, n=50 + i, cfg=CFG_OFF)
+        assert r["error"] == "denied_interactive_off"
+    card = _card(led)
+    assert card["delivery_state"] == "pending"   # not update_failed
+    r = _begin(led, render, n=60)
+    assert r["granted"]
+
+
+def test_refresh_on_revoked_card_rejected(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    notify_cards.revoke_card(led.db, card["card_id"], NOW)
+    led.db.commit()
+    r = notify_cards.apply_refresh(led, {
+        "version": 1, "op": "refresh", "command_id": _uuid(42),
+        "actor": "nurse-1",
+        "origin": dict(ORIGIN, message_id="m-9")}, CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "card_revoked"
+    # no fresh revoke render minted by the refresh itself
+    assert _latest_render(led)["op"] != "revoke" or \
+        _latest_render(led)["render_rev"] == 1
+
+
+def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
+    """request/dismiss tokens authorize opening the modal — applied,
+    modal flag — while the actual human command arrives separately."""
+    _patient(led, 1)
+    _signal_row(led, "sig-modal")
+    ev = _intent(led, kind="signal", pid=1,
+                 payload={"signal_keys": ["sig-modal"], "project_id": 1,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    render = _latest_render(led)
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    for i, action in enumerate(("request", "dismiss")):
+        tok = _token_for(spec, action)
+        r = notify_cards.apply_notification(
+            led, {**_notif(tok, n=70 + i),
+                  "command_id": f"{tok}:{(70 + i):016x}"},
+            CFG, now=NOW)
+        assert r["outcome"] == "applied", (action, r)
+        assert r["action"] == action and r["modal"] is True
+    # nothing was mutated — no request row, signal still open
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 0
+
+
+def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    spec_path = (tmp_path / "data" / "discord_render"
+                 / (render["delivery_id"] + ".json"))
+    assert spec_path.exists()
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    out = notify_cards.gc(led, CFG, now=NOW)
+    assert out["spec_files"] >= 1 and not spec_path.exists()
+    led.db.execute("UPDATE notification_action_tokens SET expires_at=?",
+                   (NOW - 1,))
+    led.db.commit()
+    out = notify_cards.gc(led, CFG, now=NOW)
+    assert out["tokens"] >= 1

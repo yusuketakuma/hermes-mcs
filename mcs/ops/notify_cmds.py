@@ -284,7 +284,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                                       canonical(out))
         except OSError as e:
             result.setdefault("errors", []).append(
-                f"result_publish_failed:{safe}:{e}")
+                f"result_publish_failed:{safe}:{type(e).__name__}")
             continue                       # keep the command file
         if error:
             os.replace(path, path + ".invalid")   # forensic quarantine
