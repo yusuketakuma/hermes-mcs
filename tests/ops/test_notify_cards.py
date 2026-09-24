@@ -816,6 +816,23 @@ def test_notification_receipt_reader(led, tmp_path):
             "actor": "nurse-1", "application_id": "app1",
             "channel_id": "ch1", "projects": [1]})
         assert r["outcome"] == "applied"
+        # profile/guild are part of the delivery scope too — a caller
+        # from another deployment profile sees nothing
+        r = view.notification_receipt(cid, context={
+            "actor": "nurse-1", "application_id": "app1",
+            "channel_id": "ch1", "profile": "other",
+            "projects": [1]})
+        assert r["error"] == "scope_mismatch"
+        r = view.notification_receipt(cid, context={
+            "actor": "nurse-1", "application_id": "app1",
+            "channel_id": "ch1", "profile": "mcs", "guild_id": "g9",
+            "projects": [1]})
+        assert r["error"] == "scope_mismatch"
+        # a receipt whose projects exceed the caller's set is refused
+        r = view.notification_receipt(cid, context={
+            "actor": "nurse-1", "application_id": "app1",
+            "channel_id": "ch1", "projects": []})
+        assert r["error"] == "project_scope_mismatch"
     finally:
         view.close()
 
