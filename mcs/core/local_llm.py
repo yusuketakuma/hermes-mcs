@@ -76,6 +76,24 @@ def _usage_dict(usage) -> dict | None:
     return out or None
 
 
+def _timings_dict(timings) -> dict | None:
+    """llama.cpp `timings` block — numeric fields only. prompt_n/
+    cache_n expose the per-slot prefix-cache hit (cache_n tokens were
+    already in KV and skipped re-evaluation); predicted_ms/prompt_ms
+    split decode time from prompt evaluation so throughput tuning is
+    measured, not guessed. Missing/absent fields stay absent."""
+    if not isinstance(timings, dict):
+        return None
+    out = {}
+    for key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms",
+                "cache_n"):
+        value = timings.get(key)
+        if type(value) in (int, float) and math.isfinite(value) \
+                and value >= 0:
+            out[key] = value
+    return out or None
+
+
 def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
          max_tokens: int = MAX_TOKENS, timeout: float = TIMEOUT,
          deadline: float | None = None, response_format=None,
@@ -158,7 +176,9 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     if finish is not None and not isinstance(finish, str):
         finish = str(finish)
     return {"text": text, "finish_reason": finish,
-            "usage": _usage_dict(out.get("usage")), "status": status}
+            "usage": _usage_dict(out.get("usage")),
+            "timings": _timings_dict(out.get("timings")),
+            "status": status}
 
 
 def acceptance_error(response: dict | None) -> str | None:

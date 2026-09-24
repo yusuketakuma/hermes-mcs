@@ -16,7 +16,9 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 - 構造化抽出: ルール `extract_v1`(即時・全投稿) + ローカルLLM `extract_llm`
   (Qwen3.5-9B、外部送信なし) — スキーマ v3（薬剤 action/status/subject・
   症状 status・evidence スパン）。v3 パスはルール解析をプロンプト
-  ヒントとして取り込み `extract_v1` artifact も同パスで保証する
+  ヒントとして取り込み `extract_v1` artifact も同パスで保証する。
+  `--batch` で context 無し本文を複数集約呼出し(既定4)、検証 drop 時は
+  1回だけ修復再問、llama.cpp timings は artifact meta に集計
 - 抽出項目の Jev QC 監査: `semantic.extract_qc:"annotate"` で `extract_qc`
   artifact に注記のみ記録（抽出の変更・抑制なし、drain ガード共有）
 - 読み取り専用統計・レビュー候補シグナル6種・人承認の依頼管理

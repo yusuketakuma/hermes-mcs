@@ -506,8 +506,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 ledger, limit=15, budget_s=min(llm_budget_cap,
                                                max(0, remain)),
                 # drainers take the newest rows (DESC); the tick walks
-                # the tail so the two never re-process the same rows
-                oldest_first=True)
+                # the tail so the two never re-process the same rows.
+                # batch_k amortizes the per-call cost over context-free
+                # backlog rows — singles stay the path for context rows.
+                oldest_first=True, batch_k=extract_llm._BATCH_K)
             if remain > 10 else {"done": 0, "failed": 0, "left": -1,
                                  "pids": []})
     except Exception as e:
