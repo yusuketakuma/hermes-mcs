@@ -3967,3 +3967,225 @@ def test_save_thread_replies_stale_unread_not_notified(tmp_path):
     assert len(rows) == 1
     assert json.loads(rows[0]["payload"])["message_ids"] == [11]
     db.close()
+
+
+# ---------- self-post / latest probe ----------
+
+class _LatestAdapter(mcs_adapter.MCSAdapter):
+    """Serves /projects/{pid}/messages/latest responses verbatim."""
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def _get(self, path, params=None, extend_session=True):
+        self.calls.append((path, params))
+        return self.response
+
+
+def test_fetch_latest_parses_newest_message():
+    adapter = _LatestAdapter({
+        "is_self_only": True,
+        "message": {"id": 42}})
+    out = adapter.fetch_latest(7)
+    assert out == {"message_id": 42, "is_self_only": True}
+    path, params = adapter.calls[0]
+    assert path == "/projects/7/messages/latest"
+    assert params is None
+
+
+def test_fetch_latest_no_newer_message():
+    for response in ({"is_self_only": False, "message": None},
+                     {"is_self_only": False, "message": {}},
+                     {"is_self_only": False}):
+        out = _LatestAdapter(response).fetch_latest(7)
+        assert out == {"message_id": None, "is_self_only": False}
+
+
+@pytest.mark.parametrize("response", [
+    {"message": {"id": "abc"}},
+    {"message": {"id": 0}},
+    {"message": {"id": None}},
+    {"message": "not-a-dict"},
+    {"is_self_only": "yes", "message": None},
+])
+def test_fetch_latest_rejects_malformed(response):
+    adapter = _LatestAdapter(response)
+    with pytest.raises(mcs_adapter.SchemaError):
+        adapter.fetch_latest(7)
+
+
+def test_self_probe_fetches_and_notifies_own_post(tmp_path):
+    """A positive probe triggers a bounded history fetch and the newly
+    stored OWN post (is_unread=0 by definition) still lands in a notify
+    intent — notify_all_new widens eligibility past the unread flag."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(90))
+    db.save_messages([_msg_at(100, 90, _iso(1), unread=False)])
+    wm = db.high_watermark(90)
+    own = _msg_at(101, 90, _iso(0), unread=False)
+
+    class Adapter:
+        def __init__(self):
+            self.history_calls = 0
+
+        def fetch_latest(self, pid):
+            assert pid == 90
+            return {"message_id": 101, "is_self_only": True}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            assert since == wm
+            self.history_calls += 1
+            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+
+    adapter = Adapter()
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(adapter, db, result,
+                               time.monotonic() + 300, run_id=1)
+
+    assert adapter.history_calls == 1
+    assert result["self_probe"] == 1
+    assert result["self_probe_fetched"] == [90]
+    assert result["new_messages"] == 1
+    row = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchone()
+    assert row["kind"] == "new_messages"
+    payload = json.loads(row["payload"])
+    assert payload["source"] == "self"
+    assert payload["message_ids"] == [101]
+    db.close()
+
+
+def test_self_probe_skips_when_latest_already_stored(tmp_path):
+    """The latest endpoint returns no timestamp — freshness is decided
+    by whether the returned id is already in the ledger."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(91))
+    db.save_messages([_msg_at(100, 91, _iso(0), unread=False)])
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": 100, "is_self_only": False}
+
+        def fetch_history(self, *a, **k):
+            raise AssertionError("must not fetch")
+
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(Adapter(), db, result,
+                               time.monotonic() + 300, run_id=1)
+    assert result["self_probe"] == 1
+    assert "self_probe_fetched" not in result
+    assert db.db.execute("SELECT COUNT(*) c FROM notify_outbox"
+                         ).fetchone()["c"] == 0
+    db.close()
+
+
+def test_self_probe_null_message_means_nothing_new(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(92))
+    db.save_messages([_msg_at(100, 92, _iso(0), unread=False)])
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": None, "is_self_only": False}
+
+        def fetch_history(self, *a, **k):
+            raise AssertionError("must not fetch")
+
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(Adapter(), db, result,
+                               time.monotonic() + 300, run_id=1)
+    assert result["self_probe"] == 1
+    assert result["errors"] == []
+    db.close()
+
+
+def test_self_probe_never_imported_patient_skipped(tmp_path):
+    """No high watermark -> the durable deep-import jobs own the backlog;
+    probing them would only re-trigger full history fetches."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(93))
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            raise AssertionError("must not probe")
+
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(Adapter(), db, result,
+                               time.monotonic() + 300, run_id=1)
+    assert result["self_probe"] == 0
+    db.close()
+
+
+def test_self_probe_missed_post_uses_probe_source(tmp_path):
+    """is_self_only=False means others' already-read posts were missed —
+    they notify under the 'probe' source, not 'self'."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(94))
+    db.save_messages([_msg_at(100, 94, _iso(1), unread=False)])
+    missed = _msg_at(101, 94, _iso(0), unread=False)
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": 101, "is_self_only": False}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch([missed], pages=1,
+                                            reached=True)
+
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(Adapter(), db, result,
+                               time.monotonic() + 300, run_id=1)
+    payload = json.loads(db.db.execute(
+        "SELECT payload FROM notify_outbox").fetchone()["payload"])
+    assert payload["source"] == "probe"
+    assert payload["message_ids"] == [101]
+    db.close()
+
+
+def test_self_probe_unfetchable_id_not_retried(tmp_path):
+    """If a completed fetch cannot store the probed id (e.g. it is a
+    reply only reachable via its own thread), the probe marker stops the
+    same id from re-triggering a fetch on every subsequent tick."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(96))
+    db.save_messages([_msg_at(100, 96, _iso(0), unread=False)])
+
+    class Adapter:
+        def __init__(self):
+            self.history_calls = 0
+
+        def fetch_latest(self, pid):
+            return {"message_id": 555, "is_self_only": False}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            self.history_calls += 1
+            return mcs_adapter.MessageBatch([], pages=1, reached=True)
+
+    adapter = Adapter()
+    for _ in range(2):
+        result = {"errors": [], "new_messages": 0}
+        run_check.stage_self_probe(adapter, db, result,
+                                   time.monotonic() + 300, run_id=1)
+        assert result["self_probe"] == 1
+    assert adapter.history_calls == 1
+    db.close()
+
+
+def test_save_messages_notify_all_new_includes_read_posts(tmp_path):
+    """Default backfill save announces only this fetch's unread posts;
+    notify_all_new adds every newly-stored row (own/missed posts)."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(95))
+    msgs = [_msg_at(1, 95, _iso(0), unread=False)]
+    db.save_messages(msgs, project_id=95, notify={"source": "probe"})
+    assert db.db.execute("SELECT COUNT(*) c FROM notify_outbox"
+                         ).fetchone()["c"] == 0
+
+    db2 = ledger.Ledger(str(tmp_path / "ledger2.db"))
+    db2.upsert_patient_info(_unread_patient(95))
+    db2.save_messages(msgs, project_id=95, notify={"source": "probe"},
+                      notify_all_new=True)
+    row = db2.db.execute("SELECT payload FROM notify_outbox").fetchone()
+    assert json.loads(row["payload"])["message_ids"] == [1]
+    db.close()
+    db2.close()

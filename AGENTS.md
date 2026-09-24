@@ -7,6 +7,11 @@
 MedicalCareStation (MCS) の医療・介護チャットを収集・解析するローカルシステム:
 
 - 15分間隔で未読収集 → SQLite(`data/ledger.db`) → Discord 通知
+- `self_posts` 設定で自投稿・他者先読み投稿を毎 tick `latest` probe →
+  未保管の最新 id があれば bounded 履歴取得して取り込み・新着通知
+  （`stage_self_probe`。`latest` は `{is_self_only,message:{id}}` のみ返し
+  after フィルタ無し。取り切れなかった id は `patients.probe_mid` に
+  記録して再取得ループを抑止）
 - 全履歴アーカイブ・FTS5 全文検索・患者タイムライン
 - 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`(Qwen3.5-9B、外部送信なし)
   — スキーマ v2（薬剤 action/status/subject・症状 status・evidence スパン）
