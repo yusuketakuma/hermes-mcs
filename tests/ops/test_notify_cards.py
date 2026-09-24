@@ -5,6 +5,7 @@ only; no Discord, no network, no real MCS data (plan RC02-09,13,21,
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -786,7 +787,9 @@ def test_notification_receipt_reader(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
     tok = _token_for(spec, "ack")
     cid = f"{tok}:{'ab' * 8}"
-    notify_cards.apply_notification(led, _notif(tok), CFG, now=NOW)
+    notify_cards.apply_notification(
+        led, {**_notif(tok), "origin": dict(ORIGIN, message_id="m-9")},
+        CFG, now=NOW)
     snap_dir = tmp_path / "snap"
     snap_dir.mkdir()
     assert _ledger2.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
@@ -1134,3 +1137,94 @@ def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
     led.db.commit()
     out = notify_cards.gc(led, CFG, now=NOW)
     assert out["tokens"] >= 1
+
+
+def test_origin_must_match_bound_message(led, tmp_path):
+    """A delivered card's buttons live on its bound message — a token
+    replayed with a different message origin is refused even when the
+    deployment scope matches (token alone resolves the card)."""
+    card, spec = _delivered_card(led, tmp_path)
+    tok = _token_for(spec, "assign")
+    r = notify_cards.apply_notification(
+        led, {**_notif(tok),
+              "origin": dict(ORIGIN, message_id="other-msg")},
+        CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "origin_mismatch"
+    # the bound message's own interaction still applies
+    r = notify_cards.apply_notification(
+        led, {**_notif(tok), "command_id": f"{tok}:{'cd' * 8}",
+              "origin": dict(ORIGIN, message_id="m-9")},
+        CFG, now=NOW)
+    assert r["outcome"] == "applied"
+
+
+def test_command_id_must_derive_from_token(led, tmp_path):
+    """The notification idempotency key is <token>:<actor_hash> — a
+    prefix that is not the submitted token can never dedupe correctly."""
+    req = {"version": 1, "op": "notification",
+           "command_id": f"{'a' * 32}:{'b' * 16}", "actor": "nurse-1",
+           "token": "c" * 32, "origin": ORIGIN}
+    assert notify_cmds.validate_int(req) == "command_id_mismatch"
+    req["command_id"] = f"{'c' * 32}:{'b' * 16}"
+    assert notify_cmds.validate_int(req) is None
+
+
+def test_message_gone_unbind_clears_thread(led, tmp_path):
+    """A proven-gone bound message orphans its thread — the binding must
+    not carry into the re-created card's next delivery."""
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    r = notify_cards.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
+        "delivery_id": render["delivery_id"], "message_id": "m-9",
+        "thread_id": "th-1"}, CFG, now=NOW)
+    assert r["thread_state"] == "created"
+    _msg(led, 103, 1, parent=100)          # drift -> update render
+    notify_cards.sweep(led, CFG)
+    upd = _latest_render(led)
+    assert upd["op"] == "update"
+    _begin(led, upd, n=61)
+    r = notify_cards.apply_transport_receipt(led, {
+        "version": 1, "op": "transport_receipt", "command_id": _uuid(62),
+        "attempt_id": f"{61:016x}", "delivery_id": upd["delivery_id"],
+        "render_rev": upd["render_rev"],
+        "payload_hash": upd["payload_hash"], "route_epoch": 1,
+        "correlation": upd["correlation"], **SCOPE,
+        "result": "not_sent", "error_code": "http_404"}, CFG, now=NOW)
+    assert r["applied"], r
+    card = _card(led)
+    assert card["delivery_state"] == "message_deleted"
+    assert card["message_id"] is None
+    assert card["thread_id"] is None and card["thread_state"] == "none"
+
+
+def test_gc_removes_old_cmd_results(led, tmp_path):
+    res_dir = tmp_path / "data" / "cmd_results"
+    res_dir.mkdir(parents=True)
+    old = res_dir / "old.json"
+    old.write_text("{}")
+    fresh = res_dir / "fresh.json"
+    fresh.write_text("{}")
+    stale = notify_cards.TOKEN_WRITE_S + 100
+    os.utime(old, (NOW - stale, NOW - stale))
+    out = notify_cards.gc(led, CFG, now=NOW)
+    assert out["result_files"] == 1
+    assert not old.exists() and fresh.exists()
+
+
+def test_drain_quarantines_corrupt_command(led, tmp_path):
+    """Publication is atomic — a readable .json that fails to parse is
+    permanently corrupt and must not be re-read every drain."""
+    int_dir = tmp_path / "data" / "cmd_int"
+    int_dir.mkdir(parents=True)
+    bad = int_dir / "bad.json"
+    bad.write_text("{not json")
+    res = {"errors": []}
+    notify_cmds.drain_int_commands(led, res, CFG, str(tmp_path / "data"))
+    assert not bad.exists()
+    assert (int_dir / "bad.json.invalid").exists()
+    # a second drain does not touch the quarantined file again
+    res2 = {"errors": []}
+    assert notify_cmds.drain_int_commands(
+        led, res2, CFG, str(tmp_path / "data")) == 0

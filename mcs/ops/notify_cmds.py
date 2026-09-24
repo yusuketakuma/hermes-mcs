@@ -89,6 +89,11 @@ def validate_int(req) -> str | None:
         if not (isinstance(req.get("token"), str)
                 and len(req["token"]) == 32):
             return "bad_token"
+        if cid.split(":", 1)[0] != req["token"]:
+            # the idempotency key must be derived from the token it
+            # applies — a mismatched pair could otherwise replay one
+            # token under another action's receipt identity
+            return "command_id_mismatch"
         if not _origin(req.get("origin")):
             return "bad_origin"
         return None
@@ -226,8 +231,9 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
     """Bounded two-pass drain of data/cmd_int. Pass 1 settles receipts
     (dependency resolution); pass 2 applies begins/interactions. Each
     command gets a result file under data/cmd_results/ and the command
-    file is consumed; unparsable (mid-write) files are left for the next
-    drain; invalid ones are quarantined like data/cmd."""
+    file is consumed; permanently unparsable files are quarantined
+    (publication is atomic, so a parse failure is never mid-write), and
+    invalid ones are quarantined like data/cmd."""
     dirs = notify_cards.notify_dirs(root)
     int_dir, res_dir = dirs["cmd_int"], dirs["cmd_results"]
     try:
@@ -242,8 +248,17 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         path = os.path.join(int_dir, name)
         try:
             req = mcs_requests.read_command(path)
-        except (ValueError, OSError):
-            continue                       # unreadable / mid-write
+        except ValueError:
+            # publication is atomic (mkstemp+rename), so a readable file
+            # that fails to parse is permanently corrupt — quarantine it
+            # instead of re-reading it on every drain
+            try:
+                os.replace(path, path + ".invalid")
+            except OSError:
+                pass
+            continue
+        except OSError:
+            continue                       # transient — next drain
         pending.append((path, req))
     receipts = [p for p in pending
                 if p[1].get("op") in ("transport_receipt",

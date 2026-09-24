@@ -17,6 +17,8 @@ import time
 CONFIRM_TTL_S = 600          # pending_confirms: preview -> confirm
 FOLLOWUP_TTL_S = 840         # Discord interaction tokens die ~15 min
 CAPABILITY_NEG_S = 900       # negative thread-capability cache
+CONTEXT_KEEP_S = 32 * 86400  # tokens/messages: covers the runner's
+                             # 30-day view-token TTL plus margin
 
 
 def new_worker_id() -> str:
@@ -119,7 +121,8 @@ class Registry:
     # -- message index ---------------------------------------------
 
     def bind_message(self, message_id: str, record: dict) -> None:
-        self._data["messages"][str(message_id)] = record
+        self._data["messages"][str(message_id)] = {
+            **record, "at": time.time()}
         self.save()
 
     def message(self, message_id: str) -> dict | None:
@@ -132,11 +135,16 @@ class Registry:
     # -- token context (spec action_rows capture) ------------------
 
     def put_tokens(self, token_map: dict) -> None:
-        """token -> {action, params, card_key, message_id, channel_id}."""
+        """token -> {action, params, card_key, message_id, channel_id}.
+        Stamped 'at' so expired runner tokens don't accumulate — the
+        runner still enforces its own TTL; this only bounds file size."""
         changed = False
+        now = time.time()
         for token, ctx in token_map.items():
-            if self._data["tokens"].get(token) != ctx:
-                self._data["tokens"][token] = ctx
+            old = self._data["tokens"].get(token)
+            if old is None or {k: v for k, v in old.items()
+                               if k != "at"} != ctx:
+                self._data["tokens"][token] = {**ctx, "at": now}
                 changed = True
         if changed:
             self.save()
@@ -234,6 +242,12 @@ class Registry:
         for table in ("pending_modals", "pending_confirms", "followups"):
             dead = [k for k, v in self._data[table].items()
                     if v.get("expires", 0) <= now]
+            for k in dead:
+                del self._data[table][k]
+                changed = True
+        for table in ("tokens", "messages"):
+            dead = [k for k, v in self._data[table].items()
+                    if v.get("at", 0) + CONTEXT_KEEP_S <= now]
             for k in dead:
                 del self._data[table][k]
                 changed = True

@@ -1175,8 +1175,11 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # unsent — convert once and let it flush as plain text
             notify_cards.revert_to_text(ledger, ev["event_id"])
         if not exe_ok:
-            res["skipped"] += len(due) - event_index
-            break
+            # no hermes exe — text events can't send, but an interactive
+            # event later in the queue still dispatches (cards don't
+            # need the exe), so skip per-event rather than break
+            res["skipped"] += 1
+            continue
         target = _target(cfg, ev["kind"])
         if not target:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
