@@ -26,6 +26,7 @@ import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards
+import notify_transport
 import notify_cmds
 
 from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
@@ -305,10 +306,9 @@ def world(tmp_path, monkeypatch):
             log=lambda e, **f: logs.append((e, f)))
         return worker, reg, bot
 
-    def _mkactions(reg, bot, worker_id=None):
+    def _mkactions(reg, bot):
         return actions_mod.Actions(
             bot=bot, settings=SETTINGS, root=str(data), reg=reg,
-            worker_id=worker_id or registry.new_worker_id(),
             log=lambda e, **f: logs.append((e, f)))
 
     async def _interact(act, ix):
@@ -478,7 +478,7 @@ def test_spec_rejects(world, mutate, error):
 
 # ---------- delivery -------------------------------------------------------
 
-async def _deliver(world, worker, sent=1):
+async def _deliver(world, worker):
     """claim -> begin -> grant -> send -> receipt -> settled."""
     await worker.tick()
     world.drain()                       # grant
@@ -518,9 +518,6 @@ def test_delivery_end_to_end(world):
     _, spec = world.spec()
     tok = world.token(spec, "ack")
     assert reg.token(tok)["action"] == "ack"
-    # the bound message maps back to the card
-    assert reg.message(str(msg.id))["delivery_id"] \
-        == spec["delivery_id"]
 
 
 def test_delivery_denied_revoked_card(world):
@@ -1050,9 +1047,12 @@ def test_supervisor_registers_and_stops(world):
             settings={**SETTINGS, "data_root": str(world.data)},
             log=lambda e, **f: world.logs.append((e, f)))
         assert sup.start() is True
-        assert len(bot.listeners) == 1
         assert spawned and not spawned[0].done()
-        await asyncio.sleep(0)          # let the loop acquire the lock
+        async def ready():
+            while not bot.listeners:
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(ready(), 5)
+        assert len(bot.listeners) == 1
         sup.unload()
         spawned[0].cancel()
         try:
@@ -1108,7 +1108,6 @@ def test_ack_idempotent_per_actor(world):
         bot=bot, settings={**SETTINGS,
                            "allowed_user_ids": {"1001", "2002"}},
         root=str(world.data), reg=reg,
-        worker_id=registry.new_worker_id(),
         log=lambda e, **f: world.logs.append((e, f)))
     msg = bot.channels[42].sent[0]
 
@@ -1524,15 +1523,23 @@ def test_supervisor_profile_scopes_do_not_mix(world):
         assert sup_dup.start()
         dup_task = spawned[-1]
         await asyncio.wait_for(dup_task, 5)
+        assert not bot_dup.listeners
         assert any(e == "scope_lock_unavailable"
                    for e, _ in world.logs)
 
         # unload A -> its listener goes; B is untouched
         sup_a.unload()
         assert not bot_a.listeners and len(bot_b.listeners) == 1
+        spawned[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await spawned[0]
         # A returns -> exactly one listener on the fresh binding
         sup_a2 = _sup(bot_a, "mcs")
         assert sup_a2.start()
+        async def ready_again():
+            while not bot_a.listeners:
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(ready_again(), 5)
         assert len(bot_a.listeners) == 1
 
         sup_b.unload()
@@ -1685,7 +1692,7 @@ def test_thread_failure_keeps_body(world, monkeypatch):
     assert card["thread_state"] == "failed"
     assert card["thread_id"] is None
     assert len(bot.channels[42].sent) == 1      # no body resend
-    scope_key = delivery._scope_key(worker.scope())
+    scope_key = registry.scope_key(worker.scope())
     assert reg.capability(scope_key)["ok"] is False
 
 
@@ -1780,7 +1787,7 @@ def test_unknown_never_resends_late_success_binds_update(world):
     attempt = world.led.db.execute(
         "SELECT attempt_id,delivery_id FROM notification_delivery_attempts"
     ).fetchone()
-    res = notify_cards.apply_card_resolve(world.led, {
+    res = notify_transport.apply_card_resolve(world.led, {
         "version": 1, "cmd": "ops.card_resolve",
         "command_id": "00000000-0000-4000-8000-0000000000aa",
         "actor": "op-user", "human_confirmed": True,
@@ -1810,3 +1817,120 @@ def test_unknown_never_resends_late_success_binds_update(world):
     assert r2["op"] == "update"
     spec = json.loads(r2["spec_json"])
     assert spec["delivery"]["message_id"] == "m-late"
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_receipt_failure_never_repeats_discord_send(world, monkeypatch, restart):
+    """A durable result survives a failed receipt publication and restart."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    publish = envelopes.publish_command
+    failed = False
+
+    def fail_receipt_once(directory, envelope):
+        nonlocal failed
+        if envelope.get("op") == "transport_receipt" and not failed:
+            failed = True
+            raise OSError("synthetic receipt failure")
+        return publish(directory, envelope)
+
+    async def run():
+        await worker.tick()
+        world.drain()
+        monkeypatch.setattr(envelopes, "publish_command", fail_receipt_once)
+        await worker.tick()
+        assert len(bot.channels[42].sent) == 1
+        resumed = worker
+        if restart:
+            resumed, _, _ = world.mkworker(bot=bot)
+            await resumed.reconcile()
+        # The runner need not have drained the receipt before the next tick.
+        await resumed.tick()
+        world.drain()
+        assert len(bot.channels[42].sent) == 1
+        assert world.card()["delivery_state"] == "delivered"
+
+    asyncio.run(run())
+
+
+def test_reconcile_ignores_other_live_scope(world):
+    """Holding B's send lock cannot settle A's active attempt."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        await worker.tick()
+        world.drain()
+        foreign = delivery.DeliveryWorker(
+            bot=bot, settings={**SETTINGS, "profile": "other"},
+            root=str(world.data), reg=reg, worker_id="other-worker",
+            log=lambda *a, **kw: None)
+        stats = await foreign.reconcile()
+        assert not any(stats.values())
+        assert not list((world.data / "cmd_int").glob("*.json"))
+        await worker.tick()
+        world.drain()
+        assert len(bot.channels[42].sent) == 1
+        assert world.card()["delivery_state"] == "delivered"
+
+    asyncio.run(run())
+
+
+def test_scoped_registries_keep_independent_state_and_restore_pinned_flows(world):
+    state = str(world.data / "discord_state")
+    world.seed()
+    world.dispatch()
+    origin = {k: SETTINGS[k] for k in
+              ("profile", "application_id", "channel_id", "guild_id")}
+    legacy = registry.Registry(state)
+    legacy.put_confirm("mine", {"origin": origin, "actor": "discord:1001"})
+    legacy.put_confirm("theirs", {"origin": {**origin, "profile": "other"}})
+    a = registry.Registry(state, scope=SETTINGS)
+    b_scope = {**SETTINGS, "profile": "other"}
+    b = registry.Registry(state, scope=b_scope)
+    assert a.confirm("mine") and not a.confirm("theirs")
+    assert b.confirm("theirs") and not b.confirm("mine")
+    a.put_followup("a", {"token": "synthetic-a"})
+    b.put_followup("b", {"token": "synthetic-b"})
+    assert set(registry.Registry(state, scope=SETTINGS).followups()) == {"a"}
+    assert set(registry.Registry(state, scope=b_scope).followups()) == {"b"}
+    assert legacy.confirm("mine") and legacy.confirm("theirs")
+    # Delivery batching must not defer a human preview's durable state.
+    with a.batch():
+        a.put_confirm("new", {"origin": origin})
+        assert registry.Registry(state, scope=SETTINGS).confirm("new")
+
+
+def test_body_reclick_waits_for_fresh_result_after_source_deletion(world):
+    world.seed()
+    world.led.db.execute(
+        "UPDATE messages SET body_text='synthetic retired body' WHERE message_id=100")
+    world.led.db.commit()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    token = world.token(spec, "body")
+    act = world.mkactions(reg, bot)
+    mid = bot.channels[42].sent[0].id
+    first = FakeInteraction(f"mcs:a:{token}", message_id=mid)
+    asyncio.run(world.interact(act, first))
+    assert any("synthetic retired body" in m["content"]
+               for m in first.followup.sent)
+    world.led.db.execute(
+        "UPDATE messages SET body_state='deleted' WHERE message_id=100")
+    world.led.db.commit()
+    second = FakeInteraction(f"mcs:a:{token}", message_id=mid)
+    asyncio.run(world.interact(act, second))
+    assert second.followup.sent
+    assert all("synthetic retired body" not in m["content"]
+               for m in second.followup.sent)
+    assert all(m["ephemeral"] for m in second.followup.sent)
+
+
+def test_body_messages_include_heading_in_discord_limit():
+    body = "x" * 6000
+    messages = actions_mod._body_messages({"title": "合成見出し" * 200, "body": body})
+    assert all(len(message) <= 2000 for message in messages)
+    assert sum(message.count("x") for message in messages) == len(body)

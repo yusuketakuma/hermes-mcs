@@ -23,7 +23,7 @@ jobs:
       - name: ruff
         run: pip install "ruff==0.6.9" && ruff check mcs/ tests/ hermes_plugin/ integration/
       - name: pytest
-        run: pip install "pytest==8.3.3" && python -m pytest -x -q
+        run: pip install "pytest==8.3.3" && scripts/run_tests.sh -x -q
       - name: check README module table on PR
         if: github.event_name == 'pull_request'
         run: |
@@ -127,4 +127,7 @@ jobs:
         working-directory: hermes-agent
         env:
           PYTHONPATH: ${{ github.workspace }}/hermes-agent
-        run: scripts/run_tests.sh ../hermes-mcs/integration/test_hermes_discord.py -x -q
+        run: >-
+          scripts/run_tests.sh
+          ../hermes-mcs/integration/test_hermes_discord.py
+          ../hermes-mcs/tests/plugin/test_discord_sdk_real.py -x -q

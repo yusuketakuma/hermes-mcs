@@ -53,7 +53,8 @@ def read_result(results_dir: str, command_id: str) -> dict | None:
             if os.fstat(handle.fileno()).st_size > 64 * 1024:
                 return None
             import json
-            return json.loads(handle.read().decode("utf-8"))
+            data = json.loads(handle.read().decode("utf-8"))
+            return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
 

@@ -90,6 +90,10 @@ def _body_messages(result: dict) -> list:
     interaction path and the delayed followup sweep."""
     body = str(result.get("body") or "")
     title = str(result.get("title") or "本文")
+    # The heading shares the 2000-character message budget with each chunk.
+    # Titles are source-derived and may be arbitrarily long.
+    if len(title) > 80:
+        title = title[:79] + "…"
     chunks = _split_body(body)
     return [f"**{title}**（{i + 1}/{len(chunks)}）\n{c}"
             if len(chunks) > 1 else f"**{title}**\n{c}"
@@ -131,13 +135,11 @@ def _same_origin(pinned: dict, current: dict,
 
 class Actions:
     def __init__(self, *, bot: Any, settings: dict, root: str,
-                 reg: registry.Registry, worker_id: str, log) -> None:
+                 reg: registry.Registry, log) -> None:
         self._bot = bot
         self._settings = settings
-        self._root = root
         self._dirs = paths.notify_dirs(root)
         self._reg = reg
-        self._worker_id = worker_id
         self._log = log
 
     # -- authorization --------------------------------------------------
@@ -165,16 +167,14 @@ class Actions:
 
     # -- result polling --------------------------------------------------
 
-    def _read_result(self, command_id: str) -> dict | None:
-        return paths.read_result(self._dirs["cmd_results"], command_id)
-
     async def _wait_result(self, command_id: str,
-                           timeout: float) -> dict | None:
+                           timeout: float, *, request_id=None) -> dict | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            result = await asyncio.to_thread(self._read_result,
-                                             command_id)
-            if result is not None:
+            result = await asyncio.to_thread(
+                paths.read_result, self._dirs["cmd_results"], command_id)
+            if result is not None and (request_id is None
+                                       or result.get("request_id") == request_id):
                 return result
             await asyncio.sleep(RESULT_POLL_S)
         return None
@@ -254,7 +254,8 @@ class Actions:
                     "送信に失敗しました。もう一度操作してください。")
                 return
             result = await self._wait_result(
-                env["command_id"], MODAL_OPEN_WAIT_S)
+                env["request_id"], MODAL_OPEN_WAIT_S,
+                request_id=env["request_id"])
             if result is not None and not (
                     result.get("outcome") == "applied"
                     and result.get("modal")):
@@ -286,7 +287,7 @@ class Actions:
         # everything else: type-6 defer, then the notification command
         await interaction.response.defer()
         env = envelopes.notification(token, actor, origin)
-        cid = env["command_id"]
+        cid = env["request_id"]
         try:
             await asyncio.to_thread(envelopes.publish_command,
                                     self._dirs["cmd_int"], env)
@@ -295,12 +296,12 @@ class Actions:
                 interaction,
                 "送信に失敗しました。もう一度操作してください。")
             return
-        result = await self._wait_result(cid, RESULT_WAIT_S)
+        result = await self._wait_result(cid, RESULT_WAIT_S, request_id=cid)
         if result is None:
             self._reg.put_followup(cid, {
                 "application_id": str(interaction.application_id),
                 "token": interaction.token,
-                "kind": "action"})
+                "kind": "action", "request_id": cid})
             await self._followup(interaction,
                                  "処理を受け付けました。結果は反映後に表示されます。")
             return
@@ -388,8 +389,9 @@ class Actions:
                 interaction,
                 "送信に失敗しました。もう一度操作してください。")
             return
-        result = await self._wait_result(env["command_id"],
-                                         RESULT_WAIT_S)
+        result = await self._wait_result(env["request_id"],
+                                         RESULT_WAIT_S,
+                                         request_id=env["request_id"])
         if result is None:
             # the drain may still be running — keep the modal so a
             # resubmit replays the same command idempotently
@@ -412,12 +414,7 @@ class Actions:
         confirm_id = registry.new_confirm_id()
         self._reg.put_confirm(confirm_id, {
             "actor": actor, "origin": pending["origin"],
-            "payload": preview,
-            "payload_hash": envelopes.payload_hash(
-                {"payload": preview, "origin": pending["origin"]}),
-            "action": pending["action"],
-            "application_id": str(interaction.application_id),
-            "interaction_token": interaction.token})
+            "payload": preview})
         await self._send_preview(interaction, pending["action"],
                                  preview, confirm_id)
 
@@ -570,8 +567,10 @@ class Actions:
         for cid, rec in list(self._reg.followups().items()):
             if self._reg.followup(cid) is None:
                 continue                         # expired — dropped
-            result = await asyncio.to_thread(self._read_result, cid)
-            if result is None:
+            result = await asyncio.to_thread(
+                paths.read_result, self._dirs["cmd_results"], cid)
+            if result is None or (rec.get("request_id") is not None
+                                  and result.get("request_id") != rec["request_id"]):
                 continue
             self._reg.drop_followup(cid)
             try:

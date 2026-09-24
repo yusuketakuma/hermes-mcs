@@ -38,10 +38,19 @@ def append(state_dir: str, worker_id: str, record: dict) -> str:
         raise ValueError("bad_phase")
     line = json.dumps(row, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":")) + "\n"
+    created = not os.path.exists(path)
     with open(path, "ab") as handle:
         handle.write(line.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
+    if created:
+        # A file fsync alone does not make its new directory entry durable.
+        # Losing the journal name must not turn a sent attempt into not_sent.
+        dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
     return path
 
 
@@ -90,7 +99,7 @@ def unfinished(records: dict[str, list[dict]]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for aid, rows in records.items():
         phases = {r.get("phase") for r in rows}
-        if "result" in phases or "denied" in phases:
+        if "result" in phases or "denied" in phases or "receipt" in phases:
             continue
         last = rows[-1]
         kind = "post_http" if "started" in phases else "pre_http"

@@ -17,6 +17,8 @@ import os
 import tempfile
 import uuid
 
+from .paths import safe_name
+
 MAX_COMMAND_BYTES = 16384
 
 
@@ -33,18 +35,12 @@ def actor_hash(actor: str) -> str:
     return hashlib.sha256(actor.encode("utf-8")).hexdigest()[:16]
 
 
-def _safe_name(command_id: str) -> str:
-    safe = "".join(c if c.isalnum() or c in "._-" else "_"
-                   for c in command_id)[:120]
-    return safe or "unknown"
-
-
 def publish_command(cmd_int_dir: str, envelope: dict) -> str:
     """Atomically publish one cmd_int command. Returns the path."""
     raw = canonical(envelope)
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
-    name = _safe_name(str(envelope["command_id"])) + ".json"
+    name = safe_name(envelope["command_id"]) + ".json"
     fd, temp = tempfile.mkstemp(prefix=".int-", suffix=".tmp",
                                 dir=cmd_int_dir)
     try:
@@ -138,6 +134,7 @@ def notification(token: str, actor: str, origin: dict) -> dict:
     idempotency key, stable across retries of the same click."""
     return {"version": 1, "op": "notification",
             "command_id": f"{token}:{actor_hash(actor)}",
+            "request_id": str(uuid.uuid4()),
             "actor": actor, "token": token, "origin": origin}
 
 

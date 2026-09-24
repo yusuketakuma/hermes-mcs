@@ -164,19 +164,24 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
   クラッシュは `not_sent`、以降は `unknown` として記録し、unknown は自動再送しない
   （operator の `card_resolve` で解決）。
-- journal(`discord_state/journal-*.jsonl`)と registry(`registry.json`)は
+- journal(`discord_state/journal-*.jsonl`)と scope 別 registry(`registry-*.json`)は
   fsync 永続化。再起動時に未レポート結果の receipt 再送と未完 attempt の
   保守的決済を行う。scope ごとの fcntl lock で同一配送先の sender は1つ。
+  旧 `registry.json` は保持し、配送 claim・未確定フォームは送信元 scope が
+  一致する記録だけ引き継ぐ。scope 情報のない旧 token cache はクリック時に再生成し、
+  旧 followup の結果は `/mcs` の receipt 照会で確認する。
 - ボタンは `mcs:a:`、モーダルは `mcs:m:`、確認は `mcs:c:` の custom_id のみを
   処理し、他の interaction は一切応答しない。actor・application・guild・channel
   （modal submit では message も）は各段階で再検証する。
+  通知操作の `command_id` は重複適用を防ぐ固定 ID、`request_id` はクリック／
+  フォーム送信ごとの応答 ID。過去の結果ファイルを今回の承認や本文閲覧に使わない。
 - `依頼`/`却下` は runner が返す pin 済み params + render context から
   `request.create` / `ops.signal_dismiss` を組み立て、preview → 本人確認
   → enqueue の順で、既存の human_confirmed ゲートを通す。
 
 ## 合成入力での検証
 
-MCSから通常の`scripts/run_tests.sh adapter`を実行する。
+MCSから`scripts/run_tests.sh tests/plugin`を実行する。
 Hermes対応候補のcheckoutから結合テストを実行する：
 
 ```sh

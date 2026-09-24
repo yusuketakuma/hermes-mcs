@@ -647,6 +647,12 @@ class View:
         for their own actor inside their own channel/application, and
         only projects they are authorized for; operator-only results
         (card_resolve) are withheld entirely."""
+        if receipt.get("kind") not in ("notification", "refresh",
+                                       "ops.card_resolve"):
+            # Ordinary request receipts carry full before/after records
+            # and use project_id, not the card channel's projects list.
+            # They must stay behind the project-scoped receipt reader.
+            return {"outcome": "rejected", "error": "receipt_kind_mismatch"}
         if receipt.get("kind") == "ops.card_resolve" \
                 and not context.get("operator"):
             return {"outcome": "rejected", "error": "operator_only"}
@@ -661,6 +667,8 @@ class View:
                 return {"outcome": "rejected", "error": "scope_mismatch"}
         allowed = set(context.get("projects") or [])
         want = set(receipt.get("projects") or [])
+        if receipt.get("project_id") is not None:
+            want.add(receipt["project_id"])
         if want and not want <= allowed:
             return {"outcome": "rejected",
                     "error": "project_scope_mismatch"}

@@ -19,6 +19,10 @@
   snapshot timestamp 必須の三重ゲート
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
+- 対話カード addon は Hermes が接続済みの Discord client と interaction
+  だけを使う。SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
+  REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
+  cancellation に限定し、process 起動や別の network transport は許可しない
 - 通知を設定した場合、本文・要約・送信対象の添付は Discord 等の設定先へ送る。
   閲覧用 snapshot と `mcs_view` 出力にも PHI が含まれ得るため、閲覧権限と転送先を管理する
 - Jev 連携は `semantic.mode` 等の明示設定に従い、本文・必要なスレッド文脈を
