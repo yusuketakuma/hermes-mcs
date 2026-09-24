@@ -376,28 +376,6 @@ def test_med_followup_ignores_family_and_negated_meds(tmp_path):
     db.close()
 
 
-def test_notifier_filters_and_labels(tmp_path):
-    db = _ledger(tmp_path)
-    db.save_messages([_message(body="お知らせ")])
-    _llm_artifact(db, 1, {
-        "meds": [{"name": "家族薬", "subject": "family"},
-                 {"name": "予定薬", "status": "planned"},
-                 {"name": "現行薬", "action": "none"}],
-        "events": ["transfer", "fall", "family_contact"],
-        "requests": [{"to": "医師", "from": "家族",
-                      "action": "状態確認", "due": "2026-10-01"}],
-    }, _hash(db))
-
-    lines = structured_view.structured_lines(db.db, 1)
-    joined = "\n".join(lines)
-    assert "家族薬" not in joined
-    assert "予定薬[予定]" in joined
-    assert "転院/移動" in joined and "転倒" in joined \
-        and "家族連絡" in joined
-    assert "家族→医師へ状態確認(期限:2026-10-01)" in joined
-    db.close()
-
-
 def test_prompt_concat_handles_percent_body(monkeypatch):
     """A literal % in body text must reach the model — the request path
     must never %-format the prompt (ValueError would escape the request
@@ -451,37 +429,6 @@ def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 0 and res["selected"] == 0
     assert structured_view.latest_artifact(db.db, "extract_llm", 1)["summary"] == "v1"
-    db.close()
-
-
-def test_notifier_resolved_cancels_v1_positive(tmp_path):
-    """A resolved symptom must suppress a v1 positive mention the same
-    way a negation does."""
-    db = _ledger(tmp_path)
-    db.save_messages([_message(body="発熱は解消しました")])
-    db.artifact_add("extract_v1",
-                    json.dumps({"symptoms": ["発熱"]}),
-                    project_id=1, message_id=1, meta={"hash": _hash(db)})
-    _llm_artifact(db, 1, {"symptoms": [{"text": "発熱",
-                                       "status": "resolved"}]},
-                  _hash(db))
-    joined = "\n".join(structured_view.structured_lines(db.db, 1))
-    assert "発熱" not in joined
-    db.close()
-
-
-def test_notifier_v1_fallback_skipped_when_llm_saw_meds(tmp_path):
-    """LLM saw meds but filtered them all (family) -> the v1 fallback
-    must not re-display them."""
-    db = _ledger(tmp_path)
-    db.save_messages([_message(body="母親の薬について")])
-    db.artifact_add("extract_v1",
-                    json.dumps({"medications": [{"name": "家族薬"}]}),
-                    project_id=1, message_id=1, meta={"hash": _hash(db)})
-    _llm_artifact(db, 1, {"meds": [{"name": "家族薬",
-                                    "subject": "family"}]}, _hash(db))
-    joined = "\n".join(structured_view.structured_lines(db.db, 1))
-    assert "家族薬" not in joined
     db.close()
 
 

@@ -22,7 +22,7 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `ingest/`(mcs_adapter・mcs_transport・job_ops・notifier・run_check) ·
   `extract/`(extract・extract_llm・extract_bench・rollup) ·
   `semantic/`(semantic.py + semantic_* 20本) ·
-  `views/`(読み取り専用: mcs_view・mcs_stats・mcs_queries・summary_review) ·
+  `views/`(読み取り専用: mcs_view・mcs_stats・mcs_queries・summary_review・structured_view) ·
   `ops/`(書き込み系: mcs_requests・mcs_operations・mcs_signals・mcs_setup・
   mcs_refstats・request_loops・brain_export)
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
