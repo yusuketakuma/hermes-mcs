@@ -171,3 +171,65 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
         assert res2.get("dispatched", 0) <= 1
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("failure", ["uncertain", "partial_usage", "corrupt"])
+def test_hold_uses_current_delivery_receipt(tmp_path, monkeypatch, failure):
+    """A freshly written receipt must prevent a rescue of an ambiguous send."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(notifier, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notifier, "_target", lambda *args: "synthetic")
+    monkeypatch.setattr(notifier, "_send_argv", lambda *args: ["hermes"])
+    monkeypatch.setattr(notifier, "_config", lambda: {})
+    monkeypatch.setattr(notifier, "_format_event",
+                        lambda *args: ("x" * (notifier._MAX_LEN + 1), []))
+    monkeypatch.setattr(notifier, "_semantic_render_state", lambda *args: ())
+    calls = []
+
+    def send(*args, **kwargs):
+        calls.append(1)
+        if failure == "uncertain":
+            raise notifier._SendUncertain("synthetic")
+        if len(calls) == 2:
+            raise notifier._SendUsage("synthetic")
+
+    monkeypatch.setattr(notifier, "_send", send)
+    try:
+        eid = db.outbox_add("new_messages", None, {"message_ids": [1]})
+        if failure == "corrupt":
+            db.db.execute("UPDATE notify_outbox SET progress='[]'")
+            db.db.commit()
+        result = notifier.flush(db)
+        assert result["failed"] == 1
+        rows = db.db.execute("SELECT * FROM notify_outbox").fetchall()
+        assert len(rows) == 1, "unknown or partially delivered intent was rescued"
+        assert rows[0]["event_id"] == eid
+        assert rows[0]["state"] == "failed" and rows[0]["next_try"] is None
+        assert len(calls) == {"uncertain": 1, "partial_usage": 2, "corrupt": 0}[failure]
+    finally:
+        db.close()
+
+
+def test_deleted_message_cannot_supply_notification_content(tmp_path):
+    """Tombstones retain source bytes for audit, never for delivery."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.db.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'合成患者')")
+        db.db.execute(
+            "INSERT INTO messages(message_id,project_id,body_state,body_text,body_html) "
+            "VALUES(1,1,'deleted','合成削除本文','<p>合成削除本文</p>')")
+        db.db.execute(
+            "INSERT INTO attachments(attachment_id,message_id,file_id,name,state,local_path) "
+            "VALUES(1,1,'file1','synthetic.txt','downloaded','synthetic')")
+        db.db.commit()
+        signal = notifier._signal_text(
+            db, {"text": "候補\n場所", "project_id": 1},
+            {"evidence": {"message_ids": [1]}})
+        assert "合成削除本文" not in signal
+        for kind, payload in (("new_messages", {"message_ids": [1]}),
+                              ("attachment_followup", {"attachment_id": 1})):
+            with pytest.raises(notifier._StaleSend):
+                notifier._format_event(db, {"kind": kind, "project_id": 1,
+                                            "payload": json.dumps(payload)})
+    finally:
+        db.close()

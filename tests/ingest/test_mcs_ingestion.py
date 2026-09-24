@@ -449,22 +449,10 @@ def test_notifier_ignores_artifact_for_old_body(tmp_path):
     db.close()
 
 
-def test_changed_partial_notification_is_quarantined(monkeypatch):
-    held = []
-
-    class Outbox:
-        def outbox_due(self, limit):
-            return [{"event_id": 1, "kind": "new", "project_id": 1,
-                     "payload": "{}", "attempts": 0,
-                     "progress": json.dumps({"next": 1, "sent": ["1"],
-                                             "fingerprint": "old"})}]
-
-        def is_archived(self, project_id):
-            return False
-
-        def outbox_hold(self, event_id):
-            held.append(event_id)
-
+def test_changed_partial_notification_is_quarantined(monkeypatch, tmp_path):
+    db = _ledger(tmp_path)
+    eid = db.outbox_add("new", 1, {})
+    db.outbox_progress(eid, 1, ["1"], "old")
     monkeypatch.setattr(notifier, "_config", lambda: {})
     monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
     monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
@@ -472,9 +460,13 @@ def test_changed_partial_notification_is_quarantined(monkeypatch):
                         lambda ledger, event: ("changed", []))
     monkeypatch.setattr(notifier, "_send",
                         lambda *args: pytest.fail("must not send"))
-
-    assert notifier.flush(Outbox())["failed"] == 1
-    assert held == [1]
+    try:
+        assert notifier.flush(db)["failed"] == 1
+        row = db.db.execute("SELECT state,next_try FROM notify_outbox WHERE event_id=?",
+                            (eid,)).fetchone()
+        assert row["state"] == "failed" and row["next_try"] is None
+    finally:
+        db.close()
 
 
 def test_backfill_does_not_advance_past_missing_reply():
@@ -2386,41 +2378,16 @@ def test_assert_allowed_url_bad_port_is_mcserror():
     mcs_adapter._assert_allowed_url("https://www.medical-care.net:443/f")
 
 
-def test_flush_unexpected_event_error_does_not_starve_queue(monkeypatch):
-    """An exception type outside the classified set (e.g. a broken
-    `import semantic` inside _semantic_gate, or sqlite3.Error from
-    thread_bundle) used to escape flush() entirely — every later due
-    event starved and the poisoned event died first again next tick.
-    The event retries hourly (transient faults self-heal) and only
-    quarantines after 5 attempts, while the rest still sends."""
-    held, sent, marked = [], [], []
-
-    class Outbox:
-        def outbox_due(self, limit):
-            return [{"event_id": 1, "kind": "semantic_notice",
-                     "project_id": 1, "payload": "{}", "attempts": 0,
-                     "progress": None},
-                    {"event_id": 2, "kind": "new_messages",
-                     "project_id": 1,
-                     "payload": json.dumps({"message_ids": []}),
-                     "attempts": 0, "progress": None}]
-
-        def is_archived(self, project_id):
-            return False
-
-        def outbox_hold(self, event_id):
-            held.append(event_id)
-
-        def outbox_mark(self, event_id, state, retry_in=60):
-            marked.append((event_id, state))
-
-        def outbox_progress(self, *a):
-            pass
-
-        db = None
+def test_flush_unexpected_event_error_does_not_starve_queue(monkeypatch, tmp_path):
+    """Retry an unexpected failure, quarantine after five attempts,
+    and continue delivering later queued events."""
+    db = _ledger(tmp_path)
+    first = db.outbox_add("semantic_notice", 1, {})
+    second = db.outbox_add("new_messages", 1, {"message_ids": []})
+    sent = []
 
     def boom(ledger, event):
-        if event["event_id"] == 1:
+        if event["event_id"] == first:
             raise RuntimeError("semantic layer exploded")
         return ("text", [])
 
@@ -2428,30 +2395,27 @@ def test_flush_unexpected_event_error_does_not_starve_queue(monkeypatch):
     monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
     monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "chan")
     monkeypatch.setattr(notifier, "_format_event", boom)
-    # stub ledger has no real db — the render-gate pre-scan is
-    # irrelevant to this test
-    monkeypatch.setattr(notifier, "_semantic_render_state",
-                        lambda *a: ())
+    monkeypatch.setattr(notifier, "_semantic_render_state", lambda *a: ())
     monkeypatch.setattr(notifier, "_send",
                         lambda *a, **k: sent.append(a) or None)
-
-    res = notifier.flush(Outbox())
-    # attempts=0 -> retryable failure (hourly), NOT terminal hold; a
-    # persistent unexpected error quarantines after 5 attempts
-    assert (1, "failed") in marked and held == []
-    assert len(sent) == 1 and res["sent"] == 1 and res["failed"] == 1
-
-    class Outbox2(Outbox):
-        def outbox_due(self, limit):
-            return [{"event_id": 7, "kind": "semantic_notice",
-                     "project_id": 1, "payload": "{}", "attempts": 4,
-                     "progress": None}]
-
-    monkeypatch.setattr(
-        notifier, "_format_event",
-        lambda ledger, event: (_ for _ in ()).throw(RuntimeError("x")))
-    res2 = notifier.flush(Outbox2())
-    assert held == [7] and res2["failed"] == 1
+    try:
+        res = notifier.flush(db)
+        row = db.db.execute("SELECT state,next_try FROM notify_outbox WHERE event_id=?",
+                            (first,)).fetchone()
+        assert row["state"] == "failed" and row["next_try"] is not None
+        assert len(sent) == 1 and res["sent"] == 1 and res["failed"] == 1
+        assert db.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
+                             (second,)).fetchone()[0] == "accepted"
+        db.db.execute("UPDATE notify_outbox SET attempts=4,next_try=0 WHERE event_id=?",
+                      (first,))
+        db.db.commit()
+        res2 = notifier.flush(db)
+        row = db.db.execute("SELECT state,next_try FROM notify_outbox WHERE event_id=?",
+                            (first,)).fetchone()
+        assert row["state"] == "failed" and row["next_try"] is None
+        assert res2["failed"] == 1 and len(sent) == 1
+    finally:
+        db.close()
 
 
 class _FakeSock:
@@ -3163,6 +3127,7 @@ def test_attachment_followup_format_and_stale(tmp_path):
     terminal drop once the file is gone."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
+    db.save_messages([_message(mid=5)])
     h = hashlib.sha256(b"data").hexdigest()
     path = tmp_path / "7"
     path.write_bytes(b"data")

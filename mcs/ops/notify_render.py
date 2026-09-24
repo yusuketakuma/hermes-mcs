@@ -26,10 +26,6 @@ PAGE_TEXT_BUDGET = 3200
 BODY_MAX_CHARS = 6000
 
 
-def _fp(value) -> str:
-    return payload_hash(value)
-
-
 def _latest_signals(db, keys: list) -> dict:
     """key -> {'artifact_id','content'} of the newest signal_v1 row."""
     out = {}
@@ -75,13 +71,13 @@ def _hhmm(posted_at) -> str:
 
 def _blocks_len(blocks) -> int:
     """Rendered length of container blocks under the same accounting the
-    Components-V2 validator applies (text +4, field name+value +5)."""
+    Components-V2 validator applies (text +4, field name+value +6)."""
     n = 0
     for b in blocks:
         if b["type"] in ("heading", "text", "quote"):
             n += len(b.get("text") or "") + 4
         elif b["type"] == "field":
-            n += len(b.get("name") or "") + len(b.get("value") or "") + 5
+            n += len(b.get("name") or "") + len(b.get("value") or "") + 6
     return n
 
 
@@ -163,7 +159,7 @@ def _source_fp(db, card) -> str:
             "SELECT message_id,content_hash,body_state FROM messages "
             "WHERE (message_id=? OR parent_id=?) ORDER BY posted_at_ts",
             (card["root_message_id"], card["root_message_id"])).fetchall()
-        return _fp({"k": "t", "msgs": [
+        return payload_hash({"k": "t", "msgs": [
             (m["message_id"], m["content_hash"], m["body_state"])
             for m in msgs],
             "name": _patient_name(db, card["project_id"])})
@@ -171,9 +167,26 @@ def _source_fp(db, card) -> str:
     sigs = _latest_signals(db, keys)
     names = sorted({_patient_name(db, s["content"].get("project_id"))
                     for s in sigs.values()})
-    return _fp({"k": kind, "m": [
+    evidence_ids = set()
+    for signal in sigs.values():
+        evidence = signal["content"].get("evidence") or {}
+        evidence_ids.update(mid for mid in evidence.get("message_ids") or []
+                            if type(mid) is int)
+        for key in ("message_id", "discharge_message_id"):
+            if type(evidence.get(key)) is int:
+                evidence_ids.add(evidence[key])
+    # Evidence may change before the signal evaluator publishes its
+    # next artifact, including on pages other than the one displayed.
+    evidence_state = []
+    for mid in sorted(evidence_ids):
+        row = db.execute(
+            "SELECT content_hash,body_state FROM messages WHERE message_id=?",
+            (mid,)).fetchone()
+        evidence_state.append((mid, tuple(row) if row else None))
+    return payload_hash({"k": kind, "m": [
         (k, sigs[k]["artifact_id"], sigs[k]["content"].get("state"))
-        for k in keys if k in sigs], "names": names})
+        for k in keys if k in sigs], "names": names,
+        "evidence": evidence_state})
 
 
 def _anchor_keys(card) -> list:
@@ -411,5 +424,5 @@ def _footer(db, card) -> list:
 
 
 def _content_fp(content: dict) -> str:
-    return _fp({"c": content["containers"], "f": content["footer"],
+    return payload_hash({"c": content["containers"], "f": content["footer"],
                 "s": content["shown"], "p": content["page"]})

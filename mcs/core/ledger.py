@@ -58,6 +58,44 @@ def _posted_epoch(posted_at: str) -> int | None:
         return None
 
 
+def _enqueue_attachment_followup_tx(db, attachment_id, project_id, message_id, now):
+    if db.execute("""
+        SELECT 1 FROM notify_outbox
+        WHERE kind='attachment_followup' AND state != 'suppressed'
+          AND json_valid(payload)
+          AND json_extract(payload,'$.attachment_id')=?
+        LIMIT 1""", (attachment_id,)).fetchone():
+        return False
+    db.execute("""
+        INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
+          route,created_at,updated_at)
+        VALUES('attachment_followup',?,?,'pending',?,'text',?,?)
+    """, (project_id, json.dumps({"attachment_id": attachment_id,
+                                 "message_id": message_id}), now, now, now))
+    return True
+
+
+def enqueue_ready_attachment_followups_tx(db, event_id, now) -> int:
+    """Queue downloaded files covered by accepted cards in this transaction."""
+    rows = db.execute("""
+        SELECT DISTINCT a.attachment_id,m.project_id,m.message_id
+        FROM notify_outbox o
+        JOIN notification_intent_batches b ON b.event_id=o.event_id
+        JOIN notification_intent_cards ic ON ic.event_id=o.event_id
+        JOIN json_each(b.frozen_payload,'$.message_ids') frozen
+        JOIN json_each(ic.coverage) covered ON covered.value=frozen.value
+        JOIN messages m ON m.message_id=frozen.value
+        JOIN attachments a ON a.message_id=m.message_id
+        WHERE o.event_id=? AND o.kind='new_messages' AND o.state='accepted'
+          AND ic.state='delivered' AND frozen.type='integer'
+          AND a.state='downloaded' AND COALESCE(a.local_path,'')!=''
+          AND m.body_state IS NOT 'deleted'
+    """, (event_id,)).fetchall()
+    return sum(_enqueue_attachment_followup_tx(
+        db, row["attachment_id"], row["project_id"], row["message_id"], now)
+        for row in rows)
+
+
 class Ledger:
     def __init__(self, path: str):
         self.db = sqlite3.connect(path, timeout=30)
@@ -1545,26 +1583,25 @@ class Ledger:
         the file, so queue an attachment-only follow-up receipt (F11).
         Deduped on payload.attachment_id: one follow-up per file ever."""
         sent = self.db.execute("""
-          SELECT 1 FROM notify_outbox
-          WHERE kind='new_messages' AND state='accepted'
-            AND updated_at < ? AND json_valid(payload)
-            AND EXISTS(SELECT 1 FROM json_each(
-                         json_extract(payload,'$.message_ids'))
-                       WHERE value=?)
-          LIMIT 1""", (now, row["message_id"])).fetchone()
+          SELECT 1 FROM notify_outbox o
+          WHERE o.kind='new_messages' AND o.state='accepted'
+            AND o.updated_at < ? AND CASE
+              WHEN EXISTS(SELECT 1 FROM notification_intent_batches b
+                          WHERE b.event_id=o.event_id) THEN
+                EXISTS(SELECT 1 FROM notification_intent_batches b
+                  JOIN notification_intent_cards ic ON ic.event_id=b.event_id
+                  JOIN json_each(b.frozen_payload,'$.message_ids') frozen
+                  JOIN json_each(ic.coverage) covered ON covered.value=frozen.value
+                  WHERE b.event_id=o.event_id AND ic.state='delivered'
+                    AND frozen.type='integer' AND frozen.value=?)
+              ELSE json_valid(o.payload) AND EXISTS(
+                SELECT 1 FROM json_each(json_extract(o.payload,'$.message_ids'))
+                WHERE value=?) END
+          LIMIT 1""", (now, row["message_id"], row["message_id"])).fetchone()
         if not sent:
             return
-        dup = self.db.execute("""
-          SELECT 1 FROM notify_outbox
-          WHERE kind='attachment_followup' AND state != 'suppressed'
-            AND json_valid(payload)
-            AND json_extract(payload,'$.attachment_id')=?
-          LIMIT 1""", (attachment_id,)).fetchone()
-        if dup:
-            return
-        self.outbox_add_tx("attachment_followup", row["project_id"], {
-            "attachment_id": attachment_id,
-            "message_id": row["message_id"]})
+        _enqueue_attachment_followup_tx(
+            self.db, attachment_id, row["project_id"], row["message_id"], now)
 
     def attachment_failed(self, attachment_id: int, kind: str,
                           retry_in: float = 900, max_attempts: int = 6,

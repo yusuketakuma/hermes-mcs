@@ -16,6 +16,8 @@ import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards
+import notify_render
+import notify_transport
 import notify_cmds
 
 NOW = 1_790_000_000.0
@@ -90,7 +92,7 @@ def _latest_render(led, card_id=1):
 
 
 def _begin(led, render, n=1, worker="bb" * 8, cfg=CFG):
-    return notify_cards.apply_transport_begin(led, {
+    return notify_transport.apply_transport_begin(led, {
         "version": 1, "op": "transport_begin", "command_id": _uuid(n),
         "attempt_id": f"{n:016x}", "worker_id": worker,
         "delivery_id": render["delivery_id"],
@@ -101,7 +103,7 @@ def _begin(led, render, n=1, worker="bb" * 8, cfg=CFG):
 
 def _receipt(led, render, attempt_id, result="delivered",
              message_id="m-1", n=9):
-    return notify_cards.apply_transport_receipt(led, {
+    return notify_transport.apply_transport_receipt(led, {
         "version": 1, "op": "transport_receipt", "command_id": _uuid(n),
         "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
         "render_rev": render["render_rev"],
@@ -233,7 +235,7 @@ def test_begin_denies_bad_hash_rev_epoch_scope(led, tmp_path):
                "render_rev": render["render_rev"],
                "payload_hash": render["payload_hash"], "route_epoch": 1,
                **SCOPE, **mut}
-        r = notify_cards.apply_transport_begin(led, req, CFG, now=NOW)
+        r = notify_transport.apply_transport_begin(led, req, CFG, now=NOW)
         assert not r["granted"], mut
         assert r["error"].startswith("denied_")
 
@@ -245,7 +247,7 @@ def test_begin_denies_when_interactive_off(led, tmp_path):
 
 
 def test_begin_unknown_delivery(led):
-    r = notify_cards.apply_transport_begin(led, {
+    r = notify_transport.apply_transport_begin(led, {
         "version": 1, "op": "transport_begin", "command_id": _uuid(3),
         "attempt_id": "f" * 16, "worker_id": "cc" * 8,
         "delivery_id": _uuid(99), "render_rev": 1,
@@ -282,7 +284,7 @@ def test_receipt_echo_mismatch_rejected(led, tmp_path):
            "payload_hash": "f" * 64, "route_epoch": 1,
            "correlation": render["correlation"], **SCOPE,
            "result": "delivered", "message_id": "m-9"}
-    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    r = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
     assert not r["applied"] and r["error"] == "payload_hash_mismatch"
 
 
@@ -300,7 +302,7 @@ def test_receipt_not_sent_requeues_render(led, tmp_path):
            "payload_hash": render["payload_hash"], "route_epoch": 1,
            "correlation": render["correlation"], **SCOPE,
            "result": "not_sent", "error_code": "channel_not_found"}
-    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    r = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
     assert r["applied"]
     # the card goes back to pending and a successor render is issued
     card = _card(led)
@@ -328,7 +330,7 @@ def test_receipt_conflicting_verdict_rejected(led, tmp_path):
            "payload_hash": render["payload_hash"], "route_epoch": 1,
            "correlation": render["correlation"], **SCOPE,
            "result": "not_sent", "error_code": "late_claim"}
-    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    r = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
     assert not r["applied"] and r["conflict"]
     assert _card(led)["delivery_state"] == "delivered"
 
@@ -343,7 +345,7 @@ def test_unknown_blocks_resend_until_resolved(led, tmp_path):
            "payload_hash": render["payload_hash"], "route_epoch": 1,
            "correlation": render["correlation"], **SCOPE,
            "result": "unknown"}
-    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    r = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
     assert r["applied"]
     assert _card(led)["delivery_state"] == "delivery_unknown"
     # no successor render while the truth is unknown
@@ -454,15 +456,15 @@ def test_card_renders_full_bodies_budget_packed(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     assert c["pages"] > 1                    # budget forced extra pages
     seen = set()
     for p in range(c["pages"]):
         card["ui_state"] = json.dumps({"page": p})
-        c = notify_cards._card_content(led.db, card)
+        c = notify_render._card_content(led.db, card)
         assert c["page"] == p
-        total = (notify_cards._blocks_len(c["containers"])
-                 + notify_cards._blocks_len(c["footer"]))
+        total = (notify_render._blocks_len(c["containers"])
+                 + notify_render._blocks_len(c["footer"]))
         assert total <= 4000, (p, total)     # hard Discord ceiling
         joined = "\n".join(b.get("text") or "" for b in c["containers"])
         assert body in joined                # full body, not a snippet
@@ -484,10 +486,10 @@ def test_card_body_oversized_item_capped_marked(led, tmp_path):
     seen, marked = set(), False
     for p in range(9):
         card["ui_state"] = json.dumps({"page": p})
-        c = notify_cards._card_content(led.db, card)
+        c = notify_render._card_content(led.db, card)
         joined = "\n".join(b.get("text") or "" for b in c["containers"])
-        total = (notify_cards._blocks_len(c["containers"])
-                 + notify_cards._blocks_len(c["footer"]))
+        total = (notify_render._blocks_len(c["containers"])
+                 + notify_render._blocks_len(c["footer"]))
         assert total <= 4000
         if 100 in c["shown"]:
             marked = "省略" in joined and "本文表示" in joined
@@ -511,13 +513,13 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     assert c["pages"] > 1
     ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
     assert "ページ" in ftxt and "全14件" in ftxt
     # last page shows the final range
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
     assert f"{c['pages']}/{c['pages']} ページ" in ftxt
     # single-page card carries no page line at all
@@ -528,7 +530,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     card2 = dict(led.db.execute(
         "SELECT * FROM notification_cards ORDER BY card_id DESC LIMIT 1"
         ).fetchone())
-    c2 = notify_cards._card_content(led.db, card2)
+    c2 = notify_render._card_content(led.db, card2)
     assert c2["pages"] == 1
     assert "ページ" not in "\n".join(
         b.get("text") or "" for b in c2["footer"])
@@ -540,8 +542,8 @@ def test_fit_item_field_shrinks_as_last_resort(led):
     whole spec fail validation and render no card at all."""
     blocks = [{"type": "field", "name": "患者",
                "value": "名前" * 4000}]
-    out = notify_cards._fit_item(blocks)
-    assert notify_cards._blocks_len(out) <= notify_cards.PAGE_TEXT_BUDGET
+    out = notify_render._fit_item(blocks)
+    assert notify_render._blocks_len(out) <= notify_render.PAGE_TEXT_BUDGET
     assert "省略" in out[0]["value"]
 
 
@@ -574,7 +576,7 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
     struct = [t for t in texts if t.startswith("📋 構造化")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
@@ -593,7 +595,7 @@ def test_card_thread_structured_per_message(led, tmp_path):
     card = _card(led)
     for p in range(9):
         card["ui_state"] = json.dumps({"page": p})
-        c = notify_cards._card_content(led.db, card)
+        c = notify_render._card_content(led.db, card)
         joined = "\n".join(b.get("text") or "" for b in c["containers"])
         if 100 in c["shown"]:
             assert "疼痛" in joined
@@ -613,7 +615,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "📋 構造化" not in joined and "疼痛" not in joined
     # the card still renders the raw bodies
@@ -634,7 +636,7 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     _dispatch(led, ev)
     card = _card(led)
     card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除済み）" in joined
     assert "📋 構造化" not in joined and "疼痛" not in joined
@@ -653,7 +655,7 @@ def test_card_signal_structured_evidence(led, tmp_path):
                           "type": "med_followup"})
     _dispatch(led, ev)
     card = _card(led)
-    c = notify_cards._card_content(led.db, card)
+    c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "📋 構造化" in joined and "要約: 状態安定" in joined
     assert "退院後フォローの記録" in joined        # raw body still there
@@ -847,7 +849,7 @@ def test_queued_render_cancelled_when_stale(led):
 
 def _resolve(led, render, attempt_id, result="mark_not_sent",
              n=30, evidence=None, scope=None):
-    return notify_cards.apply_card_resolve(led, {
+    return notify_transport.apply_card_resolve(led, {
         "version": 1, "cmd": "ops.card_resolve", "command_id": _uuid(n),
         "actor": "op-user", "human_confirmed": True,
         "reason": "operator verified",
@@ -909,11 +911,11 @@ def test_card_resolve_requires_evidence_and_scope(led, tmp_path):
            "evidence": {"method": "channel_lookup",
                         "worker_stopped": True, "proof": "n/a",
                         "ref": "msg m-found visible"}}
-    r = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
     assert r["outcome"] == "applied" and r["attempt_state"] == "delivered"
     assert _card(led)["message_id"] == "m-found"
     # replay is idempotent
-    r2 = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    r2 = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
     assert r2["outcome"] == "applied"
 
 
@@ -950,7 +952,7 @@ def test_card_resolve_human_gate_and_validation(led):
            "result": "mark_not_sent", **SCOPE,
            "evidence": {"method": "m", "worker_stopped": True,
                         "proof": "no_journal_started", "ref": "r"}}
-    r = notify_cards.apply_card_resolve(led, dict(bad, reason="ok"), CFG,
+    r = notify_transport.apply_card_resolve(led, dict(bad, reason="ok"), CFG,
                                         now=NOW)
     assert r["outcome"] == "rejected" \
         and r["error"] == "human_confirmation_required"
@@ -1162,19 +1164,19 @@ def test_thread_receipt_binds_once(led, tmp_path):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
-    r = notify_cards.apply_thread_receipt(led, {
+    r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
         "thread_id": "th-1"}, CFG, now=NOW)
     assert r["applied"] and r["thread_state"] == "created"
     # a later thread_id can never rebind
-    r = notify_cards.apply_thread_receipt(led, {
+    r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(6),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
         "thread_id": "th-2"}, CFG, now=NOW)
     assert r["thread_id"] == "th-1"
     # wrong message -> rejected, no state change
-    r = notify_cards.apply_thread_receipt(led, {
+    r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(7),
         "delivery_id": render["delivery_id"], "message_id": "m-x",
         "thread_id": "th-3"}, CFG, now=NOW)
@@ -1305,7 +1307,7 @@ def test_update_404_unbinds_and_recreates(led, tmp_path):
            "payload_hash": nxt["payload_hash"], "route_epoch": 1,
            "correlation": nxt["correlation"], **SCOPE,
            "result": "not_sent", "error_code": "http_404"}
-    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    r = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
     assert r["applied"]
     card = _card(led)
     assert card["delivery_state"] == "message_deleted"
@@ -1335,7 +1337,7 @@ def test_resend_budget_suspends_until_epoch_bump(led, tmp_path):
                "payload_hash": r["payload_hash"], "route_epoch": 1,
                "correlation": r["correlation"], **SCOPE,
                "result": "not_sent", "error_code": "channel_not_found"}
-        out = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+        out = notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
         assert out["applied"]
     card = _card(led)
     assert card["delivery_state"] == "update_failed"
@@ -1484,7 +1486,7 @@ def test_message_gone_unbind_clears_thread(led, tmp_path):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
-    r = notify_cards.apply_thread_receipt(led, {
+    r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
         "thread_id": "th-1"}, CFG, now=NOW)
@@ -1494,7 +1496,7 @@ def test_message_gone_unbind_clears_thread(led, tmp_path):
     upd = _latest_render(led)
     assert upd["op"] == "update"
     _begin(led, upd, n=61)
-    r = notify_cards.apply_transport_receipt(led, {
+    r = notify_transport.apply_transport_receipt(led, {
         "version": 1, "op": "transport_receipt", "command_id": _uuid(62),
         "attempt_id": f"{61:016x}", "delivery_id": upd["delivery_id"],
         "render_rev": upd["render_rev"],
@@ -1646,12 +1648,12 @@ def test_card_resolve_reapply_is_idempotent(led):
            "delivery_id": r0["delivery_id"], "attempt_id": f"{1:016x}",
            "result": "mark_delivered", "message_id": "m-9", **SCOPE,
            "evidence": {"method": "journal_review", "ref": "w1.jsonl"}}
-    first = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    first = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
     assert first["outcome"] == "applied"
-    again = notify_cards.apply_card_resolve(led, dict(req), CFG,
+    again = notify_transport.apply_card_resolve(led, dict(req), CFG,
                                             now=NOW + 1)
     assert again == first                     # stored receipt replay
-    conflict = notify_cards.apply_card_resolve(
+    conflict = notify_transport.apply_card_resolve(
         led, {**req, "result": "mark_not_sent",
               "evidence": {"method": "journal_review", "ref": "w1.jsonl",
                            "worker_stopped": True,
@@ -1659,3 +1661,259 @@ def test_card_resolve_reapply_is_idempotent(led):
         CFG, now=NOW + 2)
     assert conflict["outcome"] == "rejected"
     assert conflict["error"] == "command_id_conflict"
+
+
+@pytest.mark.parametrize('phase', ['queued', 'sending', 'delivered'])
+def test_new_intent_with_unchanged_card_eventually_completes(led, tmp_path, phase):
+    render = _deliverable(led, tmp_path)
+    if phase != 'queued':
+        _begin(led, render)
+    if phase == 'delivered':
+        _receipt(led, render, f'{1:016x}')
+    # A later batch may cover a message already present on the thread card.
+    event = _intent(led, payload={'message_ids': [101]})
+    _dispatch(led, event)
+    if phase == 'queued':
+        _begin(led, render)
+    if phase != 'delivered':
+        _receipt(led, render, f'{1:016x}')
+    latest = _latest_render(led)
+    if latest['state'] == 'queued':
+        _begin(led, latest, n=2)
+        _receipt(led, latest, f'{2:016x}', n=10)
+    assert led.db.execute('SELECT state FROM notify_outbox WHERE event_id=?',
+                          (event['event_id'],)).fetchone()['state'] == 'accepted'
+
+
+def test_bounded_sweep_visits_unchanged_cards_fairly(led, tmp_path):
+    _delivered_card(led, tmp_path)
+    _msg(led, 200)
+    ev = _intent(led, payload={'message_ids': [200]})
+    _dispatch(led, ev)
+    second = _latest_render(led, 2)
+    _begin(led, second, n=2)
+    _receipt(led, second, f'{2:016x}', message_id='m-2', n=10)
+    led.db.execute("UPDATE messages SET body_text='変更',content_hash=? WHERE message_id=200",
+                   ('f' * 64,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, limit=1, now=NOW + 10)
+    notify_cards.sweep(led, CFG, limit=1, now=NOW + 20)
+    assert _latest_render(led, 2)['render_rev'] > second['render_rev']
+
+
+def test_old_route_epoch_cannot_grant_and_is_reissued(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    cfg2 = dict(CFG, notify=dict(CFG['notify'], route_epoch=2))
+    denied = _begin(led, render, cfg=cfg2)
+    assert not denied['granted']
+    notify_cards.sweep(led, cfg2, now=NOW + 1)
+    replacement = _latest_render(led)
+    assert replacement['route_epoch'] == 2
+    assert replacement['state'] == 'queued'
+    assert replacement['delivery_id'] != render['delivery_id']
+
+
+@pytest.mark.parametrize('field', ['profile', 'guild_id'])
+def test_refresh_rejects_other_deployment_scope(led, tmp_path, field):
+    _delivered_card(led, tmp_path)
+    rev = _latest_render(led)['render_rev']
+    origin = dict(ORIGIN, message_id='m-9')
+    origin[field] = 'other'
+    out = notify_cards.apply_refresh(led, {
+        'version': 1, 'op': 'refresh', 'command_id': _uuid(900),
+        'actor': 'nurse-1', 'origin': origin}, CFG, now=NOW)
+    assert out['outcome'] == 'rejected'
+    assert _latest_render(led)['render_rev'] == rev
+
+
+def test_failed_revoke_stays_revoked_after_retry_exhaustion(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    notify_cards.revoke_card(led.db, card['card_id'], NOW)
+    led.db.commit()
+    # Emit the first delete; subsequent not_sent receipts retry it.
+    specs = []
+    with led.db:
+        notify_cards._issue_render(led.db, card['card_id'], CFG, NOW, specs)
+    for i in range(notify_cards.MAX_RESEND):
+        render = _latest_render(led)
+        assert render['op'] == 'revoke'
+        _begin(led, render, n=100 + i)
+        out = notify_transport.apply_transport_receipt(led, {
+            'version': 1, 'op': 'transport_receipt', 'command_id': _uuid(200 + i),
+            'attempt_id': f'{100 + i:016x}', 'delivery_id': render['delivery_id'],
+            'render_rev': render['render_rev'], 'payload_hash': render['payload_hash'],
+            'route_epoch': 1, 'correlation': render['correlation'], **SCOPE,
+            'result': 'not_sent', 'error_code': 'http_403'}, CFG, now=NOW)
+        assert out['applied']
+    assert _card(led)['delivery_state'] == 'revoked'
+    exhausted = _latest_render(led)['render_rev']
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert _latest_render(led)['render_rev'] == exhausted
+    # Explicit routing recovery still retries a DELETE, never an UPDATE.
+    cfg2 = dict(CFG, notify=dict(CFG['notify'], route_epoch=2))
+    notify_cards.sweep(led, cfg2, now=NOW + 2)
+    assert _latest_render(led)['op'] == 'revoke'
+    assert _latest_render(led)['state'] == 'queued'
+
+
+@pytest.mark.parametrize('bad_op', [[], {}])
+def test_drain_quarantines_non_string_op_and_continues(led, tmp_path, bad_op):
+    root = tmp_path / 'data'
+    notify_cards.ensure_dirs(str(root))
+    bad = root / 'cmd_int' / '00-invalid.json'
+    bad.write_text(json.dumps({'version': 1, 'op': bad_op, 'command_id': _uuid(990)}))
+    result = {}
+    assert notify_cmds.drain_int_commands(led, result, CFG, str(root)) == 1
+    assert not bad.exists()
+    assert (root / 'cmd_int' / '00-invalid.json.invalid').exists()
+    receipt = json.loads((root / 'cmd_results' / (_uuid(990) + '.json')).read_text())
+    assert receipt['outcome'] == 'rejected'
+    assert receipt['error'] == 'unknown_op'
+
+
+def test_resolve_delivered_conflict_rejects_another_message(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, f'{1:016x}', message_id='original-message')
+    req = {'version': 1, 'cmd': 'ops.card_resolve', 'command_id': _uuid(991),
+           'actor': 'op-user', 'human_confirmed': True, 'reason': 'checked channel',
+           'delivery_id': render['delivery_id'], 'attempt_id': f'{1:016x}',
+           'result': 'mark_delivered', **SCOPE, 'message_id': 'another-message',
+           'evidence': {'method': 'channel_lookup', 'ref': 'synthetic-proof'}}
+    result = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    assert result['outcome'] == 'rejected'
+    assert result['error'] == 'attempt_conflict'
+    assert _card(led)['message_id'] == 'original-message'
+
+
+def test_success_resets_consecutive_resend_budget(led, tmp_path):
+    _deliverable(led, tmp_path)
+    for i in range(1, notify_cards.MAX_RESEND):
+        render = _latest_render(led)
+        _begin(led, render, n=400 + i)
+        notify_transport.apply_transport_receipt(led, {
+            'version': 1, 'op': 'transport_receipt', 'command_id': _uuid(500 + i),
+            'attempt_id': f'{400 + i:016x}', 'delivery_id': render['delivery_id'],
+            'render_rev': render['render_rev'], 'payload_hash': render['payload_hash'],
+            'route_epoch': 1, 'correlation': render['correlation'], **SCOPE,
+            'result': 'not_sent', 'error_code': 'http_503'}, CFG, now=NOW)
+    render = _latest_render(led)
+    _begin(led, render, n=450)
+    _receipt(led, render, f'{450:016x}')
+    led.db.execute("UPDATE messages SET body_text='追記',content_hash=? WHERE message_id=100",
+                   ('e' * 64,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    update = _latest_render(led)
+    _begin(led, update, n=451)
+    notify_transport.apply_transport_receipt(led, {
+        'version': 1, 'op': 'transport_receipt', 'command_id': _uuid(551),
+        'attempt_id': f'{451:016x}', 'delivery_id': update['delivery_id'],
+        'render_rev': update['render_rev'], 'payload_hash': update['payload_hash'],
+        'route_epoch': 1, 'correlation': update['correlation'], **SCOPE,
+        'result': 'not_sent', 'error_code': 'http_503'}, CFG, now=NOW + 2)
+    assert _card(led)['delivery_state'] == 'delivered'
+    assert _latest_render(led)['state'] == 'queued'
+    assert _latest_render(led)['render_rev'] > update['render_rev']
+
+
+def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    req = _notif(_token_for(spec, 'body'))
+    req['origin'] = dict(ORIGIN, message_id='m-9')
+    first = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    assert '本文' in first['body']
+    led.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1")
+    led.db.commit()
+    second = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
+    assert '（削除済み）' in second['body']
+    assert ': 本文' not in second['body']
+    notify_cards.revoke_card(led.db, card['card_id'], NOW + 2)
+    led.db.commit()
+    third = notify_cards.apply_notification(led, req, CFG, now=NOW + 3)
+    assert third['outcome'] == 'rejected'
+    assert 'body' not in third
+
+
+def test_notification_request_ids_get_fresh_results_without_duplicate_writes(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    req = _notif(_token_for(spec, 'ack'))
+    req['origin'] = dict(ORIGIN, message_id='m-9')
+    root = tmp_path / 'data'
+    for number in (910, 911):
+        req['request_id'] = _uuid(number)
+        path = root / 'cmd_int' / f'{number}.json'
+        path.write_text(json.dumps(req))
+        notify_cmds.drain_int_commands(led, {}, CFG, str(root))
+        result_path = root / 'cmd_results' / f'{req["request_id"]}.json'
+        assert result_path.exists()
+        out = json.loads(result_path.read_text())
+        assert out['outcome'] == 'applied'
+        assert out['request_id'] == req['request_id']
+    assert led.db.execute('SELECT COUNT(*) FROM notification_acknowledgements').fetchone()[0] == 1
+
+
+def test_interactive_acceptance_queues_ready_attachments_once(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    synthetic = tmp_path / 'synthetic.txt'
+    synthetic.write_text('synthetic attachment')
+    led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,state,downloaded_at) "
+        "VALUES(100,'f1','synthetic.txt',?,'downloaded',?)", (str(synthetic), NOW - 1))
+    led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,state) "
+        "VALUES(101,'f2','pending.txt','pending')")
+    led.db.commit()
+    _begin(led, render)
+    assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind='attachment_followup'").fetchone()
+    _receipt(led, render, f'{1:016x}')
+    for _ in range(2):
+        rows = led.db.execute(
+            "SELECT payload,route,state FROM notify_outbox WHERE kind='attachment_followup'").fetchall()
+        assert len(rows) == 1
+        assert json.loads(rows[0]['payload'])['message_id'] == 100
+        assert rows[0]['route'] == 'text' and rows[0]['state'] == 'pending'
+        # Repeated completion or worker receipts must never resend the attachment.
+        with led.db:
+            notify_cards._complete_intent(led.db, 1, NOW + 1)
+
+
+def test_bounded_gc_advances_past_deleted_terminal_spec_files(led, tmp_path):
+    first = _deliverable(led, tmp_path)
+    _begin(led, first)
+    _receipt(led, first, f'{1:016x}')
+    _msg(led, 200)
+    _dispatch(led, _intent(led, payload={'message_ids': [200]}))
+    second = _latest_render(led, 2)
+    _begin(led, second, n=2)
+    _receipt(led, second, f'{2:016x}', n=10, message_id='m-2')
+    paths = [tmp_path / 'data' / 'discord_render' / (r['delivery_id'] + '.json')
+             for r in (first, second)]
+    assert all(path.exists() for path in paths)
+    notify_cards.gc(led, CFG, now=NOW + 10, limit=1)
+    notify_cards.gc(led, CFG, now=NOW + 20, limit=1)
+    assert not any(path.exists() for path in paths)
+
+
+def test_gc_eligible_payload_is_not_starved_by_unsettled_card(led, tmp_path):
+    first = _deliverable(led, tmp_path)
+    led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", ('e' * 64,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert led.db.execute('SELECT state FROM notification_renders WHERE delivery_id=?',
+                          (first['delivery_id'],)).fetchone()[0] == 'cancelled'
+    # A second card's cancelled payload has a delivered successor and is eligible.
+    _msg(led, 200)
+    _dispatch(led, _intent(led, payload={'message_ids': [200]}))
+    old_second = _latest_render(led, 2)
+    led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=200", ('d' * 64,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    second = _latest_render(led, 2)
+    _begin(led, second, n=2)
+    _receipt(led, second, f'{2:016x}', message_id='m-2', n=10)
+    assert notify_cards.gc(led, CFG, now=NOW + 3, limit=1)['spec_json_cleared'] == 1
+    assert led.db.execute('SELECT spec_json FROM notification_renders WHERE delivery_id=?',
+                          (old_second['delivery_id'],)).fetchone()[0] is None
+    assert led.db.execute('SELECT spec_json FROM notification_renders WHERE delivery_id=?',
+                          (first['delivery_id'],)).fetchone()[0] is not None

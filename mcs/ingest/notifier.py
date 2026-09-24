@@ -176,7 +176,8 @@ def _signal_text(ledger, payload: dict, latest: dict):
         if type(mid) is int:
             m = ledger.db.execute(
                 "SELECT sender_name, posted_at, body_text FROM messages"
-                " WHERE message_id=?", (mid,)).fetchone()
+                " WHERE message_id=? AND body_state IS NOT 'deleted'",
+                (mid,)).fetchone()
             if m and m["body_text"]:
                 snippet = " ".join(str(m["body_text"]).split())[:120]
                 lines.append(
@@ -293,8 +294,10 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         if type(aid) is not int:
             raise ValueError("payload_invalid")
         a = ledger.db.execute(
-            "SELECT message_id,file_id,name,state,local_path,bytes,sha256"
-            " FROM attachments WHERE attachment_id=?", (aid,)).fetchone()
+            "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256"
+            " FROM attachments a JOIN messages m ON m.message_id=a.message_id"
+            " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'",
+            (aid,)).fetchone()
         if not a or a["state"] != "downloaded" or not a["local_path"]:
             raise _StaleSend("attachment_not_ready")
         files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
@@ -310,12 +313,13 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         r = ledger.db.execute("""
           SELECT m.*, p.patient_name FROM messages m
           LEFT JOIN patients p ON p.project_id = m.project_id
-          WHERE m.message_id=?""", (mid,)).fetchone()
+          WHERE m.message_id=? AND m.body_state IS NOT 'deleted'""",
+            (mid,)).fetchone()
         if r:
             rows.append(r)
     src = payload.get("source", "unread")
     if not rows:
-        return f"[MCS] 新着 {len(ids)} 件 (project {ev['project_id']})", []
+        raise _StaleSend("messages_unavailable")
     att_map = _attachments_map(ledger, [r["message_id"] for r in rows])
     # group replies under their parent when both are new in this event
     by_id = {r["message_id"]: r for r in rows}
@@ -733,7 +737,8 @@ def _has_sent_progress(ev) -> bool:
         progress = json.loads(ev["progress"] or "{}")
     except (json.JSONDecodeError, TypeError):
         return False
-    return type(progress.get("next")) is int and progress["next"] > 0
+    return (isinstance(progress, dict)
+            and type(progress.get("next")) is int and progress["next"] > 0)
 
 
 def _send_never_began(ev) -> bool:
@@ -763,6 +768,12 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False):
     without this the members would go permanently silent. Salvage runs
     only when non-delivery is provable: an empty/no-send receipt, or a
     send path that refused before posting (proven_undelivered)."""
+    # flush's row predates this attempt. Its current receipt may now
+    # contain accepted chunks or an unresolved in-flight send.
+    ev = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                           (ev["event_id"],)).fetchone()
+    if ev is None:
+        return
     if (proven_undelivered or _send_never_began(ev)) \
             and not _has_sent_progress(ev):
         try:
