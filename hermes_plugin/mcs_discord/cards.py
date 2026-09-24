@@ -168,7 +168,7 @@ def build_view(spec: dict):
             view.add_item(
                 discord.ui.TextDisplay(f"**{c['name']}**: {c['value']}"))
         elif t == "quote":
-            view.add_item(discord.ui.TextDisplay(f"> {c['text']}"))
+            view.add_item(discord.ui.TextDisplay(f">>> {c['text']}"))
         elif t == "meta":
             continue                       # correlation — not displayed
         else:
