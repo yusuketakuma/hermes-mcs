@@ -43,7 +43,8 @@ config_schema:
   application_id:
     type: str
     required: false
-    description: Discord application ID this worker is bound to.
+    description: Discord application ID this worker is bound to
+      (defaults to the connected bot's application/user ID).
   channel_id:
     type: str
     required: false

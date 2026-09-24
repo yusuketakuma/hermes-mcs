@@ -818,16 +818,25 @@ def _make_handler(ctx):
     return handler
 
 
-def _interactive_settings(ctx) -> dict[str, Any] | None:
+def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     """Card-worker config — absent/incomplete means the plugin still
     serves /mcs but never binds the Discord interaction surface."""
     if ctx.get_config("interactive", False) is not True:
         return None
     data_root = ctx.get_config("data_root", None)
     application_id = ctx.get_config("application_id", None)
+    if not (isinstance(application_id, str) and application_id.strip()):
+        # The connected bot IS the application — for bot accounts the
+        # interaction's application_id equals the bot user id. Deriving
+        # it here removes a misconfig surface.
+        application_id = getattr(
+            getattr(native, "user", None), "id", None) or getattr(
+            native, "application_id", None)
     channel_id = ctx.get_config("channel_id", None)
     if not all(isinstance(v, str) and v.strip()
-               for v in (data_root, application_id, channel_id)):
+               for v in (data_root, channel_id)):
+        return None
+    if application_id is None or not str(application_id).strip():
         return None
     settings = _settings(ctx)
     if settings is None:
@@ -835,7 +844,7 @@ def _interactive_settings(ctx) -> dict[str, Any] | None:
     return {**settings, "data_root": data_root.strip(),
             "profile": ctx.get_config("profile", None)
             or getattr(ctx, "profile_name", None) or "default",
-            "application_id": application_id.strip(),
+            "application_id": str(application_id).strip(),
             "channel_id": channel_id.strip(),
             "guild_id": (ctx.get_config("guild_id", None) or "").strip()
             or None}
@@ -846,7 +855,7 @@ def _make_discord_factory(ctx):
         """Bound at connect() per Bot instance — registers the
         interaction listener and the supervised delivery worker. SDK
         imports stay inside so /mcs works without discord.py."""
-        settings = _interactive_settings(ctx)
+        settings = _interactive_settings(ctx, native)
         if settings is None:
             return None
         import logging
