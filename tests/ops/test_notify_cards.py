@@ -498,6 +498,17 @@ def test_card_body_oversized_item_capped_marked(led, tmp_path):
         b.get("text") or "" for b in c["containers"])
 
 
+def test_fit_item_field_shrinks_as_last_resort(led):
+    """Pathological input (huge field value, no shrinkable text) still
+    fits the page budget — an over-budget item must never make the
+    whole spec fail validation and render no card at all."""
+    blocks = [{"type": "field", "name": "患者",
+               "value": "名前" * 4000}]
+    out = notify_cards._fit_item(blocks)
+    assert notify_cards._blocks_len(out) <= notify_cards.PAGE_TEXT_BUDGET
+    assert "省略" in out[0]["value"]
+
+
 def test_body_action_signal_full_evidence(led, tmp_path):
     long_body = "退院後フォローの経過記録。" * 30
     _patient(led, 1)

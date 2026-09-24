@@ -85,6 +85,17 @@ def _split_body(text: str, limit: int = BODY_CHUNK) -> list:
     return out[:BODY_MAX_CHUNKS]
 
 
+def _body_messages(result: dict) -> list:
+    """title + chunked body as sendable messages — shared by the live
+    interaction path and the delayed followup sweep."""
+    body = str(result.get("body") or "")
+    title = str(result.get("title") or "本文")
+    chunks = _split_body(body)
+    return [f"**{title}**（{i + 1}/{len(chunks)}）\n{c}"
+            if len(chunks) > 1 else f"**{title}**\n{c}"
+            for i, c in enumerate(chunks)]
+
+
 def _origin(interaction, profile: str | None) -> dict:
     """Native origin from the interaction object — never from a payload
     the user could have written."""
@@ -567,7 +578,14 @@ class Actions:
                 hook = discord.Webhook.partial(
                     int(rec["application_id"]), rec["token"],
                     client=self._bot)
-                await hook.send(_ja(result), ephemeral=True)
+                if result.get("action") == "body" and result.get("body"):
+                    # a body click that outlived the wait window still
+                    # owes the full text — generic _ja would report
+                    # "反映しました" and never deliver it
+                    for msg in _body_messages(result):
+                        await hook.send(msg, ephemeral=True)
+                else:
+                    await hook.send(_ja(result), ephemeral=True)
             except Exception as e:
                 self._log("followup_failed", error=type(e).__name__)
 
@@ -577,13 +595,8 @@ class Actions:
         """Full-text answer for the 'body' action as chunked ephemeral
         followups — text stays ephemeral (unlike a file attachment,
         whose CDN URL is reachable by link alone)."""
-        body = str(result.get("body") or "")
-        title = str(result.get("title") or "本文")
-        chunks = _split_body(body)
-        for i, chunk in enumerate(chunks):
-            head = (f"**{title}**（{i + 1}/{len(chunks)}）\n"
-                    if len(chunks) > 1 else f"**{title}**\n")
-            await self._followup(interaction, head + chunk)
+        for msg in _body_messages(result):
+            await self._followup(interaction, msg)
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:
