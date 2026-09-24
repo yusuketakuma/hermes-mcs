@@ -472,30 +472,31 @@ def test_card_renders_full_bodies_budget_packed(led, tmp_path):
 
 
 def test_card_body_oversized_item_capped_marked(led, tmp_path):
-    """A single message bigger than the page budget gets its own page
-    and an explicit omission marker — the spec can never exceed the
-    4000-char ceiling and be rejected whole."""
+    """A single message bigger than the page budget is capped with an
+    explicit omission marker — the spec can never exceed the 4000-char
+    ceiling and be rejected whole."""
     _patient(led, 1)
     _msg(led, 100, 1, body="長い記録。" * 900)   # ~4500 chars
     _msg(led, 101, 1, parent=100, body="短い")
     ev = _intent(led)
     _dispatch(led, ev)
     card = _card(led)
-    card["ui_state"] = json.dumps({"page": 0})
-    c = notify_cards._card_content(led.db, card)
-    assert c["pages"] == 2                   # oversized msg alone
-    assert c["shown"] == [100]
-    joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "省略" in joined and "本文表示" in joined
-    total = (notify_cards._blocks_len(c["containers"])
-             + notify_cards._blocks_len(c["footer"]))
-    assert total <= 4000
-    # the newest page still shows the short message fully
-    card["ui_state"] = json.dumps({"page": 1})
-    c = notify_cards._card_content(led.db, card)
-    assert c["shown"] == [101]
-    assert "短い" in "\n".join(
-        b.get("text") or "" for b in c["containers"])
+    seen, marked = set(), False
+    for p in range(9):
+        card["ui_state"] = json.dumps({"page": p})
+        c = notify_cards._card_content(led.db, card)
+        joined = "\n".join(b.get("text") or "" for b in c["containers"])
+        total = (notify_cards._blocks_len(c["containers"])
+                 + notify_cards._blocks_len(c["footer"]))
+        assert total <= 4000
+        if 100 in c["shown"]:
+            marked = "省略" in joined and "本文表示" in joined
+        if 101 in c["shown"]:
+            assert "短い" in joined           # short msg shown fully
+        seen.update(c["shown"])
+        if c["pages"] == p + 1:
+            break
+    assert seen == {100, 101} and marked
 
 
 def test_fit_item_field_shrinks_as_last_resort(led):
@@ -507,6 +508,100 @@ def test_fit_item_field_shrinks_as_last_resort(led):
     out = notify_cards._fit_item(blocks)
     assert notify_cards._blocks_len(out) <= notify_cards.PAGE_TEXT_BUDGET
     assert "省略" in out[0]["value"]
+
+
+# ---------- structured-data block on cards ----------
+
+def _extract(led, mid, content, kind="extract_v1", stale=False):
+    """An extraction artifact bound to the message's current body
+    revision — the same meta.hash gate the text notifier enforces."""
+    h = led.db.execute(
+        "SELECT content_hash FROM messages WHERE message_id=?",
+        (mid,)).fetchone()["content_hash"]
+    meta = {"hash": "0" * 64} if stale else {"hash": h}
+    body = (json.dumps(content, ensure_ascii=False)
+            if content is not None else "{bad json")
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,"
+        "model,meta,created_at) VALUES(?,?,?,?,'test',?,?)",
+        (kind, 1, mid, body, json.dumps(meta), NOW))
+    led.db.commit()
+
+
+def test_card_thread_shows_structured_lines(led, tmp_path):
+    """A message with extract_v1 renders its structured block under the
+    body on the card — same content the text notifier would emit."""
+    _seed_thread(led)
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛", "悪寒"],
+                        "rx_actions": [{"action": "start",
+                                        "ctx": "オキシコドン"}]})
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    texts = [b.get("text") or "" for b in c["containers"]]
+    struct = [t for t in texts if t.startswith("📋 構造化")]
+    assert struct and "症状" in struct[0] and "疼痛" in struct[0]
+    # raw body still present alongside the structured block
+    assert any("本文" in t for t in texts)
+
+
+def test_card_thread_structured_per_message(led, tmp_path):
+    """Structured data binds to its own message — a second message's
+    extraction must not bleed into the first message's block."""
+    _seed_thread(led)
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]})
+    _extract(led, 101, {"v": 1, "symptoms": ["悪寒"]})
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    for p in range(9):
+        card["ui_state"] = json.dumps({"page": p})
+        c = notify_cards._card_content(led.db, card)
+        joined = "\n".join(b.get("text") or "" for b in c["containers"])
+        if 100 in c["shown"]:
+            assert "疼痛" in joined
+        if 101 in c["shown"]:
+            assert "悪寒" in joined
+        if c["pages"] == p + 1:
+            break
+
+
+def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
+    """An artifact bound to an older body revision (hash mismatch) or
+    malformed content is never rendered as current structured data."""
+    _seed_thread(led)
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]}, stale=True)
+    _extract(led, 101, None)                      # malformed JSON
+    ev = _intent(led)
+    _dispatch(led, ev)
+    card = _card(led)
+    card["ui_state"] = json.dumps({"page": 0})
+    c = notify_cards._card_content(led.db, card)
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "📋 構造化" not in joined and "疼痛" not in joined
+    # the card still renders the raw bodies
+    assert "本文" in joined
+
+
+def test_card_signal_structured_evidence(led, tmp_path):
+    """Signal/digest cards show the evidence message's structured block
+    (LLM summary labelled as such via the shared formatter)."""
+    _patient(led, 1)
+    _msg(led, 100, 1, body="退院後フォローの記録")
+    _signal_row(led, "sig-x", mids=[100])
+    _extract(led, 100, {"summary": "状態安定", "points": ["経過観察"]},
+             kind="extract_llm")
+    ev = _intent(led, kind="signal", pid=1,
+                 payload={"signal_keys": ["sig-x"], "project_id": 1,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    card = _card(led)
+    c = notify_cards._card_content(led.db, card)
+    joined = "\n".join(b.get("text") or "" for b in c["containers"])
+    assert "📋 構造化" in joined and "要約: 状態安定" in joined
+    assert "退院後フォローの記録" in joined        # raw body still there
 
 
 def test_body_action_signal_full_evidence(led, tmp_path):

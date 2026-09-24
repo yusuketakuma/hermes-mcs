@@ -463,6 +463,30 @@ def _pack_pages(lengths, max_count, budget=PAGE_TEXT_BUDGET) -> list:
     return pages or [[]]
 
 
+class _DbView:
+    """notifier helpers take a ledger; the card builder holds a raw
+    connection — adapt the attribute shape instead of re-plumbing."""
+
+    def __init__(self, db):
+        self.db = db
+
+
+def _structured_block(db, mid) -> dict | None:
+    """Per-message structured block for the card — reuses the text
+    notifier's hardened builder verbatim (same suppression rules:
+    negated/resolved symptoms, other-person meds, unverified meds
+    labelled). A build failure must never sink the card."""
+    try:
+        import notifier
+        lines = notifier._structured_lines(_DbView(db), mid)
+    except Exception:
+        return None
+    if not lines:
+        return None
+    return {"type": "text",
+            "text": "📋 構造化\n" + "\n".join("・" + ln for ln in lines)}
+
+
 def _source_fp(db, card) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
@@ -533,6 +557,9 @@ def _signal_display(db, sig: dict) -> list:
                            f"最新言及 {m['posted_at'] or '?'} "
                            f"{m['sender_name'] or '?'}: "
                            f"{m['body_text']}"})
+            sblk = _structured_block(db, mid)
+            if sblk:
+                blocks.append(sblk)
     state = sig.get("state")
     if state and state != "open":
         blocks.append({"type": "field", "name": "状態",
@@ -565,6 +592,9 @@ def _signal_body(db, sig: dict) -> str:
                     else m["body_text"])
             lines.append(f"最新言及 {m['posted_at'] or '?'} "
                          f"{m['sender_name'] or '?'}: {body}")
+            sblk = _structured_block(db, mid)
+            if sblk:
+                lines.append(sblk["text"])
     state = sig.get("state")
     if state and state != "open":
         lines.append(f"状態: {state}")
@@ -593,6 +623,9 @@ def _card_body_text(db, card, man) -> tuple:
                     else (m["body_text"] or ""))
             lines.append(f"{_hhmm(m['posted_at'])} "
                          f"{m['sender_name'] or '?'}: {body}")
+            sblk = _structured_block(db, mid)
+            if sblk:
+                lines.append(sblk["text"])
         name = _patient_name(db, card["project_id"]) \
             or "project " + str(card["project_id"])
         title = f"💬 {name} — 本文"
@@ -634,17 +667,21 @@ def _card_content(db, card) -> dict:
         for m in msgs:
             body = ("（削除済み）" if m["body_state"] == "deleted"
                     else (m["body_text"] or ""))
-            rendered.append(_cap_card_text(
-                f"{_hhmm(m['posted_at'])} {m['sender_name'] or '?'}: "
-                f"{body}"))
-        pages_idx = _pack_pages([len(t) for t in rendered],
+            blocks = [{"type": "text", "text":
+                       f"{_hhmm(m['posted_at'])} "
+                       f"{m['sender_name'] or '?'}: {body}"}]
+            sblk = _structured_block(db, m["message_id"])
+            if sblk:
+                blocks.append(sblk)
+            rendered.append(_fit_item(blocks))
+        pages_idx = _pack_pages([_blocks_len(b) for b in rendered],
                                 PAGE_THREAD)
         pages = len(pages_idx)
         page = _page(ui, pages, default=pages - 1)
         shown = []
         for i in pages_idx[page]:
             shown.append(msgs[i]["message_id"])
-            containers.append({"type": "text", "text": rendered[i]})
+            containers.extend(rendered[i])
         shown_kind = "message_ids"
     else:
         keys = _anchor_keys(card)
