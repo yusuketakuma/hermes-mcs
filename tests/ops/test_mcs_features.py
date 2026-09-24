@@ -453,3 +453,27 @@ def test_extract_all_reextracts_stale_artifacts(tmp_path, monkeypatch,
     assert len(arts) == 1
     assert json.loads(arts[0]["meta"])["hash"] == chash
     check.close()
+
+
+def test_publish_snapshot_extra_snapshot_meta_column(tmp_path):
+    """Live DBs may carry a later snapshot_meta column (notify_dirty);
+    publish_snapshot must name its columns so an extra column never
+    breaks the insert contract."""
+    db = _source(tmp_path)
+    with db.db:
+        db.db.execute("DROP TABLE snapshot_meta")
+        db.db.execute(
+            "CREATE TABLE snapshot_meta("
+            "singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+            "generation_id TEXT NOT NULL, generated_at REAL NOT NULL,"
+            "notify_dirty INTEGER NOT NULL DEFAULT 0)")
+        db.db.execute("INSERT INTO snapshot_meta VALUES(1,'old',0,1)")
+    db.close()
+    path = ledger.publish_snapshot(
+        str(tmp_path / "source.db"), str(tmp_path / "snap"))
+    assert path is not None
+    chk = sqlite3.connect(path)
+    row = chk.execute(
+        "SELECT generation_id,notify_dirty FROM snapshot_meta").fetchone()
+    chk.close()
+    assert row[0] != "old" and row[1] == 0
