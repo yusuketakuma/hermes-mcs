@@ -384,6 +384,15 @@ class Ledger:
               "ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'tick'")
         from mcs_requests import SCHEMA
         self._script(SCHEMA)
+        # interactive notification delivery ledger (module-SCHEMA, same
+        # pattern as mcs_requests — SCHEMA_VERSION stays 7 so snapshot
+        # readers never see a version they refuse)
+        if "route" not in cols("notify_outbox"):
+            self.db.execute(
+              "ALTER TABLE notify_outbox ADD COLUMN route TEXT NOT NULL"
+              " DEFAULT 'text'")
+        from notify_cards import SCHEMA as NOTIFY_CARDS_SCHEMA
+        self._script(NOTIFY_CARDS_SCHEMA)
 
     def _backfill_v3(self):
         """Fill derived columns for pre-v3 rows (idempotent, chunked)."""
@@ -581,12 +590,17 @@ class Ledger:
         next_try delays when the drain first picks the event up
         (scheduled digests); default is immediately."""
         now = time.time()
+        # eligible kinds are marked 'interactive' at insert; the
+        # interactive flag itself is evaluated at delivery time, so a
+        # kill switch never strands a sealed card pipeline
+        from notify_cards import INTERACTIVE_KINDS
+        route = "interactive" if kind in INTERACTIVE_KINDS else "text"
         cur = self.db.execute("""
           INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
-            created_at,updated_at)
-          VALUES(?,?,?,'pending',?,?,?)
+            route,created_at,updated_at)
+          VALUES(?,?,?,'pending',?,?,?,?)
         """, (kind, project_id, json.dumps(payload, ensure_ascii=False),
-              next_try if next_try is not None else now, now, now))
+              next_try if next_try is not None else now, route, now, now))
         return cur.lastrowid
 
     def save_patient(self, p, notify: dict | None = None,
@@ -1645,7 +1659,7 @@ class Ledger:
 
     def outbox_due(self, limit: int = 20) -> list:
         return self.db.execute("""
-          SELECT event_id,kind,project_id,payload,attempts,progress
+          SELECT event_id,kind,project_id,payload,attempts,progress,route
           FROM notify_outbox
           WHERE state IN ('pending','failed') AND next_try <= ?
           ORDER BY event_id LIMIT ?

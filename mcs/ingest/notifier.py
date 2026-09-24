@@ -1112,13 +1112,24 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
     return next_chunk, sent, fingerprint, sending
 
 
+def _route(ev) -> str:
+    """Row/dict-safe route read — a fake outbox in tests (or an
+    un-migrated caller) that lacks the column is a text event."""
+    try:
+        return ev["route"] or "text"
+    except (KeyError, IndexError):
+        return "text"
+
+
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
     due = ledger.outbox_due(limit)
     exe = _hermes_exe(cfg)
-    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+    exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
+    if not exe_ok and not any(
+            _route(e) == "interactive" for e in due):
         res["skipped"] = len(due)
         return res
     for event_index, ev in enumerate(due):
@@ -1132,6 +1143,40 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
+        if _route(ev) == "interactive":
+            import notify_cards
+            sealed = ledger.db.execute(
+                "SELECT 1 FROM notification_intent_batches "
+                "WHERE event_id=?", (ev["event_id"],)).fetchone()
+            if sealed or notify_cards.interactive_enabled(cfg):
+                # sealed intents stay card-owned even with the switch
+                # off — a text send here could double-deliver; begins
+                # are denied until the switch returns
+                try:
+                    outcome = notify_cards.dispatch_intent(
+                        ledger, ev, cfg)
+                    if outcome.get("error"):
+                        ledger.outbox_mark(ev["event_id"], "failed",
+                                           retry_in=3600)
+                        res["failed"] += 1
+                    elif outcome.get("suppressed"):
+                        res["suppressed"] += 1
+                    elif not outcome.get("skipped"):
+                        res["dispatched"] = res.get("dispatched", 0) + 1
+                except Exception:
+                    if ev["attempts"] >= 4:
+                        ledger.outbox_hold(ev["event_id"])
+                    else:
+                        ledger.outbox_mark(ev["event_id"], "failed",
+                                           retry_in=3600)
+                    res["failed"] += 1
+                continue
+            # kill switch: an UNSEALED interactive intent is provably
+            # unsent — convert once and let it flush as plain text
+            notify_cards.revert_to_text(ledger, ev["event_id"])
+        if not exe_ok:
+            res["skipped"] += len(due) - event_index
+            break
         target = _target(cfg, ev["kind"])
         if not target:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)

@@ -1,0 +1,883 @@
+"""Interactive notification cards — durable ledger, dispatch, grant,
+settle and operator-resolve contracts. Synthetic fixtures + a temp DB
+only; no Discord, no network, no real MCS data (plan RC02-09,13,21,
+23-25)."""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
+import _mcs_path  # noqa: F401
+
+import ledger as _ledger
+import notify_cards
+import notify_cmds
+
+NOW = 1_790_000_000.0
+CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
+                  "operator": "op-user", "card_thread": True,
+                  "discord": {"profile": "mcs", "application_id": "app1",
+                              "guild_id": "g1", "channel_id": "ch1"}}}
+CFG_OFF = {"notify": {"interactive": "off", "route_epoch": 1,
+                      "discord": CFG["notify"]["discord"]}}
+SCOPE = {"profile": "mcs", "application_id": "app1",
+         "guild_id": "g1", "channel_id": "ch1"}
+ORIGIN = {**SCOPE, "message_id": "mid-1"}
+
+
+def _uuid(n: int) -> str:
+    return f"{n:08x}-0000-4000-8000-{n:012x}"[:36]
+
+
+@pytest.fixture()
+def led(tmp_path):
+    db_path = tmp_path / "data" / "ledger.db"
+    (tmp_path / "data").mkdir()
+    led = _ledger.Ledger(str(db_path))
+    yield led
+    led.close()
+
+
+def _patient(led, pid=1, name="患者A", archived=0):
+    led.db.execute(
+        "INSERT INTO patients(project_id,patient_name,is_archived) "
+        "VALUES(?,?,?)", (pid, name, archived))
+
+
+def _msg(led, mid, pid=1, parent=None, body="本文", ts=None):
+    ts = ts if ts is not None else int(NOW) + mid
+    led.db.execute(
+        "INSERT INTO messages(message_id,project_id,sender_name,"
+        "posted_at,posted_at_ts,body_text,content_hash,body_state,"
+        "parent_id) VALUES(?,?,?,?,?,?,?,?,?)",
+        (mid, pid, "職員", f"2026-09-24T08:{mid % 60:02d}", ts, body,
+         f"h{mid}", "full", parent))
+    led.db.commit()
+
+
+def _intent(led, kind="new_messages", pid=1, payload=None):
+    payload = payload or {"message_ids": [100, 101]}
+    eid = led.outbox_add(kind, pid, payload)
+    return led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                          (eid,)).fetchone()
+
+
+def _seed_thread(led, pid=1, root=100, mids=(100, 101)):
+    _patient(led, pid)
+    for m in mids:
+        _msg(led, m, pid, parent=root if m != root else None)
+
+
+def _dispatch(led, ev, cfg=CFG, now=NOW):
+    return notify_cards.dispatch_intent(led, dict(ev), cfg, now=now)
+
+
+def _card(led, card_id=1):
+    return dict(led.db.execute(
+        "SELECT * FROM notification_cards WHERE card_id=?",
+        (card_id,)).fetchone())
+
+
+def _latest_render(led, card_id=1):
+    return led.db.execute(
+        "SELECT * FROM notification_renders WHERE card_id=? "
+        "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+
+
+def _begin(led, render, n=1, worker="bb" * 8, cfg=CFG):
+    return notify_cards.apply_transport_begin(led, {
+        "version": 1, "op": "transport_begin", "command_id": _uuid(n),
+        "attempt_id": f"{n:016x}", "worker_id": worker,
+        "delivery_id": render["delivery_id"],
+        "render_rev": render["render_rev"],
+        "payload_hash": render["payload_hash"], "route_epoch": 1,
+        **SCOPE}, cfg, now=NOW)
+
+
+def _receipt(led, render, attempt_id, result="delivered",
+             message_id="m-1", n=9):
+    return notify_cards.apply_transport_receipt(led, {
+        "version": 1, "op": "transport_receipt", "command_id": _uuid(n),
+        "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
+        "render_rev": render["render_rev"],
+        "payload_hash": render["payload_hash"], "route_epoch": 1,
+        "correlation": render["correlation"], **SCOPE,
+        "result": result, "message_id": message_id}, CFG, now=NOW)
+
+
+def _signal_row(led, key, pid=1, state="open", stype="med_followup"):
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,"
+        "model,meta,created_at) VALUES('signal_v1',?,?,?,'test',?,?)",
+        (pid, None, json.dumps({"type": stype, "state": state,
+                                "project_id": pid, "severity": "info",
+                                "note": f"note {key}",
+                                "evidence": {"message_ids": []}}),
+         json.dumps({"key": key, "type": stype}), NOW))
+
+
+# ---------- dispatch / seal / freeze (RC02, RC03) ----------
+
+def test_dispatch_seals_and_publishes(led, tmp_path):
+    _seed_thread(led)
+    ev = _intent(led)
+    out = _dispatch(led, ev)
+    assert out["dispatched"] and out["cards"] == 1
+    batch = led.db.execute(
+        "SELECT * FROM notification_intent_batches WHERE event_id=?",
+        (ev["event_id"],)).fetchone()
+    assert batch is not None
+    # the frozen payload is immutable even if notify_outbox mutates
+    led.db.execute("UPDATE notify_outbox SET payload='{}' WHERE event_id=?",
+                   (ev["event_id"],))
+    card = _card(led)
+    assert card["kind"] == "thread" and card["delivery_state"] == "pending"
+    render = _latest_render(led)
+    assert render["state"] == "queued" and render["spec_published"] == 1
+    spec_file = (tmp_path / "data" / "discord_render"
+                 / (render["delivery_id"] + ".json"))
+    spec = json.loads(spec_file.read_text())
+    assert spec["schema"] == "mcs-card-render/v1"
+    assert spec["op"] == "create" and spec["render_rev"] == 1
+    assert spec["delivery"]["route_epoch"] == 1
+    assert len(spec["delivery"]["correlation"]) == 32
+    # intent stays pending until its cards are delivered
+    ev2 = led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
+                         (ev["event_id"],)).fetchone()
+    assert ev2["state"] == "pending"
+
+
+def test_intent_fanout_two_roots(led):
+    _seed_thread(led, root=100, mids=(100,))
+    _msg(led, 200, 1)                     # a second thread root
+    ev = _intent(led, payload={"message_ids": [100, 200]})
+    out = _dispatch(led, ev)
+    assert out["cards"] == 2
+    rows = led.db.execute(
+        "SELECT * FROM notification_intent_cards WHERE event_id=?",
+        (ev["event_id"],)).fetchall()
+    assert len(rows) == 2 and all(r["state"] == "pending" for r in rows)
+
+
+def test_dispatch_idempotent_reseal(led):
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    out = _dispatch(led, ev)
+    assert out.get("resealed") or not out.get("dispatched")
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_cards").fetchone()["c"] == 1
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_renders").fetchone()["c"] == 1
+
+
+def test_kill_switch_unsealed_reverts_sealed_stays(led):
+    _seed_thread(led)
+    ev1 = _intent(led)
+    _dispatch(led, ev1)                       # sealed
+    ev2 = _intent(led, payload={"message_ids": [100]})
+    assert notify_cards.revert_to_text(led, ev2["event_id"])
+    assert not notify_cards.revert_to_text(led, ev1["event_id"])  # sealed
+    r2 = led.db.execute("SELECT route FROM notify_outbox WHERE event_id=?",
+                        (ev2["event_id"],)).fetchone()
+    assert r2["route"] == "text"
+    r1 = led.db.execute("SELECT route FROM notify_outbox WHERE event_id=?",
+                        (ev1["event_id"],)).fetchone()
+    assert r1["route"] == "interactive"
+
+
+# ---------- begin / grant (RC06, RC07, RC24) ----------
+
+def _deliverable(led, tmp_path):
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    return _latest_render(led)
+
+
+def test_begin_grants_once_and_replays(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    r = _begin(led, render)
+    assert r["granted"] and r["attempt_state"] == "granted"
+    assert r["correlation"] == render["correlation"]
+    again = _begin(led, render)              # same command_id
+    assert again["granted"] and again["attempt_id"] == r["attempt_id"]
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_delivery_attempts"
+    ).fetchone()["c"] == 1
+    # a DIFFERENT begin for the same delivery is denied, durably
+    r2 = _begin(led, render, n=2)
+    assert not r2["granted"] and r2["error"] == "denied_not_queued"
+    row = led.db.execute(
+        "SELECT state,error_code FROM notification_delivery_attempts "
+        "WHERE begin_command_id=?", (_uuid(2),)).fetchone()
+    assert row["state"] == "not_sent" and row["error_code"].startswith(
+        "denied_")
+
+
+def test_begin_denies_bad_hash_rev_epoch_scope(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    for i, mut in enumerate(
+            ({"payload_hash": "0" * 64}, {"render_rev": 9},
+             {"route_epoch": 7}, {"channel_id": "chX"})):
+        req = {"version": 1, "op": "transport_begin",
+               "command_id": _uuid(10 + i), "attempt_id": f"{9 + i:016x}",
+               "worker_id": "cc" * 8, "delivery_id": render["delivery_id"],
+               "render_rev": render["render_rev"],
+               "payload_hash": render["payload_hash"], "route_epoch": 1,
+               **SCOPE, **mut}
+        r = notify_cards.apply_transport_begin(led, req, CFG, now=NOW)
+        assert not r["granted"], mut
+        assert r["error"].startswith("denied_")
+
+
+def test_begin_denies_when_interactive_off(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    r = _begin(led, render, cfg=CFG_OFF)
+    assert not r["granted"] and r["error"] == "denied_interactive_off"
+
+
+def test_begin_unknown_delivery(led):
+    r = notify_cards.apply_transport_begin(led, {
+        "version": 1, "op": "transport_begin", "command_id": _uuid(3),
+        "attempt_id": "f" * 16, "worker_id": "cc" * 8,
+        "delivery_id": _uuid(99), "render_rev": 1,
+        "payload_hash": "0" * 64, "route_epoch": 1, **SCOPE},
+        CFG, now=NOW)
+    assert not r["granted"] and r["error"] == "denied_unknown_delivery"
+
+
+# ---------- settle (RC08) ----------
+
+def test_receipt_delivered_binds_message_and_accepts_intent(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    r = _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    assert r["applied"]
+    card = _card(led)
+    assert card["delivery_state"] == "delivered"
+    assert card["message_id"] == "m-9"
+    ev = led.db.execute("SELECT state,accepted_ref FROM notify_outbox"
+                        ).fetchone()
+    assert ev["state"] == "accepted" and ev["accepted_ref"] == "cards:1"
+    # the result file the plugin consumes exists via drain path; the
+    # render row itself carries the durable verdict
+    assert _latest_render(led)["state"] == "delivered"
+
+
+def test_receipt_echo_mismatch_rejected(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(9),
+           "attempt_id": "0" * 15 + "1",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": "f" * 64, "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "result": "delivered", "message_id": "m-9"}
+    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    assert not r["applied"] and r["error"] == "payload_hash_mismatch"
+
+
+def test_receipt_not_sent_requeues_render(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    r = _receipt(led, render, "0" * 15 + "1", result="not_sent",
+                 message_id=None, n=9)
+    # not_sent requires an error_code — missing one is invalid input
+    assert not r["applied"] and r["error"] == "error_code_required"
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(9),
+           "attempt_id": "0" * 15 + "1",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "result": "not_sent", "error_code": "channel_not_found"}
+    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    assert r["applied"]
+    # the card goes back to pending and a successor render is issued
+    card = _card(led)
+    assert card["delivery_state"] == "pending"
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == 2 and nxt["state"] == "queued"
+    # the unbound coverage row stays pending on the new render
+    ic = led.db.execute(
+        "SELECT state,delivery_id,required_render_rev FROM "
+        "notification_intent_cards").fetchone()
+    assert ic["state"] == "pending" and ic["delivery_id"] == \
+        nxt["delivery_id"]
+
+
+def test_receipt_conflicting_verdict_rejected(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    # a second receipt flipping the verdict is a conflict, never a
+    # silent overwrite
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(10),
+           "attempt_id": "0" * 15 + "1",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "result": "not_sent", "error_code": "late_claim"}
+    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    assert not r["applied"] and r["conflict"]
+    assert _card(led)["delivery_state"] == "delivered"
+
+
+def test_unknown_blocks_resend_until_resolved(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(9),
+           "attempt_id": "0" * 15 + "1",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "result": "unknown"}
+    r = notify_cards.apply_transport_receipt(led, req, CFG, now=NOW)
+    assert r["applied"]
+    assert _card(led)["delivery_state"] == "delivery_unknown"
+    # no successor render while the truth is unknown
+    assert _latest_render(led)["render_rev"] == 1
+    # and a fresh begin on a re-issued render cannot happen: the
+    # unsettled attempt still owns the card
+    notify_cards.sweep(led, CFG)
+    assert _latest_render(led)["render_rev"] == 1
+
+
+# ---------- notification actions (RC09) ----------
+
+def _delivered_card(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    return _card(led), spec
+
+
+def _notif(token, actor="nurse-1", n=20):
+    return {"version": 1, "op": "notification",
+            "command_id": f"{token}:{'ab' * 8}", "actor": actor,
+            "token": token, "origin": ORIGIN}
+
+
+def _token_for(spec, action):
+    return next(b["token"] for row in spec["parts"]["action_rows"]
+                for b in row if b["id"] == action)
+
+
+def test_ack_assign_defer_persist(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    for action in ("ack", "assign", "defer"):
+        tok = _token_for(spec, action)
+        req = _notif(tok)
+        req["origin"] = dict(ORIGIN, message_id="m-9")
+        r = notify_cards.apply_notification(led, req, CFG, now=NOW)
+        assert r["outcome"] == "applied", (action, r)
+        assert r["action"] == action
+    tri = led.db.execute("SELECT * FROM notification_triage").fetchone()
+    assert tri["state"] == "deferred" and tri["defer_until"] > NOW
+    ack = led.db.execute(
+        "SELECT actor,manifest_id FROM notification_acknowledgements"
+    ).fetchone()
+    assert ack["actor"] == "nurse-1"
+
+
+def test_action_scope_and_stale_source_rejected(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    tok = _token_for(spec, "assign")
+    bad = _notif(tok)
+    bad["origin"] = dict(ORIGIN, channel_id="other-ch")
+    bad["command_id"] = f"{tok}:{'cd' * 8}"
+    r = notify_cards.apply_notification(led, bad, CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "scope_mismatch"
+    # mutate source -> token's need_source_gen goes stale
+    _msg(led, 103, 1, parent=100)
+    notify_cards.sweep(led, CFG)
+    good = _notif(tok)
+    good["origin"] = dict(ORIGIN, message_id="m-9")
+    good["command_id"] = f"{tok}:{'ef' * 8}"
+    r = notify_cards.apply_notification(led, good, CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "stale_source"
+    # a fresh token still works
+    spec2 = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (_latest_render(led)["delivery_id"] + ".json")).read_text())
+    r = notify_cards.apply_notification(
+        led, {**_notif(_token_for(spec2, "assign")),
+              "command_id": f"{_token_for(spec2, 'assign')}:{'ef' * 8}",
+              "origin": dict(ORIGIN, message_id="m-9")},
+        CFG, now=NOW)
+    assert r["outcome"] == "applied"
+
+
+def test_unknown_and_expired_tokens(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    r = notify_cards.apply_notification(
+        led, _notif("f" * 32), CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "unknown_token"
+    tok = _token_for(spec, "assign")
+    led.db.execute("UPDATE notification_action_tokens SET expires_at=? "
+                   "WHERE token=?", (NOW - 1, tok))
+    led.db.commit()
+    r = notify_cards.apply_notification(led, _notif(tok), CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "token_expired"
+
+
+# ---------- digest card + NULL project (RC13) ----------
+
+def test_digest_card_null_project(led, tmp_path):
+    _patient(led, 1, "患者A")
+    _patient(led, 2, "患者B")
+    for i, k in enumerate(("sig-a", "sig-b")):
+        _signal_row(led, k, pid=1 + i)
+    ev = _intent(led, kind="signal", pid=None,
+                 payload={"digest": True, "type": "signal_digest",
+                          "signal_keys": ["sig-a", "sig-b"],
+                          "text": "2件"})
+    out = _dispatch(led, ev)
+    assert out["cards"] == 1
+    card = _card(led)
+    assert card["kind"] == "digest" and card["project_id"] is None
+    render = _latest_render(led)
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    assert spec["kind"] == "digest"
+    manifest = led.db.execute(
+        "SELECT shown,digest FROM notification_view_manifests").fetchone()
+    assert manifest["digest"] == 1
+    assert json.loads(manifest["shown"]) == ["sig-a", "sig-b"]
+
+
+def test_digest_sealed_intent_not_merged(led):
+    _patient(led, 1)
+    _signal_row(led, "sig-x")
+    ev = _intent(led, kind="signal", pid=None,
+                 payload={"digest": True, "type": "signal_digest",
+                          "signal_keys": ["sig-x"], "text": "1件"})
+    _dispatch(led, ev)                        # sealed
+    # a new digest member must NOT fold into the sealed intent
+    import mcs_signals
+    added, merged = mcs_signals._digest_add(
+        led, "sig-y", NOW, {"notify_cooldown_d": 0.0}, 24)
+    assert added == 1 and not merged
+    rows = led.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='signal' "
+        "ORDER BY event_id").fetchall()
+    assert len(rows) == 2
+    assert json.loads(rows[1]["payload"])["signal_keys"] == ["sig-y"]
+
+
+# ---------- signal card + member anchor (RC13 cont.) ----------
+
+def test_signal_card_member_lookup_no_fork(led):
+    _patient(led, 1)
+    for k in ("sig-m1", "sig-m2"):
+        _signal_row(led, k, pid=1)
+    ev1 = _intent(led, kind="signal", pid=1,
+                  payload={"signal_keys": ["sig-m1"], "project_id": 1,
+                           "type": "med_followup"})
+    _dispatch(led, ev1)
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_cards").fetchone()["c"] == 1
+    # a later intent naming a member of the same merged unit must land
+    # on the same card — never fork a second signal card
+    ev2 = _intent(led, kind="signal", pid=1,
+                  payload={"signal_keys": ["sig-m1", "sig-m2"],
+                           "project_id": 1, "type": "med_followup"})
+    _dispatch(led, ev2)
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_cards").fetchone()["c"] == 1
+    card = _card(led)
+    anchor = json.loads(card["anchor_key"])
+    assert set(anchor["signal_keys"]) == {"sig-m1", "sig-m2"}
+
+
+# ---------- sweep / revoke (RC23) ----------
+
+def test_sweep_detects_edit_and_reissues(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    rev_before = _latest_render(led)["render_rev"]
+    led.db.execute("UPDATE messages SET body_text='編集後', "
+                   "content_hash='hx' WHERE message_id=100")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == rev_before + 1 and nxt["op"] == "update"
+    card = _card(led)
+    assert card["source_generation"] == 2
+
+
+def test_sweep_revokes_archived_card(led):
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    card = _card(led)
+    assert card["delivery_state"] == "revoked"
+    assert _latest_render(led)["op"] == "revoke"
+
+
+def test_queued_render_cancelled_when_stale(led):
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    r1 = _latest_render(led)
+    assert r1["state"] == "queued"
+    _msg(led, 104, 1, parent=100)            # content drifts pre-send
+    notify_cards.sweep(led, CFG)
+    r1 = led.db.execute(
+        "SELECT state FROM notification_renders WHERE render_rev=1"
+    ).fetchone()
+    assert r1["state"] == "cancelled"
+    r2 = _latest_render(led)
+    assert r2["render_rev"] == 2 and r2["state"] == "queued"
+
+
+# ---------- card_resolve (RC25) ----------
+
+def _resolve(led, render, attempt_id, result="mark_not_sent",
+             n=30, evidence=None, scope=None):
+    return notify_cards.apply_card_resolve(led, {
+        "version": 1, "cmd": "ops.card_resolve", "command_id": _uuid(n),
+        "actor": "op-user", "human_confirmed": True,
+        "reason": "operator verified",
+        "delivery_id": render["delivery_id"], "attempt_id": attempt_id,
+        "result": result, **(scope or SCOPE),
+        "evidence": evidence or {
+            "method": "journal_check", "worker_stopped": True,
+            "proof": "no_journal_started", "ref": "journal:t-1"}},
+        CFG, now=NOW)
+
+
+def test_card_resolve_mark_not_sent_reissues(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    r = _resolve(led, render, "0" * 15 + "1")
+    assert r["outcome"] == "applied" and r["attempt_state"] == "not_sent"
+    assert r["projects"] == [1]
+    assert r["scope"]["channel_id"] == "ch1"
+    att = led.db.execute(
+        "SELECT state FROM notification_delivery_attempts"
+    ).fetchone()
+    assert att["state"] == "not_sent"
+    # successor render issued — resolve itself never sends
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == 2 and nxt["state"] == "queued"
+
+
+def test_card_resolve_requires_evidence_and_scope(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    # wrong channel — scope derived from the stored render, not input
+    r = _resolve(led, render, "0" * 15 + "1", scope=dict(SCOPE,
+                                                       channel_id="chX"))
+    assert r["outcome"] == "rejected" and r["error"] == "scope_mismatch"
+    # no proof the send never began -> cannot mark not_sent
+    bad_ev = {"method": "guess", "worker_stopped": False,
+              "proof": "no_journal_started", "ref": "x"}
+    r = _resolve(led, render, "0" * 15 + "1", n=31, evidence=bad_ev)
+    assert r["outcome"] == "rejected"
+    # mark_delivered needs a message id
+    r = _resolve(led, render, "0" * 15 + "1", n=32,
+                 result="mark_delivered")
+    assert r["outcome"] == "rejected" and r["error"] == "bad_message_id"
+    # with evidence it lands and binds the message
+    r = _resolve(led, render, "0" * 15 + "1", n=33,
+                 result="mark_delivered",
+                 evidence={"method": "channel_lookup",
+                           "worker_stopped": True,
+                           "proof": "n/a", "ref": "msg found"},
+                 scope=None)
+    # message_id required even when scope ok
+    assert r["outcome"] == "rejected"
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": _uuid(34), "actor": "op-user",
+           "human_confirmed": True, "reason": "found in channel",
+           "delivery_id": render["delivery_id"],
+           "attempt_id": "0" * 15 + "1", "result": "mark_delivered",
+           **SCOPE, "message_id": "m-found",
+           "evidence": {"method": "channel_lookup",
+                        "worker_stopped": True, "proof": "n/a",
+                        "ref": "msg m-found visible"}}
+    r = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied" and r["attempt_state"] == "delivered"
+    assert _card(led)["message_id"] == "m-found"
+    # replay is idempotent
+    r2 = notify_cards.apply_card_resolve(led, req, CFG, now=NOW)
+    assert r2["outcome"] == "applied"
+
+
+def test_card_resolve_enqueue_bypasses_project_rule(led, tmp_path):
+    """ops.card_resolve carries no positive project_id — the common
+    validator delegates to the dedicated one instead of rejecting the
+    envelope (the operator CLI enqueues through mcs_requests.enqueue)."""
+    import mcs_requests
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": _uuid(41), "actor": "op-user",
+           "human_confirmed": True, "reason": "verified in channel",
+           "delivery_id": _uuid(2), "attempt_id": "x" * 16,
+           "result": "mark_not_sent", **SCOPE,
+           "evidence": {"method": "journal_check", "worker_stopped": True,
+                        "proof": "no_journal_started", "ref": "j:t-1"}}
+    assert mcs_requests.validate(req) is None
+    # a project_id on the envelope is rejected — scope comes from the
+    # stored render, not operator input
+    assert mcs_requests.validate(dict(req, project_id=9)) \
+        == "unknown_field"
+    # and the command still requires the human gate
+    assert mcs_requests.validate(
+        dict(req, human_confirmed=False)) == "human_confirmation_required"
+    cmd_dir = tmp_path / "cmd"
+    cmd_dir.mkdir()
+    r = mcs_requests.enqueue(req, str(cmd_dir))
+    assert r["outcome"] == "queued"
+
+
+def test_card_resolve_human_gate_and_validation(led):
+    bad = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": _uuid(1), "actor": "op",
+           "delivery_id": _uuid(2), "attempt_id": "x" * 16,
+           "result": "mark_not_sent", **SCOPE,
+           "evidence": {"method": "m", "worker_stopped": True,
+                        "proof": "no_journal_started", "ref": "r"}}
+    r = notify_cards.apply_card_resolve(led, dict(bad, reason="ok"), CFG,
+                                        now=NOW)
+    assert r["outcome"] == "rejected" \
+        and r["error"] == "human_confirmation_required"
+
+
+def test_cmd_int_rejects_card_resolve(led, tmp_path):
+    """The resolve path is operator-only — a plugin-origin cmd_int file
+    carrying it must be refused, never applied."""
+    root = tmp_path / "data"
+    notify_cards.ensure_dirs(str(root))
+    req = {"version": 1, "op": "card_resolve", "command_id": _uuid(1),
+           "delivery_id": _uuid(2), "attempt_id": "x" * 16}
+    path = root / "cmd_int" / "r.json"
+    path.write_text(json.dumps(req))
+    result = {"errors": []}
+    notify_cmds.drain_int_commands(led, result, CFG, str(root))
+    assert path.with_suffix(".json.invalid").exists() or not path.exists()
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM command_receipts").fetchone()["c"] == 0
+
+
+# ---------- cmd_int drain + result files (RC05) ----------
+
+def test_drain_int_two_pass_and_results(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    root = tmp_path / "data"
+    begin_req = {"version": 1, "op": "transport_begin",
+                 "command_id": _uuid(1), "attempt_id": "0" * 15 + "7",
+                 "worker_id": "dd" * 8,
+                 "delivery_id": render["delivery_id"],
+                 "render_rev": 1,
+                 "payload_hash": render["payload_hash"],
+                 "route_epoch": 1, **SCOPE}
+    rcpt_req = {"version": 1, "op": "transport_receipt",
+                "command_id": _uuid(2), "attempt_id": "0" * 15 + "7",
+                "delivery_id": render["delivery_id"],
+                "render_rev": 1,
+                "payload_hash": render["payload_hash"],
+                "route_epoch": 1,
+                "correlation": render["correlation"], **SCOPE,
+                "result": "delivered", "message_id": "m-7"}
+    int_dir = root / "cmd_int"
+    for name, req in (("b.json", rcpt_req), ("a.json", begin_req)):
+        (int_dir / name).write_text(json.dumps(req))
+    result = {"errors": []}
+    n = notify_cmds.drain_int_commands(led, result, CFG, str(root))
+    assert n == 2
+    # pass order: the receipt lands BEFORE the begin is consumed...
+    # actually receipt-first ordering means the receipt was processed
+    # while the attempt existed? No: receipts sort first but the
+    # receipt targets an attempt that must exist — it does not yet.
+    # The receipt is rejected, the begin granted; both result files
+    # exist and the command files are consumed.
+    res_dir = root / "cmd_results"
+    results = sorted(p.name for p in res_dir.iterdir())
+    assert results == [_uuid(1) + ".json", _uuid(2) + ".json"]
+    assert not list(int_dir.iterdir())
+
+
+def test_drain_int_receipts_first_settles_then_begin(led, tmp_path):
+    """Real dependency order: a begin lands, gets granted; the NEXT
+    drain sees the receipt first (pass 1) and settles before the
+    queued interaction is applied (pass 2)."""
+    render = _deliverable(led, tmp_path)
+    root = tmp_path / "data"
+    begin_req = {"version": 1, "op": "transport_begin",
+                 "command_id": _uuid(1), "attempt_id": "0" * 15 + "7",
+                 "worker_id": "dd" * 8,
+                 "delivery_id": render["delivery_id"],
+                 "render_rev": 1,
+                 "payload_hash": render["payload_hash"],
+                 "route_epoch": 1, **SCOPE}
+    (root / "cmd_int" / "a.json").write_text(json.dumps(begin_req))
+    notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root))
+    # now the receipt + an interaction arrive together
+    rcpt_req = {"version": 1, "op": "transport_receipt",
+                "command_id": _uuid(2), "attempt_id": "0" * 15 + "7",
+                "delivery_id": render["delivery_id"],
+                "render_rev": 1,
+                "payload_hash": render["payload_hash"],
+                "route_epoch": 1,
+                "correlation": render["correlation"], **SCOPE,
+                "result": "delivered", "message_id": "m-7"}
+    spec = json.loads(
+        (root / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    tok = _token_for(spec, "ack")
+    notif = {"version": 1, "op": "notification",
+             "command_id": f"{tok}:{'ee' * 8}", "actor": "nurse-1",
+             "token": tok,
+             "origin": dict(ORIGIN, message_id="m-7")}
+    (root / "cmd_int" / "z.json").write_text(json.dumps(notif))
+    (root / "cmd_int" / "b.json").write_text(json.dumps(rcpt_req))
+    n = notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root))
+    assert n == 2
+    assert _card(led)["delivery_state"] == "delivered"
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_acknowledgements"
+    ).fetchone()["c"] == 1
+
+
+def test_drain_int_validation_quarantine(led, tmp_path):
+    root = tmp_path / "data"
+    notify_cards.ensure_dirs(str(root))
+    bad = root / "cmd_int" / "bad.json"
+    bad.write_text(json.dumps({"version": 1, "op": "bogus"}))
+    notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root))
+    assert bad.with_suffix(".json.invalid").exists()
+
+
+# ---------- snapshot dirty flag (RC21) ----------
+
+def test_snapshot_dirty_flag_lifecycle(led):
+    _seed_thread(led)
+    assert not notify_cards.snapshot_dirty(led)
+    _dispatch(led, _intent(led))
+    assert notify_cards.snapshot_dirty(led)
+    notify_cards.clear_snapshot_dirty(led)
+    assert not notify_cards.snapshot_dirty(led)
+
+
+# ---------- notification_receipt reader (RC27) ----------
+
+def test_notification_receipt_reader(led, tmp_path):
+    import ledger as _ledger2
+    card, spec = _delivered_card(led, tmp_path)
+    tok = _token_for(spec, "ack")
+    cid = f"{tok}:{'ab' * 8}"
+    notify_cards.apply_notification(led, _notif(tok), CFG, now=NOW)
+    snap_dir = tmp_path / "snap"
+    snap_dir.mkdir()
+    assert _ledger2.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
+                                     str(snap_dir))
+    import mcs_view
+    snap = snap_dir / "ledger-snapshot.db"
+    view = mcs_view.View(str(snap))
+    try:
+        r = view.notification_receipt(cid)
+        assert r["outcome"] == "applied" and r["action"] == "ack"
+        # wrong hash -> conflict, never a fake result
+        r = view.notification_receipt(cid, payload_hash="0" * 64)
+        assert r["error"] == "command_id_conflict"
+        # unknown id -> not processed (snapshot lag is not failure)
+        r = view.notification_receipt(_uuid(77))
+        assert r["outcome"] == "not_processed_or_not_in_snapshot"
+        # a different actor sees nothing
+        r = view.notification_receipt(cid, context={
+            "actor": "someone-else", "application_id": "app1",
+            "channel_id": "ch1", "projects": [1]})
+        assert r["error"] == "actor_mismatch"
+        # correct actor + scope passes
+        r = view.notification_receipt(cid, context={
+            "actor": "nurse-1", "application_id": "app1",
+            "channel_id": "ch1", "projects": [1]})
+        assert r["outcome"] == "applied"
+    finally:
+        view.close()
+
+
+def test_card_resolve_receipt_is_operator_only(led, tmp_path):
+    import ledger as _ledger2
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    r = _resolve(led, render, "0" * 15 + "1")
+    cid = _uuid(30)
+    assert r["outcome"] == "applied"
+    snap_dir = tmp_path / "snap"
+    snap_dir.mkdir()
+    assert _ledger2.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
+                                     str(snap_dir))
+    import mcs_view
+    snap = snap_dir / "ledger-snapshot.db"
+    view = mcs_view.View(str(snap))
+    try:
+        # operator context sees the resolve receipt
+        r = view.notification_receipt(cid, context={
+            "actor": "op-user", "operator": True, "projects": [1]})
+        assert r["outcome"] == "applied"
+        # a non-operator plugin context is refused
+        r = view.notification_receipt(cid, context={
+            "actor": "op-user", "operator": False, "projects": [1]})
+        assert r["error"] == "operator_only"
+    finally:
+        view.close()
+
+
+# ---------- thread_receipt ----------
+
+def test_thread_receipt_binds_once(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    r = notify_cards.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
+        "delivery_id": render["delivery_id"], "message_id": "m-9",
+        "thread_id": "th-1"}, CFG, now=NOW)
+    assert r["applied"] and r["thread_state"] == "created"
+    # a later thread_id can never rebind
+    r = notify_cards.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(6),
+        "delivery_id": render["delivery_id"], "message_id": "m-9",
+        "thread_id": "th-2"}, CFG, now=NOW)
+    assert r["thread_id"] == "th-1"
+    # wrong message -> rejected, no state change
+    r = notify_cards.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(7),
+        "delivery_id": render["delivery_id"], "message_id": "m-x",
+        "thread_id": "th-3"}, CFG, now=NOW)
+    assert not r["applied"]
+
+
+# ---------- refresh (self-heal) ----------
+
+def test_refresh_reissues_from_origin(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    rev_before = _latest_render(led)["render_rev"]
+    req = {"version": 1, "op": "refresh", "command_id": _uuid(40),
+           "actor": "nurse-1",
+           "origin": dict(ORIGIN, message_id="m-9")}
+    r = notify_cards.apply_refresh(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied"
+    assert _latest_render(led)["render_rev"] == rev_before + 1
+    # unknown origin -> rejected
+    r = notify_cards.apply_refresh(led, {
+        "version": 1, "op": "refresh", "command_id": _uuid(41),
+        "actor": "nurse-1", "origin": dict(ORIGIN, message_id="nope")},
+        CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "card_not_found"

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.mcs-int</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__REPO__/mcs/ingest/run_check.py</string>
+    <string>--json</string>
+    <string>--commands-only</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>__DATA__/cmd_int</string>
+  </array>
+  <key>StandardOutPath</key><string>__DATA__/cmd_int.log</string>
+  <key>StandardErrorPath</key><string>__DATA__/cmd_int.log</string>
+</dict>
+</plist>

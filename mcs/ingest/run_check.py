@@ -83,6 +83,7 @@ def _health(ledger, result: dict, status: str) -> dict:
     notification completion, extract/QC backlog lag, and current
     extraction-generation coverage. Every query is a count — never bodies."""
     import extract_llm
+    import notify_cards
     now = time.time()
     notify_res = result.get("notify") or {}
     notify_state = ("incomplete"
@@ -152,6 +153,7 @@ def _health(ledger, result: dict, status: str) -> dict:
             "current": current, "eligible": total,
             "poison_gated": poison,
             "ratio": round(current / total, 4) if total else None},
+        "cards": notify_cards.health_cards(ledger),
         "errors": list(result.get("errors") or []),
     }
 
@@ -458,6 +460,62 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
 # ---------- main ----------
 
+def _commands_only(lock_fd, deadline) -> int:
+    """Interactive-notification command worker: drains data/cmd (shared
+    queue — operator card_resolve lives there) and data/cmd_int, repairs
+    published state, and refreshes the snapshot when notification
+    receipts/renders dirtied it. Deliberately no adapter, no auth, no
+    ingest, no derive, no notifier flush, no health write — it exists so
+    a card interaction never waits a whole tick (RC05/RC20)."""
+    import notify_cards
+    import notify_cmds
+    try:
+        ledger = Ledger(DB)
+    except Exception:
+        os.close(lock_fd)
+        print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
+        return 1
+    result = {"ok": True, "commands": 0, "errors": []}
+    cfg = _config()
+    root = os.path.join(HOME, "data")
+    try:
+        notify_cards.ensure_dirs(root)
+        # startup/periodic recovery: missing spec files, flags,
+        # stale-claim visibility — before any command is applied
+        notify_cards.recover(ledger, cfg, result)
+        # dependency order: existing data/cmd traffic first (a resolve
+        # may settle an attempt a receipt then reports), then cmd_int
+        job_ops.drain_commands(ledger, result)
+        notify_cmds.drain_int_commands(
+            ledger, result, cfg, root,
+            deadline=time.monotonic() + min(120, max(
+                5, deadline - time.monotonic() - 10)))
+        # a second drain: commands queued by the first pass's receipts
+        notify_cmds.drain_int_commands(
+            ledger, result, cfg, root, deadline=time.monotonic() + 30)
+        notify_cards.publish_flags(cfg, root)
+        if notify_cards.snapshot_dirty(ledger):
+            result["snapshot"] = maintenance.publish_snapshot(DB)
+            if result["snapshot"]:
+                notify_cards.clear_snapshot_dirty(ledger)
+            else:
+                result["ok"] = False
+                result["errors"].append("snapshot_publish_failed")
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["ok"] else 1
+    except Exception as e:
+        # exception text can embed paths/user data — type name only,
+        # matching the tick's outermost boundary
+        print(json.dumps({"ok": False,
+                          "error": f"crash:{type(e).__name__}"}))
+        return 1
+    finally:
+        try:
+            ledger.close()
+        finally:
+            os.close(lock_fd)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -469,6 +527,10 @@ def main() -> int:
     ap.add_argument("--jobs-only", action="store_true",
                     help="skip unread/backfill; only drain durable jobs "
                          "(used by the idle-time deep-import agent)")
+    ap.add_argument("--commands-only", action="store_true",
+                    help="drain cmd/cmd_int command traffic only — no "
+                         "adapter, network, ingest, derive or notify; "
+                         "the interactive-card watcher job uses this")
     args = ap.parse_args()
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
@@ -480,6 +542,8 @@ def main() -> int:
         return 3
 
     deadline = time.monotonic() + RUN_DEADLINE_S
+    if args.commands_only:
+        return _commands_only(lock_fd, deadline)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
     try:
@@ -533,6 +597,17 @@ def main() -> int:
         # cmd ingest first so requests are due THIS run; discovery and
         # trickle seeding only enqueue — the drains below execute them.
         job_ops.drain_commands(ledger, result)
+        try:
+            # interactive-notification command channel: plugin receipts
+            # and card actions apply mid-tick, not just via the watcher
+            import notify_cards
+            import notify_cmds
+            notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+            notify_cmds.drain_int_commands(
+                ledger, result, cfg, os.path.join(HOME, "data"),
+                deadline=deadline)
+        except Exception as e:
+            result["errors"].append(f"cmd_int: {type(e).__name__}")
         job_ops.seed_discovery(ledger)
         discover_archived = cfg.get("discover_archived", False)
         if type(discover_archived) is not bool:
@@ -608,6 +683,13 @@ def main() -> int:
                 result["notify"] = notifier.flush(ledger, deadline=deadline)
             except Exception as e:
                 result["errors"].append(f"notify: {type(e).__name__}")
+        try:
+            # live-card sweep: edits/deletes, signal resolves, archive
+            # revokes, deferral expiry, stuck spec repair — bounded
+            result["card_sweep"] = notify_cards.sweep(
+                ledger, cfg, limit=50)
+        except Exception as e:
+            result["errors"].append(f"card_sweep: {type(e).__name__}")
 
         # -- semantic layer (Phase J, feature-gated) --------------------
         # drains durable 'semantic' jobs on the same lock + remaining
@@ -653,8 +735,18 @@ def main() -> int:
         ledger.finish_run(run_id, status,
                           "; ".join(result["errors"][:8]))
         try:
+            # last-chance drain: interactions queued while this tick ran
+            notify_cmds.drain_int_commands(
+                ledger, result, cfg, os.path.join(HOME, "data"),
+                deadline=deadline, limit=16)
+            notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+        except Exception as e:
+            result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
+        try:
             result["snapshot"] = maintenance.publish_snapshot(DB)
-            if not result["snapshot"]:
+            if result["snapshot"]:
+                notify_cards.clear_snapshot_dirty(ledger)
+            else:
                 raise RuntimeError("snapshot_verify_failed")
         except Exception as e:
             result["errors"].append(f"snapshot: {type(e).__name__}")

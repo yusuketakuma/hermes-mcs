@@ -120,13 +120,17 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
             return "bad_reason"
         return None
     if cmd == "ops.signal_dismiss":
-        allowed = base | {"signal_key", "reason"}
+        allowed = base | {"signal_key", "reason",
+                          "expected_signal_artifact_id"}
         if req.keys() - allowed:
             return "unknown_field"
         if not _text(req.get("signal_key"), 300):
             return "bad_signal_key"
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
+        if "expected_signal_artifact_id" in req \
+                and not positive(req["expected_signal_artifact_id"]):
+            return "bad_expected_artifact_id"
         return None
     if cmd == "ops.signal_policy":
         allowed = base | {"policy", "reason"}
@@ -404,7 +408,7 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     evaluator keeps the key dismissed while its evidence is unchanged
     and reopens only if the underlying evidence moves on."""
     row = db.execute(
-        """SELECT project_id, content FROM artifacts
+        """SELECT artifact_id, project_id, content FROM artifacts
            WHERE kind='signal_v1' AND json_valid(meta)
              AND json_valid(content)
              AND json_extract(meta,'$.key')=?
@@ -412,6 +416,13 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         (req["signal_key"],)).fetchone()
     if row is None:
         return "signal_not_found", {"signal_key": req["signal_key"]}
+    if req.get("expected_signal_artifact_id") is not None \
+            and row["artifact_id"] != req["expected_signal_artifact_id"]:
+        # the card pinned the signal row it displayed — a newer signal
+        # transition since then means the human acted on stale content
+        return "signal_changed", {"signal_key": req["signal_key"],
+                                  "current_artifact_id":
+                                      row["artifact_id"]}
     content = json.loads(row["content"])
     if not isinstance(content, dict):
         # json_valid passed but the payload is a scalar/array — a corrupt

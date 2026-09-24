@@ -1111,6 +1111,8 @@ def _digest_add(ledger, key, now, th, interval_h):
              AND next_try IS NOT NULL
              AND json_valid(payload)
              AND json_extract(payload,'$.digest')=1
+             AND NOT EXISTS(SELECT 1 FROM notification_intent_batches b
+                            WHERE b.event_id=notify_outbox.event_id)
            ORDER BY event_id DESC LIMIT 1""").fetchone()
     if row:
         pl = json.loads(row["payload"])

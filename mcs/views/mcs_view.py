@@ -607,6 +607,64 @@ class View:
             return {"outcome": "not_processed_or_not_in_snapshot"}
         return json.loads(row["receipt_json"])
 
+    def notification_receipt(self, command_id, payload_hash=None,
+                             context=None):
+        """Receipts for the interactive-notification channel — separate
+        from _receipt because notification command_ids are composite
+        ('<token>:<actor_hash>') and digest/notice rows legitimately
+        carry project_id NULL. Snapshot lag is reported as
+        not_processed, never as failure. context=None is the local
+        operator CLI; a plugin context {actor, application_id,
+        channel_id, projects, operator} narrows what may be seen."""
+        if not isinstance(command_id, str) \
+                or not (0 < len(command_id) <= 200):
+            raise ValueError("bad_receipt_identity")
+        if payload_hash is not None \
+                and not requests.valid_hash(payload_hash):
+            raise ValueError("bad_receipt_identity")
+        row = self.db.execute(
+            "SELECT payload_hash,receipt_json FROM command_receipts "
+            "WHERE command_id=?", (command_id,)).fetchone()
+        if row is None:
+            return {"outcome": "not_processed_or_not_in_snapshot",
+                    "snapshot_generated_at": self.meta["generated_at"]}
+        if payload_hash is not None \
+                and row["payload_hash"] != payload_hash:
+            return {"outcome": "rejected", "error": "command_id_conflict"}
+        try:
+            receipt = json.loads(row["receipt_json"])
+        except (json.JSONDecodeError, TypeError):
+            receipt = None
+        if not isinstance(receipt, dict):
+            return {"outcome": "rejected", "error": "receipt_corrupt"}
+        if context is None:
+            return receipt
+        return self._scope_notification_receipt(receipt, context)
+
+    @staticmethod
+    def _scope_notification_receipt(receipt: dict, context: dict) -> dict:
+        """Plugin-side scope enforcement: a viewer sees only receipts
+        for their own actor inside their own channel/application, and
+        only projects they are authorized for; operator-only results
+        (card_resolve) are withheld entirely."""
+        if receipt.get("kind") == "ops.card_resolve" \
+                and not context.get("operator"):
+            return {"outcome": "rejected", "error": "operator_only"}
+        actor = receipt.get("actor")
+        if actor is not None and actor != context.get("actor"):
+            return {"outcome": "rejected", "error": "actor_mismatch"}
+        scope = receipt.get("origin") or receipt.get("scope") or {}
+        for key in ("application_id", "channel_id"):
+            if scope.get(key) and context.get(key) \
+                    and scope[key] != context[key]:
+                return {"outcome": "rejected", "error": "scope_mismatch"}
+        allowed = set(context.get("projects") or [])
+        want = set(receipt.get("projects") or [])
+        if want and not want <= allowed:
+            return {"outcome": "rejected",
+                    "error": "project_scope_mismatch"}
+        return receipt
+
     def stats(self, args: dict) -> dict:
         """Cross-project statistics — same snapshot generation, read-only
         (MCS-STAT-PROSPECTIVE §A-3: entry lives in mcs_view, the math in
@@ -681,11 +739,11 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "requests", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
-            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss", "signal_policy", "refstat_approve")]
+            parsers = [actions.add_parser(action) for action in ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss", "signal_policy", "refstat_approve", "card_resolve")]
             for write in parsers:
                 write.add_argument("--confirm-human", action="store_true", required=True,
                                    help="Queue an exact human-approved operation from JSON stdin.")
@@ -702,9 +760,16 @@ def _parser():
         for index, child in enumerate(parsers):
             if kind == "stats":
                 break  # stats carries its own arg set below
+            # card_resolve derives its project set from the stored
+            # render/coverage — a --project input would be meaningless
+            # and wrong; notification_receipt keys on command_id only
+            projectless = (kind in ("status", "signals",
+                                    "notification_receipt")
+                           or (kind == "control" and index == len(parsers) - 1))
             child.add_argument("--project", type=int,
-                               required=kind not in ("status", "signals"))
-            if kind not in ("evidence", "receipt", "control") and (kind != "requests" or index == 0):
+                               required=not projectless)
+            if kind not in ("evidence", "receipt", "notification_receipt",
+                            "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 if kind != "signals":
                     child.add_argument("--cursor")
@@ -733,6 +798,9 @@ def _parser():
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)
             sub.add_argument("--payload-hash", required=True)
+        if kind == "notification_receipt":
+            sub.add_argument("--command-id", required=True)
+            sub.add_argument("--payload-hash")
     return parser
 
 
@@ -752,8 +820,16 @@ def main(argv=None):
             if command.startswith("request.") and "reason" not in req:
                 raise ValueError("reason_required")
             req = {**req, "cmd": command, "version": 1,
-                   "project_id": args["project"], "human_confirmed": confirmed}
+                   "human_confirmed": confirmed}
+            if action != "card_resolve":
+                req["project_id"] = args["project"]
             result = requests.enqueue(req, cmd_dir)
+        elif args["kind"] == "notification_receipt":
+            result = {"snapshot": view.meta,
+                      "snapshot_age_s": max(
+                          0, time.time() - view.meta["generated_at"]),
+                      **view.notification_receipt(
+                          args["command_id"], args["payload_hash"])}
         elif args["kind"] == "stats":
             result = view.stats(args)
         elif args["kind"] == "signals":
