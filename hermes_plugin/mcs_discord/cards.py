@@ -75,6 +75,11 @@ def validate(spec) -> dict:
     for k in ("profile", "guild_id", "message_id", "thread_id"):
         if not _opt_id(delivery.get(k)):
             _err(f"bad_delivery_{k}")
+    if spec["op"] in ("update", "revoke") \
+            and not delivery.get("message_id"):
+        # an edit/delete with no target is a malformed spec — fail at
+        # validation instead of burning an attempt as no_target
+        _err("bad_delivery_message_id")
     if type(delivery.get("route_epoch")) is not int \
             or delivery["route_epoch"] < 1:
         _err("bad_route_epoch")

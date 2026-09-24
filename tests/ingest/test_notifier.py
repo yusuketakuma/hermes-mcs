@@ -131,3 +131,40 @@ def test_uncertain_child_delivery_is_held_without_retry(tmp_path, monkeypatch,
         assert calls == ["synthetic"]
     finally:
         db.close()
+
+
+def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
+    """hermes exe missing: a text event ahead of an interactive one must
+    not break the loop — the card still dispatches (regression: the old
+    bulk-skip break swallowed every later event)."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    cfg = {"notify": {"interactive": "discord", "route_epoch": 1,
+                      "discord": {"profile": "mcs", "application_id": "a",
+                                  "guild_id": "g", "channel_id": "c"}}}
+    monkeypatch.setattr(notifier, "_hermes_exe",
+                        lambda cfg: "/nonexistent/hermes")
+    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    db.db.execute(
+        "INSERT INTO patients(project_id,patient_name,is_archived)"
+        " VALUES(1,'合成患者',0)")
+    db.db.execute(
+        "INSERT INTO messages(message_id,project_id,sender_name,"
+        "posted_at,posted_at_ts,body_text,content_hash,body_state)"
+        " VALUES(100,1,'職員','2026-09-24T08:00',1790000000,'本文',"
+        f"{'a' * 64!r},'full')")
+    db.db.commit()
+    try:
+        db.outbox_add("run_failed", None, {})
+        db.outbox_add("new_messages", 1, {"message_ids": [100]})
+        res = notifier.flush(db)
+        # the text event is skipped; the interactive card dispatched
+        assert res["skipped"] == 1
+        assert res.get("dispatched") == 1
+        assert db.db.execute(
+            "SELECT COUNT(*) c FROM notification_renders"
+        ).fetchone()["c"] == 1
+        # a second flush re-enters the sealed intent idempotently
+        res2 = notifier.flush(db)
+        assert res2.get("dispatched", 0) <= 1
+    finally:
+        db.close()

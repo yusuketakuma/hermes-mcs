@@ -1226,10 +1226,16 @@ def _settle_attempt(db, attempt, render, result, now,
                                               error_code)
             db.execute(
                 """UPDATE notification_cards SET delivery_state=?,
-                     message_id=?, last_delivery_error=?, updated_at=?
+                     message_id=?, thread_id=?, thread_state=?,
+                     last_delivery_error=?, updated_at=?
                    WHERE card_id=?""",
                 (state,
                  None if unbind_mid else card["message_id"],
+                 # the thread lived under the bound message — once the
+                 # message is proven gone its thread binding is stale
+                 # and must not carry into the re-created card
+                 None if unbind_mid else card["thread_id"],
+                 "none" if unbind_mid else card["thread_state"],
                  error_code, now, card["card_id"]))
         cov = "unbind"
     else:  # unknown — never auto-resend; waits for reconcile/resolve
@@ -1334,6 +1340,12 @@ def _apply_notification_tx(db, req, cfg, now, specs) -> dict:
                 else _digest_projects(db, card))
     if not _scope_match(card, origin):
         return {**base, "outcome": "rejected", "error": "scope_mismatch"}
+    if card["message_id"] \
+            and card["message_id"] != (origin or {}).get("message_id"):
+        # a delivered card's buttons live on its bound message — a token
+        # arriving with another message's origin is being replayed in a
+        # context that never rendered this card
+        return {**base, "outcome": "rejected", "error": "origin_mismatch"}
     action = tok["action"]
     if action in _WRITE_ACTIONS and not interactive_enabled(cfg):
         return {**base, "outcome": "rejected", "error": "interactive_off"}
@@ -2067,19 +2079,38 @@ def gc(ledger, cfg=None, now=None, token_keep_s=0, limit=500) -> dict:
         # would be denied anyway; unknown stays for investigation
         removed = 0
         root = data_root(ledger)
-        rdir = notify_dirs(root)["discord_render"]
+        dirs = notify_dirs(root)
         for r in db.execute(
                 "SELECT delivery_id FROM notification_renders "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall():
-            path = os.path.join(rdir, r["delivery_id"] + ".json")
+            path = os.path.join(dirs["discord_render"],
+                                r["delivery_id"] + ".json")
             try:
                 os.unlink(path)
                 removed += 1
             except OSError:
                 pass
+        # cmd_results files are a transport artifact — the durable audit
+        # lives in command_receipts. The plugin polls a result for
+        # minutes at most; anything a week old is dead weight.
+        results = 0
+        try:
+            names = sorted(os.listdir(dirs["cmd_results"]))
+        except OSError:
+            names = []
+        for n in names[:limit]:
+            if not n.endswith(".json"):
+                continue
+            path = os.path.join(dirs["cmd_results"], n)
+            try:
+                if now - os.stat(path).st_mtime > TOKEN_WRITE_S:
+                    os.unlink(path)
+                    results += 1
+            except OSError:
+                pass
         return {"tokens": tokens, "spec_json_cleared": cleared,
-                "spec_files": removed}
+                "spec_files": removed, "result_files": results}
 
 
 def recover(ledger, cfg, result) -> dict:

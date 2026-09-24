@@ -308,7 +308,6 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
-        self._reg.drop_modal(modal_id)
 
         # the token authorizes the modal flow — apply it now so the
         # runner's stored params, not our cache, drive the preview
@@ -318,13 +317,20 @@ class Actions:
             await asyncio.to_thread(envelopes.publish_command,
                                     self._dirs["cmd_int"], env)
         except OSError:
+            # keep the modal — a resubmit replays the same command_id
             await self._followup(
                 interaction,
                 "送信に失敗しました。もう一度操作してください。")
             return
         result = await self._wait_result(env["command_id"],
                                          RESULT_WAIT_S)
-        if result is None or result.get("outcome") != "applied" \
+        if result is None:
+            # the drain may still be running — keep the modal so a
+            # resubmit replays the same command idempotently
+            await self._followup(interaction, _ja(result))
+            return
+        self._reg.drop_modal(modal_id)   # a definitive answer consumed it
+        if result.get("outcome") != "applied" \
                 or not result.get("modal"):
             await self._followup(interaction, _ja(result))
             return
