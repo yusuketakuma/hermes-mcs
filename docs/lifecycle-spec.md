@@ -12,6 +12,11 @@
 （install.sh 再実行・`update.mode` 設定）は未実施」を意味する。
 auto 有効化（§11 P3）は人の判断事項として残る。
 
+**2026-09-25 更新**: `git reset` 後に更新差分と同名の未追跡ファイルを
+追加で自動削除する処理は、updater/recovery ともに廃止した。以下の
+「外科的削除」は旧設計の記録であり、現行手順には含めない。
+詳細は `docs/auto-update-plan.md` 冒頭を参照する。
+
 ## 1. 対象範囲と非目標
 
 対象: `~/.mcs`（git checkout 兼 runtime）+ `~/.hermes`（plugin
@@ -130,9 +135,10 @@ script 名で dedup 登録（現行4件 + 📋`mcs_update`）→
   `ops.update_apply` — **receipt commit が承認確定の境界**（receipt
   駆動キュー、`command_id` 単位の実行管理、`{tag,target_sha,base_sha}`
   ピン・`human_confirmed`/`actor`/`reason` 必須・projectless）。
-  **受理には plugin(`__init__.py` の `_CONTROL_FIELDS`/`_confirm`/
-  projectless 認可）と `mcs_requests.validate()` の projectless 例外が
-  必要** — 現行コードは全層で拒否する（`{"cmd":...}` は受理されない）。
+  plugin の `_CONTROL_FIELDS`/`_confirm`/projectless 認可と
+  `mcs_requests.validate()` は `update_apply`/`update_rollback` の
+  preview/confirm・検証済みコマンドに対応済み。任意の `cmd` や
+  人承認情報のない要求を受理するものではない。
   auto は猶予付き（検出→翌日 check で apply）を既定案とする
 - **スキーマ互換**: 候補の `SCHEMA_VERSION` > 現行 DB の
   `user_version` なら auto は中止（旧コードが migrated DB を拒否する
@@ -197,7 +203,7 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 | collection=incomplete | mcs_check.sh の stdout 警報行（watchdog）+ 次回 tick で再試行 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
 | extract drainer 滞留 | `ai.mcs.extract-drainer` 常駐 drain・`mcs_llm_catchup` で夜間追走 | ✅ |
-| llama-server 停滞/異常 | `llamacpp daily restart` 04:00・idle 時のみ再起動 | ✅ |
+| llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
 | コマンド inbox 滞留 | `local.mcs-cmd`/`local.mcs-int` WatchPaths 常駐 + receipt 冪等で再送安全 | ✅ |
 | apply_failed📋 | tag 単位で記録・自動再試行せず人の再承認待ち | 📋 |
 | 更新 available📋 | `update_notice` 通知（dedup）+ `status` で詳細 | 📋 |
