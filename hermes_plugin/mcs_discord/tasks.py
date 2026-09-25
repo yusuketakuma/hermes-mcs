@@ -20,9 +20,10 @@ import asyncio
 import time
 from typing import Any
 
-from . import actions, delivery, paths, registry
+from ..mcs_delivery import paths, registry
+from ..mcs_delivery.worker import POLL_S
+from . import actions, delivery
 
-POLL_S = delivery.POLL_S
 # Takeover window for the scope lock after a bot rebuild: the host
 # disconnects a fatally-failed adapter (client.close()) BEFORE the
 # replacement adapter connects, so the previous supervisor releases the

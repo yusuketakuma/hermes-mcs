@@ -1,6 +1,7 @@
 """Convert validated MCS display parts to Slack Block Kit."""
+from __future__ import annotations
 
-from hermes_plugin.mcs_discord.cards import validate as validate_discord
+from ..mcs_delivery.spec import validate as validate_v1
 
 _SECTION_MAX = 3000
 _HEADER_MAX = 150
@@ -22,7 +23,7 @@ def validate(spec):
             or "\x00" in delivery["team_id"] \
             or delivery.get("guild_id") is not None:
         raise ValueError("bad_slack_scope")
-    validate_discord({**spec, "schema": "mcs-card-render/v1"})
+    validate_v1({**spec, "schema": "mcs-card-render/v1"})
     return spec
 
 

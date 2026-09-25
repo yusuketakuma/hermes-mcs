@@ -6,8 +6,8 @@ import copy
 import re
 from collections.abc import Mapping
 
-from hermes_plugin.mcs_discord.delivery import DeliveryWorker as DiscordDeliveryWorker
-from hermes_plugin.mcs_discord.cards import token_map
+from ..mcs_delivery.spec import token_map
+from ..mcs_delivery.worker import DeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import render, validate
@@ -24,7 +24,7 @@ def _payload(response):
     return data if isinstance(data, Mapping) else {}
 
 
-def _single_attempt(client):
+def single_attempt(client):
     # Snapshot the native SDK client without a new token or HTTP session.
     # Its default connection retry can duplicate a post whose response was
     # lost; changing retry_handlers on the shared client races Hermes sends.
@@ -75,6 +75,11 @@ class SlackCardAdapter:
             and identity.get("team_id") == self._team_id
         return self._bound
 
+    def single_attempt(self):
+        """Send-safe snapshot of the bound client — shared by the
+        delivery worker and the ephemeral-reply path in actions."""
+        return single_attempt(self._client)
+
     def _owns(self, delivery):
         return (delivery.get("transport") == "slack"
                 and delivery.get("team_id") == self._team_id
@@ -93,7 +98,7 @@ class SlackCardAdapter:
             text, blocks = render(spec)
         except ValueError:
             return {"result": "not_sent", "error_code": "bad_render"}
-        sender = _single_attempt(self._client)
+        sender = single_attempt(self._client)
         if sender is None:
             return {"result": "not_sent", "error_code": "retry_policy_unknown"}
         op = spec["op"]
@@ -135,7 +140,7 @@ class SlackCardAdapter:
             allowed_user_ids=self._allowed_user_ids)
 
 
-class DeliveryWorker(DiscordDeliveryWorker):
+class DeliveryWorker(_BaseWorker):
     """Reuse the durable claim/journal/receipt loop with Slack-only edges."""
 
     transport = "slack"

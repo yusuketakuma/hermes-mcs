@@ -4,8 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from hermes_plugin.mcs_discord import paths as shared_paths
-from hermes_plugin.mcs_discord import registry
+from hermes_plugin.mcs_delivery import paths as shared_paths
+from hermes_plugin.mcs_delivery import registry
 from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
 from hermes_plugin.mcs_slack.paths import notify_dirs

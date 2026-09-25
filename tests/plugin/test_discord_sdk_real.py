@@ -16,6 +16,7 @@ import pytest
 discord = pytest.importorskip("discord")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from hermes_plugin.mcs_delivery import spec as spec_mod  # noqa: E402
 from hermes_plugin.mcs_discord import cards  # noqa: E402
 
 
@@ -65,7 +66,7 @@ def _spec():
 
 def test_layout_view_serializes_components_v2():
     spec = _spec()
-    cards.validate(spec)
+    spec_mod.validate(spec)
     view = cards.build_view(spec)
     comps = view.to_components()
     # the face is a single Container card (type 17) — bare TextDisplays
@@ -148,14 +149,14 @@ def test_validator_matches_nested_components_budget():
     spec["parts"]["action_rows"] = [[
         {"ui": "button", "id": "ack", "label": "確認", "style": "success",
          "token": f"{i:032x}"} for i in range(5)]]
-    cards.validate(spec)
+    spec_mod.validate(spec)
     view = cards.build_view(spec)
     # text merges inside the Container — the 10-child cap is never hit
     inner = view.to_components()[0]["components"]
     assert len(inner) == 2          # one merged TextDisplay + one row
     spec["parts"]["containers"].append({"type": "text", "text": "overflow"})
     with pytest.raises(ValueError, match="component_budget"):
-        cards.validate(spec)
+        spec_mod.validate(spec)
 
 
 @pytest.mark.parametrize("wire_length", [4000, 4001])
@@ -169,7 +170,7 @@ def test_field_text_budget_counts_markdown_wrapper(wire_length):
     inner = view.to_components()[0]["components"]
     assert sum(len(item["content"]) for item in inner) == wire_length
     if wire_length == 4000:
-        cards.validate(spec)
+        spec_mod.validate(spec)
     else:
         with pytest.raises(ValueError, match="text_budget"):
-            cards.validate(spec)
+            spec_mod.validate(spec)
