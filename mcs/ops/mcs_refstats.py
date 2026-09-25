@@ -34,6 +34,7 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -167,11 +168,16 @@ def cmd_capture(args) -> int:
            "captured_at": int(time.time()), **result}
     pending = _ref_path(args.data_dir, args.name, "pending")
     os.makedirs(os.path.dirname(pending), exist_ok=True)
-    tmp = pending + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(ref, f, ensure_ascii=False, sort_keys=True,
-                  allow_nan=False, indent=1)
-    os.replace(tmp, pending)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(pending),
+                               prefix=".capture-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(ref, f, ensure_ascii=False, sort_keys=True,
+                      allow_nan=False, indent=1)
+        os.replace(tmp, pending)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     print(json.dumps({"ok": True, "name": args.name,
                       "pending": pending,
                       "file_hash": file_sha256(pending),

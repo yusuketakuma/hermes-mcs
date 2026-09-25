@@ -53,14 +53,17 @@ def _observe(c, cfg) -> dict:
     history = audit_history(ledger)
     eligible_pending = q(
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
-        "AND state='pending' AND json_extract(payload,'$.eligible')=1")[0][0]
+        "AND state='pending' AND CASE WHEN json_valid(payload) THEN "
+        "json_extract(payload,'$.eligible')=1 ELSE 0 END")[0][0]
     # version-aware: counts the messages still lacking a CURRENT-schema
     # artifact — matches run_pending's `left`, so migration progress is
     # visible instead of reading 0 while the v2 backlog drains
     from extract_llm import EXTRACT_VERSION
     extract_left = q(
         "SELECT COUNT(*) FROM messages m WHERE m.body_text IS NOT NULL "
-        "AND m.body_text != '' AND NOT EXISTS "
+        "AND m.body_text != '' "
+        "AND (m.body_state IS NULL OR m.body_state='full') "
+        "AND NOT EXISTS "
         "(SELECT 1 FROM artifacts a WHERE a.kind='extract_llm' "
         " AND a.message_id=m.message_id AND json_valid(a.meta) "
         " AND json_extract(a.meta,'$.error') IS NOT 1 "
@@ -70,7 +73,8 @@ def _observe(c, cfg) -> dict:
     from semantic_store import _jst_day_start
     jst_start = _jst_day_start(time.time())
     jev_today = q(
-        "SELECT COALESCE(SUM(json_extract(meta,'$.jev_requests')),0) "
+        "SELECT COALESCE(SUM(CASE WHEN json_valid(meta) THEN "
+        "json_extract(meta,'$.jev_requests') ELSE 0 END),0) "
         "FROM artifacts WHERE kind='semantic_usage' AND created_at >= ?",
         (jst_start,))[0][0]
     return {

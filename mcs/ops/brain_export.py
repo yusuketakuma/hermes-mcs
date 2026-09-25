@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -32,9 +33,16 @@ def _write(root: Path, rel: str, text: str) -> None:
     """Atomic rewrite — a crash mid-write must not leave a torn file."""
     dest = root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, dest)
+    # Exported summaries can contain PHI; staging must be private and
+    # exclusively created, including in a user-selected shared directory.
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}-",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.replace(tmp, dest)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
 def _fm(title: str) -> str:

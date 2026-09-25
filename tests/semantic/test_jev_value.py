@@ -6,6 +6,8 @@ partial evidence never passes.
 """
 import json
 
+import pytest
+
 import semantic_evaluation as seval
 import semantic_facts as sf
 
@@ -165,3 +167,48 @@ def test_shadow_e2e_extraction_failure_recorded():
     assert stages["extract"] in ("incomplete",) or \
         stages["extract"].startswith("error:")
     assert not report["per_case"][0]["passed"]
+
+
+@pytest.mark.parametrize("failure", ["audit", "unevaluated", "relations"])
+def test_shadow_e2e_later_message_cannot_hide_failed_stage(monkeypatch, failure):
+    import semantic_audit
+    import semantic_relations
+
+    calls = []
+
+    def audit(*args):
+        first = not calls
+        calls.append(1)
+        return {"evaluated": not (first and failure == "unevaluated"),
+                "status": "NEEDS_REVIEW" if first and failure != "relations" else "PASS",
+                "findings": []}
+
+    if failure == "relations":
+        reconcile = semantic_relations.reconcile_facts
+        def broken(active, new):
+            if active:
+                raise ValueError("synthetic reconciliation failure")
+            return reconcile(active, new)
+        monkeypatch.setattr(semantic_relations, "reconcile_facts", broken)
+    monkeypatch.setattr(semantic_audit, "audit_facts_v2", audit)
+    cases = [{"id": "thread", "messages": [
+        {"message_id": i, "body": BODY} for i in (1, 2)]}]
+    report = seval.run_shadow_e2e(
+        cases, _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev())
+    assert len(calls) == 2
+    assert report["complete"] == 0
+    case = report["per_case"][0]
+    assert not case["passed"]
+    if failure != "relations":
+        assert case["stages"]["audit"] == "NEEDS_REVIEW"
+
+
+def test_shadow_e2e_honors_chunk_budget():
+    prompts = []
+    body = "本日は特記なし。\n" * 20
+    def llm(prompt):
+        prompts.append(prompt)
+        return _llm([])(prompt)
+
+    seval.run_shadow_e2e([{"id": "chunked", "body": body}], llm, _Jev(), chunk_size=30)
+    assert len(prompts) > 1

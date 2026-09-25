@@ -1,5 +1,6 @@
 """Current audit coverage excludes history, stale generations and orphan results."""
 import json
+import time
 
 import pytest
 
@@ -115,5 +116,53 @@ def test_missing_or_disabled_config_is_not_reported_as_current_quality(tmp_path,
         assert quality["available"] is False and quality["reason"] == "summary_disabled"
         assert quality["complete"] is None and quality["incomplete"] is None
         assert quality["completion_rate"] is None
+    finally:
+        db.close()
+
+
+def test_observation_excludes_partial_bodies_from_extract_backlog(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.save_messages([_message(1, body="完全な合成本文"),
+                          _message(2, body="部分的な合成本文")])
+        with db.db:
+            db.db.execute("UPDATE messages SET body_state='snippet' "
+                          "WHERE message_id=2")
+
+        snapshot = semantic_observe.observe(str(tmp_path / "ledger.db"))
+        assert snapshot["extract_llm_left"] == 1
+    finally:
+        db.close()
+
+
+def test_observation_skips_invalid_usage_json(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        now = time.time()
+        with db.db:
+            db.db.execute(
+                "INSERT INTO artifacts(kind,content,meta,created_at) "
+                "VALUES('semantic_usage','{}','{broken',?)", (now,))
+            db.db.execute(
+                "INSERT INTO artifacts(kind,content,meta,created_at) "
+                "VALUES('semantic_usage','{}',?,?)",
+                (json.dumps({"jev_requests": 2}), now))
+
+        snapshot = semantic_observe.observe(str(tmp_path / "ledger.db"))
+        assert snapshot["jev_requests_today"] == 2
+    finally:
+        db.close()
+
+
+def test_observation_skips_invalid_job_json(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        with db.db:
+            db.db.execute(
+                "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state) "
+                "VALUES('semantic',1,1,'{broken','pending')")
+
+        assert semantic_observe.observe(str(tmp_path / "ledger.db"))[
+            "eligible_pending"] == 0
     finally:
         db.close()

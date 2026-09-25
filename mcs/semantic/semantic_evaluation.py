@@ -1027,6 +1027,7 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
         stages = {"extract": "ok", "relations": "ok", "audit": None,
                   "repair": "skipped", "render": "ok"}
         case_doc_facts = 0
+        all_audits_passed = True
         for msg in messages:
             member = {"project_id": case.get("project_id", "eval"),
                       "message_id": msg.get("message_id", cid),
@@ -1038,7 +1039,8 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                                  "profession": ""}}
             try:
                 result = semantic_extraction.extract_facts_v2(
-                    llm_fn, member, deadline, jev_client=jev_client)
+                    llm_fn, member, deadline, jev_client=jev_client,
+                    chunk_size=chunk_size)
             except Exception as error:
                 stages["extract"] = f"error:{type(error).__name__}"
                 break
@@ -1055,14 +1057,15 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                 stages["relations"] = f"error:{type(error).__name__}"
             audit = semantic_audit.audit_facts_v2(
                 jev_client, doc, member["body_original"], deadline)
-            stages["audit"] = audit["status"]
+            audit_status = audit["status"]
             if audit["evaluated"] and audit["status"] != "PASS":
                 rejected = {f["fact"]: f["code"]
                             for f in audit["findings"] if f.get("fact")}
                 if rejected:
                     try:
                         repair = semantic_extraction.repair_facts_v2(
-                            llm_fn, member, doc, rejected, deadline)
+                            llm_fn, member, doc, rejected, deadline,
+                            chunk_size=chunk_size)
                     except Exception as error:
                         stages["repair"] = f"error:{type(error).__name__}"
                         repair = {"repaired": False}
@@ -1075,11 +1078,16 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                         audit = semantic_audit.audit_facts_v2(
                             jev_client, doc, member["body_original"],
                             deadline)
-                        stages["audit"] = f"{audit['status']} (post-repair)"
+                        audit_status = f"{audit['status']} (post-repair)"
+            all_audits_passed &= audit["evaluated"] and audit["status"] == "PASS"
+            # Preserve the first failing message's audit in a thread report.
+            if stages["audit"] is None or stages["audit"].startswith("PASS"):
+                stages["audit"] = audit_status
             mandatory = semantic_render.mandatory_render(doc)
             stages["render"] = (f"{len(mandatory['facts'])}facts/"
                                 f"{len(mandatory['limitations'])}lims")
         passed = stages["extract"] == "ok" \
+            and stages["relations"] == "ok" and all_audits_passed \
             and isinstance(stages["audit"], str) \
             and stages["audit"].startswith("PASS")
         if passed:
