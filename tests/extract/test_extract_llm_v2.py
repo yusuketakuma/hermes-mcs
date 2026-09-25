@@ -775,7 +775,10 @@ def test_chunked_full_coverage_and_merge(monkeypatch):
     """A >3000-char body is covered in full; outputs merge
     deterministically (progression-preserving dedup, last-vitals,
     any-high urgency, no partial summary)."""
-    part_a, part_b = "あ" * 2500, "い" * 1200
+    # vitals need their labelled numbers in the body — the vitals guard
+    # anchors each key to the label nearest its value (脈は80 -> hr)
+    part_a = "あ" * 2500 + "脈は80"
+    part_b = "い" * 600 + "脈は90 SpO2は95" + "い" * 580
     body = part_a + "\n" + part_b
     seen_bodies = []
 
@@ -1058,6 +1061,26 @@ def test_med_period_requires_med_context():
     d = extract.extract_message(
         "勤務予定表は9/1-9/14です", "2026-09-23T10:00:00+09:00")
     assert "med_periods" not in d
+
+
+def test_v1_vitals_ha_connector_and_pulse():
+    """'脈は48' — the topic marker は sits between the label and the
+    value; the pulse reading must land on hr (and never bs)."""
+    import extract
+    d = extract.extract_message(
+        "Spo2の低下はなく98％キープ。脈は48回／分です。",
+        "2026-02-28T16:08:39+09:00")
+    assert d["vitals"]["hr"] == 48
+    assert "bs" not in (d["vitals"] or {})
+
+
+def test_v1_vitals_no_vein_false_positive():
+    """静脈/動脈 are vessels, not pulse labels — '静脈は20G確保' must
+    not surface as a heart rate."""
+    import extract
+    d = extract.extract_message(
+        "静脈は20Gで確保しました", "2026-02-28T16:08:39+09:00")
+    assert (d.get("vitals") or {}).get("hr") is None
 
 
 def test_posted_at_reaches_prompt(monkeypatch):
@@ -1545,3 +1568,193 @@ def test_cli_batch_default_and_pass_through(monkeypatch):
         monkeypatch.setattr(extract_llm.sys, "argv", argv)
         assert extract_llm.main() == 0
         assert seen["batch_k"] == want
+
+
+# ---------- vitals label anchoring ----------
+
+def test_vitals_guard_relabels_mislabelled_key():
+    """Regression: '脈は48回／分' extracted as bs:48 must relabel to
+    hr — a pulse shown as blood sugar reads as severe hypoglycemia."""
+    out = extract_llm._validate({"vitals": {"bs": 48}},
+                                "SpO2は98。脈は48回／分です。")
+    assert out["vitals"] == {"hr": 48.0}
+
+
+def test_vitals_guard_keeps_labelled_and_unlabelled():
+    out = extract_llm._validate({"vitals": {"bs": 48, "hr": 72}},
+                                "血糖値48。脈拍は72。")
+    assert out["vitals"] == {"bs": 48.0, "hr": 72.0}
+    # a verbatim number with no nearby label is unverifiable, kept
+    out = extract_llm._validate({"vitals": {"rr": 20}},
+                                "バイタルメモ 20 と記録")
+    assert out["vitals"] == {"rr": 20.0}
+
+
+def test_vitals_guard_drops_absent_and_ambiguous():
+    drops = {}
+    out = extract_llm._validate({"vitals": {"bs": 99, "hr": 48}},
+                                "脈は48回／分です", drops)
+    assert out["vitals"] == {"hr": 48.0}
+    assert any("vitals.bs" in s for s in drops["vitals"])
+    drops = {}
+    out = extract_llm._validate({"vitals": {"rr": 48}},
+                                "脈拍48、血糖48", drops)
+    assert "rr" not in out.get("vitals", {})
+    assert drops["vitals"]
+
+
+def test_vitals_guard_relabel_conflict_drops():
+    """bs->hr remap must not overwrite a real hr reading."""
+    drops = {}
+    out = extract_llm._validate({"vitals": {"hr": 80, "bs": 48}},
+                                "脈拍80。脈は48回／分です", drops)
+    assert out["vitals"]["hr"] == 80.0
+    assert "bs" not in out["vitals"]
+    assert drops["vitals"]
+
+
+def test_repair_issues_include_vitals_notes():
+    issues = extract_llm._repair_issues(
+        {"vitals": ["vitals.bs=48 は本文に数値がありません"]},
+        {"vitals": {}})
+    assert any("vitals.bs" in i for i in issues)
+
+
+def test_llm_extract_injects_qc_feedback(monkeypatch):
+    seen = []
+
+    def fake(prompt, **_):
+        seen.append(prompt)
+        return {"summary": "ok"}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    extract_llm.llm_extract(
+        "本文", feedback=["vitals項目「bs=48」は本文に裏付けがありません"])
+    assert "監査フィードバック" in seen[0]
+    assert "裏付けがありません" in seen[0]
+
+
+# ---------- QC-flagged feedback re-extraction ----------
+
+def _extract_artifact(db, mid, content, chash, qc_fix=None):
+    meta = {"hash": chash,
+            "extract_version": extract_llm.EXTRACT_VERSION}
+    if qc_fix is not None:
+        meta["qc_fix"] = qc_fix
+    return db.artifact_add("extract_llm", json.dumps(content),
+                           project_id=1, message_id=mid, meta=meta)
+
+
+def _qc_artifact(db, mid, src_id, chash, content):
+    return db.artifact_add(
+        "extract_qc", json.dumps(content, ensure_ascii=False),
+        project_id=1, message_id=mid, model="jev-test",
+        meta={"hash": chash,
+              "extract_version": extract_llm.EXTRACT_VERSION,
+              "source_artifact_id": src_id, "qc": "done"})
+
+
+def _seed_qc_flagged(db, body="脈は48回／分です"):
+    db.save_messages([_message(body=body)])
+    chash = _hash(db, 1)
+    src = _extract_artifact(db, 1, {"vitals": {"bs": 48},
+                                    "summary": "s"}, chash)
+    _qc_artifact(db, 1, src, chash,
+                 {"qc": "done", "items": [
+                     {"section": "vitals", "index": "bs",
+                      "item": {"vitals": {"bs": 48}},
+                      "verdict": "NO_MATCH", "noul": 0.1}]})
+    return chash
+
+
+def test_qc_flagged_row_reextracts_with_feedback(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    _seed_qc_flagged(db)
+    seen = {}
+
+    def fake(body, **kw):
+        seen["feedback"] = kw.get("feedback")
+        return {"vitals": {"hr": 48}, "summary": "s2"}
+
+    monkeypatch.setattr(extract_llm, "llm_extract", fake)
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["done"] == 1
+    assert seen["feedback"] and "裏付け" in seen["feedback"][0]
+    art = db.artifacts("extract_llm", message_id=1)[-1]
+    meta = json.loads(art["meta"])
+    assert meta["qc_fix"]["applied"] is True
+    assert json.loads(art["content"])["vitals"] == {"hr": 48}
+    # qc_fix ends the loop — no re-selection, no further calls
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res2["selected"] == 0 and res2["done"] == 0
+
+
+def test_qc_flagged_failed_repair_settles_flag(tmp_path, monkeypatch):
+    """A failed feedback re-extract re-mints the audited artifact with
+    qc_fix applied=False — the row stops re-entering pending instead of
+    burning an LLM call every cycle."""
+    db = _ledger(tmp_path)
+    _seed_qc_flagged(db)
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **k: True)
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["failed"] == 1
+    art = db.artifacts("extract_llm", message_id=1)[-1]
+    meta = json.loads(art["meta"])
+    assert meta["qc_fix"]["applied"] is False
+    assert json.loads(art["content"])["vitals"] == {"bs": 48}
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res2["selected"] == 0
+
+
+def test_qc_urgency_mismatch_flags_row(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="経過観察の記録")])
+    chash = _hash(db, 1)
+    src = _extract_artifact(db, 1, {"summary": "s",
+                                    "urgency": "routine"}, chash)
+    _qc_artifact(db, 1, src, chash,
+                 {"qc": "done", "items": [],
+                  "urgency": {"extracted": "routine", "jev": "high",
+                              "confidence": 0.9}})
+    seen = {}
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **kw: seen.update(kw)
+                        or {"summary": "s", "urgency": "high"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["done"] == 1
+    assert "緊急度" in seen["feedback"][0]
+
+
+def test_qc_clean_artifact_stays_settled(tmp_path, monkeypatch):
+    """A MATCH verdict must not re-pend the row."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    chash = _hash(db, 1)
+    src = _extract_artifact(db, 1, {"summary": "s"}, chash)
+    _qc_artifact(db, 1, src, chash,
+                 {"qc": "done", "items": [
+                     {"section": "meds", "index": 0, "item": {"name": "薬"},
+                      "verdict": "MATCH", "noul": 0.9}]})
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda *a, **k: {"summary": "x"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["selected"] == 0
+
+
+def test_qc_stale_source_artifact_does_not_flag(tmp_path, monkeypatch):
+    """A QC row pinned to a SUPERSEDED extraction never re-pends the
+    message — only the verdict on the current artifact counts."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    chash = _hash(db, 1)
+    old = _extract_artifact(db, 1, {"summary": "old"}, chash)
+    _qc_artifact(db, 1, old, chash,
+                 {"qc": "done", "items": [
+                     {"section": "meds", "index": 0, "item": {"name": "薬"},
+                      "verdict": "NO_MATCH", "noul": 0.1}]})
+    _extract_artifact(db, 1, {"summary": "new"}, chash)  # supersedes
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda *a, **k: {"summary": "x"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["selected"] == 0

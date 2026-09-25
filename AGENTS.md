@@ -18,9 +18,14 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   症状 status・evidence スパン）。v3 パスはルール解析をプロンプト
   ヒントとして取り込み `extract_v1` artifact も同パスで保証する。
   `--batch` で context 無し本文を複数集約呼出し(既定4)、検証 drop 時は
-  1回だけ修復再問、llama.cpp timings は artifact meta に集計
+  1回だけ修復再問、llama.cpp timings は artifact meta に集計。
+  vitals は本文ラベル照合で誤キーを自動修正(脈→bs 等)。Jev QC が
+  NO_MATCH/urgency 不一致を付した抽出は1回だけフィードバック再抽出
+  される(meta.qc_fix で終息)
 - 抽出項目の Jev QC 監査: `semantic.extract_qc:"annotate"` で `extract_qc`
-  artifact に注記のみ記録（抽出の変更・抑制なし、drain ガード共有）
+  artifact に注記のみ記録（監査結果は抽出を直接変更しない、drain ガード
+  共有）。NO_MATCH/urgency 不一致は extract_llm 側で1回限りの
+  フィードバック再抽出として処理される
 - 読み取り専用統計・レビュー候補シグナル6種・人承認の依頼管理
 - Hermes addon(`hermes_plugin/`): Discord `/mcs <json>` で閲覧・preview/confirm
 

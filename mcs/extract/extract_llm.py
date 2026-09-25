@@ -11,7 +11,10 @@ enable_thinking=false for clean JSON). Fully local — no data leaves the box.
 
 Incremental: run_pending() extracts only messages lacking a current
 extract_llm artifact (content_hash tracked in meta). run_check calls it
-with a time budget each tick so the backlog drains gradually.
+with a time budget each tick so the backlog drains gradually. A row whose
+current artifact Jev QC flagged re-enters pending once for a feedback
+re-extract (meta.qc_fix settles the flag); vitals are anchored to the
+nearest measurement label in the body at validation time.
 """
 import argparse
 import contextlib
@@ -78,7 +81,7 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
 - "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
 - "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "依頼者(職種・家族等) または null", "action": "依頼内容を15字以内で", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null"}]
-- "vitals": 数値のみ {"bt": 36.5, "hr": 76, "rr": 18, "sbp": 134, "dbp": 68, "spo2": 97, "bs": 120}
+- "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
 - "urgency": "high" または "routine" (至急・緊急・救急・搬送等ならhigh)
@@ -139,6 +142,12 @@ _HINT_HEAD = """決定的候補(同一本文へのルール抽出結果 — 機�
 _HINT_TAIL = """
 >>>
 
+"""
+
+# Jev QC audit findings on the CURRENT extraction, injected before the
+# target label — a NO_MATCH verdict means the item lacked text support,
+# so the re-extract must drop or re-anchor it, not re-emit it.
+_FEEDBACK_HEAD = """監査フィードバック(前回の抽出へのQC指摘 — 本文に裏付けの無い項目は削除し、本文に忠実に修正すること):
 """
 
 _TARGET_HEAD = """対象本文(投稿日時: {posted}):
@@ -354,6 +363,114 @@ def _probe_format(deadline: float | None = None) -> str:
     return _FMT_MODE
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
+
+# Vital keys anchor to the measurement label NEAREST their value in the
+# body — labels precede the number (脈は48 / 血圧120/80), units follow
+# (48回／分, 98℃). A bare 回/分 or % is shared between vitals, so it is
+# not a distinguishing label. sbp/dbp share the 血圧 class — position
+# inside the N/M pair decides which.
+_VITAL_LABELS = {
+    "bt":   re.compile(r"体温|BT|Bt|bt|℃"),
+    "hr":   re.compile(r"脈拍|(?<!静)(?<!動)脈|心拍|HR|Hr|hr"),
+    "rr":   re.compile(r"呼吸|RR|Rr|rr"),
+    "bp":   re.compile(r"血圧|BP|Bp|bp|収縮|拡張|mmHg"),
+    "spo2": re.compile(r"SpO2|Spo2|SPO2|spo2|酸素飽和|酸素"),
+    "bs":   re.compile(r"血糖|BS|Bs|bs|Glu|glu|血糖値"),
+}
+_VITAL_CLASS = {"bt": "bt", "hr": "hr", "rr": "rr",
+                "sbp": "bp", "dbp": "bp", "spo2": "spo2", "bs": "bs"}
+_VITAL_WIN_BACK = 14
+_VITAL_WIN_FWD = 8
+
+
+def _vitals_guard(body: str | None, vit: dict,
+                  drops: dict | None = None) -> dict:
+    """Anchor each vital to the label nearest its value in the body.
+
+    A mislabelled key ('脈は48' extracted as bs:48 — pulse shown as
+    blood sugar) is clinically dangerous: when the label nearest the
+    number names a different vital, remap to it; when the value is
+    absent or the nearest labels disagree, drop the key. A verbatim
+    value with no nearby label is kept — unverifiable, not contradicted
+    (same policy as evidence)."""
+    if not body or not vit:
+        return vit
+    toks = [(m.start(), m.end(), float(m.group()))
+            for m in re.finditer(r"\d+(?:\.\d+)?", body)]
+    issues = drops.setdefault("vitals", []) if drops is not None else []
+
+    def note(s):
+        if len(issues) < 6:
+            issues.append(s)
+
+    def nearest(s, e):
+        """Label class closest to the number — a preceding label beats
+        a following unit (a label after the number belongs to the NEXT
+        reading: 血圧120/80 脈60)."""
+        best = None
+        back = body[max(0, s - _VITAL_WIN_BACK):s]
+        for cls, rx in _VITAL_LABELS.items():
+            m = None
+            for m in rx.finditer(back):
+                pass
+            if m is not None:
+                dist = len(back) - m.end()
+                if best is None or dist < best[0]:
+                    best = (dist, cls)
+        for cls, rx in _VITAL_LABELS.items():
+            fm = rx.search(body[e:e + _VITAL_WIN_FWD])
+            if fm is not None:
+                dist = 100 + fm.start()
+                if best is None or dist < best[0]:
+                    best = (dist, cls)
+        return best[1] if best else None
+
+    def bp_side(s, e):
+        """120/80: before the slash is systolic, after is diastolic."""
+        if body[e:e + 1] in "/／":
+            return "sbp"
+        if body[s - 1:s] in "/／":
+            return "dbp"
+        return None
+
+    out = {}
+    for k, val in vit.items():
+        hits = [(s, e) for s, e, num in toks if num == val]
+        if not hits:
+            note(f"vitals.{k}={val:g} は本文に数値がありません")
+            continue
+        kcls = _VITAL_CLASS[k]
+        winners = {nearest(s, e) for s, e in hits}
+        if kcls in winners:
+            tgt = k
+            if kcls == "bp":
+                tgt = next((bp_side(s, e) for s, e in hits
+                            if bp_side(s, e)), k)
+        else:
+            winners.discard(None)
+            if len(winners) != 1:
+                if len(winners) > 1:
+                    note(f"vitals.{k}={val:g} の測定名が本文で"
+                         "一意に特定できません")
+                else:
+                    out[k] = val    # verbatim, unlabelled — keep
+                continue
+            tgt = winners.pop()
+            if tgt == "bp":
+                tgt = next((bp_side(s, e) for s, e in hits
+                            if bp_side(s, e)), None)
+                if tgt is None:
+                    note(f"vitals.{k}={val:g} の測定名が本文で"
+                         "一意に特定できません")
+                    continue
+        if tgt != k:
+            if tgt in vit or tgt in out:
+                note(f"vitals.{k}={val:g} は本文では{tgt}の記述です")
+                continue
+            out[tgt] = val          # relabel, e.g. bs -> hr
+        else:
+            out[k] = val
+    return out
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
 _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
            "eol", "care", "family_contact", "other"}
@@ -563,6 +680,8 @@ def _validate(d: dict, body: str | None = None,
                         drop_item("vitals")
                         continue
                     vit[k] = float(val)
+                if vit and body is not None:
+                    vit = _vitals_guard(body, vit, drops)
                 if vit:
                     out["vitals"] = vit
             else:
@@ -809,6 +928,8 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
     Empty means nothing actionable to fix (e.g. transport failure)."""
     issues = [f"evidence「{q}」は対象本文に一致しません(完全一致引用に修正)"
               for q in drops.get("ev") or []]
+    issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
+               for s in drops.get("vitals") or []]
     issues += [f"「{f}」の項目がスキーマ違反でした"
                for f in drops.get("items") or []]
     if v is None and not issues:
@@ -823,6 +944,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 posted_at: str | None = None,
                 chunks_in: dict | None = None,
                 chunks_out: dict | None = None,
+                feedback: list | None = None,
                 on_chunk=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
@@ -832,7 +954,9 @@ def llm_extract(body: str, *, context: str | None = None,
     it is reference-only and never becomes evidence. `hints` is the
     deterministic rule-parser output for the SAME body — injected as
     confirmable candidates so the v3 pass folds the v1/v2 (rules) work
-    into one call instead of a second pipeline.
+    into one call instead of a second pipeline. `feedback` carries Jev
+    QC findings on the current extraction — unsupported items to drop
+    or re-anchor, applied as a one-shot repair steer.
 
     Bodies longer than _CHUNK_SIZE are covered in full via _chunks;
     each chunk's output validates against the WHOLE body so evidence
@@ -848,6 +972,11 @@ def llm_extract(body: str, *, context: str | None = None,
         block = _hint_block(hints)
         if block:
             prompt += _HINT_HEAD + block + _HINT_TAIL
+    if feedback:
+        flines = [str(x)[:140] for x in feedback if str(x).strip()][:8]
+        if flines:
+            prompt += (_FEEDBACK_HEAD
+                       + "\n".join("- " + x for x in flines) + "\n\n")
     thead = _target_head(posted_at)
     chunks = _chunks(body, _CHUNK_SIZE)
     saved = chunks_in or {}
@@ -1095,7 +1224,8 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
 
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
-                     integrity: dict | None = None):
+                     integrity: dict | None = None,
+                     qc_fix: dict | None = None):
     """Atomically write the current-version artifact and remove every
     superseded valid-meta row for the message — readers must never see
     two 'current' rows for one body (they disagree: stats scan oldest-
@@ -1111,6 +1241,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         meta["ctx"] = True
     if integrity:
         meta["integrity"] = integrity
+    if qc_fix is not None:
+        meta["qc_fix"] = qc_fix
     with ledger.db:
         # A guarded INSERT takes the write lock before superseding any
         # result. An edit/deletion during inference must preserve the
@@ -1130,6 +1262,76 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             AND artifact_id != ?
         """, (KIND, r["message_id"], cur.lastrowid))
     return True
+
+
+def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
+    """Scalar subquery: the extract artifact whose current Jev QC audit
+    flagged unsupported items (NO_MATCH verdicts) or an urgency
+    mismatch. The source pin lands on the NEWEST current extraction —
+    a verdict on a superseded artifact never flags."""
+    from mcs_queries import qc_source_id
+    src = qc_source_id(msg, version=EXTRACT_VERSION)
+    return f"""SELECT {val} FROM artifacts a
+        JOIN artifacts q ON q.message_id=a.message_id
+         AND q.kind='extract_qc'
+         AND json_valid(q.meta) AND json_valid(q.content)
+         AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
+         AND json_extract(q.content,'$.qc')='done'
+         AND (q.content LIKE '%NO_MATCH%'
+              OR (json_extract(q.content,'$.urgency.jev') IS NOT NULL
+                  AND json_extract(q.content,'$.urgency.jev') !=
+                      json_extract(q.content,'$.urgency.extracted')))
+        WHERE a.kind='{KIND}' AND a.artifact_id={src}
+        ORDER BY q.artifact_id DESC LIMIT 1"""
+
+
+def _qc_feedback(ledger, src_artifact_id):
+    """Flagged QC audit for a current extraction -> {src, qc, notes}
+    for a feedback re-extract, or None when nothing actionable remains
+    (the artifact vanished, or the newest audit is clean)."""
+    row = ledger.db.execute(
+        """SELECT q.artifact_id, q.content FROM artifacts q
+           WHERE q.kind='extract_qc'
+             AND json_valid(q.meta) AND json_valid(q.content)
+             AND json_extract(q.meta,'$.source_artifact_id')=?
+             AND json_extract(q.content,'$.qc')='done'
+             AND (q.content LIKE '%NO_MATCH%'
+                  OR (json_extract(q.content,'$.urgency.jev') IS NOT NULL
+                      AND json_extract(q.content,'$.urgency.jev') !=
+                          json_extract(q.content,'$.urgency.extracted')))
+           ORDER BY q.artifact_id DESC LIMIT 1""",
+        (src_artifact_id,)).fetchone()
+    if row is None:
+        return None
+    try:
+        c = json.loads(row["content"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    notes = []
+    for it in c.get("items") or []:
+        if not isinstance(it, dict) or it.get("verdict") != "NO_MATCH":
+            continue
+        item = it.get("item")
+        if isinstance(item, dict):
+            label = item.get("name") or item.get("text")
+            if label is None and isinstance(item.get("vitals"), dict):
+                label = ",".join(f"{vk}={vv}"
+                                 for vk, vv in item["vitals"].items())
+            if label is None:
+                label = json.dumps(item, ensure_ascii=False)
+        else:
+            label = str(item)
+        notes.append(f"{it.get('section')}項目「{str(label)[:80]}」"
+                     "は本文に裏付けがありません")
+    urg = c.get("urgency")
+    if isinstance(urg, dict) and urg.get("jev") is not None \
+            and urg.get("jev") != urg.get("extracted"):
+        notes.append(f"緊急度は「{urg.get('jev')}」が妥当と監査されています"
+                     f"(前回の抽出: {urg.get('extracted')})")
+    if not notes:
+        return None
+    return {"src": src_artifact_id, "qc": row["artifact_id"],
+            "notes": notes[:6]}
 
 
 def _next_retry(ledger) -> float | None:
@@ -1388,9 +1590,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainers take DESC (newest), so an ASC caller can progress the
     # backlog without re-selecting rows a drainer just claimed.
     order = "ASC" if oldest_first else "DESC"
+    # QC-flagged rows keep their current artifact but re-enter pending
+    # for exactly one feedback re-extract — a meta.qc_fix artifact
+    # (applied or declined) ends the loop.
     rows = ledger.db.execute(f"""
       SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
              m.parent_id, m.posted_at, m.posted_at_ts,
+             ({_qc_flagged_sql()}) AS qc_src,
              MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
       FROM messages m
       LEFT JOIN artifacts e ON e.message_id=m.message_id AND e.kind=?
@@ -1409,13 +1615,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         AND NOT EXISTS (SELECT 1 FROM artifacts bad
                         WHERE bad.kind=? AND bad.message_id=m.message_id
                           AND NOT json_valid(bad.meta))
-        AND NOT EXISTS (SELECT 1 FROM artifacts a
+        AND NOT EXISTS (SELECT 1 FROM artifacts f
+                        WHERE f.kind=? AND f.message_id=m.message_id
+                          AND json_valid(f.meta)
+                          AND json_extract(f.meta,'$.hash')=m.content_hash
+                          AND json_extract(f.meta,'$.extract_version')=?
+                          AND json_extract(f.meta,'$.qc_fix') IS NOT NULL)
+        AND (NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind=? AND a.message_id=m.message_id
                           AND CASE WHEN json_valid(a.meta) THEN
                             json_extract(a.meta,'$.error') IS NOT 1
                             AND json_extract(a.meta,'$.hash')=m.content_hash
                             AND json_extract(a.meta,'$.extract_version')=?
                           ELSE 0 END)
+             OR EXISTS ({_qc_flagged_sql(val="1")}))
         AND (? IS NULL OR m.message_id % ? = ?)
       GROUP BY m.message_id
       HAVING attempts < 5
@@ -1424,6 +1637,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
       ORDER BY m.posted_at_ts {order}
       LIMIT ?
     """, (KIND, EXTRACT_VERSION, KIND, KIND, EXTRACT_VERSION,
+          KIND, EXTRACT_VERSION,
           shard[1] if shard else None,
           shard[1] if shard else 1,
           shard[0] if shard else 0,
@@ -1436,15 +1650,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     jobs = []
     for r in rows:
         context = _thread_context(ledger, r)
+        qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
+        if r["qc_src"] and qc is None:
+            continue   # flagged in SQL but the audit is gone or clean
         jobs.append((r, context, _saved_chunks(ledger, r, context),
-                     _rule_hints(r)))
+                     _rule_hints(r), qc))
     metas = [None] * len(jobs)
     checkpoints = queue.SimpleQueue()
     parallel = workers > 1 and len(jobs) > 1
     leases = {}
 
     def _checkpoint(index, chunk, value):
-        r, ctx, _, _ = jobs[index]
+        r, ctx = jobs[index][0], jobs[index][1]
         if _owns_current_source(ledger, r, leases[index]):
             _persist_chunks(ledger, r, {chunk: value}, ctx)
 
@@ -1457,7 +1674,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _checkpoint(*item)
 
     def _extract(item):
-        index, (r, ctx, saved, hints) = item
+        index, (r, ctx, saved, hints, qc) = item
         meta = {}
         metas[index] = meta
         chunks_out: dict = {}
@@ -1468,11 +1685,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            posted_at=r["posted_at"],
                            chunks_in=saved,
                            chunks_out=chunks_out,
+                           feedback=qc["notes"] if qc else None,
                            on_chunk=(lambda i, v: checkpoints.put((index, i, v)))
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v))), chunks_out
 
-    def _handle(r, ctx, d, integrity, lease, chunks_out):
+    def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down
         try:
             if not _owns_current_source(ledger, r, lease):
@@ -1487,6 +1705,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows.
                     endpoint_down = True
+                    return
+                if qc is not None:
+                    # A QC-flagged row that failed its feedback re-
+                    # extract keeps the audited artifact — re-mint it
+                    # with qc_fix so the flag settles instead of
+                    # burning an LLM call every cycle.
+                    src = ledger.db.execute(
+                        "SELECT content FROM artifacts WHERE artifact_id=?",
+                        (qc["src"],)).fetchone()
+                    if src is not None:
+                        with lock(per_write_lock) as held:
+                            if held:
+                                _replace_current(
+                                    ledger, r, src["content"],
+                                    qc_fix={"qc": qc["qc"],
+                                            "applied": False})
                     return
                 with lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
@@ -1503,12 +1737,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return
             d["_model"] = MODEL
             with lock(per_write_lock) as held:
-                if held and not _current(ledger, r["message_id"],
-                                         r["content_hash"]):
+                # QC-flagged rows already hold a current artifact —
+                # replacing it is the point of the feedback pass.
+                if held and (qc is not None
+                             or not _current(ledger, r["message_id"],
+                                             r["content_hash"])):
                     if not _replace_current(ledger, r,
                                             json.dumps(d, ensure_ascii=False),
                                             ctx=ctx is not None,
-                                            integrity=integrity):
+                                            integrity=integrity,
+                                            qc_fix=({"qc": qc["qc"],
+                                                     "applied": True}
+                                                    if qc else None)):
                         deferred += 1
                         return
                     # the whole body is now covered — checkpoints for
@@ -1527,7 +1767,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    for index, (r, ctx, saved, hints) in enumerate(jobs):
+    for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
         lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
                                       deadline - time.monotonic() + TIMEOUT + 30))
         if lease is not None:
@@ -1536,7 +1776,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # claimed rows mint/refresh their extract_v1 artifact here so
             # speed-lane readers never wait on the LLM queue
             _ensure_v1(ledger, r, hints)
-            claimed.append((index, r, ctx, saved, hints, lease))
+            claimed.append((index, r, ctx, saved, hints, qc, lease))
 
     def _exec_batch(tups):
         """One shared call for context-free single-chunk rows ->
@@ -1548,7 +1788,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         start = len(notes)
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
-                           for _, r, _c, _s, hints, _l in tups]),
+                           for _, r, _c, _s, hints, _q, _l in tups]),
             deadline=deadline, schema=_SCHEMA_BATCH,
             max_tokens=_BATCH_MAX_TOKENS,
             need_s=_batch_need_s(len(tups)))
@@ -1591,10 +1831,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         free when the remainder fits nothing."""
         residue = []
         for tup in tups:
-            index, r, ctx, saved, hints, lease = tup
+            index, r, ctx, saved, hints, qc, lease = tup
             if status == "ok" and index in results:
                 metas[index] = meta
-                _handle(r, ctx, results[index], meta, lease, {})
+                _handle(r, ctx, results[index], meta, lease, {}, qc)
             else:
                 # a deferred batch's rows also fall through: the single
                 # lane's preflight floor re-defers them for free when
@@ -1612,8 +1852,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         units: list = []
         group: list = []
         for tup in claimed:
-            _index, r, ctx, saved, _h, _l = tup
-            if batch_k >= 2 and ctx is None and not saved \
+            _index, r, ctx, saved, _h, qc, _l = tup
+            # QC-flagged rows take the single lane — their feedback
+            # prompt differs from the shared batch envelope.
+            if batch_k >= 2 and qc is None and ctx is None and not saved \
                     and len(_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
                 group.append(tup)
                 if len(group) >= batch_k:
@@ -1628,9 +1870,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             units.append(("batch", group))
 
         def _single_future(pool, tup):
-            index, r, ctx, saved, hints, _lease = tup
+            index, r, ctx, saved, hints, qc, _lease = tup
             return pool.submit(_extract,
-                               (index, (r, ctx, saved, hints)))
+                               (index, (r, ctx, saved, hints, qc)))
 
         if parallel and units:
             # settle the probed output format before fanning out — the
@@ -1660,10 +1902,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     for fut in finished:
                         kind, tups = futs[fut]
                         if kind == "single":
-                            index, r, ctx, saved, hints, lease = tups[0]
+                            index, r, ctx, saved, hints, qc, lease = \
+                                tups[0]
                             d, chunks_out = fut.result()
                             _handle(r, ctx, d, metas[index], lease,
-                                    chunks_out)
+                                    chunks_out, qc)
                         else:
                             status, results, meta = fut.result()
                             for tup in _handle_batch(status, results,
@@ -1674,24 +1917,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         else:
             for kind, payload in units:
                 if kind == "single":
-                    index, r, ctx, saved, hints, lease = payload
+                    index, r, ctx, saved, hints, qc, lease = payload
                     d, chunks_out = _extract(
-                        (index, (r, ctx, saved, hints)))
-                    _handle(r, ctx, d, metas[index], lease, chunks_out)
+                        (index, (r, ctx, saved, hints, qc)))
+                    _handle(r, ctx, d, metas[index], lease, chunks_out,
+                            qc)
                 else:
                     status, results, meta = _exec_batch(payload)
                     for tup in _handle_batch(status, results, meta,
                                              payload):
-                        index, r, ctx, saved, hints, lease = tup
+                        index, r, ctx, saved, hints, qc, lease = tup
                         d, chunks_out = _extract(
-                            (index, (r, ctx, saved, hints)))
+                            (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
-                                chunks_out)
+                                chunks_out, qc)
     finally:
         try:
             _flush_checkpoints()
         finally:
-            for index, r, ctx, saved, hints, lease in claimed:
+            for index, r, ctx, saved, hints, qc, lease in claimed:
                 _release(ledger, r, lease)
     left = ledger.db.execute("""
       SELECT COUNT(*) FROM messages m
