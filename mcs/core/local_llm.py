@@ -47,8 +47,10 @@ def request_slot() -> int:
     real-time reservation."""
     import os
     v = os.environ.get("MCS_LLM_SLOT")
-    if v is not None and v.strip().isdigit() and int(v) >= 0:
-        return int(v)
+    if v is not None:
+        digits = v.strip()
+        if digits and digits.isascii() and digits.isdecimal():
+            return int(digits)
     return BACKGROUND_SLOT
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
@@ -225,8 +227,18 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     id_slot = slot if type(slot) is int and slot >= 0 else request_slot()
     candidates = []
     if schema is not None:
+        # A server that ignores json_schema will echo the prompt's "ok"
+        # instead of this marker; that response must not select schema.
         candidates.append(("schema", {"type": "json_schema",
-                                      "json_schema": schema}))
+                                      "json_schema": {
+                                          "name": "mcs_format_probe",
+                                          "schema": {
+                                              "type": "object",
+                                              "properties": {"probe": {
+                                                  "type": "string",
+                                                  "enum": ["schema"]}},
+                                              "required": ["probe"],
+                                              "additionalProperties": False}}}))
     candidates.append(("object", {"type": "json_object"}))
     operation_deadline = time.monotonic() + timeout
     if deadline is not None:
@@ -245,8 +257,12 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 break
             if response["status"] != 200:
                 continue
+            if acceptance_error(response) is not None:
+                continue
             content = response["text"]
-            if isinstance(content, str) and verify(content):
+            if (isinstance(content, str) and verify(content)
+                    and (mode != "schema"
+                         or _json_obj(content) == {"probe": "schema"})):
                 return mode
         except (OSError, ValueError):
             break                   # transport dead — stop probing

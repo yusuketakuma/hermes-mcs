@@ -58,7 +58,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 2
+RULE_VERSION = 3
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -72,7 +72,7 @@ _VITAL_PATTERNS = {
 }
 
 
-def _ymd(month: int, day: int, year: int,
+def _ymd(month: int, day: int, year: int | None,
          posted: datetime | None = None,
          mode: str = "past") -> str | None:
     """Resolve an M/D (no year) against the post date. `mode`:
@@ -81,7 +81,10 @@ def _ymd(month: int, day: int, year: int,
       'any'    — explicit year or neutral
     Year wraps at Dec/Jan are resolved by shifting the year, not by
     guessing (Oracle B26)."""
-    for y in (year, year + 1, year - 1):
+    if year is None:
+        return None
+    years = (year,) if mode == "any" else (year, year + 1, year - 1)
+    for y in years:
         try:
             d = datetime(y, month, day).date()
         except ValueError:
@@ -133,7 +136,7 @@ def _period_dates(a, b, start_year, end_year, posted, context):
 def extract_message(body: str, posted_at: str) -> dict:
     """Structured view of one message. Missing fields are simply absent."""
     out: dict = {"v": 1}
-    year = 2026
+    year = None
     posted = None
     try:
         posted = datetime.fromisoformat(posted_at)
@@ -167,7 +170,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     if m:
         d = _ymd(int(m.group(2)), int(m.group(3)),
                  int(m.group(1)) if m.group(1) else year,
-                 posted if not m.group(1) else None, "past")
+                 posted, "any" if m.group(1) else "past")
         if d:
             out["visit_date"] = d
 
@@ -380,8 +383,6 @@ def main() -> int:
     if args.limit:
         todo = todo[:args.limit]
 
-    if args.stats:
-        pass  # fall through to stats below after optional extraction
     n = 0
     for r in todo:
         d = extract_message(r["body_text"], r["posted_at"])

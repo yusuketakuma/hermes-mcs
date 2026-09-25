@@ -203,3 +203,50 @@ def test_chunk_merge_preserves_restart_and_separate_subjects():
     ])
     assert merged["meds"][-1] == med("start", "2mg")
     assert {s["subject"] for s in merged["symptoms"]} == {"patient", "family"}
+
+
+@pytest.mark.parametrize('body,posted,expected', [
+    ('2025/2/29 訪問しました', '2025-03-01', {}),
+    ('2/20 訪問しました。次回3/1', '不明', {}),
+    ('2024/2/29 訪問しました', '不明', {'visit_date': '2024-02-29'}),
+    ('12/31 訪問しました。次回1/3', '2027-01-01',
+     {'visit_date': '2026-12-31', 'next_planned': '2027-01-03'}),
+    ('12/28 訪問しました。次回1/3', '2026-12-30',
+     {'visit_date': '2026-12-28', 'next_planned': '2027-01-03'}),
+])
+def test_visit_dates_require_a_valid_year_anchor(body, posted, expected):
+    result = extract.extract_message(body, posted)
+    assert {key: result[key] for key in ('visit_date', 'next_planned')
+            if key in result} == expected
+
+
+def test_date_rule_revision_replaces_fabricated_year(db):
+    db.save_messages([_message(body='2025/2/29 訪問しました')])
+    content_hash = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
+    db.artifact_add('extract_v1', json.dumps({'visit_date': '2024-02-29'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': content_hash,
+                          'rule_version': extract.RULE_VERSION - 1})
+    assert extract.run_pending(db)['done'] == 1
+    assert 'visit_date' not in json.loads(db.artifacts('extract_v1')[0]['content'])
+    assert extract.run_pending(db)['done'] == 0
+
+
+@pytest.mark.parametrize('workers', [1, 2])
+def test_ambiguous_batch_index_retries_only_its_message(db, monkeypatch, workers):
+    db.save_messages([_message(1, body='合成本文A', day=19),
+                      _message(2, body='合成本文B', day=20)])
+    monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: {
+        'items': [{'i': 0, 'summary': '先の候補'},
+                  {'i': 1, 'summary': '一意の候補'},
+                  {'i': 0, 'summary': '矛盾する候補'},
+                  {'i': 0, 'summary': '三つ目の候補'}]})
+    calls = []
+    monkeypatch.setattr(extract_llm, 'llm_extract',
+                        lambda body, **kw: calls.append(body) or {'summary': '再抽出'})
+    result = extract_llm.run_pending(db, budget_s=30, batch_k=2, workers=workers)
+    assert result['done'] == 2 and result['failed'] == 0
+    assert calls == ['合成本文B']
+    summaries = {a['message_id']: json.loads(a['content'])['summary']
+                 for a in db.artifacts('extract_llm')}
+    assert summaries == {1: '一意の候補', 2: '再抽出'}

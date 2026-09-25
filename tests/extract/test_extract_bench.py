@@ -47,6 +47,36 @@ def test_meds_strict_fp_counts_unlisted():
     assert s["fields"]["meds"] == {"tp": 1, "fp": 1, "fn": 0}
 
 
+def test_one_output_cannot_satisfy_two_expected_symptoms():
+    case = {"id": "synthetic", "expect": {"symptoms": [
+        {"text": "頭痛"}, {"text": "腹痛"}]}}
+    output = {"symptoms": [{"text": "頭痛と腹痛", "negated": False}]}
+
+    assert extract_bench._score_case(case, output)["fields"]["symptoms"] == {
+        "tp": 1, "fp": 0, "fn": 1}
+
+
+def test_one_to_one_matching_prefers_the_specific_medication():
+    case = {"id": "synthetic", "expect": {"meds": [
+        {"name": "合成薬"}, {"name": "合成薬", "action": "stop"}]}}
+    output = {"meds": [{"name": "合成薬", "action": "stop"},
+                       {"name": "合成薬", "action": "start"}]}
+
+    assert extract_bench._score_case(case, output)["fields"]["meds"] == {
+        "tp": 2, "fp": 0, "fn": 0}
+
+
+def test_one_medication_cannot_satisfy_two_safety_attributes():
+    case = {"id": "synthetic", "expect": {"meds": [
+        {"name": "合成薬", "status": "past"},
+        {"name": "合成薬", "status": "past"}]}}
+    output = {"meds": [{"name": "合成薬", "status": "past"}]}
+
+    fields = extract_bench._score_case(case, output)["fields"]
+    assert fields["meds"] == {"tp": 1, "fp": 0, "fn": 1}
+    assert fields["med_status"] == {"tp": 1, "fp": 0, "fn": 1}
+
+
 def test_extract_failed_marks_error():
     s = extract_bench._score_case({"id": "x", "expect": {}}, None)
     assert s["error"] == "extract_failed"

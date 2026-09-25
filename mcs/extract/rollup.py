@@ -16,8 +16,10 @@ Usage: python3 rollup.py [--project <id>] [--all]
 Called by run_check for patients that received new messages this tick.
 """
 import argparse
+from datetime import date, datetime, timedelta
 import json
 import os
+import re
 import sys
 import time
 
@@ -27,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger
-from mcs_queries import current_fact_pred, med_is_patient_current
+from mcs_queries import JST, current_fact_pred, med_is_patient_current
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -44,7 +46,7 @@ def _dicts(value) -> list[dict]:
 def build_rollup(ledger, project_id: int) -> dict:
     db = ledger.db
     msgs = db.execute("""
-      SELECT message_id, posted_at, posted_at_ts, sender_name, sender_type,
+      SELECT message_id, posted_at, posted_at_ts, body_text, sender_name, sender_type,
              parent_id, updated_seen, body_state
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC
     """, (project_id,)).fetchall()
@@ -76,6 +78,8 @@ def build_rollup(ledger, project_id: int) -> dict:
 
     latest_vitals = None
     med_period = None
+    as_of = datetime.fromtimestamp(out["generated_at"], JST).date()
+    next_period_check = None
     # name -> (bucket, item, posted_at): every med name resolves ONCE,
     # on its newest mention — a stop/negation/past report newer than a
     # 'current' mention suppresses it; an item missing status/subject
@@ -116,9 +120,33 @@ def build_rollup(ledger, project_id: int) -> dict:
             vit = lm.get("vitals") or v1.get("vitals")
             if isinstance(vit, dict) and vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
-        periods = _dicts(v1.get("med_periods"))
-        if med_period is None and periods:
-            med_period = periods[-1]
+        for period in reversed(_dicts(v1.get("med_periods"))):
+            try:
+                start = date.fromisoformat(period["start"])
+                end = date.fromisoformat(period["end"])
+            except (KeyError, TypeError, ValueError):
+                continue  # undated or invalid is evidence, not current
+            raw = period.get("raw")
+            context = ""
+            if isinstance(raw, str) and m["body_text"]:
+                pos = m["body_text"].find(raw)
+                if pos >= 0:
+                    context = m["body_text"][
+                        max(0, pos - 16):pos + len(raw) + 16]
+            if re.search(r"予定|検討", context):
+                continue  # a dated plan is not evidence of current use
+            if start > as_of:
+                boundary = start
+            elif start <= as_of <= end:
+                if med_period is None:
+                    med_period = period
+                boundary = end + timedelta(days=1) if end < date.max else None
+            else:
+                boundary = None
+            if boundary is not None:
+                at = datetime.combine(boundary, datetime.min.time(), JST).timestamp()
+                if next_period_check is None or at < next_period_check:
+                    next_period_check = at
         mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
                           if isinstance(x.get("name"), str)}
         # Chunk merging retains source order. The last mention within a
@@ -195,6 +223,8 @@ def build_rollup(ledger, project_id: int) -> dict:
         out["latest_vitals"] = latest_vitals
     if med_period:
         out["current_med_period"] = med_period
+    if next_period_check is not None:
+        out["_next_med_period_check"] = next_period_check
     for bucket, key, cap in (("current", "medications", 20),
                              ("unverified", "unverified_medications", 20),
                              ("planned", "planned_medications", 10)):
@@ -245,7 +275,10 @@ def rebuild(ledger, project_id: int) -> int:
             "model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
             (KIND, project_id, None,
              json.dumps(d, ensure_ascii=False), "rules-v1",
-             json.dumps({"generated_at": d["generated_at"]}), time.time()))
+             json.dumps({"generated_at": d["generated_at"],
+                         "period_check_version": 1,
+                         "next_med_period_check":
+                         d.get("_next_med_period_check")}), time.time()))
     return cur.lastrowid
 
 
@@ -254,7 +287,7 @@ def dirty_projects(ledger) -> list:
     (message/artifact). Rolls forward artifact-only changes too — an LLM
     pass landing after the last message must still refresh (Oracle B23)."""
     rows = ledger.db.execute("""
-      SELECT p.project_id, r.g AS gen,
+      SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
@@ -264,14 +297,23 @@ def dirty_projects(ledger) -> list:
       FROM patients p
         LEFT JOIN (SELECT project_id,
                    MAX(CASE WHEN json_valid(meta)
-                            THEN json_extract(meta,'$.generated_at') END) g
+                            THEN json_extract(meta,'$.generated_at') END) g,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.period_check_version')
+                            END) period_version,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.next_med_period_check')
+                            END) next_check
                  FROM artifacts WHERE kind=?
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
                     WHERE m3.project_id=p.project_id)
     """, (KIND,)).fetchall()
+    now = time.time()
     return [x["project_id"] for x in rows
             if x["gen"] is None
+            or x["period_version"] != 1
+            or (x["next_check"] is not None and x["next_check"] <= now)
             or (x["art_ts"] or 0) > x["gen"]
             or (x["msg_ts"] or 0) > x["gen"]]
 

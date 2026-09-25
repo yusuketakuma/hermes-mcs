@@ -79,16 +79,35 @@ def _match_request(expected: dict, got: list) -> bool:
                for item in got)
 
 
+def _match_pairs(expected: list, got: list, matcher) -> dict[int, int]:
+    """Maximum one-to-one matches; one output cannot satisfy two labels."""
+    edges = [[j for j, item in enumerate(got) if matcher(want, [item])]
+             for want in expected]
+    assigned = {}
+
+    def assign(i, visited):
+        for j in edges[i]:
+            if j in visited:
+                continue
+            visited.add(j)
+            if j not in assigned or assign(assigned[j], visited):
+                assigned[j] = i
+                return True
+        return False
+
+    for i in sorted(range(len(expected)), key=lambda index: len(edges[index])):
+        assign(i, set())
+    return {i: j for j, i in assigned.items()}
+
+
 def _field_pr(expected: list, got: list, matcher,
               strict_fp: bool = True) -> dict:
     """tp/fp/fn for one field. With strict_fp=False the open-vocabulary
     fields (events) only count forbid-matching extras as FP — the model
     legitimately emits 'care'/'visit' on nearly every post, so unlisted
     extras would be noise rather than a regression signal."""
-    tp = sum(1 for e in expected if matcher(e, got))
-    fp = sum(1 for g in got
-             if not any(matcher(e, [g]) for e in expected)) \
-        if strict_fp else 0
+    tp = len(_match_pairs(expected, got, matcher))
+    fp = len(got) - tp if strict_fp else 0
     return {"tp": tp, "fp": fp, "fn": len(expected) - tp}
 
 
@@ -137,16 +156,12 @@ def _score_case(case: dict, out: dict | None) -> dict:
     # value — a wrong status/subject/negated is a miss with its own
     # per-attribute error rate, not an invisible pass
     for k in _MED_ATTRS:
-        tp = fn = 0
-        for e in exp.get("meds", []):
-            if e.get(k) is None:
-                continue
-            hit = next((m for m in got_meds if _med_name_hit(e, m)),
-                       None)
-            if hit is not None and hit.get(k) == e[k]:
-                tp += 1
-            else:
-                fn += 1
+        expected = [e for e in exp.get("meds", []) if e.get(k) is not None]
+        tp = len(_match_pairs(
+            expected, got_meds,
+            lambda e, items: _med_name_hit(e, items[0])
+            and items[0].get(k) == e[k]))
+        fn = len(expected) - tp
         if tp + fn:
             fields[f"med_{k}"] = {"tp": tp, "fp": 0, "fn": fn}
     violations = []

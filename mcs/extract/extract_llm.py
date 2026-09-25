@@ -883,7 +883,7 @@ def _merge(outs: list[dict]) -> dict:
     gist (points survive: they are additive facts, each still true).
     Drop counters are summed."""
     out: dict = {}
-    seen: dict = {"meds": set(), "requests": set()}
+    seen_requests: set = set()
     sym_idx: dict = {}
     for d in outs:
         for m in d.get("meds") or []:
@@ -904,8 +904,8 @@ def _merge(outs: list[dict]) -> dict:
         for rq in d.get("requests") or []:
             k = (rq.get("to"), rq.get("from"), rq.get("action"),
                  rq.get("due"))
-            if k not in seen["requests"]:
-                seen["requests"].add(k)
+            if k not in seen_requests:
+                seen_requests.add(k)
                 out.setdefault("requests", []).append(rq)
         for e in d.get("events") or []:
             if e not in out.setdefault("events", []):
@@ -1141,12 +1141,16 @@ def _thread_context(ledger, r) -> str | None:
         """SELECT message_id, body_text, posted_at_ts,
                   COALESCE(NULLIF(profession,''), sender_type) AS who
            FROM messages
-           WHERE project_id=? AND (message_id=? OR parent_id=?)
-             AND posted_at_ts < ? AND body_text IS NOT NULL
+           WHERE project_id=?
+             AND ((message_id=? AND message_id!=?)
+                  OR (parent_id=? AND (posted_at_ts < ?
+                      OR (posted_at_ts = ? AND message_id < ?))))
+             AND body_text IS NOT NULL
              AND body_text != ''
              AND (body_state IS NULL OR body_state='full')
            ORDER BY posted_at_ts, message_id""",
-        (r["project_id"], root, root, ts)).fetchall()
+        (r["project_id"], root, r["message_id"], root, ts, ts,
+         r["message_id"])).fetchall()
     if not rows:
         return None
     return "\n".join(_ctx_lines(rows, root)) or None
@@ -1828,8 +1832,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             i = item.get("i")
             # index must route to exactly one claimed row — an
             # unverifiable or duplicate item is dropped, never guessed
-            if type(i) is not int or i in seen \
-                    or not (0 <= i < len(tups)):
+            if type(i) is not int or not (0 <= i < len(tups)):
+                continue
+            if i in seen:
+                # Conflicting candidates have no authoritative first winner.
+                # Leave this row to the existing single-message retry path.
+                out.pop(tups[i][0], None)
                 continue
             seen.add(i)
             index, r = tups[i][0], tups[i][1]
