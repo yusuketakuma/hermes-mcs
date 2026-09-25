@@ -59,7 +59,8 @@ def _fields(req, allowed) -> str | None:
 def _origin(v, slack=False) -> bool:
     """Verified native origin the plugin supplies from the interaction —
     application/channel/message identify the card; guild/profile pin
-    the deployment."""
+    the deployment; thread_id records a companion-thread click for
+    audit only."""
     if not isinstance(v, dict):
         return False
     if slack:
@@ -70,11 +71,12 @@ def _origin(v, slack=False) -> bool:
                     for k in ("profile", "application_id", "team_id",
                               "channel_id", "message_id"))
     if v.keys() - {"profile", "application_id", "guild_id",
-                   "channel_id", "message_id"}:
+                   "channel_id", "message_id", "thread_id"}:
         return False
     return all(_text(v.get(k), 64) for k in
                ("application_id", "channel_id", "message_id")) \
         and _opt_text(v.get("guild_id"), 64) \
+        and _opt_text(v.get("thread_id"), 64) \
         and _opt_text(v.get("profile"), 200)
 
 

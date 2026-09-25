@@ -241,12 +241,13 @@ class FakeFollowup:
 class FakeInteraction:
     def __init__(self, custom_id, *, user_id=1001, channel_id=42,
                  guild_id=7, app_id=1, message_id=None,
-                 components=None, token="tok-1"):
+                 components=None, token="tok-1", channel=None):
         self.data = {"custom_id": custom_id}
         if components is not None:
             self.data["components"] = components
         self.user = SimpleNamespace(id=user_id)
         self.channel_id = channel_id
+        self.channel = channel
         self.guild_id = guild_id
         self.application_id = app_id
         self.token = token
@@ -873,6 +874,53 @@ def test_action_body_ephemeral_full_text(world):
     assert "職員" in joined and "本文" in joined
     card = world.card()
     assert card["desired_render_rev"] == card["applied_render_rev"]
+
+
+def test_action_click_inside_companion_thread(world):
+    """A click inside the card's companion thread reports the thread's
+    id as channel_id — the thread inherits the parent channel's
+    authorization, and the origin reaching the runner is normalized
+    to the channel the card is bound to."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "body")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    thread = SimpleNamespace(id=777, parent_id=42)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id,
+                         channel_id=777, channel=thread)
+    asyncio.run(world.interact(act, ix))
+    assert ix.followup.sent
+    joined = "\n".join(m["content"] for m in ix.followup.sent)
+    assert "本文" in joined
+    receipt = json.loads(world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts "
+        "WHERE outcome='applied'").fetchone()["receipt_json"])
+    assert receipt["origin"]["channel_id"] == "42"
+    assert receipt["origin"]["thread_id"] == "777"
+
+
+def test_action_foreign_thread_denied(world):
+    """A click inside a thread whose parent is NOT the allowed channel
+    stays denied — thread normalization never widens scope."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "body")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    thread = SimpleNamespace(id=888, parent_id=999)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id,
+                         channel_id=888, channel=thread)
+    before = len(list((world.data / "cmd_int").glob("*.json")))
+    asyncio.run(act.on_interaction(ix))
+    assert "権限" in ix.response.message["content"]
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == before
 
 
 def test_split_body_chunks_bounded():
