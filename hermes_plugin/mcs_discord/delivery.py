@@ -358,9 +358,16 @@ class DeliveryWorker:
         """Card companion thread — separated from the body send; a
         thread failure never resends the card itself (plan §3)."""
         spec = claim["spec"]
+        if spec["delivery"].get("thread_id"):
+            # update on a card whose thread predates the in-thread
+            # body — backfill whatever chunks are missing, once
+            if spec["op"] == "update" \
+                    and spec["parts"].get("thread_body"):
+                await self._thread_backfill(spec)
+            return
         name = (spec["parts"].get("thread_name")
                 if spec["op"] in ("create", "notice") else None)
-        if not name or (spec["delivery"].get("thread_id")):
+        if not name:
             return
         scope_key = registry.scope_key(self.scope())
         cap = self._reg.capability(scope_key)
@@ -385,19 +392,42 @@ class DeliveryWorker:
             envelopes.publish_command, self._dirs["cmd_int"], env)
         await self._thread_body(spec, thread)
 
-    async def _thread_body(self, spec: dict, thread) -> None:
-        """Full text lands inside the fresh companion thread — the card
+    async def _thread_backfill(self, spec: dict) -> None:
+        """Threads created before the in-thread body hold no text —
+        the next update render posts it there. Best-effort like the
+        create path: failures only log."""
+        try:
+            thread = await self._channel(spec["delivery"]["thread_id"])
+        except Exception as exc:
+            self._log("thread_body_failed", error=type(exc).__name__)
+            return
+        await self._thread_body(spec, thread, dedupe=True)
+
+    async def _thread_body(self, spec: dict, thread,
+                           dedupe: bool = False) -> None:
+        """Full text lands inside the companion thread — the card
         itself stays a summary surface. Best-effort by design: the
         thread (and its receipt) is already settled, so a chunk send
-        failure only logs; it must not re-enter the delivery path."""
+        failure only logs; it must not re-enter the delivery path.
+        `dedupe` content-matches against recent history so re-renders
+        of an already-populated thread — or a partial earlier post —
+        never duplicate chunks."""
         if thread is None:
             return
         body = str(spec["parts"].get("thread_body") or "")
-        if not body.strip():
+        chunks = [c for c in actions._split_body(body) if c.strip()]
+        if not chunks:
             return
-        for chunk in actions._split_body(body):
-            if not chunk.strip():
-                continue
+        if dedupe:
+            try:
+                posted = {m.content
+                          async for m in thread.history(limit=100)}
+            except Exception as exc:
+                self._log("thread_body_failed",
+                          error=type(exc).__name__)
+                return
+            chunks = [c for c in chunks if c not in posted]
+        for chunk in chunks:
             try:
                 await thread.send(chunk)
             except Exception as exc:

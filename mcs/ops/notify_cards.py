@@ -655,8 +655,11 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         if card[k]:
             spec["delivery"][k] = card[k]
     context = _render_context(db, card)
+    # failed/deleted threads can never carry the body — those cards
+    # keep the 📄 button so the full text stays reachable
     in_thread_body = (card["transport"] != "slack"
-                      and notify_cfg(cfg).get("card_thread") is True)
+                      and notify_cfg(cfg).get("card_thread") is True
+                      and card["thread_state"] not in ("failed", "deleted"))
     spec["parts"] = {
         "containers": content["containers"],
         "action_rows": _action_rows(db, card, content, now, context,

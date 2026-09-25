@@ -148,6 +148,11 @@ def _fake_discord():
 
 # ---------- fake discord objects ----------------------------------------
 
+class _HistMsg:
+    def __init__(self, content):
+        self.content = content
+
+
 class FakeThread:
     def __init__(self, tid):
         self.id = tid
@@ -156,10 +161,16 @@ class FakeThread:
     async def send(self, content):
         self.sent.append(content)
 
+    async def history(self, limit=None):
+        items = self.sent if limit is None else self.sent[-limit:]
+        for c in reversed(items):
+            yield _HistMsg(c)
+
 
 class FakeMessage:
-    def __init__(self, mid):
+    def __init__(self, mid, channel=None):
         self.id = mid
+        self.channel = channel
         self.view = None
         self.edits = 0
         self.deleted = False
@@ -179,6 +190,9 @@ class FakeMessage:
     async def create_thread(self, name=None):
         t = FakeThread(7700 + len(self.threads))
         self.threads.append((name, t))
+        bot = getattr(getattr(self, "channel", None), "bot", None)
+        if bot is not None:
+            bot.channels[t.id] = t
         return t
 
 
@@ -191,7 +205,7 @@ class FakeChannel:
 
     async def send(self, view=None):
         self._next += 1
-        m = FakeMessage(self._next)
+        m = FakeMessage(self._next, channel=self)
         m.view = view
         self.sent.append(m)
         self.messages[m.id] = m
@@ -207,6 +221,7 @@ class FakeChannel:
 class FakeBot:
     def __init__(self, channel_id=42):
         self.channels = {channel_id: FakeChannel(channel_id)}
+        self.channels[channel_id].bot = self
         self.listeners = []
 
     def get_channel(self, cid):
@@ -1962,6 +1977,57 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     assert card["delivery_state"] == "delivered"
     assert card["thread_state"] == "created"
     assert any(e == "thread_body_failed" for e, _ in world.logs)
+
+
+def test_update_backfills_body_into_legacy_thread(world, monkeypatch):
+    """A card whose thread was created before the in-thread body —
+    here simulated by a failed body post — gets the text on the next
+    update render. Content dedupe keeps further updates silent."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        original = FakeThread.send
+
+        async def boom(self, content):
+            raise FakeHTTP(500)
+        monkeypatch.setattr(FakeThread, "send", boom)
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+        world.drain()
+        # restore by re-setting — undo() would also revert the world
+        # fixture's own monkeypatch actions (shared instance)
+        monkeypatch.setattr(FakeThread, "send", original)
+        thread = sent[0].threads[0][1]
+        assert not thread.sent
+        # source drifts -> update render on the same message
+        world.led.db.execute(
+            "UPDATE messages SET body_text='追記あり',content_hash=? "
+            "WHERE message_id=101", ("e" * 64,))
+        world.led.db.commit()
+        notify_cards.sweep(world.led, CFG)
+        await _deliver(world, worker)
+        world.drain()
+        assert thread.sent                   # backfilled
+        assert "本文" in "\n".join(thread.sent)
+        n = len(thread.sent)
+        # re-running the same spec posts nothing — already there
+        _, spec2 = world.spec()
+        await worker._thread_body(spec2, thread, dedupe=True)
+        assert len(thread.sent) == n
+        # a changed body posts the new version (latest text lands last)
+        world.led.db.execute(
+            "UPDATE messages SET body_text='さらに追記',content_hash=? "
+            "WHERE message_id=101", ("f" * 64,))
+        world.led.db.commit()
+        notify_cards.sweep(world.led, CFG)
+        await _deliver(world, worker)
+        world.drain()
+        assert len(thread.sent) == n + 1
+        assert "さらに追記" in thread.sent[-1]
+
+    asyncio.run(run())
 
 
 def test_unknown_never_resends_late_success_binds_update(world):
