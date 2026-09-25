@@ -713,6 +713,25 @@ class MCSAdapter:
     def _config(self) -> dict:
         return load_config()
 
+    def _recover_session(self) -> bool:
+        """A still-valid browser session recovers a run with zero form
+        interaction — API token expiry does not imply logout; cookies
+        can keep the app session alive (or a manual/concurrent login
+        may have landed). A fresh localStorage token that passes
+        check_session is enough."""
+        try:
+            tok = self._token_via_cdp()
+        except Exception:
+            return False
+        self._token = tok
+        try:
+            if self.check_session():
+                self._write_cache(tok)
+                return True
+        except Exception:
+            pass
+        return False
+
     def auto_login(self, profile_dir: str = "", chrome_bin: str = "",
                    wait_s: int = 45) -> str:
         """Re-login by filling the form from macOS Keychain and clicking
@@ -722,11 +741,18 @@ class MCSAdapter:
         persisted by the app itself; if empty we fill from config
         'mcs_login_id'. Password is never logged or stored by us.
 
-        Returns 'ok' | 'manual_required' | 'keychain_locked' | 'failed'."""
+        Returns 'ok' | 'manual_required' | 'keychain_locked' | 'failed'.
+        'manual_required:no_form' distinguishes a missing login form
+        (page never rendered / app redirected) from a submitted login
+        that never validated."""
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
         except (BootstrapError, OSError):
             return "failed"
+        # cheapest recovery first — before touching the login form at
+        # all, a live session (fresh token + valid API check) ends it
+        if self._recover_session():
+            return "ok"
         try:
             page = self._login_page()
             ws = page["webSocketDebuggerUrl"]
@@ -740,8 +766,15 @@ class MCSAdapter:
               if (pw.value) return 'ready';
               return (id && id.value) ? 'need_pw' : 'need_both';
             })()""")
-            if state in ("no_form", "bad_origin"):
-                return "manual_required" if state == "no_form" else "failed"
+            if state == "bad_origin":
+                return "failed"
+            if state == "no_form":
+                # a logged-in app redirects /authentication/login back
+                # home — no form then MEANS a session, verify before
+                # escalating to a manual alert
+                if self._recover_session():
+                    return "ok"
+                return "manual_required:no_form"
             if state != "ready":
                 pw, locked = self._login_password()
                 if not pw:

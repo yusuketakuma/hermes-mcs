@@ -172,6 +172,25 @@ def _write_health(ledger, result: dict, status: str) -> None:
         pass
 
 
+SESSION_ALERT_MIN_INTERVAL_S = 3600
+
+
+def _alert_session_expired(ledger, run_id: int, detail: str) -> bool:
+    """Enqueue the session_expired alert — throttled so a session that
+    stays dead does not re-alert on every tick: one per hour keeps it
+    visible without flooding the channel. The run row and health file
+    still record every expiry; only the notification is gated."""
+    last = ledger.db.execute(
+        "SELECT MAX(created_at) t FROM notify_outbox"
+        " WHERE kind='session_expired'").fetchone()["t"]
+    if last is not None \
+            and time.time() - float(last) < SESSION_ALERT_MIN_INTERVAL_S:
+        return False
+    ledger.outbox_add("session_expired", None,
+                      {"run_id": run_id, "detail": detail})
+    return True
+
+
 # ---------- stage: unread pipeline ----------
 
 def stage_unread(adapter, ledger, args, result, deadline, run_id,
@@ -861,8 +880,7 @@ def main() -> int:
         ledger.finish_run(run_id, "session_expired", _err_str(e))
         result["errors"].append(_err_str(e))
         try:  # operational alert — contains no patient data
-            ledger.outbox_add("session_expired", None,
-                              {"run_id": run_id, "detail": _err_str(e)})
+            _alert_session_expired(ledger, run_id, _err_str(e))
             if not args.no_notify:  # --no-notify suppresses ALL sends;
                 result["notify"] = notifier.flush(ledger, deadline=deadline)
         except Exception:                                    # queued for a
