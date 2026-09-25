@@ -71,7 +71,11 @@ def _capture_bodies():
 
     def send(endpoint, method, body, timeout, deadline=None):
         bodies.append(body)
-        reply = {"choices": [{"message": {"content": '{"ok": true}'},
+        probe = (body.get("response_format") or {}).get("json_schema", {})
+        content = ('{"probe":"schema"}'
+                   if probe.get("name") == "mcs_format_probe"
+                   else '{"ok": true}')
+        reply = {"choices": [{"message": {"content": content},
                               "finish_reason": "stop"}]}
         return 200, {}, json.dumps(reply).encode()
 

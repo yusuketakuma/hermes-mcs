@@ -474,6 +474,24 @@ def test_thread_context_reply_sees_parent_not_future(tmp_path):
     db.close()
 
 
+def test_thread_context_keeps_parent_and_earlier_replies_at_same_time(tmp_path):
+    db = _ledger(tmp_path)
+    posted_at = "2026-09-19T02:00:00+09:00"
+    db.save_messages([
+        _message(mid=1, body="親投稿: 合成薬を確認", posted_at=posted_at),
+        _message(mid=2, body="先の返信", parent_id=1, posted_at=posted_at),
+        _message(mid=3, body="対象の返信", parent_id=1, posted_at=posted_at),
+        _message(mid=4, body="後の返信", parent_id=1, posted_at=posted_at),
+    ])
+    row = db.db.execute(
+        "SELECT * FROM messages WHERE message_id=3").fetchone()
+    ctx = extract_llm._thread_context(db, row)
+    assert ctx is not None
+    assert "親投稿" in ctx and "先の返信" in ctx
+    assert "対象の返信" not in ctx and "後の返信" not in ctx
+    db.close()
+
+
 def test_llm_extract_context_block_boundaries(monkeypatch):
     """Context goes inside its own <<<>>> DATA boundary, BEFORE the
     target label — and is absent entirely when None."""
@@ -663,8 +681,12 @@ class _Opener:
         verdict = self.script.get(mode, "ok")
         if verdict != "ok":
             raise _http_error(verdict)
+        probe = rf.get("json_schema") or {}
+        content = ('{"probe":"schema"}'
+                   if probe.get("name") == "mcs_format_probe"
+                   else '{"ok":true}')
         return io.BytesIO(json.dumps(
-            {"choices": [{"message": {"content": '{"ok":true}'}}]}
+            {"choices": [{"message": {"content": content}}]}
         ).encode())
 
 

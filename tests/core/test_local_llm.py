@@ -204,6 +204,55 @@ def test_probe_format_pins_background_slot(monkeypatch):
                           for b in bodies)
 
 
+def test_request_slot_rejects_non_ascii_digits(monkeypatch):
+    monkeypatch.setenv("MCS_LLM_SLOT", "²")
+    assert local_llm.request_slot() == local_llm.BACKGROUND_SLOT
+    monkeypatch.setenv("MCS_LLM_SLOT", " 3 ")
+    assert local_llm.request_slot() == 3
+
+
+def test_probe_rejects_schema_ignored_by_server():
+    formats = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        formats.append(body["response_format"]["type"])
+        return 200, {}, json.dumps(_response('{"ok":true}')).encode()
+
+    mode = local_llm.probe_format(local_llm.ENDPOINT, "synthetic",
+                                  {"name": "synthetic"}, request_fn=send)
+    assert mode == "object"
+    assert formats == ["json_schema", "json_object"]
+
+
+def test_probe_accepts_enforced_schema_marker():
+    def send(endpoint, method, body, timeout, deadline=None):
+        required = body["response_format"]["json_schema"]["schema"]
+        assert required["required"] == ["probe"]
+        return 200, {}, json.dumps(
+            _response('{"probe":"schema"}')).encode()
+
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", {"name": "synthetic"},
+        request_fn=send) == "schema"
+
+
+@pytest.mark.parametrize("schema,content,expected", [
+    ({"name": "synthetic"}, '{"probe":"schema"}', "object"),
+    (None, '{"ok":true}', "plain"),
+])
+def test_probe_rejects_length_stops(schema, content, expected):
+    def send(endpoint, method, body, timeout, deadline=None):
+        finish = ("length" if schema is None
+                  or body["response_format"]["type"] == "json_schema"
+                  else "stop")
+        text = content if finish == "length" else '{"ok":true}'
+        return 200, {}, json.dumps(_response(text, finish=finish)).encode()
+
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", schema,
+        request_fn=send) == expected
+
+
 def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
