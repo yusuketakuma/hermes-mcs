@@ -22,7 +22,7 @@ import os
 import time
 from typing import Any
 
-from . import cards, envelopes, journal, paths, registry
+from . import actions, cards, envelopes, journal, paths, registry
 
 POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
@@ -366,6 +366,7 @@ class DeliveryWorker:
         cap = self._reg.capability(scope_key)
         if cap is not None and cap.get("ok") is False:
             return                                 # negative-cached
+        thread = None
         try:
             channel = await self._channel(spec["delivery"]["channel_id"])
             sent_message = await channel.fetch_message(int(message_id))
@@ -382,6 +383,27 @@ class DeliveryWorker:
                 error_code=_err_code(exc))
         await asyncio.to_thread(
             envelopes.publish_command, self._dirs["cmd_int"], env)
+        await self._thread_body(spec, thread)
+
+    async def _thread_body(self, spec: dict, thread) -> None:
+        """Full text lands inside the fresh companion thread — the card
+        itself stays a summary surface. Best-effort by design: the
+        thread (and its receipt) is already settled, so a chunk send
+        failure only logs; it must not re-enter the delivery path."""
+        if thread is None:
+            return
+        body = str(spec["parts"].get("thread_body") or "")
+        if not body.strip():
+            return
+        for chunk in actions._split_body(body):
+            if not chunk.strip():
+                continue
+            try:
+                await thread.send(chunk)
+            except Exception as exc:
+                self._log("thread_body_failed",
+                          error=type(exc).__name__)
+                return
 
     # -- the per-claim step ----------------------------------------------
 
