@@ -427,13 +427,21 @@ class DeliveryWorker:
                           error=type(exc).__name__)
                 return
             chunks = [c for c in chunks if c not in posted]
+            if not chunks:
+                self._log("thread_body_skipped", reason="already_posted")
+                return
+        sent = 0
         for chunk in chunks:
             try:
                 await thread.send(chunk)
+                sent += 1
             except Exception as exc:
                 self._log("thread_body_failed",
-                          error=type(exc).__name__)
+                          error=type(exc).__name__,
+                          chunks_sent=sent)
                 return
+        self._log("thread_body_posted",
+                  thread_id=str(thread.id), chunks=sent)
 
     # -- the per-claim step ----------------------------------------------
 
