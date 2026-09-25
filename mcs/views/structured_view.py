@@ -1,7 +1,7 @@
 """Structured display view over extraction artifacts.
 
 Shared formatter for the extract_v1/extract_llm artifacts — used by the
-text notifier (_fmt's 📋 構造化 section) and the interactive card
+text notify_flush (_fmt's 📋 構造化 section) and the interactive card
 renderer (notify_render._structured_block). Keeping one implementation
 means the suppression rules (negated/resolved symptoms, other-person
 meds, unverified-medication labelling) and the freshness gate can never

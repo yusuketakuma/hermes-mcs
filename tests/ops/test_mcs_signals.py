@@ -346,10 +346,10 @@ def test_signal_notice_renders_patient_and_snippet(led, monkeypatch):
     _ev(led, cfg={"signals": {"notify": True}})
     ev = led.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='signal'").fetchone()
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
-    content, files = notifier._format_event(led, ev)
+    content, files = notify_flush._format_event(led, ev)
     assert "山田テスト（project 1 / med エリキュース）" in content
     assert "最新言及" in content and "エリキュースを開始しました" in content
     assert '"op":"timeline"' in content and '"project_id":1' in content
@@ -363,10 +363,10 @@ def test_signal_notice_degrades_without_patient_or_message(
     _ev(led, cfg={"signals": {"notify": True}})
     ev = led.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='signal'").fetchone()
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
-    content, _ = notifier._format_event(led, ev)
+    content, _ = notify_flush._format_event(led, ev)
     assert "レビュー候補" in content and "request_overdue" in content
 
 
@@ -418,7 +418,7 @@ def test_notify_cooldown_suppresses_renotify(led):
     assert res["notify_enqueued"] == 1
 
 
-# --- send-time gates (notifier._format_event) ---
+# --- send-time gates (notify_flush._format_event) ---
 
 def _sig_ev(led):
     row = led.db.execute(
@@ -427,35 +427,35 @@ def _sig_ev(led):
 
 
 def test_send_gate_flag_turned_off(led, monkeypatch):
-    import notifier
+    import notify_flush
     _req(led.db, "open", due="2026-09-10")
     _ev(led, cfg={"signals": {"notify": True}})
-    monkeypatch.setattr(notifier, "_config", lambda: {})
-    with pytest.raises(notifier._StaleSend,
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    with pytest.raises(notify_flush._StaleSend,
                        match="signals_notify_disabled"):
-        notifier._format_event(led, _sig_ev(led))
+        notify_flush._format_event(led, _sig_ev(led))
 
 
 def test_send_gate_signal_resolved_while_queued(led, monkeypatch):
-    import notifier
+    import notify_flush
     _req(led.db, "open", due="2026-09-10")
     cfg = {"signals": {"notify": True}}
     _ev(led, cfg=cfg)
     led.db.execute("UPDATE requests SET status='done'")
     _ev(led, cfg=cfg)              # resolves; intent still pending
-    monkeypatch.setattr(notifier, "_config",
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
-    with pytest.raises(notifier._StaleSend, match="signal_not_open"):
-        notifier._format_event(led, _sig_ev(led))
+    with pytest.raises(notify_flush._StaleSend, match="signal_not_open"):
+        notify_flush._format_event(led, _sig_ev(led))
 
 
 def test_send_gate_open_signal_formats(led, monkeypatch):
-    import notifier
+    import notify_flush
     _req(led.db, "open", due="2026-09-10")
     cfg = {"signals": {"notify": True}}
     _ev(led, cfg=cfg)
-    monkeypatch.setattr(notifier, "_config", lambda: cfg)
-    text, files = notifier._format_event(led, _sig_ev(led))
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    text, files = notify_flush._format_event(led, _sig_ev(led))
     assert "レビュー候補" in text and files == []
 
 
@@ -705,11 +705,11 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     assert _states(led.db)["med_change_no_followup:1:インスリン"] == "open"
     assert _states(led.db)["med_change_no_followup:1:在宅酸素"] == "open"
     # digest render re-groups: both meds appear as ONE merged unit
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, files = notifier._format_event(led, ev)
+    text, files = notify_flush._format_event(led, ev)
     assert "ダイジェスト（3件）" in text
     assert "med インスリン・在宅酸素" in text
     assert "薬「インスリン」「在宅酸素」の変更言及後" in text
@@ -765,11 +765,11 @@ def test_single_med_notice_unchanged(led, monkeypatch):
     assert len(pls) == 1
     assert pls[0]["signal_keys"] == ["med_change_no_followup:1:薬A"]
     assert pls[0]["digest"] is True
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "ダイジェスト（1件）" in text
     assert "med 薬A" in text and "薬「薬A」の変更言及後" in text
     assert "・" not in text
@@ -789,11 +789,11 @@ def test_distinct_posts_not_merged(led, monkeypatch):
     assert len(pls) == 1 and pls[0]["digest"] is True
     assert sorted(pls[0]["signal_keys"]) == [
         "med_change_no_followup:1:薬A", "med_change_no_followup:1:薬B"]
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "med 薬A・薬B" not in text          # no coalesced unit
     assert "med 薬A" in text and "med 薬B" in text
 
@@ -847,10 +847,10 @@ def test_send_gate_group_member_resolved(led, monkeypatch):
     _ev(led, cfg=cfg)
     _set_meds(led.db, [{"name": "薬A", "action": "stop"}])
     _ev(led, cfg=cfg)           # 薬B resolved; merged intent still queued
-    import notifier
-    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "薬「薬A」" in text and "薬B" not in text
     assert "med 薬A" in text
 
@@ -864,11 +864,11 @@ def test_send_gate_group_all_resolved(led, monkeypatch):
     _ev(led, cfg=cfg)
     _set_meds(led.db, [])
     _ev(led, cfg=cfg)
-    import notifier
-    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    with pytest.raises(notifier._StaleSend, match="signal_not_open"):
-        notifier._format_event(led, ev)
+    with pytest.raises(notify_flush._StaleSend, match="signal_not_open"):
+        notify_flush._format_event(led, ev)
 
 
 def test_group_intent_covers_member_reopen(led):
@@ -1140,11 +1140,11 @@ def test_urgency_high_escalates_to_immediate(led, monkeypatch):
     assert pl.get("digest") is not True
     assert pl["urgent"] is True
     assert pl["signal_key"] == "med_change_no_followup:1:薬A"
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "urgency:high" in text
 
 
@@ -1189,10 +1189,10 @@ def test_digest_send_drops_resolved_members(led, monkeypatch):
     _ev(led, cfg=cfg)
     led.db.execute("UPDATE requests SET status='done'")
     _ev(led, cfg=cfg)              # request_overdue resolved
-    import notifier
-    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "ダイジェスト（1件）" in text
     assert "med 薬A" in text and "request_overdue" not in text
 
@@ -1402,14 +1402,14 @@ def test_self_sets_empty_profile_professions_authoritative(led):
 def test_held_digest_members_salvaged(led):
     """A quarantined digest intent must not strand its member keys —
     still-open members fold into a fresh scheduled digest."""
-    import notifier
+    import notify_flush
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _ev(led, cfg={"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     assert json.loads(ev["payload"])["digest"] is True
     # quarantine with NO send receipt — nothing was ever delivered
-    notifier._hold_event(
+    notify_flush._hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1428,14 +1428,14 @@ def test_held_digest_members_salvaged(led):
 def test_held_digest_with_send_progress_not_salvaged(led):
     """A digest that may have partially delivered must NOT respawn —
     duplication risk outweighs the stranded-member fix."""
-    import notifier
+    import notify_flush
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _ev(led, cfg={"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     led.outbox_progress(ev["event_id"], 0, [], "fp", sending=1)
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
-    notifier._hold_event(
+    notify_flush._hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1446,14 +1446,14 @@ def test_held_digest_with_send_progress_not_salvaged(led):
 def test_signal_unit_text_renders_every_member(led):
     """A unit that cannot merge must render each member — never
     silently collapse to the first signal."""
-    import notifier
+    import notify_flush
     _msg(led.db, 1, ts=NOW - 1 * DAY)
     _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2")
     s1 = {"type": "adherence_concern", "project_id": 1,
           "evidence": {"message_ids": [1]}, "note": "note-one"}
     s2 = {"type": "adherence_concern", "project_id": 1,
           "evidence": {"message_ids": [2]}, "note": "note-two"}
-    text = notifier._signal_unit_text(led, [s1, s2])
+    text = notify_flush._signal_unit_text(led, [s1, s2])
     assert "note-one" in text and "note-two" in text
 
 
@@ -1461,7 +1461,7 @@ def test_digest_render_drops_archived_member(led, monkeypatch):
     """A digest member whose patient was archived after enqueue must
     not render — digest intents carry project_id=None and bypass
     flush's per-event archived gate."""
-    import notifier
+    import notify_flush
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2")
@@ -1471,9 +1471,9 @@ def test_digest_render_drops_archived_member(led, monkeypatch):
     assert len(json.loads(ev["payload"])["signal_keys"]) == 2
     led.db.execute("UPDATE patients SET is_archived=1 "
                    "WHERE project_id=2")
-    monkeypatch.setattr(notifier, "_config",
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
-    text, _ = notifier._format_event(led, ev)
+    text, _ = notify_flush._format_event(led, ev)
     assert "薬A" in text and "薬B" not in text
     assert "ダイジェスト（1件）" in text
 
@@ -1482,7 +1482,7 @@ def test_held_merged_intent_members_salvaged(led):
     """A quarantined NON-digest merged med_change intent must also
     rescue its members — they strand identically otherwise. Rescue
     preserves the non-digest shape (immediate, no 24h delay)."""
-    import notifier
+    import notify_flush
     _msg(led.db, 1, ts=NOW - 30 * DAY)
     _extract_llm(led.db, 1, "h1",
                  [{"name": "薬A", "action": "stop"},
@@ -1492,7 +1492,7 @@ def test_held_merged_intent_members_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     pl = json.loads(ev["payload"])
     assert len(pl["signal_keys"]) == 2 and "digest" not in pl
-    notifier._hold_event(
+    notify_flush._hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})
@@ -1510,7 +1510,7 @@ def test_held_merged_intent_members_salvaged(led):
 def test_held_single_signal_key_salvaged(led):
     """A quarantined single signal_key intent re-enqueues its key —
     a legacy-shape payload is rescued via signal_key, not signal_keys."""
-    import notifier
+    import notify_flush
     _req(led.db, "open", created=NOW - 400 * DAY)
     led.db.execute("UPDATE requests SET status='open'")
     _ev(led, cfg={"signals": {"notify": True, "tiers":
@@ -1518,7 +1518,7 @@ def test_held_single_signal_key_salvaged(led):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     pl = json.loads(ev["payload"])
     assert "signal_key" in pl
-    notifier._hold_event(
+    notify_flush._hold_event(
         led, {"event_id": ev["event_id"], "kind": "signal",
               "payload": ev["payload"],
               "progress": ev["progress"]}, {"signals": {}})

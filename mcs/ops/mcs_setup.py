@@ -316,7 +316,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             and not re.fullmatch(r"[a-z0-9_-]+", profile):
         errors.append("notify_bot_profile: must match [a-z0-9_-]+")
     # Delivery is `hermes send` — the binary must resolve the same way
-    # notifier._hermes_exe does: config hermes_bin, else PATH, else the
+    # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
     # standard user-local install (launchd PATH is minimal).
     exe = _hermes_exe(cfg)
     if not _hermes_ok(exe):

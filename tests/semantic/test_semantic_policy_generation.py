@@ -5,7 +5,7 @@ import time
 import pytest
 import ledger
 import mcs_view
-import notifier
+import notify_flush
 import semantic
 from test_mcs_semantic import _cfg, _FakeJev, _llm, _seeded
 
@@ -19,13 +19,13 @@ def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, 
         old_summary = db.artifacts("semantic_summary", message_id=1)[-1]
         event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice' LIMIT 1").fetchone()
         assert event is not None
-        monkeypatch.setattr(notifier, "_config", lambda: _cfg("enforce", project_ids=[]))
-        with pytest.raises(notifier._DeferredSend):
-            notifier._semantic_gate(db, event, json.loads(event["payload"]))
+        monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce", project_ids=[]))
+        with pytest.raises(notify_flush._DeferredSend):
+            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
         changed = _cfg("enforce", match_threshold=.8)
-        monkeypatch.setattr(notifier, "_config", lambda: changed)
-        with pytest.raises(notifier._StaleSend):
-            notifier._semantic_gate(db, event, json.loads(event["payload"]))
+        monkeypatch.setattr(notify_flush, "_config", lambda: changed)
+        with pytest.raises(notify_flush._StaleSend):
+            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
         db.semantic_seed(1, [1], {"source": "replay"})
         fake = _FakeJev()
         semantic.run_due(db, changed, {"errors": []}, time.monotonic() + 300,

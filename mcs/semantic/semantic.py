@@ -86,7 +86,7 @@ from semantic_llm import (CLAIM_KINDS, CLAIM_SECTIONS, FACT_KINDS,
                           _json_block, _locate_quote)
 
 # Re-export contract: names below are imported for callers that use the
-# facade surface (tests, semantic_extraction's `semantic` arg, notifier).
+# facade surface (tests, semantic_extraction's `semantic` arg, notify_flush).
 __all__ = [
     "CLAIM_KINDS", "CLAIM_SECTIONS", "FACT_KINDS", "FACT_STATUSES",
     "JOB_KIND", "KIND_ASSESS", "KIND_AUDIT", "KIND_BUNDLE",

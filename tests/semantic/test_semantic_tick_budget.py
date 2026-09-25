@@ -12,7 +12,7 @@ import job_ops
 import ledger
 import mcs_adapter
 import maintenance
-import notifier
+import notify_flush
 import run_check
 import semantic
 
@@ -98,7 +98,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         ).fetchone()[0] == 1     # instant rule lane before notify
         return {"sent": 0}
 
-    monkeypatch.setattr(notifier, "flush", flush)
+    monkeypatch.setattr(notify_flush, "flush", flush)
     monkeypatch.setattr(sys, "argv", [
         "run_check", "--no-backfill",
     ])

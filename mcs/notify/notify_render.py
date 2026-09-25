@@ -143,7 +143,7 @@ def _pack_pages(lengths, max_count, budget=PAGE_TEXT_BUDGET) -> list:
 
 
 def _structured_block(db, mid) -> dict | None:
-    """Per-message 📋 構造化 block — the same lines the text notifier
+    """Per-message 📋 構造化 block — the same lines the text notify_flush
     shows, via the shared extractor view. Artifact freshness and the
     deleted-message gate live in structured_view's SQL; a build failure
     must never sink the card."""

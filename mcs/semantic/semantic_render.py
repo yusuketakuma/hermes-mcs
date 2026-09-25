@@ -194,7 +194,7 @@ def _notify_src_event(ledger, project_id: int,
     whose targets were never in a real arrival intent returns None and
     can produce artifacts only — no notice is generated (AT-055).
     A suppressed origin (archived/retracted arrival) counts as no
-    origin — the send-time gate in notifier re-checks the same
+    origin — the send-time gate in semantic_send_gate re-checks the same
     condition in case suppression lands after enqueue. Replay of a
     genuinely notified thread re-derives the same eligibility, which
     is what lets a crash-lost intent heal."""

@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 import mcs_requests
-import notifier
+import notify_flush
 import semantic
 import semantic_runtime as runtime
 from test_mcs_semantic import _seeded, _message, _cfg, _FakeJev, _llm
@@ -48,12 +48,12 @@ def test_pause_preserves_source_jobs_and_receipts_and_resume_is_explicit(tmp_pat
         assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 1
         event = _semantic_event(db)
         payload = json.loads(event['payload'])
-        monkeypatch.setattr(notifier, '_config', lambda: _cfg('enforce'))
+        monkeypatch.setattr(notify_flush, '_config', lambda: _cfg('enforce'))
         _control(db, 'pause')
-        with pytest.raises(notifier._DeferredSend, match='semantic_paused'):
-            notifier._semantic_gate(db, event, payload)
-        with pytest.raises(notifier._FreezeSend, match='semantic_paused'):
-            notifier._semantic_gate(db, event, payload, in_progress=True)
+        with pytest.raises(notify_flush._DeferredSend, match='semantic_paused'):
+            notify_flush._semantic_gate(db, event, payload)
+        with pytest.raises(notify_flush._FreezeSend, match='semantic_paused'):
+            notify_flush._semantic_gate(db, event, payload, in_progress=True)
         assert db.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 3
         assert db.db.execute('SELECT count(*) FROM command_receipts').fetchone()[0] == 3
     finally:
