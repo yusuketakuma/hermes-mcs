@@ -38,5 +38,20 @@ while :; do
   sleep 10
 done
 
-/bin/launchctl kickstart -k "gui/$(id -u)/ai.hermes.llamacpp"
-echo "$(ts) restarted (kickstart -k)" >> "$LOG"
+# kickstart target: the loaded label differs per machine. Hermes-managed
+# installs run ai.hermes.llamacpp; the repo template installs as
+# ai.mcs.llamaserver (install.sh fallback). Whichever is loaded wins.
+LABEL=""
+for cand in ai.hermes.llamacpp ai.mcs.llamaserver; do
+  if /bin/launchctl print "gui/$(id -u)/$cand" >/dev/null 2>&1; then
+    LABEL="$cand"
+    break
+  fi
+done
+if [ -z "$LABEL" ]; then
+  echo "$(ts) no llamacpp launchd agent loaded — restart skipped" >> "$LOG"
+  printf 'llamacpp restart: no launchd agent loaded (ai.hermes.llamacpp / ai.mcs.llamaserver)\n'
+  exit 1
+fi
+/bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"
+echo "$(ts) restarted $LABEL (kickstart -k)" >> "$LOG"

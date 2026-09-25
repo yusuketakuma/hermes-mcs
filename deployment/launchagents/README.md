@@ -1,6 +1,9 @@
 # スケジューリング構成
 
-収集ジョブは **hermes cron（標準スケジューラ）+ launchd 3件** のハイブリッド。
+収集ジョブは **hermes cron（標準スケジューラ）5件 + launchd 5件** の
+ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
+（KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
+配置）が同ディレクトリにある。
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
@@ -64,7 +67,7 @@ hermes cron create "0 4 * * *"  --name "llamacpp daily restart" \
 hermes cron create "10 5 * * *"  --name "MCS update check" \
   --script mcs_update.sh --no-agent --deliver local
 
-# 3. launchd plist（4件とも同じ置換規則）
+# 3. launchd plist（services 管理の4件は同じ置換規則）
 for p in local.mcs-cmd local.mcs-int ai.mcs.extract-drainer ai.mcs.extract-drainer-rt; do
   sed -e "s|__PYTHON__|$PY|g" -e "s|__REPO__|$REPO|g" -e "s|__DATA__|$DATA|g" \
       "$REPO/deployment/launchagents/$p.plist" > ~/Library/LaunchAgents/$p.plist
@@ -72,11 +75,24 @@ for p in local.mcs-cmd local.mcs-int ai.mcs.extract-drainer ai.mcs.extract-drain
 done
 ```
 
-| プレースホルダ | 例 |
-|---|---|
-| `__PYTHON__` | `/Users/you/.hermes/hermes-agent/venv/bin/python` |
-| `__REPO__` | このリポジトリの checkout パス（例 `/Users/you/hermes-mcs`） |
-| `__DATA__` | データ dir（例 `/Users/you/.mcs/data`） |
+残る2件は install.sh 所有で置換規則も異なる（services の reconcile 対象外）:
+
+- `org.mcs.recovery` — `__RECOVERY__`/`__DATA__` を置換（install.sh stage 6）
+- `ai.mcs.llamaserver` — `__LLAMA_BIN__`/`__MODEL__`/`__HERMES_HOME__` を
+  置換（install.sh stage 4。実機で hermes 管理の `ai.hermes.llamacpp`
+  が既存なら導入自体を skip）
+
+手動で配置する場合は install.sh の sed コマンドをそのまま使う。
+
+| プレースホルダ | 置換者 | 例 |
+|---|---|---|
+| `__PYTHON__` | `mcs_setup.py services` | `/Users/you/.hermes/hermes-agent/venv/bin/python` |
+| `__REPO__` | `mcs_setup.py services` | このリポジトリの checkout パス（例 `/Users/you/hermes-mcs`） |
+| `__DATA__` | `mcs_setup.py services`・install.sh（recovery） | データ dir（例 `/Users/you/.mcs/data`） |
+| `__RECOVERY__` | install.sh | 復旧ツール dir（`~/.mcs-recovery`） |
+| `__LLAMA_BIN__` | install.sh | llama-server バイナリ（例 `/opt/homebrew/bin/llama-server`） |
+| `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`） |
+| `__HERMES_HOME__` | install.sh | hermes home（`~/.hermes`） |
 
 > 注意: パス変更時は plist の ProgramArguments と cron wrapper の双方を
 > 更新すること（`adapter/` → `mcs/` 移動時に実機 plist が旧パスで失敗した実績あり）。
@@ -104,10 +120,15 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   定期 tick を餓死させない。残 backlog は翌晩に持ち越し。
 
 `MCS_LLM_SLOT=<N>` はプロセス単位の wire id_slot オーバーライド
-（`local_llm.request_slot()`）。llama-server は `-c 65536 -np 2 -fa on
--ub 1024 -ctk q4_0 -ctv q4_0`（per-slot 32768）で稼働する —
-`-c 49152` は prompt cache が slot context を埋め尽くして実行中 task が
-cancel される退行が実測されたため差し戻し（2026-09-23）。
+（`local_llm.request_slot()`）。llama-server のフラグは
+`-c 65536 -np 2 --spec-type ngram-simple -fa on -ctk q4_0 -ctv q4_0
+-ub 512 --cache-ram 1024`（per-slot 32768）— 同梱テンプレート
+`ai.mcs.llamaserver.plist` の実値で、実機の hermes 管理ラベル
+`ai.hermes.llamacpp` も同じ構成で稼働する（install.sh は既存の
+hermes 管理 agent を検出してテンプレート導入を skip するため、実機の
+常駐ラベルは `ai.hermes.llamacpp` のまま）。`-c 49152` は
+prompt cache が slot context を埋め尽くして実行中 task が cancel
+される退行が実測されたため差し戻し（2026-09-23）。
 
 ## llama-server 再起動ガード
 
@@ -116,6 +137,11 @@ cancel される退行が実測されたため差し戻し（2026-09-23）。
 in-flight 要求を kill する実害があった）。24/7 drainer 常駐下では
 瞬間 idle が滅多に無いため、10秒毎・最大15分 poll して gap を捉える。
 15分 busy 継続なら再起動を実行（高々1-2 callが失敗→drainerが自動retry）。
+
+kickstart 対象のラベルは機で異なるため、スクリプトが loaded な方を
+選ぶ: `ai.hermes.llamacpp`（hermes 管理・実機）を先に試し、
+未ロードなら `ai.mcs.llamaserver`（repo テンプレート由来）に fallback。
+どちらも無ければ alert 行を出して失敗終了する。
 
 ## ollama（embedding）
 
