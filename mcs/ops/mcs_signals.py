@@ -1006,7 +1006,7 @@ def sig_units(pairs):
 def _urgency_high(db, sig):
     """True when the signal's primary evidence message carries a
     high-urgency extraction — escalates a digest-tier signal to
-    immediate delivery. Mirrors notifier._urgency: either extractor
+    immediate delivery. Mirrors notify_flush._urgency: either extractor
     kind (rule extract_v1 or extract_llm) can carry the flag."""
     ev = sig.get("evidence") or {}
     mids = ev.get("message_ids")

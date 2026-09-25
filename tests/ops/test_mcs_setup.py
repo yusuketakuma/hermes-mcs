@@ -73,7 +73,7 @@ def test_env_write_merges_and_preserves(tmp_path):
 
 def test_check_environment_resolves_hermes_binary(monkeypatch,
                                                   tmp_path):
-    """check must resolve the hermes CLI the way notifier._hermes_exe
+    """check must resolve the hermes CLI the way notify_flush._hermes_exe
     does: config hermes_bin wins, else PATH, else the user-local
     fallback — an unresolvable binary is an error because notifications
     cannot be sent."""

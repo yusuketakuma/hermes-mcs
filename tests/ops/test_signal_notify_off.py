@@ -3,7 +3,7 @@
 import pytest
 
 import ledger
-import notifier
+import notify_flush
 from test_notify_cards import (
     CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
     _signal_row,
@@ -71,12 +71,12 @@ def test_flush_suppresses_review_without_muting_chat(led, tmp_path,
                                                     monkeypatch):
     review = _signal(led)
     chat = _intent(led, payload={"message_ids": [100]})
-    monkeypatch.setattr(notifier, "_config", lambda: OFF)
+    monkeypatch.setattr(notify_flush, "_config", lambda: OFF)
     monkeypatch.setattr(
-        notifier, "_hermes_exe",
+        notify_flush, "_hermes_exe",
         lambda cfg: str(tmp_path / "missing-hermes"))
 
-    outcome = notifier.flush(led)
+    outcome = notify_flush.flush(led)
 
     assert outcome["suppressed"] == 1
     assert outcome["dispatched"] == 1
