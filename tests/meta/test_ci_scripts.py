@@ -82,6 +82,46 @@ def test_snapshot_gate_flags_connect_line_without_mode_ro(
     assert not any("ok.py" in b for b in bads)
 
 
+@pytest.mark.parametrize("call,allowed", [
+    ("sqlite3.connect(\n 'file:synthetic?mode=ro', uri=True)", True),
+    ("sqlite3.connect(\n f'file:{path}?mode=ro', uri=True)", True),
+    ("sqlite3.connect('file:synthetic?mode=ro')", False),
+    ("sqlite3.connect(path, uri=True) # mode=ro", False),
+    ("sqlite3.connect('file:synthetic?mode=rw&cache=mode=ro', uri=True)", False),
+    ("sqlite3.connect('file:synthetic?mode=ro&mode=rw', uri=True)", False),
+])
+def test_snapshot_gate_checks_the_uri_argument(monkeypatch, tmp_path, call, allowed):
+    gates = _load("ci_uri", "ci/gates.py")
+    path = tmp_path / "reader.py"
+    path.write_text("db = " + call + "\n")
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_snapshot_readonly()) is not allowed
+
+
+def test_platform_gates_distinguish_provisioning_and_uri_encoding(monkeypatch, tmp_path):
+    gates = _load("ci_platform", "ci/gates.py")
+    mcs = tmp_path / "mcs"
+    setup = mcs / "ops" / "mcs_setup.py"
+    setup.parent.mkdir(parents=True)
+    setup.write_text('def _apply_plugin_integration():\n'
+                     ' return os.environ.get("DISCORD_BOT_TOKEN")\n')
+    monkeypatch.setattr(gates, "MCS", mcs)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [setup])
+    assert gates.gate_no_direct_platform_api() == []
+    setup.write_text('def _hermes_config_set(key, value):\n'
+                     ' return key == "DISCORD_BOT_TOKEN"\n')
+    assert gates.gate_no_direct_platform_api() == []
+    setup.write_text('def collector():\n return os.environ.get("DISCORD_BOT_TOKEN")\n')
+    assert gates.gate_no_direct_platform_api()
+    setup.write_text('def _apply_plugin_integration():\n return "https://discord.com/api"\n')
+    assert gates.gate_no_direct_platform_api()
+    for source, allowed in [("from urllib.parse import quote\n", True),
+                            ("from urllib.request import urlopen\n", False),
+                            ("import urllib\n", False)]:
+        setup.write_text(source)
+        assert bool(gates.gate_plugin_sandbox()) is not allowed
+
+
 # ---------- FIX-G2 / mine_gates: nested records must be scanned --------
 
 
@@ -140,3 +180,27 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     monkeypatch.setattr(gates, "PLUGIN", plugin)
     monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
     assert bool(gates.gate_plugin_sandbox()) is not allowed
+
+
+@pytest.mark.parametrize("source,locked", [
+    ('"acquire_run_lock"\ndef write():\n return Ledger("synthetic.db")\n', False),
+    ('def unused():\n acquire_run_lock()\n'
+     'def write():\n return Ledger("synthetic.db")\n', False),
+    ('def write():\n return Ledger("synthetic.db")\n'
+     'def main():\n write()\n'
+     'def locked():\n acquire_run_lock()\n write()\n', False),
+    ('def write():\n acquire_run_lock()\n'
+     ' return Ledger("synthetic.db")\n', True),
+    ('def write():\n return Ledger("synthetic.db")\n'
+     'def main():\n acquire_run_lock()\n return write()\n', True),
+    ('def _lock():\n return acquire_run_lock()\n'
+     'def write():\n return ledger.Ledger("synthetic.db")\n'
+     'def main():\n _lock()\n return write()\n', True),
+])
+def test_writer_gate_checks_lock_on_each_caller_path(
+        monkeypatch, tmp_path, source, locked):
+    gates = _load("ci_writer", "ci/gates.py")
+    path = tmp_path / "synthetic_writer.py"
+    path.write_text(source)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_writer_lock()) is not locked

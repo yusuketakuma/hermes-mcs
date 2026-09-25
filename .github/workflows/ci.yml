@@ -111,10 +111,12 @@ jobs:
       # the plugin contract is validated against ONE pinned Hermes ref —
       # floating 'latest upstream' would let unrelated upstream drift
       # break (or silently change) the lane (F23)
+      # Release prerequisite: advance this pin and install.sh together after
+      # the companion Hermes stdin/native-command changes are published.
       - uses: actions/checkout@v4
         with:
           repository: yusuketakuma/hermes-agent
-          ref: 11d7814deee1d573201e754128ea783b63ff03ba
+          ref: 16390dc80d248b7b49554c0cde52caf22e1fc3d8
           path: hermes-agent
       - uses: actions/setup-python@v5
         with:
@@ -123,11 +125,13 @@ jobs:
         run: |
           python -m venv hermes-agent/.venv
           hermes-agent/.venv/bin/python -m pip install -e './hermes-agent[dev,messaging]'
-      - name: discord plugin integration
+      - name: discord and slack plugin integration
         working-directory: hermes-agent
         env:
           PYTHONPATH: ${{ github.workspace }}/hermes-agent
         run: >-
           scripts/run_tests.sh
           ../hermes-mcs/integration/test_hermes_discord.py
+          ../hermes-mcs/integration/test_hermes_slack.py
+          ../hermes-mcs/integration/test_hermes_config.py
           ../hermes-mcs/tests/plugin/test_discord_sdk_real.py -x -q

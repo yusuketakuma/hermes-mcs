@@ -22,7 +22,7 @@ PLUGIN = ROOT / "hermes_plugin"
 # the ledger read-write is a regression of the snapshot/read-only contract.
 LEDGER_WRITERS = {
     "extract.py", "extract_llm.py", "init_data.py", "rollup.py",
-    "run_check.py", "semantic.py", "semantic_drain.py",
+    "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
 }
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin"}
@@ -134,11 +134,26 @@ def gate_no_direct_platform_api() -> list[str]:
     bad = []
     for path in _py_files(MCS):
         text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        # Setup provisions the serving Hermes profile via its public CLI;
+        # it does not own a platform transport. Keep token access limited
+        # to that function, while still checking every platform URL.
+        provisioning = set()
+        if path == MCS / "ops" / "mcs_setup.py":
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and node.name in {
+                        "_apply_plugin_integration", "_hermes_config_set"}:
+                    provisioning.update(range(node.lineno, node.end_lineno + 1))
         for i, line in enumerate(text.splitlines(), 1):
             if _PLATFORM_URLS.search(line):
                 bad.append(f"{path.name}:{i} direct platform API URL")
-            if _PLATFORM_TOKENS.search(line):
-                bad.append(f"{path.name}:{i} platform token env read")
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docstrings and node.lineno not in provisioning
+                    and _PLATFORM_TOKENS.search(node.value)):
+                bad.append(f"{path.name}:{node.lineno} platform token env read")
     return bad
 
 
@@ -168,6 +183,8 @@ def gate_plugin_sandbox() -> list[str]:
             if isinstance(node, ast.Import):
                 mods = [a.name.split(".")[0] for a in node.names]
             elif isinstance(node, ast.ImportFrom):
+                if node.module == "urllib.parse":
+                    continue  # Pure URI encoding, no network transport.
                 mods = [] if node.level else [node.module.split(".")[0]]
             else:
                 continue
@@ -209,30 +226,96 @@ def gate_snapshot_readonly() -> list[str]:
             bad.append(f"{path.name}:{line} write-mode Ledger(")
         if path.name in _SQLITE_RW_OK:
             continue
-        for i, line in enumerate(text.splitlines(), 1):
-            # the read-only marker must sit on the connect() line itself —
-            # a plain "uri" token previously exempted `connect(uri)` where
-            # the URI was built (possibly without mode=ro) elsewhere
-            # (FIX-G1)
-            if "sqlite3.connect" in line and "mode=ro" not in line \
-                    and "immutable" not in line:
-                bad.append(f"{path.name}:{i} sqlite3.connect without "
+        for node in ast.walk(ast.parse(text)):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "sqlite3" and node.func.attr == "connect"):
+                continue
+            uri_enabled = any(k.arg == "uri" and isinstance(k.value, ast.Constant)
+                              and k.value.value is True for k in node.keywords)
+            database = node.args[0] if node.args else next(
+                (k.value for k in node.keywords if k.arg == "database"), None)
+            # Examine the URI argument itself, across line breaks. A marker
+            # in a comment, another argument or another assignment proves
+            # nothing about this connection (FIX-G1).
+            fragments = []
+            while isinstance(database, ast.BinOp) and isinstance(database.op, ast.Add):
+                database = database.right
+            if isinstance(database, ast.JoinedStr):
+                tail = database.values[-1] if database.values else None
+                if isinstance(tail, ast.Constant) and isinstance(tail.value, str):
+                    fragments.append(tail.value)
+            elif isinstance(database, ast.Constant) and isinstance(database.value, str):
+                fragments.append(database.value)
+            readonly = any(re.search(r"[?&](?:mode=ro|immutable=1)(?:&|$)", part)
+                           and not re.search(r"[?&]mode=(?!ro(?:&|$))", part)
+                           for part in fragments)
+            if not uri_enabled or not readonly:
+                bad.append(f"{path.name}:{node.lineno} sqlite3.connect without "
                            f"mode=ro/immutable")
     return bad
 
 
 def gate_writer_lock() -> list[str]:
     """FIX-R00-01: every module that opens a write-mode Ledger must hold
-    acquire_run_lock — manual CLIs previously wrote the DB unflocked."""
+    acquire_run_lock along its call path — manual CLIs previously wrote
+    the DB unflocked."""
     bad = []
     for path in _py_files(MCS):
-        text = path.read_text(encoding="utf-8")
         if path.name == "ledger.py":
             continue
-        if re.search(r"\bLedger\s*\(", text) and \
-                "acquire_run_lock" not in text:
-            bad.append(f"{path.name}: write-mode Ledger without "
-                       f"acquire_run_lock")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = {node.name: node for node in tree.body
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        parents = {child: parent for parent in ast.walk(tree)
+                   for child in ast.iter_child_nodes(parent)}
+        calls = {name: set() for name in functions}
+        ledger_sites = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            owner = parents.get(node)
+            while owner is not None and not isinstance(
+                    owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                owner = parents.get(owner)
+            name = owner.name if owner is not None \
+                and functions.get(owner.name) is owner else None
+            if isinstance(node.func, ast.Name):
+                callee = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                callee = node.func.attr
+            else:
+                continue
+            if callee == "Ledger":
+                ledger_sites.append((name, node.lineno))
+            if name is not None and isinstance(node.func, ast.Name):
+                calls[name].add(callee)
+
+        callers = {name: set() for name in functions}
+        for name, callees in calls.items():
+            for callee in callees & functions.keys():
+                callers[callee].add(name)
+
+        def reaches_lock(name, seen):
+            if name in seen:
+                return False
+            return "acquire_run_lock" in calls[name] or any(
+                reaches_lock(callee, seen | {name})
+                for callee in calls[name] & functions.keys())
+
+        def protected(name, seen):
+            if name in seen:
+                return False
+            if reaches_lock(name, set()):
+                return True
+            return bool(callers[name]) and all(
+                protected(caller, seen | {name}) for caller in callers[name])
+
+        for name, line in ledger_sites:
+            if name is None or not protected(name, set()):
+                bad.append(f"{path.name}:{line} write-mode Ledger without "
+                           "acquire_run_lock on every caller path")
     return bad
 
 
