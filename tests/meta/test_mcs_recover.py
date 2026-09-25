@@ -47,6 +47,16 @@ def _make_repo(tmp_path):
 @pytest.fixture
 def rec(tmp_path, monkeypatch):
     mod = _load()
+    monkeypatch.setattr(mod, "_notify", lambda *args: None)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    original_run = subprocess.run
+
+    def local_run(args, **kwargs):
+        if args[0] == "launchctl":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(mod.subprocess, "run", local_run)
     monkeypatch.setattr(mod, "REPO", str(tmp_path / "repo"))
     monkeypatch.setattr(mod, "DATA", str(tmp_path / "data"))
     monkeypatch.setattr(mod, "STATE_PATH",
@@ -63,6 +73,21 @@ def rec(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "RESIDENT_LABELS", ())
     os.makedirs(tmp_path / "data", exist_ok=True)
     return mod
+
+
+@pytest.fixture
+def gateway_restarts(rec, monkeypatch):
+    calls = []
+    original_popen = subprocess.Popen
+
+    def local_popen(args, **kwargs):
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            calls.append(args)
+            return None
+        return original_popen(args, **kwargs)
+
+    monkeypatch.setattr(rec.subprocess, "Popen", local_popen)
+    return calls
 
 
 def _applying(prev, tag="v1.1.0", sha="t" * 40, stage="quiesce",
@@ -112,6 +137,52 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path):
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     report = json.load(open(rec.REPORT_PATH))
     assert report["result"] in ("mixed_tree_reset",)
+
+
+def test_mixed_tree_preserves_untracked_update_collision(rec, tmp_path,
+                                                         monkeypatch):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("target")
+    (repo / "added.txt").write_text("target content")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", prev)
+    (repo / "added.txt").write_text("user content")
+    (repo / "f.txt").write_text("interrupted checkout")
+    state = _applying(prev, sha=target, stage="applying")
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    monkeypatch.setattr(rec, "_notify", lambda *args: None)
+
+    assert rec.recover() == 0
+    assert (repo / "added.txt").read_text() == "user content"
+    assert (repo / "f.txt").read_text() == "one"
+
+
+def test_git_status_error_does_not_complete_recovery(rec, tmp_path,
+                                                     monkeypatch):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("interrupted checkout")
+    state = _applying(prev, sha="0" * 40, stage="applying")
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    original_git = rec._git
+
+    def fail_status(args, timeout=rec.T_GIT):
+        if args[0] == "status":
+            return subprocess.CompletedProcess(args, 128, "", "synthetic failure")
+        return original_git(args, timeout)
+
+    monkeypatch.setattr(rec, "_git", fail_status)
+    monkeypatch.setattr(rec, "_notify", lambda *args: None)
+
+    assert rec.recover() == 1
+    assert (repo / "f.txt").read_text() == "interrupted checkout"
+    assert json.load(open(rec.STATE_PATH))["applying"] == state["applying"]
+    assert json.load(open(rec.REPORT_PATH))["result"] == "escalate"
 
 
 def test_merge_head_aborted(rec, tmp_path):
@@ -202,7 +273,80 @@ def test_busy_update_lock_defers(rec, tmp_path):
         os.close(fd)
 
 
-def test_membership_reconcile_removes_undesired_agents(rec, tmp_path):
+def test_busy_lock_closes_failed_descriptor(rec, monkeypatch):
+    import fcntl
+    held = os.open(rec.UPDATE_LOCK, os.O_WRONLY | os.O_CREAT)
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    attempted = []
+    original_open = os.open
+
+    def record_open(*args):
+        fd = original_open(*args)
+        attempted.append(fd)
+        return fd
+
+    monkeypatch.setattr(rec.os, "open", record_open)
+    try:
+        assert rec._try_lock(rec.UPDATE_LOCK) is None
+        with pytest.raises(OSError):
+            os.fstat(attempted[0])
+    finally:
+        os.close(held)
+        for fd in attempted:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+@pytest.mark.parametrize("result", [None, subprocess.CompletedProcess([], 1, "", "failed")])
+def test_unverifiable_git_status_is_not_clean(rec, monkeypatch, result):
+    monkeypatch.setattr(rec, "_git", lambda *args: result)
+    assert rec._clean() is not True
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_resumed_target_retains_apply_history_and_restarts_gateway(
+        rec, tmp_path, monkeypatch, gateway_restarts, rollback):
+    repo = _make_repo(tmp_path)
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying("0" * 40, sha=target, stage="postcheck")
+    previous = {"sha": "1" * 40, "tag": "v0.9.0"}
+    reverted = {"sha": "0" * 40, "prev_sha": target, "tag": "v1.1.0"}
+    state["applied"] = [previous, reverted]
+    state["applying"].update(rollback=rollback, plugin_changed=True,
+                             command_id="cid-resume")
+    applying = dict(state["applying"])
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda snapshot: [])
+    rec._save_state(state)
+
+    assert rec.recover() == 0
+    after = rec._load_state()
+    assert after["applying"] is None and after["stages"] == []
+    assert after["applied"] == ([previous] if rollback
+                                else [previous, reverted, applying])
+    expected = "rolled_back" if rollback else "applied"
+    assert after["executed"]["cid-resume"]["result"] == expected
+    if rollback:
+        assert after["attempts"]["v1.1.0"]["result"] == "rolled_back"
+    assert len(gateway_restarts) == 1
+
+
+def test_done_bookkeeping_restarts_gateway(rec, tmp_path, gateway_restarts):
+    _make_repo(tmp_path)
+    state = {"v": 1, "applying": None,
+             "stages": [{"stage": "done", "at": time.time() - 4000}],
+             "applied": [{"plugin_changed": True, "command_id": "cid-done"}]}
+    rec._save_state(state)
+    assert rec.recover() == 0
+    after = rec._load_state()
+    assert after["executed"]["cid-done"]["result"] == "applied"
+    assert after["stages"] == []
+    assert len(gateway_restarts) == 1
+
+
+def test_membership_reconcile_removes_undesired_agents(rec, tmp_path,
+                                                       monkeypatch):
     agents = tmp_path / "agents"
     agents.mkdir()
     (agents / "ai.mcs.extract-old.plist").write_text("<plist/>")
@@ -210,8 +354,18 @@ def test_membership_reconcile_removes_undesired_agents(rec, tmp_path):
     (agents / "unrelated.other.plist").write_text("<plist/>")
     snapshot = {"agents": [{"label": "ai.mcs.extract-drainer"}],
                 "cron": []}
+    commands = []
+
+    def record_command(args, **kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr(rec.subprocess, "run", record_command)
+    monkeypatch.setattr(rec.shutil, "which", lambda name: None)
     rec._reconcile_membership(snapshot)
     # undesired owned agent removed; excluded + foreign survive
+    assert commands == [["launchctl", "bootout",
+                         f"gui/{os.getuid()}/ai.mcs.extract-old"]]
     assert not (agents / "ai.mcs.extract-old.plist").exists()
     assert (agents / "ai.mcs.llamaserver.plist").exists()
     assert (agents / "unrelated.other.plist").exists()
@@ -353,4 +507,5 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     report = json.load(open(rec.REPORT_PATH))
     assert report["result"] == "resumed"
     after = json.load(open(rec.STATE_PATH))
-    assert after["executed"]["cid-rb"]["result"] == "applied"
+    assert after["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert after["applied"] == []

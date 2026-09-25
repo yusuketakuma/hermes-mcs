@@ -72,7 +72,8 @@ def _head():
 
 
 def _clean():
-    return _git_out(["status", "--porcelain", "-uno"]).strip() == ""
+    r = _git(["status", "--porcelain", "-uno"])
+    return None if r is None or r.returncode != 0 else r.stdout.strip() == ""
 
 
 def _load_state():
@@ -121,9 +122,13 @@ def _report(result, detail):
 def _try_lock(path):
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
-    except (BlockingIOError, OSError):
+    except OSError:
+        os.close(fd)
         return None
 
 
@@ -158,6 +163,15 @@ def _restart_drainers():
     return problems
 
 
+def _restart_gateway():
+    subprocess.Popen(
+        ["launchctl", "kickstart", "-k",
+         f"gui/{os.getuid()}/ai.hermes.gateway"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, close_fds=True,
+        start_new_session=True)
+
+
 def _clean_stale_git_locks():
     """Only locks OLDER than GIT_LOCK_MIN_AGE_S — a fresh lock may
     belong to an unrelated live `git` process. A free update.lock
@@ -174,22 +188,6 @@ def _clean_stale_git_locks():
         except OSError:
             pass
     return removed
-
-
-def _surgical_delete(sha_a, sha_b):
-    """Delete only untracked files that differ between the update
-    endpoints — `git clean` is banned (would take unrelated user
-    files). Pinned SHAs, never tag names; -z parsing keeps quoted and
-    non-ASCII paths exact."""
-    fileset = set(_git_out(
-        ["diff", "--name-only", "-z", sha_a, sha_b]).split("\0"))
-    for name in _git_out(
-            ["ls-files", "--others", "--full-name", "-z"]).split("\0"):
-        if name and name in fileset:
-            try:
-                os.unlink(os.path.join(REPO, name))
-            except OSError:
-                pass
 
 
 def _reconcile_membership(snapshot):
@@ -394,6 +392,8 @@ def recover(if_stale=False):
             _remove_marker()
             _report("resumed_done", "completed bookkeeping after crash")
             _notify("[MCS] 中断された更新の後処理を完了しました")
+            if applied and applied[-1].get("plugin_changed"):
+                _restart_gateway()
             return 0
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated
@@ -402,11 +402,12 @@ def recover(if_stale=False):
 
         head = _head()
         clean = _clean()
+        if clean is None:
+            return escalate("git status failed")
         if head == target:
             if not clean:
                 _git_out(["reset", "--hard", target])
-                _surgical_delete(target, prev or target)
-                if not _clean():
+                if _clean() is not True:
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
                 err = _restore_db(applying["backup_path"])
@@ -419,32 +420,36 @@ def recover(if_stale=False):
             if problems:
                 return escalate("resume incomplete: "
                                 + ",".join(problems))
-            state.setdefault("applied", []).append(applying)
+            if applying.get("rollback"):
+                applied = state.get("applied") or []
+                if applied and applied[-1].get("sha") == applying.get("prev_sha"):
+                    reverted = applied[-1]
+                    state["applied"] = applied[:-1]
+                    state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+                        "result": "rolled_back", "at": time.time()}
+                result = "rolled_back"
+            else:
+                state.setdefault("applied", []).append(applying)
+                result = "applied"
             state["applying"] = None
             state["stages"] = []
             cid = applying.get("command_id")
             if cid:
                 state.setdefault("executed", {})[cid] = {
-                    "result": "applied", "at": time.time()}
+                    "result": result, "at": time.time()}
             _save_state(state)
             _remove_marker()
             _report("resumed", "post-merge converged after crash")
             _notify("[MCS] 更新の中断を検出し、post-merge を完了しました")
             if applying.get("plugin_changed"):
-                subprocess.Popen(
-                    ["launchctl", "kickstart", "-k",
-                     f"gui/{os.getuid()}/ai.hermes.gateway"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, close_fds=True,
-                    start_new_session=True)
+                _restart_gateway()
             return 0
         if prev and head == prev:
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach
                 _git_out(["reset", "--hard", prev])
-                _surgical_delete(prev, target or prev)
-                if _head() != prev or not _clean():
+                if _head() != prev or _clean() is not True:
                     return escalate("prev tree could not be cleaned")
                 _finish(state, "mixed_tree_reset", removed)
                 return 0

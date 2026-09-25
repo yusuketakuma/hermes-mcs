@@ -777,6 +777,42 @@ def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
     assert ("", "DISCORD_BOT_TOKEN", "tok") in sets
 
 
+def test_env_merge_failure_preserves_existing_credentials(tmp_path, monkeypatch):
+    import pytest
+    path = tmp_path / ".env"
+    path.write_text("SAMPLE_TOKEN=synthetic-original\nUNCHANGED=keep\n")
+    original = path.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(mcs_setup.os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        mcs_setup._env_write(str(path), {"SAMPLE_TOKEN": "synthetic-new"})
+    assert path.read_bytes() == original
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]
+
+
+def test_hermes_token_is_piped_without_argv_fallback(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=2)
+
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    token = "synthetic-bot-credential"
+    assert not mcs_setup._hermes_config_set("/fake/hermes", "test-profile",
+                                            "DISCORD_BOT_TOKEN", token)
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert argv == ["/fake/hermes", "-p", "test-profile", "config", "set",
+                    "DISCORD_BOT_TOKEN", "--stdin"]
+    assert token not in " ".join(argv)
+    assert kwargs["input"] == token
+
+
 def test_plugin_integration_token_written_to_serving_profile(
         monkeypatch):
     """The bot token is a PROFILE-scoped secret — under multiplex a

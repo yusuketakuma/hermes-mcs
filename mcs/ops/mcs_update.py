@@ -647,30 +647,6 @@ def restart_gateway(cfg: dict) -> None:
         stdin=subprocess.DEVNULL, close_fds=True, start_new_session=True)
 
 
-def _surgical_delete(sha_a: str, sha_b: str) -> None:
-    """Delete only untracked files that differ between the two update
-    endpoints — `git clean` is banned (it would take unrelated user
-    files). Uses the pinned SHAs, not tag names, so a re-pointed tag
-    can never widen the delete set; -z parsing handles quoted and
-    non-ASCII paths (F2/F3)."""
-    fileset = set(_git_out(
-        ["diff", "--name-only", "-z", sha_a, sha_b]).split("\0"))
-    fileset.discard("")
-    untracked = _git_out(["ls-files", "--others", "--full-name", "-z"])
-    norm_protected = tuple(_norm(p) for p in PROTECTED)
-    for name in untracked.split("\0"):
-        if not name or name not in fileset or not _safe_relpath(name):
-            continue
-        np_ = _norm(name)
-        if any(np_ == p or np_.startswith(p.rstrip("/") + "/")
-               for p in norm_protected):
-            continue                        # never touch protected
-        try:
-            os.unlink(os.path.join(REPO, name))
-        except OSError:
-            pass
-
-
 def _clean_stale_git_locks() -> list[str]:
     """Stage-0 of every recovery: .git/*.lock leftovers block even
     `reset --hard`. Only locks OLDER than GIT_LOCK_MIN_AGE_S are
@@ -878,6 +854,7 @@ def _post_merge(state: dict) -> int:
         "backup_path": applying.get("backup_path"),
         "schema_bump": applying.get("schema_bump", False),
         "plugin_changed": applying.get("plugin_changed", False),
+        "manifest_snapshot": applying.get("manifest_snapshot"),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None
@@ -1201,13 +1178,12 @@ def _reconcile_membership(desired: dict) -> list[str]:
 
 
 def _rollback_tree(entry: dict) -> None:
-    """Surgical restore of prev_sha — shared by rollback() and the
+    """Restore tracked files to prev_sha — shared by rollback() and the
     post-merge failure path. Caller holds both locks and drainers are
-    already quiesced. The delete set is pinned to the recorded SHAs —
-    never a tag name that could have been re-pointed (F4)."""
+    already quiesced. Do not additionally delete untracked paths just
+    because their names occur in the update diff; ownership is unproven."""
     prev = entry["prev_sha"]
     _git_out(["reset", "--hard", prev])
-    _surgical_delete(prev, entry.get("sha") or prev)
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
     if entry.get("schema_bump") and entry.get("backup_path"):
@@ -1298,7 +1274,8 @@ def rollback(command_id: str | None = None) -> int:
                     "result": "rolled_back", "at": time.time()}
             save_state(state)
             # gateway restart AFTER the durable save (self-deadlock)
-            _gateway_restart_if_needed(state)
+            if entry.get("plugin_changed"):
+                restart_gateway(load_config())
             _enqueue_notice(f"[MCS] ロールバックしました: "
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
@@ -1451,6 +1428,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
             _remove_marker()
             _report("resumed_done", "completed bookkeeping after crash")
             _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
+            _gateway_restart_if_needed(state)
             return 0
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated — safe
@@ -1464,7 +1442,6 @@ def recover_interrupted(if_stale: bool = False) -> int:
             if not clean:
                 # crash during the target checkout — converge to target
                 _git_out(["reset", "--hard", target])
-                _surgical_delete(target, prev or target)
                 if not _tree_clean():
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
@@ -1473,25 +1450,40 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 except UpdateError as e:
                     return escalate("rollback db restore: " + str(e))
             try:
+                if applying.get("rollback"):
+                    problems = _reconcile_membership(applying.get("manifest_snapshot"))
+                    if problems:
+                        return escalate("membership: " + ",".join(problems))
                 _services_reconcile()
                 problems = restart_agents()
                 errors = _postcheck(state, target)
                 if problems or errors:
                     return escalate("resume postcheck: "
                                     + ",".join(problems + errors))
-                state.setdefault("applied", []).append(applying)
+                if applying.get("rollback"):
+                    applied = state.get("applied") or []
+                    if applied and applied[-1].get("sha") == applying.get("prev_sha"):
+                        reverted = applied[-1]
+                        state["applied"] = applied[:-1]
+                        state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+                            "result": "rolled_back", "at": time.time()}
+                    result = "rolled_back"
+                else:
+                    state.setdefault("applied", []).append(applying)
+                    result = "applied"
                 state["applying"] = None
                 state["stages"] = []
                 cid = applying.get("command_id")
                 if cid:
                     state.setdefault("executed", {})[cid] = {
-                        "result": "applied", "at": time.time()}
+                        "result": result, "at": time.time()}
                 save_state(state)
                 _remove_marker()
                 _report("resumed", "post-merge completed after crash")
                 _enqueue_notice(
                     "[MCS] 更新の中断を検出し、post-merge を完了しました")
-                _gateway_restart_if_needed(state)
+                if applying.get("plugin_changed"):
+                    restart_gateway(load_config())
                 return 0
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
@@ -1500,7 +1492,6 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
                 _git_out(["reset", "--hard", prev])
-                _surgical_delete(prev, target or prev)
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")
                 _finish_recovery(state, "mixed_tree_reset", removed)

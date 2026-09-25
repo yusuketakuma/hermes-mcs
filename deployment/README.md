@@ -23,6 +23,9 @@ repo との drift になる。
 
 ## CCO terminal/file 隔離の候補設定
 
-`cco-terminal.candidate.yaml` は未適用の候補で、背景・検証結果・
-ホスト側経路の確認範囲は [cco-terminal-isolation.md](cco-terminal-isolation.md)
-に記録する。
+現在の `cco-terminal.candidate.yaml` は snapshot 読取専用と
+`cmd-proposals` 書込み用の候補で、実行用 `cmd` は公開しない。
+`cco-approval-scope.json` は旧候補の設定適用記録であり、記録の候補hashは
+現在のファイルと一致しない。現在候補の承認・適用・実機検証の証拠には使わない。
+背景と過去の検証範囲は [cco-terminal-isolation.md](cco-terminal-isolation.md)
+を参照する。

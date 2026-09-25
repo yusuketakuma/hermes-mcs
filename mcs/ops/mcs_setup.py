@@ -227,13 +227,13 @@ def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
-def _hermes_cli(exe: str, profile: str, *argv: str):
+def _hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None = None):
     """Public hermes CLI against a named profile ("" = launch/default).
     Returns the CompletedProcess, or None when the call can't run."""
     cmd = [exe] + (["-p", profile] if profile else []) + list(argv)
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=30)
+                              timeout=30, input=input_text)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -246,7 +246,11 @@ def _hermes_config_get(exe: str, profile: str, key: str):
 
 
 def _hermes_config_set(exe: str, profile: str, key: str, val) -> bool:
-    r = _hermes_cli(exe, profile, "config", "set", key, str(val))
+    if key == "DISCORD_BOT_TOKEN":
+        r = _hermes_cli(exe, profile, "config", "set", key, "--stdin",
+                        input_text=str(val))
+    else:
+        r = _hermes_cli(exe, profile, "config", "set", key, str(val))
     return bool(r and r.returncode == 0)
 
 
@@ -358,8 +362,9 @@ def _env_write(path: str, updates: dict[str, str]):
     """Merge KEY=value lines — existing keys preserved unless updated."""
     lines, seen = [], set()
     try:
-        lines = open(path, encoding="utf-8").read().splitlines()
-    except OSError:
+        with open(path, encoding="utf-8") as stream:
+            lines = stream.read().splitlines()
+    except FileNotFoundError:
         pass
     out = []
     for line in lines:
@@ -372,11 +377,7 @@ def _env_write(path: str, updates: dict[str, str]):
     for key, val in updates.items():
         if key not in seen:
             out.append(f"{key}={val}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("\n".join(out) + "\n")
-    os.chmod(path, 0o600)  # enforce even when the file pre-existed
+    _write_atomic(path, "\n".join(out) + "\n", 0o600)
 
 
 def _keychain_store(account: str, pw: str) -> bool:
@@ -743,8 +744,9 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
               " — 後で `hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
-    # Bot token — `config set` routes *_TOKEN keys to the profile .env,
-    # so the secret never lands in argv history or config.json. It must
+    # Pipe the token to the public writer so process listings cannot expose
+    # it. Older Hermes versions must fail instead of falling back to argv.
+    # `config set` routes *_TOKEN keys to the profile .env. It must
     # land in the SERVING profile's .env: under multiplex each profile's
     # secret scope is authoritative and a miss never falls through to
     # the default profile's .env (agent/secret_scope.py).
@@ -753,7 +755,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         ok = _hermes_config_set(exe, profile, "DISCORD_BOT_TOKEN", tok)
         print("  DISCORD_BOT_TOKEN: "
               + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗"))
+                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
     elif _hermes_config_get(exe, profile, "DISCORD_BOT_TOKEN"):
         print("  DISCORD_BOT_TOKEN: 設定済み")
     else:
@@ -766,11 +768,11 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
                                         "DISCORD_BOT_TOKEN", tok)
                 print("  DISCORD_BOT_TOKEN: "
                       + (f"hermes {'-p ' + profile if profile else '既定'}"
-                         " .env へ保存" if ok else "保存失敗"))
+                         " .env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
         if not tok:
             print("  DISCORD_BOT_TOKEN: 未設定 — `hermes "
                   + (f"-p {profile} " if profile else "")
-                  + "config set DISCORD_BOT_TOKEN <token>` で後から設定")
+                  + "setup` で後から設定")
 
 
 def cmd_init(args) -> int:
@@ -883,10 +885,8 @@ def cmd_init(args) -> int:
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
     os.makedirs(os.path.join(HOME, "data", "cmd"), exist_ok=True)
     os.makedirs(os.path.join(HOME, "chrome-profile"), exist_ok=True)
-    fd = os.open(CONF_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
+    _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
+                                      indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: wrote {CONF_PATH}")
     _apply_plugin_integration(cfg, args)
     return cmd_check(args)
@@ -917,8 +917,8 @@ def cmd_fact_source(args) -> int:
                   "human-labelled gate)")
             return 1
         try:
-            raw = os.read(os.open(args.gate_evidence, os.O_RDONLY),
-                          8 * 1024 * 1024)
+            with open(args.gate_evidence, "rb") as stream:
+                raw = stream.read(8 * 1024 * 1024)
             report = json.loads(raw)
         except (OSError, ValueError) as e:
             print(f"fact_source: gate evidence unreadable ({e})")
@@ -951,10 +951,8 @@ def cmd_fact_source(args) -> int:
         print("fact_source: refusing to write invalid semantic config — "
               + "; ".join(sem_errors))
         return 1
-    fd = os.open(CONF_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
+    _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
+                                      indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: semantic.fact_source = {source}"
           + (f" (gate {sem['fact_source_gate']})"
              if source == "canonical" else ""))
@@ -973,7 +971,8 @@ def cmd_jev_value(args) -> int:
     import semantic_jev as jev
     import semantic_evaluation
     try:
-        raw = os.read(os.open(args.cases, os.O_RDONLY), 8 * 1024 * 1024)
+        with open(args.cases, "rb") as stream:
+            raw = stream.read(8 * 1024 * 1024)
         payload = json.loads(raw)
     except (OSError, ValueError) as e:
         print(f"jev-value: cases unreadable ({e})")
