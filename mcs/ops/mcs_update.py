@@ -1009,7 +1009,10 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 
         journal(state, "backup")
         import maintenance
-        bpath = maintenance.preupdate_backup(LEDGER)
+        try:
+            bpath = maintenance.preupdate_backup(LEDGER)
+        except maintenance.MaintenanceError as e:
+            return bail(str(e))
         snap = None
         try:
             with open(MANIFEST_PATH, encoding="utf-8") as f:

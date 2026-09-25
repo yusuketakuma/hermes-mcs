@@ -1,9 +1,11 @@
 """Shared micro-utilities for the MCS adapter — no network, no DB access.
 
 Centralizes the small pieces several modules used to keep private copies
-of: config loading, HTML-to-text, the no-redirect HTTP guard, and the
-single-writer run lock. Keep this module dependency-free so every entry
-point (run_check, init_data, the extract CLIs, notifier, mcs_adapter)
+of: config loading, HTML-to-text, the no-redirect HTTP guard, the
+single-writer run lock, shared path constants, and the text utilities
+(chunking / evidence-quote location) used by the extract and semantic
+layers. Keep this module dependency-free so every entry point
+(run_check, init_data, the extract CLIs, notify_flush, mcs_adapter)
 can import it without side effects.
 """
 import fcntl
@@ -17,6 +19,10 @@ import urllib.request
 HOME = os.path.expanduser("~/.mcs")
 CONF_PATH = os.path.join(HOME, "config.json")
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
+DB = os.path.join(HOME, "data", "ledger.db")
+CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
+CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
+CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
 def load_config(path: str = CONF_PATH) -> dict:
@@ -31,7 +37,7 @@ def load_config(path: str = CONF_PATH) -> dict:
 
 
 def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
-    """KEY=value lookup shared by notifier/semantic/semantic_jev.
+    """KEY=value lookup shared by notify_flush/semantic/semantic_jev.
 
     Order: process env (unless check_env=False — file-pinned lookups like
     per-profile Discord tokens pass False so a stray shell var can never
@@ -89,6 +95,65 @@ def html_to_text(h: str) -> str:
     h = re.sub(r"<br\s*/?>", "\n", h or "")
     h = re.sub(r"</(p|div|li)>", "\n", h)
     return html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
+
+
+def locate_quote_span(body: str, quote: str) -> tuple[int, int] | None:
+    """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
+    quotes get no span — never a guessed one (INV-07, AT-029).
+
+    Exact match first; if absent, retry with all whitespace removed and
+    map the span back to original codepoints. Models routinely emit
+    quotes with inserted/altered whitespace — the located span is still
+    unique and the caller stores body[s:e] verbatim, so span equality
+    holds."""
+    if not body or not quote:
+        return None
+    first = body.find(quote)
+    if first >= 0 and body.find(quote, first + 1) < 0:
+        return (first, first + len(quote))
+    if first >= 0:
+        return None
+    nbody = []
+    nidx = []
+    for i, ch in enumerate(body):
+        if not ch.isspace():
+            nbody.append(ch)
+            nidx.append(i)
+    nbody = "".join(nbody)
+    nquote = "".join(quote.split())
+    s = nbody.find(nquote)
+    if s < 0 or nbody.find(nquote, s + 1) >= 0:
+        return None
+    return (nidx[s], nidx[s + len(nquote) - 1] + 1)
+
+
+def text_chunks(text: str, size: int = 3000) -> list:
+    """Split into <=size chunks at line/sentence boundaries, hard-
+    splitting only as a last resort. The concatenation of all chunks is
+    the original text — full coverage, never head-only processing
+    (§12.3, AT-017)."""
+    if not text:
+        return []
+    if len(text) <= size:
+        return [text]
+    out, buf = [], ""
+    for seg in re.split(r"(?<=\n)", text):
+        if len(buf) + len(seg) <= size:
+            buf += seg
+            continue
+        if buf:
+            out.append(buf)
+            buf = ""
+        while len(seg) > size:
+            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size))
+            if cut <= 0:
+                cut = size
+            out.append(seg[:cut])
+            seg = seg[cut:]
+        buf = seg
+    if buf:
+        out.append(buf)
+    return out
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

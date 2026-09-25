@@ -28,14 +28,12 @@ import _mcs_path  # noqa: F401
 from mcs_adapter import MCSAdapter, MCSError, SessionExpired
 from ledger import Ledger
 from job_ops import merge_full_replies
-from mcs_util import acquire_run_lock
+from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, DB, RUN_LOCK,
+                      acquire_run_lock)
 
-HOME = os.path.expanduser("~/.mcs")
-DB = os.path.join(HOME, "data", "ledger.db")
-CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
-LOCKFILE = os.path.join(HOME, "data", "run.lock")
-CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
-CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# canonical path constants live in mcs_util; the local aliases keep the
+# module attribute names (monkeypatch surface for tests) unchanged
+LOCKFILE = RUN_LOCK
 
 
 def main() -> int:

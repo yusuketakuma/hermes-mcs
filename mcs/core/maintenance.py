@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
-from mcs_adapter import MCSError
 
 HOME = os.path.expanduser("~/.mcs")
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -21,6 +20,12 @@ LOGFILE = os.path.join(HOME, "data", "run.log")
 BACKUP_KEEP = 7
 LOG_MAX = 5 * 1024 * 1024
 ATTACHMENT_KEEP_S = 14 * 86400
+
+
+class MaintenanceError(RuntimeError):
+    """Housekeeping failure carrying a short stable reason token
+    (e.g. "backup_verify_failed"). Distinct from the adapter's MCSError
+    — core must not depend on the ingest layer for an error type."""
 
 
 def daily_backup(db_path: str):
@@ -48,7 +53,7 @@ def daily_backup(db_path: str):
         src.close()
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
-        raise MCSError("backup_verify_failed")
+        raise MaintenanceError("backup_verify_failed")
     os.replace(tmp, dest)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
@@ -78,7 +83,7 @@ def preupdate_backup(db_path: str) -> str:
         src.close()
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
-        raise MCSError("backup_verify_failed")
+        raise MaintenanceError("backup_verify_failed")
     os.replace(tmp, dest)
     return dest
 
@@ -146,7 +151,7 @@ def prune_attachments(db_path: str) -> int:
     payload goes. 'pending'/'failed' rows are untouched — a failed
     download keeps its retry path and never ages out mid-retry.
 
-    F12: the notifier aliases each file to `<path><ext>` for upload —
+    F12: notify_flush aliases each file to `<path><ext>` for upload —
     the alias is part of the same asset and is unlinked too. Files
     still referenced by an unsent notification are kept. Returns the
     number of payloads actually deleted."""
@@ -177,7 +182,7 @@ def prune_attachments(db_path: str) -> int:
             try:
                 if path and os.path.isfile(path):
                     os.unlink(path)
-                # notifier._media_path hardlink/copy alias — same asset
+                # notify_flush._media_path hardlink/copy alias — same asset
                 ext = os.path.splitext(a["name"] or "")[1].lower()
                 if (path and ext and len(ext) <= 9
                         and ext[1:].isascii() and ext[1:].isalnum()):

@@ -10,6 +10,10 @@ import time
 
 import semantic_jev as jev
 from mcs_util import json_object as _json_block
+# generic text utilities live in core/mcs_util.py; the private aliases
+# keep the semantic_llm/semantic facade patch surface stable
+from mcs_util import locate_quote_span as _locate_quote  # noqa: F401
+from mcs_util import text_chunks as _chunks  # noqa: F401
 from semantic_policy import SCHEMA_VERSION
 
 FACT_KINDS = ("medication_event", "symptom", "explicit_request",
@@ -110,65 +114,6 @@ def _iso_date(text: str) -> str | None:
         return date(y, mo, d).isoformat()
     except ValueError:
         return None
-
-
-def _locate_quote(body: str, quote: str) -> tuple[int, int] | None:
-    """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
-    quotes get no span — never a guessed one (INV-07, AT-029).
-
-    Exact match first; if absent, retry with all whitespace removed and
-    map the span back to original codepoints. Models routinely emit
-    quotes with inserted/altered whitespace — the located span is still
-    unique and the caller stores body[s:e] verbatim, so span equality
-    holds."""
-    if not body or not quote:
-        return None
-    first = body.find(quote)
-    if first >= 0 and body.find(quote, first + 1) < 0:
-        return (first, first + len(quote))
-    if first >= 0:
-        return None
-    nbody = []
-    nidx = []
-    for i, ch in enumerate(body):
-        if not ch.isspace():
-            nbody.append(ch)
-            nidx.append(i)
-    nbody = "".join(nbody)
-    nquote = "".join(quote.split())
-    s = nbody.find(nquote)
-    if s < 0 or nbody.find(nquote, s + 1) >= 0:
-        return None
-    return (nidx[s], nidx[s + len(nquote) - 1] + 1)
-
-
-def _chunks(text: str, size: int = 3000) -> list:
-    """Split into <=size chunks at line/sentence boundaries, hard-
-    splitting only as a last resort. The concatenation of all chunks is
-    the original text — full coverage, never head-only processing
-    (§12.3, AT-017)."""
-    if not text:
-        return []
-    if len(text) <= size:
-        return [text]
-    out, buf = [], ""
-    for seg in re.split(r"(?<=\n)", text):
-        if len(buf) + len(seg) <= size:
-            buf += seg
-            continue
-        if buf:
-            out.append(buf)
-            buf = ""
-        while len(seg) > size:
-            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size))
-            if cut <= 0:
-                cut = size
-            out.append(seg[:cut])
-            seg = seg[cut:]
-        buf = seg
-    if buf:
-        out.append(buf)
-    return out
 
 
 def extract_facts(llm_fn, member: dict,

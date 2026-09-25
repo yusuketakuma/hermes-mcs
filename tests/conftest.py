@@ -114,12 +114,13 @@ _install(socket.socket, "connect_ex", _blocked)
 _install(subprocess, "run", _guarded_run)
 _install(subprocess, "Popen", _guarded_popen)
 
-# The jev transport spawns a fresh interpreter for every request, so the
-# in-process socket guard cannot reach it — a call that slips past a
-# test's fakes would hit the real local LLM / Jev for real. Synthetic
-# loopback servers stay allowed (real-transport tests exercise the
-# worker against their own fixture endpoints); only the production
+# The bounded-http transport spawns a fresh interpreter for every
+# request, so the in-process socket guard cannot reach it — a call that
+# slips past a test's fakes would hit the real local LLM / Jev for real.
+# Synthetic loopback servers stay allowed (real-transport tests exercise
+# the worker against their own fixture endpoints); only the production
 # endpoints are denied at the boundary.
+import bounded_http  # noqa: E402
 import local_llm  # noqa: E402
 import semantic_jev as _jev  # noqa: E402
 
@@ -139,7 +140,12 @@ def _guarded_http_request(endpoint, *args, **kwargs):
     return _ORIG_HTTP_REQUEST(endpoint, *args, **kwargs)
 
 
-_ORIG_HTTP_REQUEST = _jev.bounded_http_request
+# Patch every name a caller can reach: ``bounded_http`` is the canonical
+# implementation (JevClient and local_llm.bounded_request call through
+# it), while ``semantic_jev.bounded_http_request`` is the kept re-export
+# used by older call sites.
+_ORIG_HTTP_REQUEST = bounded_http.bounded_http_request
+_install(bounded_http, "bounded_http_request", _guarded_http_request)
 _install(_jev, "bounded_http_request", _guarded_http_request)
 
 

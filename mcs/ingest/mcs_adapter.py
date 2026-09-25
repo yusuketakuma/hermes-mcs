@@ -41,7 +41,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 
 from mcs_util import env_value, load_config, no_proxy_opener
-from mcs_transport import WorkerError, bounded_call
+from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
