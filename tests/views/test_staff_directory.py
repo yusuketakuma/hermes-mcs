@@ -32,13 +32,13 @@ def test_staff_directory_links_name_to_facility(tmp_path):
     _staff_msg(db, 10, 1, "薬局 花子", "テスト薬局")
     _staff_msg(db, 11, 1, "薬局 花子", "テスト薬局")
     _staff_msg(db, 12, 1, "看護 太郎", "", prof="看護師")
+    _staff_msg(db, 20, 2, "他局 誰", "別薬局")
     rows = mcs_queries.staff_directory(db.db, 1)
     by_name = {r["sender_name"]: r for r in rows}
     assert by_name["薬局 花子"]["organization"] == "テスト薬局"
     assert by_name["薬局 花子"]["messages"] == 2
     assert by_name["看護 太郎"]["profession"] == "看護師"
     # project scoping — a sender seen only in another room is absent
-    _staff_msg(db, 20, 2, "他局 誰", "別薬局")
     assert "他局 誰" not in by_name
     all_rows = mcs_queries.staff_directory(db.db)
     assert any(r["sender_name"] == "他局 誰" for r in all_rows)

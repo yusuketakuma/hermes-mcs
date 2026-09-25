@@ -4,6 +4,7 @@ capture -> human-approved ops.refstat_approve -> verify. Uses a real
 Ledger + published snapshot in tmp_path; no network, no live data.
 """
 import json
+import stat
 import sqlite3
 import sys
 import uuid
@@ -76,6 +77,42 @@ def test_capture_writes_pending_with_hash(tmp_path, capsys):
     ref = json.load(open(path))
     assert ref["schema"] == "refstat_v1" and ref["name"] == "base"
     assert "overview" in ref["stats"]
+
+
+def test_capture_staging_is_private_and_does_not_follow_symlinks(tmp_path):
+    db = _db(tmp_path)
+    db.save_messages([_msg()])
+    db.close()
+    pending = tmp_path / "refstats" / "pending"
+    pending.mkdir(parents=True)
+    unrelated = tmp_path / "unrelated.txt"
+    unrelated.write_text("keep")
+    (pending / "base.json.tmp").symlink_to(unrelated)
+    _capture(tmp_path)
+    assert unrelated.read_text() == "keep"
+    assert (pending / "base.json.tmp").is_symlink()
+    assert not (pending / "base.json").is_symlink()
+    assert stat.S_IMODE((pending / "base.json").stat().st_mode) == 0o600
+
+
+def test_capture_failed_publication_keeps_previous_baseline(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    db.save_messages([_msg()])
+    db.close()
+    _capture(tmp_path)
+    pending = tmp_path / "refstats" / "pending"
+    previous = (pending / "base.json").read_bytes()
+    snap = _snapshot(tmp_path)
+
+    def fail_replace(*args):
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(mcs_refstats.os, "replace", fail_replace)
+    assert mcs_refstats.main([
+        "capture", "--name", "base", "--stat", "overview",
+        "--snapshot", str(snap), "--data-dir", str(tmp_path)]) == 1
+    assert (pending / "base.json").read_bytes() == previous
+    assert not list(pending.glob("*.tmp"))
 
 
 def test_capture_rejects_bad_name(tmp_path, capsys):

@@ -325,7 +325,7 @@ def cmd_detect(args) -> int:
         print("TYPESAFE_API_KEY not found", file=sys.stderr)
         return 2
     client = jev.JevClient(api_key=key, job_budget=120)
-    tp = fp = fn = tn = 0
+    tp = fp = fn = tn = unevaluated = 0
     for p in _PROBES:
         findings, evaluated = audit_claims(
             client, p["bundle"], p["summary"], time.monotonic() + 60)
@@ -344,13 +344,15 @@ def cmd_detect(args) -> int:
                 fp += 1
             else:
                 tn += 1
+        else:
+            unevaluated += 1
         print(f"  {p['name']:20s} expect_reject={p['expect_reject']} "
               f"-> {'REJECT' if rejected else 'pass'} "
               f"({[f['code'] for f in findings]}) "
               f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}")
-    print(f"detection: TP={tp} FP={fp} FN={fn} TN={tn} "
+    print(f"detection: TP={tp} FP={fp} FN={fn} TN={tn} unevaluated={unevaluated} "
           f"(requests used: {client.requests_made})")
-    return 0 if fn == 0 and fp == 0 else 1
+    return 0 if fn == 0 and fp == 0 and unevaluated == 0 else 1
 
 
 def main() -> int:

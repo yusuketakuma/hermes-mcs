@@ -77,11 +77,21 @@ def thread_bundle(ledger, project_id: int, root_id: int,
                    for mid in target_ids)):
         raise ValueError("semantic_target_scope")
     members = [_member(r) for r in rows]
+    attachments = {mid: [] for mid in member_ids}
+    for row in ledger.db.execute("""
+      SELECT a.message_id,a.attachment_id,a.file_id,a.name,a.bytes,a.sha256,a.state
+      FROM attachments a JOIN messages m ON m.message_id=a.message_id
+      WHERE m.project_id=? AND (m.message_id=? OR m.parent_id=?)
+        AND a.state != 'withdrawn'
+      ORDER BY a.attachment_id
+    """, (project_id, root_id, root_id)):
+        attachment = dict(row)
+        message_id = attachment.pop("message_id")
+        # A reply committed after the member snapshot belongs to the next bundle.
+        if message_id in attachments:
+            attachments[message_id].append(attachment)
     for m in members:
-        m["attachments"] = [dict(a) for a in ledger.db.execute(
-            "SELECT attachment_id,file_id,name,bytes,sha256,state FROM attachments "
-            "WHERE message_id=? AND state != 'withdrawn' "
-            "ORDER BY attachment_id", (m["message_id"],))]
+        m["attachments"] = attachments[m["message_id"]]
         m["role"] = ("target" if target_ids
                      and m["message_id"] in target_ids else
                      "root" if m["parent_id"] is None else "context")
@@ -134,6 +144,8 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
         try:
             meta = json.loads(r["meta"] or "{}")
         except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(meta, dict):
             continue
         if kind == KIND_ASSESS and meta.get("fact_id") is not None:
             continue

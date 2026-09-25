@@ -3,6 +3,7 @@ boundary, rollup rendering, facts fence, signals, idempotency, and
 stale-page GC. No live DB, network, or real patient data — every
 fixture is invented for this file."""
 import json
+import stat
 import sqlite3
 import time
 from pathlib import Path
@@ -177,6 +178,35 @@ def test_idempotent(env):
     second = {p.name: p.read_bytes() for p in sorted(out.rglob("*.md"))}
     assert first == second
     assert not list(out.rglob("*.tmp"))  # no torn temp files
+
+
+def test_export_staging_is_private_and_does_not_follow_symlinks(env, tmp_path):
+    snap, out = env
+    out.mkdir()
+    unrelated = tmp_path / "unrelated.txt"
+    unrelated.write_text("keep")
+    (out / "meta.md.tmp").symlink_to(unrelated)
+    brain_export.run(out, snap)
+    assert unrelated.read_text() == "keep"
+    assert (out / "meta.md.tmp").is_symlink()
+    assert not (out / "meta.md").is_symlink()
+    for path in out.rglob("*.md"):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_export_failed_publication_preserves_previous_file(env, monkeypatch):
+    snap, out = env
+    brain_export.run(out, snap)
+    previous = (out / "meta.md").read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(brain_export.os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        brain_export.run(out, snap)
+    assert (out / "meta.md").read_bytes() == previous
+    assert not list(out.rglob("*.tmp"))
 
 
 def test_updated_rollup_changes_file(env):
