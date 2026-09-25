@@ -688,6 +688,11 @@ class Actions:
                 hook = discord.Webhook.partial(
                     int(rec["application_id"]), rec["token"],
                     client=self._bot)
+                # Webhook.partial hardcodes type=incoming, but this token
+                # is an interaction token — the endpoint is really an
+                # application webhook, and ephemeral sends are refused
+                # (ValueError) unless the local type reflects that
+                hook.type = discord.WebhookType.application
                 if result.get("action") == "body" and result.get("body"):
                     # a body click that outlived the wait window still
                     # owes the full text — generic _ja would report
@@ -703,11 +708,13 @@ class Actions:
                         await asyncio.to_thread(
                             self._reg.put_tokens, token_ctx)
                     items = result.get("tasks") or []
-                    await hook.send(
-                        _task_list_text(items) if items
-                        else "このスレッドのタスクはありません。",
-                        ephemeral=True,
-                        view=_task_view(items) if items else None)
+                    if items:
+                        await hook.send(_task_list_text(items),
+                                        ephemeral=True,
+                                        view=_task_view(items))
+                    else:
+                        await hook.send("このスレッドのタスクはありません。",
+                                        ephemeral=True)
                 elif result.get("action") == "task_status":
                     await hook.send(_task_done_text(result),
                                     ephemeral=True)
@@ -754,7 +761,11 @@ class Actions:
     async def _followup(self, interaction, text: str,
                         view=None) -> None:
         try:
-            await interaction.followup.send(text, ephemeral=True,
-                                            view=view)
+            # discord.py validates `view is not MISSING`, so a plain
+            # None would TypeError — only pass a real view through
+            kwargs = {"ephemeral": True}
+            if view is not None:
+                kwargs["view"] = view
+            await interaction.followup.send(text, **kwargs)
         except Exception as e:
             self._log("followup_failed", error=type(e).__name__)

@@ -34,6 +34,7 @@ from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
                                       paths, registry, tasks)
 
 NOW = 1_790_000_000.0
+MISSING = object()  # discord.py's "argument not passed" sentinel
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user", "card_thread": True,
                   "discord": {"profile": "mcs", "application_id": "1",
@@ -110,14 +111,26 @@ def _fake_discord():
 
         def __init__(self, ident, token, client):
             self.ident, self.token, self.client = ident, token, client
+            # partial() hardcodes incoming — production sweep must
+            # flip it to application before ephemeral sends are legal
+            self.type = 1
 
         @classmethod
         def partial(cls, ident, token, client=None):
             return cls(ident, token, client)
 
-        async def send(self, content, ephemeral=False, view=None):
+        async def send(self, content, ephemeral=False, view=MISSING):
+            # discord.py validation: ephemeral requires an application
+            # webhook; an explicitly-passed view=None is a TypeError
+            if ephemeral and self.type != 3:
+                raise ValueError("ephemeral messages can only be sent "
+                                 "from application webhooks")
+            if view is not MISSING and view is None:
+                raise TypeError("expected view parameter to be of type "
+                                "View, not NoneType")
             Webhook.sent.append(
-                {"content": content, "ephemeral": ephemeral})
+                {"content": content, "ephemeral": ephemeral,
+                 "view": view})
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
@@ -127,6 +140,8 @@ def _fake_discord():
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
                                       danger=4)
     mod.TextStyle = SimpleNamespace(short=1, paragraph=2)
+    mod.WebhookType = SimpleNamespace(incoming=1, channel_follower=2,
+                                      application=3)
     mod.Webhook = Webhook
     return mod
 
@@ -233,7 +248,12 @@ class FakeFollowup:
     def __init__(self):
         self.sent = []
 
-    async def send(self, content, ephemeral=False, view=None):
+    async def send(self, content, ephemeral=False, view=MISSING):
+        # interaction followups are application webhooks — ephemeral is
+        # always legal, but discord.py rejects an explicit view=None
+        if view is not MISSING and view is None:
+            raise TypeError("expected view parameter to be of type "
+                            "View, not NoneType")
         self.sent.append({"content": content, "ephemeral": ephemeral,
                           "view": view})
 
