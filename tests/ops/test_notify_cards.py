@@ -1571,6 +1571,54 @@ def test_message_gone_unbind_clears_thread(led, tmp_path):
     assert card["thread_id"] is None and card["thread_state"] == "none"
 
 
+def test_failed_thread_keeps_body_button(led, tmp_path):
+    """A card whose companion thread could not be created keeps the
+    📄 button on the next render — the body has nowhere else to live."""
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    r = notify_transport.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
+        "delivery_id": render["delivery_id"], "message_id": "m-9",
+        "error_code": "http_403"}, CFG, now=NOW)
+    assert r["thread_state"] == "failed"
+    _msg(led, 103, 1, parent=100)          # drift -> update render
+    notify_cards.sweep(led, CFG)
+    upd = _latest_render(led)
+    assert upd["op"] == "update"
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (upd["delivery_id"] + ".json")).read_text())
+    ids = {b["id"] for row in spec["parts"]["action_rows"]
+           for b in row}
+    assert "body" in ids
+    assert "thread_body" not in spec["parts"]
+
+
+def test_created_thread_update_carries_body_not_button(led, tmp_path):
+    """A card whose thread exists renders the body as thread_body —
+    the update delivers it into the thread instead of minting 📄."""
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    r = notify_transport.apply_thread_receipt(led, {
+        "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
+        "delivery_id": render["delivery_id"], "message_id": "m-9",
+        "thread_id": "th-1"}, CFG, now=NOW)
+    assert r["thread_state"] == "created"
+    _msg(led, 103, 1, parent=100)
+    notify_cards.sweep(led, CFG)
+    upd = _latest_render(led)
+    spec = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (upd["delivery_id"] + ".json")).read_text())
+    assert spec["delivery"]["thread_id"] == "th-1"
+    assert spec["parts"]["thread_body"]
+    ids = {b["id"] for row in spec["parts"]["action_rows"]
+           for b in row}
+    assert "body" not in ids
+
+
 def test_gc_removes_old_cmd_results(led, tmp_path):
     res_dir = tmp_path / "data" / "cmd_results"
     res_dir.mkdir(parents=True)
