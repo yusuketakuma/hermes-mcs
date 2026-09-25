@@ -119,7 +119,11 @@ class _WSConn:
         path = u.path or "/"
         if u.query:
             path += "?" + u.query
-        self._handshake(host, port, path)
+        try:
+            self._handshake(host, port, path)
+        except (BootstrapError, OSError):
+            self._sock.close()
+            raise
 
     def _handshake(self, host: str, port: int, path: str):
         key = base64.b64encode(os.urandom(16)).decode()
@@ -185,6 +189,7 @@ class _WSConn:
     def recv_message(self) -> bytes:
         """Reassemble one complete data message; answer pings inline."""
         parts: list[bytes] = []
+        total = 0
         while True:
             b0, b1 = self._read_exact(2)
             fin, opcode = b0 & 0x80, b0 & 0x0F
@@ -195,6 +200,14 @@ class _WSConn:
                 ln = int.from_bytes(self._read_exact(2), "big")
             elif ln == 127:
                 ln = int.from_bytes(self._read_exact(8), "big")
+            # Validate before reading the advertised payload: a corrupt CDP
+            # frame must not allocate beyond the message budget. Control
+            # frames have their own RFC 6455 bound and cannot be fragmented.
+            if opcode in (0x8, 0x9, 0xA):
+                if not fin or ln > 125:
+                    raise BootstrapError("cdp_ws_protocol")
+            elif total + ln > self._MAX_MSG:
+                raise BootstrapError("cdp_ws_too_large")
             payload = self._read_exact(ln) if ln else b""
             if opcode == 0x9:
                 self._send_frame(0xA, payload)   # ping -> pong
@@ -209,8 +222,7 @@ class _WSConn:
             elif opcode != 0x0 or not parts:
                 raise BootstrapError("cdp_ws_protocol")
             parts.append(payload)
-            if sum(map(len, parts)) > self._MAX_MSG:
-                raise BootstrapError("cdp_ws_too_large")
+            total += ln
             if fin:
                 return b"".join(parts)
 
@@ -1265,7 +1277,7 @@ class MCSAdapter:
         if self_only is not None and type(self_only) is not bool:
             raise SchemaError(f"latest[{project_id}]: is_self_only invalid")
         msg = r.get("message")
-        if not msg:
+        if msg is None or msg == {}:
             # null/empty message object = no messages on the project
             return {"message_id": None, "is_self_only": bool(self_only)}
         if not isinstance(msg, dict) or not _valid_id(msg.get("id")):

@@ -370,6 +370,36 @@ def test_history_batch_session_expired_stays_attempt_free(tmp_path):
     db.close()
 
 
+def test_history_partial_failure_resumes_from_committed_pages(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(74)
+    db.job_add("history", 74, payload={"since": 0, "page": 8, "pages": 4})
+    starts = []
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            starts.append(start_page)
+            if len(starts) == 1:
+                return mcs_adapter.MessageBatch(
+                    [_message(mid=740, project_id=pid)], pages=3,
+                    error=mcs_adapter.MCSError("network_error", retryable=True))
+            return mcs_adapter.MessageBatch([], pages=1, reached=True)
+
+    adapter = Adapter()
+    result = {"errors": []}
+    job_ops.run_history_jobs(adapter, db, result, time.monotonic() + 300)
+    job = db.history_job(74)
+    assert db.has_message(740)
+    assert json.loads(job["payload"])["page"] == 10
+    assert job["attempts"] == 1 and db.history_floor(74) == 0
+    db.db.execute("UPDATE fetch_jobs SET next_try=0")
+    db.db.commit()
+    job_ops.run_history_jobs(adapter, db, result, time.monotonic() + 300)
+    assert starts == [7, 9]  # one-page overlap around durable progress
+    assert db.job_state("history", 74) == "done"
+    db.close()
+
+
 def test_history_stall_counter_resets_on_progress(tmp_path):
     # stalls count consecutive unsafe windows only — once the cursor
     # advances (checkpoint safe) the counter clears (P-2)

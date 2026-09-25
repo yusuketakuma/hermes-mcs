@@ -71,10 +71,12 @@ def test_backfill_does_not_advance_past_missing_reply():
                              time.monotonic() + 60, 1)
 
     assert covered == []
-    assert reserved == [("history_head", 1,
-                         {"since": 0, "page": 1,
-                          "pages": run_check.BACKFILL_MAX_PAGES,
-                          "trickle": False})]
+    assert reserved == [
+        ("thread", 1, {"page": 1}),
+        ("history_head", 1,
+         {"since": 0, "page": 1, "pages": run_check.BACKFILL_MAX_PAGES,
+          "trickle": False}),
+    ]
 
 
 def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
@@ -810,3 +812,111 @@ def test_self_probe_incomplete_walk_retries_latest_id(tmp_path):
     assert db.has_message(555)
     assert second["new_messages"] == 1
     db.close()
+
+
+def test_self_probe_incomplete_body_does_not_mark_latest(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(98))
+    db.save_messages([_msg_at(100, 98, _iso(1), unread=False)])
+
+    class Adapter:
+        def __init__(self):
+            self.history_calls = 0
+
+        def fetch_latest(self, pid):
+            return {"message_id": 555, "is_self_only": False}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            self.history_calls += 1
+            if self.history_calls == 1:
+                partial = _msg_at(101, 98, _iso(0), unread=False)
+                partial.body_state = "snippet"
+                return mcs_adapter.MessageBatch(
+                    [partial], pages=1, reached=True)
+            return mcs_adapter.MessageBatch(
+                [_msg_at(555, 98, _iso(0), unread=False)],
+                pages=1, reached=True)
+
+    adapter = Adapter()
+    first = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(
+        adapter, db, first, time.monotonic() + 300, run_id=1)
+    assert db.probe_marker(98) is None
+    assert "probe 98: history_incomplete" in first["errors"]
+
+    second = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(
+        adapter, db, second, time.monotonic() + 300, run_id=2)
+    assert adapter.history_calls == 2
+    assert db.has_message(555)
+    db.close()
+
+
+def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
+    import maintenance
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+
+    class Adapter:
+        def __init__(self, **kwargs):
+            pass
+
+        def set_deadline(self, deadline):
+            pass
+
+        def list_unread(self):
+            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+
+        def list_projects(self):
+            return []
+
+        def self_profile(self):
+            return {}
+
+    data = tmp_path / "data"
+    data.mkdir()
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"deep_history":false,"semantic":{"mode":"off"}}',
+        encoding="utf-8")
+    for name, value in {
+        "HOME": tmp_path, "DB": data / "ledger.db",
+        "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
+        "HEALTH_FILE": data / "health.json", "CONF_PATH": config,
+        "MCSAdapter": Adapter, "stage_derive": lambda *a, **k: None,
+    }.items():
+        monkeypatch.setattr(run_check, name, str(value)
+                            if isinstance(value, Path) else value)
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
+                 "gc", "clear_snapshot_dirty"):
+        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
+    monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    calls = []
+
+    def fail_tail(*args, **kwargs):
+        calls.append(None)
+        if len(calls) == 2:
+            raise RuntimeError("synthetic tail failure")
+
+    monkeypatch.setattr(notify_cmds, "drain_int_commands", fail_tail)
+    monkeypatch.setattr(
+        sys, "argv", ["run_check", "--no-notify", "--no-backfill"])
+
+    assert run_check.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["errors"] == ["cmd_int_tail: RuntimeError"]
+    db = ledger.Ledger(str(data / "ledger.db"))
+    assert db.db.execute(
+        "SELECT status FROM runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()[0] == "partial"
+    db.close()
+    assert json.loads((data / "health.json").read_text())["run_status"] == "partial"

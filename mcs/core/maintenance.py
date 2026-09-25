@@ -8,6 +8,7 @@ import glob
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -70,8 +71,10 @@ def preupdate_backup(db_path: str) -> str:
     (B3). Returns the published path."""
     os.makedirs(BACKUP_DIR, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest = os.path.join(BACKUP_DIR, f"preupdate-{stamp}.db")
-    tmp = dest + ".tmp"
+    fd, tmp = tempfile.mkstemp(
+        prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+    os.close(fd)
+    dest = tmp[:-4]
     src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
                           uri=True)
     dst = sqlite3.connect(tmp)
@@ -183,12 +186,13 @@ def prune_attachments(db_path: str) -> int:
                 if path and os.path.isfile(path):
                     os.unlink(path)
                 # notify_flush._media_path hardlink/copy alias — same asset
-                ext = os.path.splitext(a["name"] or "")[1].lower()
-                if (path and ext and len(ext) <= 9
-                        and ext[1:].isascii() and ext[1:].isalnum()):
-                    alias = path + ext
-                    if os.path.isfile(alias):
-                        os.unlink(alias)
+                if path and not os.path.splitext(path)[1]:
+                    for alias in glob.glob(glob.escape(path) + ".*"):
+                        ext = alias[len(path):]
+                        if (1 < len(ext) <= 9 and ext[1:].isascii()
+                                and ext[1:].isalnum()
+                                and os.path.isfile(alias)):
+                            os.unlink(alias)
             except OSError:
                 continue   # unlink failed — retry next tick
             con.execute("""
