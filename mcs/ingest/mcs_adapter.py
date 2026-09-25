@@ -3,8 +3,10 @@
 Verified contract (live session, 2026-09):
   auth    : Authorization: Bearer <36char> from localStorage['ngStorage-lastSessionToken']
             (ngStorage JSON-encodes values -> must JSON.parse)
-  unread  : GET /api/v2t/projects/unread?per_page=N&page=P&include_paginate_totals=0
-            -> {paginate:{timestamp,...}, projects:[{id,type,karte}]}
+  unread  : GET /api/v2t/projects?include_meta=1&per_page=N&page=P&include_paginate_totals=0
+            -> {paginate:{timestamp,...}, projects:[{id,type,karte,is_unread,last_message}]}
+            (the dedicated /projects/unread route went 403 server-side while
+            every sibling stayed 200 — the web app enumerates unread this way)
   messages: GET /api/v2t/projects/{id}/messages?unread=1&timestamp={ts}&keep_read_status=1
             &include_meta=1&exclude_terminated_ex_application=1&include_paginate_totals=1
   threads : GET /api/v2t/projects/{pid}/messages/{mid}/messages  (full reply bodies)
@@ -50,11 +52,6 @@ _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # the origin host), so it is handled manually in _open_download.
 _ALLOWED_REDIRECT_HOSTS = _ALLOWED_DOWNLOAD_HOSTS | {"files.medical-care.net"}
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
-# The unread set can move between page requests (a post arrives, or a
-# read happens on another device) — restart a drifted walk instead of
-# failing the run on a transient race.
-_UNREAD_DRIFT = "unread: timestamp changed during pagination"
-_UNREAD_LIST_ATTEMPTS = 3
 
 
 class MCSError(Exception):
@@ -383,6 +380,29 @@ def _has_next(pag: dict, label: str) -> bool:
     if type(value) is not bool:
         raise SchemaError(f"{label}: has_next invalid")
     return value
+
+
+def _unread_patient(p, src: str) -> "UnreadPatient":
+    """Project row -> UnreadPatient — shape shared by the /projects
+    readers (unread list and full inventory)."""
+    if not isinstance(p, dict) or not _valid_id(p.get("id")):
+        raise SchemaError(f"{src}: invalid project id")
+    k = p.get("karte") or {}
+    if not isinstance(k, dict):
+        raise SchemaError(f"{src}: karte invalid")
+    st = k.get("station") or {}
+    if not isinstance(st, dict):
+        raise SchemaError(f"{src}: station invalid")
+    return UnreadPatient(
+        project_id=p["id"],
+        project_type=_text(p.get("type"), f"{src}: project type"),
+        patient_name=(
+            f"{_text(k.get('last_name'), f'{src}: last_name')} "
+            f"{_text(k.get('first_name'), f'{src}: first_name')}"
+        ).strip(),
+        disease=_text(k.get("disease"), f"{src}: disease"),
+        station_name=_text(st.get("name"), f"{src}: station name"),
+        url=f"{BASE}/projects/medical/{p['id']}")
 
 
 def _attachments(files: list | None) -> list[Attachment]:
@@ -889,24 +909,26 @@ class MCSAdapter:
 
     # ---------- reads ----------
 
-    def list_unread(self, per_page: int = 10, max_pages: int = 50) -> UnreadSnapshot:
-        for _ in range(_UNREAD_LIST_ATTEMPTS):
-            try:
-                return self._list_unread_once(per_page, max_pages)
-            except SchemaError as e:
-                if e.detail != _UNREAD_DRIFT:
-                    raise
-        raise SchemaError(_UNREAD_DRIFT)
+    def list_unread(self, per_page: int = 100,
+                    max_pages: int = 50) -> UnreadSnapshot:
+        """Unread projects enumerated via /projects?include_meta=1 filtered
+        by the per-project is_unread flag — the dedicated /projects/unread
+        route went 403 server-side (every sibling stayed 200) and the web
+        app itself lists unread through include_meta.
 
-    def _list_unread_once(self, per_page: int,
-                          max_pages: int) -> UnreadSnapshot:
+        paginate.timestamp is a per-request server clock on this route, not
+        a shared snapshot cursor — consecutive pages legitimately differ,
+        so the old page-drift restart no longer applies. snapshot_ts takes
+        the MINIMUM observed timestamp (the walk's start): mark_as_read(ts)
+        then can never cover a message posted after the walk began — such a
+        message stays unread for the next tick."""
         patients: list[UnreadPatient] = []
         ts = None
         prev_page_ids: set[int] | None = None
         for page in range(1, max_pages + 1):
-            r = self._get("/projects/unread", {
+            r = self._get("/projects", {
                 "per_page": per_page, "page": page,
-                "include_paginate_totals": 0})
+                "include_meta": 1, "include_paginate_totals": 0})
             pag = r.get("paginate")
             if not isinstance(pag, dict):
                 raise SchemaError("unread: paginate missing")
@@ -914,40 +936,27 @@ class MCSAdapter:
             if not isinstance(projs, list):
                 raise SchemaError("unread: projects missing")
             page_ts = pag.get("timestamp")
-            if ts is not None and page_ts != ts:
-                raise SchemaError(_UNREAD_DRIFT)
-            ts = page_ts if ts is None else ts
+            if type(page_ts) is not int or page_ts <= 0:
+                raise SchemaError("unread: paginate.timestamp invalid")
+            ts = page_ts if ts is None else min(ts, page_ts)
             ids = set()
             for p in projs:
                 if not isinstance(p, dict) or not _valid_id(p.get("id")):
                     raise SchemaError("unread: invalid project id")
                 ids.add(p["id"])
-                k = p.get("karte") or {}
-                if not isinstance(k, dict):
-                    raise SchemaError("unread: karte invalid")
-                st = k.get("station") or {}
-                if not isinstance(st, dict):
-                    raise SchemaError("unread: station invalid")
-                patients.append(UnreadPatient(
-                    project_id=p["id"],
-                    project_type=_text(p.get("type"), "unread: project type"),
-                    patient_name=(
-                        f"{_text(k.get('last_name'), 'unread: last_name')} "
-                        f"{_text(k.get('first_name'), 'unread: first_name')}"
-                    ).strip(),
-                    disease=_text(k.get("disease"), "unread: disease"),
-                    station_name=_text(st.get("name"),
-                                       "unread: station name"),
-                    url=f"{BASE}/projects/medical/{p['id']}"))
+                if type(p.get("is_unread")) is not bool:
+                    raise SchemaError("unread: is_unread missing/invalid")
+                if not p["is_unread"]:
+                    continue
+                patients.append(_unread_patient(p, "unread"))
             if prev_page_ids is not None and ids and ids <= prev_page_ids:
                 raise SchemaError("unread: pagination not advancing")
             prev_page_ids = ids
             if not _has_next(pag, "unread"):
                 break
         else:
-            raise MCSError("pages_exceeded", "unread list > 50 pages", retryable=True)
-        if type(ts) is not int:
-            raise SchemaError("unread: paginate.timestamp missing/invalid")
+            raise MCSError("pages_exceeded", "unread list > 50 pages",
+                           retryable=True)
         return UnreadSnapshot(timestamp=ts, patients=patients)
 
     def fetch_unread_messages(self, project_id: int, timestamp: int,
@@ -1093,27 +1102,10 @@ class MCSAdapter:
             if not isinstance(projs, list) or not isinstance(pag, dict):
                 raise SchemaError("projects: page invalid")
             for p in projs:
-                if not isinstance(p, dict) or not _valid_id(p.get("id")):
-                    raise SchemaError("projects: invalid project id")
-                k = p.get("karte") or {}
-                if not isinstance(k, dict):
-                    raise SchemaError("projects: karte invalid")
-                st = k.get("station") or {}
+                up = _unread_patient(p, "projects")
                 lm = p.get("last_message") or {}
-                if not all(isinstance(x, dict) for x in (st, lm)):
+                if not isinstance(lm, dict):
                     raise SchemaError("projects: nested object invalid")
-                up = UnreadPatient(
-                    project_id=p["id"],
-                    project_type=_text(p.get("type"),
-                                       "projects: project type"),
-                    patient_name=(
-                        f"{_text(k.get('last_name'), 'projects: last_name')} "
-                        f"{_text(k.get('first_name'), 'projects: first_name')}"
-                    ).strip(),
-                    disease=_text(k.get("disease"), "projects: disease"),
-                    station_name=_text(st.get("name"),
-                                       "projects: station name"),
-                    url=f"{BASE}/projects/medical/{p['id']}")
                 ca = _text(lm.get("created_at"),
                            "projects: last_message.created_at")
                 try:
@@ -1367,36 +1359,34 @@ class MCSAdapter:
     # ---------- write (guarded) ----------
 
     def mark_patient_read(self, project_id: int, snapshot_ts: int) -> dict:
-        """snapshot_ts is MANDATORY here even though the server accepts it empty —
-        omitting marks everything read including unfetched messages. It must be
-        the exact int returned by list_unread().timestamp (type checked — bool
-        is an int subclass and is explicitly rejected).
+        """snapshot_ts is still mandatory and still sent — but the POST
+        /projects/{id}/mark_as_read route was retired server-side (403
+        while every GET stayed 200). Read state now clears as a SIDE
+        EFFECT of reading the message list: a GET without
+        keep_read_status marks the project's unread messages read
+        (verified live — per_page=1 clears the whole flag). The
+        timestamp-gated mark is gone server-side; sending the same
+        unread=1&timestamp= filters is the closest equivalent — the
+        residual window is a post landing between the collection fetch
+        and this read (sub-second inside the tick).
 
-        The response is CONFIRMED only when the project payload positively
-        reports the read state cleared; anything else (200 {}, missing keys,
-        non-JSON, odd shapes) is mark_result_unknown — never confirmed
-        (Oracle B02)."""
+        CONFIRMED only when the project detail positively reports no
+        oldest_unread_message; anything else (missing project, the key
+        still present, odd shapes) is mark_result_unknown — never
+        confirmed (Oracle B02)."""
         if type(snapshot_ts) is not int or snapshot_ts <= 0:
             raise MCSError("bad_snapshot_ts")
-        body = urllib.parse.urlencode({"timestamp": snapshot_ts}).encode()
-        status, raw, _ = self._request(
-            "POST", f"/projects/{project_id}/mark_as_read", data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
-        try:
-            out = json.loads(raw)
-        except json.JSONDecodeError:
-            # 200 + non-JSON: mark result UNKNOWN — never record as success
-            raise MCSError("mark_result_unknown", status=status)
-        if not isinstance(out, dict):
-            raise MCSError("mark_result_unknown", status=status)
-        proj = out.get("project")
-        if proj is None and isinstance(out.get("data"), dict):
-            proj = out["data"].get("project")
-        if isinstance(proj, dict):
-            if proj.get("is_unread") is False:
-                return out
-            unread_count = proj.get("unread_count")
-            if ("is_unread" not in proj and type(unread_count) is int
-                    and unread_count == 0):
-                return out
-        raise MCSError("mark_result_unknown", status=status)
+        self._get(f"/projects/{project_id}/messages", {
+            "unread": 1, "timestamp": snapshot_ts,
+            "per_page": 1, "page": 1, "include_paginate_totals": 0})
+        r = self._get(f"/projects/{project_id}", {})
+        proj = r.get("project")
+        if proj is None and isinstance(r.get("data"), dict):
+            proj = r["data"].get("project")
+        # is_archived is a permanent detail field — requiring it keeps an
+        # empty/malformed project object from counting as confirmation
+        if isinstance(proj, dict) \
+                and type(proj.get("is_archived")) is bool \
+                and proj.get("oldest_unread_message") is None:
+            return r
+        raise MCSError("mark_result_unknown")
