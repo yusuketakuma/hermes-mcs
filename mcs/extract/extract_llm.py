@@ -471,6 +471,25 @@ def _vitals_guard(body: str | None, vit: dict,
         else:
             out[k] = val
     return out
+
+
+# Free-text fields (summary/points): the model sometimes parrots JSON
+# fragments or slips into another language's output — structural
+# characters never belong in a Japanese one-liner.
+_RX_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
+
+
+def _clean_text(v, maxlen: int) -> str | None:
+    """Strip a free-text field; reject JSON-structural fragments and
+    cap length. None means the value is not a usable string."""
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s or _RX_BAD_TEXT.search(s):
+        return None
+    return s[:maxlen]
+
+
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
 _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
            "eol", "care", "family_contact", "other"}
@@ -687,8 +706,9 @@ def _validate(d: dict, body: str | None = None,
             else:
                 drop_item("vitals")
         if "summary" in d:
-            if isinstance(d["summary"], str) and d["summary"].strip():
-                out["summary"] = d["summary"]
+            s = _clean_text(d["summary"], 60)
+            if s:
+                out["summary"] = s
             else:
                 drop_item("summary")
         if "urgency" in d:
@@ -698,9 +718,9 @@ def _validate(d: dict, body: str | None = None,
                 drop_item("urgency")
         if "points" in d:
             if isinstance(d["points"], list):
-                out["points"] = [str(p)[:40] for p in d["points"]
-                                 if isinstance(p, str)
-                                 and p.strip()][:3]
+                out["points"] = [p for p in
+                                 (_clean_text(x, 40) for x in d["points"])
+                                 if p][:3]
             else:
                 drop_item("points")
         if ev_dropped:
