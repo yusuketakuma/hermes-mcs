@@ -151,6 +151,10 @@ def _fake_discord():
 class FakeThread:
     def __init__(self, tid):
         self.id = tid
+        self.sent = []
+
+    async def send(self, content):
+        self.sent.append(content)
 
 
 class FakeMessage:
@@ -875,9 +879,14 @@ def test_action_ack_round_trip(world):
 
 def test_action_body_ephemeral_full_text(world):
     """📄本文表示 answers with chunked ephemeral followups carrying the
-    untruncated shown-set text — the card itself is untouched."""
+    untruncated shown-set text — the card itself is untouched. The
+    button still ships on card_thread-less renders, so exercise that
+    surface here (threaded cards show the body inside the thread)."""
     world.seed()
-    world.dispatch()
+    cfg = {"notify": {k: v for k, v in CFG["notify"].items()
+                      if k != "card_thread"},
+           "signals": CFG["signals"]}
+    world.dispatch(cfg=cfg)
     worker, reg, bot = world.mkworker()
     asyncio.run(_deliver(world, worker))
     _, spec = world.spec()
@@ -906,16 +915,13 @@ def test_action_click_inside_companion_thread(world):
     worker, reg, bot = world.mkworker()
     asyncio.run(_deliver(world, worker))
     _, spec = world.spec()
-    tok = world.token(spec, "body")
+    tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     thread = SimpleNamespace(id=777, parent_id=42)
     ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id,
                          channel_id=777, channel=thread)
     asyncio.run(world.interact(act, ix))
-    assert ix.followup.sent
-    joined = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "本文" in joined
     receipt = json.loads(world.led.db.execute(
         "SELECT receipt_json FROM command_receipts "
         "WHERE outcome='applied'").fetchone()["receipt_json"])
@@ -931,7 +937,7 @@ def test_action_foreign_thread_denied(world):
     worker, reg, bot = world.mkworker()
     asyncio.run(_deliver(world, worker))
     _, spec = world.spec()
-    tok = world.token(spec, "body")
+    tok = world.token(spec, "ack")
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     thread = SimpleNamespace(id=888, parent_id=999)
@@ -1894,7 +1900,69 @@ def test_thread_capability_recovers_after_expiry(world, monkeypatch):
     assert world.card(1)["thread_state"] == "failed"
 
 
-# ---------- D4: unknown stays un-sent forever (RC23) ---------------------------
+def test_thread_opens_with_body_and_card_drops_body_button(world):
+    """The companion thread opens holding the full text — the card
+    drops its 📄 button because the body already lives inside."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+        world.drain()
+
+    asyncio.run(run())
+    msg = bot.channels[42].sent[0]
+    assert msg.threads
+    thread = msg.threads[0][1]
+    assert thread.sent                       # body chunks in the thread
+    assert "本文" in "\n".join(thread.sent)
+    _, spec = world.spec()
+    ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
+    assert "body" not in ids
+    assert {"ack", "assign", "defer", "tasks"} <= ids
+    assert spec["parts"].get("thread_body")
+
+
+def test_body_button_survives_without_card_thread(world):
+    """card_thread off -> no thread exists to carry the text, so 📄
+    stays the only way to reach it and must keep shipping."""
+    world.seed()
+    cfg = {"notify": {k: v for k, v in CFG["notify"].items()
+                      if k != "card_thread"},
+           "signals": CFG["signals"]}
+    world.dispatch(cfg=cfg)
+    _, spec = world.spec()
+    ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
+    assert "body" in ids
+    assert "thread_body" not in spec["parts"]
+
+
+def test_thread_body_send_failure_only_logs(world, monkeypatch):
+    """A chunk-send failure inside the fresh thread is a log event,
+    never a delivery fault — the card and thread stay settled."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        original = FakeThread.send
+
+        async def boom(self, content):
+            raise FakeHTTP(500)
+        monkeypatch.setattr(FakeThread, "send", boom)
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+        world.drain()
+        monkeypatch.setattr(FakeThread, "send", original)
+
+    asyncio.run(run())
+    card = world.card()
+    assert card["delivery_state"] == "delivered"
+    assert card["thread_state"] == "created"
+    assert any(e == "thread_body_failed" for e, _ in world.logs)
+
 
 def test_unknown_never_resends_late_success_binds_update(world):
     """RC23 — an attempt that went unknown (post-HTTP uncertainty)
@@ -2054,7 +2122,11 @@ def test_body_reclick_waits_for_fresh_result_after_source_deletion(world):
     world.led.db.execute(
         "UPDATE messages SET body_text='synthetic retired body' WHERE message_id=100")
     world.led.db.commit()
-    world.dispatch()
+    # body button lives on card_thread-less renders — dispatch that way
+    cfg = {"notify": {k: v for k, v in CFG["notify"].items()
+                      if k != "card_thread"},
+           "signals": CFG["signals"]}
+    world.dispatch(cfg=cfg)
     worker, reg, bot = world.mkworker()
     asyncio.run(_deliver(world, worker))
     _, spec = world.spec()

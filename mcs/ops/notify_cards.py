@@ -462,7 +462,8 @@ def _mint_token(db, card_id, action, params, need, now) -> str:
     return token
 
 
-def _action_rows(db, card, content, now, context=None):
+def _action_rows(db, card, content, now, context=None,
+                 in_thread_body=False):
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
@@ -486,7 +487,11 @@ def _action_rows(db, card, content, now, context=None):
     btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label)
     btn("assign")
     btn("defer")
-    btn("body")
+    if not in_thread_body:
+        # cards with a companion thread show the body inside it on
+        # delivery — the 📄 button only remains where no thread can
+        # carry it (slack transport, card_thread off)
+        btn("body")
     if kind == "thread" and card["transport"] != "slack":
         # thread scope is the only scope a task list can be pinned to —
         # signal/digest cards span messages/projects the requests table
@@ -650,9 +655,12 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         if card[k]:
             spec["delivery"][k] = card[k]
     context = _render_context(db, card)
+    in_thread_body = (card["transport"] != "slack"
+                      and notify_cfg(cfg).get("card_thread") is True)
     spec["parts"] = {
         "containers": content["containers"],
-        "action_rows": _action_rows(db, card, content, now, context),
+        "action_rows": _action_rows(db, card, content, now, context,
+                                    in_thread_body=in_thread_body),
         "footer": content["footer"]
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],
@@ -663,6 +671,13 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         spec["parts"]["thread_name"] = _thread_name(db, card)
     elif notify_cfg(cfg).get("card_thread") is True:
         spec["parts"]["thread_name"] = _digest_thread_name(content)
+    if in_thread_body:
+        # the body travels inside the spec so the companion thread is
+        # populated atomically with its creation — no button needed
+        spec["parts"]["thread_body"] = _card_body_text(
+            db, card,
+            {"shown": json.dumps(content["shown"],
+                                 ensure_ascii=False)})[1]
     db.execute(
         """INSERT INTO notification_renders(
              delivery_id,card_id,op,render_rev,manifest_id,route_epoch,

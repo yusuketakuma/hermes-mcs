@@ -26,6 +26,9 @@ CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "discord": {"profile": "mcs", "application_id": "app1",
                               "guild_id": "g1", "channel_id": "ch1"}},
        "signals": {"notify": True}}
+NO_THREAD_CFG = {"notify": {k: v for k, v in CFG["notify"].items()
+                            if k != "card_thread"},
+                 "signals": CFG["signals"]}
 CFG_OFF = {"notify": {"interactive": "off", "route_epoch": 1,
                       "discord": CFG["notify"]["discord"]}}
 SCOPE = {"profile": "mcs", "application_id": "app1",
@@ -199,10 +202,10 @@ def test_kill_switch_unsealed_reverts_sealed_stays(led):
 
 # ---------- begin / grant (RC06, RC07, RC24) ----------
 
-def _deliverable(led, tmp_path):
+def _deliverable(led, tmp_path, cfg=CFG):
     _seed_thread(led)
     ev = _intent(led)
-    _dispatch(led, ev)
+    _dispatch(led, ev, cfg=cfg)
     return _latest_render(led)
 
 
@@ -360,8 +363,8 @@ def test_unknown_blocks_resend_until_resolved(led, tmp_path):
 
 # ---------- notification actions (RC09) ----------
 
-def _delivered_card(led, tmp_path):
-    render = _deliverable(led, tmp_path)
+def _delivered_card(led, tmp_path, cfg=CFG):
+    render = _deliverable(led, tmp_path, cfg=cfg)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
     spec = json.loads(
@@ -413,13 +416,15 @@ def test_ack_assign_defer_persist(led, tmp_path):
 
 def test_body_action_returns_full_text(led, tmp_path):
     """📄本文表示 is a view action: it answers the untruncated text of
-    the shown set and mutates nothing — no render, no triage rows."""
+    the shown set and mutates nothing — no render, no triage rows.
+    The button ships only where no companion thread carries the body
+    (card_thread off here), so exercise that surface."""
     long_body = "詳細な記録。" * 40           # ~200 chars > MAX_SNIPPET
     _patient(led, 1)
     _msg(led, 100, 1, body=long_body)
     _msg(led, 101, 1, parent=100, body="短い返信")
     ev = _intent(led)
-    _dispatch(led, ev)
+    _dispatch(led, ev, cfg=NO_THREAD_CFG)
     render = _latest_render(led)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
@@ -484,7 +489,7 @@ def test_card_body_oversized_headers_and_full_action(led, tmp_path):
     _msg(led, 100, 1, body=long_body)
     _msg(led, 101, 1, parent=100, body="短い")
     ev = _intent(led)
-    _dispatch(led, ev)
+    _dispatch(led, ev, cfg=NO_THREAD_CFG)
     card = _card(led)
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
@@ -725,7 +730,7 @@ def test_body_action_signal_full_evidence(led, tmp_path):
     ev = _intent(led, kind="signal", pid=1,
                  payload={"signal_keys": ["sig-body"], "project_id": 1,
                           "type": "med_followup"})
-    _dispatch(led, ev)
+    _dispatch(led, ev, cfg=NO_THREAD_CFG)
     render = _latest_render(led)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
@@ -1874,7 +1879,7 @@ def test_success_resets_consecutive_resend_budget(led, tmp_path):
 
 
 def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
-    card, spec = _delivered_card(led, tmp_path)
+    card, spec = _delivered_card(led, tmp_path, cfg=NO_THREAD_CFG)
     req = _notif(_token_for(spec, 'body'))
     req['origin'] = dict(ORIGIN, message_id='m-9')
     first = notify_cards.apply_notification(led, req, CFG, now=NOW)
