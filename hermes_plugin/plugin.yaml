@@ -29,6 +29,12 @@ config_schema:
     type: list
     required: true
     description: MCS project IDs visible to this command.
+  project_ids_auto:
+    type: bool
+    required: false
+    description: >
+      Also allow every project present in the snapshot's patients
+      table — a newly admitted patient works without a config edit.
   interactive:
     type: bool
     required: false

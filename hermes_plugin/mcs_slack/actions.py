@@ -5,6 +5,7 @@ import copy
 import re
 from datetime import date
 
+from hermes_plugin import projects
 from hermes_plugin.mcs_discord import envelopes, paths, registry
 from hermes_plugin.mcs_discord.actions import _body_messages, _ja
 
@@ -96,16 +97,18 @@ class Actions:
                 or ctx.get("message_id") != origin["message_id"]:
             return None
         allowed = self._settings.get("project_ids")
-        if not allowed:
+        if not allowed and not self._settings.get("project_ids_auto"):
             return None
         project = ctx.get("project_id")
         if project is not None:
-            if project not in allowed:
+            if not projects.project_allowed(self._settings, project):
                 return None
         else:
             signals = (ctx.get("context") or {}).get("signals") or {}
-            if not signals or any(s.get("project_id") not in allowed
-                                  for s in signals.values()):
+            if not signals or any(
+                    not projects.project_allowed(
+                        self._settings, s.get("project_id"))
+                    for s in signals.values()):
                 return None
         if actor != origin.get("actor"):
             return None
@@ -261,8 +264,8 @@ class Actions:
     async def _preview(self, pending, result):
         origin = pending["origin"]
         payload = self._payload(pending, result)
-        if payload is None or payload["project_id"] not in \
-                self._settings["project_ids"]:
+        if payload is None or not projects.project_allowed(
+                self._settings, payload["project_id"]):
             await self._say(origin["channel_id"], pending["user"],
                             "入力または対象が無効です。")
             return
@@ -314,7 +317,8 @@ class Actions:
             await self._say(origin["channel_id"], user, "取り消しました。")
             return
         payload = pending["payload"]
-        if payload["project_id"] not in self._settings["project_ids"]:
+        if not projects.project_allowed(self._settings,
+                                        payload["project_id"]):
             return
         try:
             await self._publish(payload)

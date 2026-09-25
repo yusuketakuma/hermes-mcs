@@ -18,6 +18,7 @@ import asyncio
 import time
 from typing import Any
 
+from .. import projects
 from . import envelopes, paths, registry
 
 ACTION_PREFIX = "mcs:a:"
@@ -38,6 +39,9 @@ ERR_JA = {
     "card_not_found": "対象カードが見つかりません。",
     "manifest_invalid": "表示内容が変わったため確定できません。最新の表示で操作してください。",
     "scope_mismatch": "この環境のカードではありません。",
+    "stale_task": "タスクが更新されました。最新の一覧でやり直してください。",
+    "request_not_found": "対象のタスクが見つかりません。",
+    "request_not_open": "このタスクは既に終了しています。",
     "interactive_off": "現在インタラクティブ通知は停止中です。",
     "signal_changed": "対象の候補が更新されました。最新のカードでやり直してください。",
     "source_changed": "元の投稿が更新されました。最新のカードでやり直してください。",
@@ -98,6 +102,53 @@ def _body_messages(result: dict) -> list:
     return [f"**{title}**（{i + 1}/{len(chunks)}）\n{c}"
             if len(chunks) > 1 else f"**{title}**\n{c}"
             for i, c in enumerate(chunks)]
+
+
+def _task_list_text(items: list) -> str:
+    """Ephemeral task list — one line per request, status mark first so
+    the scan order matches the transition buttons below it."""
+    marks = {"open": "⬜", "in_progress": "⏳", "done": "✅"}
+    lines = ["📋 **タスク**（このスレッド）"]
+    for t in items:
+        meta = []
+        if t.get("assignee"):
+            meta.append(f"担当: {t['assignee']}")
+        if t.get("due_date"):
+            meta.append(f"期限: {t['due_date']}")
+        lines.append(f"{marks.get(t['status'], '⬜')} "
+                     f"#{t['request_id']} {t['title']}"
+                     + (" — " + "・".join(meta) if meta else ""))
+    return "\n".join(lines)
+
+
+def _task_done_text(result: dict) -> str:
+    status = "完了" if result.get("status") == "done" else "対応中"
+    title = result.get("title") or f"#{result.get('request_id')}"
+    if result.get("absorbed"):
+        return f"タスク「{title}」は既に「{status}」です。"
+    return f"タスク「{title}」を「{status}」にしました。"
+
+
+def _task_view(items: list):
+    """Classic component view carrying each task's transition buttons —
+    every token was minted by the runner inside the tasks result, so
+    dispatch is identical to a card button."""
+    import discord
+
+    view = discord.ui.View(timeout=None)
+    count = 0
+    for t in items:
+        for to, tr in (t.get("transitions") or {}).items():
+            if count >= 25:
+                return view
+            style = (discord.ButtonStyle.success if to == "done"
+                     else discord.ButtonStyle.primary)
+            view.add_item(discord.ui.Button(
+                style=style,
+                label=f"{tr['label']} #{t['request_id']}",
+                custom_id=f"{ACTION_PREFIX}{tr['token']}"))
+            count += 1
+    return view if count else None
 
 
 def _authorizing_channel(interaction) -> tuple[str, str | None]:
@@ -177,9 +228,8 @@ class Actions:
                 and str(interaction.channel_id) not in chats:
             return "chat_not_allowed"
         if project_ids is not None:
-            allowed = s.get("project_ids") or set()
             for pid in project_ids:
-                if pid is not None and pid not in allowed:
+                if pid is not None and not projects.project_allowed(s, pid):
                     return "project_not_allowed"
         return None
 
@@ -189,6 +239,16 @@ class Actions:
         self._log("interaction_denied", reason=denial,
                   actor=_actor(interaction),
                   channel=str(interaction.channel_id))
+
+    def _result_log(self, interaction, action: str, result: dict | None,
+                    **fields) -> None:
+        """Every confirmed interaction outcome lands in the journal —
+        denials alone are not an audit trail."""
+        self._log("interaction_result", action=action,
+                  outcome=(result or {}).get("outcome") or "timeout",
+                  error=(result or {}).get("error"),
+                  actor=_actor(interaction),
+                  channel=str(interaction.channel_id), **fields)
 
     # -- result polling --------------------------------------------------
 
@@ -249,6 +309,8 @@ class Actions:
                 await asyncio.to_thread(
                     envelopes.publish_command, self._dirs["cmd_int"],
                     envelopes.refresh(actor, origin))
+                self._result_log(interaction, "refresh",
+                                 {"outcome": "refresh_published"})
             except OSError:
                 pass
             await self._ephemeral(
@@ -287,6 +349,7 @@ class Actions:
             if result is not None and not (
                     result.get("outcome") == "applied"
                     and result.get("modal")):
+                self._result_log(interaction, action, result)
                 await self._ephemeral(interaction, _ja(result))
                 return
             modal_id = registry.new_modal_id()
@@ -301,6 +364,8 @@ class Actions:
                 "params": (result or {}).get("params") or {}})
             try:
                 await interaction.response.send_modal(modal)
+                self._result_log(interaction, action,
+                                 {"outcome": "modal_opened"})
             except Exception:
                 # the ~3s initial-response window can expire while the
                 # preflight drain ran — a dead modal entry must not stay
@@ -325,6 +390,7 @@ class Actions:
                 "送信に失敗しました。もう一度操作してください。")
             return
         result = await self._wait_result(cid, RESULT_WAIT_S, request_id=cid)
+        self._result_log(interaction, action, result)
         if result is None:
             self._reg.put_followup(cid, {
                 "application_id": str(interaction.application_id),
@@ -337,6 +403,10 @@ class Actions:
         if outcome == "applied" and not result.get("modal"):
             if result.get("action") == "body" and result.get("body"):
                 await self._send_body(interaction, result)
+            elif result.get("action") == "tasks":
+                await self._send_tasks(interaction, result)
+            elif result.get("action") == "task_status":
+                await self._followup(interaction, _task_done_text(result))
             # silent ack — the card re-renders through the pipeline
             return
         await self._followup(interaction, _ja(result))
@@ -427,6 +497,7 @@ class Actions:
             await self._followup(interaction, _ja(result))
             return
         self._reg.drop_modal(modal_id)   # a definitive answer consumed it
+        self._result_log(interaction, pending["action"], result)
         if result.get("outcome") != "applied" \
                 or not result.get("modal"):
             await self._followup(interaction, _ja(result))
@@ -546,6 +617,9 @@ class Actions:
             return
         if suffix == "cancel":
             self._reg.drop_confirm(confirm_id)
+            self._result_log(interaction,
+                             pending["payload"].get("cmd"),
+                             {"outcome": "cancelled"})
             await self._ephemeral(interaction, "取り消しました。")
             return
         denial = self._authorized(
@@ -574,6 +648,9 @@ class Actions:
             return
         # consumed only after the command file is durably queued
         self._reg.drop_confirm(confirm_id)
+        self._result_log(interaction, payload.get("cmd"),
+                         {"outcome": "confirmed"},
+                         command_id=payload.get("command_id"))
         cid = payload["command_id"]
         await self._followup(
             interaction,
@@ -586,6 +663,7 @@ class Actions:
         if result is None:
             return                        # supervisor sweeps followups
         self._reg.drop_followup(cid)
+        self._result_log(interaction, payload.get("cmd"), result)
         await self._followup(interaction, _ja(result))
 
     # -- pending followup sweep (called by the supervisor) ---------------
@@ -613,6 +691,23 @@ class Actions:
                     # "反映しました" and never deliver it
                     for msg in _body_messages(result):
                         await hook.send(msg, ephemeral=True)
+                elif result.get("action") == "tasks":
+                    # same debt for the 📋 list — and its transition
+                    # tokens must be registered before the buttons can
+                    # be clicked
+                    token_ctx = result.get("token_ctx") or {}
+                    if token_ctx:
+                        await asyncio.to_thread(
+                            self._reg.put_tokens, token_ctx)
+                    items = result.get("tasks") or []
+                    await hook.send(
+                        _task_list_text(items) if items
+                        else "このスレッドのタスクはありません。",
+                        ephemeral=True,
+                        view=_task_view(items) if items else None)
+                elif result.get("action") == "task_status":
+                    await hook.send(_task_done_text(result),
+                                    ephemeral=True)
                 else:
                     await hook.send(_ja(result), ephemeral=True)
             except Exception as e:
@@ -626,6 +721,22 @@ class Actions:
         whose CDN URL is reachable by link alone)."""
         for msg in _body_messages(result):
             await self._followup(interaction, msg)
+
+    async def _send_tasks(self, interaction, result: dict) -> None:
+        """Task list answer for the 'tasks' action — ephemeral text plus
+        a view of per-task transition buttons. The runner minted those
+        tokens inside the result; their ctx must land in the registry
+        before the buttons are clickable."""
+        token_ctx = result.get("token_ctx") or {}
+        if token_ctx:
+            await asyncio.to_thread(self._reg.put_tokens, token_ctx)
+        items = result.get("tasks") or []
+        if not items:
+            await self._followup(
+                interaction, "このスレッドのタスクはありません。")
+            return
+        await self._followup(interaction, _task_list_text(items),
+                             view=_task_view(items))
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:

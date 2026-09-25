@@ -190,13 +190,21 @@ _ACTIONS = {
     "assign":  ("👤 担当", "primary", "write"),
     "defer":   ("⏸ 保留", "secondary", "write"),
     "body":    ("📄 本文表示", "secondary", "view"),
+    "tasks":   ("📋 タスク", "secondary", "view"),
     "request": ("📝 依頼作成", "secondary", "write"),
     "dismiss": ("🚫 却下", "danger", "write"),
     "prev":    ("◀ 前へ", "secondary", "view"),
     "next":    ("次へ ▶", "secondary", "view"),
+    # minted only inside a tasks view — never a card button; the plugin
+    # supplies its own labels from the view's transitions
+    "task_status": ("", "secondary", "write"),
 }
 _WRITE_ACTIONS = frozenset(
     a for a, (_, _, cls) in _ACTIONS.items() if cls == "write")
+
+TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
+                              # buttons stays under Discord's 25-button
+                              # per-message ceiling
 
 
 # ---------- config / dirs ----------
@@ -479,6 +487,12 @@ def _action_rows(db, card, content, now, context=None):
     btn("assign")
     btn("defer")
     btn("body")
+    if kind == "thread" and card["transport"] != "slack":
+        # thread scope is the only scope a task list can be pinned to —
+        # signal/digest cards span messages/projects the requests table
+        # does not key on. Slack cards get no 📋 for now: the adapter's
+        # followup sweep has no ephemeral surface to answer it with.
+        btn("tasks")
     rows.append(list(row))
     row.clear()
     if positive(card["project_id"]) \
@@ -1082,13 +1096,22 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 else _digest_projects(db, card))
     if not _scope_match(card, origin):
         return {**base, "outcome": "rejected", "error": "scope_mismatch"}
+    action = tok["action"]
+    try:
+        tok_params = json.loads(tok["params"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        tok_params = {}
     if card["message_id"] \
-            and card["message_id"] != (origin or {}).get("message_id"):
+            and card["message_id"] != (origin or {}).get("message_id") \
+            and not tok_params.get("ephemeral"):
         # a delivered card's buttons live on its bound message — a token
         # arriving with another message's origin is being replayed in a
-        # context that never rendered this card
+        # context that never rendered this card. Tokens minted for an
+        # ephemeral surface (the 📋 task list's transition buttons)
+        # declare "ephemeral": their binding is the token itself plus
+        # the channel/project scope checked above, not the followup
+        # message that carried the click.
         return {**base, "outcome": "rejected", "error": "origin_mismatch"}
-    action = tok["action"]
     if action in _WRITE_ACTIONS and (
             not interactive_enabled(cfg) or card["transport"] != active_transport(cfg)):
         return {**base, "outcome": "rejected", "error": "interactive_off"}
@@ -1108,11 +1131,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 and tok["need_ui_rev"] != card["ui_revision"]:
             return {**base, "outcome": "rejected", "error": "stale_ui",
                     "hint": "refresh"}
-        try:
-            params = json.loads(tok["params"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            params = {}
-        page = params.get("page")
+        page = tok_params.get("page")
         content = _card_content(db, card)
         if type(page) is not int or not 0 <= page < content["pages"]:
             return {**base, "outcome": "rejected", "error": "bad_page"}
@@ -1140,6 +1159,52 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         title, body_text = _card_body_text(db, card, man)
         return {**base, "outcome": "applied", "action": "body",
                 "title": title, "body": body_text}
+    if action == "tasks":
+        # live view — requests anchored to the thread's messages, plus a
+        # fresh transition token per reachable status minted in the same
+        # tx so the plugin can answer with an actionable ephemeral list
+        items, token_ctx = _thread_tasks(db, card, tok, now)
+        return {**base, "outcome": "applied", "action": "tasks",
+                "tasks": items, "token_ctx": token_ctx}
+    if action == "task_status":
+        rid, to = tok_params.get("request_id"), tok_params.get("status")
+        row = (db.execute(
+            "SELECT * FROM requests WHERE request_id=? AND project_id=?",
+            (rid, card["project_id"])).fetchone()
+            if positive(rid) else None)
+        if row is None or to not in ("in_progress", "done"):
+            return {**base, "outcome": "rejected",
+                    "error": "request_not_found"}
+        if tok["need_request_rev"] is not None \
+                and tok["need_request_rev"] != row["revision"]:
+            return {**base, "outcome": "rejected",
+                    "error": "stale_task", "hint": "tasks"}
+        if row["status"] == to:
+            return {**base, "outcome": "applied", "action": "task_status",
+                    "request_id": rid, "status": to, "absorbed": True,
+                    "title": row["title"]}
+        if row["status"] not in ("open", "in_progress"):
+            return {**base, "outcome": "rejected",
+                    "error": "request_not_open"}
+        cur = db.execute(
+            "UPDATE requests SET status=?,revision=revision+1,"
+            "updated_at=? WHERE request_id=? AND revision=?",
+            (to, now, rid, row["revision"]))
+        if cur.rowcount != 1:
+            # raced transition — answer against what actually landed
+            again = db.execute(
+                "SELECT status FROM requests WHERE request_id=?",
+                (rid,)).fetchone()
+            if again and again["status"] == to:
+                return {**base, "outcome": "applied",
+                        "action": "task_status", "request_id": rid,
+                        "status": to, "absorbed": True,
+                        "title": row["title"]}
+            return {**base, "outcome": "rejected",
+                    "error": "stale_task", "hint": "tasks"}
+        return {**base, "outcome": "applied", "action": "task_status",
+                "request_id": rid, "status": to, "title": row["title"],
+                "revision": row["revision"] + 1}
     if action == "ack":
         mid = tok["need_manifest_id"]
         man = db.execute(
@@ -1203,14 +1268,54 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
     # stored params go back to the caller so the plugin builds the modal
     # against what was rendered — user input never picks the target.
     if action in ("request", "dismiss"):
-        try:
-            params = json.loads(tok["params"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            params = {}
         return {**base, "outcome": "applied", "action": action,
-                "modal": True, "params": params}
+                "modal": True, "params": tok_params}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
+
+
+def _thread_tasks(db, card, tok, now):
+    """The thread card's live task list — requests anchored to the
+    thread's own messages — with one transition token per reachable
+    status. Each token pins the request's revision so a stale view
+    cannot overwrite a concurrent update."""
+    if card["kind"] != "thread" or not positive(card["root_message_id"]) \
+            or not positive(card["project_id"]):
+        return [], {}
+    rows = db.execute(
+        """SELECT request_id,title,status,assignee,due_date,revision
+           FROM requests WHERE project_id=? AND status!='cancelled'
+           AND source_message_id IN (
+             SELECT message_id FROM messages
+             WHERE message_id=? OR parent_id=?)
+           ORDER BY CASE status WHEN 'open' THEN 0
+                    WHEN 'in_progress' THEN 1 ELSE 2 END,
+                    due_date IS NULL, due_date, request_id
+           LIMIT ?""",
+        (card["project_id"], card["root_message_id"],
+         card["root_message_id"], TASK_VIEW_LIMIT)).fetchall()
+    need = {"source_gen": tok["need_source_gen"],
+            "manifest_id": tok["need_manifest_id"],
+            "ui_rev": tok["need_ui_rev"]}
+    items, token_ctx = [], {}
+    for r in rows:
+        transitions = {}
+        for to, label in (("in_progress", "⏳ 対応中"), ("done", "✅ 完了")):
+            if r["status"] == "done" \
+                    or (to == "in_progress" and r["status"] == "in_progress"):
+                continue
+            t = _mint_token(
+                db, card["card_id"], "task_status",
+                {"request_id": r["request_id"], "status": to,
+                 "ephemeral": True},
+                {**need, "request_rev": r["revision"]}, now)
+            transitions[to] = {"token": t, "label": label}
+            token_ctx[t] = {"action": "task_status",
+                            "card_key": card["card_key"],
+                            "kind": card["kind"],
+                            "project_id": card["project_id"]}
+        items.append({**dict(r), "transitions": transitions})
+    return items, token_ctx
 
 
 def _digest_projects(db, card) -> list:
