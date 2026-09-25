@@ -1876,6 +1876,8 @@ def valid_mcs_db(path: str) -> bool:
                 return False
             tables = {r[0] for r in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
+            if {"attachments_v1", "read_marks_v1"} & tables:
+                return False
             # _migrate_body adds derived columns, not these source fields.
             # Older backups may lack tables that _init creates on reopen.
             core_columns = {
@@ -1894,10 +1896,45 @@ def valid_mcs_db(path: str) -> bool:
                     "attachments", "notify_outbox", "read_marks",
                     "artifacts", "fetch_jobs"} <= tables:
                 return False
-            return all(
-                required <= {row[1] for row in db.execute(
+            base_columns = {
+                **core_columns,
+                "attachments": {"attachment_id", "message_id", "file_id",
+                                "name", "url", "local_path", "bytes",
+                                "sha256", "state", "downloaded_at",
+                                "created_at"},
+                "read_marks": {"project_id", "snapshot_ts", "marked_at"},
+                "notify_outbox": {"event_id", "kind", "project_id", "payload",
+                                  "state", "attempts", "next_try",
+                                  "accepted_ref", "created_at", "updated_at"},
+                "artifacts": {"artifact_id", "kind", "project_id", "message_id",
+                              "content", "model", "meta", "created_at"},
+                "fetch_jobs": {"job_id", "kind", "project_id", "message_id",
+                               "parent_id", "payload", "state", "attempts",
+                               "next_try", "created_at", "updated_at"},
+            }
+            for table, required in base_columns.items():
+                if table not in tables:
+                    continue  # _init creates absent tables for older backups.
+                columns = {row[1] for row in db.execute(
                     f"PRAGMA table_info({table})")}
-                for table, required in core_columns.items())
+                if table == "attachments" and "attachment_id" not in columns:
+                    required = {"message_id", "file_id", "name", "url",
+                                "downloaded_path", "first_seen"}
+                elif table == "read_marks" and "id" in columns:
+                    required = required | {"status"}
+                if not required <= columns:
+                    return False
+                # Match the ambiguous-key fence in Ledger._preflight before
+                # a recovery candidate can replace the live database.
+                key_check = {
+                    "attachments": ("attachment_id", "message_id,file_id"),
+                    "read_marks": ("id", "project_id,snapshot_ts"),
+                }.get(table)
+                if key_check and key_check[0] in columns and db.execute(
+                        f"SELECT 1 FROM {table} GROUP BY {key_check[1]} "
+                        "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
+                    return False
+            return True
         finally:
             db.close()
     except (OSError, sqlite3.DatabaseError):

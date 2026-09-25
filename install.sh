@@ -41,7 +41,7 @@ warn() { echo "  warn: $*" >&2; }
 say "1/6 Homebrew packages"
 if ! command -v brew >/dev/null 2>&1; then
     warn "brew not found — install it first:"
-    warn '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    warn "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
     warn "then re-run this script."
     exit 1
 fi
@@ -141,10 +141,11 @@ if "$HERMES_BIN" config get plugins.enabled 2>/dev/null \
         | grep -q "mcs-discord-commands"; then
     skip "plugin already enabled"
 else
-    "$HERMES_BIN" plugins enable mcs-discord-commands \
-        --no-allow-tool-override \
-        && ok "plugin enabled" \
-        || warn "plugins enable failed — add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml"
+    if "$HERMES_BIN" plugins enable mcs-discord-commands --no-allow-tool-override; then
+        ok "plugin enabled"
+    else
+        warn "plugins enable failed — add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml"
+    fi
 fi
 
 # -------------------------------------------------- 4. local LLM server
@@ -162,9 +163,12 @@ else
         if [ ! -f "$MODEL_FILE" ]; then
             echo "  downloading model (~6 GB): $MODEL_FILE"
             mkdir -p "$MODEL_DIR"
-            curl -fL --progress-bar -o "$MODEL_FILE.part" "$MODEL_URL" \
-                && mv "$MODEL_FILE.part" "$MODEL_FILE" \
-                || warn "model download failed — fetch $MODEL_URL into $MODEL_FILE"
+            if curl -fL --progress-bar -o "$MODEL_FILE.part" "$MODEL_URL" \
+                    && mv "$MODEL_FILE.part" "$MODEL_FILE"; then
+                ok "model downloaded"
+            else
+                warn "model download failed — fetch $MODEL_URL into $MODEL_FILE"
+            fi
         else
             skip "model already present"
         fi
@@ -178,9 +182,11 @@ else
         if launchctl print "gui/$(id -u)/ai.mcs.llamaserver" >/dev/null 2>&1; then
             skip "ai.mcs.llamaserver already loaded"
         else
-            launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" \
-                && ok "llama-server LaunchAgent started" \
-                || warn "launchctl bootstrap failed for ai.mcs.llamaserver"
+            if launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"; then
+                ok "llama-server LaunchAgent started"
+            else
+                warn "launchctl bootstrap failed for ai.mcs.llamaserver"
+            fi
         fi
     fi
 fi
@@ -214,9 +220,11 @@ if [ "$(uname -s)" = "Darwin" ]; then
         "$REPO/deployment/launchagents/org.mcs.recovery.plist" \
         > "$WATCH_PLIST"
     launchctl bootout "gui/$(id -u)/org.mcs.recovery" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$WATCH_PLIST" \
-        && ok "recovery watchdog loaded (StartInterval 900)" \
-        || warn "watchdog bootstrap failed — load manually: launchctl bootstrap gui/$(id -u) $WATCH_PLIST"
+    if launchctl bootstrap "gui/$(id -u)" "$WATCH_PLIST"; then
+        ok "recovery watchdog loaded (StartInterval 900)"
+    else
+        warn "watchdog bootstrap failed — load manually: launchctl bootstrap gui/$(id -u) $WATCH_PLIST"
+    fi
 else
     skip "watchdog: not macOS — install the timer manually"
 fi

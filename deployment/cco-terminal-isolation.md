@@ -1,5 +1,21 @@
 # CCO terminal/file隔離の候補設定
 
+## 現在の候補（2026-09-25確認）
+
+`cco-terminal.candidate.yaml` は snapshot を読取専用、`cmd-proposals` を
+提案の書込み先として公開する。実行用 `cmd` はモデルへ書込み可能にしない。
+提案ファイルだけで人の承認とみなさず、native plugin の preview/confirm を経て
+実行用 inbox へ投入する。terminal 節だけの候補であり、config 全体を置換しない。
+
+`cco-approval-scope.json` は旧候補の `applied_config_only` 記録で、記録された
+候補hashは現在のYAMLと一致しない。以下の cmd 書込みを含むcanary結果は過去の
+構成の証拠であり、現在候補の承認・適用・実機検証を証明しない。今回、実設定や
+稼働サービスは確認・変更していない。
+
+## 過去の候補と検証計画
+
+以下は当時の記録を保持したもの。記載された cmd の直接書込みは現在の候補に採用しない。
+
 未適用。`cco-terminal.candidate.yaml`はCCO configのterminal節だけの案で、config全体を置換しない。既存のHermes Docker backendを使用する。
 
 - terminal/fileツールへsnapshotディレクトリをread-only、既存cmdディレクトリをread-writeで公開する。原本DB・添付本体・backup・credentials・HOME全体をmountしない。

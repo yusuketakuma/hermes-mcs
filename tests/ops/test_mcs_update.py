@@ -98,6 +98,56 @@ def test_update_lock_nonblocking(updater):
     assert updater.acquire_update_lock() is not None
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_rollback_keeps_manifest_and_restarts_changed_plugin(
+        updater, tmp_path, monkeypatch, interrupted):
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
+    after = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    desired = {"scripts": [], "agents": [{"label": "local.mcs-cmd"}], "cron": []}
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": after,
+                         "prev_sha": before, "plugin_changed": True,
+                         "manifest_snapshot": desired, "command_id": "apply-id"}
+    monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(updater, "restart_agents", lambda: [])
+    monkeypatch.setattr(updater, "_postcheck", lambda *a: [])
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    assert updater._post_merge(state) == 0
+    state = updater.load_state()
+    assert state["applied"][-1]["manifest_snapshot"] == desired
+    state["stages"] = []
+    restarts, memberships = [], []
+
+    def restart(cfg):
+        # The decision survives popping the entry, and durable bookkeeping
+        # must precede a restart that could terminate this caller.
+        persisted = updater.load_state()
+        assert persisted["applied"] == []
+        assert persisted["executed"]["rollback-id"]["result"] == "rolled_back"
+        restarts.append(True)
+
+    monkeypatch.setattr(updater, "restart_gateway", restart)
+    monkeypatch.setattr(updater, "quiesce", lambda: [])
+    monkeypatch.setattr(updater, "_reconcile_membership",
+                        lambda manifest: memberships.append(manifest) or [])
+    if interrupted:
+        state["applying"] = {"tag": "rollback:v1.1.0", "sha": before,
+                             "prev_sha": after, "rollback": True,
+                             "plugin_changed": True, "manifest_snapshot": desired,
+                             "command_id": "rollback-id", "at": time.time()}
+        state["stages"] = [{"stage": "rollback", "at": time.time()}]
+        _git(repo, "reset", "--hard", before)
+    updater.save_state(state)
+    assert (updater.recover_interrupted() if interrupted
+            else updater.rollback("rollback-id")) == 0
+    assert updater.load_state()["applied"] == []
+    assert restarts == [True]
+    assert memberships == [desired]
+
+
 # ------------------------------------------------------------ tag parsing
 
 def test_remote_tag_sha_annotated_and_lightweight(updater, tmp_path):
@@ -111,7 +161,7 @@ def test_remote_tag_sha_annotated_and_lightweight(updater, tmp_path):
     commit_ann = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
     assert lite == commit_lite           # lightweight: direct = commit
     assert ann == commit_ann             # annotated: peeled = commit
-    assert ann != _git(repo, "rev-parse", "v1.1.0").stdout.strip() or True
+    assert ann != _git(repo, "rev-parse", "v1.1.0").stdout.strip()
 
 
 def test_detect_latest_semver_max(updater, tmp_path):
@@ -178,52 +228,24 @@ def test_precheck_tag_rejects_protected_and_symlink(updater, tmp_path,
     assert any("bad_entry_type" in e for e in errors)
 
 
-def test_surgical_delete_only_removes_update_files(updater, tmp_path):
+@pytest.mark.parametrize("name", ["user-added.txt", "新規ファイル.txt", "sp ace.txt"])
+def test_rollback_preserves_untracked_update_name(updater, tmp_path, monkeypatch, name):
     repo, _ = _make_repo(tmp_path)
-    mcs_update.REPO = str(repo)
-    prev = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
-    new = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
-    # untracked file NOT in the update's diff must survive
-    (repo / "keep_me.txt").write_text("user data")
-    _git(repo, "checkout", "-q", "v1.1.0")
-    _git(repo, "checkout", "-q", "main")
-    mcs_update._surgical_delete(prev, new)
-    assert (repo / "keep_me.txt").exists()
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    previous = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    path = repo / name
+    path.write_text("release content")
+    _git(repo, "add", path.name)
+    _git(repo, "commit", "-qm", "release adds path")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "reset", "--hard", previous)
+    path.write_text("user content after interrupted update")
+    monkeypatch.setattr(updater, "_reconcile_membership", lambda manifest: [])
+    monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
 
+    updater._rollback_tree({"sha": target, "prev_sha": previous})
 
-def test_surgical_delete_handles_quoted_paths(updater, tmp_path):
-    """core.quotepath escapes non-ASCII names — with -z parsing the
-    fileset must still match (F2): an update-introduced file with a
-    non-ASCII name is deleted, a same-named user file in a protected
-    dir is not."""
-    repo, _ = _make_repo(tmp_path)
-    mcs_update.REPO = str(repo)
-    work = tmp_path / "remote-work"
-    (work / "新規ファイル.txt").write_text("x")
-    (work / "sp ace.txt").write_text("x")
-    _git(work, "add", ".")
-    _git(work, "commit", "-qm", "unicode")
-    _git(work, "tag", "v2.0.0")
-    _git(work, "push", "-q", str(tmp_path / "remote.git"),
-         "main", "v2.0.0")
-    _git(repo, "fetch", "-q", "--tags")
-    _git(repo, "checkout", "-q", "v2.0.0")
-    _git(repo, "checkout", "-q", "main")
-    # simulate mid-merge leftovers: the new files exist but are
-    # untracked again after checkout back to main? they're tracked
-    # after checkout v2.0.0... recreate them as untracked instead:
-    (repo / "新規ファイル.txt").write_text("x")
-    (repo / "sp ace.txt").write_text("x")
-    _git(repo, "rm", "-q", "--cached", "新規ファイル.txt", "sp ace.txt",
-         check=False)
-    _git(repo, "reset", "-q", "--hard", "HEAD")
-    (repo / "新規ファイル.txt").write_text("x")
-    (repo / "sp ace.txt").write_text("x")
-    prev = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
-    new = _git(repo, "rev-parse", "v2.0.0^{commit}").stdout.strip()
-    mcs_update._surgical_delete(prev, new)
-    assert not (repo / "新規ファイル.txt").exists()
-    assert not (repo / "sp ace.txt").exists()
+    assert path.read_text() == "user content after interrupted update"
 
 
 def test_stale_git_lock_cleanup(updater, tmp_path):
@@ -608,7 +630,7 @@ def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,
     assert updater.recover_interrupted() == 0
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     assert _git(repo, "status", "--porcelain", "-uno").stdout.strip() == ""
-    assert not (repo / "introduced.txt").exists()
+    assert (repo / "introduced.txt").read_text() == "new"
     after = updater.load_state()
     # the failed apply's receipt is consumed — no crash/apply loop
     assert after["executed"]["cid-mix"]["result"] == \
