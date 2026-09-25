@@ -20,7 +20,7 @@
 | 037–038 | semantic_loops / mcs_view、test_semantic_loop_generations / test_semantic_loop_view | scope/revision/時系列/低confidenceの構造ガード。新replyで現行候補・進展eventを再評価するE2Eあり。語義精度は未評価 |
 | 039 | mcs_requests / hermes_plugin / integration/test_hermes_discord | native Discord入力→Hermes現在allowlist→限定plugin→preview/confirm→inbox/receiptを合成E2E。実Discord受信と本番権限配置は未実施 |
 | 040 | origin eligibility / immutable loop candidates | replay/import通知抑止に加え、test_semantic_acceptance_edgesで人手完了済みrequestへのhistory取込・Loop再評価後も状態/revision/receipt数が不変であることを検証 |
-| 041–043 | notifier、test_semantic_delivery、既存配送suite | part間停止・凍結receipt・mention/宛先契約。実Discord未送信 |
+| 041–043 | notify_flush、test_semantic_delivery、既存配送suite | part間停止・凍結receipt・mention/宛先契約。実Discord未送信 |
 | 044 | fixed Jev endpoint / no proxy / no redirect / sanitized errors | 模擬wire境界あり。認証値混入全経路の最終確認が必要 |
 | 045–046 | shared run lock / runtime deadlines / local LLM timeout | job token/CASで旧workerの更新拒否を合成検証。短命urllib workerでDNS/readを絶対deadline内にkill/reapし、loopback slow-trickleを検証 |
 | 047–048 | maintenance / snapshot View、test_mcs_recovery_contract | 合成backup中断・独立復元・読取り成功。実権限配置は未実施 |
@@ -31,8 +31,8 @@
 | 055–056 | immutable semantic_bundle / stored source event eligibility | history通知抑止・旧snapshot保持の合成回帰あり |
 | 057 | semantic_runtime token / CAS / usage reservation | job token/CASで旧workerの結果を拒否。実運用の並走観察は未実施 |
 | 058 | semantic_runtime / semantic seed / mcs_operations / test_semantic_manual_retry | 同入力の累積上限で停止し、人手の追加1〜3試行と理由をreceiptに保存。再起動・再seed・重複confirmで上限を増やさず、新入力では旧追加枠を除去。Jev/LLM呼出し後の時間切れも累積attemptを消費し有限停止。呼出し前の予算待ちは消費せずdefer。Discord認証経路は合成結合検証、実運用未実施 |
-| 059–060 | replay dedup / runtime boundary guards / notifier gates | 重複replayとpart間OFFの回帰。test_semantic_pauseで外部応答後のpauseが次の通信と結果昇格を止めることを検証 |
-| 061–063 | notifier frozen parts / fp gate / semantic-only selectors | part毎header/link・原文添付維持の合成試験。send gateでproject/sourceevent/targetrevision/PASS/publicationmode/policyを検査。実送信は未実施 |
+| 059–060 | replay dedup / runtime boundary guards / notify_flush gates | 重複replayとpart間OFFの回帰。test_semantic_pauseで外部応答後のpauseが次の通信と結果昇格を止めることを検証 |
+| 061–063 | notify_flush frozen parts / fp gate / semantic-only selectors | part毎header/link・原文添付維持の合成試験。send gateでproject/sourceevent/targetrevision/PASS/publicationmode/policyを検査。実送信は未実施 |
 | 064 | Jev固定model / models一覧は情報扱い | 承認範囲の合成POST1回が成功し固定model echoを確認。成功後GET1回のID一覧は空。固定versionをaliasへ切り替えていない |
 | 065–068 | continuation台帳 / refactor-revalidation / この表 | 既存signatureで統合、基準148件、稼働checkout無変更。最終差分の再照合が必要 |
 
@@ -68,7 +68,7 @@ G2/G6/G7を、この成功件数で代替しない。
 | 06 | fact status/polarity、semantic_assessment | 引用・予定・実施等の実文意味精度（G6） |
 | 07 | audit_codeのrevision/quote/codepoint検査、Unicode回帰 | 意味上の支持はG6 |
 | 08 | extraction technical status、attachment context、source coverage試験 | 実添付・実モデルでの検証 |
-| 09 | audit_status_forとnotifier PASS gate、low-confidence回帰 | 実モデル校正 |
+| 09 | audit_status_forとnotify_flush PASS gate、low-confidence回帰 | 実モデル校正 |
 | 10 | durable repair reservation、test_semantic_repair_recovery | 実運用の障害注入 |
 | 11 | Loopはartifactのみ、完了済みrequest不変の回帰 | 実オペレータ評価 |
 | 12–13 | fixed endpoint/model、proxy/redirect禁止、stdin credential、transport回帰 | 合成実API接続は確認済み。実配置のOS egress隔離は未検証 |
@@ -134,7 +134,7 @@ G2/G6/G7を、この成功件数で代替しない。
 
 - JevClient.evaluateが組むHTTP本文はmodel/state/questionsのみ。APIキーはbounded_http_requestのローカル子process stdin envelopeで別フィールドに渡り、workerがAuthorization headerへ設定する。子process argvに本文・キーは渡さない。ローカルIPC envelopeと外向きHTTP本文を混同しない。
 - semantic.llm_chatは明示api_key=Noneでloopback endpointへ送る。共通transportの親側はキーありの場合をJev固定endpointへ、キーなしの場合をloopbackへ限定し、proxy/redirectを使わない。workerの応答サイズと絶対deadlineは既存transport回帰で検証されている。
-- notifier._postはcontent/allowed_mentions/attachment metadataのみを本文に組み、bot tokenはAuthorization header。_channel_idは患者本文のfallback channelを拒否し、_OPENERはNoRedirect/no proxy。送信は既存flushのみ。
+- notify_flush._postはcontent/allowed_mentions/attachment metadataのみを本文に組み、bot tokenはAuthorization header。_channel_idは患者本文のfallback channelを拒否し、_OPENERはNoRedirect/no proxy。送信は既存flushのみ。
 - test_real_transport_keeps_hooks_and_fixed_wire_contractの実loopback HTTP経路はBearer headerとwire primitive、予約hook順を検査。test_real_transport_does_not_follow_redirect_and_caps_bodyは302拒否と応答上限を確認。これらは297件成功に含まれる。今回コード本文とassertを読み取ったため、再実行なし。
 
 この確認はアプリが資格情報を本文へ追加しない構築経路の証拠。原文に利用者が秘密値を書いた場合の汎用検出・除去や、OSの通信先制限を証明しない。実配置egress検証はRF-OPS/G7に残す。
