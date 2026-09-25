@@ -1667,6 +1667,19 @@ def _seed_qc_flagged(db, body="脈は48回／分です"):
     return chash
 
 
+def test_validate_drops_json_fragment_summary():
+    """Model sometimes parrots JSON into free text ('…回复{') — a
+    summary containing structural characters is dropped, not stored."""
+    d = extract_llm._validate(
+        {"summary": "デイ帰宅前再试一次，回复{",
+         "points": ["ok要点", "悪い{断片"],
+         "vitals": {"hr": 48}},
+        body="脈は48回／分です。")
+    assert "summary" not in d
+    assert d["points"] == ["ok要点"]
+    assert d["vitals"] == {"hr": 48.0}
+
+
 def test_qc_flagged_row_reextracts_with_feedback(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _seed_qc_flagged(db)
