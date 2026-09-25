@@ -86,12 +86,14 @@ def _cfg_path(tmp_path, mode):
 
 
 class _FakeJev:
-    """Deterministic evaluate(): noul=0.9, choice=first option."""
-    def __init__(self, noul=0.9, choice_map=None, error=None):
+    """Deterministic evaluate(): noul=0.9, choice=first option (or the
+    `choice` override / per-qid `choice_map`)."""
+    def __init__(self, noul=0.9, choice_map=None, error=None, choice=None):
         self.requests_made = 0
         self.noul = noul
         self.choice_map = choice_map or {}
         self.error = error
+        self.choice = choice
         self.calls = []
 
     def evaluate(self, state, questions, deadline):
@@ -103,8 +105,9 @@ class _FakeJev:
         for qid, q in questions.items():
             if q.get("type") == "choice":
                 opts = list(q.get("criteria") or {})
-                pick = self.choice_map.get(qid, "planned" if qid == "status"
-                                           else opts[0] if opts else None)
+                pick = self.choice or self.choice_map.get(
+                    qid, "planned" if qid == "status"
+                    else opts[0] if opts else None)
                 out[qid] = {"type": "choice", "choice": pick,
                             "confidence": 0.9,
                             "probabilities": {o: 1.0 / len(opts)
@@ -710,10 +713,10 @@ def test_notifier_semantic_notice_render(tmp_path, monkeypatch):
                        "WHERE kind='semantic_notice'").fetchone()
     assert ev is not None
     frozen = json.loads(ev["payload"])["text"]
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: _cfg("enforce"))
-    content, files = notifier._format_event(db, ev)
+    content, files = notify_flush._format_event(db, ev)
     assert content == frozen and files == []
     db.close()
 
@@ -980,14 +983,14 @@ def test_sem_block_drops_stale_revision(tmp_path, monkeypatch):
     semantic.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
-    import notifier
+    import notify_flush
     monkeypatch.setattr(
-        notifier, "_config",
+        notify_flush, "_config",
         lambda: _cfg("enforce"))
     ev = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
-    content, _ = notifier._format_event(db, ev)
+    content, _ = notify_flush._format_event(db, ev)
     assert "要約（自動検査済）" in content
     # edit the parent body -> new content_hash -> block must drop
     p = _patient(db)
@@ -996,7 +999,7 @@ def test_sem_block_drops_stale_revision(tmp_path, monkeypatch):
     ev = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
-    content, _ = notifier._format_event(db, ev)
+    content, _ = notify_flush._format_event(db, ev)
     assert "要約（自動検査済）" not in content
     db.close()
 
@@ -1011,16 +1014,16 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
     n = db.db.execute("SELECT COUNT(*) c FROM notify_outbox "
                       "WHERE kind='semantic_notice'").fetchone()["c"]
     assert n == 2          # one queued intent per audited target
-    import notifier
+    import notify_flush
     monkeypatch.setattr(
-        notifier, "_config",
+        notify_flush, "_config",
         lambda: {"semantic": {"mode": "off"},
                  "notify_target": "slack"})
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notifier, "_send",
+    monkeypatch.setattr(notify_flush, "_send",
                         lambda *a, **k: calls.append(a) or None)
-    notifier.flush(db)
+    notify_flush.flush(db)
     # the base new_messages notice sends; the semantic_notice must not
     assert not any("要約" in str(c[1]) for c in calls)
     row = db.db.execute(
@@ -1040,16 +1043,16 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     p = _patient(db)
     p.messages = [_message(1, body=BODY + "（編集）", unread=False)]
     db.save_patient(p)                 # fingerprint moves
-    import notifier
+    import notify_flush
     monkeypatch.setattr(
-        notifier, "_config",
+        notify_flush, "_config",
         lambda: {**_cfg("enforce"),
                  "notify_target": "slack"})
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
     calls = []
-    monkeypatch.setattr(notifier, "_send",
+    monkeypatch.setattr(notify_flush, "_send",
                         lambda *a, **k: calls.append(a) or None)
-    notifier.flush(db)
+    notify_flush.flush(db)
     assert not any("要約" in str(c[1]) for c in calls)
     row = db.db.execute(
         "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
@@ -1171,11 +1174,11 @@ def test_notice_suppressed_when_src_event_suppressed(tmp_path,
                        "WHERE kind='semantic_notice'").fetchone()
     src = json.loads(ev["payload"])["src_event_id"]
     db.outbox_suppress(src)
-    import notifier
-    monkeypatch.setattr(notifier, "_config",
+    import notify_flush
+    monkeypatch.setattr(notify_flush, "_config",
                         lambda: _cfg("enforce"))
-    with pytest.raises(notifier._StaleSend):
-        notifier._format_event(db, ev)
+    with pytest.raises(notify_flush._StaleSend):
+        notify_flush._format_event(db, ev)
     db.close()
 
 
@@ -1648,14 +1651,14 @@ def test_parked_notice_not_counted_skipped(tmp_path, monkeypatch):
     semantic.run_due(db, _cfg("enforce"), {"errors": []},
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
-    import notifier
+    import notify_flush
     monkeypatch.setattr(
-        notifier, "_config",
+        notify_flush, "_config",
         lambda: {"semantic": {"mode": "shadow"},
                  "notify_target": "slack"})
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notifier, "_send", lambda *a, **k: None)
-    res = notifier.flush(db)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_send", lambda *a, **k: None)
+    res = notify_flush.flush(db)
     assert res["parked"] == 2 and res["skipped"] == 0
     db.close()
 

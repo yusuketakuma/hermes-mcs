@@ -34,6 +34,12 @@ CFG_OFF = {"notify": {"interactive": "off", "route_epoch": 1,
 SCOPE = {"profile": "mcs", "application_id": "app1",
          "guild_id": "g1", "channel_id": "ch1"}
 ORIGIN = {**SCOPE, "message_id": "mid-1"}
+# Canonical Discord worker settings for the notify/plugin test family —
+# test_perf_cards (and tests/plugin/test_mcs_discord.py) share this dict.
+SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
+            "guild_id": "7",
+            "allowed_user_ids": {"1001"}, "allowed_chat_ids": {"42"},
+            "project_ids": {1}}
 
 
 def _uuid(n: int) -> str:
@@ -564,7 +570,7 @@ def test_fit_item_field_shrinks_as_last_resort(led):
 
 def _extract(led, mid, content, kind="extract_v1", stale=False):
     """An extraction artifact bound to the message's current body
-    revision — the same meta.hash gate the text notifier enforces."""
+    revision — the same meta.hash gate the text notify_flush enforces."""
     h = led.db.execute(
         "SELECT content_hash FROM messages WHERE message_id=?",
         (mid,)).fetchone()["content_hash"]

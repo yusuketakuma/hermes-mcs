@@ -17,12 +17,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
-import ledger
-import mcs_adapter
 import mcs_signals
 import mcs_stats
 import structured_view
 import rollup
+from extract_testkit import _hash, _ledger, _message
 
 
 def _request_from_opener(opener):
@@ -36,28 +35,6 @@ def _request_from_opener(opener):
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers or {}), b""
     return request
-
-
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
-
-
-def _message(mid=1, body="body", state="full", project_id=1,
-             parent_id=None, posted_at="2026-09-19T00:00:00+09:00",
-             profession=""):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=project_id, parent_id=parent_id,
-        sender_id=1, sender_name="sender", sender_type="user",
-        profession=profession, organization="", posted_at=posted_at,
-        body_html=body, body_state=state, is_unread=False,
-        reply_count=0,
-    )
-
-
-def _hash(db, mid=1):
-    return db.db.execute(
-        "SELECT content_hash FROM messages WHERE message_id=?",
-        (mid,)).fetchone()[0]
 
 
 def _v1_artifact(db, mid, content, chash):
@@ -1771,3 +1748,104 @@ def test_qc_stale_source_artifact_does_not_flag(tmp_path, monkeypatch):
                         lambda *a, **k: {"summary": "x"})
     res = extract_llm.run_pending(db, limit=10, budget_s=120)
     assert res["selected"] == 0
+
+
+# ---------- carried over from test_mcs_ingestion ----------
+
+
+def test_llm_validation_rejects_string_boolean_and_bool_vital():
+    assert extract_llm._validate({"symptoms": [
+        {"text": "pain", "negated": "false"}
+    ]}) is None
+    assert extract_llm._validate({"vitals": {"hr": True}}) is None
+
+
+def test_llm_error_retry_resets_after_body_change(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="A")])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._fail(db, row, 4)
+    db.save_messages([_message(body="B")])
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: {})
+
+    result = extract_llm.run_pending(db, limit=1, budget_s=5)
+
+    assert result["done"] == 1
+    db.close()
+
+
+def test_malformed_llm_retry_metadata_is_held(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    with db.db:
+        db.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+            "VALUES('extract_llm',1,1,'{}','{broken')")
+    monkeypatch.setattr(
+        extract_llm, "llm_extract", lambda body, **_: pytest.fail("must not retry"))
+
+    result = extract_llm.run_pending(db, limit=1, budget_s=5)
+
+    assert result["done"] == 0
+    assert result["left"] == 1
+    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    db.close()
+
+
+def test_rollup_ignores_malformed_current_artifact_and_continues(tmp_path):
+    db = _ledger(tmp_path)
+    for pid in (1, 2):
+        db.ensure_patient(pid)
+        db.save_messages([_message(mid=pid, project_id=pid)])
+    row = db.db.execute(
+        "SELECT content_hash FROM messages WHERE message_id=1"
+    ).fetchone()
+    db.artifact_add("extract_llm", json.dumps({"meds": [7]}),
+                    project_id=1, message_id=1,
+                    meta={"hash": row["content_hash"]})
+
+    assert rollup.rebuild_many(db, [1, 2]) == 2
+    assert db.db.execute(
+        "SELECT count(*) FROM artifacts WHERE kind='patient_rollup'"
+    ).fetchone()[0] == 2
+    db.close()
+
+
+def test_snippet_message_is_not_extracted(tmp_path, monkeypatch):
+    """F05: extraction consumes only complete bodies — a 'snippet'
+    row stays pending instead of producing partial-input facts."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="partial...", state="snippet")])
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: {})
+    result = extract_llm.run_pending(db, limit=10, budget_s=5)
+    assert result["done"] == 0
+    db.close()
+
+
+def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
+    """The v3 drain performs the v1/v2 rule work simultaneously: a
+    claimed row mints its extract_v1 artifact inside the pass AND its
+    rule parse rides the LLM call as `hints` — one pass, both lanes."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(
+        mid=1,
+        body="体温36.5度、SpO2 97%。カロナール500mgを9/1-9/21の期間服用。"
+             "次回9/25訪問予定。確認お願いします")])
+    seen = {}
+
+    def fake(body, **kw):
+        seen.update(kw)
+        return {"summary": "s"}
+
+    monkeypatch.setattr(extract_llm, "llm_extract", fake)
+    out = extract_llm.run_pending(db, limit=5, budget_s=10)
+    assert out["done"] == 1
+    v1 = db.artifacts("extract_v1", message_id=1)
+    assert v1 and "カロナール" in v1[0]["content"]
+    import extract
+    body = db.db.execute(
+        "SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]
+    assert seen["hints"] == extract.extract_message(
+        body, "2026-09-19T00:00:00+09:00")
+    db.close()

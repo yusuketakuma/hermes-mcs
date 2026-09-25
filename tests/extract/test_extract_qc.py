@@ -12,33 +12,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
-import ledger
-import mcs_adapter
 import semantic
 import semantic_drain
 import semantic_jev as jev
-
-
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
-
-
-def _message(mid=1, body="プレドニンを中止しました", project_id=1,
-             posted_at=None):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=project_id, parent_id=None,
-        sender_id=1, sender_name="sender", sender_type="user",
-        profession="", organization="",
-        posted_at=posted_at or time.strftime(
-            "%Y-%m-%dT%H:%M:%S+09:00", time.localtime()),
-        body_html=body, body_state="full", is_unread=False,
-        reply_count=0)
-
-
-def _hash(db, mid=1):
-    return db.db.execute(
-        "SELECT content_hash FROM messages WHERE message_id=?",
-        (mid,)).fetchone()[0]
+from extract_testkit import _hash, _ledger, _message
+from test_mcs_semantic import _FakeJev
 
 
 def _v2_artifact(db, mid, chash, content=None):
@@ -61,33 +39,6 @@ def _cfg(**kw):
                          "project_ids": None}}
     base["semantic"].update(kw)
     return base
-
-
-class _FakeJev:
-    def __init__(self, noul=0.9, choice="routine", error=None):
-        self.requests_made = 0
-        self.noul = noul
-        self.choice = choice
-        self.error = error
-        self.last_error = None
-        self.calls = []
-
-    def evaluate(self, state, questions, deadline):
-        self.requests_made += 1
-        self.calls.append(sorted(questions))
-        if self.error:
-            raise self.error
-        out = {}
-        for qid, q in questions.items():
-            if q.get("type") == "choice":
-                opts = list(q.get("criteria") or {})
-                out[qid] = {"type": "choice", "choice": self.choice,
-                            "confidence": 0.9,
-                            "probabilities": {o: 1.0 / len(opts)
-                                              for o in opts}}
-            else:
-                out[qid] = {"type": "noul", "noul": self.noul}
-        return {"answers": out, "model": jev.JEV_MODEL}
 
 
 def _qc_job(db, mid=1):
@@ -249,7 +200,7 @@ def test_qc_requeues_changed_extraction_with_same_hash_and_version(tmp_path):
         db.save_messages([_message()])
         _v2_artifact(db, 1, _hash(db))
         semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
-                         time.monotonic() + 60, jev_client=_FakeJev())
+                         time.monotonic() + 60, jev_client=_FakeJev(choice="routine"))
         old_id = json.loads(_qc_artifact(db)["meta"])["source_artifact_id"]
         new_id = _v2_artifact(db, 1, _hash(db), content={"symptoms": []})
         assert new_id != old_id
@@ -270,7 +221,7 @@ def test_qc_seed_and_drain_use_same_valid_source(tmp_path):
                             meta={"hash": _hash(db),
                                   "extract_version": extract_llm.EXTRACT_VERSION})
         out = semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
-                               time.monotonic() + 60, jev_client=_FakeJev())
+                               time.monotonic() + 60, jev_client=_FakeJev(choice="routine"))
         assert out["done"] == 1
         assert json.loads(_qc_artifact(db)["meta"])["source_artifact_id"] == source_id
         assert semantic_drain._qc_seed(db, time.time()) == 0
@@ -350,7 +301,7 @@ def test_done_qc_job_is_not_reclaimed(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     for _ in range(2):
         semantic.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
                          time.monotonic() + 60, jev_client=client)
@@ -368,7 +319,7 @@ def test_drain_skips_qc_when_not_annotate(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     out = semantic.run_due(db, _cfg(), {"errors": []},
                            time.monotonic() + 60, jev_client=client)
     assert out["done"] == 0 and client.requests_made == 0
@@ -393,7 +344,7 @@ def test_process_qc_job_skips_aged_post(tmp_path):
     job = db.db.execute(
         "SELECT * FROM fetch_jobs WHERE kind='extract_qc'").fetchone()
     scfg, _ = semantic_config(_cfg(extract_qc="annotate"))
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     out = semantic_drain._process_qc_job(
         db, scfg, job, client, time.monotonic() + 60)
     assert out == "done" and client.requests_made == 0
@@ -441,7 +392,7 @@ def test_qc_respects_project_scope(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(project_id=9)])
     _v2_artifact(db, 1, _hash(db))
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     out = semantic.run_due(
         db, _cfg(extract_qc="annotate", project_ids=[1]),
         {"errors": []}, time.monotonic() + 60, jev_client=client)
@@ -510,7 +461,7 @@ def test_qc_job_done_when_no_current_artifact(tmp_path):
         "state,next_try,created_at,updated_at) "
         "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
     db.db.commit()
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     out = semantic.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
@@ -601,7 +552,7 @@ def test_semantic_jobs_outrank_qc_backfill(tmp_path):
     semantic_drain._qc_seed(db, time.time())          # QC job first (job_id smaller)
     db.job_add("semantic", 1, 1, payload={
         "targets": [1], "origin": {"source": "history_import"}})
-    client = _FakeJev()
+    client = _FakeJev(choice="routine")
     out = semantic.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 300,
                            jev_client=client, llm_fn=_llm, max_jobs=1)
