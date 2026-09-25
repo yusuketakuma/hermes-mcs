@@ -1489,10 +1489,11 @@ def test_corrupt_spec_quarantined(world):
 
 # ---------- D3: supervisor scope isolation (RC17) ------------------------------
 
-def test_supervisor_profile_scopes_do_not_mix(world):
+def test_supervisor_profile_scopes_do_not_mix(world, monkeypatch):
     """A->B->A: two profiles on the same data root hold separate scope
     locks; unload removes only its own listener; a duplicate worker on
     an owned scope reports visible-stopped instead of racing sends."""
+    monkeypatch.setattr(tasks, "LOCK_WAIT_S", 1.0)
     world.seed()
     world.dispatch()
     spawned = []
@@ -1554,6 +1555,71 @@ def test_supervisor_profile_scopes_do_not_mix(world):
 
         sup_b.unload()
         sup_a2.unload()
+        for t in spawned:
+            t.cancel()
+        for t in spawned:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(run())
+
+
+def test_supervisor_yields_scope_when_bot_closes(world):
+    """Fatal adapter rebuild: the predecessor's bot is closed before the
+    replacement connects; the old supervisor must release the scope lock
+    so the successor — wired on the new bot — can take over intake."""
+    world.seed()
+    world.dispatch()
+    spawned = []
+
+    class FakeCtx:
+        def spawn_task(self, coro, *, name=None):
+            t = asyncio.ensure_future(coro)
+            spawned.append(t)
+            return t
+
+        def on_unload(self, cb):
+            self._unload = cb
+
+    def _sup(bot):
+        return tasks.Supervisor(
+            ctx=FakeCtx(), bot=bot,
+            settings={**SETTINGS, "data_root": str(world.data),
+                      "profile": "mcs"},
+            log=lambda e, **f: world.logs.append((e, f)))
+
+    async def run():
+        closed = {"a": False}
+        bot_a = FakeBot()
+        bot_a.is_closed = lambda: closed["a"]
+        sup_a = _sup(bot_a)
+        assert sup_a.start()
+        async def ready():
+            while not bot_a.listeners:
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(ready(), 5)
+
+        # fatal adapter error path: host closes the old client, then a
+        # rebuilt adapter wires a successor on the new bot
+        closed["a"] = True
+        bot_b = FakeBot()
+        sup_b = _sup(bot_b)
+        assert sup_b.start()
+
+        # predecessor notices the closed client and releases the lock;
+        # the successor waits out the handoff and takes over intake
+        await asyncio.wait_for(spawned[0], 10)
+        async def taken_over():
+            while not bot_b.listeners:
+                await asyncio.sleep(0.05)
+        await asyncio.wait_for(taken_over(), 10)
+        assert len(bot_b.listeners) == 1
+        assert not bot_a.listeners
+        assert any(e == "bot_closed" for e, _ in world.logs)
+
+        sup_b.unload()
         for t in spawned:
             t.cancel()
         for t in spawned:
