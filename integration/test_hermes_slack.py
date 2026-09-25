@@ -72,6 +72,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     host = SimpleNamespace(name="Slack", platform="slack",
                            _plugin_handler_native=None,
                            _plugin_handlers_wired=None)
+    host._get_client = lambda channel_id, team_id=None: host._plugin_handler_native.client
 
     class NativeClient:
         retry_handlers = []
@@ -190,9 +191,10 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     assert len(fresh_handlers) == 2
 
 
-def test_connected_sdk_client_posts_card_without_retrying(tmp_path, monkeypatch):
-    """The actual Hermes SDK client must work without mutating shared retries."""
+def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, monkeypatch):
+    """Hermes's workspace lookup selects the secondary SDK client without retrying."""
     from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
+    from plugins.platforms.slack.adapter import SlackAdapter
     from slack_sdk.web import async_base_client
     from slack_sdk.web.async_client import AsyncWebClient
 
@@ -215,8 +217,12 @@ def test_connected_sdk_client_posts_card_without_retrying(tmp_path, monkeypatch)
     client = AsyncWebClient(token="xoxb-synthetic")
     original_handlers = client.retry_handlers
     assert original_handlers
+    native_adapter = object.__new__(SlackAdapter)
+    native_adapter._team_clients = {"T_SYNTHETIC": client}
+    native_adapter._channel_team = {}
+    native_adapter._app = SimpleNamespace(client=object())
     adapter = SlackCardAdapter(
-        SimpleNamespace(client=client),
+        native_adapter._app, native_adapter=native_adapter,
         team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
         channel_id="C_SYNTHETIC", profile="cco",
         allowed_user_ids={"U_OPERATOR"},

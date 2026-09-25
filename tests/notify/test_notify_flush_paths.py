@@ -140,6 +140,38 @@ def test_media_path_aliases_extensionless_files(tmp_path):
     assert notify_flush._media_path("x.png", str(src) + ".jpg") == str(src) + ".jpg"
 
 
+@pytest.mark.parametrize("alias_kind", ["old_hardlink", "copy", "symlink", "copy_fallback"])
+def test_upload_alias_uses_verified_payload_after_replacement(tmp_path, monkeypatch, alias_kind):
+    source = tmp_path / "42"
+    source.write_bytes(b"previous-payload")
+    alias = tmp_path / "42.pdf"
+    other = tmp_path / "unrelated"
+    other.write_bytes(b"not-an-attachment")
+    if alias_kind == "old_hardlink":
+        os.link(source, alias)
+    elif alias_kind in ("copy", "copy_fallback"):
+        alias.write_bytes(b"previous-payload")
+    else:
+        alias.symlink_to(other)
+    replacement = tmp_path / "42.part"
+    replacement.write_bytes(b"verified-current-payload")
+    os.replace(replacement, source)
+    if alias_kind == "copy_fallback":
+        def no_hardlinks(*args):
+            raise OSError("synthetic unsupported hardlinks")
+        monkeypatch.setattr(notify_flush.os, "link", no_hardlinks)
+    files = notify_flush._collect_files({1: [{
+        "state": "downloaded", "local_path": str(source), "name": "a.pdf",
+        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }]}, [1])
+
+    body = notify_flush._compose_body("synthetic", files)
+    upload = Path(body.split("\nMEDIA:", 1)[1])
+    assert upload.read_bytes() == source.read_bytes()
+    assert not upload.is_symlink()
+    assert other.read_bytes() == b"not-an-attachment"
+
+
 def test_send_writes_media_tags_with_extension(tmp_path, monkeypatch):
     """_send must emit MEDIA: lines on the aliased (extension-carrying)
     path so the platform upload keeps a real filename."""

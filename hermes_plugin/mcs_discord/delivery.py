@@ -9,6 +9,7 @@ companion-thread body post.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 
 from ..mcs_delivery import envelopes, registry, text, worker
 from . import cards
@@ -131,13 +132,19 @@ class DeliveryWorker(worker.DeliveryWorker):
             return
         if dedupe:
             try:
-                posted = {m.content
-                          async for m in thread.history(limit=100)}
+                posted = Counter(
+                    [m.content async for m in thread.history(limit=100)])
             except Exception as exc:
                 self._log("thread_body_failed",
                           error=type(exc).__name__)
                 return
-            chunks = [c for c in chunks if c not in posted]
+            missing = []
+            for chunk in chunks:
+                if posted[chunk]:
+                    posted[chunk] -= 1
+                else:
+                    missing.append(chunk)
+            chunks = missing
             if not chunks:
                 self._log("thread_body_skipped", reason="already_posted")
                 return

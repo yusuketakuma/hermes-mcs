@@ -56,8 +56,11 @@ class SlackCardAdapter:
     """An inert native-client adapter until explicitly bound and called."""
 
     def __init__(self, app, *, team_id, application_id, channel_id,
-                 profile, allowed_user_ids):
-        self._client = app.client
+                 profile, allowed_user_ids, native_adapter=None):
+        # Hermes keeps one native client per workspace; app.client is only
+        # the first workspace's client when several bot tokens are connected.
+        self._client = (native_adapter._get_client(channel_id, team_id=team_id)
+                        if native_adapter is not None else app.client)
         self._team_id = team_id
         self._application_id = application_id
         self._channel_id = channel_id

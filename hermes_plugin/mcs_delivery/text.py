@@ -46,23 +46,41 @@ def split_body(text: str, limit: int = BODY_CHUNK) -> list:
     """Split a full-text answer on line boundaries into <=limit chunks,
     hard-wrapping overlong lines. Bounded so a huge body stays a few
     ephemeral messages, never a flood."""
+    if limit <= 0:
+        raise ValueError("chunk_limit_must_be_positive")
     out, cur = [], ""
-    for line in text.split("\n"):
-        while len(line) > limit:
+    start = 0
+    while start <= len(text):
+        # Look only as far as one chunk. Long lines and discarded tails
+        # must not be copied or split after the output budget is filled.
+        end = text.find("\n", start, start + limit + 1)
+        if end < 0 and len(text) - start > limit:
             if cur:
                 out.append(cur)
                 cur = ""
-            out.append(line[:limit])
-            line = line[limit:]
+                if len(out) == BODY_MAX_CHUNKS:
+                    return out
+            out.append(text[start:start + limit])
+            if len(out) == BODY_MAX_CHUNKS:
+                return out
+            start += limit
+            continue
+        if end < 0:
+            end = len(text)
+        line = text[start:end]
+        start = end + 1
         cand = (cur + "\n" + line) if cur else line
         if len(cand) > limit:
             out.append(cur)
+            if len(out) == BODY_MAX_CHUNKS:
+                return out
             cur = line
         else:
             cur = cand
     if cur or not out:
         out.append(cur)
-    return out[:BODY_MAX_CHUNKS]
+    return out
+
 
 
 def body_messages(result: dict) -> list:

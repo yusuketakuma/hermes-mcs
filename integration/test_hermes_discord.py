@@ -7,11 +7,13 @@ import json
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
+import discord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'mcs'))
 import _mcs_path  # noqa: F401  registers every subdir as import root
@@ -21,7 +23,7 @@ from mcs_adapter import Message
 import job_ops
 import semantic
 import semantic_loops
-from gateway.config import Platform, PlatformConfig
+from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.run import GatewayRunner
 from gateway.run_inbound import GatewayInboundMixin
 from gateway.platforms.event import MessageEvent, MessageType
@@ -73,6 +75,7 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         guild_id=None, user=SimpleNamespace(id=42, display_name='synthetic', bot=False))
     runner = object.__new__(GatewayRunner)
     runner._draining = False
+    runner.config = GatewayConfig(platforms={Platform.DISCORD: adapter.config})
     runner._hm_quick_commands = lambda: {}
     runner.adapters = {Platform.DISCORD: adapter}
     monkeypatch.setenv('DISCORD_ALLOWED_USERS', '42')
@@ -80,9 +83,33 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
     monkeypatch.setenv('GATEWAY_ALLOW_ALL_USERS', 'false')
     monkeypatch.delenv('GATEWAY_ALLOWED_USERS', raising=False)
 
-    async def invoke(payload, *, internal=False, bot_message=False):
+    async def invoke(payload, *, internal=False, bot_message=False, native_source='slash'):
         text = '/mcs ' + json.dumps(payload)
         event = adapter._build_slash_event(interaction, text)
+        if native_source in {'message', 'forwarded', 'recovered'}:
+            channel = object.__new__(discord.DMChannel)
+            channel.id = interaction.channel_id
+            captured = []
+
+            async def capture(event):
+                captured.append(event)
+
+            message = SimpleNamespace(
+                id=interaction.id, channel=channel, author=SimpleNamespace(
+                    id=42, name='synthetic', display_name='synthetic', bot=False),
+                content='' if native_source == 'forwarded' else text,
+                message_snapshots=[SimpleNamespace(content=text, attachments=[])]
+                    if native_source == 'forwarded' else [],
+                attachments=[], mentions=[], reference=None, guild=None,
+                created_at=datetime.now(timezone.utc))
+            monkeypatch.setattr(adapter, 'handle_message', capture)
+            assert await adapter._handle_message(message, recovered=native_source == 'recovered')
+            event, = captured
+        elif native_source == 'rewritten':
+            event = adapter._build_slash_event(interaction, '/status')
+            event.text = text
+        elif native_source == 'unmarked':
+            event = MessageEvent(text=text, source=event.source)
         if bot_message:
             # Normal Discord messages carry is_bot through build_source;
             # native slash interactions do not populate that field.
@@ -105,6 +132,7 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
     try:
         status = await invoke({'op': 'status', 'project_id': 1})
         assert status['ok'], status
+        assert (await invoke({'op': 'status', 'project_id': 1}, native_source='message'))['ok']
         preview = await invoke({'op': 'request', 'phase': 'preview', 'action': 'create',
                                 'project_id': 1, 'source_message_id': 1,
                                 'title': 'Synthetic explicitly approved task',
@@ -114,6 +142,9 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         assert preview['ok'] and not list(inbox.iterdir())
         confirmation = {key: preview[key] for key in ('payload', 'payload_hash', 'origin')}
         confirmation.update(op='request', phase='confirm')
+        for native_source in ('forwarded', 'recovered', 'rewritten', 'unmarked'):
+            assert not (await invoke(confirmation, native_source=native_source))['ok'], native_source
+            assert not list(inbox.iterdir()), native_source
         assert not (await invoke(confirmation, internal=True))['ok']
         monkeypatch.setenv('DISCORD_ALLOWED_USERS', '43')
         assert not (await invoke(confirmation))['ok']  # current Hermes allowlist is rechecked
@@ -234,3 +265,5 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         assert comparison['result']['candidate']['adopted']
     finally:
         db.close()
+        if executor := getattr(runner, '_executor', None):
+            executor.shutdown(wait=True)

@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 
 import mcs_signals
@@ -545,15 +546,23 @@ def _media_path(name: str, path: str) -> str:
             or os.path.splitext(path)[1]):
         return path
     alias = path + ext
-    if os.path.exists(alias):
-        return alias
     try:
-        os.link(path, alias)
+        if (not os.path.islink(alias) and os.path.exists(alias)
+                and os.path.samefile(path, alias)):
+            return alias
+        # A re-download atomically replaces the source inode. Reusing its
+        # old alias would bypass the source's hash check and upload stale
+        # bytes; replacing the alias also avoids following a planted link.
+        with tempfile.TemporaryDirectory(
+                prefix=".media-", dir=os.path.dirname(os.path.abspath(path))) as work:
+            prepared = os.path.join(work, "attachment")
+            try:
+                os.link(path, prepared)
+            except OSError:
+                shutil.copy2(path, prepared)
+            os.replace(prepared, alias)
     except OSError:
-        try:
-            shutil.copy2(path, alias)
-        except OSError:
-            return path
+        return path
     return alias
 
 

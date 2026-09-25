@@ -1174,8 +1174,7 @@ def test_notification_receipt_reader(led, tmp_path):
         assert r["error"] == "actor_mismatch"
         # correct actor + scope passes
         r = view.notification_receipt(cid, context={
-            "actor": "nurse-1", "application_id": "app1",
-            "channel_id": "ch1", "projects": [1]})
+            **SCOPE, "actor": "nurse-1", "projects": [1]})
         assert r["outcome"] == "applied"
         # profile/guild are part of the delivery scope too — a caller
         # from another deployment profile sees nothing
@@ -1191,8 +1190,7 @@ def test_notification_receipt_reader(led, tmp_path):
         assert r["error"] == "scope_mismatch"
         # a receipt whose projects exceed the caller's set is refused
         r = view.notification_receipt(cid, context={
-            "actor": "nurse-1", "application_id": "app1",
-            "channel_id": "ch1", "projects": []})
+            **SCOPE, "actor": "nurse-1", "projects": []})
         assert r["error"] == "project_scope_mismatch"
     finally:
         view.close()
@@ -1215,7 +1213,7 @@ def test_card_resolve_receipt_is_operator_only(led, tmp_path):
     try:
         # operator context sees the resolve receipt
         r = view.notification_receipt(cid, context={
-            "actor": "op-user", "operator": True, "projects": [1]})
+            **SCOPE, "actor": "op-user", "operator": True, "projects": [1]})
         assert r["outcome"] == "applied"
         # a non-operator plugin context is refused
         r = view.notification_receipt(cid, context={

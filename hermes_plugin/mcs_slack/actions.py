@@ -62,6 +62,7 @@ class Actions:
         self._sender = sender
         self._log = log
         self._active = False
+        self._followup_cursor = 0
 
     def register(self):
         """Attach native Bolt handlers after scope lock and workspace bind."""
@@ -333,7 +334,15 @@ class Actions:
         """Deliver at most 32 ready results to the original user."""
         if not self._active:
             return
-        for cid, rec in list(self._reg.followups().items())[:32]:
+        followups = list(self._reg.followups().items())
+        if not followups:
+            self._followup_cursor = 0
+            return
+        start = self._followup_cursor % len(followups)
+        count = min(32, len(followups))
+        self._followup_cursor = (start + count) % len(followups)
+        for offset in range(count):
+            cid, rec = followups[(start + offset) % len(followups)]
             if self._reg.followup(cid) is None:
                 continue
             origin = rec["origin"]

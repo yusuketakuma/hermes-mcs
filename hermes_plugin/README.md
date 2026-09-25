@@ -2,6 +2,10 @@
 
 既存Hermesのnative Discord受信とallowlistを使う独立plugin。Hermes側には
 optional `command_context` とnative入力provenanceの対応が必要。
+セットアップで bot token を保存する場合は `hermes config set --stdin` の対応も必要。
+未対応版で秘密値を引数に渡すfallbackは行わない。これらの対応を含むHermes版を
+用意し、配布時には検証したcommitを固定する。手元の未コミット差分の成功だけで、
+既存の固定pinが対応済みとは扱わない。
 モデルtoolや任意shellは登録せず、`/mcs <JSON>` だけを登録する。
 
 現状の範囲はstatus、snapshot閲覧、正式依頼と限定運用操作のpreview/confirm、receipt閲覧。
@@ -11,7 +15,7 @@ Loop候補の採用も既存requestのpreview/confirmを使う。
 
 MCS checkout全体を読める配置で、対象Hermes profileの`plugins/mcs-discord-commands`を
 この`hermes_plugin`ディレクトリへのsymlinkにする。pluginだけをコピーすると
-隣の`adapter`を参照できない。snapshotは公開済みread-only copy、inboxは既存の限定
+隣の`mcs/`を参照できない。snapshotは公開済みread-only copy、inboxは既存の限定
 書込ディレクトリを指定する。原本DB・backup・credentialsは公開しない。
 
 設定例（値は合成値。実際の許可scopeへ置き換える）：

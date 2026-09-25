@@ -126,6 +126,32 @@ def test_body_goes_only_to_original_user_after_runner_result(tmp_path):
     asyncio.run(scenario())
 
 
+def test_ready_followup_behind_pending_batch_is_delivered(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path)
+        origin = {**SCOPE, "message_id": TS}
+        for index in range(32):
+            cid = f"pending-{index}"
+            reg.put_followup(cid, {
+                "kind": "action", "request_id": cid, "origin": origin,
+                "actor": "slack:T_SYNTHETIC:U_OPERATOR",
+                "token": TOKEN, "user": "U_OPERATOR"})
+        reg.put_followup("ready", {
+            "kind": "action", "request_id": "ready", "origin": origin,
+            "actor": "slack:T_SYNTHETIC:U_OPERATOR",
+            "token": TOKEN, "user": "U_OPERATOR"})
+        result(dirs, "ready", request_id="ready", outcome="applied",
+               action="body", body="READY-SYNTHETIC")
+
+        await actions.sweep_followups()
+        await actions.sweep_followups()
+
+        assert len(app.client.messages) == 1
+        assert "READY-SYNTHETIC" in app.client.messages[0]["text"]
+        assert "ready" not in reg.followups()
+    asyncio.run(scenario())
+
+
 def test_pending_body_is_not_sent_after_user_loses_access(tmp_path):
     async def scenario():
         old, app, reg, dirs = fixture(tmp_path)

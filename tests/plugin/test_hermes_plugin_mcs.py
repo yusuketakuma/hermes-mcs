@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -11,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import hermes_plugin
+from hermes_plugin import projects
 import job_ops
 import ledger
 import mcs_requests
@@ -99,6 +102,29 @@ def test_native_identity_and_scope_fail_closed(tmp_path):
         "ok": False, "error": "project_not_allowed"}
     assert _call(handler, {**command, "actor": "self-declared"}, _context()) == {
         "ok": False, "error": "unknown_field"}
+
+
+def test_auto_project_scope_tracks_snapshot_replacement(tmp_path):
+    snapshot = tmp_path / "snapshot.db"
+
+    def publish(project_id, dest):
+        db = sqlite3.connect(dest)
+        try:
+            db.execute("CREATE TABLE patients (project_id INTEGER)")
+            db.execute("INSERT INTO patients VALUES (?)", (project_id,))
+            db.commit()
+        finally:
+            db.close()
+
+    publish(1, snapshot)
+    settings = {"project_ids": set(), "project_ids_auto": True,
+                "snapshot": str(snapshot)}
+    assert projects.project_allowed(settings, 1)
+    replacement = tmp_path / "replacement.db"
+    publish(2, replacement)
+    os.replace(replacement, snapshot)
+    assert not projects.project_allowed(settings, 1)
+    assert projects.project_allowed(settings, 2)
 
 
 def test_snapshot_read_preview_confirm_and_receipt_pipeline(tmp_path):

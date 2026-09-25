@@ -7,22 +7,28 @@ too — a newly admitted patient works without a config edit, while an
 id that is not a real MCS project still fails closed. The snapshot
 set is cached briefly so every click does not reopen SQLite.
 """
+import os
 import sqlite3
 import time
-import urllib.parse
+from urllib.parse import quote
 
 _TTL_S = 120.0
-_cache: dict[str, tuple[float, frozenset]] = {}
+_cache: dict[str, tuple[float, tuple[int, int, int, int], frozenset[int]]] = {}
 
 
-def _snapshot_projects(path: str) -> frozenset | None:
+def _snapshot_projects(path: str) -> frozenset[int] | None:
     now = time.monotonic()
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    generation = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
     hit = _cache.get(path)
-    if hit and now - hit[0] < _TTL_S:
-        return hit[1]
+    if hit and hit[1] == generation and now - hit[0] < _TTL_S:
+        return hit[2]
     try:
         db = sqlite3.connect(
-            f"file:{urllib.parse.quote(path)}?mode=ro", uri=True)
+            f"file:{quote(path)}?mode=ro", uri=True)
         try:
             rows = db.execute("SELECT project_id FROM patients").fetchall()
         finally:
@@ -30,7 +36,7 @@ def _snapshot_projects(path: str) -> frozenset | None:
     except sqlite3.Error:
         return None
     out = frozenset(r[0] for r in rows)
-    _cache[path] = (now, out)
+    _cache[path] = (now, generation, out)
     return out
 
 

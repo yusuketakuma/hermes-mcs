@@ -459,6 +459,8 @@ class View:
                     meta = json.loads(r["meta"] or "{}")
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
                 try:
                     content = json.loads(r["content"])
                 except (json.JSONDecodeError, TypeError):
@@ -671,8 +673,7 @@ class View:
         scope = receipt.get("origin") or receipt.get("scope") or {}
         for key in ("application_id", "channel_id", "guild_id",
                     "profile"):
-            if scope.get(key) and context.get(key) \
-                    and scope[key] != context[key]:
+            if scope.get(key) and scope[key] != context.get(key):
                 return {"outcome": "rejected", "error": "scope_mismatch"}
         allowed = set(context.get("projects") or [])
         want = set(receipt.get("projects") or [])
