@@ -486,8 +486,10 @@ class View:
         """Name -> facility directory for this room — pharmacy staff
         link by their pharmacy name in ``organization``."""
         from mcs_queries import staff_directory
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("bad_limit")
         rows = staff_directory(self.db, pid)
-        return {"items": [dict(r) for r in rows[:max(1, min(limit, 200))]]}
+        return {"items": [dict(r) for r in rows[:limit]]}
 
     def _loops(self, pid, limit):
         """Open-Loop candidates + their relation events. Candidates are

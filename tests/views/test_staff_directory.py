@@ -94,4 +94,8 @@ def test_staff_read_kind(tmp_path):
     assert "薬局 花子" in names
     item = next(i for i in out["items"] if i["sender_name"] == "薬局 花子")
     assert item["organization"] == "テスト薬局"
+    import pytest
+    for bad in (0, 201, "5", 1.5):
+        with pytest.raises(ValueError, match="bad_limit"):
+            view.read("staff", project=1, limit=bad)
     db.close()
