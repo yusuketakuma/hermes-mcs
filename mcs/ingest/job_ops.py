@@ -275,6 +275,11 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
         m.replies = list(merged.values())
         if len(got) < m.reply_count:
             result.checkpoint_safe = False
+            if ledger:
+                # Missing reply ids cannot be queued individually; retry
+                # the thread until its advertised count is accounted for.
+                ledger.job_add("thread", m.project_id, message_id=m.message_id,
+                               parent_id=m.message_id, payload={"page": 1})
         if ledger:
             for t in merged.values():
                 if (t.message_id not in got
@@ -386,7 +391,23 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             result.setdefault("reply_windows", []).append(
                 {"mid": job["message_id"], "next_page": next_page})
         elif job["kind"] == "thread":
-            ledger.job_done(job["job_id"])
+            parent = ledger.db.execute(
+                "SELECT reply_count FROM messages "
+                "WHERE project_id=? AND message_id=?",
+                (job["project_id"], job["parent_id"])).fetchone()
+            complete = ledger.db.execute(
+                "SELECT COUNT(*) FROM messages "
+                "WHERE project_id=? AND parent_id=? "
+                "AND body_state IN ('full','deleted')",
+                (job["project_id"], job["parent_id"])).fetchone()[0]
+            if parent and complete < (parent["reply_count"] or 0):
+                pl["page"] = 1
+                ledger.job_defer(job["job_id"], 0, payload=pl)
+                ledger.job_retry(job["job_id"])
+                result["errors"].append(
+                    f"thread {job['parent_id']}: replies_missing")
+            else:
+                ledger.job_done(job["job_id"])
         else:
             # An incomplete target on an earlier page must be revisited
             # on the next attempt, not retried forever at the tail.
@@ -498,7 +519,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             if isinstance(batch.error, SessionExpired):
                 ledger.job_defer(job["job_id"], 300, payload=pl)
             else:
-                ledger.job_retry(job["job_id"], 300)
+                ledger.job_retry(job["job_id"], 300, payload=pl)
         elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
             # window can never certify (e.g. 'snippet' parent whose full
             # body has no API surface) — fail visibly; the job is still

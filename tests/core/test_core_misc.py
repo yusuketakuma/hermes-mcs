@@ -666,6 +666,50 @@ def test_prune_removes_alias_and_keeps_pending_refs(tmp_path):
     db.close()
 
 
+def test_prune_removes_alias_from_previous_attachment_name(tmp_path):
+    import maintenance
+    db = _ledger(tmp_path)
+    path = tmp_path / "1"
+    path.write_bytes(b"synthetic")
+    alias = tmp_path / "1.pdf"
+    os.link(path, alias)
+    db.db.execute(
+        "INSERT INTO attachments(attachment_id,message_id,name,"
+        "local_path,state,downloaded_at) "
+        "VALUES(1,10,'renamed.txt',?,'downloaded',?)",
+        (str(path), time.time() - maintenance.ATTACHMENT_KEEP_S - 1))
+    db.db.commit()
+
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
+    assert not path.exists() and not alias.exists()
+    db.close()
+
+
+def test_preupdate_backups_in_same_second_keep_both_generations(
+        tmp_path, monkeypatch):
+    import maintenance
+    source = tmp_path / "ledger.db"
+    db = ledger.Ledger(str(source))
+    db.ensure_patient(1)
+    db.close()
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(maintenance.time, "strftime",
+                        lambda _fmt: "20260925-010203")
+
+    first = maintenance.preupdate_backup(str(source))
+    db = ledger.Ledger(str(source))
+    db.ensure_patient(2)
+    db.close()
+    second = maintenance.preupdate_backup(str(source))
+
+    assert first != second
+    assert maintenance.valid_mcs_db(first)
+    assert maintenance.valid_mcs_db(second)
+    with sqlite3.connect(first) as older, sqlite3.connect(second) as newer:
+        assert older.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
+        assert newer.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 2
+
+
 # ---------- F21: resident-writer log rotation ----------
 
 

@@ -452,7 +452,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
         result.setdefault("self_probe_fetched", []).append(pid)
         # A page-limited walk has not established that the latest id is
         # unfetchable. Only a completed walk may suppress later probes.
-        if not batch.error and batch.reached:
+        if not batch.error and batch.reached and merged.checkpoint_safe:
             ledger.set_probe_marker(pid, mid)
         elif not batch.error and not ledger.has_message(mid):
             result["errors"].append(f"probe {pid}: history_incomplete")
@@ -847,14 +847,7 @@ def main() -> int:
                 or result.get("notify", {}).get("skipped"):
             result["errors"].append("notify_incomplete")
 
-        # stage-level status: ANY recorded error or unfilled stage means the
-        # run was not clean — silent ok on partial work is the failure mode
-        # being removed (Oracle B18)
-        status = "ok" if not result["errors"] and not result["incomplete"] \
-            else "partial"
         result["ok"] = True
-        ledger.finish_run(run_id, status,
-                          "; ".join(result["errors"][:8]))
         try:
             # last-chance drain: interactions queued while this tick ran
             notify_cmds.drain_int_commands(
@@ -863,6 +856,12 @@ def main() -> int:
             notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
         except Exception as e:
             result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
+        # Tail command failures must be included in the recorded run
+        # before its read-only snapshot is published.
+        status = "ok" if not result["errors"] and not result["incomplete"] \
+            else "partial"
+        ledger.finish_run(run_id, status,
+                          "; ".join(result["errors"][:8]))
         try:
             result["snapshot"] = maintenance.publish_snapshot(DB)
             if result["snapshot"]:

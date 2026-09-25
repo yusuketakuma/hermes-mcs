@@ -1231,7 +1231,11 @@ class Ledger:
         self.db.commit()
 
     def job_retry(self, job_id: int, retry_in: float = 300,
-                  max_attempts: int = 8):
+                  max_attempts: int = 8, *, payload: dict | None = None):
+        if payload is not None:
+            self.db.execute(
+                "UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                (json.dumps(payload), job_id))
         self.db.execute(
             "UPDATE fetch_jobs SET attempts=attempts+1,next_try=?,updated_at=? "
             "WHERE job_id=?", (time.time() + retry_in, time.time(), job_id))
@@ -1522,7 +1526,8 @@ class Ledger:
         return self.db.execute("""
           SELECT m.message_id,m.project_id,m.parent_id FROM messages m
           WHERE m.parent_id IS NOT NULL
-            AND m.body_state NOT IN ('full','deleted')
+            AND (m.body_state IS NULL
+                 OR m.body_state NOT IN ('full','deleted'))
             AND NOT EXISTS(SELECT 1 FROM fetch_jobs j
               WHERE j.kind='reply' AND j.project_id=m.project_id
                 AND j.message_id=m.message_id)
@@ -1862,12 +1867,38 @@ def valid_mcs_db(path: str) -> bool:
     uri = Path(path).resolve().as_uri() + "?mode=ro&immutable=1"
     try:
         db = sqlite3.connect(uri, uri=True)
-        ok = db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-        journal = db.execute("PRAGMA journal_mode").fetchone()[0]
-        tables = {r[0] for r in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
-        db.close()
-        return ok and journal == "delete" \
-            and {"runs", "patients", "messages"} <= tables
+        try:
+            if db.execute("PRAGMA quick_check").fetchone()[0] != "ok" \
+                    or db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                return False
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if not 0 <= version <= SCHEMA_VERSION:
+                return False
+            tables = {r[0] for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            # _migrate_body adds derived columns, not these source fields.
+            # Older backups may lack tables that _init creates on reopen.
+            core_columns = {
+                "runs": {"run_id", "started_at", "finished_at",
+                         "snapshot_ts", "status", "error"},
+                "patients": {"project_id", "project_type", "patient_name",
+                             "disease", "station_name", "url", "last_seen"},
+                "messages": {"message_id", "project_id", "parent_id",
+                             "sender_id", "sender_name", "sender_type",
+                             "profession", "organization", "posted_at",
+                             "body_html", "reply_count", "first_seen"},
+            }
+            if not core_columns.keys() <= tables:
+                return False
+            if version >= 5 and not {
+                    "attachments", "notify_outbox", "read_marks",
+                    "artifacts", "fetch_jobs"} <= tables:
+                return False
+            return all(
+                required <= {row[1] for row in db.execute(
+                    f"PRAGMA table_info({table})")}
+                for table, required in core_columns.items())
+        finally:
+            db.close()
     except (OSError, sqlite3.DatabaseError):
         return False

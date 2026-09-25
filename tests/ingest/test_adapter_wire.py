@@ -416,6 +416,15 @@ def test_ws_handshake_rejects_wrong_accept():
         raise AssertionError("wrong Accept must be refused")
 
 
+def test_ws_constructor_closes_socket_after_failed_handshake(monkeypatch):
+    sock = _FakeSock(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    monkeypatch.setattr(mcs_adapter.socket, "create_connection",
+                        lambda *args, **kwargs: sock)
+    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_handshake"):
+        mcs_adapter._WSConn("ws://127.0.0.1:9222/x", 5)
+    assert sock.closed
+
+
 def test_ws_recv_reassembles_fragments_and_answers_ping():
     payload = _ws_frame(b'{"id":1,"par', fin=False) \
         + _ws_frame(b"ping!", opcode=0x9) \
@@ -451,6 +460,29 @@ def test_ws_recv_close_and_oversize_fail():
 
 def test_ws_recv_rejects_masked_server_frames():
     conn = _ws_conn(_ws_frame(b'{"id":1}', mask=True))
+    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
+        conn.recv_message()
+
+
+@pytest.mark.parametrize("prefix,opcode", [(b"", 0x1),
+                          (_ws_frame(b"12345678", fin=False), 0x0)])
+def test_ws_rejects_oversize_from_header_before_reading_body(prefix, opcode):
+    # No payload follows the advertised length: rejecting before reading it
+    # prevents both unbounded buffering and waiting for an impossible frame.
+    conn = _ws_conn(prefix + bytes([0x80 | opcode, 127])
+                    + (11).to_bytes(8, "big"))
+    conn._MAX_MSG = 16 if prefix else 10
+    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_too_large"):
+        conn.recv_message()
+
+
+@pytest.mark.parametrize("opcode,fin,length", [(0x9, True, 126),
+                                               (0x9, False, 1),
+                                               (0xA, True, 126),
+                                               (0x8, True, 126)])
+def test_ws_rejects_invalid_control_frame_before_reading_body(opcode, fin, length):
+    head = bytes([(0x80 if fin else 0) | opcode, 126])
+    conn = _ws_conn(head + length.to_bytes(2, "big"))
     with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_protocol"):
         conn.recv_message()
 
@@ -995,6 +1027,7 @@ def test_fetch_latest_no_newer_message():
     {"message": {"id": 0}},
     {"message": {"id": None}},
     {"message": "not-a-dict"},
+    {"message": []},
     {"is_self_only": "yes", "message": None},
 ])
 def test_fetch_latest_rejects_malformed(response):
