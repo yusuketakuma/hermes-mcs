@@ -32,11 +32,12 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 ## 構成
 
 - `mcs/` — 実行モジュール。**flat import維持のまま第一層サブディレクトリに分割**:
-  `core/`(ledger・mcs_util・init_data・local_llm・maintenance) ·
-  `ingest/`(mcs_adapter・mcs_transport・job_ops・notifier・run_check) ·
+  `core/`(ledger・mcs_util・mcs_queries・local_llm・maintenance・bounded_http) ·
+  `ingest/`(mcs_adapter・mcs_worker・job_ops・run_check・init_data) ·
+  `notify/`(notify_flush・notify_cards・notify_cmds・notify_render・notify_transport) ·
   `extract/`(extract・extract_llm・extract_bench・rollup) ·
-  `semantic/`(semantic.py + semantic_* 20本) ·
-  `views/`(読み取り専用: mcs_view・mcs_stats・mcs_queries・summary_review・structured_view) ·
+  `semantic/`(semantic.py + semantic_* 群) ·
+  `views/`(読み取り面: mcs_view・mcs_stats・summary_review・structured_view) ·
   `ops/`(書き込み系: mcs_requests・mcs_operations・mcs_signals・mcs_setup・
   mcs_update・mcs_refstats・request_loops・brain_export)
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
@@ -48,7 +49,9 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   テスト間ヘルパーimportを維持 + socket 遮断ガード）
 - `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
   rehearsal結果）
-- `hermes_plugin/` · `integration/`(hermes E2E) · `deployment/` · `docs/`
+- `hermes_plugin/` — `mcs_discord/`(Discord worker) · `mcs_slack/`(Slack worker) ·
+  `mcs_delivery/`(transport中立の配送基盤: paths・journal・registry・envelopes・spec・text・worker) ·
+  `card_workers.py`(worker 設定解決・factory) · `projects.py` · `integration/`(hermes E2E) · `deployment/` · `docs/`
 - `scripts/` — `run_tests.sh`、`update_readme.py`
 
 ## コマンド
