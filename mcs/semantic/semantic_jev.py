@@ -32,33 +32,37 @@ gate G2 and needs the approved budget): request {"model","state",
 {"input_tokens": ..., "output_tokens": ...}}.
 """
 import argparse
-import base64
 import json
 import math
 import os
 import random
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
-from urllib.parse import urlsplit
 
-from mcs_util import NoRedirect, env_value, no_proxy_opener
+import bounded_http
+from bounded_http import MAX_RESPONSE_BYTES
+from mcs_util import env_value
+
+# The worker execution mechanism (bounded_http_request, the loopback
+# check, the response cap) lives in core/bounded_http.py — this module
+# keeps only the Jev-side policy: which endpoints a key may be sent to.
+# bounded_http_request stays re-exported here for backward compatibility
+# and so the tests' live-endpoint guard keeps a stable patch surface.
+bounded_http_request = bounded_http.bounded_http_request
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
 JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 JEV_ALLOWED_ENDPOINTS = frozenset({JEV_ENDPOINT})
 REGISTRY_VERSION = "2026-09-20"
-MAX_RESPONSE_BYTES = 262144
 
 # provisional shadow-display thresholds only — never feed these into
 # automatic control decisions (spec §14.2)
@@ -197,200 +201,6 @@ def verdict_for(noul: float, match: float = MATCH_THRESHOLD,
     return "UNDETERMINED"
 
 
-_HTTP_WORKER_ARG = "--http-worker"
-_WORKER_HEADER_NAMES = frozenset({
-    "content-length", "content-type", "retry-after", "transfer-encoding",
-})
-
-
-def _worker_endpoint_allowed(endpoint: str) -> bool:
-    """Keep the private worker limited to the production or loopback URL."""
-    if endpoint in (JEV_ENDPOINT, JEV_MODELS_URL):
-        return True
-    return _loopback_endpoint_allowed(endpoint)
-
-
-def _loopback_endpoint_allowed(endpoint: str) -> bool:
-    """Allow only an unauthenticated HTTP endpoint on loopback."""
-    try:
-        parts = urlsplit(endpoint)
-    except ValueError:
-        return False
-    return (parts.scheme == "http" and parts.hostname in
-            {"127.0.0.1", "localhost", "::1"}
-            and parts.username is None and parts.password is None
-            and not parts.fragment)
-
-
-def _worker_headers(headers) -> dict:
-    return {str(key): str(value) for key, value in headers.items()
-            if str(key).lower() in _WORKER_HEADER_NAMES}
-
-
-def _http_worker_main() -> int:
-    """Read one request from stdin and write one bounded response to stdout.
-
-    The parent process supplies the credential and JSON body through stdin;
-    neither is present in this worker's argv or diagnostics.  The worker is
-    short-lived so urllib DNS and socket timeouts cannot outlive the parent's
-    absolute deadline.
-    """
-    try:
-        envelope = json.loads(sys.stdin.buffer.read().decode("utf-8"))
-        if not isinstance(envelope, dict):
-            raise ValueError("request_invalid")
-        endpoint = envelope.get("endpoint")
-        method = envelope.get("method", "POST")
-        api_key = envelope.get("api_key")
-        timeout = envelope.get("timeout")
-        body = envelope.get("body")
-        if (not isinstance(endpoint, str) or not _worker_endpoint_allowed(endpoint)
-                or method not in ("GET", "POST")
-                or not isinstance(timeout, (int, float))
-                or isinstance(timeout, bool) or not math.isfinite(timeout)
-                or timeout <= 0
-                or (api_key is not None and not isinstance(api_key, str))
-                or (api_key is None and not _loopback_endpoint_allowed(endpoint))):
-            raise ValueError("request_invalid")
-        raw = None if body is None else json.dumps(
-            body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        headers = {"User-Agent": "mcs-adapter-semantic/1.0"}
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-        if raw is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(endpoint, data=raw, method=method,
-                                         headers=headers)
-        opener = no_proxy_opener(NoRedirect)
-        try:
-            response = opener.open(request, timeout=float(timeout))
-        except urllib.error.HTTPError as error:
-            response = error
-        try:
-            payload = response.read(MAX_RESPONSE_BYTES + 1)
-            result = {
-                "ok": True,
-                "status": int(getattr(response, "status",
-                                       getattr(response, "code", 0))),
-                "headers": _worker_headers(response.headers),
-                "body": base64.b64encode(payload).decode("ascii"),
-            }
-        finally:
-            response.close()
-    except Exception as error:
-        reason = getattr(error, "reason", error)
-        if isinstance(reason, ConnectionRefusedError):
-            kind = "connection_refused"
-        elif isinstance(reason, TimeoutError):
-            kind = "timeout"
-        else:
-            kind = "transport"
-        result = {"ok": False, "error": kind}
-    sys.stdout.write(json.dumps(result, separators=(",", ":")))
-    sys.stdout.flush()
-    return 0
-
-
-def _worker_environment() -> dict:
-    """Pass only runtime essentials; credentials remain stdin-only."""
-    allowed = {"PATH", "PYTHONPATH", "PYTHONHOME", "SYSTEMROOT",
-               "LANG", "LC_ALL", "VIRTUAL_ENV"}
-    return {key: value for key, value in os.environ.items()
-            if key in allowed}
-
-
-def bounded_http_request(endpoint: str, method: str, body,
-                         timeout: float, api_key: str | None = None,
-                         deadline: float | None = None):
-    """Make one bounded request through a short-lived, reaped worker.
-
-    Jev calls must use an allowed endpoint and carry their API key.  The
-    local-model entry point passes ``api_key=None`` and is restricted to an
-    unauthenticated loopback URL.  Request bodies and credentials are sent
-    through stdin only; the worker follows neither proxies nor redirects and
-    returns at most ``MAX_RESPONSE_BYTES + 1`` bytes so callers can reject an
-    oversized response without retaining an unbounded body.
-    """
-    if not isinstance(endpoint, str) or method not in ("GET", "POST"):
-        raise ValueError("request_invalid")
-    if api_key is None:
-        if not _loopback_endpoint_allowed(endpoint):
-            raise ValueError("local_endpoint_not_allowed")
-    elif (not isinstance(api_key, str)
-          or (endpoint not in JEV_ALLOWED_ENDPOINTS
-              and endpoint not in (JEV_ENDPOINT, JEV_MODELS_URL))):
-        raise ValueError("endpoint_not_allowed")
-    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout) or timeout <= 0):
-        raise ValueError("timeout_invalid")
-    operation_deadline = time.monotonic() + float(timeout)
-    if deadline is not None:
-        if (isinstance(deadline, bool)
-                or not isinstance(deadline, (int, float))
-                or not math.isfinite(deadline)):
-            raise ValueError("deadline_invalid")
-        operation_deadline = min(operation_deadline, float(deadline))
-    remaining = operation_deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("http worker deadline exceeded")
-    envelope = {
-        "endpoint": endpoint,
-        "method": method,
-        "api_key": api_key,
-        "body": body,
-        "timeout": remaining,
-    }
-    payload = json.dumps(envelope, ensure_ascii=False,
-                         allow_nan=False).encode("utf-8")
-    command = [sys.executable, os.path.abspath(__file__), _HTTP_WORKER_ARG]
-    process = subprocess.Popen(
-        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, close_fds=True, env=_worker_environment())
-    try:
-        remaining = operation_deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("http worker deadline exceeded")
-        stdout, _stderr = process.communicate(input=payload, timeout=remaining)
-    except subprocess.TimeoutExpired as error:
-        try:
-            process.kill()
-        finally:
-            process.communicate()
-        raise TimeoutError("http worker deadline exceeded") from error
-    except BaseException:
-        if process.poll() is None:
-            process.kill()
-        try:
-            process.communicate()
-        except Exception:
-            pass
-        raise
-    if time.monotonic() >= operation_deadline:
-        raise TimeoutError("http worker deadline exceeded")
-    if process.returncode != 0:
-        raise OSError("http worker failed")
-    try:
-        result = json.loads(stdout.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as error:
-        raise OSError("http worker protocol failed") from error
-    if not isinstance(result, dict) or not result.get("ok"):
-        if isinstance(result, dict) and result.get("error") == "timeout":
-            raise TimeoutError("http worker timeout")
-        if isinstance(result, dict) and result.get("error") == "connection_refused":
-            raise ConnectionRefusedError("http worker connection refused")
-        raise OSError("http worker transport failed")
-    try:
-        status = int(result["status"])
-        headers = result["headers"]
-        raw = base64.b64decode(result["body"], validate=True)
-    except (KeyError, TypeError, ValueError) as error:
-        raise OSError("http worker response invalid") from error
-    if (status < 100 or status > 599 or not isinstance(headers, dict)
-            or len(raw) > MAX_RESPONSE_BYTES + 1):
-        raise OSError("http worker response invalid")
-    return status, headers, raw
-
-
 class JevClient:
     """Bounded, injectable TypeSafe caller. post_fn(body:dict,
     timeout:float) -> (status:int, headers:dict, raw:bytes) lets tests
@@ -441,10 +251,12 @@ class JevClient:
 
     def _http_request(self, method: str, body, timeout: float,
                       endpoint: str | None = None):
-        return bounded_http_request(
+        return bounded_http.bounded_http_request(
             endpoint or self.endpoint, method, body, timeout,
             api_key=self.api_key if isinstance(self.api_key, str) else "",
-            deadline=self._active_deadline)
+            deadline=self._active_deadline,
+            allowed_endpoints=(JEV_ALLOWED_ENDPOINTS
+                               | {JEV_ENDPOINT, JEV_MODELS_URL}))
 
     def _retry_after(self, headers: dict) -> float | None:
         try:
@@ -801,8 +613,6 @@ def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] == _HTTP_WORKER_ARG:
-        return _http_worker_main()
     ap = argparse.ArgumentParser(
         description="TypeSafe Jev client — wire-contract smoke check")
     ap.add_argument("--smoke", action="store_true",

@@ -33,10 +33,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_util import acquire_run_lock, json_object
-from semantic_llm import _chunks, _locate_quote
+from mcs_util import (acquire_run_lock, json_object, locate_quote_span,
+                      text_chunks)
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -559,7 +560,7 @@ def _validate(d: dict, body: str | None = None,
             # cannot be quote-verified: keep it, mark it (F08)
             item["unverified"] = True
             return
-        span = _locate_quote(body, q) if isinstance(q, str) \
+        span = locate_quote_span(body, q) if isinstance(q, str) \
             and q.strip() and body is not None else None
         if span is None:
             ev_dropped += 1
@@ -978,7 +979,7 @@ def llm_extract(body: str, *, context: str | None = None,
     QC findings on the current extraction — unsupported items to drop
     or re-anchor, applied as a one-shot repair steer.
 
-    Bodies longer than _CHUNK_SIZE are covered in full via _chunks;
+    Bodies longer than _CHUNK_SIZE are covered in full via text_chunks;
     each chunk's output validates against the WHOLE body so evidence
     stays anchored to the real source, then merges deterministically.
     A failed chunk fails the WHOLE message (returns None) — a partial
@@ -998,7 +999,7 @@ def llm_extract(body: str, *, context: str | None = None,
             prompt += (_FEEDBACK_HEAD
                        + "\n".join("- " + x for x in flines) + "\n\n")
     thead = _target_head(posted_at)
-    chunks = _chunks(body, _CHUNK_SIZE)
+    chunks = text_chunks(body, _CHUNK_SIZE)
     saved = chunks_in or {}
     outs = []
     notes = _note_list()
@@ -1155,7 +1156,7 @@ def _llm_up(deadline: float | None = None) -> bool:
     try:
         status, _headers, raw = _opener_request(
             ENDPOINT.split("/v1/")[0] + "/v1/models", "GET", None, 3, deadline)
-        return status == 200 and len(raw) <= local_llm.jev.MAX_RESPONSE_BYTES
+        return status == 200 and len(raw) <= bounded_http.MAX_RESPONSE_BYTES
     except OSError:
         return False
 
@@ -1249,7 +1250,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     """Atomically write the current-version artifact and remove every
     superseded valid-meta row for the message — readers must never see
     two 'current' rows for one body (they disagree: stats scan oldest-
-    first, notifier reads newest-first). Invalid-meta poison rows are
+    first, notify_flush reads newest-first). Invalid-meta poison rows are
     kept: they still gate reprocessing.
 
     `ctx` records whether thread context was supplied: the content hash
@@ -1383,7 +1384,7 @@ def _choose_slot(deadline: float | None = None) -> int:
             base = ENDPOINT.split("/v1/")[0]
             status, _headers, raw = _opener_request(
                 base + "/slots", "GET", None, 2, deadline)
-            if status != 200 or len(raw) > local_llm.jev.MAX_RESPONSE_BYTES:
+            if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
                 return local_llm.request_slot()
             slots = json.loads(raw.decode("utf-8"))
             rt = next((s for s in slots
@@ -1876,7 +1877,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # QC-flagged rows take the single lane — their feedback
             # prompt differs from the shared batch envelope.
             if batch_k >= 2 and qc is None and ctx is None and not saved \
-                    and len(_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
+                    and len(text_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
                 group.append(tup)
                 if len(group) >= batch_k:
                     units.append(("batch", group))

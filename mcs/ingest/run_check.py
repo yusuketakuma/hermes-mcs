@@ -9,7 +9,7 @@ Responsibility split:
 - job_ops.py     : cmd ingest, fetch_jobs drains, discovery, trickle
                    deep-import seeding, thread merge
 - maintenance.py : daily verified backup, log rotation, snapshot publish
-- extract*/rollup/notifier : derived-data + delivery stages
+- extract*/rollup/notify_flush : derived-data + delivery stages
 
 Exit codes:
   0 = run ok (may include per-patient partial failures — see result.errors)
@@ -39,19 +39,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger
-from mcs_util import acquire_run_lock, load_config
+from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
+                      HOME, RUN_LOCK, acquire_run_lock, load_config)
 import job_ops
 import maintenance
-import notifier
+import notify_flush
 
-HOME = os.path.expanduser("~/.mcs")
-DB = os.path.join(HOME, "data", "ledger.db")
-CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
+# canonical path constants live in mcs_util; the local aliases keep the
+# module attribute names (monkeypatch surface for tests) unchanged
+LOCKFILE = RUN_LOCK
 ATTACH_DIR = os.path.join(HOME, "data", "attachments")
-LOCKFILE = os.path.join(HOME, "data", "run.lock")
-CONF_PATH = os.path.join(HOME, "config.json")
-CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
-CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
@@ -564,7 +561,7 @@ def _commands_only(lock_fd, deadline) -> int:
     queue — operator card_resolve lives there) and data/cmd_int, repairs
     published state, and refreshes the snapshot when notification
     receipts/renders dirtied it. Deliberately no adapter, no auth, no
-    ingest, no derive, no notifier flush, no health write — it exists so
+    ingest, no derive, no notify_flush run, no health write — it exists so
     a card interaction never waits a whole tick (RC05/RC20)."""
     import notify_cards
     import notify_cmds
@@ -797,7 +794,7 @@ def main() -> int:
         # later tick
         if not args.no_notify:
             try:
-                result["notify"] = notifier.flush(ledger, deadline=deadline)
+                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
             except Exception as e:
                 result["errors"].append(f"notify: {type(e).__name__}")
         try:
@@ -831,6 +828,8 @@ def main() -> int:
         # -- housekeeping ------------------------------------------------
         try:
             maintenance.daily_backup(DB)
+        except maintenance.MaintenanceError as e:
+            result["errors"].append(f"backup: {e}")
         except Exception as e:
             result["errors"].append(f"backup: {type(e).__name__}")
         try:
@@ -882,7 +881,7 @@ def main() -> int:
         try:  # operational alert — contains no patient data
             _alert_session_expired(ledger, run_id, _err_str(e))
             if not args.no_notify:  # --no-notify suppresses ALL sends;
-                result["notify"] = notifier.flush(ledger, deadline=deadline)
+                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:                                    # queued for a
             pass                                             # later flush
         _write_health(ledger, result, "session_expired")
@@ -895,7 +894,7 @@ def main() -> int:
             ledger.outbox_add("run_failed", None,
                               {"run_id": run_id, "detail": _err_str(e)})
             if not args.no_notify:
-                result["notify"] = notifier.flush(ledger, deadline=deadline)
+                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:
             pass
         _write_health(ledger, result, "failed")
@@ -911,7 +910,7 @@ def main() -> int:
                               {"run_id": run_id,
                                "detail": type(e).__name__})
             if not args.no_notify:
-                result["notify"] = notifier.flush(ledger, deadline=deadline)
+                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:
             pass
         _write_health(ledger, result, "failed")

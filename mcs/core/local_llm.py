@@ -18,7 +18,7 @@ import math
 import time
 import urllib.error
 
-import semantic_jev as jev
+import bounded_http
 
 ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
 MODEL = "Qwen3.5-9B"
@@ -53,10 +53,11 @@ def request_slot() -> int:
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
                     deadline: float | None = None):
-    """Pre-wired ``jev.bounded_http_request`` for unauthenticated
-    loopback calls — worker isolation, byte bound, absolute deadline."""
-    return jev.bounded_http_request(endpoint, method, body, timeout,
-                                    api_key=None, deadline=deadline)
+    """Pre-wired ``bounded_http.bounded_http_request`` for
+    unauthenticated loopback calls — worker isolation, byte bound,
+    absolute deadline."""
+    return bounded_http.bounded_http_request(
+        endpoint, method, body, timeout, api_key=None, deadline=deadline)
 
 
 def _default_request(endpoint: str, method: str, body, timeout: float,
@@ -105,7 +106,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     HTTP 200, or ``None`` on transport/protocol failure.  ``request_fn``
     is the ``(endpoint, method, body, timeout, deadline) ->
     (status, headers, raw)`` seam — tests inject a fake loopback here
-    and ``semantic.llm_chat`` passes ``jev.bounded_http_request`` to keep
+    and ``semantic.llm_chat`` passes ``bounded_request`` to keep
     worker isolation.  ``error_out``, when given, receives
     ``{"kind": "unreachable"|"transport"}`` on the exception path —
     "unreachable" means the server refused the connection outright
@@ -114,7 +115,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     """
     if not isinstance(prompt, str) or not prompt:
         raise ValueError("prompt_invalid")
-    if not jev._loopback_endpoint_allowed(endpoint):
+    if not bounded_http._loopback_endpoint_allowed(endpoint):
         raise ValueError("local_endpoint_not_allowed")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
             or not math.isfinite(timeout) or timeout <= 0:
@@ -153,7 +154,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
                 if isinstance(reason, ConnectionRefusedError)
                 else "transport")
         return None
-    if status != 200 or len(raw) > jev.MAX_RESPONSE_BYTES:
+    if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}
     try:
