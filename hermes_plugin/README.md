@@ -27,6 +27,9 @@ plugins:
         allowed_user_ids: ["123456789"]
         allowed_chat_ids: ["987654321"]
         project_ids: [1]
+        # 任意: snapshot の patients テーブルにある全 project を
+        # 追加で許可 — 新規患者が設定編集なしで機能する
+        project_ids_auto: true
 ```
 
 設定は呼出しごとに読み直す。全scope必須、未設定は拒否。

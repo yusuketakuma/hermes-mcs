@@ -226,3 +226,44 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
     for pid, dmid, mid in rows:
         grouped.setdefault(dmid, (pid, set()))[1].add(mid)
     return grouped
+
+
+def staff_directory(db, project_id=None):
+    """Name -> facility directory of senders observed in MCS posts.
+
+    One row per (sender_name, organization) pair — a person posting
+    from several facilities appears once per facility, and pharmacy
+    staff surface under their pharmacy name in ``organization`` (the
+    sender's MCS ``stations`` list), which is what links them to the
+    facility they serve. `project_id` scopes the directory to one
+    patient's room; None covers every project."""
+    where = "sender_name IS NOT NULL AND sender_name != ''"
+    params = []
+    if project_id is not None:
+        where += " AND project_id=?"
+        params.append(project_id)
+    return db.execute(
+        f"""SELECT sender_name, profession, organization,
+                   COUNT(*) messages, COUNT(DISTINCT project_id) projects,
+                   MIN(posted_at) first_seen, MAX(posted_at) last_seen
+            FROM messages WHERE {where}
+            GROUP BY sender_name, organization
+            ORDER BY last_seen DESC""", params).fetchall()
+
+
+def resolve_staff(db, name, project_id=None):
+    """Canonical ``name（facility）`` for a free-text staff reference.
+
+    The link materializes only when the directory resolves the name to
+    exactly one facility within the scope — an ambiguous or unknown
+    name is returned unchanged rather than guessing. A name already
+    carrying a ``（…）`` annotation is treated as resolved so re-saves
+    stay idempotent."""
+    base = (name or "").strip()
+    if not base or "（" in base:
+        return base or None
+    orgs = {r["organization"].strip() for r in staff_directory(db, project_id)
+            if r["sender_name"].strip() == base and r["organization"]}
+    if len(orgs) == 1:
+        return f"{base}（{next(iter(orgs))}）"
+    return base

@@ -1973,3 +1973,141 @@ def test_gc_eligible_payload_is_not_starved_by_unsettled_card(led, tmp_path):
                           (old_second['delivery_id'],)).fetchone()[0] is None
     assert led.db.execute('SELECT spec_json FROM notification_renders WHERE delivery_id=?',
                           (first['delivery_id'],)).fetchone()[0] is not None
+
+
+# ---------- thread task list + transitions ----------
+
+def _request(led, pid=1, src_mid=100, title="依頼X", status="open",
+             assignee=None, due=None, rev=1):
+    rid = led.db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,assignee,due_date,status,revision,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (pid, src_mid, "h" * 64, title, assignee, due, status,
+         rev, NOW, NOW)).lastrowid
+    led.db.commit()
+    return rid
+
+
+def _tasks_click(led, spec, msg_id="m-9", suffix="ab"):
+    """Each click needs a fresh command_id — a repeated one replays the
+    stored receipt by design."""
+    tok = _token_for(spec, "tasks")
+    r = notify_cards.apply_notification(
+        led, {**_notif(tok), "command_id": f"{tok}:{suffix * 8}",
+              "origin": dict(ORIGIN, message_id=msg_id)},
+        CFG, now=NOW)
+    return r
+
+
+def test_tasks_button_only_on_thread_cards(led, tmp_path):
+    """📋 pins a task list to a thread — only thread cards carry it."""
+    card, spec = _delivered_card(led, tmp_path)
+    assert _token_for(spec, "tasks")
+    _patient(led, 2)
+    _msg(led, 200, 2)
+    _signal_row(led, "sig-nt", pid=2, mids=[200])
+    ev = _intent(led, kind="signal", pid=2,
+                 payload={"signal_keys": ["sig-nt"], "project_id": 2,
+                          "type": "med_followup"})
+    _dispatch(led, ev)
+    render = _latest_render(led, 2)
+    spec2 = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    ids = {b["id"] for row in spec2["parts"]["action_rows"] for b in row}
+    assert "tasks" not in ids
+
+
+def test_tasks_view_lists_thread_requests(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)   # root 100 + reply 101
+    rid1 = _request(led, src_mid=100, title="経過確認")
+    rid2 = _request(led, src_mid=101, title="返信タスク",
+                    status="in_progress", assignee="山田",
+                    due="2026-10-01")
+    _request(led, src_mid=100, title="取り下げ済", status="cancelled")
+    _msg(led, 300, 1)
+    _request(led, src_mid=300, title="別スレッド")
+    _patient(led, 2)
+    _msg(led, 400, 2)
+    _request(led, pid=2, src_mid=400, title="別患者")
+    r = _tasks_click(led, spec)
+    assert r["outcome"] == "applied" and r["action"] == "tasks"
+    ids = [t["request_id"] for t in r["tasks"]]
+    assert ids == [rid1, rid2]          # open first; cancelled/other gone
+    t1, t2 = r["tasks"]
+    assert set(t1["transitions"]) == {"in_progress", "done"}
+    assert set(t2["transitions"]) == {"done"}
+    assert t2["assignee"] == "山田" and t2["due_date"] == "2026-10-01"
+    for t in r["tasks"]:
+        for tr in t["transitions"].values():
+            ctx = r["token_ctx"].get(tr["token"])
+            assert ctx and ctx["action"] == "task_status" \
+                and ctx["project_id"] == 1
+
+
+def test_task_status_transition_and_stale_reject(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    rid = _request(led, src_mid=100, title="T")
+    r = _tasks_click(led, spec)
+    tr = r["tasks"][0]["transitions"]["in_progress"]
+    # the click arrives on the ephemeral list message — not the card's
+    # bound message — which the token's "ephemeral" flag legitimizes
+    out = notify_cards.apply_notification(
+        led, {**_notif(tr["token"]),
+              "origin": dict(ORIGIN, message_id="eph-1")},
+        CFG, now=NOW)
+    assert out["outcome"] == "applied" and out["status"] == "in_progress"
+    row = led.db.execute(
+        "SELECT status,revision FROM requests WHERE request_id=?",
+        (rid,)).fetchone()
+    assert row["status"] == "in_progress" and row["revision"] == 2
+    # the same view token is now stale — rejected, never double-applied
+    out2 = notify_cards.apply_notification(
+        led, {**_notif(tr["token"], n=21),
+              "command_id": f"{tr['token']}:{'cd' * 8}",
+              "origin": dict(ORIGIN, message_id="eph-1")},
+        CFG, now=NOW)
+    assert out2["outcome"] == "rejected" and out2["error"] == "stale_task"
+
+
+def test_task_status_done_absorbs_and_terminal_rejected(led, tmp_path):
+    card, spec = _delivered_card(led, tmp_path)
+    rid = _request(led, src_mid=100)
+    r = _tasks_click(led, spec)
+    done_tok = r["tasks"][0]["transitions"]["done"]["token"]
+    out = notify_cards.apply_notification(
+        led, {**_notif(done_tok),
+              "origin": dict(ORIGIN, message_id="eph-1")},
+        CFG, now=NOW)
+    assert out["outcome"] == "applied" and out["status"] == "done"
+    # a fresh list offers no transition for a done task
+    r2 = _tasks_click(led, spec, suffix="cd")
+    t = next(t for t in r2["tasks"] if t["request_id"] == rid)
+    assert t["transitions"] == {}
+    # defensive: a hand-minted token pinning the live revision still
+    # refuses to move a terminal row (the table is the authority)
+    rid2 = _request(led, src_mid=101, status="cancelled")
+    tok = notify_cards._mint_token(
+        led.db, card["card_id"], "task_status",
+        {"request_id": rid2, "status": "done", "ephemeral": True},
+        {"request_rev": 1}, NOW)
+    led.db.commit()
+    out2 = notify_cards.apply_notification(
+        led, {**_notif(tok),
+              "origin": dict(ORIGIN, message_id="eph-1")},
+        CFG, now=NOW)
+    assert out2["outcome"] == "rejected" \
+        and out2["error"] == "request_not_open"
+
+
+def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
+    """Card-bound tokens still require the bound message — only tokens
+    minted for an ephemeral surface may arrive on another message."""
+    card, spec = _delivered_card(led, tmp_path)
+    tok = _token_for(spec, "tasks")
+    out = notify_cards.apply_notification(
+        led, {**_notif(tok), "origin": dict(ORIGIN, message_id="eph-1")},
+        CFG, now=NOW)
+    assert out["outcome"] == "rejected" \
+        and out["error"] == "origin_mismatch"

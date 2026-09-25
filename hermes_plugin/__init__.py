@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from . import projects
 
 _ADAPTER_DIR = Path(__file__).resolve().parents[1] / "mcs"
 _MISSING = object()
@@ -31,7 +32,8 @@ _CONTEXT_FLAGS = {
 }
 _READ_KINDS = frozenset({
     "search", "timeline", "thread", "evidence", "attachments", "candidates",
-    "requests", "receipt", "semantic", "comparison", "loops", "operations",
+    "requests", "staff", "receipt", "semantic", "comparison", "loops",
+    "operations",
 })
 _STATUS_FIELDS = frozenset({"op", "project_id", "limit", "cursor"})
 _READ_FIELDS = frozenset({
@@ -166,6 +168,8 @@ def _settings(ctx) -> dict[str, Any] | None:
         "allowed_user_ids": users, "allowed_chat_ids": chats,
         "project_ids": projects,
     }
+    if ctx.get_config("project_ids_auto", None) is True:
+        settings["project_ids_auto"] = True
     # receipt scoping can only compare fields we actually know — the
     # interactive card config is optional for the /mcs surface
     for key in ("application_id", "guild_id"):
@@ -188,7 +192,7 @@ def _authorize(settings: dict[str, Any], identity: dict[str, str | None], value:
         return None, "user_not_allowed"
     if identity["chat_id"] not in settings["allowed_chat_ids"]:
         return None, "chat_not_allowed"
-    if project_id not in settings["project_ids"]:
+    if not projects.project_allowed(settings, project_id):
         return None, "project_not_allowed"
     return project_id, None
 
@@ -950,12 +954,18 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
                or getattr(ctx, "profile_name", None) or "default")
     if not isinstance(profile, str) or not profile.strip():
         return None
-    return {"transport": "slack", "data_root": data_root.strip(),
-            "team_id": scope["slack_team_id"].strip(),
-            "application_id": scope["slack_application_id"].strip(),
-            "channel_id": scope["slack_channel_id"].strip(),
-            "profile": profile.strip(), "allowed_user_ids": users,
-            "project_ids": projects}
+    settings = {"transport": "slack", "data_root": data_root.strip(),
+                "team_id": scope["slack_team_id"].strip(),
+                "application_id": scope["slack_application_id"].strip(),
+                "channel_id": scope["slack_channel_id"].strip(),
+                "profile": profile.strip(), "allowed_user_ids": users,
+                "project_ids": projects}
+    snapshot = ctx.get_config("snapshot", None)
+    if isinstance(snapshot, str) and snapshot.strip():
+        settings["snapshot"] = snapshot.strip()
+    if ctx.get_config("project_ids_auto", None) is True:
+        settings["project_ids_auto"] = True
+    return settings
 
 
 def _make_slack_factory(ctx):

@@ -268,15 +268,25 @@ def apply_command(ledger, req):
                             error = "loop_ref_stale"
                 if not error:
                     if req["cmd"] == "request.create":
+                        from mcs_queries import resolve_staff
+                        assignee = req.get("assignee")
+                        if assignee:
+                            # 台帳 link — materialize name（facility） when
+                            # the directory resolves it unambiguously
+                            assignee = resolve_staff(db, assignee, pid)
                         rid = db.execute("""
                           INSERT INTO requests(project_id,source_message_id,source_hash,title,
                             assignee,due_date,status,revision,created_at,updated_at)
                           VALUES(?,?,?,?,?,?,'open',1,?,?)
-                        """, (pid, mid, expected, req["title"], req.get("assignee"),
+                        """, (pid, mid, expected, req["title"], assignee,
                               req.get("due_date"), now, now)).lastrowid
                     else:
                         rid = before["request_id"]
                         fields = req["patch"]
+                        if fields.get("assignee"):
+                            from mcs_queries import resolve_staff
+                            fields = {**fields, "assignee": resolve_staff(
+                                db, fields["assignee"], pid)}
                         changed = db.execute(
                             "UPDATE requests SET " + ",".join(f"{k}=?" for k in fields)
                             + ",revision=revision+1,updated_at=? WHERE request_id=? AND revision=?",

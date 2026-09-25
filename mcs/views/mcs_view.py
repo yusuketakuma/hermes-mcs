@@ -482,6 +482,13 @@ class View:
         self._message(pid, mid)
         return comparison(self.db, pid, mid)
 
+    def _staff(self, pid, limit):
+        """Name -> facility directory for this room — pharmacy staff
+        link by their pharmacy name in ``organization``."""
+        from mcs_queries import staff_directory
+        rows = staff_directory(self.db, pid)
+        return {"items": [dict(r) for r in rows[:max(1, min(limit, 200))]]}
+
     def _loops(self, pid, limit):
         """Open-Loop candidates + their relation events. Candidates are
         advisory only — promotion to a formal request goes through the
@@ -721,6 +728,7 @@ class View:
             "evidence": lambda: {"message": self._message(project, message_id)},
             "attachments": lambda: self._attachments(project, message_id, limit, cursor),
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
+            "staff": lambda: self._staff(project, limit),
             "qc": lambda: self._qc(project, message_id, limit, cursor),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
@@ -748,7 +756,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)

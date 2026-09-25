@@ -921,6 +921,9 @@ def test_action_foreign_thread_denied(world):
     asyncio.run(act.on_interaction(ix))
     assert "権限" in ix.response.message["content"]
     assert len(list((world.data / "cmd_int").glob("*.json"))) == before
+    # the denial reason is journaled — the user-facing text stays generic
+    denials = [f for e, f in world.logs if e == "interaction_denied"]
+    assert denials and denials[0]["reason"] == "chat_not_allowed"
 
 
 def test_split_body_chunks_bounded():
@@ -2058,3 +2061,118 @@ def test_body_messages_include_heading_in_discord_limit():
     messages = actions_mod._body_messages({"title": "合成見出し" * 200, "body": body})
     assert all(len(message) <= 2000 for message in messages)
     assert sum(message.count("x") for message in messages) == len(body)
+
+
+# ---------- task list + transitions ----------------------------------------
+
+def _request(world, src_mid=100, title="経過確認", status="open", rev=1):
+    rid = world.led.db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,status,revision,created_at,updated_at) "
+        "VALUES(1,?,?,?,?,?,?,?)",
+        (src_mid, "h" * 64, title, status, rev, NOW, NOW)).lastrowid
+    world.led.db.commit()
+    return rid
+
+
+def test_action_tasks_ephemeral_list_and_transition(world):
+    """📋 answers with an ephemeral list; a transition button on it
+    applies through the same token pipeline even though its origin
+    message is the followup, not the card."""
+    world.seed()
+    _request(world)
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    assert ix.followup.sent
+    last = ix.followup.sent[-1]
+    assert last["ephemeral"] and "経過確認" in last["content"]
+    labels = [b.label for b in last["view"].items]
+    assert any("対応中" in label for label in labels) \
+        and any("完了" in label for label in labels)
+    # click ⏳対応中 — the origin message is the ephemeral list itself
+    btn = next(b for b in last["view"].items if "対応中" in b.label)
+    ix2 = FakeInteraction(btn.custom_id, message_id=555)
+    asyncio.run(world.interact(act, ix2))
+    joined = "\n".join(m["content"] for m in ix2.followup.sent)
+    assert "対応中" in joined and "経過確認" in joined
+    row = world.led.db.execute(
+        "SELECT status FROM requests WHERE title='経過確認'").fetchone()
+    assert row["status"] == "in_progress"
+    # both clicks landed in the interaction audit journal
+    results = [f["action"] for e, f in world.logs
+               if e == "interaction_result"]
+    assert "tasks" in results and "task_status" in results
+
+
+def test_action_tasks_empty_list(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    joined = "\n".join(m["content"] for m in ix.followup.sent)
+    assert "タスクはありません" in joined
+
+
+def test_action_task_stale_shows_latest_hint(world):
+    """A transition clicked after another one landed reports the stale
+    view instead of double-applying."""
+    world.seed()
+    _request(world)
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    view = ix.followup.sent[-1]["view"]
+    done = next(b for b in view.items if "完了" in b.label)
+    asyncio.run(world.interact(
+        act, FakeInteraction(done.custom_id, message_id=555)))
+    # replaying the stale ⏳ token from the same rendered list
+    stale = next(b for b in view.items if "対応中" in b.label)
+    ix2 = FakeInteraction(stale.custom_id, message_id=556)
+    asyncio.run(world.interact(act, ix2))
+    joined = "\n".join(m["content"] for m in ix2.followup.sent)
+    assert "最新" in joined
+    row = world.led.db.execute(
+        "SELECT status,revision FROM requests").fetchone()
+    assert row["status"] == "done" and row["revision"] == 2
+
+
+def test_project_auto_authorizes_snapshot_projects(tmp_path):
+    """project_ids_auto: the snapshot's patients table becomes the
+    allowlist — a new patient works without a config edit, and a
+    project that is not a patient still fails closed."""
+    import sqlite3
+    from hermes_plugin import projects as projects_mod
+    snap = tmp_path / "snap.db"
+    db = sqlite3.connect(str(snap))
+    db.execute("CREATE TABLE patients(project_id INTEGER)")
+    db.execute("INSERT INTO patients VALUES (99)")
+    db.commit()
+    db.close()
+    settings = {"project_ids": {1}, "snapshot": str(snap)}
+    assert not projects_mod.project_allowed(settings, 99)     # static only
+    settings["project_ids_auto"] = True
+    assert projects_mod.project_allowed(settings, 99)         # dynamic
+    assert not projects_mod.project_allowed(settings, 100)    # no patient
+    bad = {"project_ids": {1}, "project_ids_auto": True,
+           "snapshot": str(tmp_path / "missing.db")}
+    assert not projects_mod.project_allowed(bad, 99)          # fail closed
+    assert projects_mod.project_allowed(bad, 1)               # static floor
