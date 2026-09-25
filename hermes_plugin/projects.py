@@ -9,6 +9,7 @@ set is cached briefly so every click does not reopen SQLite.
 """
 import sqlite3
 import time
+import urllib.parse
 
 _TTL_S = 120.0
 _cache: dict[str, tuple[float, frozenset]] = {}
@@ -20,7 +21,8 @@ def _snapshot_projects(path: str) -> frozenset | None:
     if hit and now - hit[0] < _TTL_S:
         return hit[1]
     try:
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        db = sqlite3.connect(
+            f"file:{urllib.parse.quote(path)}?mode=ro", uri=True)
         try:
             rows = db.execute("SELECT project_id FROM patients").fetchall()
         finally:

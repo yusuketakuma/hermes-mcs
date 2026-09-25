@@ -320,9 +320,9 @@ class Actions:
             return
         action = ctx.get("action")
 
-        projects = ([ctx.get("project_id")] if ctx.get("project_id")
-                    else None)
-        denial = self._authorized(interaction, projects)
+        pids = ([ctx.get("project_id")] if ctx.get("project_id")
+                else None)
+        denial = self._authorized(interaction, pids)
         if denial:
             self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
@@ -366,12 +366,15 @@ class Actions:
                 await interaction.response.send_modal(modal)
                 self._result_log(interaction, action,
                                  {"outcome": "modal_opened"})
-            except Exception:
+            except Exception as e:
                 # the ~3s initial-response window can expire while the
                 # preflight drain ran — a dead modal entry must not stay
                 # claimable, and the click still deserves an answer via
                 # the 15-minute followup token
                 self._reg.drop_modal(modal_id)
+                self._result_log(interaction, action,
+                                 {"outcome": "modal_send_failed",
+                                  "error": type(e).__name__})
                 await self._followup(
                     interaction,
                     "応答が期限切れになりました。もう一度操作してください。")
