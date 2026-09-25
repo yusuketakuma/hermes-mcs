@@ -615,3 +615,15 @@ def test_semantic_jobs_outrank_qc_backfill(tmp_path):
     assert out2["job_metrics"][0]["kind"] == "extract_qc"
     assert out2["done_by_kind"] == {"extract_qc": 1}
     db.close()
+
+
+def test_qc_questions_cover_vitals():
+    """Vitals join the audit keyed by vital name — a mislabel
+    (脈は48 -> bs:48) audits as '本文に血糖値が48である旨の記述がない'."""
+    ex = {"vitals": {"bs": 48, "hr": 72}}
+    questions, layout, ctx = semantic_drain._qc_questions(ex)
+    v_layout = [e for e in layout if e[1] == "vitals"]
+    assert sorted(e[2] for e in v_layout) == ["bs", "hr"]
+    blob = json.dumps(questions, ensure_ascii=False)
+    assert "血糖値" in blob and "脈拍" in blob
+    assert ctx["v0"] and "bs" in ctx["v0"]

@@ -86,13 +86,19 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
     return cur.rowcount
 
 
+_VITAL_JP = {"bt": "体温", "hr": "脈拍・心拍数", "rr": "呼吸数",
+             "sbp": "収縮期血圧", "dbp": "拡張期血圧",
+             "spo2": "SpO2(酸素飽和度)", "bs": "血糖値"}
+
+
 def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
     """Per-item support questions (noul) plus classification audits
     (choice). Returns (questions, layout, context_items): layout maps
     qid -> (section, index); context_items carries the extracted items
     as quoted DATA for state.context — never in the instruction channel
     (an evidence span is a verbatim quote of the message body, i.e.
-    attacker-controlled text)."""
+    attacker-controlled text). Vitals join the audit with the vital KEY
+    as index — a key mislabel ('脈は48' -> bs:48) reads as NO_MATCH."""
     questions, layout, ctx_items = {}, [], {}
     n = QC_MAX_ITEMS
     for section in ("meds", "symptoms", "events"):
@@ -112,6 +118,20 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
                 break
         if n <= 0:
             break
+    vits = ex.get("vitals")
+    if isinstance(vits, dict) and n > 0:
+        for i, (k, val) in enumerate(list(vits.items())[:n]):
+            qid = f"v{i}"
+            ctx_items[qid] = json.dumps({"vitals": {k: val}},
+                                        ensure_ascii=False)
+            jp = _VITAL_JP.get(k, k)
+            questions[qid] = jev.noul_question(
+                f"state.context の id={qid} のバイタル項目は、"
+                "対象の投稿本文に裏付けられているか",
+                f"本文に{jp}が{val}である旨の記述がある",
+                f"本文に{jp}が{val}である旨の記述がない")
+            layout.append((qid, "vitals", k))
+            n -= 1
     urg = ex.get("urgency")
     if urg in ("high", "routine"):
         questions["urg"] = jev.choice_question(
@@ -251,8 +271,12 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                        "jev": ans.get("choice"),
                        "confidence": ans.get("confidence")}
         else:
+            src = ex.get(section)
+            item = (src.get(i) if isinstance(src, dict)
+                    else (src or [])[i])
             items.append({"section": section, "index": i,
-                          "item": (ex.get(section) or [])[i],
+                          "item": ({section: {i: item}}
+                                   if section == "vitals" else item),
                           # NO_MATCH means 'not supported by this
                           # text', never 'the fact does not exist'
                           "verdict": jev.verdict_for(
