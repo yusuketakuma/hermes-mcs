@@ -2611,6 +2611,7 @@ def test_auto_login_reports_keychain_locked(monkeypatch, tmp_path):
     def locked(*a, **k):
         raise mcs_adapter.KeychainLocked("mcs-adapter")
     monkeypatch.setattr(a, "_keychain_password", locked)
+    monkeypatch.setattr(a, "_recover_session", lambda: False)
     assert a.auto_login() == "keychain_locked"
 
 
@@ -2623,7 +2624,71 @@ def test_auto_login_reports_manual_required_when_entry_missing(
                         lambda: {"webSocketDebuggerUrl": "ws://x"})
     monkeypatch.setattr(a, "_cdp_eval", lambda ws, expr: "need_both")
     monkeypatch.setattr(a, "_keychain_password", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_recover_session", lambda: False)
     assert a.auto_login() == "manual_required"
+
+
+def test_auto_login_recovers_live_session_without_form(
+        monkeypatch, tmp_path):
+    """Token expiry is not logout — when the browser session is still
+    alive, a fresh localStorage token + check_session ends the recovery
+    before any form fill is attempted."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_token_via_cdp", lambda: "tok-12345678")
+    monkeypatch.setattr(a, "check_session", lambda: True)
+    monkeypatch.setattr(
+        a, "_login_page",
+        lambda: pytest.fail("login form must not be touched"))
+    assert a.auto_login() == "ok"
+    assert a._token == "tok-12345678"
+
+
+def test_auto_login_no_form_means_redirected_when_session_live(
+        monkeypatch, tmp_path):
+    """A logged-in app redirects /authentication/login back home, so a
+    missing form is evidence of a session — not of failure. Recover via
+    the second live-session check instead of alerting."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(mcs_adapter.time, "sleep", lambda s: None)
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_login_page",
+                        lambda: {"webSocketDebuggerUrl": "ws://x"})
+    monkeypatch.setattr(a, "_cdp_eval", lambda ws, expr: "no_form")
+    seq = iter([False, True])      # pre-check fails, post-no_form ok
+    monkeypatch.setattr(a, "_recover_session", lambda: next(seq))
+    assert a.auto_login() == "ok"
+
+
+def test_auto_login_no_form_and_dead_session_is_manual(
+        monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(mcs_adapter.time, "sleep", lambda s: None)
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_login_page",
+                        lambda: {"webSocketDebuggerUrl": "ws://x"})
+    monkeypatch.setattr(a, "_cdp_eval", lambda ws, expr: "no_form")
+    monkeypatch.setattr(a, "_recover_session", lambda: False)
+    assert a.auto_login() == "manual_required:no_form"
+
+
+def test_session_expired_alert_throttled(tmp_path):
+    """A dead session alerts once per hour, not once per tick — the run
+    row and health file still record every expiry."""
+    db = _ledger(tmp_path)
+    assert run_check._alert_session_expired(db, 1, "d") is True
+    assert run_check._alert_session_expired(db, 2, "d") is False
+    db.db.execute(
+        "UPDATE notify_outbox SET created_at=?"
+        " WHERE kind='session_expired'",
+        (time.time() - run_check.SESSION_ALERT_MIN_INTERVAL_S - 1,))
+    db.db.commit()
+    assert run_check._alert_session_expired(db, 3, "d") is True
+    n = db.db.execute(
+        "SELECT COUNT(*) c FROM notify_outbox"
+        " WHERE kind='session_expired'").fetchone()["c"]
+    assert n == 2
+    db.close()
 
 
 def test_err_str_includes_structured_detail():
