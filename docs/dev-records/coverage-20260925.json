@@ -1,0 +1,1825 @@
+{
+  "date": "2026-09-25",
+  "repository": "hermes-mcs",
+  "baseline": "4c9b0c0b57d1701770bf7a0e0139ab0d29603d4a",
+  "baseline_tracked_count": 246,
+  "meaning": "MCS baseline files were read by assigned reviewers. This is review coverage, not proof of exhaustive correctness. Hermes coverage is limited to MCS connection paths.",
+  "excluded": "Ignored operational data, credentials, installed dependencies, caches, .git object store; no runtime ledger or secret files inspected.",
+  "tracked_files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "1ecabeb806598cea50fac641b87f3e332e22bcdc0e08d4612eec384fd6e8e12a"
+    },
+    {
+      "path": ".gitignore",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2a4b88a2bb17e4a3885af00c6f89760b67e92428c69057a547ad18bc0163c1bd"
+    },
+    {
+      "path": "AGENTS.md",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c015dbfe89ae7a6fb0244bb3d9c112c5112e18917814bbe4b64d8f13c33b483b"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "aef81a58f3759ab310a146a5c1e9fb8655e7c7e7ee7664b07cc5330af5598e98"
+    },
+    {
+      "path": "LICENSE",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a"
+    },
+    {
+      "path": "Makefile",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "dfdf66dabd8ab434c1b6a5318150b843fd73b17b29970b2dc67ed78d7c73b23a"
+    },
+    {
+      "path": "README.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "76be9bfea4e9a2701410edcb67a64e6fb707782d6ed161740157bc1a2d58e3f7"
+    },
+    {
+      "path": "SECURITY.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2ff482c44e4c8a1fce883dbf306ad382d20a2690ef4c9bad9fde2a5117b67dce"
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "02ea27d79bec50684823ab5109cf57a135c37b1fe0e32233670685ccd36d81da"
+    },
+    {
+      "path": "ci/gates.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "3e2dd22f56a4611cbac8d5ab7e7075ae6ff316cfa2dd6eded1661cf11dd080f6"
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "3cc1472e921bd829e9c85d17b9b75c0a107f45f8c74c75e388c2491397a0811c"
+    },
+    {
+      "path": "conftest.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "97f58a9e623edb71bc8cf0064d1fc51e5f9613c22942a3e58bc5064f54e5544f"
+    },
+    {
+      "path": "deployment/README.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "3ae7d90252a3fde2a147d5d61359947e971e96161d2e45ca7193e1e83f5baa14"
+    },
+    {
+      "path": "deployment/cco-approval-scope.json",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960"
+    },
+    {
+      "path": "deployment/cco-terminal-isolation.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8"
+    },
+    {
+      "path": "deployment/cco-terminal.candidate.yaml",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9"
+    },
+    {
+      "path": "deployment/launchagents/README.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "519a087a4e9773f038f9ba78c3cd223cbd0fe67109b1caf9f08af2eb69b3b528"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer-rt.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "21f8beeac7950d85166f3fcb20a95094cf0b7fd755dcfb4f79c309656d936130"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "176bc3362dc5c67eb065edea77890af507eebb55bee2f5c485a1e10e85543ce1"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4b7dab5b22bdeaea8000a78bffe7fe1c9d93cd7f078757fa2dcb4ad5fca113dd"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-cmd.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d5a1533dd5fcba92dff77715b382c100786b947410b743defd2d8606d3a2921f"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-int.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "004ab5baf7efbc520cc99ec4f680fc3c834c33526c7ae0e2f94bd6030d6d14c2"
+    },
+    {
+      "path": "deployment/launchagents/org.mcs.recovery.plist",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "082fbcac9c2bae407185c10653915d47c66eca3f2a7f7a5e535e9c470f326d79"
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "bdec85a9498cd66ddcbaa89d9c3b6e5665e396c91a3d058e15f6009e94f9c494"
+    },
+    {
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "29a7ddfa226061643ed3adf31b3848394a6233070001b0b9221197e9c177725c"
+    },
+    {
+      "path": "deployment/scripts/mcs_check.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "acf8a101d9524dfce11a2872041aabb344292c57e23d68b3d0215792fbbbabcf"
+    },
+    {
+      "path": "deployment/scripts/mcs_deep.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a82707d878e486797efd3aa8121f5e737858be83126acf910e3313c9623cfd7c"
+    },
+    {
+      "path": "deployment/scripts/mcs_llm_catchup.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "490ac49343b80a7862eb66781aa186123222549034c2fce3a4e8ca96348c32d9"
+    },
+    {
+      "path": "deployment/scripts/mcs_update.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f5ab5b9a7d5e72e24c59bba4acba495c6daa5b87ab49964534846488a026187c"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "59941603ce5ff79c5a1f6da55c6dc30d5c6833c22d3fb8db8ba634168dfd9b52"
+    },
+    {
+      "path": "docs/acceptance-map.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ef7882bdf68deb3c379deef526547a16a2849f44f6d95ff01b7dac77ec26fb0a"
+    },
+    {
+      "path": "docs/assets/analytics-overview.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d"
+    },
+    {
+      "path": "docs/assets/flow-journey.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1"
+    },
+    {
+      "path": "docs/assets/flow-network.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59"
+    },
+    {
+      "path": "docs/assets/flow-overview.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "badc4ab6b0cc43d2398bee46bbc9fae3d01bcbd98ddc318c0e6279fa414faf24"
+    },
+    {
+      "path": "docs/assets/flow-pipeline.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878"
+    },
+    {
+      "path": "docs/assets/flow-signals.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "aec71cf5c2fab92e53f7140057e0243a22c1c5f4993bb667b5150088b5f146c3"
+    },
+    {
+      "path": "docs/assets/flow-timeline.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f"
+    },
+    {
+      "path": "docs/auto-update-plan.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "b4d6f46257bf065a0cf2473a336d7371b8b1f5b27028f2908678edaf6dc848d9"
+    },
+    {
+      "path": "docs/deployment-candidate.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "0bb3171c69fad984379f0d844e6f00558a80c88be529e742a5191e1e06594ab1"
+    },
+    {
+      "path": "docs/dev-records/continuation-20260920.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb"
+    },
+    {
+      "path": "docs/dev-records/continuation-20260923.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd"
+    },
+    {
+      "path": "docs/dev-records/g1-validation.json",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "dc8cb89102e12b480828432937eae512190b3133a9a70c73ae1230eb1667776a"
+    },
+    {
+      "path": "docs/dev-records/phase-j-record.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d9fbb681037c65dc3d0686f1807b4fb64782bb0d356d69860f2e03491048c149"
+    },
+    {
+      "path": "docs/dev-records/phase-r-record.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e"
+    },
+    {
+      "path": "docs/dev-records/r00-baseline.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a"
+    },
+    {
+      "path": "docs/dev-records/refactor-revalidation.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572"
+    },
+    {
+      "path": "docs/dev-records/review-20260923.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe"
+    },
+    {
+      "path": "docs/dev-records/signal-priorities-20260924.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "959ac1c1bc256ef2620afda11a7820f44d262ed73ca46b10a5da74c232a9c2de"
+    },
+    {
+      "path": "docs/lifecycle-spec.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "490ad67d90ab1c2c219f51e38946e1f3e803816d7a921e1e22ee6378fd1e88c8"
+    },
+    {
+      "path": "docs/screenshots/discord-notify.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4188e4af1db8fa73ab52a5f4a6dd5c8e3a029c818dcb86a0100c028df13db3c2"
+    },
+    {
+      "path": "docs/screenshots/signals-cli.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d"
+    },
+    {
+      "path": "docs/screenshots/view-status.svg",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f"
+    },
+    {
+      "path": "docs/semantic-evaluation.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "f81c6871e60c7742d9b687767ed869bdb6826a3b75b19fd303e771bbc34df4cd"
+    },
+    {
+      "path": "docs/semantic-facts-v2-rollout.md",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "4ea60ac723d3efaa437edad59e4c77518b01c6e50e16e2837fcb90888b320d17"
+    },
+    {
+      "path": "evaluation/README.md",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4c50ff886cbd66cf64234a52a4acb4d39e891d381b8d6405a51953e2a4bfded8"
+    },
+    {
+      "path": "evaluation/annotation-guide.md",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "54c892609aa3906c5b44c070a8da8e294ff2436dcc27245febb78eb7852e0db8"
+    },
+    {
+      "path": "evaluation/extract_cases.json",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "9776f8c23ca282f187368e5169c290e0ed6153d64a472f7b11a11c64799f90e7"
+    },
+    {
+      "path": "evaluation/g6-criteria-v1.json",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "6493cc71c3c08cc357532929bff588c8a5ff22d17d9ecf959e6550af0d474092"
+    },
+    {
+      "path": "evaluation/rehearsal-comparison.jsonl",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "32387930f2b164c1c887d244e53573b48bd61ba1b0bb7726db844d71d197d6eb"
+    },
+    {
+      "path": "evaluation/semantic_completeness_cases.json",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "6c9321d6d2bdfbce87d4bba3fcff9ffa9c0f6c767b2cf0eeba0ed9ed8bd4e488"
+    },
+    {
+      "path": "hermes_plugin/README.md",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "6dea103feea5f59351054a50222d42352452d6cd3678a74aca2e05b77f6596d8"
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "87418efe7dbf8894136e89aff86308de3ce41779ff6b5f17811ae4857f864589"
+    },
+    {
+      "path": "hermes_plugin/card_workers.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "a9f88d4b1674cbb409863d7b8bf76d139ec93e225cf8bafe13973e58a6940fa9"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/envelopes.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "305d8ecef6cc0b481a7421a1ef49a14d3f05158ea6f0109b3757feb3ca0ce16a"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/journal.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c6cf4df42cb344f3c34db89e2a8ac181e5731964d00bdb45f553d64e1d37bd2b"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/paths.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2bc4e8f9c1e45d7ab726aeeeadde4cd494151d9db7d18a76f7657c574907b093"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/registry.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d72e64c7eb7360074ef90657b5afee7828cb8d8059aab57613344ca476dad34c"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/spec.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "7cacb0933132c3ce8c2eaad1f92884548fbb4cf1c29509444c3318a051aed082"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/text.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "3bc85ce0c29414d29082e88f90bfc60a3ee6e556fd77119fe50e2201ca9b3e11"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/worker.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "53864ac78625ce51a44cd092021f93ef6639b1ca7cb9cc6a4a99a0006fb1352e"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/__init__.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/actions.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "0310dbae630761ac87e2c9f8184f623d9a9771ef03c17186e31276799d8b8091"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/cards.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "dfced5dbcf0d4a7deea6cc8deff6789c72cd31ad7764a510b6cf56492ac084fc"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/delivery.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "85f4fe79e27bc8f7fe287c35280b83f0a1d5e3cb6044b77e19c286f02222b664"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/tasks.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "9f672a6483ffa3cffc343365cf46b57e61ecff504f64c9979253e9b5879d1540"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/__init__.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/actions.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "5e452f3a52caa83e2f60e085bfdbd163afaf2764915bcab1c8432e62a57756fc"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/cards.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "798a6ce8189f7ad9065f358a60d66ca016a611931baa005a7197dcae64b1672d"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/delivery.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "42c01f8deddf4bec268a3da9c109b3809012cfed1cdde644dcb42d8aa02b5fc2"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/paths.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "775fe3bf72f53011e7edac535b024c89adbc2867e68fc5896833747602f81157"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/tasks.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "690592605b80dd451ff229cbfe81c13ae36b636465a45cf1e3b7763ecbe38329"
+    },
+    {
+      "path": "hermes_plugin/plugin.yaml",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "647bf1c1330aecee23c6e261198be17ef1f833c1797055a097f1b006759bd5f7"
+    },
+    {
+      "path": "hermes_plugin/projects.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "81d949e559314b49753780ceea6b79fb7b62cc3f2bc425115e8c834119cad198"
+    },
+    {
+      "path": "install.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "02f46eb61c349695839be2ec6ad1b0586038354f35b902cf36c97c5c1c045c7a"
+    },
+    {
+      "path": "integration/test_hermes_discord.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "17fb764a73d7d91ee73b6d1148aca45da14ab0220a59fb1e956d01d8c440306e"
+    },
+    {
+      "path": "integration/test_hermes_slack.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "2b38418985802094f77b15814842e5ce2647bbdc8d9a501ae47e633559f6de2c"
+    },
+    {
+      "path": "mcs/_mcs_path.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "7421346f82c7eb4b85616e5d9e38ebe8e41201c9a7e68e60a6a7ba7b20bf509c"
+    },
+    {
+      "path": "mcs/core/bounded_http.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d34f79efc273b1b96f748959115b096d8c3afc1317e55bb4a4bc46090db21f9a"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "reviewer": "core_tools + root + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "e642fd74de22c5bd19f33d8e911a6e984dc6578db8f084386ffa748dad230a74"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "e967dd85746bf0252d870621896d0ceb9eb36d806809906ff9b02c463b4f4d83"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "648be53ecf03aa0f88c6a471b8f441770fcd0fd916c85ac4cb419031fd1534c4"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "50303114b0b5669573c1bd2e0e60c1f0d074a9176ae47cab8714f42c9e4bfdfc"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "77a2dcdc18a58db91315654a9830180e5ddbec149b8b5ac7aebd22b3f939d584"
+    },
+    {
+      "path": "mcs/extract/extract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "10f9cb29a4c02df4f64a1fc3af5a061971459bfae5bc8313ddca6e394b96d509"
+    },
+    {
+      "path": "mcs/extract/extract_bench.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "e93541bff207c3f316083e8a641701760259f9ef2f070da195b2b85fb31ddd9f"
+    },
+    {
+      "path": "mcs/extract/extract_llm.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "4116a98367ae6f1991350e258f5ee3c5da47a083556120332c0bbc7b2431eb4d"
+    },
+    {
+      "path": "mcs/extract/rollup.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "5a9e8491868a01339493ca0fcd85fdbb9df6193a5141b81d7b14f0c931ec32cc"
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1f805c493495edbff6f8182af0eaf1f9ee31f251c0d4181a3eb063837ed239e7"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "2f05aed13c4eaf3c4d81118a21c83c59fa9d97ad068a108684cd559552ceb032"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "aefb2c15f227d9d0a14e2e693a76ed8563cc2a03d2be80dfde63dffd6632a4d5"
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4d4b2487987523726c1e2b5a95bc92b4de5bcc28e1119dc6a36d4a6cd1748256"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "60dab29c73d1d44d0c71dd666ceb23796f754473baed1b6f639ebc819372029c"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c93c2df62c65c262107b0a55a0894c53cf0f7b61c96744b8a084fb51e5d06c91"
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a0f7988c7202e5117018b87c842896cfe7378914a78611529f06f236af438eb9"
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "cf76128433b06da803e67738b47caa7d9e58b77cb335a094220c7a1711b8b9db"
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1b3b888ef589a935999e3afba7d147c48cecabb0a444b2e193c57a269f86a6a9"
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5a10fab27f03ccf153e58b1cc8fcad742493aab3aa8c9627f3829d9f0b3b3d70"
+    },
+    {
+      "path": "mcs/ops/brain_export.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "eff26c810539f4436f3b9bd8e67c18594caa649a823acb5c82c7f9049b9c90e1"
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "78de8cd45c3af04ee7e12c96dff21e800190de9e958e67f8bee5e17ed44956d8"
+    },
+    {
+      "path": "mcs/ops/mcs_refstats.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "ae2d501c7aa46c5af9efcf9e4029d8c668127160b830f3b8fb7d8d4dcc755f63"
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "0232a95e8d70ed7f1fed898bc3384bfc3ce99750916bdbc0ca07d3dabf751127"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "a1c1cdef963cb62f100a83b652f682ea6ba66b8a9791bb0e6bf544ed6223e197"
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a8b7230afb76888612447b15accc0922258d8de5e94609ff43ecb058a0544d70"
+    },
+    {
+      "path": "mcs/ops/mcs_update.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "fa297794a2d0ea7f34389c7e8edf3e3d768a44c8dc46e5681548bb93914fab62"
+    },
+    {
+      "path": "mcs/ops/request_loops.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "6b7e5747db27dd8e7c97732a8ddbdab78f2958bf8f979d00e7718d76af522419"
+    },
+    {
+      "path": "mcs/semantic/semantic.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1027b0803c84b99ef2785c86fda4580d1c9bd08191ee395342e211f7621caa53"
+    },
+    {
+      "path": "mcs/semantic/semantic_assessment.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c697bb8c56adadc007e5c0be6ba972254e831a609c16839583230b8f54f6bef0"
+    },
+    {
+      "path": "mcs/semantic/semantic_audit.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "684d61566931ceef8bb08a02c52ed07d23ca692df9cc9221285a99c7a2137b4d"
+    },
+    {
+      "path": "mcs/semantic/semantic_bench.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "5370d2fdb19cef024a66b83310160914bd8dc98e3549c6bed3b3e24ff5c90024"
+    },
+    {
+      "path": "mcs/semantic/semantic_blind.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5797e0b0332afef94f815d61c83096f5e6674567b629b5907f4ed1c8b0a6fbf6"
+    },
+    {
+      "path": "mcs/semantic/semantic_drain.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "def07b3420af55ceade861f08da9c3019d043b951b0010f883d388f645925293"
+    },
+    {
+      "path": "mcs/semantic/semantic_evaluation.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "ce1aa200e95e5e23fee747d9def80e53b5db0a3da2d228087bb4d7b89c37b0e7"
+    },
+    {
+      "path": "mcs/semantic/semantic_extraction.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "04f4a5c59e2d210edff79e9dd9d934d9774b339a7178a07e1172993d3d733be6"
+    },
+    {
+      "path": "mcs/semantic/semantic_facts.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "e7215361e0eb0db8a6f489593832a6ecd3a721d5919f20491d53aebe6a85fb5b"
+    },
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "38ec874308ae6e1857bbeebdc0babd8da1a72dc3ac3717295b1c72be6864f0ff"
+    },
+    {
+      "path": "mcs/semantic/semantic_llm.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "580e151dfcf8ae235b1d0c6553a27d141e62d49afaef23a1b7e63d5653ea03cd"
+    },
+    {
+      "path": "mcs/semantic/semantic_loops.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ce6308a3fc50682578a182b8240972264f5525ed8a88429d347945a179bc634c"
+    },
+    {
+      "path": "mcs/semantic/semantic_metrics.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "0e046f9bd01dad297371e41059766849ef6f902058861ef27ab23f07bfec2bf0"
+    },
+    {
+      "path": "mcs/semantic/semantic_observe.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "241ddaa0f7894c3d71e481e5a13848be313ef96e264ecb1bfca4f50c844f6ede"
+    },
+    {
+      "path": "mcs/semantic/semantic_policy.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "31ba25b0bbfa8fd258bc424cddeb9c3aa2b3fd42bec4e51de9626cbe6689b56c"
+    },
+    {
+      "path": "mcs/semantic/semantic_projection.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "75a0277d9e24fe92a9be2c12150ee8bf2725ec537d25351e4d72909f285aab79"
+    },
+    {
+      "path": "mcs/semantic/semantic_qc.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b2e25d7f334cb40d0da72d557e527e5932825dcbd31690181db3a447e484eeb6"
+    },
+    {
+      "path": "mcs/semantic/semantic_quantities.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b63d992f55aff391c98782201be532f778c8c98ce572129146af12b48b4e210d"
+    },
+    {
+      "path": "mcs/semantic/semantic_relations.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "449f72c12f7fff805a4bb054f168094b5a8c68f873e26b1d40d536e901de2618"
+    },
+    {
+      "path": "mcs/semantic/semantic_render.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1c3abd8d2a1490b328a9feb86dd664df5d5ea4ccc10151426b5806c5b58bdff1"
+    },
+    {
+      "path": "mcs/semantic/semantic_runtime.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "3d18a95289d390602e883ecc80296ecbf6b5e30630cbc96ad9f82cef10d23d96"
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b6914be759fc85f4638bd9c381adf8849a4e1755ebdadfcd508db19cb228cc03"
+    },
+    {
+      "path": "mcs/semantic/semantic_store.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "6a88506aa84ebf54187b6e574d6edb8241999a26f384a1a1088db6a3f4126795"
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ec389e7f281400a05bd6464475db76ee5a2df533c6814189ed22605b50768433"
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "18b0b5a8b8f246fa49dbe107ccfeb720b2686f3be015fcaffe5692d314fc75f7"
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f9a899bae19b89fd0916ccd8e1ab575142006f01f9b06931758b5cbf4551cb16"
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "23a34c9469930213a2e603f81fa758400eeadcd6503077f4a5726438cb0b667a"
+    },
+    {
+      "path": "pyproject.toml",
+      "reviewer": "ui_apps + docs_history",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "306592c367676b8b47d8ae04665e0ee35427fb4681a47d615c3284e3b0b9c362"
+    },
+    {
+      "path": "scripts/keychain_to_env.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "3855af02167d92920e49923e9ffb14a5467c54bf84071ae1d981ad772e884fd0"
+    },
+    {
+      "path": "scripts/semantic_shadow_e2e.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "31009cdd967455526b88f5e7f3fd89c1e1ec2600b61d76f42dd82a4316f2dc6e"
+    },
+    {
+      "path": "scripts/update_readme.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2718e877e2645047f4ba449d416e64e27351ef6a727c003ddf1bd8d659672113"
+    },
+    {
+      "path": "tests/conftest.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "9f6b5e82d109adeb536cd0ad41f378512e5cb6860983bbafd8cf3a586a1d4d2e"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "35601e655882e824f70ab5aab12b9e96506a87687746372448675b64230cdb6c"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "003444eae2b47c106bae7d2e6b60711498c0601093858dc14b7527b0e84b0eb6"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "3c72795373160de3e12667ea3b412b840c61f1aaab1a92cada1806b6674a0b5f"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "605b00e29dec556706c976e8fd9e638f3be4420ae4ec4f83071f1a514553b29b"
+    },
+    {
+      "path": "tests/extract/extract_testkit.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "060eb57615824b1a6e834d854016ead768d898dc34d4f0db575ad608b8cf2db5"
+    },
+    {
+      "path": "tests/extract/test_extract_bench.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "14cae443b5a01f588cef0260c5921828edcdd58e3981b4b6342d003cfa156445"
+    },
+    {
+      "path": "tests/extract/test_extract_llm_v2.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "1ce1fba2e675cfba36e20ee27784f4dfac6c5d8fa2a72783c7fe353af34e46a0"
+    },
+    {
+      "path": "tests/extract/test_extract_qc.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c9aedfb6d0c0aa4d0189191add456985b594e2cef925ff84eab1f3e10dcbe232"
+    },
+    {
+      "path": "tests/extract/test_extraction_review.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "bbd19cd2aa7ac61e721a31c68fee06c7ef3f12d122129a07cb4c7318fa2d4027"
+    },
+    {
+      "path": "tests/extract/test_slot_routing.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "e3633fdb2e70e80213ad640a37244e7dd9e9a1d1dc3263be0001c34efafd2438"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a1dfd9c8e734d7dfb132adf45a5d3e2cab2299b9df2cf616c4371fcb5d1b9668"
+    },
+    {
+      "path": "tests/ingest/test_adapter_wire.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "02569ba09b2880cfa4ab5f2d812d177106da1aa8190e0c31f2ab2c2f61588c9b"
+    },
+    {
+      "path": "tests/ingest/test_job_drain.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "1d76cf1c6a7edaa966eb5225832d4ddd5a7069c562c65fc5588d9ed811b3747d"
+    },
+    {
+      "path": "tests/ingest/test_run_check_stages.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "6dc49fa5e8c75293153e92224eba626adbba4c9ce7c43a67e93b0568ef5991d3"
+    },
+    {
+      "path": "tests/ingest/test_semantic_ingest_revisions.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "850594bfcb785baa1bf4227a485711d6c5fe0e5d5027e8fe2684c55a5856a53a"
+    },
+    {
+      "path": "tests/meta/test_ci_scripts.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "863ad27faaefba76f1c1ced7770e39011a097b729d897a45160fcabe03c0bdbc"
+    },
+    {
+      "path": "tests/meta/test_deployment_scripts.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "34a4a55063801a790dad36df89c1f1f64d941612827bc15a1e6b5be0985f4b24"
+    },
+    {
+      "path": "tests/meta/test_mcs_recover.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "90af6341ddedfa934c00a724f963219c2e759f1e1dcad7502b1ec1b373837d01"
+    },
+    {
+      "path": "tests/notify/test_card_attachment_followups.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4163ba16cf071e809d5dcb4511f3d91d149640d637d06c01979cff2166294027"
+    },
+    {
+      "path": "tests/notify/test_notify_cards.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "3405b965b4924ee75b05a8170348f135b7bc5ee9ece2532f9d5802851a23994e"
+    },
+    {
+      "path": "tests/notify/test_notify_flush.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "8360ddfcaa427df781e212fb5579141e48219353e1e0ed175ab75a8d19472f18"
+    },
+    {
+      "path": "tests/notify/test_notify_flush_paths.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "01165e36cf7face86e7e2669548adb623784b281dd34eb124785c9fb8fa8e9d4"
+    },
+    {
+      "path": "tests/notify/test_notify_render.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b28d8d3882b81c45949b8bfb125677854ff398c97ff8a587ccf7199b4c30f872"
+    },
+    {
+      "path": "tests/notify/test_notify_slack.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ff7d893cce2d0f96f41449612f6ebfb06372ed15a386c5ec781d4c7b0a75c385"
+    },
+    {
+      "path": "tests/notify/test_perf_cards.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c31478db6346b361896034e3c13b85fea242ae4a179557179be2c7a000ef07e5"
+    },
+    {
+      "path": "tests/ops/test_brain_export.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "763a0496c5c5f670cc14b41c975f7878a251551f5d5ecc94b64379d8deee947e"
+    },
+    {
+      "path": "tests/ops/test_mcs_features.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5beb50938789c3d3155a88dabdecd8c93041ba22c6d61441b93d816db4c3fa43"
+    },
+    {
+      "path": "tests/ops/test_mcs_operation_cli.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "9407bffa6d0c2a3dde5c266f2a22b59c595c6516ad82e2c3ff4ec26aaacb4bf5"
+    },
+    {
+      "path": "tests/ops/test_mcs_operations.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ad514139a6492600dd6c2c687486826d53d2f98f65cde7fb8158dccb3aa34c34"
+    },
+    {
+      "path": "tests/ops/test_mcs_refstats.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "67ff08a9243498e6aa55f4e6997c7d63d08b6381ca60110b3b0ab8ea752f678f"
+    },
+    {
+      "path": "tests/ops/test_mcs_request_loops.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "4b1f201475d79cfe4ddf211a61732c654ac090f9fdec28ae16c2b1090344bd9e"
+    },
+    {
+      "path": "tests/ops/test_mcs_request_reason.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a269caa75205f6c90a661a1c0e165b475046d1606420b5cbe1d26f31bc88fee6"
+    },
+    {
+      "path": "tests/ops/test_mcs_setup.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "5c77ecd4c3b1ee0f6b4d59698b9438805034036df322bb56b9d2d02ac38bc6ab"
+    },
+    {
+      "path": "tests/ops/test_mcs_signals.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2501baf4f0a2d4a6a421f7c6f914a435938a8ad6d109494880576cfc334d9a4a"
+    },
+    {
+      "path": "tests/ops/test_mcs_update.py",
+      "reviewer": "root",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "f03e7a28903345c02412468020c555504a1ca4500a89ff70f8e33b104e1eb7aa"
+    },
+    {
+      "path": "tests/ops/test_signal_notify_off.py",
+      "reviewer": "core_tools",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2ff7b5edfd37cf563cddbc68020386514d0376a8698b2823751b9e77760f4fec"
+    },
+    {
+      "path": "tests/plugin/test_discord_sdk_real.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1b8f2b9b6b5059ee4d7dbae34c35427f103df1ba0c4dde2b867197c11fdf5cc1"
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_mcs.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "54a06a5b9233166cd25ed7d9109767b0677fcd7e6323cdc2bc76c91886c9db8a"
+    },
+    {
+      "path": "tests/plugin/test_mcs_discord.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "ff8035a37610c24984141c70bfa53726b3eba4879b40e26117ac762605d0b416"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "d9a64b1cc11837bc4e535da59df716036913dd7f65fa52ee177393682e2ef559"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack_actions.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "89520f5258000c5323270d842d94327048a3d2780ba3709d9dc3200c2d20bd14"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack_cards.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "6336f917a1b99508fdde09947943f12ce03bea967679d4b928d08b6e863a11af"
+    },
+    {
+      "path": "tests/plugin/test_update_ops.py",
+      "reviewer": "ui_apps",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d73efbdafee54a66b4698e9f8e2dc02899bbaf00209db2c9962e60003d8b6342"
+    },
+    {
+      "path": "tests/semantic/test_canonical_drain.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "474cc50b11d993b85ac0cde185e19ae23e2171b87f4520612d6ef933e22f5de8"
+    },
+    {
+      "path": "tests/semantic/test_canonical_projection.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "c206de2bcd761ec76617589d6ed65fc48840f6f2981385935c4543371e6ba219"
+    },
+    {
+      "path": "tests/semantic/test_fact_source.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "23dacf2ddfc365ef8ef20f697407daf87b2e9ba131a720cf9c72ec814c06dcd5"
+    },
+    {
+      "path": "tests/semantic/test_jev_value.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "6d26e7652599ad69b5e5759fbcffb440a6b888b98ab84d66f545ec4938f0b1c3"
+    },
+    {
+      "path": "tests/semantic/test_mcs_semantic.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f24c759b08f838e5c4a61889980711d548abeeb8a4ef96263ed57f1b10353750"
+    },
+    {
+      "path": "tests/semantic/test_semantic_acceptance_edges.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "7675bc17a10429f276561c4318806b2acf5523d0173a8f5a89af17a0c0872fc5"
+    },
+    {
+      "path": "tests/semantic/test_semantic_assessment.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f919154d9a05c6f57f4bca51fba1df53edbfe622e2a355c15826147cc845299c"
+    },
+    {
+      "path": "tests/semantic/test_semantic_atomization.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f9d1698f28ff770aa726ab19a4876300429efa84b1b0aa3b1e6d1785edcfbeba"
+    },
+    {
+      "path": "tests/semantic/test_semantic_attachment_context.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f98503189e7e24ed6573c46bd99674b02abe9dbf81cde10136fec3f97a9c2c33"
+    },
+    {
+      "path": "tests/semantic/test_semantic_blind.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "e4290715af0115b335848a216e389ad7f37bc68ef078c9f872dc94f664b9c275"
+    },
+    {
+      "path": "tests/semantic/test_semantic_budget_retry.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d325f53d460358a252fcd2fbbf392b4985158d0b80b4f9daa494dd1d4de2fb67"
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0"
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit_drain.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "77c494714f22bddcdc0c946e05ce9610d611deb1c7255ac3598b2770ae220835"
+    },
+    {
+      "path": "tests/semantic/test_semantic_claim_quantity_guard.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d365a63c82dcd8d59b9c00572ab5b543206b7864c12c96cb073be2efebe200be"
+    },
+    {
+      "path": "tests/semantic/test_semantic_cli_contract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2005f21a8c34d8c9072f92b9f3b695f826b5ec70a7cfb8d50cac8da7579fdc28"
+    },
+    {
+      "path": "tests/semantic/test_semantic_degraded_coverage.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a015c58069a59bcb2e4214e9cd9a40d91590c41f3cad7a7f6fe5ab5946dce22a"
+    },
+    {
+      "path": "tests/semantic/test_semantic_delivery.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "cb874f5b3d2e759ae06ccf5fea71818269286adf6bb7cbf3c7c34f03c1226b43"
+    },
+    {
+      "path": "tests/semantic/test_semantic_detail_deadline.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "982232ea1e0b2b6885fa319fb3681e0b0e18d7f3adb3cf69fad02b20dca36952"
+    },
+    {
+      "path": "tests/semantic/test_semantic_evaluation.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "b0e009955b337ddfe11ac66ed7ddb460f763d4cd9d72dce550da8d8a3216b0cf"
+    },
+    {
+      "path": "tests/semantic/test_semantic_extraction.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "030793698e6834ccb6c3c9539fef43dc83e911f1e145f45c1efdf5e69f4e9030"
+    },
+    {
+      "path": "tests/semantic/test_semantic_fact_contract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "fc4b2effb9d66df4f08b18636426ccb5a2b74dced7428f058ad59bca7863ee2b"
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_audit.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "429600ca1d5c6cbcb4a4b4efef6356665a8f757185b6a2b131bb86774aa0c8c0"
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_v2.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f3a5a035a76bf44502db3ce1d74b54b2a16015479300374ec7bc378088f1060e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_feature_modes.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "f51e997e48f09042e9939369be9e23337677ac81a6029a92b2ac22fbf7d9a38f"
+    },
+    {
+      "path": "tests/semantic/test_semantic_input_contract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "fad467f5c2cafada0b33a1d76f86d78770e4550d086d3282549100763aa89373"
+    },
+    {
+      "path": "tests/semantic/test_semantic_jev_contract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "e503d6eba6d2e3fd48d84ebcd4665c80d448684d6394934256257b5291650d69"
+    },
+    {
+      "path": "tests/semantic/test_semantic_llm_retry.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "5086eae6993b7dfb60de15e80a11a63200b7aeecb18186b1e39bb127992dc57e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_generations.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d15493f90887240d7f8fdddc34117d70b094be0f676153344dce364f53b36303"
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_view.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "0577ab44c50dd2f25c6a4359c89d9efb4f84d7d37d327ba3865d24b8462b5ea7"
+    },
+    {
+      "path": "tests/semantic/test_semantic_mandatory_render.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "288e8282cd4af8cada8ff8ca949385cd94d9bd96863499f22256dab5d6b0da5d"
+    },
+    {
+      "path": "tests/semantic/test_semantic_manual_retry.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "d234bb4388ee158eb8684a879913e252abdf9ba7a0aaa303366dfcdaf4de7003"
+    },
+    {
+      "path": "tests/semantic/test_semantic_notice_contract.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "07ac2e011e1b652619a0b92e91a4e83f5ee7fa09f2a23aa975cd86ce05a4c2ea"
+    },
+    {
+      "path": "tests/semantic/test_semantic_observe.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "8b3ed0fa67a9001c637f29141e5161d2b91e9dbab6edc4800917c320cff06ec5"
+    },
+    {
+      "path": "tests/semantic/test_semantic_pause.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "2f0b96937a82488ea42a21780e086736bf3006d88a27fefe9410e9831cf1b8b7"
+    },
+    {
+      "path": "tests/semantic/test_semantic_policy_generation.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a51394c7d9744c79f1d361a228f397603825001afd31efd33482cb6ff34e7486"
+    },
+    {
+      "path": "tests/semantic/test_semantic_quantities.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "13915a591b415a2cf6a3e0481cee92c256a7151e77cd41368c14d7f2aee78e9e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_relations.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "74ccc843f2d2b91c344510082f723476c8f75a86c7242a4d877619e2d0f4a4c1"
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "3acc1748a614fd8baa8b1c5d265b238bb743259e9aa21d4b9aab0667341188e6"
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair_recovery.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "04a41fc6eae42f12ddec6374ea9ad5ee822b7f2de1c59e811a7798f62f05fbeb"
+    },
+    {
+      "path": "tests/semantic/test_semantic_runtime.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "aba2b73899f0e1cc8fe8ad3da008c6abac4e6c54d043998aa8ff28eba7483996"
+    },
+    {
+      "path": "tests/semantic/test_semantic_scope_edges.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "191775b3649c84d575dc5b827ff7fef2784da0cfd1902748cc8bbcf93b9abc25"
+    },
+    {
+      "path": "tests/semantic/test_semantic_send_gate.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "a8ec6dc65622145c47b47526c41a32e3abf940449205c9e078bd3bcf262a208e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_smoke.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_tick_budget.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "e71c0a2f84f58e5c37f4757b4f3327d1c3b464466e81d1540f45dd56392b6f97"
+    },
+    {
+      "path": "tests/semantic/test_semantic_transport.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "e59e94ba601fe69acef8373b76b0b0a32e7d0d97a2f08c901bfa2d1351a93323"
+    },
+    {
+      "path": "tests/semantic/test_semantic_view_generation.py",
+      "reviewer": "cli_gateway",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "27857310d23355ac35a3ffabaf665e96c6a5e283086adf84b27a722da67efd63"
+    },
+    {
+      "path": "tests/views/test_mcs_stats.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "aa145e17c683bdb105fdfecf17c99dbf4972e3f2285f4d6f3b98fdd7ccb5f58f"
+    },
+    {
+      "path": "tests/views/test_notification_receipt_scope.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "2788fee2f04a0371a9b218c023867f82a9027de4ad1624b790c25585d90cb365"
+    },
+    {
+      "path": "tests/views/test_qc_view.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "1df4a86add0d6782311ff214d4bc506a6d86732e0669d0361478e895810dd6e0"
+    },
+    {
+      "path": "tests/views/test_staff_directory.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": true,
+      "sha256": "ddaddecb59af5f763abab13c594146764c1ca353d6693d09178dc7d317d8ac30"
+    },
+    {
+      "path": "tests/views/test_structured_view.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "80da916690d90d67bc1009a315a92ed460dcdb30a189edebfa98e59c24e0c391"
+    },
+    {
+      "path": "tests/views/test_summary_review.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "7e6111079b23cc6170ed04bdbdf2abe3419dd7a78203b8bd910230b9852b579d"
+    },
+    {
+      "path": "tests/views/test_summary_review_cli.py",
+      "reviewer": "core_tools + coverage_finish",
+      "review": "full_text_and_relevant_contracts",
+      "modified": false,
+      "sha256": "6bff030154052c9eb6ebf30caf9d806cace291ec0763f119b7273cea5f482650"
+    }
+  ],
+  "new_files_reviewed": [
+    "docs/dev-records/review-20260925.md",
+    "integration/test_hermes_config.py",
+    "tests/core/test_ledger_candidate_validation.py",
+    "tests/core/test_ledger_reply_recovery.py",
+    "tests/extract/test_rollup_period.py",
+    "tests/ingest/test_thread_count_retry.py",
+    "tests/plugin/test_mcs_discord_delivery.py",
+    "tests/semantic/test_semantic_bench.py",
+    "tests/semantic/test_semantic_store.py",
+    "tests/views/test_semantic_view.py"
+  ],
+  "hermes_connection_files": [
+    {
+      "path": "gateway/platforms/event.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "2213d60e5a03b7716f2f6c71cfb127aa3115575ffa346e90391d2b52dc1110ca"
+    },
+    {
+      "path": "gateway/run_inbound.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "ead0063aa2a97ab183ba711e7fc568fe6ce8ee2f49a52978ce058d206136dff5"
+    },
+    {
+      "path": "plugins/platforms/discord/adapter.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "4de1d5b657b9ddb04a2894878fdab899b48a2412a9a33aea1d08f323951277fc"
+    },
+    {
+      "path": "hermes_cli/config.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "c7c8eb3669a1b240794966fb4f7fbb5c866df9f754b94ae449e40f54ec960f22"
+    },
+    {
+      "path": "hermes_cli/config_set.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "cda8d9e01c67030f4eec69b5b48591ae8304fd8a4e921ad4eee1d96fc13e81f4"
+    },
+    {
+      "path": "hermes_cli/subcommands/config.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "455a42ab8d2b97bc50368ee20d89280e69a28872a8a37a376168adfd110e3532"
+    },
+    {
+      "path": "tests/hermes_cli/test_config_stdin.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "e931ffdc1e2bc60cbabad4c4c7698ff4a0b928cddfcaa68325c69954df1f6785"
+    },
+    {
+      "path": "tests/gateway/test_unknown_command.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "9b4b3cde1a6bcfc861b9df36a3568e765fc27c75cdd5890fe4a27261bf21d800"
+    },
+    {
+      "path": "tests/gateway/test_discord_slash_commands.py",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "4ee449ef1e156e1b59fae6c384e03be7aeb22e2fa6727218fda6d37081a91064"
+    },
+    {
+      "path": "website/docs/user-guide/configuration.md",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "b2cecb68af15da3ba9ce0c7788ed283e33a5fbfc90ffa51385a9c9884e6019f8"
+    },
+    {
+      "path": "website/docs/developer-guide/plugins/index.md",
+      "review": "MCS_connection_path_and_diff",
+      "sha256": "3643f5148b50e40def5bf8f2c29f08435bf7652f4147e74d8d55b23cb60df622"
+    }
+  ],
+  "preserved_preexisting_hermes_changes": [
+    ".omo/omo.jsonc",
+    "gateway/run_busy.py",
+    "gateway/run_turn.py",
+    "tests/gateway/test_busy_session_ack.py"
+  ],
+  "pending_privacy_documents": [
+    "docs/dev-records/signal-priorities-20260924.md",
+    "docs/dev-records/phase-j-record.md",
+    "docs/screenshots/discord-notify.svg"
+  ],
+  "new_file_sha256": {
+    "docs/dev-records/review-20260925.md": "a2823c9f28ae3451f4aa6c20c4ba2e66e02a887e376b807853334258919d6a67",
+    "integration/test_hermes_config.py": "cda4da63fbb8e6b546e6870e2e76fe98f9509e1d49e55edf2a9bbc06172cb2bc",
+    "tests/core/test_ledger_candidate_validation.py": "83f6b270c8d5cfe14e81b123901bdbbd2b42169078adb54c8f755e9efd693b1d",
+    "tests/core/test_ledger_reply_recovery.py": "237cbf0c512223ed1d03f927808f9f6a45ea44709b3a7b594d207228477cdf8a",
+    "tests/extract/test_rollup_period.py": "1b8c07adbaf8c4e9ea82f1d327275e1c0aba868d575d92499b03c7dfcb223232",
+    "tests/ingest/test_thread_count_retry.py": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+    "tests/plugin/test_mcs_discord_delivery.py": "71230f3eef38c5836dff00912c118fde35092831f4e18488dc33b93da55cfebb",
+    "tests/semantic/test_semantic_bench.py": "a4715b5f24ae354bda5fc9fd34d1c6fa99e285fca68709f538b6b0ce9c720802",
+    "tests/semantic/test_semantic_store.py": "41fe9f71cb25270c6c8c2d6f9bdc6dcff327190181bcc91bed40603b663097bf",
+    "tests/views/test_semantic_view.py": "a147b861481c9d19a9cb98c33e48d5930df611f68847c5e040c7f78d5cc818f6"
+  },
+  "observed_head_at_handoff": "5f3af2c357fcfded6e059a8d722c6a974d8a2163"
+}

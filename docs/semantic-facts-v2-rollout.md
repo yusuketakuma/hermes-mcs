@@ -19,8 +19,8 @@ Set it through the activation command — it validates the resulting
 config before writing:
 
 ```sh
-python3 -m mcs.mcs_setup fact-source shadow
-python3 -m mcs.mcs_setup fact-source canonical --gate-evidence report.json
+python3 mcs/ops/mcs_setup.py fact-source shadow
+python3 mcs/ops/mcs_setup.py fact-source canonical --gate-evidence report.json
 ```
 
 `canonical` requires `--gate-evidence`: a `semantic_evaluation` report
@@ -105,7 +105,7 @@ Per target message, inside the shared drain queue:
 ## Evaluating Jev's incremental value
 
 ```sh
-python3 -m mcs.mcs_setup jev-value \
+python3 mcs/ops/mcs_setup.py jev-value \
   --cases evaluation/semantic_completeness_cases.json \
   --out /tmp/jev-value.json
 ```

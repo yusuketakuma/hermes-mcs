@@ -11,14 +11,14 @@
   <text x="115" y="112" font-size="11" fill="#8b949e" text-anchor="middle">医療・介護チームの</text>
   <text x="115" y="126" font-size="11" fill="#8b949e" text-anchor="middle">チャット記録</text>
   <line x1="200" y1="105" x2="248" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
-  <text x="224" y="92" font-size="10" fill="#58a6ff" text-anchor="middle">15分ごと</text>
+  <text x="224" y="92" font-size="10" fill="#58a6ff" text-anchor="middle">5分ごと</text>
   <text x="224" y="122" font-size="10" fill="#8b949e" text-anchor="middle">自動収集</text>
   <!-- stage 2: this system -->
   <rect x="252" y="42" width="230" height="126" rx="10" fill="#1f6feb"/>
   <text x="367" y="68" font-size="14" fill="#fff" text-anchor="middle" font-weight="bold">hermes-mcs</text>
   <text x="367" y="90" font-size="11" fill="#dbe8ff" text-anchor="middle">このマシン上に保存し</text>
   <text x="367" y="106" font-size="11" fill="#dbe8ff" text-anchor="middle">薬・症状・依頼などを整理</text>
-  <text x="367" y="130" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 記録は外部へ出ません</text>
+  <text x="367" y="130" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 通知・監査は設定先へ送信</text>
   <text x="367" y="146" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 元の記録は書き換えません</text>
   <line x1="482" y1="105" x2="530" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
   <text x="506" y="92" font-size="10" fill="#8b949e" text-anchor="middle">見える形に</text>

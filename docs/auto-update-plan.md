@@ -1,5 +1,15 @@
 # 自動アップデート機構 — 設計計画
 
+## 復旧時の未追跡ファイルの扱い（2026-09-25更新）
+
+現行実装では、更新差分に同名があるという理由だけで未追跡ファイルを
+自動削除しない。`mcs_update` と独立 recovery の双方からこの削除処理を廃止した。
+`git reset` による追跡済みファイルの復旧は維持する。その後に未追跡ファイルを
+名前の一致だけで追加削除する処理を行わない。
+以下の「外科的削除（tag-fileset と untracked の一致）」の記述は過去の設計・
+レビュー記録であり、現在の復旧手順として使わない。利用者が更新中に同名ファイルを
+作成した場合も、更新処理が生成したものと名前だけでは区別できないためである。
+
 **実装済み**（2026-09-24）。実装ファイル: `mcs/ops/mcs_update.py`、
 `deployment/scripts/mcs_update.sh`、`deployment/recovery/mcs_recover.py`、
 `deployment/launchagents/org.mcs.recovery.plist`、`mcs_setup.py` の
