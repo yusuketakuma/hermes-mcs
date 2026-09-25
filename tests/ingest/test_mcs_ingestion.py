@@ -178,64 +178,96 @@ def test_unread_reply_snippet_remains_missing():
 
 
 def test_contradictory_mark_read_response_is_unknown(monkeypatch):
+    # the mark read is a GET on the message list (keep_read_status
+    # omitted); confirmation comes from the detail read afterwards —
+    # oldest_unread_message still present means the mark did not hold
     adapter = mcs_adapter.MCSAdapter()
-    adapter._request = lambda *a, **k: (
-        200, b'{"project":{"is_unread":true,"unread_count":0}}', {}
-    )
+    adapter._get = lambda path, params=None, **k: {
+        "project": {"is_archived": False,
+                    "oldest_unread_message": {"id": 7}},
+    }
     with pytest.raises(mcs_adapter.MCSError) as error:
         adapter.mark_patient_read(1, 123)
     assert error.value.kind == "mark_result_unknown"
 
 
-def _unread_project(pid: int) -> dict:
-    return {"id": pid, "type": "medical",
+def test_mark_read_confirms_when_oldest_unread_is_gone():
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._get = lambda path, params=None, **k: (
+        {"project": {"is_archived": False}}     # detail: key absent = read
+        if path == "/projects/1" else {"messages": [], "paginate": {}})
+    assert adapter.mark_patient_read(1, 123)["project"]["is_archived"] is False
+
+
+def test_mark_read_empty_project_is_unknown():
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._get = lambda path, params=None, **k: (
+        {"project": {}}                        # no is_archived — not real
+        if path == "/projects/1" else {"messages": [], "paginate": {}})
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter.mark_patient_read(1, 123)
+    assert error.value.kind == "mark_result_unknown"
+
+
+def _unread_project(pid: int, unread: bool = True) -> dict:
+    return {"id": pid, "type": "medical", "is_unread": unread,
             "karte": {"last_name": "T", "first_name": "P", "disease": "",
                       "station": {"name": "st"}}}
 
 
 class _UnreadListAdapter(mcs_adapter.MCSAdapter):
-    """Serves /projects/unread pages from a schedule of
-    (timestamp, has_next) tuples, one entry per request."""
+    """Serves /projects pages from a schedule of
+    (timestamp, has_next, projects) tuples, one entry per request."""
 
     def __init__(self, pages):
         self.pages = list(pages)
         self.calls = []
 
     def _get(self, path, params=None, extend_session=True):
-        ts, has_next = self.pages[len(self.calls)]
+        ts, has_next, projs = self.pages[len(self.calls)]
         self.calls.append(params["page"])
-        return {"projects": [_unread_project(100 + params["page"])],
+        return {"projects": projs,
                 "paginate": {"timestamp": ts, "has_next": has_next}}
 
 
-def test_list_unread_restarts_when_snapshot_drifts():
+def test_list_unread_filters_read_projects_and_uses_earliest_ts():
     adapter = _UnreadListAdapter([
-        (1, True), (2, False),   # attempt 1: timestamp moves mid-walk
-        (7, True), (7, False),   # attempt 2: consistent snapshot
+        (100, True, [_unread_project(11), _unread_project(12, unread=False)]),
+        # page timestamps are a per-request server clock — they legitimately
+        # differ between pages; the snapshot keeps the earliest so mark-read
+        # can never cover a post made after the walk started.
+        (105, False, [_unread_project(13)]),
     ])
 
     snap = adapter.list_unread()
 
-    assert snap.timestamp == 7
-    assert adapter.calls == [1, 2, 1, 2]
-    assert [p.project_id for p in snap.patients] == [101, 102]
+    assert snap.timestamp == 100
+    assert adapter.calls == [1, 2]
+    assert [p.project_id for p in snap.patients] == [11, 13]
 
 
-def test_list_unread_fails_after_bounded_drift():
+def test_list_unread_fails_when_pagination_sticks():
     adapter = _UnreadListAdapter([
-        (1, True), (2, False),
-        (3, True), (4, False),
-        (5, True), (6, False),   # every attempt drifts
+        (100, True, [_unread_project(11)]),
+        (100, True, [_unread_project(11)]),  # same ids again
     ])
 
     with pytest.raises(mcs_adapter.SchemaError) as error:
         adapter.list_unread()
-    assert error.value.kind == "schema_error"
-    assert "timestamp changed" in error.value.detail
-    assert adapter.calls == [1, 2] * 3
+    assert "not advancing" in error.value.detail
 
 
-def test_list_unread_does_not_retry_other_schema_errors():
+def test_list_unread_rejects_missing_is_unread():
+    adapter = _UnreadListAdapter([
+        (100, False, [{"id": 11, "type": "medical", "karte": {}}]),
+    ])
+
+    with pytest.raises(mcs_adapter.SchemaError) as error:
+        adapter.list_unread()
+    assert "is_unread" in error.value.detail
+
+
+def test_list_unread_fails_on_schema_error():
     class Adapter(mcs_adapter.MCSAdapter):
         def __init__(self):
             self.calls = 0
@@ -832,7 +864,9 @@ def test_paginated_thread_is_not_reported_complete():
 
 def test_malformed_mark_response_stays_unknown():
     adapter = mcs_adapter.MCSAdapter()
-    adapter._request = lambda *a, **k: (200, b'{"data":[1]}', {})
+    adapter._get = lambda path, params=None, **k: (
+        {"data": [1]}                        # no project object at all
+        if path == "/projects/1" else {"messages": [], "paginate": {}})
     with pytest.raises(mcs_adapter.MCSError) as error:
         adapter.mark_patient_read(1, 123)
     assert error.value.kind == "mark_result_unknown"
@@ -843,8 +877,9 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
 
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            if path in ("/projects", "/projects/unread"):
-                return {"projects": [{"id": 1, "karte": {}}],
+            if path == "/projects":
+                return {"projects": [{"id": 1, "is_unread": True,
+                                      "karte": {}}],
                         "paginate": {"has_next": False, "timestamp": 123}}
             assert path == "/projects/1/messages"
             assert params["keep_read_status"] == 1
@@ -2212,7 +2247,10 @@ def test_incomplete_fetch_or_ack_never_becomes_confirmed(tmp_path, failure):
         ).fetchone()[0] == "incomplete"
         assert db.db.execute("SELECT count(*) FROM read_marks").fetchone()[0] == 0
     else:
-        assert len(calls) == 1
+        # the mark is two GETs now (list read = the mark, detail = confirm);
+        # empty_ack returns {} for both -> unknown, lost_ack raises on the
+        # first -> same unknown outcome
+        assert 1 <= len(calls) <= 2
         assert db.db.execute(
             "SELECT status FROM read_marks WHERE project_id=1 AND snapshot_ts=123"
         ).fetchone()[0] == "unknown"
@@ -3730,11 +3768,11 @@ def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
     import base64
     import io
     import urllib.error
+    import urllib.parse
     import mcs_transport
     import mcs_util
 
     observed = []
-    response_body = b'{"project":{"is_unread":false}}'
 
     class Response(io.BytesIO):
         status = 200
@@ -3743,7 +3781,10 @@ def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
     class Opener:
         def open(self, request, timeout):
             observed.append(request)
-            return Response(response_body)
+            body = (b'{"project":{"is_archived":false}}'
+                    if request.full_url.endswith("/projects/1")
+                    else b'{"messages":[],"paginate":{}}')
+            return Response(body)
 
     def opener(*handlers):
         assert handlers == (mcs_util.NoRedirect,)
@@ -3753,10 +3794,15 @@ def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
     adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
         mcs_transport._execute(dict(payload, timeout=timeout)))
     adapter._token = "synthetic-bearer"
-    assert adapter.mark_patient_read(1, 123)["project"]["is_unread"] is False
-    assert observed[0].data == b"timestamp=123"
-    assert observed[0].get_header("Authorization") == "Bearer synthetic-bearer"
-    assert observed[0].get_header("Content-type") == "application/x-www-form-urlencoded"
+    assert adapter.mark_patient_read(1, 123)["project"]["is_archived"] is False
+    # the mark is a GET on the message list — no body, Bearer header only —
+    # carrying the same unread/timestamp filter the fetch used
+    mark = observed[0]
+    assert mark.data is None
+    assert mark.get_method() == "GET"
+    assert mark.get_header("Authorization") == "Bearer synthetic-bearer"
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(mark.full_url).query)
+    assert q["unread"] == ["1"] and q["timestamp"] == ["123"]
 
     class ErrorBody:
         def read(self, *args):
@@ -3776,11 +3822,12 @@ def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
 
     # The explicit worker seam keeps retry policy in the parent adapter.
     statuses = iter([503, 200])
+    ok_body = b'{"ok":true}'
     adapter._worker = lambda payload, **kwargs: {
         "status": next(statuses), "headers": {},
-        "body": base64.b64encode(response_body).decode("ascii")}
+        "body": base64.b64encode(ok_body).decode("ascii")}
     monkeypatch.setattr(adapter, "_sleep_bounded", lambda seconds: None)
-    assert adapter._request("GET", "/projects")[1] == response_body
+    assert adapter._request("GET", "/projects")[1] == ok_body
 
 
 def test_attachment_worker_keeps_redirect_and_atomic_file_contract(tmp_path, monkeypatch):

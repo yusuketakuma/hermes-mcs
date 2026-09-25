@@ -43,8 +43,9 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
 
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
-            if path in ("/projects", "/projects/unread"):
-                return {"projects": [{"id": 1, "karte": {}}],
+            if path == "/projects":
+                return {"projects": [{"id": 1, "is_unread": True,
+                                      "karte": {}}],
                         "paginate": {"has_next": False, "timestamp": 123}}
             assert path == "/projects/1/messages"
             return {"messages": [{
