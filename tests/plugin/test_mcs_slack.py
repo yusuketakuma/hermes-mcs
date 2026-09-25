@@ -10,6 +10,7 @@ import ledger
 import pytest
 from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
+from hermes_plugin.card_workers import make_slack_factory
 from hermes_plugin.mcs_delivery import envelopes, journal, registry
 from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
@@ -124,6 +125,46 @@ def test_foreign_workspace_cannot_send():
         assert not await adapter.bind()
         assert (await adapter.perform(_spec()))["result"] == "not_sent"
         assert [kind for kind, _ in foreign.calls] == ["auth_test"]
+
+    asyncio.run(scenario())
+
+
+def test_factory_uses_existing_secondary_workspace_client(tmp_path, monkeypatch):
+    class Context:
+        def get_config(self, key, default=None):
+            return settings.get(key, default)
+
+    settings = {
+        "slack_adapter_enabled": True, "slack_team_id": "T_SYNTHETIC",
+        "slack_application_id": "A_SYNTHETIC",
+        "slack_channel_id": "C_SYNTHETIC",
+        "slack_allowed_user_ids": ["U_OPERATOR"], "slack_profile": "cco",
+        "project_ids": [1], "data_root": str(tmp_path),
+    }
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(
+        json.dumps({"interactive": True, "transport": "slack"}))
+    from hermes_plugin.mcs_slack.tasks import Supervisor
+    monkeypatch.setattr(Supervisor, "start", lambda self: None)
+    primary = FakeClient(team="T_PRIMARY")
+    secondary = FakeClient()
+    selected = []
+
+    def workspace_client(channel_id, team_id=None):
+        selected.append((channel_id, team_id))
+        return secondary
+
+    async def scenario():
+        supervisor = make_slack_factory(Context())(
+            SimpleNamespace(client=primary),
+            SimpleNamespace(_get_client=workspace_client))
+        assert supervisor is not None
+        assert await supervisor._sender.bind()
+        assert (await supervisor._sender.perform(_spec()))["result"] == "delivered"
+        assert selected == [("C_SYNTHETIC", "T_SYNTHETIC")]
+        assert primary.calls == []
+        assert [kind for kind, _ in secondary.calls] == ["auth_test", "create"]
 
     asyncio.run(scenario())
 

@@ -105,7 +105,13 @@ def validate(spec) -> dict:
         if c["type"] in ("heading", "text", "quote"):
             if not _text(c.get("text"), MAX_TEXT):
                 _err("container_too_long")
-            text_budget -= len(c["text"]) + 4   # "## " / ">>> " wrappers
+            if c["type"] == "quote":
+                # The merged card prefixes EVERY quote line with "> ".
+                # Reserve its joining newline too, as for other containers.
+                text_budget -= sum(len(line) + 3
+                                   for line in c["text"].splitlines())
+            else:
+                text_budget -= len(c["text"]) + 4
         elif c["type"] == "field":
             if not _text(c.get("name"), 256) \
                     or not _text(c.get("value"), MAX_TEXT):

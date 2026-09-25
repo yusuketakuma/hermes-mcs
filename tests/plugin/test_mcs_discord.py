@@ -529,6 +529,21 @@ def test_spec_rejects(world, mutate, error):
         spec_mod.validate(spec)
 
 
+def test_spec_text_budget_covers_multiline_quotes(world):
+    world.seed()
+    world.dispatch()
+    _, spec = world.spec()
+    spec["parts"]["footer"] = []
+    spec["parts"]["action_rows"] = []
+    spec["parts"]["containers"] = [
+        {"type": "quote", "text": "x\n" * 1500}]
+    view = cards.build_view(spec)
+    rendered = sum(len(item.content) for item in view.items[0].children)
+    assert rendered > spec_mod.MAX_TOTAL_TEXT
+    with pytest.raises(ValueError, match="text_budget"):
+        spec_mod.validate(spec)
+
+
 # ---------- delivery -------------------------------------------------------
 
 async def _deliver(world, worker):
@@ -976,6 +991,11 @@ def test_split_body_chunks_bounded():
     assert 1 < len(chunks) <= text.BODY_MAX_CHUNKS
     assert all(len(c) <= text.BODY_CHUNK for c in chunks)
     assert chunks[0].startswith("line-0")
+    with pytest.raises(ValueError, match="chunk_limit"):
+        text.split_body("synthetic", limit=0)
+    oversized = "合" * (text.BODY_CHUNK * (text.BODY_MAX_CHUNKS + 3))
+    assert text.split_body(oversized) == [
+        "合" * text.BODY_CHUNK] * text.BODY_MAX_CHUNKS
     one = text.split_body("短い")
     assert one == ["短い"]
     long_line = "y" * 5000

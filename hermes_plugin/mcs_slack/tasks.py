@@ -13,7 +13,7 @@ from .delivery import DeliveryWorker, SlackCardAdapter
 
 
 class Supervisor:
-    def __init__(self, *, ctx, app, settings, log):
+    def __init__(self, *, ctx, app, adapter, settings, log):
         self._ctx = ctx
         self._settings = settings
         self._log = log
@@ -22,7 +22,7 @@ class Supervisor:
         self._reg = registry.Registry(self._dirs["state"], scope=settings)
         self._worker_id = registry.new_worker_id()
         self._sender = SlackCardAdapter(
-            app, team_id=settings["team_id"],
+            app, native_adapter=adapter, team_id=settings["team_id"],
             application_id=settings["application_id"],
             channel_id=settings["channel_id"], profile=settings["profile"],
             allowed_user_ids=settings["allowed_user_ids"])

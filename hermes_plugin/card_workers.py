@@ -117,7 +117,7 @@ def make_slack_factory(ctx):
                      json.dumps(fields, ensure_ascii=False,
                                 sort_keys=True, default=str))
         from .mcs_slack.tasks import Supervisor
-        supervisor = Supervisor(ctx=ctx, app=native,
+        supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
                                 settings=settings, log=_event)
         supervisor.start()
         return supervisor
