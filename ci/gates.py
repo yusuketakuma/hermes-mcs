@@ -32,13 +32,16 @@ _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin"}
 # without an SDK installed. No new client/token ownership is delegated.
 _SDK_FILES = {"mcs_discord/actions.py", "mcs_discord/cards.py"}
 _ASYNC_FILES = {"mcs_discord/actions.py", "mcs_discord/delivery.py",
-                "mcs_discord/tasks.py"}
+                "mcs_discord/tasks.py", "mcs_delivery/worker.py",
+                "mcs_slack/actions.py", "mcs_slack/delivery.py",
+                "mcs_slack/tasks.py"}
 _ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
 _SDK_MEMBERS = {
     "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
-    "ui.Modal", "ui.TextInput", "ui.View", "ButtonStyle",
-    "ButtonStyle.success", "ButtonStyle.secondary", "TextStyle.short",
-    "TextStyle.paragraph", "Webhook.partial",
+    "ui.Modal", "ui.TextInput", "ui.View", "ui.Container",
+    "ButtonStyle", "ButtonStyle.success", "ButtonStyle.secondary",
+    "ButtonStyle.primary", "TextStyle.short", "TextStyle.paragraph",
+    "Webhook.partial", "WebhookType.application",
 }
 
 

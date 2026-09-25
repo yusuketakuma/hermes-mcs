@@ -1,8 +1,9 @@
 """Slack render/state directories beside the shared MCS command inbox."""
+from __future__ import annotations
 
 import os
 
-from hermes_plugin.mcs_discord import paths
+from ..mcs_delivery import paths
 
 
 def notify_dirs(root: str) -> dict[str, str]:

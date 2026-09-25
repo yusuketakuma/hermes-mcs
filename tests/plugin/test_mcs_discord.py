@@ -29,9 +29,12 @@ import notify_cards
 import notify_transport
 import notify_cmds
 
+from hermes_plugin.mcs_delivery import (envelopes, journal, paths,
+                                        registry, text)
+from hermes_plugin.mcs_delivery import spec as spec_mod
+from hermes_plugin.mcs_delivery import worker as worker_mod
 from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
-                                      delivery, envelopes, journal,
-                                      paths, registry, tasks)
+                                       delivery, tasks)
 
 NOW = 1_790_000_000.0
 MISSING = object()  # discord.py's "argument not passed" sentinel
@@ -493,7 +496,7 @@ def test_real_spec_validates_and_builds(world):
     world.seed()
     world.dispatch()
     _, spec = world.spec()
-    assert cards.validate(spec) is spec
+    assert spec_mod.validate(spec) is spec
     view = cards.build_view(spec)
     # the face is one bordered Container carrying text + action rows
     assert [type(i).__name__ for i in view.items] == ["Container"]
@@ -523,7 +526,7 @@ def test_spec_rejects(world, mutate, error):
     _, spec = world.spec()
     mutate(spec)
     with pytest.raises(ValueError, match=error):
-        cards.validate(spec)
+        spec_mod.validate(spec)
 
 
 # ---------- delivery -------------------------------------------------------
@@ -614,7 +617,7 @@ def test_in_flight_retry_mints_fresh_envelope(world, monkeypatch):
     """A denied_in_flight re-begin must publish a NEW envelope with a
     NEW attempt_id — replaying the stored begin_env just replays the
     same denial forever."""
-    monkeypatch.setattr(delivery, "RETRY_IN_FLIGHT_S", 0)
+    monkeypatch.setattr(worker_mod, "RETRY_IN_FLIGHT_S", 0)
     world.seed()
     world.dispatch()
     worker, reg, bot = world.mkworker()
@@ -968,16 +971,16 @@ def test_action_foreign_thread_denied(world):
 
 
 def test_split_body_chunks_bounded():
-    text = "\n".join(f"line-{i} " + "x" * 100 for i in range(80))
-    chunks = actions_mod._split_body(text)
-    assert 1 < len(chunks) <= actions_mod.BODY_MAX_CHUNKS
-    assert all(len(c) <= actions_mod.BODY_CHUNK for c in chunks)
+    body = "\n".join(f"line-{i} " + "x" * 100 for i in range(80))
+    chunks = text.split_body(body)
+    assert 1 < len(chunks) <= text.BODY_MAX_CHUNKS
+    assert all(len(c) <= text.BODY_CHUNK for c in chunks)
     assert chunks[0].startswith("line-0")
-    one = actions_mod._split_body("短い")
+    one = text.split_body("短い")
     assert one == ["短い"]
     long_line = "y" * 5000
-    chunks = actions_mod._split_body(long_line)
-    assert all(len(c) <= actions_mod.BODY_CHUNK for c in chunks)
+    chunks = text.split_body(long_line)
+    assert all(len(c) <= text.BODY_CHUNK for c in chunks)
 
 
 def test_action_ignores_foreign_and_denies(world):
@@ -1744,7 +1747,7 @@ def test_stale_claim_marker_reclaimed(world):
         await worker.tick()          # fresh marker -> not reclaimed yet
         assert reg.claimed(spec["delivery_id"]) is None
         assert not bot.channels[42].sent
-        old = time.time() - delivery.CLAIM_STALE_S - 1
+        old = time.time() - worker_mod.CLAIM_STALE_S - 1
         os.utime(marker, (old, old))
         sent = await _deliver(world, worker)
         assert len(sent) == 1
@@ -1760,7 +1763,7 @@ def test_begin_republishes_same_envelope(world, monkeypatch):
     """RC09 — a begin whose result never arrives republishes the SAME
     envelope: deterministic command_id lands on the same file and the
     runner's idempotent replay answers the existing attempt."""
-    monkeypatch.setattr(delivery, "REPUBLISH_BEGIN_S", 0)
+    monkeypatch.setattr(worker_mod, "REPUBLISH_BEGIN_S", 0)
     world.seed()
     world.dispatch()
     worker, reg, bot = world.mkworker()
@@ -2216,7 +2219,7 @@ def test_body_reclick_waits_for_fresh_result_after_source_deletion(world):
 
 def test_body_messages_include_heading_in_discord_limit():
     body = "x" * 6000
-    messages = actions_mod._body_messages({"title": "合成見出し" * 200, "body": body})
+    messages = text.body_messages({"title": "合成見出し" * 200, "body": body})
     assert all(len(message) <= 2000 for message in messages)
     assert sum(message.count("x") for message in messages) == len(body)
 

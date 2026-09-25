@@ -19,7 +19,7 @@ import time
 from typing import Any
 
 from .. import projects
-from . import envelopes, paths, registry
+from ..mcs_delivery import envelopes, paths, registry, text
 
 ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
@@ -29,104 +29,6 @@ RESULT_POLL_S = 0.5
 RESULT_WAIT_S = 20.0          # interactive ops budget (plan §7: p95<=6s)
 MODAL_OPEN_WAIT_S = 1.5       # send_modal initial-response ceiling ~3s
 HUMAN_WAIT_S = 25.0           # human command drains can queue behind tick
-
-ERR_JA = {
-    "unknown_token": "この操作は無効化されました（カードが更新された可能性があります）。",
-    "token_expired": "操作の有効期限が切れています。最新のカードでやり直してください。",
-    "stale_ui": "カードが更新されました。最新の表示で操作してください。",
-    "stale_source": "原資料が更新されました。最新の表示で操作してください。",
-    "card_revoked": "このカードは取り下げ済みです。",
-    "card_not_found": "対象カードが見つかりません。",
-    "manifest_invalid": "表示内容が変わったため確定できません。最新の表示で操作してください。",
-    "scope_mismatch": "この環境のカードではありません。",
-    "stale_task": "タスクが更新されました。最新の一覧でやり直してください。",
-    "request_not_found": "対象のタスクが見つかりません。",
-    "request_not_open": "このタスクは既に終了しています。",
-    "interactive_off": "現在インタラクティブ通知は停止中です。",
-    "signal_changed": "対象の候補が更新されました。最新のカードでやり直してください。",
-    "source_changed": "元の投稿が更新されました。最新のカードでやり直してください。",
-    "source_missing": "対象の投稿が見つかりません。",
-    "source_incomplete": "対象の投稿データが不完全です。",
-    "command_id_conflict": "同じIDで内容の異なる要求が検出されました。",
-    "bad_page": "そのページは存在しません。",
-    "reason_required": "理由の入力が必要です。",
-}
-
-
-def _ja(result: dict | None) -> str:
-    if not result:
-        return "結果を取得できませんでした（処理中の可能性があります）。"
-    err = result.get("error")
-    if result.get("outcome") == "applied" or result.get("applied"):
-        return "反映しました。"
-    return ERR_JA.get(str(err), f"拒否されました: {err}")
-
-
-BODY_CHUNK = 1900          # under the 2000-char message ceiling
-BODY_MAX_CHUNKS = 4        # runner caps ~6k chars; never spam a channel
-
-
-def _split_body(text: str, limit: int = BODY_CHUNK) -> list:
-    """Split a full-text answer on line boundaries into <=limit chunks,
-    hard-wrapping overlong lines. Bounded so a huge body stays a few
-    ephemeral messages, never a flood."""
-    out, cur = [], ""
-    for line in text.split("\n"):
-        while len(line) > limit:
-            if cur:
-                out.append(cur)
-                cur = ""
-            out.append(line[:limit])
-            line = line[limit:]
-        cand = (cur + "\n" + line) if cur else line
-        if len(cand) > limit:
-            out.append(cur)
-            cur = line
-        else:
-            cur = cand
-    if cur or not out:
-        out.append(cur)
-    return out[:BODY_MAX_CHUNKS]
-
-
-def _body_messages(result: dict) -> list:
-    """title + chunked body as sendable messages — shared by the live
-    interaction path and the delayed followup sweep."""
-    body = str(result.get("body") or "")
-    title = str(result.get("title") or "本文")
-    # The heading shares the 2000-character message budget with each chunk.
-    # Titles are source-derived and may be arbitrarily long.
-    if len(title) > 80:
-        title = title[:79] + "…"
-    chunks = _split_body(body)
-    return [f"**{title}**（{i + 1}/{len(chunks)}）\n{c}"
-            if len(chunks) > 1 else f"**{title}**\n{c}"
-            for i, c in enumerate(chunks)]
-
-
-def _task_list_text(items: list) -> str:
-    """Ephemeral task list — one line per request, status mark first so
-    the scan order matches the transition buttons below it."""
-    marks = {"open": "⬜", "in_progress": "⏳", "done": "✅"}
-    lines = ["📋 **タスク**（このスレッド）"]
-    for t in items:
-        meta = []
-        if t.get("assignee"):
-            meta.append(f"担当: {t['assignee']}")
-        if t.get("due_date"):
-            meta.append(f"期限: {t['due_date']}")
-        lines.append(f"{marks.get(t['status'], '⬜')} "
-                     f"#{t['request_id']} {t['title']}"
-                     + (" — " + "・".join(meta) if meta else ""))
-    return "\n".join(lines)
-
-
-def _task_done_text(result: dict) -> str:
-    status = "完了" if result.get("status") == "done" else "対応中"
-    title = result.get("title") or f"#{result.get('request_id')}"
-    if result.get("absorbed"):
-        return f"タスク「{title}」は既に「{status}」です。"
-    return f"タスク「{title}」を「{status}」にしました。"
 
 
 def _task_view(items: list):
@@ -350,7 +252,7 @@ class Actions:
                     result.get("outcome") == "applied"
                     and result.get("modal")):
                 self._result_log(interaction, action, result)
-                await self._ephemeral(interaction, _ja(result))
+                await self._ephemeral(interaction, text.ja(result))
                 return
             modal_id = registry.new_modal_id()
             modal = self._build_modal(action, modal_id)
@@ -409,10 +311,10 @@ class Actions:
             elif result.get("action") == "tasks":
                 await self._send_tasks(interaction, result)
             elif result.get("action") == "task_status":
-                await self._followup(interaction, _task_done_text(result))
+                await self._followup(interaction, text.task_done_text(result))
             # silent ack — the card re-renders through the pipeline
             return
-        await self._followup(interaction, _ja(result))
+        await self._followup(interaction, text.ja(result))
 
     # -- modal ------------------------------------------------------------
 
@@ -497,13 +399,13 @@ class Actions:
         if result is None:
             # the drain may still be running — keep the modal so a
             # resubmit replays the same command idempotently
-            await self._followup(interaction, _ja(result))
+            await self._followup(interaction, text.ja(result))
             return
         self._reg.drop_modal(modal_id)   # a definitive answer consumed it
         self._result_log(interaction, pending["action"], result)
         if result.get("outcome") != "applied" \
                 or not result.get("modal"):
-            await self._followup(interaction, _ja(result))
+            await self._followup(interaction, text.ja(result))
             return
         params = dict(pending.get("params") or {})
         params.update(result.get("params") or {})
@@ -667,7 +569,7 @@ class Actions:
             return                        # supervisor sweeps followups
         self._reg.drop_followup(cid)
         self._result_log(interaction, payload.get("cmd"), result)
-        await self._followup(interaction, _ja(result))
+        await self._followup(interaction, text.ja(result))
 
     # -- pending followup sweep (called by the supervisor) ---------------
 
@@ -695,9 +597,9 @@ class Actions:
                 hook.type = discord.WebhookType.application
                 if result.get("action") == "body" and result.get("body"):
                     # a body click that outlived the wait window still
-                    # owes the full text — generic _ja would report
+                    # owes the full text — generic text.ja would report
                     # "反映しました" and never deliver it
-                    for msg in _body_messages(result):
+                    for msg in text.body_messages(result):
                         await hook.send(msg, ephemeral=True)
                 elif result.get("action") == "tasks":
                     # same debt for the 📋 list — and its transition
@@ -709,17 +611,17 @@ class Actions:
                             self._reg.put_tokens, token_ctx)
                     items = result.get("tasks") or []
                     if items:
-                        await hook.send(_task_list_text(items),
+                        await hook.send(text.task_list_text(items),
                                         ephemeral=True,
                                         view=_task_view(items))
                     else:
                         await hook.send("このスレッドのタスクはありません。",
                                         ephemeral=True)
                 elif result.get("action") == "task_status":
-                    await hook.send(_task_done_text(result),
+                    await hook.send(text.task_done_text(result),
                                     ephemeral=True)
                 else:
-                    await hook.send(_ja(result), ephemeral=True)
+                    await hook.send(text.ja(result), ephemeral=True)
             except Exception as e:
                 self._log("followup_failed", error=type(e).__name__)
 
@@ -729,7 +631,7 @@ class Actions:
         """Full-text answer for the 'body' action as chunked ephemeral
         followups — text stays ephemeral (unlike a file attachment,
         whose CDN URL is reachable by link alone)."""
-        for msg in _body_messages(result):
+        for msg in text.body_messages(result):
             await self._followup(interaction, msg)
 
     async def _send_tasks(self, interaction, result: dict) -> None:
@@ -745,7 +647,7 @@ class Actions:
             await self._followup(
                 interaction, "このスレッドのタスクはありません。")
             return
-        await self._followup(interaction, _task_list_text(items),
+        await self._followup(interaction, text.task_list_text(items),
                              view=_task_view(items))
 
     async def _ephemeral(self, interaction, text: str) -> None:

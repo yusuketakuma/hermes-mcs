@@ -1,13 +1,13 @@
 """Native Slack card actions; the runner remains the authority for each token."""
+from __future__ import annotations
 
 import asyncio
-import copy
 import re
 from datetime import date
 
-from hermes_plugin import projects
-from hermes_plugin.mcs_discord import envelopes, paths, registry
-from hermes_plugin.mcs_discord.actions import _body_messages, _ja
+from .. import projects
+from ..mcs_delivery import envelopes, paths, registry
+from ..mcs_delivery.text import body_messages, ja
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
@@ -83,12 +83,9 @@ class Actions:
                 and user.get("id") in self._settings["allowed_user_ids"])
 
     def _client(self):
-        handlers = getattr(self._app.client, "retry_handlers", None)
-        if not isinstance(handlers, (list, tuple)):
-            return None
-        client = copy.copy(self._app.client)
-        client.retry_handlers = []
-        return client
+        # The adapter vends a send-safe snapshot of the shared native
+        # client — the single place the retry_handlers copy lives.
+        return self._sender.single_attempt()
 
     def _pinned(self, token, origin, actor):
         ctx = self._reg.token(token)
@@ -370,10 +367,10 @@ class Actions:
                     await self._preview(pending, result)
                 else:
                     await self._say(origin["channel_id"], rec["user"],
-                                    _ja(result))
+                                    ja(result))
             elif result.get("action") == "body" \
                     and result.get("outcome") == "applied":
-                for message in _body_messages(result):
+                for message in body_messages(result):
                     await self._say(origin["channel_id"], rec["user"], message)
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
-                await self._say(origin["channel_id"], rec["user"], _ja(result))
+                await self._say(origin["channel_id"], rec["user"], ja(result))

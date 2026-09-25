@@ -10,7 +10,7 @@ import ledger
 import pytest
 from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
-from hermes_plugin.mcs_discord import envelopes, journal, registry
+from hermes_plugin.mcs_delivery import envelopes, journal, registry
 from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
