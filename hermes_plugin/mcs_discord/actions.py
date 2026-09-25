@@ -100,14 +100,31 @@ def _body_messages(result: dict) -> list:
             for i, c in enumerate(chunks)]
 
 
+def _authorizing_channel(interaction) -> tuple[str, str | None]:
+    """(scope channel_id, thread_id). A click arriving from inside a
+    card's companion thread reports the thread's id — the thread
+    inherits its parent channel's authorization and the card is bound
+    to the parent, so the parent is the scope; the thread id is kept
+    for the audit trail."""
+    parent_id = getattr(getattr(interaction, "channel", None),
+                        "parent_id", None)
+    if parent_id is not None:
+        return str(parent_id), str(interaction.channel_id)
+    return str(interaction.channel_id), None
+
+
 def _origin(interaction, profile: str | None) -> dict:
     """Native origin from the interaction object — never from a payload
-    the user could have written."""
+    the user could have written. A click inside a card's companion
+    thread is normalized to the parent channel the card is bound to."""
+    channel_id, thread_id = _authorizing_channel(interaction)
     origin = {"application_id": str(interaction.application_id),
-              "channel_id": str(interaction.channel_id),
+              "channel_id": channel_id,
               "message_id": str(interaction.message.id)
               if getattr(interaction, "message", None) is not None
               else ""}
+    if thread_id is not None:
+        origin["thread_id"] = thread_id
     if getattr(interaction, "guild_id", None):
         origin["guild_id"] = str(interaction.guild_id)
     if profile:
@@ -151,12 +168,13 @@ class Actions:
         can't guarantee MCS's own restriction)."""
         s = self._settings
         users = s.get("allowed_user_ids") or set()
-        chats = s.get("allowed_chat_ids") or set()
+        chats = {str(c) for c in s.get("allowed_chat_ids") or set()}
         uid = str(interaction.user.id)
-        cid = str(interaction.channel_id)
+        cid, _ = _authorizing_channel(interaction)
         if users and uid not in {str(u) for u in users}:
             return "user_not_allowed"
-        if chats and cid not in {str(c) for c in chats}:
+        if chats and cid not in chats \
+                and str(interaction.channel_id) not in chats:
             return "chat_not_allowed"
         if project_ids is not None:
             allowed = s.get("project_ids") or set()
@@ -164,6 +182,13 @@ class Actions:
                 if pid is not None and pid not in allowed:
                     return "project_not_allowed"
         return None
+
+    def _deny_reason(self, interaction, denial: str) -> None:
+        """The user only sees 「権限がありません。」— the reason stays
+        diagnosable in the journal."""
+        self._log("interaction_denied", reason=denial,
+                  actor=_actor(interaction),
+                  channel=str(interaction.channel_id))
 
     # -- result polling --------------------------------------------------
 
@@ -215,7 +240,9 @@ class Actions:
             # bound to the native origin, and the runner re-issues the
             # render (with fresh tokens) only when the origin resolves
             # to a live card. An unauthorized click earns no refresh.
-            if self._authorized(interaction) is not None:
+            denial = self._authorized(interaction)
+            if denial is not None:
+                self._deny_reason(interaction, denial)
                 await self._ephemeral(interaction, "権限がありません。")
                 return
             try:
@@ -235,6 +262,7 @@ class Actions:
                     else None)
         denial = self._authorized(interaction, projects)
         if denial:
+            self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
             return
 
@@ -364,6 +392,7 @@ class Actions:
             interaction,
             [pending.get("context", {}).get("project_id")])
         if denial:
+            self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
             return
         profile = self._settings.get("profile")
@@ -522,6 +551,7 @@ class Actions:
         denial = self._authorized(
             interaction, [pending["payload"].get("project_id")])
         if denial:
+            self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
             return
         profile = self._settings.get("profile")
