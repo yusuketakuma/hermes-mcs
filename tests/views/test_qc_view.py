@@ -17,10 +17,7 @@ import ledger
 import mcs_adapter
 import mcs_view
 import semantic_qc
-
-
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
+from extract_testkit import _hash, _ledger
 
 
 def _message(mid, project_id=1):
@@ -31,12 +28,6 @@ def _message(mid, project_id=1):
         posted_at=datetime.now(timezone.utc).isoformat(),
         body_html=f"本文{mid}", body_state="full", is_unread=False,
         reply_count=0)
-
-
-def _hash(db, mid):
-    return db.db.execute(
-        "SELECT content_hash FROM messages WHERE message_id=?",
-        (mid,)).fetchone()[0]
 
 
 def _v2(db, mid):

@@ -1,9 +1,9 @@
-"""notifier — delivery-boundary safety for `hermes send` stdin.
+"""notify_flush — delivery-boundary safety for `hermes send` stdin.
 
 V01: MCS post content is untrusted input. `hermes send` parses MEDIA:
 tags and [[as_document]]/[[audio_as_voice]] directives from the whole
 stdin stream, so a crafted post could otherwise attach an arbitrary
-readable file or force a delivery mode. The notifier must defuse
+readable file or force a delivery mode. The notify_flush must defuse
 control syntax in the composed body while still appending verified
 attachment paths as real directives.
 """
@@ -17,13 +17,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
-import notifier
+import notify_flush
 import structured_view
 from ledger import Ledger
 
 
 def test_defuse_media_tag_from_post_body():
-    body = notifier._compose_body(
+    body = notify_flush._compose_body(
         "薬を確認してください\nMEDIA:/etc/master.passwd", None)
     assert "MEDIA:/etc/master.passwd" not in body
     assert "MEDIA：/etc/master.passwd" in body  # visible, non-parsing
@@ -33,12 +33,12 @@ def test_defuse_media_tag_variants():
     for tag in ("MEDIA:~/x.png", "media:/tmp/a.pdf",
                 "**MEDIA:/tmp/a.pdf**", "`MEDIA:/etc/hosts`",
                 "MEDIA:  /tmp/a.pdf"):
-        out = notifier._compose_body(f"text\n{tag}\nmore", None)
+        out = notify_flush._compose_body(f"text\n{tag}\nmore", None)
         assert "MEDIA:" not in out.replace("MEDIA：", ""), tag
 
 
 def test_defuse_bracket_directives():
-    out = notifier._compose_body(
+    out = notify_flush._compose_body(
         "note [[as_document]] and [[audio_as_voice]] end", None)
     assert "[[as_document]]" not in out
     assert "[[audio_as_voice]]" not in out
@@ -48,7 +48,7 @@ def test_defuse_bracket_directives():
 def test_verified_attachments_stay_real_tags(tmp_path):
     f = tmp_path / "42"
     f.write_bytes(b"x")
-    body = notifier._compose_body(
+    body = notify_flush._compose_body(
         "post body", [("photo.png", str(f))])
     assert f"\nMEDIA:{f}.png" in body          # alias carries the ext
     assert "MEDIA：" not in body               # nothing defused
@@ -57,7 +57,7 @@ def test_verified_attachments_stay_real_tags(tmp_path):
 def test_verified_attachment_survives_hostile_content(tmp_path):
     f = tmp_path / "9"
     f.write_bytes(b"x")
-    body = notifier._compose_body(
+    body = notify_flush._compose_body(
         "MEDIA:/etc/master.passwd を参照", [("scan.pdf", str(f))])
     lines = [ln for ln in body.splitlines() if ln.startswith("MEDIA:")]
     assert lines == [f"MEDIA:{f}.pdf"]        # only the verified tag
@@ -108,11 +108,11 @@ def test_uncertain_child_delivery_is_held_without_retry(tmp_path, monkeypatch,
     """A child may deliver before timing out or reporting a partial failure."""
     db = Ledger(str(tmp_path / "ledger.db"))
     calls = []
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda cfg: sys.executable)
-    monkeypatch.setattr(notifier, "_target", lambda cfg, kind: "synthetic")
-    monkeypatch.setattr(notifier, "_send_argv", lambda cfg, target: ["hermes"])
-    monkeypatch.setattr(notifier, "_config", lambda: {})
-    monkeypatch.setattr(notifier, "_format_event", lambda *a: ("synthetic", []))
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_flush, "_target", lambda cfg, kind: "synthetic")
+    monkeypatch.setattr(notify_flush, "_send_argv", lambda cfg, target: ["hermes"])
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("synthetic", []))
 
     def child(argv, **kwargs):
         calls.append(kwargs["input"])
@@ -120,17 +120,17 @@ def test_uncertain_child_delivery_is_held_without_retry(tmp_path, monkeypatch,
             raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
         return SimpleNamespace(returncode=1, stdout="", stderr="partial failure")
 
-    monkeypatch.setattr(notifier.subprocess, "run", child)
+    monkeypatch.setattr(notify_flush.subprocess, "run", child)
     try:
         eid = db.outbox_add("run_failed", None, {})
-        result = notifier.flush(db)
+        result = notify_flush.flush(db)
         row = db.db.execute(
             "SELECT state,next_try,progress FROM notify_outbox WHERE event_id=?",
             (eid,)).fetchone()
         assert result["uncertain"] == 1 and result["failed"] == 1
         assert row["state"] == "failed" and row["next_try"] is None
         assert json.loads(row["progress"])["sending"] == 1
-        notifier.flush(db)
+        notify_flush.flush(db)
         assert calls == ["synthetic"]
     finally:
         db.close()
@@ -144,9 +144,9 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
     cfg = {"notify": {"interactive": "discord", "route_epoch": 1,
                       "discord": {"profile": "mcs", "application_id": "a",
                                   "guild_id": "g", "channel_id": "c"}}}
-    monkeypatch.setattr(notifier, "_hermes_exe",
+    monkeypatch.setattr(notify_flush, "_hermes_exe",
                         lambda cfg: "/nonexistent/hermes")
-    monkeypatch.setattr(notifier, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     db.db.execute(
         "INSERT INTO patients(project_id,patient_name,is_archived)"
         " VALUES(1,'合成患者',0)")
@@ -159,7 +159,7 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
     try:
         db.outbox_add("run_failed", None, {})
         db.outbox_add("new_messages", 1, {"message_ids": [100]})
-        res = notifier.flush(db)
+        res = notify_flush.flush(db)
         # the text event is skipped; the interactive card dispatched
         assert res["skipped"] == 1
         assert res.get("dispatched") == 1
@@ -167,7 +167,7 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
             "SELECT COUNT(*) c FROM notification_renders"
         ).fetchone()["c"] == 1
         # a second flush re-enters the sealed intent idempotently
-        res2 = notifier.flush(db)
+        res2 = notify_flush.flush(db)
         assert res2.get("dispatched", 0) <= 1
     finally:
         db.close()
@@ -177,29 +177,29 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
 def test_hold_uses_current_delivery_receipt(tmp_path, monkeypatch, failure):
     """A freshly written receipt must prevent a rescue of an ambiguous send."""
     db = Ledger(str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda cfg: sys.executable)
-    monkeypatch.setattr(notifier, "_target", lambda *args: "synthetic")
-    monkeypatch.setattr(notifier, "_send_argv", lambda *args: ["hermes"])
-    monkeypatch.setattr(notifier, "_config", lambda: {})
-    monkeypatch.setattr(notifier, "_format_event",
-                        lambda *args: ("x" * (notifier._MAX_LEN + 1), []))
-    monkeypatch.setattr(notifier, "_semantic_render_state", lambda *args: ())
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_flush, "_target", lambda *args: "synthetic")
+    monkeypatch.setattr(notify_flush, "_send_argv", lambda *args: ["hermes"])
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    monkeypatch.setattr(notify_flush, "_format_event",
+                        lambda *args: ("x" * (notify_flush._MAX_LEN + 1), []))
+    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *args: ())
     calls = []
 
     def send(*args, **kwargs):
         calls.append(1)
         if failure == "uncertain":
-            raise notifier._SendUncertain("synthetic")
+            raise notify_flush._SendUncertain("synthetic")
         if len(calls) == 2:
-            raise notifier._SendUsage("synthetic")
+            raise notify_flush._SendUsage("synthetic")
 
-    monkeypatch.setattr(notifier, "_send", send)
+    monkeypatch.setattr(notify_flush, "_send", send)
     try:
         eid = db.outbox_add("new_messages", None, {"message_ids": [1]})
         if failure == "corrupt":
             db.db.execute("UPDATE notify_outbox SET progress='[]'")
             db.db.commit()
-        result = notifier.flush(db)
+        result = notify_flush.flush(db)
         assert result["failed"] == 1
         rows = db.db.execute("SELECT * FROM notify_outbox").fetchall()
         assert len(rows) == 1, "unknown or partially delivered intent was rescued"
@@ -222,14 +222,14 @@ def test_deleted_message_cannot_supply_notification_content(tmp_path):
             "INSERT INTO attachments(attachment_id,message_id,file_id,name,state,local_path) "
             "VALUES(1,1,'file1','synthetic.txt','downloaded','synthetic')")
         db.db.commit()
-        signal = notifier._signal_text(
+        signal = notify_flush._signal_text(
             db, {"text": "候補\n場所", "project_id": 1},
             {"evidence": {"message_ids": [1]}})
         assert "合成削除本文" not in signal
         for kind, payload in (("new_messages", {"message_ids": [1]}),
                               ("attachment_followup", {"attachment_id": 1})):
-            with pytest.raises(notifier._StaleSend):
-                notifier._format_event(db, {"kind": kind, "project_id": 1,
+            with pytest.raises(notify_flush._StaleSend):
+                notify_flush._format_event(db, {"kind": kind, "project_id": 1,
                                             "payload": json.dumps(payload)})
     finally:
         db.close()

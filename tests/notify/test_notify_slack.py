@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 import ledger
-import notifier
+import notify_flush
 import notify_cards as cards
 import notify_cmds as cmds
 import notify_transport as transport
@@ -122,9 +122,9 @@ def test_slack_signal_body_only_after_authorized_click(led, kind):
 def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatch):
     _seed_thread(led)
     ev = _intent(led)
-    monkeypatch.setattr(notifier, "_config", lambda: SLACK)
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda cfg: "/nonexistent/synthetic")
-    assert notifier.flush(led)["dispatched"] == 1
+    monkeypatch.setattr(notify_flush, "_config", lambda: SLACK)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: "/nonexistent/synthetic")
+    assert notify_flush.flush(led)["dispatched"] == 1
     render = _latest_render(led)
     root = tmp_path / "data"
     path = root / "slack_render" / (render["delivery_id"] + ".json")

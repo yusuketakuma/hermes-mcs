@@ -2,23 +2,10 @@
 import json
 from types import SimpleNamespace
 
-import mcs_adapter
-import notifier
+import notify_flush
 import semantic
 import ledger
-from test_mcs_semantic import _cfg
-
-
-BODY = "原文の本文です。"
-
-
-def _message(mid=1, parent=None, body=BODY, unread=True):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=1, parent_id=parent, sender_id=1,
-        sender_name="sender", sender_type="user", profession="",
-        organization="", posted_at="2026-09-19T00:00:00+09:00",
-        body_html=f"<p>{body}</p>", body_state="full",
-        is_unread=unread, reply_count=0)
+from test_mcs_semantic import _cfg, _message
 
 
 def _patient(messages=()):
@@ -86,9 +73,9 @@ def _semantic_event(db, text="notice"):
 
 
 def _prepare_send(monkeypatch, cfg):
-    monkeypatch.setattr(notifier, "_config", lambda: cfg[0])
-    monkeypatch.setattr(notifier, "_hermes_exe", lambda *a: "/bin/sh")
-    monkeypatch.setattr(notifier, "_target", lambda c, kind: "channel")
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg[0])
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_target", lambda c, kind: "channel")
 
 
 def test_shadow_and_off_keep_existing_notification_byte_identical(
@@ -97,13 +84,13 @@ def test_shadow_and_off_keep_existing_notification_byte_identical(
     event = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
-    baseline = notifier._format_event(db, event)[0]
+    baseline = notify_flush._format_event(db, event)[0]
     _summary(db, claims=8)
     cfg = [{"semantic": {"mode": "shadow"}}]
-    monkeypatch.setattr(notifier, "_config", lambda: cfg[0])
-    shadow = notifier._format_event(db, event)[0]
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg[0])
+    shadow = notify_flush._format_event(db, event)[0]
     cfg[0] = {"semantic": {"mode": "off"}}
-    off = notifier._format_event(db, event)[0]
+    off = notify_flush._format_event(db, event)[0]
     assert shadow == baseline == off
     db.close()
 
@@ -119,12 +106,12 @@ def test_semantic_block_requires_current_whole_thread_fingerprint(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"
     ).fetchone()
     cfg = [_cfg("enforce")]
-    monkeypatch.setattr(notifier, "_config", lambda: cfg[0])
-    before = notifier._format_event(db, event)[0]
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg[0])
+    before = notify_flush._format_event(db, event)[0]
     assert "claim-0-" in before
     db.save_thread_replies([_message(2, parent=1, body="返信が訂正された",
                                       unread=False)], 1, notify=None)
-    after = notifier._format_event(db, event)[0]
+    after = notify_flush._format_event(db, event)[0]
     assert "claim-0-" not in after
     db.close()
 
@@ -144,8 +131,8 @@ def test_semantic_send_holds_after_source_change_mid_delivery(
                                                 unread=False)]), notify=None)
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_send", post)
-    result = notifier.flush(db)
+    monkeypatch.setattr(notify_flush, "_send", post)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox WHERE kind='semantic_notice'"
     ).fetchone()
@@ -171,8 +158,8 @@ def test_semantic_send_holds_after_mode_change_mid_delivery(
             cfg[0] = {"semantic": {"mode": "off"}}
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_send", post)
-    result = notifier.flush(db)
+    monkeypatch.setattr(notify_flush, "_send", post)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox WHERE kind='semantic_notice'"
     ).fetchone()
@@ -198,8 +185,8 @@ def test_attached_summary_holds_when_mode_changes_mid_delivery(
             cfg[0] = {"semantic": {"mode": "off"}}
         return str(len(calls))
 
-    monkeypatch.setattr(notifier, "_send", post)
-    result = notifier.flush(db)
+    monkeypatch.setattr(notify_flush, "_send", post)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox "
         "WHERE kind='new_messages'"
@@ -227,9 +214,9 @@ def test_resumed_stale_semantic_notice_holds_receipt(
     cfg = [_cfg("enforce")]
     _prepare_send(monkeypatch, cfg)
     calls = []
-    monkeypatch.setattr(notifier, "_send",
+    monkeypatch.setattr(notify_flush, "_send",
                         lambda *args, **kwargs: calls.append(args[1]) or "2")
-    result = notifier.flush(db)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT state,next_try,progress FROM notify_outbox "
         "WHERE event_id=?", (event["event_id"],)
@@ -249,10 +236,10 @@ def test_semantic_notice_repeats_provenance_on_every_chunk(
     _prepare_send(monkeypatch, cfg)
     calls = []
     monkeypatch.setattr(
-        notifier, "_send",
+        notify_flush, "_send",
         lambda *args, **kwargs: calls.append(args[1]) or str(len(calls)))
 
-    result = notifier.flush(db)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT progress FROM notify_outbox WHERE event_id=?",
         (event["event_id"],),
@@ -261,7 +248,7 @@ def test_semantic_notice_repeats_provenance_on_every_chunk(
     assert result["sent"] == 1
     assert len(calls) > 1
     assert progress["next"] == len(calls)
-    assert all(len(part) <= notifier._MAX_LEN for part in calls)
+    assert all(len(part) <= notify_flush._MAX_LEN for part in calls)
     assert all("取得：完全" in part for part in calls)
     assert all("要約：自動検査完了" in part for part in calls)
     assert all("part " in part for part in calls)
@@ -287,10 +274,10 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
         # the classified send-path failure — a raw OSError escaping
         # _send would instead leave the in-flight marker and hold as
         # an uncertain delivery (F19)
-        raise notifier._SendFailed("synthetic transport failure")
+        raise notify_flush._SendFailed("synthetic transport failure")
 
-    monkeypatch.setattr(notifier, "_send", fail_after_first)
-    result = notifier.flush(db)
+    monkeypatch.setattr(notify_flush, "_send", fail_after_first)
+    result = notify_flush.flush(db)
     row = db.db.execute(
         "SELECT state,progress FROM notify_outbox WHERE event_id=?",
         (event["event_id"],),
@@ -303,14 +290,14 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
 
     retry = []
     monkeypatch.setattr(
-        notifier, "_send", lambda *args, **kwargs: retry.append(args[1]) or "2"
+        notify_flush, "_send", lambda *args, **kwargs: retry.append(args[1]) or "2"
     )
     db.db.execute(
         "UPDATE notify_outbox SET next_try=0 WHERE event_id=?",
         (event["event_id"],),
     )
     db.db.commit()
-    result = notifier.flush(db)
+    result = notify_flush.flush(db)
     assert result["sent"] == 1
     assert retry
     assert first_part == first_attempt[0]
