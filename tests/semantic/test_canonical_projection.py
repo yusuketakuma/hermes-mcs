@@ -208,6 +208,60 @@ def test_current_fact_pred_prefers_canonical_projection(tmp_path):
         db.close()
 
 
+def test_projection_carries_every_verified_fact_category():
+    """GAP-2: categories with no legacy slot must not disappear —
+    canonical_facts carries fact_id/kind/statement/evidence for every
+    verified fact (allergy, adverse, vitals, preference, observation),
+    with doc relations and the coverage quality state alongside."""
+    doc = _doc([
+        _fact("f_med", kind="medication_event", action="continue"),
+        _fact("f_alg", kind="allergy_intolerance",
+              statement="ペニシリンアレルギー"),
+        _fact("f_ade", kind="adverse_drug_event",
+              statement="嘔気（薬剤起因疑い）"),
+        _fact("f_vit", kind="vital_lab", statement="BP 120/80"),
+        _fact("f_pref", kind="preference", statement="午前訪問希望"),
+        _fact("f_obs", kind="other_observation", statement="独居"),
+    ])
+    doc["relations"] = [
+        {"left_fact_id": "f_med", "right_fact_id": "f_alg",
+         "type": "CAUTION"},
+        {"left_fact_id": "f_med", "right_fact_id": "f_ghost",
+         "type": "DANGLING"},
+    ]
+    doc["coverage"] = {"category_counts": {},
+                       "open_obligation_ids": ["ob_1"],
+                       "limitations": ["家族分は未確認"],
+                       "status": "partial"}
+    out = projection.project_v2_doc_legacy(doc)
+    ids = [f["fact_id"] for f in out["canonical_facts"]]
+    assert ids == ["f_med", "f_alg", "f_ade", "f_vit", "f_pref", "f_obs"]
+    by_id = {f["fact_id"]: f for f in out["canonical_facts"]}
+    assert by_id["f_alg"]["kind"] == "allergy_intolerance"
+    assert by_id["f_alg"]["evidence_quote"] == "アムロジピン"
+    assert by_id["f_alg"]["evidence_ids"] == ["ev_1"]
+    assert by_id["f_vit"]["importance"] == "T1"
+    assert by_id["f_obs"]["subject"] == "patient:1"
+    # only relations whose endpoints both survived projection
+    assert out["canonical_relations"] == [
+        {"left_fact_id": "f_med", "right_fact_id": "f_alg",
+         "type": "CAUTION"}]
+    q = out["canonical_quality"]
+    assert q["coverage_status"] == "partial"
+    assert q["open_obligation_ids"] == ["ob_1"]
+    assert q["limitations"] == ["家族分は未確認"]
+    assert q["source_fingerprint"] == "sf_x"
+
+
+def test_projection_canonical_facts_exclude_unverified():
+    """Unverified work never surfaces — not even in canonical_facts."""
+    doc = _doc([_fact("f_bad", kind="allergy_intolerance",
+                      statement="アレルギー", verified=False)])
+    out = projection.project_v2_doc_legacy(doc)
+    assert out["canonical_facts"] == []
+    assert out["canonical_relations"] == []
+
+
 def test_projection_normalizes_string_message_ids(tmp_path):
     """C01: v2 JSON carries message ids as strings; the projection must
     emit int ids so audit/bundle lookups (int-keyed) match."""

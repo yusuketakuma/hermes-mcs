@@ -238,4 +238,59 @@ def project_v2_doc_legacy(doc: dict) -> dict:
                 {"to": "不明", "from": None,
                  "action": (fact.get("statement") or "")[:15],
                  "due": due})
+    _carry_canonical(doc, out, evidence_by_id)
     return out
+
+
+# Canonical carriers — the legacy slots above cannot represent every
+# verified fact (allergy, adverse events, vitals, preferences,
+# observations have no slot).  ``canonical_facts`` carries every
+# verified fact verbatim with its ids/evidence so no reader ever loses
+# a canonical fact to a missing slot; ``canonical_relations`` keeps the
+# doc's fact graph restricted to carried endpoints; ``canonical_quality``
+# keeps the coverage state visible next to the facts.
+
+
+def _carry_canonical(doc: dict, out: dict, evidence_by_id: dict) -> None:
+    carried: list = []
+    seen: set = set()
+    for fact in doc.get("facts", []):
+        if not isinstance(fact, dict) \
+                or fact.get("validation_status") != "verified" \
+                or not fact.get("fact_id"):
+            continue
+        quote = None
+        bound = []
+        for ref in fact.get("evidence_ids", []):
+            ev = evidence_by_id.get(ref)
+            if ev is not None:
+                bound.append(ref)
+                if quote is None:
+                    quote = ev.get("quote")
+        carried.append({
+            "fact_id": fact["fact_id"],
+            "kind": fact.get("kind"),
+            "statement": fact.get("statement") or "",
+            "subject": fact.get("subject"),
+            "polarity": fact.get("polarity"),
+            "epistemic": fact.get("epistemic"),
+            "workflow_status": fact.get("workflow_status"),
+            "event_time": fact.get("event_time"),
+            "importance": fact.get("importance"),
+            "evidence_ids": bound,
+            "evidence_quote": quote})
+        seen.add(fact["fact_id"])
+    out["canonical_facts"] = carried
+    out["canonical_relations"] = [
+        rel for rel in doc.get("relations", [])
+        if isinstance(rel, dict)
+        and rel.get("left_fact_id") in seen
+        and rel.get("right_fact_id") in seen]
+    coverage = doc.get("coverage", {})
+    coverage = coverage if isinstance(coverage, dict) else {}
+    out["canonical_quality"] = {
+        "coverage_status": coverage.get("status"),
+        "open_obligation_ids": coverage.get("open_obligation_ids") or [],
+        "limitations": coverage.get("limitations") or [],
+        "source_fingerprint":
+            (doc.get("source") or {}).get("source_fingerprint")}

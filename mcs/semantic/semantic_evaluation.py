@@ -33,6 +33,7 @@ METRICS = (
     "speaker_relation_recall", "loop_conformity",
     "loop_false_resolution", "loop_precision", "loop_unresolved_miss_rate", "defer_rate",
     "mandatory_fact_recall", "rendered_fact_recall",
+    "delivered_fact_recall",
     "relation_accuracy", "evidence_closure", "silent_drop",
 )
 ATTRIBUTE_FIELDS = ("medication", "negation", "time", "speaker_relation")
@@ -298,6 +299,17 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         raise EvaluationError("candidate_rendered_fact_id_invalid")
     if len(rendered) != len(set(rendered)):
         raise EvaluationError("candidate_rendered_fact_id_duplicate")
+    # verified -> rendered -> delivered chain (T6): the delivered id
+    # set follows the rendered contract — same shape, same dedupe, and
+    # an absent list scores as nothing delivered rather than skipped.
+    delivered = candidate.get("delivered_fact_ids", [])
+    if not isinstance(delivered, list):
+        raise EvaluationError("candidate_delivered_fact_ids_list_required")
+    if any(not isinstance(ref, str) or not ref.strip()
+           for ref in delivered):
+        raise EvaluationError("candidate_delivered_fact_id_invalid")
+    if len(delivered) != len(set(delivered)):
+        raise EvaluationError("candidate_delivered_fact_id_duplicate")
     for row in _items(candidate.get("relations", []), "candidate_relations"):
         _id(row.get("left_fact_id"), "candidate_relation_left")
         _id(row.get("right_fact_id"), "candidate_relation_right")
@@ -317,6 +329,18 @@ def _validate_label(label, manifest: dict, candidate: dict) -> str:
     source = label.get("source")
     if source not in ("human", "synthetic"):
         raise EvaluationError("label_source_invalid")
+    if source == "human":
+        # A bare 'human' string cannot mint provenance: the label must
+        # bind a durable labelling receipt. The schema checks receipt
+        # presence/shape — it cannot prove authenticity; that remains
+        # the human review process described in annotation-guide.md.
+        receipt = label.get("receipt")
+        if not isinstance(receipt, dict):
+            raise EvaluationError("label_human_receipt_required")
+        for field in ("receipt_id", "labelled_at", "reviewer"):
+            if not isinstance(receipt.get(field), str) \
+                    or not receipt[field].strip():
+                raise EvaluationError(f"label_human_receipt_{field}")
     if "label_version" in manifest and label.get("version") \
             != manifest["label_version"]:
         raise EvaluationError("label_version_mismatch")
@@ -505,6 +529,8 @@ def _case_counts(record: dict) -> dict:
     mandatory_found = mandatory & predicted.keys()
     rendered_ids = set(candidate.get("rendered_fact_ids") or [])
     mandatory_rendered = mandatory & rendered_ids
+    delivered_ids = set(candidate.get("delivered_fact_ids") or [])
+    mandatory_delivered = mandatory & delivered_ids
     unresolved_refs = {row.get("fact_ref")
                        for row in _items(candidate.get("unresolved", []),
                                          "candidate_unresolved")}
@@ -537,6 +563,7 @@ def _case_counts(record: dict) -> dict:
         "final": [len(important & final), len(important)],
         "mandatory": [len(mandatory_found), len(mandatory)],
         "rendered": [len(mandatory_rendered), len(mandatory)],
+        "delivered": [len(mandatory_delivered), len(mandatory)],
         "relations": [relation_hits, len(gold_relations)],
         "evidenced": [evidenced, len(predicted)],
         "silent_drop": [len(silently_dropped), len(mandatory)],
@@ -557,7 +584,8 @@ def _scope_report(records: list[dict]) -> dict:
         "important": [0, 0], "final": [0, 0], "critical": [0, 0],
         "loops": [0, 0], "false_resolution": [0, 0], "deferred": [0, 0],
         "loop_precision": [0, 0], "unresolved_missed": [0, 0],
-        "mandatory": [0, 0], "rendered": [0, 0], "relations": [0, 0],
+        "mandatory": [0, 0], "rendered": [0, 0], "delivered": [0, 0],
+        "relations": [0, 0],
         "evidenced": [0, 0], "silent_drop": [0, 0],
     }
     attrs = {name: [0, 0] for name in ATTRIBUTE_FIELDS}
@@ -591,6 +619,7 @@ def _scope_report(records: list[dict]) -> dict:
         "defer_rate": _error_metric(*counts["deferred"]),
         "mandatory_fact_recall": _success_metric(*counts["mandatory"]),
         "rendered_fact_recall": _success_metric(*counts["rendered"]),
+        "delivered_fact_recall": _success_metric(*counts["delivered"]),
         "relation_accuracy": _success_metric(*counts["relations"]),
         "evidence_closure": _success_metric(*counts["evidenced"]),
         "silent_drop": _error_metric(*counts["silent_drop"]),

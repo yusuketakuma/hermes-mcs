@@ -143,7 +143,8 @@ def validate(req):
         # validator.
         from notify_transport import validate_card_resolve
         return validate_card_resolve(req)
-    if req.get("cmd") in ("ops.update_apply", "ops.update_rollback"):
+    if req.get("cmd") in ("ops.update_apply", "ops.update_rollback",
+                          "ops.restore_approve"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
@@ -380,24 +381,33 @@ def candidates(db, message):
         return []
     # Select the same artifact as stats/signals, including when a newer
     # malformed or expired projection follows a usable one.
-    from mcs_queries import current_projection_id
+    from mcs_queries import current_projection_id, current_v4_id
     current = db.execute(f"""
-      SELECT {current_projection_id('m')} FROM messages m
+      SELECT {current_projection_id('m')}, {current_v4_id('m')}
+      FROM messages m
       WHERE m.message_id=? AND m.project_id=? AND m.content_hash=?
     """, (message["message_id"], message["project_id"],
           message["content_hash"])).fetchone()
     projection_id = current[0] if current else None
+    v4_id = current[1] if current else None
     seen, result = set(), []
     for row in db.execute("""
       SELECT * FROM artifacts WHERE message_id=?
-        AND kind IN ('extract_v1','extract_llm','canonical_projection')
+        AND kind IN ('extract_v1','extract_llm','canonical_projection',
+                     'semantic_facts_v4')
       ORDER BY artifact_id DESC
     """, (message["message_id"],)):
-        if row["kind"] == "canonical_projection" and row["artifact_id"] != projection_id:
+        if row["kind"] == "semantic_facts_v4" \
+                and row["artifact_id"] != v4_id:
+            continue
+        if row["kind"] == "canonical_projection" and (
+                row["artifact_id"] != projection_id
+                or v4_id is not None):
             continue
         if row["kind"] in seen:
             continue
-        if projection_id is not None and row["kind"] == "extract_llm":
+        if (projection_id is not None or v4_id is not None) \
+                and row["kind"] == "extract_llm":
             continue
         seen.add(row["kind"])
         try:
@@ -418,7 +428,8 @@ def candidates(db, message):
             if not _text(item.get(text_key), 1000) or not _text(
                     item.get(to_key), 120,
                     nullable=row["kind"] in ("extract_llm",
-                                             "canonical_projection")):
+                                             "canonical_projection",
+                                             "semantic_facts_v4")):
                 continue
             if row["kind"] == "extract_v1" and item[to_key] not in (
                     "confirm", "contact", "share", "request", "ask", "report"):

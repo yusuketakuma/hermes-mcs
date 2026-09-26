@@ -12,7 +12,8 @@ import semantic
 import semantic_extraction as extraction
 import semantic_facts as sf
 from mcs_requests import payload_hash
-from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, KIND_SUMMARY
+from semantic_policy import (KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS_V2,
+                             KIND_SUMMARY)
 from test_mcs_semantic import (_FakeJev, _cfg, _ledger, _message,
                                _patient)
 
@@ -229,5 +230,74 @@ def test_unevaluated_fact_audit_is_re_run(tmp_path):
                   if _meta(r).get("doc_hash") == doc_hash]
         assert any(a.get("evaluated") for a in audits), \
             "evaluated:false audit was reused instead of re-run"
+    finally:
+        db.close()
+
+
+def _many_facts_llm(n, statement_len=20):
+    """v2 extraction returning n verified-eligible facts per target —
+    the >40 corpus the old max_facts cap silently dropped."""
+    def llm(prompt):
+        if "要約器" in prompt:
+            return json.dumps({"claims": [], "limitations": []},
+                              ensure_ascii=False)
+        quote = ("アムロジピン" if "アムロジピン" in prompt
+                 else "メトホルミン" if "メトホルミン" in prompt else "薬")
+        facts = [{"statement": (f"合成事実{i:03d}番 "
+                                + "詳細" * statement_len)[:statement_len],
+                  "kind": "medication_event", "action": "continue",
+                  "subject_role": "patient", "polarity": "affirmed",
+                  "workflow_status": "performed", "importance": "T1",
+                  "evidence_quote": quote} for i in range(n)]
+        return json.dumps({"facts": facts,
+                           "category_presence":
+                           dict(NO_FACTS, medication="one")},
+                          ensure_ascii=False)
+    return llm
+
+
+def _audit_doc(db, mid):
+    row = db.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        (KIND_AUDIT, mid)).fetchone()
+    return json.loads(row["content"]) if row else None
+
+
+def test_drain_publishes_all_verified_facts_past_old_cap(tmp_path):
+    """T4: 41+ verified facts reach the summary uncapped — rendered
+    fact IDs equal the verified set, paged within the char budget."""
+    db = _seeded_two(tmp_path)
+    try:
+        out = _drain(db, llm=_many_facts_llm(45))
+        assert out["done"] == 1 and not out["failed"]
+        s1 = _summary_doc(db, 1)
+        ids = s1.get("mandatory_fact_ids") or []
+        # pipeline may merge a rule-derived fact on top of the 45 stub
+        # facts — the contract is: everything verified renders, >40
+        assert len(ids) > 40
+        assert len(s1.get("mandatory_facts") or []) == len(ids)
+        assert len(set(ids)) == len(ids)
+        pages = s1.get("mandatory_pages") or []
+        assert pages and len(pages) > 1
+        seen = [fid for p in pages for fid in p["fact_ids"]]
+        assert sorted(seen) == sorted(ids)
+        assert s1.get("mandatory_overview")
+    finally:
+        db.close()
+
+
+def test_drain_flags_incomplete_mandatory_pages(tmp_path):
+    """T4 failure path: a fact line that cannot fit any page budget
+    marks the summary NEEDS_REVIEW — publication incomplete, never
+    PASS."""
+    db = _seeded_two(tmp_path)
+    try:
+        out = _drain(db, llm=_many_facts_llm(3, statement_len=5000))
+        assert out["done"] == 1 and not out["failed"]
+        audit = _audit_doc(db, 1)
+        assert audit["status"] == "NEEDS_REVIEW"
+        assert any(f["code"] == "mandatory_render_incomplete"
+                   for f in audit["findings"])
     finally:
         db.close()

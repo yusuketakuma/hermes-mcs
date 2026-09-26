@@ -90,6 +90,13 @@ def enqueue_ready_attachment_followups_tx(db, event_id, now) -> int:
           AND ic.state='delivered' AND frozen.type='integer'
           AND a.state='downloaded' AND COALESCE(a.local_path,'')!=''
           AND m.body_state IS NOT 'deleted'
+          -- a file sealed into a card's durable part manifest is owned
+          -- by the part pipeline (T7); the text followup would be a
+          -- second send of the same file
+          AND NOT EXISTS(SELECT 1 FROM notification_render_parts rp
+                         WHERE rp.attachment_id=a.attachment_id
+                           AND rp.state IN ('pending','delivered',
+                                            'held','unknown'))
     """, (event_id,)).fetchall()
     return sum(_enqueue_attachment_followup_tx(
         db, row["attachment_id"], row["project_id"], row["message_id"], now)
@@ -445,6 +452,12 @@ class Ledger:
             column = "scope_json" if table == "notification_intent_batches" else "team_id"
             if column not in cols(table):
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Durable per-part rollup (T7): 'none' marks renders planned
+        # before the part ledger existed.
+        if "parts_state" not in cols("notification_renders"):
+            self.db.execute(
+                "ALTER TABLE notification_renders ADD COLUMN parts_state "
+                "TEXT NOT NULL DEFAULT 'none'")
 
     def _backfill_v3(self):
         """Fill derived columns for pre-v3 rows (idempotent, chunked)."""
@@ -588,13 +601,15 @@ class Ledger:
 
     def _has_canonical_projections(self) -> bool:
         return self.db.execute(
-            "SELECT 1 FROM artifacts WHERE kind='canonical_projection' LIMIT 1"
+            "SELECT 1 FROM artifacts WHERE kind IN "
+            "('canonical_projection','semantic_facts_v4') LIMIT 1"
         ).fetchone() is not None
 
     def _invalidate_thread_projections(self, project_id: int, root: int):
         changed = self.db.execute("""
           UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))
-          WHERE kind='canonical_projection' AND project_id=?
+          WHERE kind IN ('canonical_projection','semantic_facts_v4')
+            AND project_id=?
             AND json_valid(meta)
             AND json_extract(meta,'$.invalidated') IS NOT 1
             AND message_id IN (SELECT message_id FROM messages

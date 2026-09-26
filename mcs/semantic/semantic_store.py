@@ -169,7 +169,8 @@ def invalidate_projections(ledger, scfg: dict) -> int:
     rows = ledger.db.execute("""
       SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
-      WHERE a.kind='canonical_projection' AND json_valid(a.meta)
+      WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
+        AND json_valid(a.meta)
         AND json_type(a.meta)='object'
         AND json_extract(a.meta,'$.invalidated') IS NOT 1
     """).fetchall()

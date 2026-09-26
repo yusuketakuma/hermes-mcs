@@ -201,6 +201,59 @@ def test_med_followup_suppressed_by_any_request(led):
     assert _ev(led)["open"] == 0
 
 
+def _projection(db, mid, chash, content, pid=1):
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+        "VALUES ('canonical_projection',?,?,?,?)",
+        (mid, pid, json.dumps(content), json.dumps({"hash": chash})))
+
+
+def test_med_change_detected_from_canonical_projection(led):
+    """T5: a canonical fact reaching the signal layer — the detector
+    reads canonical_projection through the same current_fact_pred rule
+    as every other consumer."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _projection(led.db, 1, "h1", {
+        "meds": [{"name": "薬A", "action": "stop", "subject": "patient"}],
+        "canonical_facts": [
+            {"fact_id": "f1", "kind": "medication_event",
+             "statement": "薬A中止", "subject": "patient:1",
+             "evidence_quote": "中止"}]})
+    res = _ev(led)
+    assert res["open"] == 1
+    sig = mcs_signals.current_open(led.db)["items"][0]
+    assert sig["type"] == "med_change_no_followup"
+    assert sig["evidence"]["med"] == "薬A"
+
+
+def test_canonical_projection_shadows_extract_llm_in_signals(led):
+    """T5: one fact source per message — a current projection owns the
+    read; the shadowed extract_llm row never double-counts."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "旧薬B", "action": "stop"}])
+    _projection(led.db, 1, "h1", {
+        "meds": [{"name": "薬A", "action": "stop"}]})
+    _ev(led)
+    sigs = mcs_signals.current_open(led.db)["items"]
+    meds = [s["evidence"]["med"]
+            for s in sigs if s["type"] == "med_change_no_followup"]
+    assert meds == ["薬A"]        # 旧薬B shadowed, never signalled
+
+
+def test_stale_projection_falls_back_to_extract_llm_in_signals(led):
+    """T5 failure axis: source revision changed -> stale projection
+    drops out; the current extract_llm drives the detector."""
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _projection(led.db, 1, "oldhash",
+                {"meds": [{"name": "陳腐薬", "action": "stop"}]})
+    _extract_llm(led.db, 1, "h1", [{"name": "現行薬", "action": "stop"}])
+    _ev(led)
+    meds = [s["evidence"]["med"]
+            for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "med_change_no_followup"]
+    assert meds == ["現行薬"]
+
+
 def test_transition_reconciliation(led):
     _msg(led.db, 1, ts=NOW - 5 * DAY, body="退院しました", chash="h1")
     _extract_llm(led.db, 1, "h1", [], events=["discharge"])

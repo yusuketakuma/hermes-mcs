@@ -8,7 +8,7 @@
 4. 原文で未解決の項目と解決報告を列挙し、候補Loopの対応・誤解決・欠落を確認する。候補の自動判定を正解へ転記しない。
 5. 記入完了後、管理者側で--unblind-keyにより方式を戻す。worksheetのhuman_labels以外は変更しない。自由記述は保存できるが、それだけでは定量評価を実行できない。
 
-品質評価器のlabelにはsource="human"、版、facts、claims、loopsが必要。各claimsのIDは対応するcandidate.claimsと一致させ、全claimを評価する。factの重要度は厳密なbooleanである。source="human"は実際に本人が記入した場合だけ指定し、AIが作った合成ラベルはsyntheticとする。
+品質評価器のlabelにはsource="human"、版、facts、claims、loopsと、記入の証跡receipt（receipt_id/labelled_at/reviewer）が必要。receiptは記入完了時に本人が採番・日付・記入者名を入れ、後から付け替えない。各claimsのIDは対応するcandidate.claimsと一致させ、全claimを評価する。factの重要度は厳密なbooleanである。source="human"は実際に本人が記入した場合だけ指定し、AIが作った合成ラベルはsyntheticとする。receiptは来歴の鍵であり、構造の検査はするが真正性そのものは記入プロセスが担保する。
 
 評価票の各choiceにはc1,c2…の主張IDがある。human_labelsの各A/B/Cに評価器のlabel構造を記入した後、semantic_blindの--evaluation-records/--manifest/--methodで対応する未ラベルrecordへ結合できる。原文指紋・患者・split・主張IDと本文を照合し、既存ラベルは上書きしない。
 

@@ -120,6 +120,36 @@ def test_unknown_stat_rejected(db):
         run(db, stat="bogus")
 
 
+def test_canonical_facts_stat(db):
+    """T5: canonical_projection canonical_facts stay enumerable —
+    total / by_kind / evidenced counts over current artifacts only."""
+    _msg(db, 1)
+    _msg(db, 2)
+    facts = [
+        {"fact_id": "f1", "kind": "medication_event",
+         "evidence_quote": "アムロジピン"},
+        {"fact_id": "f2", "kind": "allergy_intolerance",
+         "evidence_quote": "ペニシリン"},
+        {"fact_id": "f3", "kind": "vital_lab", "evidence_quote": None}]
+    # stale projection (hash mismatch) must not be counted
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+        "VALUES ('canonical_projection',1,?,?,?)",
+        (1, json.dumps({"canonical_facts": facts}),
+         json.dumps({"hash": "different-hash"})))
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+        "VALUES ('canonical_projection',1,?,?,?)",
+        (2, json.dumps({"canonical_facts": facts}),
+         json.dumps({"hash": "h1"})))
+    st = run(db, stat="canonical_facts")["canonical_facts"]
+    assert st["status"] == "ok"
+    assert st["total"] == 3                       # msg1 stale -> excluded
+    assert st["by_kind"] == {"medication_event": 1,
+                            "allergy_intolerance": 1, "vital_lab": 1}
+    assert st["evidenced"] == 2
+
+
 def test_med_change_followup_stat(db):
     """Change mention >=7d before as_of with no later post and no
     registered request -> counted in no_followup_record."""

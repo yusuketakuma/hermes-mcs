@@ -36,8 +36,8 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_util import (acquire_run_lock, json_object, locate_quote_span,
-                      text_chunks)
+from mcs_util import (acquire_run_lock, json_object, load_config,
+                      locate_quote_span, text_chunks)
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -355,11 +355,20 @@ def _probe_format(deadline: float | None = None) -> str:
     if _FMT_MODE is not None \
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
-    _FMT_MODE = local_llm.probe_format(
-        ENDPOINT, MODEL, _SCHEMA, timeout=10,
-        deadline=deadline, request_fn=_opener_request,
-        slot=_choose_slot(deadline=deadline),
-        verify=lambda text: json_object(text) is not None)
+    if local_llm.admission_enabled():
+        # T20: the probe sends real inference POSTs — it passes the
+        # same admission gate and consumes its class budget
+        _FMT_MODE = local_llm.admitted_probe_format(
+            "mcs.extract", ENDPOINT, MODEL, _SCHEMA, timeout=10,
+            deadline=deadline, request_fn=_opener_request,
+            slot=_choose_slot(deadline=deadline),
+            verify=lambda text: json_object(text) is not None)
+    else:
+        _FMT_MODE = local_llm.probe_format(
+            ENDPOINT, MODEL, _SCHEMA, timeout=10,
+            deadline=deadline, request_fn=_opener_request,
+            slot=_choose_slot(deadline=deadline),
+            verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -837,12 +846,24 @@ def _llm_call(prompt: str, deadline: float | None = None,
         elif fmt == "object":
             rf = {"type": "json_object"}
         err_out: dict = {}
-        response = local_llm.chat(
-            prompt, endpoint=ENDPOINT, model=MODEL,
-            max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
-            response_format=rf,
-            extra_payload={"id_slot": _choose_slot(deadline=deadline)},
-            request_fn=_opener_request, error_out=err_out)
+        if local_llm.admission_enabled():
+            # T20: every backend request holds a class permit through
+            # confirmed terminal retirement — a held/deferred verdict
+            # parks the message, it never becomes a silent failure
+            response = local_llm.admitted_chat(
+                "mcs.extract", prompt, endpoint=ENDPOINT, model=MODEL,
+                max_tokens=max_tokens, timeout=TIMEOUT,
+                deadline=deadline, response_format=rf,
+                request_fn=_opener_request, error_out=err_out)
+            if response is not None and response.get("admission"):
+                return _DEFERRED
+        else:
+            response = local_llm.chat(
+                prompt, endpoint=ENDPOINT, model=MODEL,
+                max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
+                response_format=rf,
+                extra_payload={"id_slot": _choose_slot(deadline=deadline)},
+                request_fn=_opener_request, error_out=err_out)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or (deadline is not None
                                      and time.monotonic() >= deadline)):
@@ -1260,6 +1281,20 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     `ctx` records whether thread context was supplied: the content hash
     covers only the body, so without the flag a context-free
     extraction is indistinguishable from a context-aware one."""
+    # T18 generation fence: once a PASS-only v4 row covers this exact
+    # source revision, a delayed v3-engine write is refused outright —
+    # the v4 generation is never shadowed back to a legacy row.
+    _V4_FENCE_SQL = (
+        "SELECT 1 FROM artifacts WHERE kind='semantic_facts_v4' "
+        "AND message_id=? AND json_valid(meta) "
+        "AND json_extract(meta,'$.hash')=? "
+        "AND json_extract(meta,'$.engine_version')=4 "
+        "AND COALESCE(json_extract(meta,'$.invalidated'),0)=0 "
+        "LIMIT 1")
+    if ledger.db.execute(
+            _V4_FENCE_SQL,
+            (r["message_id"], r["content_hash"])).fetchone() is not None:
+        return False
     meta = {"hash": r["content_hash"],
             "extract_version": EXTRACT_VERSION}
     if ctx:
@@ -1271,7 +1306,14 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     with ledger.db:
         # A guarded INSERT takes the write lock before superseding any
         # result. An edit/deletion during inference must preserve the
-        # newer source and any extraction already saved for it.
+        # newer source and any extraction already saved for it. The
+        # v4 fence is re-checked INSIDE the transaction — a v4 row
+        # committed between the outer check and this write must still
+        # refuse the legacy write (no shadowed-back window).
+        if ledger.db.execute(
+                _V4_FENCE_SQL,
+                (r["message_id"], r["content_hash"])).fetchone() is not None:
+            return False
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
             "SELECT ?,project_id,message_id,?,?,?,? FROM messages "
@@ -1382,7 +1424,17 @@ def _choose_slot(deadline: float | None = None) -> int:
     call (~tens of seconds). A probe failure or a busy RT slot falls
     back to the background slot; --slot always wins over both."""
     if _SLOT_OVERRIDE is not None:
-        return _SLOT_OVERRIDE
+        # a stale/invalid override must not go unpinned on the wire —
+        # bound it to the selected count exactly like --slot parsing
+        if type(_SLOT_OVERRIDE) is int \
+                and 0 <= _SLOT_OVERRIDE < local_llm.SLOT_COUNT:
+            return _SLOT_OVERRIDE
+        return local_llm.BACKGROUND_SLOT
+    if local_llm.admission_enabled():
+        # T20: under the admission boundary there is no RT-slot borrow —
+        # --lend-rt's /slots peek cannot cross an epoch, and a busy
+        # sample was never an authorization anyway
+        return local_llm.request_slot()
     if _LEND_RT:
         try:
             base = ENDPOINT.split("/v1/")[0]
@@ -1562,6 +1614,7 @@ def _ensure_v1(ledger, r, hints) -> None:
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
+                admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
                 shard: tuple[int, int] | None = None,
                 oldest_first: bool = False,
@@ -1615,6 +1668,23 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainers take DESC (newest), so an ASC caller can progress the
     # backlog without re-selecting rows a drainer just claimed.
     order = "ASC" if oldest_first else "DESC"
+    # T18: under v4 activation the v3 engine's new-inference admission
+    # defaults to ZERO — only message ids carried by a live, non-expired
+    # conversion manifest may be claimed. The filter lives INSIDE the
+    # query so a large backlog can never starve an admitted manifest id
+    # behind the LIMIT.
+    adm_sql = ""
+    adm_params: list = []
+    adm_post = None
+    if admitted_ids is not None:
+        if len(admitted_ids) <= 30000:
+            marks = ",".join("?" * len(admitted_ids)) or "NULL"
+            adm_sql = f" AND m.message_id IN ({marks})"
+            adm_params = sorted(admitted_ids)
+        else:
+            # beyond the SQLite variable limit — degrade to a
+            # post-filter rather than fail the whole scan open
+            adm_post = admitted_ids
     # QC-flagged rows keep their current artifact but re-enter pending
     # for exactly one feedback re-extract — a meta.qc_fix artifact
     # (applied or declined) ends the loop.
@@ -1631,7 +1701,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                       =?
                  ELSE 0 END
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
+        AND (m.body_state IS NULL OR m.body_state='full'){adm_sql}
         AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
                         WHERE claim.kind='extract_claim'
                           AND claim.project_id=m.project_id
@@ -1661,12 +1731,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
              <= unixepoch()
       ORDER BY m.posted_at_ts {order}
       LIMIT ?
-    """, (KIND, EXTRACT_VERSION, KIND, KIND, EXTRACT_VERSION,
+    """, (KIND, EXTRACT_VERSION, *adm_params,
+          KIND, KIND, EXTRACT_VERSION,
           KIND, EXTRACT_VERSION,
           shard[1] if shard else None,
           shard[1] if shard else 1,
           shard[0] if shard else 0,
           limit or 20)).fetchall()
+    if adm_post is not None:
+        rows = [r for r in rows if r["message_id"] in adm_post]
     done = failed = deferred = 0
     done_pids = set()
     endpoint_down = False
@@ -1978,9 +2051,63 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             AND json_extract(a.meta,'$.extract_version')=?
                           ELSE 0 END)
     """, (KIND, EXTRACT_VERSION)).fetchone()[0]
+    # T14: queue-age bounds over the still-pending set (age of the OLDEST
+    # pending body is the backlog's starvation indicator) and aggregate
+    # per-call timings — every field stays None when unmeasured instead
+    # of reporting a fake zero.
+    age_min, age_max = ledger.db.execute("""
+      SELECT MIN(m.posted_at_ts), MAX(m.posted_at_ts) FROM messages m
+      WHERE m.body_text IS NOT NULL AND m.body_text != ''
+        AND (m.body_state IS NULL OR m.body_state='full')
+        AND NOT EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind=? AND a.message_id=m.message_id
+                          AND CASE WHEN json_valid(a.meta) THEN
+                            json_extract(a.meta,'$.error') IS NOT 1
+                            AND json_extract(a.meta,'$.hash')=m.content_hash
+                            AND json_extract(a.meta,'$.extract_version')=?
+                          ELSE 0 END)
+    """, (KIND, EXTRACT_VERSION)).fetchone()
+    now_ts = time.time()
+    llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
+                 "tokens": 0}
+    have_calls = have_ms = have_toks = False
+    seen_meta = set()
+    for meta in metas:
+        if not isinstance(meta, dict) or id(meta) in seen_meta:
+            continue
+        seen_meta.add(id(meta))
+        n = meta.get("calls")
+        if type(n) is int:
+            llm_calls["calls"] += n
+            have_calls = True
+        timings = meta.get("timings")
+        if isinstance(timings, dict):
+            for key in ("prompt_ms", "predicted_ms"):
+                value = timings.get(key)
+                if type(value) in (int, float):
+                    llm_calls[key] += value
+                    have_ms = True
+        usage = meta.get("usage")
+        if isinstance(usage, dict) \
+                and type(usage.get("total_tokens")) is int:
+            llm_calls["tokens"] += usage["total_tokens"]
+            have_toks = True
+    if not have_calls:
+        llm_calls["calls"] = None
+    if not have_ms:
+        llm_calls["prompt_ms"] = llm_calls["predicted_ms"] = None
+    if not have_toks:
+        llm_calls["tokens"] = None
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
-            "pids": sorted(done_pids)}
+            "pids": sorted(done_pids),
+            "queue_ages_s": {
+                "oldest": (now_ts - age_min) if age_min is not None
+                          else None,
+                "newest": (now_ts - age_max) if age_max is not None
+                          else None},
+            "llm_calls": llm_calls if any(
+                v is not None for v in llm_calls.values()) else None}
 
 
 def main() -> int:
@@ -2046,7 +2173,9 @@ def main() -> int:
             return 2
     if args.slot is not None:
         global _SLOT_OVERRIDE
-        if not (0 <= args.slot <= 15):
+        # T19: a slot past the deployed count goes UNPINNED on the
+        # wire — bound to the measured selection, not a raw range
+        if not (0 <= args.slot < local_llm.SLOT_COUNT):
             print(json.dumps({"ok": False, "error": "bad_slot"}))
             return 2
         _SLOT_OVERRIDE = args.slot
@@ -2058,6 +2187,27 @@ def main() -> int:
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
           file=sys.stderr, flush=True)
     led = Ledger(DB)
+    # T18: under the v4 engine (fact_source=canonical) the legacy
+    # extractor admits nothing outside explicit conversion manifests —
+    # the standalone daemon obeys the same zero-default boundary as the
+    # tick path, and a manifest read error fails CLOSED (empty set).
+    try:
+        import semantic_policy
+        canonical_mode = semantic_policy.semantic_config(
+            load_config() or {})[0].get("fact_source") == "canonical"
+    except Exception:
+        canonical_mode = False
+
+    def _admitted():
+        # re-resolved per batch so a newly declared cohort is picked up
+        # without a daemon restart
+        if not canonical_mode:
+            return None
+        try:
+            import semantic_v4
+            return semantic_v4.active_legacy_admissions(led)
+        except Exception:
+            return set()
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -2094,7 +2244,8 @@ def main() -> int:
                 r = run_pending(led, limit=8, budget_s=min(budget, 900),
                                 per_write_lock=True,
                                 workers=max(1, min(args.workers, 8)),
-                                shard=shard, batch_k=args.batch)
+                                shard=shard, batch_k=args.batch,
+                                admitted_ids=_admitted())
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
@@ -2138,7 +2289,8 @@ def main() -> int:
             try:
                 print(json.dumps(
                     run_pending(led, args.limit, args.budget,
-                                batch_k=args.batch),
+                                batch_k=args.batch,
+                                admitted_ids=_admitted()),
                     ensure_ascii=False))
             finally:
                 os.close(lock_fd)

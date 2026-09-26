@@ -8,6 +8,7 @@
     "speaker_relation_recall", "loop_conformity",
     "loop_false_resolution", "loop_precision", "loop_unresolved_miss_rate",
     "defer_rate", "mandatory_fact_recall", "rendered_fact_recall",
+    "delivered_fact_recall",
     "relation_accuracy", "evidence_closure", "silent_drop"
   ],
   "minimums": {
@@ -21,6 +22,7 @@
     "loop_precision": 0.95,
     "mandatory_fact_recall": 1.0,
     "rendered_fact_recall": 1.0,
+    "delivered_fact_recall": 1.0,
     "relation_accuracy": 0.98,
     "evidence_closure": 1.0
   },

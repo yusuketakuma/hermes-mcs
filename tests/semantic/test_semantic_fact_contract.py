@@ -267,6 +267,9 @@ def test_missing_mandatory_fact_is_silent_drop_not_recall():
         "candidate": {"version": "candidate-v1", "facts": [],
                       "status": "complete"},
         "label": {"version": "label-v1", "source": "human",
+                  "receipt": {"receipt_id": "rcpt-1",
+                              "labelled_at": "2026-09-21",
+                              "reviewer": "reviewer-1"},
                   "facts": [{"fact_id": "f1", "important": True,
                              "mandatory": True}]},
     }
