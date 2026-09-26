@@ -23,9 +23,10 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 HERMES_HOME="${1:-$HOME/.hermes}"
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
-# Pinned: fork main — org build merged with upstream main (v2026.9.22),
-# including audit repairs and plugin command_context injection.
-HERMES_PIN="16390dc80d248b7b49554c0cde52caf22e1fc3d8"
+# Pinned: fork main — org build merged with upstream main (v2026.9.24),
+# including config set --stdin, native command attestation, and the
+# async pre-dispatch hook await fixes.
+HERMES_PIN="fd50a275e2616118c48fe07e7e1c878782b15ccd"
 HERMES_BIN_DIR="$HOME/.local/bin"
 LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
 MODEL_DIR="$HERMES_HOME/models"
