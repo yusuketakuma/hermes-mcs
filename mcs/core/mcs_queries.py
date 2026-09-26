@@ -48,6 +48,12 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
 
 
 CANONICAL_PROJECTION_KIND = "canonical_projection"
+# T18: the PASS-only v4 read model — a distinct kind the legacy
+# extract_llm `_replace_current` DELETE can never reach. When a
+# current v4 row exists it outranks both older kinds.
+V4_PROJECTION_KIND = "semantic_facts_v4"
+FACT_KINDS_SQL = ("'extract_llm','canonical_projection',"
+                  "'semantic_facts_v4'")
 
 
 def qc_source_id(msg: str = "m", *, version: int) -> str:
@@ -100,19 +106,59 @@ def current_projection_id(msg: str = "m") -> str:
             f" AND {current_projection_pred('c', f'{msg}.content_hash')})")
 
 
+def current_v4_pred(art: str = "v", hash_ref: str = "?") -> str:
+    """Predicate: a semantic_facts_v4 row is usable — same contract as
+    current_projection_pred plus the engine version pin."""
+    col = f"{art}." if art else ""
+    return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
+            f"THEN json_type({col}content)='object' "
+            f"AND json_type({col}meta)='object' "
+            f"AND COALESCE(json_extract({col}content,'$._error'),0)=0 "
+            f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
+            f"AND json_extract({col}meta,'$.hash')={hash_ref} "
+            f"AND json_extract({col}meta,'$.engine_version')=4 "
+            f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
+            "ELSE 0 END")
+
+
+def current_v4_id(msg: str = "m") -> str:
+    """Subquery: THE current v4 read-model row for a message."""
+    return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
+            f" WHERE v.kind='{V4_PROJECTION_KIND}'"
+            f" AND v.message_id={msg}.message_id"
+            f" AND v.project_id={msg}.project_id"
+            f" AND {current_v4_pred('v', f'{msg}.content_hash')})")
+
+
+def qc_v4_source_id(msg: str = "m") -> str:
+    """The v4 row a QC audit binds to. Deliberately separate from
+    qc_source_id: a bare ``version=4`` on the legacy extract_llm scan
+    can never select this kind — the consumer must opt in."""
+    return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
+            f" WHERE v.kind='{V4_PROJECTION_KIND}'"
+            f" AND v.message_id={msg}.message_id"
+            f" AND {current_v4_pred('v', f'{msg}.content_hash')}"
+            f" AND json_extract(v.meta,'$.extract_version')=4)")
+
+
 def current_fact_pred(art: str = "a", msg: str = "m", *,
                       error_check: bool = True) -> str:
-    """AND-fragment for fact-extraction reads (T12 consumer migration):
-    the CURRENT-generation ``canonical_projection`` row (see
-    current_projection_id) shadows ``extract_llm`` for the same
-    message; either kind must satisfy current_extract_pred. The
-    caller's FROM clause must admit both kinds —
-    ``<art>.kind IN ('extract_llm','canonical_projection')``."""
+    """AND-fragment for fact-extraction reads: v4 PASS outranks the
+    canonical projection, which outranks a legacy ``extract_llm`` row;
+    each must satisfy current_extract_pred. A delayed v3 writer can
+    still land a row but can never displace a published v4
+    generation. The caller's FROM clause must admit all three kinds —
+    ``<art>.kind IN ('extract_llm','canonical_projection',
+    'semantic_facts_v4')``."""
     return (current_extract_pred(art, msg, error_check=error_check)
-            + f" AND CASE WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"
+            + f" AND CASE WHEN {art}.kind='{V4_PROJECTION_KIND}'"
+              f" THEN {art}.artifact_id={current_v4_id(msg)}"
+              f" WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"
               f" THEN {art}.artifact_id="
               f"{current_projection_id(msg)}"
-              f" ELSE {current_projection_id(msg)} IS NULL END")
+              f" AND {current_v4_id(msg)} IS NULL"
+              f" ELSE {current_projection_id(msg)} IS NULL"
+              f" AND {current_v4_id(msg)} IS NULL END")
 
 
 def med_period_artifacts(db):
@@ -208,10 +254,12 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
                  AND m.posted_at_ts BETWEEN d.posted_at_ts-?
                                         AND d.posted_at_ts+?
             CROSS JOIN artifacts a ON a.message_id=m.message_id
-            WHERE da.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}')
+            WHERE da.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}',
+                              '{V4_PROJECTION_KIND}')
               {current_fact_pred('da', 'd')}
               AND ev.value IN ({TRANSITION_EVENTS_SQL})
-              AND a.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}')
+              AND a.kind IN ('extract_llm','{CANONICAL_PROJECTION_KIND}',
+                             '{V4_PROJECTION_KIND}')
               {current_fact_pred('a', 'm')}
               {pred_p}AND EXISTS
                   (SELECT 1 FROM json_each(a.content,'$.meds') je

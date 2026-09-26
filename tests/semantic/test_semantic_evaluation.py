@@ -1,6 +1,7 @@
 """Offline WP08 evaluation contracts; every fixture is synthetic."""
 import copy
 import json
+import pathlib
 
 import pytest
 
@@ -25,12 +26,16 @@ CRITERIA = {
         "speaker_relation_recall": 1.0,
         "loop_conformity": 1.0,
         "loop_precision": 1.0,
+        "mandatory_fact_recall": 1.0,
+        "rendered_fact_recall": 1.0,
+        "delivered_fact_recall": 1.0,
     },
     "maximums": {
         "critical_overclaim": 0.0,
         "loop_false_resolution": 0.0,
         "loop_unresolved_miss_rate": 0.0,
         "defer_rate": 0.0,
+        "silent_drop": 0.0,
     },
     "required_splits": ["test"],
     "min_human_labels": 1,
@@ -67,6 +72,7 @@ def _record(source="synthetic"):
                  "evidence_ids": ["ev-2"]},
             ],
             "rendered_fact_ids": ["f1", "f2"],
+            "delivered_fact_ids": ["f1", "f2"],
             "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
                            "type": "COMPLEMENTS"}],
             "unresolved": [],
@@ -85,6 +91,10 @@ def _record(source="synthetic"):
         "label": {
             "version": "label-v1",
             "source": source,
+            **({"receipt": {"receipt_id": "rcpt-1",
+                            "labelled_at": "2026-09-21",
+                            "reviewer": "reviewer-1"}}
+               if source == "human" else {}),
             "facts": [
                 {"fact_id": "f1", "important": True, "mandatory": True,
                  "medication": "drug-a", "negation": "affirmed",
@@ -346,6 +356,135 @@ def test_report_binds_actual_criteria_even_if_version_is_reused():
     assert second["criteria"] == evaluation.validate_criteria(changed)
     assert first["criteria_sha256"] == evaluation.evaluate_records(
         [_record("human")], MANIFEST, dict(reversed(list(CRITERIA.items()))))["criteria_sha256"]
+
+
+def _facts(prefix, n, mandatory=True, important=True):
+    return [{"fact_id": f"{prefix}-{i}", "important": important,
+             "mandatory": mandatory, "medication": f"drug-{i}",
+             "negation": "affirmed", "time": "today",
+             "speaker_relation": "nurse", "evidence_ids": [f"ev-{i}"]}
+            for i in range(n)]
+
+
+def _claim_pair(fid, index=0):
+    """One critical+final claim pair (label + candidate) over `fid`."""
+    return (
+        {"claim_id": f"c-{fid}", "critical": index == 0,
+         "supported": True, "final": True,
+         "covered_gold_fact_ids": [fid]},
+        {"claim_id": f"c-{fid}", "critical": index == 0,
+         "fact_refs": [fid], "attachment_refs": []},
+    )
+
+
+def _set_claims(record, fids):
+    label_claims, candidate_claims = [], []
+    for i, fid in enumerate(fids):
+        lc, cc = _claim_pair(fid, i)
+        label_claims.append(lc)
+        candidate_claims.append(cc)
+    record["label"]["claims"] = label_claims
+    record["candidate"]["claims"] = candidate_claims
+
+
+def test_missing_41st_fact_fails_gate():
+    """T6 failure axis: a mandatory fact dropped between extraction and
+    render must break the gate. The candidate predicts all 41 but lists
+    only 40 rendered ids — rendered recall sees the missing one."""
+    record = _record("human")
+    record["label"]["facts"] = [
+        {**f, "mandatory": True} for f in _facts("f", 41)]
+    record["candidate"]["facts"] = _facts("f", 41)
+    rel = {"left_fact_id": "f-0", "right_fact_id": "f-1",
+           "type": "COMPLEMENTS"}
+    record["label"]["relations"] = [dict(rel)]
+    record["candidate"]["relations"] = [dict(rel)]
+    _set_claims(record, [f"f-{i}" for i in range(41)])
+    record["candidate"]["rendered_fact_ids"] = [f"f-{i}" for i in range(40)]
+    record["candidate"]["delivered_fact_ids"] = [f"f-{i}" for i in range(41)]
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    rendered = report["metrics"]["rendered_fact_recall"]
+    assert rendered["correct"] == 40 and rendered["denominator"] == 41
+    assert not report["gate"]["pass"]
+    assert "below_threshold:rendered_fact_recall" in report["gate"]["reasons"]
+
+
+def test_unpredicted_41st_fact_is_silent_drop():
+    """Same class, harder failure: the fact never reached the candidate
+    AND was never listed unresolved -> silent_drop, the exact 'cannot
+    disappear' property the 40-item cap violated."""
+    record = _record("human")
+    record["label"]["facts"] = [
+        {**f, "mandatory": True} for f in _facts("f", 41)]
+    record["candidate"]["facts"] = _facts("f", 40)
+    rel = {"left_fact_id": "f-0", "right_fact_id": "f-1",
+           "type": "COMPLEMENTS"}
+    record["label"]["relations"] = [dict(rel)]
+    record["candidate"]["relations"] = [dict(rel)]
+    _set_claims(record, [f"f-{i}" for i in range(40)])
+    record["candidate"]["rendered_fact_ids"] = [f"f-{i}" for i in range(40)]
+    record["candidate"]["delivered_fact_ids"] = [f"f-{i}" for i in range(40)]
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    drop = report["metrics"]["silent_drop"]
+    assert drop["errors"] == 1 and drop["denominator"] == 41
+    assert "above_threshold:silent_drop" in report["gate"]["reasons"]
+
+
+def test_undelivered_mandatory_fact_breaks_delivery_chain():
+    """verified->rendered->delivered: a fact rendered but absent from
+    delivered_fact_ids fails the chain — no silent success."""
+    record = _record("human")
+    record["candidate"]["delivered_fact_ids"] = ["f2"]  # f1 undelivered
+    criteria = copy.deepcopy(CRITERIA)
+    criteria["minimums"]["delivered_fact_recall"] = 1.0
+    report = evaluation.evaluate_records([record], MANIFEST, criteria)
+    metric = report["metrics"]["delivered_fact_recall"]
+    assert metric["correct"] == 0 and metric["denominator"] == 1
+    assert not report["gate"]["pass"]
+    assert "below_threshold:delivered_fact_recall" \
+        in report["gate"]["reasons"]
+
+
+def test_fake_human_label_without_receipt_rejected():
+    """A bare source='human' string cannot mint provenance — human
+    labels must bind a durable labelling receipt."""
+    record = _record("human")
+    del record["label"]["receipt"]
+    with pytest.raises(evaluation.EvaluationError,
+                       match="label_human_receipt_required"):
+        evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+
+
+@pytest.mark.parametrize("receipt", [
+    {"receipt_id": "", "labelled_at": "2026-09-21", "reviewer": "r1"},
+    {"receipt_id": "rcpt-1", "labelled_at": None, "reviewer": "r1"},
+    {"receipt_id": "rcpt-1", "labelled_at": "2026-09-21"},
+    "a receipt id",
+])
+def test_malformed_human_receipt_rejected(receipt):
+    record = _record("human")
+    record["label"]["receipt"] = receipt
+    with pytest.raises(evaluation.EvaluationError,
+                       match="label_human_receipt"):
+        evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+
+
+def test_g6_file_minimum_needs_200_human_provenance_rows():
+    """The shipped criteria file means it: fewer than 200 human-labelled
+    held-out cases can never pass, however good the metrics look."""
+    criteria_file = pathlib.Path(__file__).resolve().parents[2] \
+        / "evaluation" / "g6-criteria-v1.json"
+    criteria = json.loads(criteria_file.read_text(encoding="utf-8"))
+    manifest = dict(MANIFEST)
+    records = []
+    for i in range(199):
+        rec = copy.deepcopy(_record("human"))
+        rec["case_id"] = f"case-{i}"
+        rec["label"]["receipt"]["receipt_id"] = f"rcpt-{i}"
+        records.append(rec)
+    report = evaluation.evaluate_records(records, manifest, criteria)
+    assert not report["gate"]["pass"]
+    assert "human_labels_insufficient" in report["gate"]["reasons"]
 
 
 @pytest.mark.parametrize("value", [None, "true", 1])

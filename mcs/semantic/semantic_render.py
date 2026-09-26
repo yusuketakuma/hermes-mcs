@@ -30,36 +30,96 @@ _CATEGORY_LABEL = {
 }
 
 
-def mandatory_render(doc: dict, max_facts: int = 40) -> dict:
+MANDATORY_PAGE_BUDGET = 1900    # chars/page — the send-path chunk bound
+
+
+def _evidence_desc(fact: dict) -> str:
+    ids = [e for e in (fact.get("evidence_ids") or []) if isinstance(e, str)]
+    if not ids:
+        return "なし"
+    return ids[0] + (f"他{len(ids) - 1}件" if len(ids) > 1 else "")
+
+
+def _fact_pages(entries: list, budget: int) -> list:
+    """Pack (line, fact_id) pairs into immutable pages within the char
+    budget. A line alone over budget still takes its own page — the
+    completeness check then reports it oversized, never truncated."""
+    pages, cur_lines, cur_ids, used = [], [], [], 0
+    for line, fid in entries:
+        need = len(line) + (1 if cur_lines else 0)
+        if cur_lines and used + need > budget:
+            pages.append({"index": len(pages), "fact_ids": cur_ids,
+                          "text": "\n".join(cur_lines)})
+            cur_lines, cur_ids, used = [], [], 0
+            need = len(line)
+        cur_lines.append(line)
+        cur_ids.append(fid)
+        used += need
+    if cur_lines:
+        pages.append({"index": len(pages), "fact_ids": cur_ids,
+                      "text": "\n".join(cur_lines)})
+    return pages
+
+
+def verify_mandatory_pages(rendered: dict,
+                           budget: int = MANDATORY_PAGE_BUDGET) -> dict:
+    """Completeness oracle for a mandatory_render result — the gate
+    between 'published' and 'still missing'. A missing/duplicated/
+    unbound fact_id or an oversized page means publication is
+    INCOMPLETE, never PASS."""
+    fact_ids = list(rendered.get("fact_ids") or [])
+    pages = list(rendered.get("pages") or [])
+    declared = [fid for p in pages for fid in p.get("fact_ids") or []]
+    declared_set = set(declared)
+    fact_set = set(fact_ids)
+    missing = [f for f in fact_ids if f not in declared_set]
+    extra = [f for f in declared if f not in fact_set]
+    duplicated = sorted({f for f in declared if declared.count(f) > 1})
+    oversized = [p.get("index") for p in pages
+                 if len(p.get("text") or "") > budget]
+    unbound = [{"page": p.get("index"), "fact_id": fid}
+               for p in pages for fid in p.get("fact_ids") or []
+               if f"ID:{fid}" not in (p.get("text") or "")]
+    return {"complete": not (missing or extra or duplicated
+                             or oversized or unbound),
+            "missing": missing, "extra": extra,
+            "duplicated": duplicated, "oversized_pages": oversized,
+            "unbound": unbound}
+
+
+def mandatory_render(doc: dict,
+                     page_budget: int = MANDATORY_PAGE_BUDGET) -> dict:
     """Deterministic mandatory layer for a semantic-facts/v2 document
     (T11): every verified fact and every non-terminal obligation must
     be visible in the rendered output even when the model summary
     omits them.  Lines are code-generated from the stored contract —
-    never model text invented here."""
+    never model text invented here. No count cap: each rendered line
+    carries subject/time/ID/evidence identity, and the full list is
+    split into source-bound pages within the platform char budget —
+    'N omitted' is publication-incomplete, never a limitation."""
     facts = [f for f in doc.get("facts", [])
              if isinstance(f, dict)
              and f.get("validation_status") == "verified"]
-    statement_counts = Counter(
-        fact.get("statement") for fact in
-        {fact["fact_id"]: fact for fact in facts}.values())
-    lines, seen = [], set()
-    omitted = 0
+    lines, fact_ids, seen = [], [], set()
+    category_counts = Counter()
+    entries = []
     for fact in facts:
         text = fact.get("statement")
-        if not isinstance(text, str) or not text or fact["fact_id"] in seen:
+        fid = fact.get("fact_id")
+        if not isinstance(text, str) or not text \
+                or not isinstance(fid, str) or not fid or fid in seen:
             continue
-        seen.add(fact["fact_id"])
-        # beyond the cap a verified fact must not vanish silently —
-        # count it and disclose the omission as a limitation (FIX-SR1)
-        if len(lines) >= max_facts:
-            omitted += 1
-            continue
+        seen.add(fid)
         label = _CATEGORY_LABEL.get(
             sf.KIND_CATEGORY.get(fact.get("kind"), ""), "その他の所見")
-        if statement_counts[text] > 1:
-            text += (f"（対象: {fact['subject']}、時点: {fact['event_time']}、"
-                     f"ID: {fact['fact_id']}）")
-        lines.append(f"{label}｜{text}")
+        category_counts[label] += 1
+        line = (f"{label}｜{text}"
+                f"（対象:{fact.get('subject') or '不明'}"
+                f"、時点:{fact.get('event_time') or '不明'}"
+                f"、ID:{fid}、証拠:{_evidence_desc(fact)}）")
+        lines.append(line)
+        fact_ids.append(fid)
+        entries.append((line, fid))
     lims, lim_seen = [], set()
     for ob in doc.get("obligations", []):
         if not isinstance(ob, dict) \
@@ -71,10 +131,17 @@ def mandatory_render(doc: dict, max_facts: int = 40) -> dict:
         if line not in lim_seen:
             lim_seen.add(line)
             lims.append(line)
-    if omitted:
-        lims.append(f"確認済み事実{omitted}件は表示上限のため省略"
-                    "（台帳を参照）")
-    return {"facts": lines, "limitations": lims}
+    breakdown = "、".join(f"{label}{n}"
+                          for label, n in category_counts.items())
+    overview = (f"確認済み事実{len(lines)}件（{breakdown}）"
+                if lines else "確認済み事実0件")
+    src = doc.get("source") or {}
+    out = {"facts": lines, "fact_ids": fact_ids, "overview": overview,
+           "pages": _fact_pages(entries, page_budget),
+           "limitations": lims,
+           "source_fingerprint": src.get("source_fingerprint")}
+    out["complete"] = verify_mandatory_pages(out, page_budget)["complete"]
+    return out
 
 
 def render_notice(ledger, project_id: int, root_id: int,
@@ -143,6 +210,9 @@ def render_notice(ledger, project_id: int, root_id: int,
     mfacts = summary.get("mandatory_facts") or []
     if mfacts:
         lines.append("\n■ 抽出済み事実（監査済み）")
+        m_overview = summary.get("mandatory_overview")
+        if m_overview:
+            lines.append(f"・{m_overview}")
         lines.extend(f"・{x}" for x in mfacts)
     lims = summary.get("limitations") or []
     if lims:

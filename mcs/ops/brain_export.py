@@ -18,10 +18,15 @@ import _mcs_path  # noqa: F401
 import mcs_stats
 import mcs_signals
 import mcs_view
+import read_model
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
 OUT_DIR = HOME / "data" / "exports"
+# dated export copies are derived snapshots of the published read —
+# they expire on a bounded retention; the original ledger/messages are
+# never touched by this sweep (T15)
+EXPORT_RETENTION_DAYS = 62
 HONESTY = ("候補・数値は公開スナップショット由来です。"
            "記録の欠如は対応の欠如を意味しません。")
 FACTS_HEADER = ("| # | claim | kind | who | weight | since | source "
@@ -127,16 +132,13 @@ def _facts_block(db, snap_ts: float, open_signals: int) -> str:
     return "\n".join(rows) + "\n"
 
 
-def _stats_md(view, today: str, open_signals: int) -> str:
-    args = {"preset": "operational", "limit": 50}
-    result = mcs_stats.run_stats(view.db, view.meta["generated_at"], args)
-    args2 = {"preset": "pharmacy", "limit": 50}
-    result2 = mcs_stats.run_stats(view.db, view.meta["generated_at"], args2)
+def _stats_md(view, today: str, open_signals: int,
+              stats_results: dict) -> str:
     lines = [_fm(f"MCS stats {today}"), f"# MCS stats — {today}\n\n",
              _banner(view), "## Facts\n\n",
              _facts_block(view.db, view.meta["generated_at"],
                           open_signals)]
-    for preset, res in (("operational", result), ("pharmacy", result2)):
+    for preset, res in stats_results.items():
         lines.append(f"\n## preset: {preset}\n\n")
         for name, stat in (res.get("stats") or {}).items():
             status = stat.get("status") if isinstance(stat, dict) else "?"
@@ -217,17 +219,92 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     return "".join(lines)
 
 
+def _records_jsonl(view, sig_res: dict, stats_results: dict,
+                   model: dict) -> str:
+    """The machine surface (T15): one complete JSON record per line —
+    never sliced, never markdown. Every line carries the contract id and
+    the exact snapshot generation it was read from, so a rotated
+    snapshot is detectable instead of silently mixing generations."""
+    gen = view.meta["generation_id"]
+    lines = []
+
+    def rec(type_, **kw):
+        kw.update({"type": type_, "contract": read_model.CONTRACT,
+                   "snapshot_generation_id": gen})
+        lines.append(json.dumps(kw, ensure_ascii=False, allow_nan=False))
+
+    rec("meta", snapshot=dict(view.meta))
+    rec("coverage", coverage=model["coverage"])
+    for preset, res in stats_results.items():
+        for name, stat in (res.get("stats") or {}).items():
+            rec("stat", preset=preset, name=name, value=stat)
+    for c in sig_res["items"]:
+        # aggregate scope: type/project/ids only — signal 'note' text is
+        # human-surface content and stays out of the machine records
+        rec("signal", signal_type=c.get("type"),
+            project_id=c.get("project_id"), detected_at=c.get("detected_at"),
+            evidence=c.get("evidence"))
+    if sig_res.get("truncated"):
+        rec("signals_truncated", total=sig_res["total"])
+    for a in model["attachments"] or []:
+        rec("attachment", **a)
+    for r in model["records"]:
+        rec("message", **r)
+    return "\n".join(lines) + "\n"
+
+
+def _sweep_exports(out_dir: Path, now: float) -> list:
+    """Bounded retention for dated export copies — only filenames this
+    exporter itself generates (stats|signals/YYYY-MM-DD.*, top-level
+    export-YYYY-MM-DD.jsonl); anything else in a user-chosen --out dir
+    is not ours to delete."""
+    cutoff = now - EXPORT_RETENTION_DAYS * 86400
+    expired = []
+    for sub in (out_dir / "stats", out_dir / "signals", out_dir):
+        if not sub.is_dir():
+            continue
+        for f in sub.iterdir():
+            m = re.fullmatch(r"(?:export-)?(\d{4}-\d{2}-\d{2})"
+                             r"\.(?:md|jsonl)", f.name)
+            if not m:
+                continue
+            try:
+                day = time.mktime(time.strptime(m.group(1), "%Y-%m-%d"))
+            except (ValueError, OverflowError):
+                continue
+            if day >= cutoff:
+                continue
+            f_res = f.resolve()
+            if not f_res.is_relative_to(out_dir.resolve()) \
+                    or not f_res.is_file():
+                continue
+            f_res.unlink()
+            expired.append(str(f.relative_to(out_dir)))
+    return expired
+
+
 def run(out_dir: Path, snapshot: Path) -> dict:
     view = mcs_view.View(str(snapshot))
     try:
         today = time.strftime("%Y-%m-%d")
         sig_res = mcs_signals.current_open(view.db, limit=200)
+        model = read_model.read_model(view.db, scope="aggregate")
         _write(out_dir, "meta.md", _meta_md(view))
         _write(out_dir, "health.md", _health_md(view))
-        stats = _stats_md(view, today, sig_res["total"])
+        stats_results = {
+            "operational": mcs_stats.run_stats(
+                view.db, view.meta["generated_at"],
+                {"preset": "operational", "limit": 50}),
+            "pharmacy": mcs_stats.run_stats(
+                view.db, view.meta["generated_at"],
+                {"preset": "pharmacy", "limit": 50})}
+        stats = _stats_md(view, today, sig_res["total"], stats_results)
         _write(out_dir, "stats/latest.md", stats)
         _write(out_dir, f"stats/{today}.md", stats)
         _write(out_dir, "signals/latest.md", _signals_md(view, sig_res))
+        records = _records_jsonl(view, sig_res, stats_results, model)
+        _write(out_dir, "export.jsonl", records)
+        _write(out_dir, f"export-{today}.jsonl", records)
         info = {r["project_id"]: dict(r) for r in view.db.execute(
             "SELECT project_id,patient_name,project_type,disease,station_name"
             " FROM patients")}
@@ -255,8 +332,14 @@ def run(out_dir: Path, snapshot: Path) -> dict:
                 if stale.name not in seen \
                         and re.fullmatch(r"p\d+\.md", stale.name):
                     stale.unlink()
+        expired = _sweep_exports(out_dir, time.time())
         return {"ok": True, "patients": len(seen),
                 "signals": sig_res["total"],
+                "snapshot_generation_id": view.meta["generation_id"],
+                "contract": read_model.CONTRACT,
+                "records": str(out_dir / "export.jsonl"),
+                "retention": {"keep_days": EXPORT_RETENTION_DAYS,
+                              "expired": expired},
                 "out": str(out_dir)}
     finally:
         view.close()

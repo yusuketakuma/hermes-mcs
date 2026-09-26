@@ -332,7 +332,7 @@ def _med_rows(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind IN ('extract_llm','canonical_projection')
+            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND json_array_length(a.content,'$.meds')>0{w}
             ORDER BY a.artifact_id""",
@@ -496,7 +496,7 @@ def st_med_change_followup(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind IN ('extract_llm','canonical_projection')
+            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND json_array_length(a.content,'$.meds')>0
               AND m.posted_at_ts IS NOT NULL
@@ -610,6 +610,72 @@ def st_open_loop_aging(db, scope):
                "formal request register only")
 
 
+def st_canonical_facts(db, scope):
+    """ST-T5: verified canonical facts carried by current
+    canonical_projection artifacts — the coverage pharmacists actually
+    read. Counting never re-derives claims: facts are enumerated once
+    per fact_id on the newest current projection; a stale projection
+    (hash drift / invalidated) contributes nothing."""
+    w, p = _where(scope)
+    rows = db.execute(
+        f"""SELECT a.content FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
+              {current_fact_pred()}
+              AND json_array_length(a.content,'$.canonical_facts')>0{w}
+            ORDER BY a.artifact_id DESC""", p).fetchall()
+    total = evidenced = 0
+    by_kind: dict = {}
+    seen: set = set()
+    for (content,) in rows:
+        facts = json.loads(content).get("canonical_facts") or []
+        for f in facts:
+            if not isinstance(f, dict):
+                continue
+            fid = f.get("fact_id")
+            if not isinstance(fid, str) or not fid or fid in seen:
+                continue
+            seen.add(fid)
+            total += 1
+            kind = f.get("kind") or "unknown"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if f.get("evidence_quote"):
+                evidenced += 1
+    return _result("ok", scope, {
+        "total": total, "evidenced": evidenced, "by_kind": by_kind,
+        "notes": ["facts counted once per fact_id on the newest "
+                  "current projection — stale/invalidated generations "
+                  "are excluded by the shared current_fact_pred rule",
+                  "kinds with no legacy slot (allergy/adverse/vitals/"
+                  "preference/observation) appear only here"]})
+
+
+def st_card_parts(db, scope):
+    """ST-T7: durable render-part coverage — planned vs delivered parts
+    across every issued render. A render's plan is 'incomplete' while
+    any part remains pending or reached a non-delivered terminal state,
+    so a delivered card can never masquerade as a complete render."""
+    rows = db.execute(
+        "SELECT state, COUNT(*) c FROM notification_render_parts "
+        "GROUP BY state").fetchall()
+    by_state = {r["state"]: r["c"] for r in rows}
+    renders = db.execute(
+        "SELECT parts_state, COUNT(*) c FROM notification_renders "
+        "WHERE parts_state IS NOT NULL AND parts_state != 'none' "
+        "GROUP BY parts_state").fetchall()
+    by_render = {r["parts_state"]: r["c"] for r in renders}
+    incomplete = by_render.get("pending", 0) + by_render.get("incomplete", 0)
+    return _result("ok", scope, {
+        "total_parts": sum(by_state.values()),
+        "by_state": by_state,
+        "renders_complete": by_render.get("complete", 0),
+        "renders_incomplete": incomplete,
+        "notes": ["complete requires every planned part delivered — "
+                  "a settled card alone never counts",
+                  "unavailable attachments are pre-settled not_sent "
+                  "parts: visible in by_state, never silently omitted"]})
+
+
 REGISTRY = {
     # name -> {tier, needs, fn}
     "overview": {"tier": "T1", "needs": ["metadata"], "fn": st_overview},
@@ -640,6 +706,12 @@ REGISTRY = {
     "transition_reconciliation": {"tier": "T2",
                                   "needs": ["med_events"],
                                   "fn": st_transition_reconciliation},
+    "canonical_facts": {"tier": "T2",
+                        "needs": ["canonical_projection"],
+                        "fn": st_canonical_facts},
+    "card_parts": {"tier": "T2",
+                   "needs": ["notification_render_parts"],
+                   "fn": st_card_parts},
 }
 
 PRESETS = {

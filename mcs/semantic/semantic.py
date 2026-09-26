@@ -122,10 +122,20 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
     request, no proxy, no redirect, bounded bytes (INV-13, §15.3).
     Returns raw text or None."""
     import local_llm
-    response = local_llm.chat(
-        prompt, endpoint=LLM_ENDPOINT, model=LLM_MODEL, timeout=timeout,
-        extra_payload={"id_slot": local_llm.request_slot()},
-        request_fn=local_llm.bounded_request)
+    if local_llm.admission_enabled():
+        # T20: route through the RT/BACKLOG admission boundary — the
+        # registered route binds the class; the response shape carries
+        # an `admission` verdict on denial/deferral (never model text)
+        response = local_llm.admitted_chat(
+            "mcs.semantic", prompt,
+            endpoint=LLM_ENDPOINT, model=LLM_MODEL, timeout=timeout,
+            request_fn=local_llm.bounded_request)
+    else:
+        response = local_llm.chat(
+            prompt, endpoint=LLM_ENDPOINT, model=LLM_MODEL,
+            timeout=timeout,
+            extra_payload={"id_slot": local_llm.request_slot()},
+            request_fn=local_llm.bounded_request)
     # canonical acceptance: a length-truncated or empty completion is an
     # incomplete result, never a success payload — even when its text
     # happens to parse (C05)

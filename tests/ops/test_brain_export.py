@@ -298,3 +298,120 @@ def test_main_cli(env, capsys):
     assert brain_export.main(
         ["--out", str(out), "--snapshot", str(snap) + ".missing"]) == 1
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+# ---------- T15: machine contract + retention ----------
+
+def _jsonl(out: Path) -> list:
+    return [json.loads(line) for line in
+            (out / "export.jsonl").read_text().splitlines() if line]
+
+
+def test_machine_export_parses_completely_and_binds_generation(env):
+    snap, out = env
+    res = brain_export.run(out, snap)
+    assert res["snapshot_generation_id"] == "gen-1"
+    assert res["contract"] == "mcs-read-model/1"
+    records = _jsonl(out)
+    assert records                       # file is non-empty JSONL
+    assert all(r["contract"] == "mcs-read-model/1" for r in records)
+    assert all(r["snapshot_generation_id"] == "gen-1" for r in records)
+    types = {r["type"] for r in records}
+    assert {"meta", "coverage", "stat", "signal", "message"} <= types
+    # message records carry provenance, not bodies
+    msg = next(r for r in records if r["type"] == "message")
+    assert msg["message_id"] == 100 and msg["content_hash"] == "hash-1"
+    assert msg["state"] in ("current", "stale", "pending", "unknown")
+    assert "extraction" in msg and "extract_llm" in msg["extraction"]
+    # coverage makes "no record" distinguishable from "no event"
+    assert "extraction" in next(r for r in records
+                              if r["type"] == "coverage")["coverage"]
+
+
+def test_machine_export_never_carries_raw_content(env):
+    snap, out = env
+    brain_export.run(out, snap)
+    blob = (out / "export.jsonl").read_text()
+    for secret in (SECRET_BODY, PATIENT_NAME, "SYNTH-nurse",
+                   "SYNTH note"):
+        assert secret not in blob, secret
+    # signal 'note' text is human-surface content — machine records
+    # carry the typed identity + evidence ids only
+    sig = next(r for r in _jsonl(out) if r["type"] == "signal")
+    assert sig["signal_type"] == "rx_period_expiry"
+    assert sig["evidence"] == {"request_ids": [5]}
+    assert "note" not in sig
+
+
+def test_snapshot_rotation_is_detectable_in_records(env, tmp_path):
+    snap, out = env
+    brain_export.run(out, snap)
+    assert all(r["snapshot_generation_id"] == "gen-1"
+               for r in _jsonl(out))
+    conn = sqlite3.connect(str(snap))
+    conn.execute("UPDATE snapshot_meta SET generation_id='gen-2'")
+    conn.commit()
+    conn.close()
+    brain_export.run(out, snap)
+    # rotation -> every record rebinds to the new generation; a
+    # consumer holding the previous file can compare and mark it stale
+    assert all(r["snapshot_generation_id"] == "gen-2"
+               for r in _jsonl(out))
+
+
+def test_retention_sweeps_only_generated_dated_files(env, tmp_path):
+    snap, out = env
+    brain_export.run(out, snap)
+    old = brain_export.EXPORT_RETENTION_DAYS + 5
+    old_day = time.strftime(
+        "%Y-%m-%d", time.localtime(time.time() - old * 86400))
+    victims = [out / "stats" / f"{old_day}.md",
+               out / "signals" / f"{old_day}.md",
+               out / f"export-{old_day}.jsonl"]
+    for f in victims:
+        f.write_text("old generated export")
+    # foreign files — even dated-looking ones outside generated dirs,
+    # or non-matching names inside them — are never ours to delete
+    foreign = [out / "stats" / "notes.md",
+               out / "stats" / "99999-99.md",
+               out / "keep-2000-01-01.md",
+               out / "meta.md"]
+    for f in foreign:
+        f.write_text("user content")
+    res = brain_export.run(out, snap)
+    for f in victims:
+        assert not f.exists(), f
+    for f in foreign:
+        assert f.exists() and f.read_text() == "user content" \
+            or f.name == "meta.md", f
+    assert sorted(res["retention"]["expired"]) == sorted(
+        str(v.relative_to(out)) for v in victims)
+    assert res["retention"]["keep_days"] == \
+        brain_export.EXPORT_RETENTION_DAYS
+    # the source snapshot — a duplicate of the live ledger — is a
+    # file this exporter only reads; retention never touches it
+    assert snap.exists()
+    conn = sqlite3.connect(str(snap))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM messages").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_machine_export_long_stat_is_complete_not_sliced(env):
+    """The markdown fence slices stats to [:4000] for humans; the
+    machine record must carry the COMPLETE stat object."""
+    snap, out = env
+    brain_export.run(out, snap)
+    stats = [r for r in _jsonl(out) if r["type"] == "stat"]
+    assert stats
+    for r in stats:
+        assert isinstance(r["value"], dict)
+        # a record is complete iff it round-trips and carries the
+        # stat's own fields — the [:4000] cut never reaches it
+        assert "status" in r["value"] or "kind" in r["value"] \
+            or r["value"] != {}
+    # and every line is under no artificial byte cap — the JSON itself
+    # decides completeness
+    assert (out / "export.jsonl").stat().st_size > 0

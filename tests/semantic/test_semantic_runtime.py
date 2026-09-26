@@ -144,13 +144,21 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
     from test_mcs_semantic import _FakeJev
     db = _seeded(tmp_path)
     client = _FakeJev()
-    ticks = iter([10.0, 11.0, 14.0, 16.0])
-    monkeypatch.setattr(semantic.time, "perf_counter", lambda: next(ticks))
+    # controllable clock: the fake LLM spends 2s of wall time per call,
+    # every other phase is instant — the phase-split contract is what
+    # is asserted, not a tick count
+    now = [10.0]
+    monkeypatch.setattr(semantic.time, "perf_counter", lambda: now[0])
     if failure:
         def broken(*args, **kwargs):
             client.requests_made += 1
             raise OSError("synthetic")
         monkeypatch.setattr(semantic, "_process_job", broken)
+        llm_fn = _llm
+    else:
+        def llm_fn(prompt):
+            now[0] += 2.0
+            return _llm(prompt)
     try:
         before = db.db.total_changes
         off = semantic.run_due(db, _cfg("off"), {"errors": []},
@@ -158,9 +166,17 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
         assert "job_metrics" not in off and db.db.total_changes == before
         result = semantic.run_due(db, _cfg(), {"errors": []},
                                   time.monotonic() + 60,
-                                  jev_client=client, llm_fn=_llm)
+                                  jev_client=client, llm_fn=llm_fn)
         metric, = result["job_metrics"]
-        assert metric["elapsed_s"] == 3 and result["elapsed_s"] == 6
+        if failure:
+            assert metric["llm_s"] == 0 and metric["elapsed_s"] == 0
+        else:
+            assert metric["llm_s"] >= 2.0
+            assert metric["elapsed_s"] >= metric["llm_s"]
+        assert (metric["elapsed_s"]
+                == pytest.approx(metric["llm_s"] + metric["jev_s"]
+                                 + metric["post_s"]))
+        assert result["elapsed_s"] == pytest.approx(now[0] - 10.0)
         assert metric["jev_requests"] == semantic.jev_usage_today(db) > 0
         assert metric["usage"]["reported_requests"] == 0
         assert metric["usage"]["unreported_requests"] == metric["jev_requests"]

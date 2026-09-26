@@ -446,7 +446,11 @@ class View:
         out = {}
         for kind in ("semantic_bundle", "semantic_assess",
                      "semantic_facts", "semantic_summary",
-                     "semantic_audit", "semantic_coverage", "notify_plan"):
+                     "semantic_audit", "semantic_coverage", "notify_plan",
+                     "semantic_facts_v2", "semantic_facts_audit",
+                     "semantic_facts_repair", "canonical_projection",
+                     "semantic_source_manifest", "semantic_facts_v4",
+                     "v4_stage", "v4_diagnostic"):
             marks = ",".join("?" * len(keys))
             items = []
             for r in self.db.execute(
@@ -465,9 +469,18 @@ class View:
                     content = json.loads(r["content"])
                 except (json.JSONDecodeError, TypeError):
                     content = None
-                current = bool(fingerprint and meta.get("fingerprint") == fingerprint)
-                if kind in ("semantic_assess", "semantic_summary", "semantic_audit", "semantic_coverage"):
-                    current = current and bool(policy and meta.get("policy_fingerprint") == policy)
+                fp_key = meta.get("fingerprint") \
+                    or meta.get("source_fingerprint")
+                current = bool(fingerprint and fp_key == fingerprint)
+                if kind in ("semantic_assess", "semantic_summary",
+                            "semantic_audit", "semantic_coverage",
+                            "semantic_facts_v2", "semantic_facts_audit",
+                            "semantic_facts_repair",
+                            "canonical_projection", "semantic_facts_v4",
+                            "v4_stage", "v4_diagnostic"):
+                    current = current and bool(
+                        policy
+                        and meta.get("policy_fingerprint") == policy)
                 effective = (meta.get("audit_status") or meta.get("technical_status")) \
                     if current else "STALE"
                 items.append({"artifact_id": r["artifact_id"],
@@ -492,6 +505,15 @@ class View:
             raise ValueError("bad_limit")
         rows = staff_directory(self.db, pid)
         return {"items": [dict(r) for r in rows[:limit]]}
+
+    def _read_model(self, pid, scope, limit):
+        """The T15 versioned machine read model over THIS snapshot
+        connection — provenance + validity states + coverage, bound to
+        this view's generation. Aggregate scope strips all raw patient
+        content (bodies, names, statements, quotes, file names)."""
+        import read_model
+        return read_model.read_model(self.db, scope=scope,
+                                     project_id=pid, limit=limit)
 
     def _loops(self, pid, limit):
         """Open-Loop candidates + their relation events. Candidates are
@@ -721,8 +743,10 @@ class View:
 
     def read(self, kind, project=None, limit=50, cursor=None, query=None,
              message_id=None, request_id=None, status=None, command_id=None,
-             payload_hash=None, since=None, until=None):
-        if (project is not None and not requests.positive(project)) or (kind != "status" and project is None):
+             payload_hash=None, since=None, until=None, scope="aggregate"):
+        projectless = ("status", "read_model")
+        if (project is not None and not requests.positive(project)) \
+                or (kind not in projectless and project is None):
             raise ValueError("project_required")
         handlers = {
             **dict.fromkeys(("search", "timeline", "thread", "candidates"),
@@ -736,6 +760,9 @@ class View:
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
             "comparison": lambda: self._comparison(project, message_id),
+            # T15: the versioned machine read model — aggregate scope
+            # (ids/states/coverage only) unless scope=detail is asked
+            "read_model": lambda: self._read_model(project, scope, limit),
             "loops": lambda: self._loops(project, limit),
             "operations": lambda: self._operations(project, limit, cursor),
         }
@@ -759,7 +786,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -784,11 +811,17 @@ def _parser():
             # render/coverage — a --project input would be meaningless
             # and wrong; notification_receipt keys on command_id only
             projectless = (kind in ("status", "signals",
-                                    "notification_receipt")
+                                    "notification_receipt", "read_model")
                            or (kind == "control" and index == len(parsers) - 1))
             child.add_argument("--project", type=int,
                                required=not projectless)
-            if kind not in ("evidence", "receipt", "notification_receipt",
+            if kind == "read_model":
+                child.add_argument("--scope", default="aggregate",
+                                   choices=("aggregate", "detail"))
+                # machine output defaults to COMPLETE records — an
+                # explicit --limit bounds honestly via 'truncated'
+                child.add_argument("--limit", type=int, default=None)
+            elif kind not in ("evidence", "receipt", "notification_receipt",
                             "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 if kind != "signals":

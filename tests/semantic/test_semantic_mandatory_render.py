@@ -4,6 +4,8 @@ The canonical contract drives a code-generated layer: every verified
 fact is listed and every non-terminal obligation is disclosed, so an
 omitting model summary can never make adjudicated content invisible.
 """
+import json
+
 import semantic
 import semantic_render as render
 from test_mcs_semantic import _seeded
@@ -87,15 +89,96 @@ def test_notice_includes_mandatory_section(tmp_path):
         db.close()
 
 
-def test_mandatory_render_dedupes_and_caps():
+def test_mandatory_render_dedupes_without_cap():
+    """Every verified fact renders — no count cap, no 'omitted'
+    disclosure line (the cap itself was the bug: 40件打切りはしない)."""
     doc = _doc(facts=[_fact(f"事実{i}") for i in range(60)]
                + [_fact("事実0")])
     out = render.mandatory_render(doc)
-    assert len(out["facts"]) == 40
+    assert len(out["facts"]) == 60
     assert len(set(out["facts"])) == len(out["facts"])
-    # FIX-SR1: capped verified facts are disclosed, not silently dropped
-    assert any("20件" in lim and "省略" in lim
-               for lim in out["limitations"])
+    assert not any("省略" in lim for lim in out["limitations"])
+    assert set(out["fact_ids"]) == {f"fact_事実{i}" for i in range(60)}
+
+
+def test_mandatory_render_covers_41_facts_with_identity():
+    """41 verified facts (one past the old cap): rendered fact IDs must
+    equal the verified set one-to-one, each line carrying
+    subject/time/ID/evidence identity."""
+    facts = []
+    for i in range(41):
+        f = _fact(f"事実{i}")
+        f["fact_id"] = f"fid_{i:03d}"
+        f["subject"] = f"patient:{i % 3}"
+        f["event_time"] = f"2026-09-{(i % 28) + 1:02d}T10:00"
+        f["evidence_ids"] = [f"ev_{i}"]
+        facts.append(f)
+    out = render.mandatory_render(_doc(facts=facts))
+    assert out["fact_ids"] == [f"fid_{i:03d}" for i in range(41)]
+    assert len(out["facts"]) == 41
+    for i, line in enumerate(out["facts"]):
+        assert f"ID:fid_{i:03d}" in line
+        assert f"対象:patient:{i % 3}" in line
+        assert f"証拠:ev_{i}" in line
+    assert out["complete"] is True
+
+
+def test_mandatory_render_pages_120_facts_within_budget():
+    """120 facts split into immutable source-bound pages: every page
+    within the char budget, union of page fact_ids == all rendered,
+    each page listing exactly the facts its text carries."""
+    facts = []
+    for i in range(120):
+        f = _fact(f"薬剤変更{i}:5mg継続")
+        f["fact_id"] = f"fid_{i:03d}"
+        f["evidence_ids"] = [f"ev_{i}"]
+        facts.append(f)
+    out = render.mandatory_render(_doc(facts=facts))
+    assert out["complete"] is True
+    assert len(out["pages"]) > 1
+    seen = []
+    for page in out["pages"]:
+        assert len(page["text"]) <= render.MANDATORY_PAGE_BUDGET
+        for fid in page["fact_ids"]:
+            assert f"ID:{fid}" in page["text"]
+        seen.extend(page["fact_ids"])
+    assert seen == out["fact_ids"]
+    assert out["source_fingerprint"] == "sf_x"
+
+
+def test_verify_mandatory_pages_detects_tampering():
+    """Failure oracle: drop fact 41 or bloat a late page past budget —
+    publication is incomplete, never PASS."""
+    facts = []
+    for i in range(60):
+        f = _fact(f"事実{i}")
+        f["fact_id"] = f"fid_{i:03d}"
+        facts.append(f)
+    out = render.mandatory_render(_doc(facts=facts))
+    assert render.verify_mandatory_pages(out)["complete"] is True
+
+    dropped = json.loads(json.dumps(out))
+    victim = dropped["pages"][-1]["fact_ids"].pop()
+    res = render.verify_mandatory_pages(dropped)
+    assert res["complete"] is False
+    assert res["missing"] == [victim]
+
+    bloated = json.loads(json.dumps(out))
+    bloated["pages"][-1]["text"] += "x" * render.MANDATORY_PAGE_BUDGET
+    res = render.verify_mandatory_pages(bloated)
+    assert res["complete"] is False
+    assert res["oversized_pages"] == [bloated["pages"][-1]["index"]]
+
+
+def test_mandatory_render_overview_is_concise_plain_language():
+    out = render.mandatory_render(_doc(facts=[
+        _fact("薬A"), _fact("薬B"),
+        {**_fact("血圧130"), "kind": "vital_lab"},
+    ]))
+    overview = out["overview"]
+    assert "確認済み事実3件" in overview
+    assert "薬剤2" in overview and "バイタル・検査1" in overview
+    assert len(overview) < 120
 
 
 def test_mandatory_render_keeps_distinct_facts_with_identical_statements():

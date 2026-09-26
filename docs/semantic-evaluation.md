@@ -41,8 +41,11 @@ attachment IDs, so an attachment path cannot silently become a new evidence
 source.
 
 A label has `source: "human"` or `source: "synthetic"`, a `facts` list, and a
-`loops` list whose entries use `loop_id` and boolean `resolved`. Fact IDs are
-the matching key. Label facts own `important`, medication, negation, time, and
+`loops` list whose entries use `loop_id` and boolean `resolved`. A human label
+must also bind a durable labelling `receipt` (`receipt_id`, `labelled_at`,
+`reviewer`); the validator checks its shape, while authenticity stays the
+review process's job — a bare `source` string cannot mint provenance. Fact IDs
+are the matching key. Label facts own `important`, medication, negation, time, and
 speaker relation fields. Candidate facts and claims use `fact_id`/`fact_refs`.
 The label must annotate every candidate claim with the
 same `claim_id`, plus `critical`, `supported`, `final`, and
@@ -50,6 +53,12 @@ same `claim_id`, plus `critical`, `supported`, `final`, and
 supported final claims; critical overclaim uses human critical claims marked
 unsupported. Candidate critical flags, fact references, and any
 `final_fact_ids` metadata are never treated as truth.
+
+`delivered_fact_ids` continues the verified -> rendered -> delivered chain:
+mandatory gold facts absent from the candidate's delivered ID set score
+against `delivered_fact_recall`, so a fact lost between render and transport
+fails the same way a dropped render does. An absent list scores as nothing
+delivered rather than being skipped.
 
 The criteria file fixes the gate. `required_metrics` defaults to all WP08
 metrics, but keeping it explicit is recommended:
@@ -221,3 +230,54 @@ python3 mcs/semantic/semantic_evaluation.py --input new-labelled/evaluation.json
 ```
 
 これらのファイル名は入力例であり、実人手ラベル入りのデータを同梱したという意味ではない。snapshotモードが返す定性比較資料に架空の構造化factsや計測値を補って定量評価へ進めない。
+
+## 要約v4次期推論エンジン統合実装計画（未実装）
+
+この節は既存のG6評価契約を変えず、次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/Users/yusuke/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
+
+### 現状の制約と区別する版
+
+| 現行の契約 | 確認した制約 | v4での決定 |
+| --- | --- | --- |
+| 旧`extract_llm.EXTRACT_VERSION=3`（出力JSON形はv2） | 抽出・QC・viewの選択、失敗再試行に世代番号を使用。単純に4へ上げると旧投稿が再候補となり、混在workerは結果を3→4→3へ逆行させ得る。旧kindの置換保存は旧v3行も削除する（`mcs/extract/extract_llm.py:54,1251-1290,1610-1668`）。 | v4 PASSまでは旧結果を明示的な現行版として保持し、**別の保存境界**に`engine_version=4`と公開派生の`extract_version=4`を記録する。対象ごとの安全な切替後は旧LLM生成成果物を上書きできるが、旧抽出定数だけをin-placeで変更しない。 |
+| canonical facts `semantic-facts/v2` / semantic artifact schema `2026-09-20` | これらはエンジンv3/4と独立。現行の事実生成→別の要約生成→Jev監査→条件付き全文修正は複数呼出し（`mcs/semantic/semantic_drain.py:235-337,659-749`）。 | evidence、facts、claim、通知を一つの**世代付きjob/receipt列**で結ぶ。現行fact schemaを無条件に改版しない。 |
+| 旧PASSのcache / 出力 | `policy_fingerprint`に`fact_source`がなく、切替後に古い要約を再利用し得る（`mcs/semantic/semantic_policy.py:160-163`）。確認済みfactは40件で切られ、通常の通知追記は`mandatory_facts`を読まない（`mcs/semantic/semantic_render.py:33-83`; `mcs/semantic/semantic_send_gate.py:334-393`）。 | fact source・engine・生成入力・修復結果・依存relation世代をcache/公開の照合対象にする。専用通知と通常/返信表示の両面でverified fact ID集合を全件追跡し、無言の件数省略を禁止する。 |
+
+旧`extract_llm`とcanonical経路を単に足して呼ぶのではなく、v4の生成を一つのjobとして段階化する。「一つの推論ロジック」は1本の無制限promptではない。現行`semantic_llm`には28,000文字超の要約入力をstubにする境界があり（`mcs/semantic/semantic_llm.py:198-245`）、長文は原文の所有範囲と重複文脈を区別したbounded chunkで網羅する。既存の3,000文字単位の耐久checkpointを失わず、chunk完了集合が原文の全範囲を覆わなければPASSにしない。
+
+### 一次推論から自己修正・公開まで
+
+1. **S0/S1 準備・一次推論**: `extract_v1`の確定的ヒント、atom/chunk境界、原文revision/添付完全性を固定。ローカルLLMでchunkごとに根拠span付きfactsと初期claim候補を生成し、出力長・JSON・全chunk完了と`semantic-facts/v2`を検証する。空・打切り・open obligation・欠けた入力は対象chunkと理由をPENDING/NEEDS_REVIEWへ残す。
+2. **S2 二次評価**: 検証済み候補についてJevがfact→固有根拠と原文→factsのcoverageを判定し、根拠/field/主語/時点/否定の不一致をID付きfindingsとする。Jevは事実の削除・書換え・欠落を正当化しない。budget不足・不正応答・未評価時はPASSに進めず、既存OFF/shadow/assist/enforceと外部PHI送信の明示設定を維持する。
+3. **S3/S4 必要箇所の二次ローカル修復と再監査**: schema/evidence/coverage/Jev findingsが指すatom・factだけ修復し、採用済みfactを固定する。モデル呼出し**前**に世代と入力digestに結んだ`started` receiptを耐久予約し、修復文書を検証し直してJevで再監査する。事実修復は世代ごと最大1 dispatch。停止後も回数を戻さず、2回目の不合格はNEEDS_REVIEW。修復なしの完全なS2 PASSは不要な再問をしない。
+4. **S5/S6/S7 事実集合・可読要約・公開監査**: Jev PASSで検証された全facts/relationsから必須情報を**確定的に全件描画**する。概説は最終factsだけからローカルLLMで生成し、claim参照とJev公開監査を行う。誤主張だけに別の上限付き要約修復を行い再監査する。事実セット不足や無根拠claimは「要約済み」とせず、原文と未完了理由を明示する。事実修復と要約修復のreceipt/予算は別。
+5. **S8 診断保存とv4公開**: `PASS|PENDING|NEEDS_REVIEW|STALE`の診断receiptを全件保存する。**PASSかつ現行source/relation/activationに一致する場合だけ**、v3形の読取用投影を独立kindから公開し、対象ごとの現行版ポインタを原子的にv4へ切り替える。非PASSを`extract_llm`の現行抽出としてmintしない。現行`mcs_queries.current_extract_pred`はaudit statusを見ないため、`extract_version=4`だけを付けた非PASS行は読めてしまう。
+
+Jevの`Choice`は同じ`state`に複数設問を送れるが、現行fact/claim監査は対象ごとに**異なる根拠state**を構築する（`mcs/semantic/semantic_audit.py:76-160,284-369`）。全claimの無条件一括化は根拠混入の危険がある。完全に同じ順序の根拠集合を持つ組だけを任意の最適化候補とし、単独方式と合成stub契約・実モデル品質をそれぞれ比較するまでは既存の分割監査を維持する。要求数は対象件数、coverage、再試行で変わり、2回/投稿などの定数ではない。[TypeSafe Choice](https://docs.typesafe.ai/primitives/choice.md)、[citation check](https://docs.typesafe.ai/cookbooks/citation_check.md)、[model limits](https://docs.typesafe.ai/models.md)に従い、日次予算の既定OFFを無断で有効化せず、送信する臨床文脈を既存許可範囲より拡大しない。
+
+表示・配送では`verified_fact_ids == rendered_fact_ids == delivered_fact_ids`を監査対象単位で要求する。物理文字数を超える場合は既存の分割/再開機構を使い、40件目・41件目・120件目、および本文の第5part以降を切らない。カード、スレッド本文、添付、通常追記と専用semantic通知は異なる表面なので各々のsource世代/part ID/bytes/hash/配送状態を照合し、未送・結果不明を完了と偽らない。生の新着通知をsemantic処理待ちで遅らせない。
+
+### 旧v1・v2・v3の推論成果をv4へ順次置換する
+
+**チャット本文・原文revisionは保存し続ける。** 上書きできるのはLLM推論後の生成成果物であり、原文、出典、受入済み配送receiptを消す指示ではない。`extract_v1`の規則成果物、旧`extract_llm`世代、canonical投影を種類別に棚卸しする。旧JSONの`schema v2`と`semantic-facts/v2`は**データ形式名**で、旧推論エンジンv2の存在や全対象の未移行を意味しない。v1/v2/v3として実在する旧推論成果を、source/revision/既存artifact IDと依存読取先で列挙する。
+
+旧版を無制限に一度に再推論せず、対象・依存閉包・総call/token/retry予算・期限・再開cursorを固定した有限cohortを順番に処理する。v4を同じ原文に対して生成・Jev監査し、全必須factsと旧版だけが供給していた情報（例: `extract_v1`由来の薬剤期間）を新readerで表現できると確認してから、対象ごとの現行選択を**原子的にv4 PASSへ置換**する。`extract_v1`の規則成果物はLLM生成ファイルの上書き許可とは別扱い。旧workerの遅延保存は世代fenceで拒否し、旧QC・通知・集計のartifact参照を移行または終端確認する。旧QCの判定をv4への監査成功として付け替えず、旧成果物IDを参照する必要があればメタデータだけのtombstone/監査receiptへ移す。旧LLM生成payload/ファイルの物理的な上書き・削除は別の有限cleanup manifest（対象ID、source世代、`retire_after_at`、検証済み復旧手段を固定）で、参照切替と復旧用保持期間が過ぎた場合だけ許す。manifestや復旧確認が無ければ自動削除しない。最低限の版・source hash・判定・置換先ID・処理時点を示す監査receiptは残し、チャット本文は対象外にする。
+
+v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行ならその対象の旧成果を上書きせず、旧版と未完了理由を表示する。cohortを繰り返して旧版の現行選択を減らし、残数・最古滞留・失敗理由を可視化する。「全件v4完了」は未処理旧版や未解決例外が残る間は宣言しない。旧生成payloadを既に上書きした対象で問題が出た場合、存在しない旧ファイルへ黙って戻さず、保存済み原文から許可済みの有限再処理または原文+pendingへ移る。原文の長期保存に必要なバックアップ/復元可能性は別の運用検証対象であり、現行のローカル日次backupだけで端末喪失への耐性を保証しない。
+
+### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
+
+現行テンプレートはllama-server `-np 2 -c 65536`で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・現行2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。本機は`hw.model=Mac16,10`、搭載メモリ16GiBと確認したM4 Mac miniで、Apple公称120GB/sはこの処理の実効帯域ではない（[モデル識別](https://support.apple.com/en-us/102852)、[技術仕様](https://support.apple.com/en-us/121555)）。
+
+本番には全ての実際の接続元（MCS、Hermes主処理/補助/委譲/cron、GBrainを含めて検出した経路）を分類する**共通の強制受付境界**が先に必要。MCSの自動新着抽出は「新着優先BACKLOG」であり、人が待つ対話RTとは区別する。classは認証済み経路と操作種別で決め、clientの自己申告だけでRTへ昇格させない。backend直結・旧URL・未分類・fallbackを拒否できない場合、MCSだけのslot固定では非重複を保証できずv4の本番切替はNO-GOとする。受付世代epochと要求の終端を耐久記録し、`O_BACKLOG * O_RT = 0`を**送信前予約からbackend終端確認まで**維持する。server内の待機要求、取消し待ち、結果不明、Jev/QC中のjobも反対classへの切替を許さない。RT到着と新規背景受付の停止を原子的に行い、背景の自然完了または旧backend終了の確認**後**にRTを送る。stock serverへcancelを送っただけ、timeout・切断・`/slots`の一瞬の空きでは終了とみなさない。controller/backend再起動・旧epochの要求・結果不明は双方を閉じて照合する。RT継続流入中にも背景progressを保証するには実測で長さを決めた背景保護時間帯が必要だが、その間のRTは待機/延期し、排他を緩めない。滞留年齢・受付待ち・資源不足を明示する。
+
+候補枠数はいずれも同一class内の並列処理だけに使う。認可された隔離環境で実モデルを**同じworkloadと排他条件**で比較し、実RAM/KV/swap、per-slot`n_ctx`、入力の完全性、tokens/s・確認済み完了件数/h、取得→確認済み表示のp50/p95、RT受付待ちと品質を測る。まず欠落・OOM・実害のあるswap・品質低下・全巡回p95<15分違反・RT p95回帰のある候補を除外し、残りからRT遅延と検証済み処理容量を比較して採用数を決める。3枠が劣れば1枠または2枠を採用でき、測定で4枠以上が安全かつ優位ならそれも選べる。syntheticサーバ試験で排他を証明しても実機容量を証明しない。配備時は採用した枠数、設定・測定receiptと2枠など検証済みの戻し先を固定する。実測・稼働設定変更・外部Jev呼出しはこの文書作業では実行しない。
+
+### 段階導入と合格条件
+
+1. **契約・移行**: 実装時には合成temp DBで旧v1/v2/v3の実在する成果物+QC→v4 PASS/失敗→旧worker遅延完了→現行版切替→旧生成payloadの上書き→rollbackを実行し、原文・既発行receiptを保ったまま非PASSや遅延旧結果がv4のcurrentを覆わないことを示す。新保存契約を知らない旧drainer/tick/手動workerを停止・退役させてから共存を始める。v3エンジンによる履歴の新規推論受付は既定0、旧成果物の**v4への再解析**は対象source/依存閉包と期限を固定した有限cohortで順次進める。総LLM/Jev要求・token・再試行上限、QC遅延高水位、停止/再開cursorを永続化し、再起動/日付変更で補充しない。旧履歴全件の処理完了はv4新着移行の前提にしないが、未移行履歴に依存する患者現在値を「完全なv4」と表示しない。旧PASSのfact-source切替は新しい内部fingerprintを要求する。
+2. **shadow比較**: v4は新着・許可された有限backfillだけを処理し、visibleな旧版選択と通知を変えずに、S0–S8のreceipt、全factの描画、通常/専用通知の合成結果を比較する。Jev未設定なら勝手に許可や予算を付与せず、未評価をPASSにしない。途中停止、予算不足、入力変更、旧worker混在、41/120件、本文第5part、候補枠数・複数クライアントの競合を合成故障注入する。
+3. **品質・性能ゲート**: `evaluation/g6-criteria-v1.json`のheld-out testで人手ラベル**200件以上**、`mandatory_fact_recall=rendered_fact_recall=evidence_closure=1.0`、`silent_drop=critical_overclaim=loop_false_resolution=0`、既存のrecall/precision/defer閾値を一つも緩めない。薬剤師の負担軽減は盲検比較で確認時間・照合手順と誤見逃しを実測して別に証明する。`evaluation/README.md`の**全巡回p95<15分**を維持し、従来2枠に対して同条件でRT遅延の非劣化と計測誤差を超える処理容量改善を確認する。合成評価だけで臨床G6合格や短縮を宣言しない。
+4. **本番移行の停止点**: 原文の継続保存・旧参照の安全な切替・全クライアント入口排他・採用枠数での実モデル容量・G6人手評価・version-bound activationのいずれかが欠ければ切替しない。configだけでcanonical/enforceを有効化しない。運用者が別途承認した設定と評価receiptに従い、小さな対象→段階拡大し、問題時には新規v4受付を閉じ、まだ旧生成成果が存在する対象だけ旧版を明示選択する。既に上書き済みなら原文+pendingへ戻し、有限の再処理なしに旧結果を復元したと偽らない。既発行通知・原文は切替操作で削除しない。
+
+本節は現行実装の合格証明ではない。コードと資料の照合表、反例、合成実行の範囲、未測定条件はHermes作業場の調査記録 `/Users/yusuke/.hermes/hermes-agent/.omo/ulw-research/20260925-112553/SYNTHESIS.md` に残す。今ある実証は完全合成の41件欠落、policy fingerprint衝突、Jev回答欠落、非PASS v4 reader誤選択と、既存のmandatory表示・修復テスト6件の成功までである。

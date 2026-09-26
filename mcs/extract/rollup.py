@@ -64,7 +64,8 @@ def build_rollup(ledger, project_id: int) -> dict:
       SELECT a.message_id, a.kind, a.content FROM artifacts a
       JOIN messages m ON m.message_id=a.message_id
       WHERE m.project_id=? AND a.kind IN
-          ('extract_v1','extract_llm','canonical_projection')
+          ('extract_v1','extract_llm','canonical_projection',
+           'semantic_facts_v4')
         AND CASE WHEN json_valid(a.meta) THEN
           json_extract(a.meta,'$.error') IS NOT 1
           AND json_extract(a.meta,'$.hash')=m.content_hash
@@ -88,6 +89,10 @@ def build_rollup(ledger, project_id: int) -> dict:
     med_state = {}
     sym_pos = {}   # term -> latest positive ts (msgs iterated newest-first)
     sym_neg = {}   # term -> latest negated ts
+    # fact_id -> carried canonical fact: newest generation wins per id
+    # (msgs iterate newest-first), evidence/statement/kind ride along so
+    # slot-less canonical categories stay enumerable in the read model.
+    canonical = {}
     requests = []
     next_planned = None
     senders = {}
@@ -100,9 +105,10 @@ def build_rollup(ledger, project_id: int) -> dict:
         try:
             v1 = json.loads(blobs["extract_v1"]) \
                 if "extract_v1" in blobs else {}
-            # canonical_projection (T12) shadows extract_llm for the
-            # same message when the canonical path owns the fact source.
-            lm_blob = blobs.get("canonical_projection") \
+            # semantic_facts_v4 (T18) shadows canonical_projection,
+            # which shadows extract_llm for the same message.
+            lm_blob = blobs.get("semantic_facts_v4") \
+                or blobs.get("canonical_projection") \
                 or blobs.get("extract_llm")
             lm = json.loads(lm_blob) if lm_blob else {}
         except (json.JSONDecodeError, TypeError):
@@ -207,6 +213,16 @@ def build_rollup(ledger, project_id: int) -> dict:
         for rq in _dicts(lm.get("requests")):
             requests.append({"kind": rq.get("to"), "ctx": rq.get("action"),
                              "at": m["posted_at"], "mid": m["message_id"]})
+        for f in _dicts(lm.get("canonical_facts")):
+            fid = f.get("fact_id")
+            if isinstance(fid, str) and fid and fid not in canonical:
+                canonical[fid] = {
+                    "fact_id": fid, "kind": f.get("kind"),
+                    "statement": f.get("statement"),
+                    "subject": f.get("subject"),
+                    "importance": f.get("importance"),
+                    "evidence": f.get("evidence_quote"),
+                    "last": m["posted_at"], "mid": m["message_id"]}
         if next_planned is None and isinstance(v1.get("next_planned"), str) \
                 and v1["next_planned"]:
             next_planned = v1["next_planned"]
@@ -237,6 +253,8 @@ def build_rollup(ledger, project_id: int) -> dict:
                                   for k, v in list(symptoms.items())[:20]]
     if requests:
         out["recent_requests"] = requests[:15]
+    if canonical:
+        out["canonical_facts"] = list(canonical.values())
     if next_planned:
         out["next_planned"] = next_planned
     if summary:
@@ -291,7 +309,8 @@ def dirty_projects(ledger) -> list:
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
-                           'canonical_projection')) AS art_ts,
+                           'canonical_projection',
+                           'semantic_facts_v4')) AS art_ts,
         (SELECT MAX(m.updated_seen) FROM messages m
           WHERE m.project_id=p.project_id) AS msg_ts
       FROM patients p

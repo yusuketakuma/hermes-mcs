@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 
-from mcs_queries import med_is_patient_current
+from mcs_queries import (current_fact_pred, med_is_patient_current)
 
 
 def latest_artifact(db, kind: str, mid: int) -> dict | None:
@@ -38,6 +38,30 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
     return d if isinstance(d, dict) else None
 
 
+def latest_fact_artifact(db, mid: int) -> dict | None:
+    """Newest usable fact artifact for a message — a hash-current
+    ``canonical_projection`` shadows ``extract_llm`` (the same
+    ``current_fact_pred`` shadow rule every consumer shares); when the
+    projection is stale, invalidated, or absent the legacy extraction
+    is read instead — never the other way around."""
+    r = db.execute(
+        "SELECT a.content FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id WHERE a.message_id=? "
+        "AND a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4') "
+        "AND m.body_state IS NOT 'deleted' "
+        "AND CASE WHEN json_valid(a.content) THEN "
+        "json_type(a.content)='object' ELSE 0 END "
+        f"{current_fact_pred('a', 'm')} "
+        "ORDER BY a.artifact_id DESC LIMIT 1", (mid,)).fetchone()
+    if not r:
+        return None
+    try:
+        d = json.loads(r["content"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
 RX_LABEL = {"start": "開始", "stop": "中止", "change": "変更",
             "none": "変更なし", "no_change": "変更なし",
             "increase": "増量", "decrease": "減量"}
@@ -50,11 +74,47 @@ EVT_LABEL = {"admission": "入院", "discharge": "退院", "exam": "受診/検�
              "family_contact": "家族連絡", "other": "その他"}
 
 
+# Canonical-only categories: these v2 kinds have no legacy slot, so
+# they render straight from ``canonical_facts`` — fact_id and evidence
+# stay attached and the statement is never squeezed into a wrong field.
+_FINDING_LABEL = {"allergy_intolerance": "アレルギー・不耐",
+                  "adverse_drug_event": "有害事象",
+                  "vital_lab": "バイタル・検査",
+                  "preference": "希望",
+                  "other_observation": "所見"}
+
+
+def _canonical_finding_lines(llm: dict) -> list[str]:
+    """Structured lines for verified facts that no legacy slot can
+    carry. Kind is labelled so a vital never reads as a symptom."""
+    out = []
+    facts = llm.get("canonical_facts")
+    if not isinstance(facts, list):
+        return out
+    seen = set()
+    for f in facts:
+        if not isinstance(f, dict):
+            continue
+        label = _FINDING_LABEL.get(f.get("kind"))
+        statement = f.get("statement")
+        if label is None or not isinstance(statement, str) \
+                or not statement.strip() or f["fact_id"] in seen:
+            continue
+        seen.add(f.get("fact_id"))
+        line = f"{label}｜{statement.strip()[:60]}"
+        quote = f.get("evidence_quote")
+        if isinstance(quote, str) and quote.strip():
+            line += f"（根拠:{quote.strip()[:40]}）"
+        out.append(line)
+    return out
+
+
 def structured_lines(db, mid: int) -> list[str]:
-    """Compact structured summary from extract_v1/extract_llm artifacts.
-    Returns [] when nothing usable exists (caller falls back to raw only)."""
+    """Compact structured summary from extract_v1 + the current fact
+    artifact (canonical_projection shadows extract_llm).  Returns []
+    when nothing usable exists (caller falls back to raw only)."""
     v1 = latest_artifact(db, "extract_v1", mid) or {}
-    llm = latest_artifact(db, "extract_llm", mid) or {}
+    llm = latest_fact_artifact(db, mid) or {}
     if not v1 and not llm:
         return []
     lines: list[str] = []
@@ -167,4 +227,5 @@ def structured_lines(db, mid: int) -> list[str]:
             lines.append(f"服薬期間: {mp['start']}〜{mp.get('end') or '?'}")
     if v1.get("next_planned"):
         lines.append(f"次回予定: {v1['next_planned']}")
+    lines.extend(_canonical_finding_lines(llm))
     return lines
