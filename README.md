@@ -568,6 +568,8 @@ ephemeral 表示する(抽出が無い/失敗時は送信者行のみ)。
 > ここから先は、システムの設置・運用を担当する方向けの内容です。
 > 詳細な手順・設定キー一覧・スタンドアロン（hermes-agent なし）での
 > 導入は [docs/INSTALLATION.md](docs/INSTALLATION.md) を参照。
+> AI エージェントに導入させる場合の対話実行用 runbook は
+> [docs/SETUP_AGENT.md](docs/SETUP_AGENT.md)。
 
 ### Hermes addon として(clone して使う)
 
