@@ -119,7 +119,12 @@
 
 - スケジューラ: hermes cron `MCS unread check`（`*/5 * * * *`,
   `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
-  実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る
+  実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る。
+  **夜間間引き**: 投稿がほぼ 07-21 時に集中する実績から、22-06 時は
+  スクリプト内で :00/:20/:40 のみ実行（20分間隔 — MCS セッションの
+  失効上限30分を下回り bearer を維持。auto_login 不在でも切れない）。
+  あわせて `health.max_missed_runs=4`（freshness deadline 15→25分） —
+  夜間 cadence を stale 誤検知しないための調整
 - 深掘り trickle: hermes cron `MCS job drain`（`7,37 * * * *`, `--jobs-only`） —
   未読取得を飛ばし fetch_jobs のみ消化。全患者の全履歴を
   `since=0` まで少しずつ取得(1run=最大8患者×3頁、cursor は payload に

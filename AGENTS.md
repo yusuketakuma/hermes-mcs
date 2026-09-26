@@ -6,7 +6,8 @@
 
 MedicalCareStation (MCS) の医療・介護チャットを収集・解析するローカルシステム:
 
-- 5分間隔で未読収集 → SQLite(`data/ledger.db`) → Discord 通知
+- 5分間隔で未読収集（夜間 22-06時はスクリプト内で20分間隔に間引き —
+  30分のセッション失効上限を下回る設計）→ SQLite(`data/ledger.db`) → Discord 通知
 - `self_posts` 設定で自投稿・他者先読み投稿を毎 tick `latest` probe →
   未保管の最新 id があれば bounded 履歴取得して取り込み・新着通知
   （`stage_self_probe`。`latest` は `{is_self_only,message:{id}}` のみ返し
