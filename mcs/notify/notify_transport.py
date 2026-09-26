@@ -65,6 +65,23 @@ def _settle_attempt(db, attempt, render, result, now,
         "UPDATE notification_delivery_attempts SET state=?,"
         "message_id=?,error_code=?,finished_at=? WHERE attempt_id=?",
         (result, message_id, error_code, now, aid))
+    # the 'card' part mirrors the attempt's factual outcome — card
+    # success alone never completes the sealed part plan (T7)
+    db.execute(
+        "UPDATE notification_render_parts SET state=?,remote_id=?,"
+        "error_code=?,attempt_id=?,updated_at=? WHERE delivery_id=? "
+        "AND part_id='card'",
+        (result, message_id, error_code, aid, now,
+         render["delivery_id"]))
+    if result != "delivered":
+        # dependent parts have nothing to attach to — 'held' honestly
+        # marks them planned-but-blocked instead of pending forever
+        db.execute(
+            "UPDATE notification_render_parts SET state='held',"
+            "updated_at=? WHERE delivery_id=? AND state='pending' "
+            "AND kind IN ('thread','body_part','attachment_part')",
+            (now, render["delivery_id"]))
+    cards._update_parts_state(db, render["delivery_id"], now)
     if render["state"] != "cancelled":
         db.execute(
             "UPDATE notification_renders SET state=?,updated_at=? "
@@ -147,6 +164,10 @@ def _settle_attempt(db, attempt, render, result, now,
             "WHERE card_id=?", (render["card_id"],)).fetchall() \
             if render["card_id"] is not None else []:
         cards._complete_intent(db, r["event_id"], now)
+    # a factual settlement also answers any post-restore hold on this
+    # delivery — the disputed evidence is resolved
+    cards.release_holds(db, delivery_id=render["delivery_id"],
+                        command_id=f"settle:{result}", now=now)
     cards.mark_snapshot_dirty(db)
     return {"settled": result}
 
@@ -158,6 +179,13 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
     db = cards._db(ledger)
     now = time.time() if now is None else now
     cid = req["command_id"]
+    if cards.restore_pending(cards.data_root(ledger)) is not None:
+        # A DB restore is unreconciled — grant nothing until the
+        # journal-vs-DB comparison finishes. No attempt row: a restore
+        # denial is not a send attempt and must not count toward the
+        # resend budget. Transient — the spec stays claimable.
+        return {"granted": False, "error": "denied_restore_pending",
+                "command_id": cid}
     with db:
         db.execute("BEGIN IMMEDIATE")
         old = db.execute(
@@ -402,6 +430,118 @@ def _receipt_check(attempt, render, req) -> str | None:
     return None
 
 
+def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
+    """part_receipt: settle one durable part of a render (thread/body/
+    attachment). Same echo contract as the card attempt — the receipt
+    can only settle the exact sealed part it names. A failed thread
+    cascades 'held' onto its dependents; the card attempt owns the
+    'card' part and is settled through transport_receipt only."""
+    db = cards._db(ledger)
+    now = time.time() if now is None else now
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        render = db.execute(
+            "SELECT * FROM notification_renders WHERE delivery_id=?",
+            (req["delivery_id"],)).fetchone()
+        part = db.execute(
+            "SELECT * FROM notification_render_parts WHERE delivery_id=? "
+            "AND part_id=?",
+            (req["delivery_id"], req["part_id"])).fetchone() \
+            if render is not None else None
+        error = _part_receipt_check(render, part, req)
+        if error:
+            receipt = {"applied": False, "error": error,
+                       "delivery_id": req["delivery_id"],
+                       "part_id": req["part_id"]}
+        elif part["state"] in ("delivered", "not_sent", "unknown",
+                               "held"):
+            # terminal already: same fact is idempotent, a different
+            # fact is a conflict — never silently overwrite
+            prior = part["state"]
+            same = prior == req["result"] and (
+                req["result"] != "delivered"
+                or str(part["remote_id"]) == str(req["remote_id"]))
+            receipt = {"applied": same,
+                       "error": None if same else "part_conflict",
+                       "delivery_id": render["delivery_id"],
+                       "part_id": part["part_id"],
+                       "part_state": prior,
+                       "parts_state": cards._rollup_parts_state(
+                           db, render["delivery_id"])}
+        else:
+            db.execute(
+                "UPDATE notification_render_parts SET state=?,"
+                "remote_id=?,error_code=?,attempt_id=?,updated_at=? "
+                "WHERE delivery_id=? AND part_id=?",
+                (req["result"], req.get("remote_id"),
+                 req.get("error_code"), req.get("attempt_id"), now,
+                 render["delivery_id"], part["part_id"]))
+            if part["kind"] == "thread":
+                # the durable path carries the card's thread binding —
+                # same contract apply_thread_receipt holds for legacy
+                # renders: bind once, a deleted thread never rebinds
+                card = cards._card_row(db, render["card_id"]) \
+                    if render["card_id"] is not None else None
+                if card is not None:
+                    tid = req.get("remote_id")
+                    if req["result"] == "delivered" and tid:
+                        state, thread_id = ("deleted", card["thread_id"]) \
+                            if card["thread_state"] == "deleted" \
+                            else ("created",
+                                  card["thread_id"] or str(tid))
+                    elif req["result"] == "unknown":
+                        state, thread_id = (card["thread_state"],
+                                            card["thread_id"])
+                    else:
+                        state, thread_id = "failed", card["thread_id"]
+                    db.execute(
+                        "UPDATE notification_cards SET thread_id=?,"
+                        "thread_state=?,updated_at=? WHERE card_id=?",
+                        (thread_id, state, now, card["card_id"]))
+                if req["result"] != "delivered":
+                    # a failed/absent thread blocks every dependent
+                    # part — they were never attempted, so 'held',
+                    # never 'not_sent'
+                    db.execute(
+                        "UPDATE notification_render_parts SET state='held',"
+                        "updated_at=? WHERE delivery_id=? AND idx>? "
+                        "AND state='pending' AND kind IN "
+                        "('body_part','attachment_part')",
+                        (now, render["delivery_id"], part["idx"]))
+            receipt = {"applied": True,
+                       "delivery_id": render["delivery_id"],
+                       "part_id": part["part_id"],
+                       "part_state": req["result"],
+                       "parts_state": cards._update_parts_state(
+                           db, render["delivery_id"], now)}
+        cards.mark_snapshot_dirty(db)
+    return receipt
+
+
+def _part_receipt_check(render, part, req) -> str | None:
+    if render is None:
+        return "unknown_delivery"
+    if part is None:
+        return "unknown_part"
+    if part["kind"] == "card":
+        return "card_part_excluded"
+    for k, want in (("render_rev", render["render_rev"]),
+                    ("payload_hash", render["payload_hash"]),
+                    ("route_epoch", render["route_epoch"]),
+                    ("correlation", render["correlation"])):
+        if req.get(k) != want:
+            return f"{k}_mismatch"
+    if not cards._scope_match(render, req):
+        return "scope_mismatch"
+    if req["result"] == "delivered" \
+            and not (isinstance(req.get("remote_id"), str)
+                     and req["remote_id"]):
+        return "remote_id_required"
+    if req["result"] == "not_sent" and not req.get("error_code"):
+        return "error_code_required"
+    return None
+
+
 def apply_thread_receipt(ledger, req, cfg, now=None) -> dict:
     """thread_receipt: thread creation is independent of the primary
     card delivery — failure here never resends the card."""
@@ -499,7 +639,11 @@ def validate_card_resolve(req) -> str | None:
     if req["result"] == "mark_not_sent":
         if ev.get("worker_stopped") is not True:
             return "worker_not_proven_stopped"
-        if ev.get("proof") not in ("no_journal_started", "api_rejected"):
+        # remote_absent: after a restore the journal alone cannot prove
+        # non-delivery — the operator may instead attest the remote
+        # channel lacks the message (checked against the remote itself)
+        if ev.get("proof") not in ("no_journal_started", "api_rejected",
+                                   "remote_absent"):
             return "bad_proof"
     return None
 
@@ -535,6 +679,7 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                    "attempt_id": req.get("attempt_id"),
                    "processed_at": now}
         attempt = render = None
+        hold = None
         if error is None:
             attempt = db.execute(
                 "SELECT * FROM notification_delivery_attempts "
@@ -546,7 +691,36 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                     if render is not None
                     and render["card_id"] is not None else None)
             error = _resolve_check(attempt, render, card, req)
-        if error is None:
+            if error == "unknown_attempt":
+                # the restore may have erased the attempt row — a
+                # recorded restore hold is the operator's handle for
+                # rebind/resume, verified against the scope reconcile
+                # captured at hold time
+                hold = db.execute(
+                    "SELECT * FROM notification_restore_holds "
+                    "WHERE delivery_id=? AND released_at IS NULL "
+                    "ORDER BY hold_id DESC LIMIT 1",
+                    (req["delivery_id"],)).fetchone()
+                if hold is not None:
+                    card = cards._card_row(db, hold["card_id"]) \
+                        if hold["card_id"] is not None else None
+                    error = _rebind_check(hold, card, req)
+        if error is None and hold is not None:
+            _rebind_apply(db, req, hold, card, now)
+            cards.release_holds(db, delivery_id=req["delivery_id"],
+                                card_id=hold["card_id"],
+                                command_id=req["command_id"], now=now)
+            receipt["scope"] = json.loads(hold["scope_json"] or "{}")
+            receipt["projects"] = (
+                [card["project_id"]]
+                if card is not None and positive(card["project_id"])
+                else [])
+            receipt["outcome"] = "applied"
+            receipt["attempt_state"] = (
+                "delivered" if req["result"] == "mark_delivered"
+                else "not_sent")
+            receipt["rebound"] = True
+        elif error is None:
             receipt["scope"] = cards.stored_scope(render)
             receipt["projects"] = _card_projects(db, render, card)
             if attempt["state"] in ("delivered", "not_sent"):
@@ -582,6 +756,69 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
         cards.ensure_dirs(root)
         cards._publish_specs(db, cards.notify_dirs(root), specs, now)
     return receipt
+
+
+def _rebind_check(hold, card, req) -> str | None:
+    """Verify an attempt-lost resolve against the scope reconcile
+    captured when it held the scope — the render row is gone, so the
+    hold record is the identity witness."""
+    try:
+        scope = json.loads(hold["scope_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return "hold_scope_corrupt"
+    transport = scope.get("transport", "discord")
+    if (transport == "slack") != (req.get("version") == 2):
+        return "scope_mismatch"
+    for k in cards.scope_fields(transport):
+        if scope.get(k) != req.get(k):
+            return "scope_mismatch"
+    if req["result"] == "mark_delivered" and card is not None \
+            and card["message_id"] is not None \
+            and str(card["message_id"]) != str(req["message_id"]):
+        return "message_id_conflict"
+    return None
+
+
+def _rebind_apply(db, req, hold, card, now) -> None:
+    """Operator-verified settlement for a scope whose attempt row the
+    restore erased. mark_delivered rebinds the card to the proven
+    remote message (never resends); mark_not_sent proves the remote is
+    absent and returns the card/events to the sendable queue."""
+    delivered = req["result"] == "mark_delivered"
+    if card is not None:
+        if delivered:
+            db.execute(
+                "UPDATE notification_cards SET message_id=?,"
+                "delivery_state='delivered',applied_render_rev="
+                "MAX(applied_render_rev,desired_render_rev),"
+                "last_delivery_error=NULL,updated_at=? WHERE card_id=?",
+                (str(req["message_id"]), now, card["card_id"]))
+        else:
+            db.execute(
+                "UPDATE notification_cards SET delivery_state='pending',"
+                "last_delivery_error=?,updated_at=? WHERE card_id=?",
+                (f"resolve:{req['result']}", now, card["card_id"]))
+    db.execute(
+        "UPDATE notification_renders SET state=?,updated_at=? "
+        "WHERE delivery_id=? AND state='held'",
+        ("delivered" if delivered else "not_sent",
+         now, req["delivery_id"]))
+    try:
+        eids = json.loads(hold["events_json"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        eids = []
+    for eid in eids:
+        if delivered:
+            # the remote card exists — the intent's work is done
+            db.execute(
+                "UPDATE notify_outbox SET state='accepted',"
+                "next_try=NULL,updated_at=? WHERE event_id=? "
+                "AND state='failed'", (now, eid))
+        else:
+            db.execute(
+                "UPDATE notify_outbox SET state='pending',next_try=?,"
+                "updated_at=? WHERE event_id=? AND state='failed' "
+                "AND next_try IS NULL", (now, now, eid))
 
 
 def _resolve_check(attempt, render, card, req) -> str | None:

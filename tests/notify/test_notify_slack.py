@@ -13,15 +13,22 @@ from hermes_plugin.mcs_slack import cards as slack_cards
 from mcs_requests import canonical
 from test_notify_cards import (
     CFG, NOW, _begin, _card, _dispatch, _intent, _latest_render,
-    _seed_thread, _signal_row, _token_for,
+    _seed_thread, _signal_row, _token_for, _uuid,
 )
 
 SCOPE = {"transport": "slack", "profile": "synthetic-slack",
          "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
          "channel_id": "C_SYNTHETIC"}
 SLACK = {"notify": {"interactive": "slack", "route_epoch": 1,
+                    "card_thread": True,
                     "slack": {k: v for k, v in SCOPE.items() if k != "transport"}},
          "signals": {"notify": True}}
+# flag-off variant — the ephemeral body-button contract survives as the
+# escape hatch for deployments without card threads
+SLACK_FLAT = {"notify": {"interactive": "slack", "route_epoch": 1,
+                         "slack": {k: v for k, v in SCOPE.items()
+                                   if k != "transport"}},
+              "signals": {"notify": True}}
 ACTOR = "slack:T_SYNTHETIC:U_SYNTHETIC"
 
 
@@ -46,6 +53,36 @@ def _command(render, op="transport_begin", **overrides):
                    message_id="1790000000.000123")
     req.update(overrides)
     return req
+
+
+def _part_receipt(render, part, result="delivered",
+                  remote_id="1790000000.000777", n=11):
+    req = {"version": 2, "transport": "slack", "op": "part_receipt",
+           "command_id": _uuid(n),
+           "attempt_id": "p:"
+           + render["delivery_id"].replace("-", "") + ":" + part["part_id"],
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "part_id": part["part_id"], "kind": part["kind"],
+           "result": result}
+    if result == "delivered":
+        req["remote_id"] = remote_id
+    else:
+        req["error_code"] = "synthetic_failure"
+    return req
+
+
+def _settle_parts(led, render, n=11):
+    """Deliver every non-card part of a render — mirrors the worker's
+    journaled part_receipt traffic so GC/resume tests can settle."""
+    spec = json.loads(render["spec_json"])
+    for i, part in enumerate(spec["parts"]["manifest"]):
+        if part["kind"] == "card":
+            continue
+        req = _part_receipt(render, part, n=n + i)
+        assert _drain(led, req)["applied"]
 
 
 def _drain(led, req, cfg=SLACK):
@@ -84,7 +121,7 @@ def test_slack_thread_body_stays_off_public_card(led):
 
 
 @pytest.mark.parametrize("kind", ["signal", "digest"])
-def test_slack_signal_body_only_after_authorized_click(led, kind):
+def test_slack_signal_body_lands_in_card_thread(led, kind):
     _seed_thread(led)
     private_body = "PRIVATE-SYNTHETIC-GATE-BODY"
     led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
@@ -105,15 +142,62 @@ def test_slack_signal_body_only_after_authorized_click(led, kind):
     assert private_body not in json.dumps({"text": fallback, "blocks": blocks},
                                           ensure_ascii=False)
 
+    # the verified body travels as durable thread parts, not a
+    # click-gated ephemeral answer — no 📄 token is minted at all
+    chunks = spec["parts"]["thread_body_parts"]
+    assert private_body in "".join(chunks)
+    kinds = [p["kind"] for p in spec["parts"]["manifest"]]
+    assert kinds[0] == "card" and "thread" in kinds
+    assert kinds.count("body_part") == len(chunks)
+    assert all(b["id"] != "body"
+               for row in spec["parts"]["action_rows"] for b in row)
+    assert led.db.execute(
+        "SELECT COUNT(*) FROM notification_render_parts "
+        "WHERE delivery_id=? AND kind='body_part'",
+        (render["delivery_id"],)).fetchone()[0] == len(chunks)
+
     assert _drain(led, _command(render))["granted"]
     assert _drain(led, _command(render, "transport_receipt"))["applied"]
-    body = _token_for(spec, "body")
+    # remaining actions stay under their existing authorization —
+    # an unknown token is still rejected
     result = _drain(led, {
         "version": 2, "transport": "slack", "op": "notification",
-        "command_id": body + ":" + "c" * 16, "request_id": str(uuid.uuid4()),
-        "actor": ACTOR, "token": body,
+        "command_id": "f" * 32 + ":" + "c" * 16,
+        "request_id": str(uuid.uuid4()),
+        "actor": ACTOR, "token": "f" * 32,
         "origin": {**SCOPE, "message_id": "1790000000.000123"},
     })
+    assert result["outcome"] == "rejected"
+
+
+@pytest.mark.parametrize("kind", ["signal"])
+def test_slack_flag_off_keeps_ephemeral_body_gate(led, kind):
+    # card_thread off — the legacy click-to-view contract stays intact
+    # as the escape hatch (body button + ephemeral answer only)
+    _seed_thread(led)
+    private_body = "PRIVATE-SYNTHETIC-GATE-BODY"
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
+                   (private_body,))
+    led.db.commit()
+    _signal_row(led, "synthetic-key", mids=[100])
+    payload = {"signal_key": "synthetic-key", "project_id": 1}
+    assert _dispatch(led, _intent(led, "signal", payload=payload),
+                     SLACK_FLAT)["dispatched"]
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    assert "thread_body_parts" not in spec["parts"]
+    assert [p["kind"] for p in spec["parts"]["manifest"]] == ["card"]
+    body = _token_for(spec, "body")
+    assert _drain(led, _command(render), cfg=SLACK_FLAT)["granted"]
+    assert _drain(led, _command(render, "transport_receipt"),
+                  cfg=SLACK_FLAT)["applied"]
+    result = _drain(led, {
+        "version": 2, "transport": "slack", "op": "notification",
+        "command_id": body + ":" + "c" * 16,
+        "request_id": str(uuid.uuid4()),
+        "actor": ACTOR, "token": body,
+        "origin": {**SCOPE, "message_id": "1790000000.000123"},
+    }, cfg=SLACK_FLAT)
     assert result["outcome"] == "applied" and result["action"] == "body"
     assert result["actor"] == ACTOR
     assert private_body in result["body"]
@@ -163,6 +247,10 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     update = _latest_render(led)
     assert update["op"] == "update" and update["transport"] == "slack"
     assert json.loads(update["spec_json"])["delivery"]["message_id"] == receipt["message_id"]
+    # pending durable parts keep the settled spec on disk for resume —
+    # GC only reclaims it once every part reaches a terminal state
+    assert cards.gc(led, now=NOW)["spec_files"] == 0
+    _settle_parts(led, render)
     assert cards.gc(led, now=NOW)["spec_files"] == 1
     assert not path.exists()
     assert (root / "slack_render" / (update["delivery_id"] + ".json")).exists()
@@ -290,39 +378,47 @@ def test_legacy_database_migration_preserves_inflight_discord(led, tmp_path):
 
 
 def test_slack_body_refresh_and_stale_write_keep_manifest_authorization(led):
-    render = _slack_render(led)
+    # view-only token semantics live on under card_thread-off — the
+    # manifest-authorization machinery is identical either way, so the
+    # escape-hatch cfg exercises the same gate
+    _seed_thread(led)
+    ev = _intent(led)
+    assert _dispatch(led, ev, SLACK_FLAT)["dispatched"]
+    render = _latest_render(led)
     spec = json.loads(render["spec_json"])
-    assert _drain(led, _command(render))["granted"]
-    assert _drain(led, _command(render, "transport_receipt"))["applied"]
+    assert _drain(led, _command(render), cfg=SLACK_FLAT)["granted"]
+    assert _drain(led, _command(render, "transport_receipt"),
+                  cfg=SLACK_FLAT)["applied"]
     origin = {**SCOPE, "message_id": "1790000000.000123"}
     body = _token_for(spec, "body")
     req = {"version": 2, "transport": "slack", "op": "notification",
-           "command_id": body + ":" + "c" * 16, "request_id": str(uuid.uuid4()),
+           "command_id": body + ":" + "c" * 16,
+           "request_id": str(uuid.uuid4()),
            "actor": ACTOR, "token": body, "origin": origin}
-    result = _drain(led, req)
+    result = _drain(led, req, cfg=SLACK_FLAT)
     assert result["action"] == "body" and result["body"]
     assert result["actor"] == ACTOR
     assert result["projects"] == [1]
     assert _latest_render(led)["delivery_id"] == render["delivery_id"]
     refresh = {"version": 2, "transport": "slack", "op": "refresh",
                "command_id": str(uuid.uuid4()), "actor": ACTOR, "origin": origin}
-    assert _drain(led, refresh)["outcome"] == "applied"
+    assert _drain(led, refresh, cfg=SLACK_FLAT)["outcome"] == "applied"
     assert _latest_render(led)["render_rev"] > render["render_rev"]
     foreign = {**refresh, "command_id": str(uuid.uuid4()),
                "origin": {**origin, "team_id": "T_OTHER"}}
-    assert _drain(led, foreign)["outcome"] == "rejected"
+    assert _drain(led, foreign, cfg=SLACK_FLAT)["outcome"] == "rejected"
     wrong_message = {**req, "request_id": str(uuid.uuid4()),
                      "command_id": body + ":" + "d" * 16,
                      "origin": {**origin, "message_id": "1790000000.999999"}}
-    assert _drain(led, wrong_message)["error"] == "origin_mismatch"
+    assert _drain(led, wrong_message, cfg=SLACK_FLAT)["error"] == "origin_mismatch"
     led.db.execute("UPDATE notification_view_manifests SET invalidated=1")
     led.db.commit()
-    assert _drain(led, req)["error"] == "manifest_invalid"
+    assert _drain(led, req, cfg=SLACK_FLAT)["error"] == "manifest_invalid"
     ack = _token_for(spec, "ack")
     led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", ("f" * 64,))
     led.db.commit()
     stale = {**req, "token": ack, "command_id": ack + ":" + "c" * 16}
-    assert _drain(led, stale)["error"] == "stale_source"
+    assert _drain(led, stale, cfg=SLACK_FLAT)["error"] == "stale_source"
 
 
 def test_slack_unknown_never_retries_and_operator_resolution_is_scoped(led):

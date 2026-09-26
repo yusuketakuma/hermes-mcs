@@ -55,7 +55,8 @@ def _default() -> dict:
     return {"v": 1,
             "claims": {}, "messages": {}, "tokens": {},
             "pending_modals": {}, "pending_confirms": {},
-            "followups": {}, "capabilities": {}, "dead": {}}
+            "followups": {}, "capabilities": {}, "dead": {},
+            "parts": {}}
 
 
 class _RegistryBatch:
@@ -291,6 +292,18 @@ class Registry:
         self._data["capabilities"][scope_key] = {
             "ok": ok, "at": time.time()}
         self.save()
+
+    # -- durable part progress -----------------------------------------
+
+    def parts_done(self, delivery_id: str) -> bool:
+        """Every manifest part of this delivery already carries journal
+        evidence — resume scans can skip it entirely."""
+        return self._data["parts"].get(str(delivery_id)) == "done"
+
+    def put_parts_done(self, delivery_id: str) -> None:
+        if self._data["parts"].get(str(delivery_id)) != "done":
+            self._data["parts"][str(delivery_id)] = "done"
+            self.save()
 
     # -- sweep -------------------------------------------------------
 
