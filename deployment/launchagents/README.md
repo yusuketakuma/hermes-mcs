@@ -7,7 +7,7 @@
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
-| 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *` | hermes cron (`mcs_check.sh`) |
+| 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *`（スクリプト内で 22-06時は :00/:20/:40 のみ実行に間引き — 30分のセッション失効上限を下回るため） | hermes cron (`mcs_check.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
 | semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（drain 最大55分 — cron script timeout 3600s 内に収束） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |

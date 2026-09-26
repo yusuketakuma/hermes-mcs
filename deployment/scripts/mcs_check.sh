@@ -10,6 +10,18 @@ export PATH
 LOG="__DATA__/run.log"
 PY=__PYTHON__
 
+# Night thinning (2026-09, data-driven): the run log shows essentially
+# no new posts outside 07-21 JST, so 22:00-06:59 polls at a 20-minute
+# cadence — under the 30-minute session-expiry limit, keeping the bearer
+# alive without needing auto_login overnight.
+case "$(date +%H)" in
+  22|23|00|01|02|03|04|05|06)
+    case "$(date +%M)" in
+      00|20|40) ;;
+      *) exit 0 ;;
+    esac ;;
+esac
+
 "$PY" __REPO__/mcs/ingest/run_check.py --json --download-files --mark-read >>"$LOG" 2>&1
 rc=$?
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
