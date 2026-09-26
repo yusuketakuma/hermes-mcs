@@ -1,62 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" height="690" viewBox="0 0 680 690" font-family="Menlo, 'Hiragino Sans', monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="690" viewBox="0 0 680 690" font-family="'Hiragino Sans', sans-serif">
+  <title>完全合成の Discord 通知表示例</title>
+  <desc>実患者・実投稿を参照せずに新規作成した、通知と本人向け本文表示の図。</desc>
   <rect width="680" height="690" fill="#313338"/>
-  <!-- channel header -->
   <rect width="680" height="44" fill="#1e1f22"/>
-  <text x="20" y="28" font-size="14" fill="#b5bac1">#</text>
-  <text x="38" y="28" font-size="14" fill="#dbdee1" font-weight="bold">mcs</text>
-  <text x="80" y="28" font-size="11" fill="#80848e">MCS 未読通知</text>
-
-  <!-- ===== bot message head ===== -->
+  <text x="20" y="28" font-size="14" fill="#dbdee1"># mcs-synthetic</text>
+  <text x="215" y="28" font-size="11" fill="#b5bac1">完全合成の通知表示例</text>
   <circle cx="36" cy="78" r="20" fill="#5865f2"/>
-  <text x="36" y="84" font-size="15" fill="#ffffff" text-anchor="middle">M</text>
-  <text x="66" y="66" font-size="14" fill="#ffffff" font-weight="bold">mcs-bot</text>
-  <rect x="132" y="54" width="38" height="17" rx="4" fill="#5865f2"/>
-  <text x="151" y="66" font-size="10" fill="#ffffff" text-anchor="middle">BOT</text>
-  <text x="178" y="66" font-size="11" fill="#949cf7">今日 9:15</text>
-
-  <!-- ===== thread card: sender lines + structured blocks only ===== -->
+  <text x="36" y="84" font-size="15" fill="#fff" text-anchor="middle">M</text>
+  <text x="66" y="69" font-size="14" fill="#fff">検証用ボット</text>
+  <text x="210" y="69" font-size="11" fill="#b5bac1">表示例 10:00</text>
   <rect x="66" y="92" width="560" height="376" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
-  <text x="78" y="118" font-size="15" fill="#ffffff" font-weight="bold">💬 A山 太郎 — 10-02</text>
-
-  <!-- message 1: header line + structured block (no body text) -->
-  <text x="78" y="144" font-size="12" fill="#dbdee1" font-weight="bold">08:55 D田 健一</text>
-  <text x="78" y="164" font-size="12" fill="#dbdee1">📋 構造化</text>
-  <text x="78" y="182" font-size="12" fill="#b5bac1">・要約: 訪問曜日変更の相談</text>
-  <text x="78" y="200" font-size="12" fill="#b5bac1">・区分: 相談</text>
-
-  <!-- message 2 -->
-  <text x="78" y="228" font-size="12" fill="#dbdee1" font-weight="bold">09:12 B野 花子</text>
-  <text x="78" y="248" font-size="12" fill="#dbdee1">📋 構造化</text>
-  <text x="78" y="266" font-size="12" fill="#b5bac1">・要約: バイタル報告と残薬確認の依頼</text>
-  <text x="78" y="284" font-size="12" fill="#b5bac1">・要点: BP 128/82 / 残薬あと3日分 / 次回訪問10/5</text>
-  <text x="78" y="302" font-size="12" fill="#b5bac1">・区分: 訪問・バイタル報告</text>
-  <text x="78" y="320" font-size="12" fill="#b5bac1">・バイタル: BP 128/82  BT 36.4  SpO2 97</text>
-  <text x="78" y="338" font-size="12" fill="#b5bac1">・症状: むくみ　発熱なし</text>
-  <text x="78" y="356" font-size="12" fill="#b5bac1">・依頼: 残薬の確認をお願いします</text>
-
-  <!-- action row 1 -->
+  <text x="78" y="118" font-size="15" fill="#fff">合成ケース A — 通知レイアウト検証</text>
+  <text x="78" y="144" font-size="12" fill="#dbdee1">09:40 検証担当 A</text>
+  <text x="78" y="164" font-size="12" fill="#dbdee1">構造化</text>
+  <text x="78" y="182" font-size="12" fill="#b5bac1">・要約: 模擬訪問予定の確認</text>
+  <text x="78" y="200" font-size="12" fill="#b5bac1">・区分: 予定確認（合成）</text>
+  <text x="78" y="228" font-size="12" fill="#dbdee1">09:50 検証担当 B</text>
+  <text x="78" y="248" font-size="12" fill="#dbdee1">構造化</text>
+  <text x="78" y="266" font-size="12" fill="#b5bac1">・要約: 模擬チェック項目の共有</text>
+  <text x="78" y="284" font-size="12" fill="#b5bac1">・要点: 連絡先欄を確認 / 模擬予定は金曜 / 検証コメントを記録</text>
+  <text x="78" y="302" font-size="12" fill="#b5bac1">・区分: 確認依頼（合成）</text>
+  <text x="78" y="320" font-size="12" fill="#b5bac1">・バイタル: この表示例には測定値を含めません</text>
+  <text x="78" y="338" font-size="12" fill="#b5bac1">・症状: この表示例には臨床情報を含めません</text>
+  <text x="78" y="356" font-size="12" fill="#b5bac1">・依頼: 模擬チェック項目の表示を確認してください</text>
   <rect x="78" y="378" width="64" height="28" rx="5" fill="#248046"/>
-  <text x="110" y="396" font-size="12" fill="#ffffff" text-anchor="middle">✅ 確認</text>
+  <text x="110" y="396" font-size="12" fill="#fff" text-anchor="middle">確認</text>
   <rect x="150" y="378" width="64" height="28" rx="5" fill="#5865f2"/>
-  <text x="182" y="396" font-size="12" fill="#ffffff" text-anchor="middle">👤 担当</text>
+  <text x="182" y="396" font-size="12" fill="#fff" text-anchor="middle">担当</text>
   <rect x="222" y="378" width="64" height="28" rx="5" fill="#4e5058"/>
-  <text x="254" y="396" font-size="12" fill="#dbdee1" text-anchor="middle">⏸ 保留</text>
+  <text x="254" y="396" font-size="12" fill="#dbdee1" text-anchor="middle">保留</text>
   <rect x="294" y="378" width="96" height="28" rx="5" fill="#4e5058"/>
-  <text x="342" y="396" font-size="12" fill="#dbdee1" text-anchor="middle">📄 本文表示</text>
-  <!-- action row 2 -->
+  <text x="342" y="396" font-size="12" fill="#dbdee1" text-anchor="middle">本文表示</text>
   <rect x="78" y="414" width="96" height="28" rx="5" fill="#4e5058"/>
-  <text x="126" y="432" font-size="12" fill="#dbdee1" text-anchor="middle">📝 依頼作成</text>
-
-  <!-- ===== ephemeral answer to 📄本文表示 ===== -->
+  <text x="126" y="432" font-size="12" fill="#dbdee1" text-anchor="middle">依頼作成</text>
   <rect x="66" y="486" width="560" height="154" rx="8" fill="#26272b" stroke="#6d6f78" stroke-dasharray="6 4"/>
-  <text x="78" y="506" font-size="11" fill="#949ba4">📄 本文表示 クリック → ephemeral（押した本人のみに表示）</text>
-  <text x="78" y="528" font-size="13" fill="#ffffff" font-weight="bold">💬 A山 太郎 — 本文</text>
-  <text x="78" y="548" font-size="12" fill="#dbdee1">08:55 D田 健一: 来週の訪問日を火曜から木曜へ変更できないか相談が</text>
-  <text x="78" y="566" font-size="12" fill="#dbdee1">あります。ご家族の希望も確認済みです。</text>
-  <text x="78" y="584" font-size="12" fill="#dbdee1">09:12 B野 花子: 本日の訪問時バイタルを報告します。血圧128/82、</text>
-  <text x="78" y="602" font-size="12" fill="#dbdee1">体温36.4℃、SpO2 97%。足のむくみが気になるとの訴えがありました。</text>
-  <text x="78" y="620" font-size="12" fill="#dbdee1">処方薬があと3日分しかないため、確認をお願いします。</text>
-
-  <!-- footer -->
-  <text x="66" y="668" font-size="10" fill="#6d6f78">※ カード上は送信者行＋構造化のみ — 本文は 📄本文表示 を押した本人のみ ephemeral 表示。患者名・投稿者名は匿名化した例</text>
+  <text x="78" y="506" font-size="11" fill="#b5bac1">本文表示 → ephemeral（押した本人のみに表示）</text>
+  <text x="78" y="528" font-size="13" fill="#fff">合成ケース A — 模擬本文</text>
+  <text x="78" y="548" font-size="12" fill="#dbdee1">09:40 検証担当 A: 模擬訪問予定を金曜として表示します。</text>
+  <text x="78" y="566" font-size="12" fill="#dbdee1">この記録は通知レイアウトを確認するために作成しました。</text>
+  <text x="78" y="584" font-size="12" fill="#dbdee1">09:50 検証担当 B: 連絡先欄とチェック項目の表示を確認します。</text>
+  <text x="78" y="602" font-size="12" fill="#dbdee1">実在する患者・職員・診療・投稿を表すものではありません。</text>
+  <text x="78" y="620" font-size="12" fill="#dbdee1">確認結果はこの合成例の範囲だけで扱ってください。</text>
+  <text x="66" y="668" font-size="10" fill="#b5bac1">完全合成の表示例。実患者・実投稿の匿名化データは使用していません。</text>
 </svg>
