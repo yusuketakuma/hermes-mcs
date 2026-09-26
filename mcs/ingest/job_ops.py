@@ -100,6 +100,15 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
     """Consume queued bot requests into durable fetch_jobs FIRST. Files may
     arrive mid-write (producer writes non-atomically): a parse failure is
     consumed but recorded, never loops."""
+    consent_only = False
+    try:
+        import notify_cards
+        consent_only = notify_cards.restore_awaiting_consent(
+            os.path.dirname(cmd_dir)) is not None
+    except Exception:
+        # an unreadable marker must not swallow commands — treat as no
+        # hold; the restore path itself stays fail-closed
+        consent_only = False
     try:
         names = sorted(os.listdir(cmd_dir))
     except OSError:
@@ -117,6 +126,12 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         if isinstance(req, dict) and isinstance(req.get("cmd"), str) \
                 and (req["cmd"].startswith("request.")
                      or req["cmd"].startswith("ops.")):
+            if consent_only and req["cmd"] != "ops.restore_approve":
+                # A schema-bump DB replace is held for human consent:
+                # any other command's writes would be silently wiped by
+                # the pending swap, so every file stays queued until
+                # the consent lands and the restore completes.
+                continue
             try:
                 if not mcs_requests.valid_uuid(req.get("command_id")):
                     raise ValueError("bad_command_id")
@@ -138,11 +153,14 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 result["errors"].append("cmd_invalid: " + receipt["error"])
             elif receipt.get("scheduled") is True \
                     and receipt.get("cmd") in (
-                        "ops.update_apply", "ops.update_rollback"):
+                        "ops.update_apply", "ops.update_rollback",
+                        "ops.restore_approve"):
                 # The committed receipt is the approval boundary — spawn
                 # the detached updater only AFTER commit, never inside
                 # apply_tx (S9). The spawned process re-verifies via
-                # receipt scan; argv/loop state is never trusted.
+                # receipt scan; argv/loop state is never trusted. A
+                # restore consent re-enters the held rollback at once
+                # instead of waiting for the next scheduled check.
                 try:
                     import mcs_update
                     mcs_update.spawn_detached()

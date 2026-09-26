@@ -29,6 +29,33 @@ class MaintenanceError(RuntimeError):
     — core must not depend on the ingest layer for an error type."""
 
 
+def atomic_publish_text(path: str, text: str) -> None:
+    """tmp -> fsync -> os.replace -> dir fsync: consumers either see the
+    whole previous file or the whole new one — a mid-write crash never
+    leaves a torn JSON behind (same contract as the backup chain)."""
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".pub.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        dfd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a

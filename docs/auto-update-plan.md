@@ -15,7 +15,7 @@
 `deployment/launchagents/org.mcs.recovery.plist`、`mcs_setup.py` の
 manifest/reconcile・`mcs_operations`/`mcs_requests` の projectless ops・
 `hermes_plugin` の preview/confirm・`maintenance.preupdate_backup`。
-テスト: `tests/ops/test_mcs_update.py`・`tests/ops/test_mcs_recover.py`・
+テスト: `tests/ops/test_mcs_update.py`・`tests/meta/test_mcs_recover.py`・
 `tests/plugin/test_update_ops.py`。既定モード `off`（config の
 `update.mode` で opt-in）。
 
@@ -88,7 +88,7 @@ mcs/core/maintenance.py          preupdate_backup + 参照ベース prune
 deployment/scripts/mcs_llm_catchup.sh  marker 検査（quiesce 中の再 spawn 防止）
 install.sh                       recovery 配置 + watchdog bootstrap（6/6 段）
 tests/ops/test_mcs_update.py     新設（一時 git repo fixture + subprocess スタブ）
-tests/ops/test_mcs_recover.py    新設
+tests/meta/test_mcs_recover.py   新設
 data/update_state.json           状態ファイル（gitignore 済み領域）
 data/update_in_progress.marker   quiesce 中の補助 launcher 沈黙フラグ
 data/service_manifest.json       services の管理対象記録
@@ -210,9 +210,11 @@ restart → postcheck → applied) → gateway_restart → done`。
      / notify は「install.sh 再実行が必要」と警告
 5. `data/backups/preupdate-<ts>.db`（検証済み backup）+
    `service_manifest.json` 現行版を state に退避
-6. `acquire_run_lock`（LOCK_NB・30s×40回=最大20分、tick 最大8分を
-   考慮）→ **`update.lock` を取得し両方を終了まで保持**（順序は常に
-   run→update。update.lock 保持が「apply 進行中」の生存信号）。
+6. `update.lock` を先に取得（以降の `update_state.json` 書込みは全て
+   このロック下で直列化・lock 不在が「apply 進行中」の生存信号）→
+   `acquire_run_lock`（LOCK_NB・30s×40回=最大20分、tick 最大8分を
+   考慮）→ **両方を終了まで保持**（順序は常に update→run。run.lock
+   保持者は update.lock を取らないためデッドロックしない）。
    ※ **lock 取得直後に再検証**: porcelain clean・state 再読
      （無 lock 期間の lost update 防止）・`HEAD == 承認時 base_sha`・
      `stages` を空に初期化
@@ -274,7 +276,7 @@ drainer を復帰**。run.lock 保持中は 15分 tick・cmd drain・drainer の
 
 トリガ: `applying` 残存 **または `stages` 非空かつ `done` 未到達**
 （quiesce 中の crash は `applying` 前でも検出できるよう）。
-recover/updater ともに **run.lock→update.lock をこの順で取得**してから
+recover/updater ともに **update.lock→run.lock をこの順で取得**してから
 判定に入る（復旧中に 15分 tick が Ledger を開かないよう遮断）。
 
 実測: `HEAD` / `status --porcelain -uno` / `.git/` 内の lock 残存
@@ -303,7 +305,7 @@ apply 窓内に同名 untracked を作った稀な競合の可能性は通知に
 
 ### ロールバック本体
 
-前提: run.lock→update.lock 取得済み・drainer quiesce 済み（独立実行の
+前提: update.lock→run.lock 取得済み・drainer quiesce 済み（独立実行の
 `ops.update_rollback`・recover 経路も同じ前提を先に満たす）。
 
 1. `git reset --hard <prev_sha>` + 外科的削除 — 事前に clean を
@@ -567,7 +569,7 @@ veto 猶予）にする方式を検討する。既定値の決定と併せて判
 | `deployment/recovery/mcs_recover.py` | repo 外配置の凍結復旧プログラム（stdlib+git のみ）。⑤判定表の実行・stale `.git/*.lock` 除去・manifest スナップショット駆動のメンバーシップ reconcile・quiesce。install.sh が `~/.mcs-recovery/` にコピー |
 | `deployment/launchagents/org.mcs.recovery.plist` | 独立 watchdog（`StartInterval`・`mcs_recover.py --if-stale` を実行）。**hermes cron ではない** — gateway 内の scheduler は gateway 死亡で止まる + `hermes cron` は `~/.hermes/scripts/` 外の script を指せない制約があるため launchd agent とする（install.sh 所有・所有規則非該当 label） |
 | `tests/ops/test_mcs_update.py` | updater テスト（一時 git repo fixture + subprocess/urllib stub） |
-| `tests/ops/test_mcs_recover.py` | 復旧プログラムのテスト |
+| `tests/meta/test_mcs_recover.py` | 復旧プログラムのテスト |
 
 **変更:**
 
@@ -846,7 +848,7 @@ git/FS・プロセス並行性・設計論理・実装実現性の4系統で計8
   apply が update.lock 保持中に run.lock を待機）の **ABBA デッド
   ロックを構造的に排除**する。
 - writer（check/apply/recover）は `data/update.lock`（flock）。
-  両 lock を持つのは apply のみで順序は常に **run.lock → update.lock**。
+  両 lock を持つのは apply のみで順序は常に **update.lock → run.lock**。
   apply が update.lock を保持し続けること自体が「apply 進行中」の
   生存信号になる（watchdog/recover は NB 試行で busy=生存と判定）。
 - state の破損（読めない JSON）は「unknown」扱い — 何もせず

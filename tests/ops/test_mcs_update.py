@@ -68,6 +68,8 @@ def updater(tmp_path, monkeypatch):
                         str(tmp_path / "data" / "marker"))
     monkeypatch.setattr(mcs_update, "REPORT_PATH",
                         str(tmp_path / "data" / "recovery_report.json"))
+    monkeypatch.setattr(mcs_update, "RESTORE_REPORT_PATH",
+                        str(tmp_path / "data" / "restore_report.json"))
     monkeypatch.setattr(mcs_update, "LEDGER", str(tmp_path / "ledger.db"))
     monkeypatch.setattr(mcs_update, "BACKUP_DIR",
                         str(tmp_path / "data" / "backups"))
@@ -266,12 +268,33 @@ def test_stale_git_lock_cleanup(updater, tmp_path):
 
 def _receipts_db(path):
     con = sqlite3.connect(path)
-    con.execute("""CREATE TABLE command_receipts(
+    con.execute("""CREATE TABLE IF NOT EXISTS command_receipts(
       command_id TEXT PRIMARY KEY, payload_hash TEXT, project_id INTEGER,
       request_id INTEGER,
       outcome TEXT CHECK(outcome IN ('applied','rejected')),
       receipt_json TEXT, processed_at REAL)""")
     return con
+
+
+def _seed_consent(ledger_path, backup_path, cid="cid-consent",
+                  report=None):
+    """Drop an ops.restore_approve receipt bound to the CURRENT loss
+    report into the live DB — the same row the human-approval path
+    commits. Returns the report it was bound to."""
+    if report is None:
+        report = mcs_update._restore_loss_report(backup_path)
+    con = _receipts_db(ledger_path)
+    con.execute(
+        "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
+        "'applied',?,?)",
+        (cid, "h" * 64, json.dumps({
+            "cmd": "ops.restore_approve", "scheduled": True,
+            "command_id": cid, "report_id": report["report_id"],
+            "backup_sha256": report["backup_sha256"],
+            "backup_schema": report["backup_schema"]}), time.time()))
+    con.commit()
+    con.close()
+    return report
 
 
 def _rec(cid, cmd, at, **kw):
@@ -679,22 +702,27 @@ def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     live = str(tmp_path / "ledger.db")
     back = str(tmp_path / "backup.db")
     mcs_update.LEDGER = live
-    for path, ver in ((live, 7), (back, 6)):
+    for path, ver, tag in ((live, 7, "live"), (back, 6, "back")):
         con = sqlite3.connect(path)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute(f"PRAGMA user_version={ver}")
         con.execute("CREATE TABLE t(x)")
+        con.execute("INSERT INTO t VALUES(?)", (tag,))
         con.commit()
         con.close()
     (Path(live).parent / "ledger.db-wal").write_bytes(b"stalewal")
     (Path(live).parent / "ledger.db-shm").write_bytes(b"staleshm")
     # valid_mcs_db is the live-schema gate — stub it to accept both
     monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
+    _seed_consent(live, back)
     mcs_update._restore_db(back)
     assert not Path(live + "-wal").exists()
     assert not Path(live + "-shm").exists()
+    # _restore_db opens a Ledger for reconcile, which migrates the
+    # restored file to SCHEMA_VERSION — the proof the swap happened is
+    # the backup's own row, not user_version
     con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
-    assert con.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert con.execute("SELECT x FROM t").fetchone()[0] == "back"
     con.close()
 
 
@@ -738,6 +766,7 @@ def test_restore_db_io_error_is_update_error(updater, tmp_path,
         con.commit()
         con.close()
     monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
+    _seed_consent(live, back)
     os.mkdir(live + ".restore-tmp")        # blocks the tmp write
     with pytest.raises(mcs_update.UpdateError):
         mcs_update._restore_db(back)
@@ -776,3 +805,235 @@ def test_rollback_restarts_agents_on_unexpected_error(
     assert restarted == [1]                  # drainers brought back up
     after = updater.load_state()
     assert after["executed"]["cid-rb"]["result"] == "rollback_failed"
+
+
+# ------------------------------------------------- restore consent gate
+# R2/T13: a schema-bump rollback that would replace the live DB must
+# wait for a NEW human approval bound to the exact backup bytes +
+# schema + loss report. An earlier update/rollback approval never
+# substitutes; every writer/sender stays frozen while it waits.
+
+def _mk_schema(path, version, messages=0):
+    """A real Ledger-created DB pinned to `version` — passes the real
+    valid_mcs_db gate, so consent tests exercise the true restore path."""
+    import ledger as _ledger
+    lg = _ledger.Ledger(str(path))
+    lg.db.execute(f"PRAGMA user_version={version}")
+    for i in range(messages):
+        lg.db.execute(
+            "INSERT INTO messages(message_id,project_id,posted_at,"
+            "posted_at_ts,body_html,body_state,content_hash,first_seen)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (i + 1, 1, "2026-01-01", 100 + i, "<b>x</b>", "full",
+             f"h{i}", 1))
+    lg.db.commit()
+    lg.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    lg.db.close()
+    for side in (str(path) + "-wal", str(path) + "-shm"):
+        try:
+            os.unlink(side)
+        except OSError:
+            pass
+
+
+def _schema_bump_world(updater, tmp_path, monkeypatch):
+    """applied v1.1.0 entry flagged schema_bump with a real v7 backup;
+    live DB sits one schema ahead at v8. Every external boundary is
+    stubbed; git reset and the DB files stay real."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
+    after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")   # under DATA — the
+    # marker/data_root paths must coincide like production
+    monkeypatch.setattr(mcs_update, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "preupdate.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)          # 3 rows since the backup
+    # keep quiesce's real marker write — only launchd stops are stubbed
+    monkeypatch.setattr(mcs_update, "quiesce",
+                        lambda: (mcs_update._write_marker(), [])[1])
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(mcs_update, "_postcheck", lambda s, e: [])
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
+    restarts = []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda: restarts.append(1) or [])
+    state = updater._default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": after,
+                         "prev_sha": before, "schema_bump": True,
+                         "backup_path": str(back), "at": time.time()}]
+    updater.save_state(state)
+    return repo, live, str(back), before, after, restarts
+
+
+def _live_version(path):
+    con = sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True)
+    try:
+        return con.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,
+                                                monkeypatch):
+    """No bound receipt => the rollback stops before the DB replace:
+    tree already reset, drainers down, BOTH markers up, loss report
+    durable, live DB byte-identical (T13)."""
+    repo, live, back, before, _after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    live_bytes = Path(live).read_bytes()
+    rc = updater.rollback("cid-rb")
+    assert rc == 2
+    assert Path(live).read_bytes() == live_bytes   # no unauthorized swap
+    assert _live_version(live) == 8
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    assert restarts == []                  # drainers stay quiesced
+    assert Path(mcs_update.MARKER_PATH).exists()
+    marker = json.loads(
+        (tmp_path / "data" / "restore_pending.json").read_text())
+    assert marker["phase"] == "awaiting_consent"
+    report = json.loads(
+        (tmp_path / "data" / "restore_report.json").read_text())
+    assert marker["report_id"] == report["report_id"]
+    assert report["backup_schema"] == 7
+    assert report["stored_since_backup"]["messages"] == 3
+    assert report["intervening_messages"] == 3
+    assert report["backup_sha256"] == mcs_update._file_sha256(back)
+    state = updater.load_state()
+    assert state["applying"]["rollback"] is True
+    assert state["restore_consent"]["report_id"] == report["report_id"]
+    # the hold must NOT consume the rollback receipt — it stays pending
+    # until the restore actually finishes
+    assert "cid-rb" not in state.get("executed", {})
+
+
+def test_rollback_consent_converges_via_recover(updater, tmp_path,
+                                                monkeypatch):
+    """After the bound ops.restore_approve receipt lands, recovery
+    re-enters _restore_db: swap happens, reconcile clears the marker,
+    drainers restart, the rollback completes (T13 happy path)."""
+    repo, live, back, before, _after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert _live_version(live) >= 7        # backup bytes restored
+    con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
+    assert con.execute(
+        "SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    con.close()
+    # reconcile consumed the marker — no stale hold pinning senders
+    import notify_cards
+    assert notify_cards.restore_pending(str(tmp_path / "data")) is None
+    state = updater.load_state()
+    assert state["applying"] is None
+    assert "restore_consent" not in state
+    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert restarts == [1]                 # drainers came back up
+
+
+def test_rollback_wrong_report_consent_stays_held(updater, tmp_path,
+                                                  monkeypatch):
+    """A receipt bound to a DIFFERENT loss report never unlocks the
+    swap — approval is bound to exact bytes+schema+loss (R2)."""
+    _repo, live, back, _before, _after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    _seed_consent(live, back,
+                  report={"report_id": "f" * 64,
+                          "backup_sha256": "e" * 64,
+                          "backup_schema": 7})
+    assert updater.recover_interrupted() == 0
+    assert _live_version(live) == 8        # still untouched
+    import notify_cards
+    marker = notify_cards.restore_awaiting_consent(
+        str(tmp_path / "data"))
+    assert marker is not None              # hold stands
+    assert restarts == []
+
+
+def test_rollback_update_receipt_cannot_satisfy_consent(
+        updater, tmp_path, monkeypatch):
+    """The earlier ops.update_apply approval that authorized the update
+    must NOT count as restore consent — a distinct op name is required
+    (the human must have seen the loss report first)."""
+    _repo, live, back, _before, _after, _restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    # seed an applied ops.update_apply receipt — same payload shape the
+    # earlier approval produced, minus the restore binding
+    report = mcs_update._restore_loss_report(back)
+    con = _receipts_db(live)
+    con.execute(
+        "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
+        "'applied',?,?)",
+        ("cid-apply-old", "h" * 64, json.dumps({
+            "cmd": "ops.update_apply", "scheduled": True,
+            "command_id": "cid-apply-old", "tag": "v1.1.0",
+            "report_id": report["report_id"],          # even forged
+            "backup_sha256": report["backup_sha256"],
+            "backup_schema": report["backup_schema"]}),
+         time.time()))
+    con.commit()
+    con.close()
+    assert updater.recover_interrupted() == 0
+    assert _live_version(live) == 8        # never swapped
+    import notify_cards
+    assert notify_cards.restore_awaiting_consent(
+        str(tmp_path / "data")) is not None
+
+
+def test_recover_escalates_orphaned_restore_consent(updater, tmp_path,
+                                                    monkeypatch):
+    """restore_consent with a non-rollback applying record is journal
+    corruption — escalate fail-closed rather than classify away the
+    hold (a 'finish' would wedge every send grant forever)."""
+    repo, _ = _make_repo(tmp_path)
+    mcs_update.REPO = str(repo)
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "restart_agents", lambda: [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
+                         "prev_sha": head, "at": time.time() - 4000}
+    state["stages"] = [{"stage": "merge", "at": time.time() - 3000}]
+    state["restore_consent"] = {"report_id": "a" * 64}
+    updater.save_state(state)
+    rc = updater.recover_interrupted()
+    assert rc == 1
+    report = json.load(open(mcs_update.REPORT_PATH))
+    assert report["result"] == "escalate"
+    assert "restore_consent" in report["detail"]
+    # journal preserved for a human — nothing classified away
+    after = updater.load_state()
+    assert after["applying"] is not None
+
+
+def test_loss_report_binds_live_state(updater, tmp_path, monkeypatch):
+    """report_id is deterministic over (backup bytes, backup schema,
+    live-vs-backup deltas) — any write slipping past the writer hold
+    changes the id and invalidates every stale consent (T13)."""
+    _repo, live, back, _b, _a, _r = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    r1 = mcs_update._restore_loss_report(back)
+    r2 = mcs_update._restore_loss_report(back)
+    assert r1["report_id"] == r2["report_id"]     # deterministic
+    # a write that slips in invalidates the bound report
+    con = sqlite3.connect(live)
+    con.execute(
+        "INSERT INTO messages(message_id,project_id,posted_at,"
+        "posted_at_ts,body_html,body_state,content_hash,first_seen)"
+        " VALUES(99,1,'2026-01-02',999,'<b>y</b>','full','h9',1)")
+    con.commit()
+    con.close()
+    r3 = mcs_update._restore_loss_report(back)
+    assert r3["report_id"] != r1["report_id"]
+    assert r3["intervening_messages"] == 4

@@ -33,7 +33,7 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 | I1 | stdlib-only コア | 新規外部依存を足さない（GitHub API も urllib） |
 | I2 | 冪等 | install.sh/services/init は再実行で収束。差分のみ適用 |
 | I3 | atomic write | 状態ファイルは tmp+`os.replace`、DB backup は検証後 publish |
-| I4 | flock 排他 | ledger 書込みは `run.lock`、更新系は `update.lock`📋。順序は run.lock → update.lock |
+| I4 | flock 排他 | ledger 書込みは `run.lock`、更新系は `update.lock`📋。順序は update.lock → run.lock |
 | I5 | 人承認ゲート | MCS 書込み・要求操作・破壊的復元は人経路のみ |
 | I6 | fail-closed | 検証不能な入力は受理しない（ops スキーマ・tag 形式・receipt 冪等） |
 | I7 | 静かな健全性 | 正常時は出力しない（watchdog 慣例: stdout は失敗警報のみ） |
@@ -124,7 +124,7 @@ script 名で dedup 登録（現行4件 + 📋`mcs_update`）→
   tag 検査（**保護パス非含有をルールベースで**（check-ignore+固定集合+
   casefold/NFC）・mode 検査（symlink/gitlink 拒否）・untracked 衝突・
   **スキーマ互換**・ls-tree+cat-file の一式 preflight・install.sh 差分）→
-  `preupdate-*` backup+manifest 退避 → run.lock→update.lock（両保持・
+  `preupdate-*` backup+manifest 退避 → update.lock→run.lock（両保持・
   lock 下で clean+state+base_sha 再検証）→ `applying` 記録 →
   **quiesce**（`update_in_progress.marker`→drainer bootout+停止検証+
   stray sweep）→ `merge --ff-only` → **post-merge は新コードの

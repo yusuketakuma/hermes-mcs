@@ -17,6 +17,7 @@ is nothing to do (watchdog-silent convention).
 """
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -282,6 +283,162 @@ def _db_version(path):
         return None
 
 
+def _mark_restored(backup_path, phase="restored", report_id=None):
+    """restore_pending marker — the runner holds every send grant
+    until its journal-vs-DB reconcile consumes this. Written BEFORE
+    the file swap (a crash between replace and write must not leave
+    senders running against a rewound DB; a stale marker is harmless).
+    Duplicated from notify_cards.mark_restored because this script
+    must keep working when the repo's own modules are broken.
+    phase='awaiting_consent' holds sends while the schema-bump DB
+    replace waits on a bound ops.restore_approve receipt."""
+    marker = os.path.join(DATA, "restore_pending.json")
+    payload = {"v": 1, "phase": phase, "backup_path": backup_path,
+               "by": "mcs_recover", "at": time.time()}
+    if phase == "restored":
+        payload["restored_at"] = payload["at"]
+    if report_id is not None:
+        payload["report_id"] = report_id
+    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restore.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, marker)
+        dfd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# Records the DB replace would silently erase — duplicated from
+# mcs_update so this script needs none of the repo's modules.
+_STORED_TABLES = ("messages", "attachments")
+_EFFECT_TABLES = ("notification_cards", "notification_renders",
+                  "notification_delivery_attempts",
+                  "notification_render_parts", "notification_restore_holds",
+                  "notification_view_manifests", "notify_outbox")
+
+
+def _table_count(con, table):
+    try:
+        return con.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _loss_report(backup_path):
+    """Same deterministic loss report as mcs_update._restore_loss_report
+    — a drift between report and live state invalidates every consent
+    receipt bound to the stale report_id."""
+    try:
+        live = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        back = sqlite3.connect(
+            "file:" + backup_path + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        live.close()
+        return None
+    try:
+        try:
+            watermark = back.execute(
+                "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
+        except sqlite3.Error:
+            watermark = None
+        stored = {t: _table_count(live, t) - _table_count(back, t)
+                  for t in _STORED_TABLES}
+        effects = {t: _table_count(live, t) - _table_count(back, t)
+                   for t in _EFFECT_TABLES}
+    finally:
+        live.close()
+        back.close()
+    metrics = {"v": 1,
+               "backup_sha256": _file_sha256(backup_path),
+               "backup_schema": _db_version(backup_path),
+               "watermark_ts": watermark,
+               "stored_since_backup": stored,
+               "external_effects": effects,
+               "intervening_messages": sum(max(0, n)
+                                           for n in stored.values()),
+               "external_effect_rows": sum(max(0, n)
+                                           for n in effects.values())}
+    metrics["report_id"] = hashlib.sha256(
+        json.dumps(metrics, sort_keys=True, separators=(",", ":"),
+                   ensure_ascii=False).encode("utf-8")).hexdigest()
+    report = dict(metrics, computed_at=time.time())
+    try:
+        fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rreport.",
+                                   suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, os.path.join(DATA, "restore_report.json"))
+        dfd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass                            # report file is best-effort
+    return report
+
+
+def _consent_for(report):
+    """The newest ops.restore_approve receipt bound to this exact loss
+    report, or None — an earlier update/rollback approval never counts."""
+    try:
+        con = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            rows = con.execute(
+                "SELECT command_id, receipt_json FROM command_receipts"
+                " WHERE outcome='applied'"
+                " ORDER BY processed_at DESC, rowid DESC").fetchall()
+        except sqlite3.Error:
+            return None
+    finally:
+        con.close()
+    for cid, rj in rows:
+        try:
+            rec = json.loads(rj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("cmd") != "ops.restore_approve" \
+                or rec.get("scheduled") is not True:
+            continue
+        if rec.get("report_id") == report["report_id"] \
+                and rec.get("backup_sha256") == report["backup_sha256"] \
+                and rec.get("backup_schema") == report["backup_schema"]:
+            return cid
+    return None
+
+
 def _restore_db(backup_path):
     """Restore only when the live schema differs — removes WAL/SHM
     sidecars FIRST so stale journals can't replay against the file.
@@ -298,7 +455,46 @@ def _restore_db(backup_path):
     if live is None:
         return "live_db_unreadable"
     if live == back:
-        return None                     # already at backup schema
+        # already at backup schema — but a crash between the marker's
+        # 'restored' rewrite and the swap can leave an awaiting_consent
+        # marker pinning every send; promote it so the runner-side
+        # reconcile releases the hold.
+        marker = os.path.join(DATA, "restore_pending.json")
+        try:
+            with open(marker, "rb") as f:
+                current = json.loads(f.read().decode("utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if isinstance(current, dict) \
+                and current.get("phase") == "awaiting_consent":
+            try:
+                _mark_restored(backup_path)
+            except OSError as e:
+                return f"restore_marker_failed: {e}"
+        return None
+    # Per-restore human consent (R2): an earlier update/rollback
+    # approval does not substitute. The sender hold lands before the
+    # loss report so no grant slips between measurement and decision.
+    try:
+        _mark_restored(backup_path, phase="awaiting_consent")
+    except OSError as e:
+        return f"restore_marker_failed: {e}"
+    report = _loss_report(backup_path)
+    if report is None:
+        return "restore_report_failed: cannot measure loss"
+    try:
+        # re-pin the hold with the report identity so operators can
+        # correlate marker <-> restore_report.json
+        _mark_restored(backup_path, phase="awaiting_consent",
+                       report_id=report["report_id"])
+    except OSError as e:
+        return f"restore_marker_failed: {e}"
+    if _consent_for(report) is None:
+        return "restore_consent_pending:" + report["report_id"]
+    try:
+        _mark_restored(backup_path, report_id=report["report_id"])
+    except OSError as e:
+        return f"restore_marker_failed: {e}"
     for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
         try:
             os.unlink(side)
@@ -371,7 +567,21 @@ def recover(if_stale=False):
                     f"（要手動対応）: {detail}")
             return 1
 
+        if state.get("restore_consent") and not (
+                applying and applying.get("rollback")
+                and applying.get("backup_path")):
+            # A held schema-bump DB replace must reach _restore_db
+            # again via the head==target rollback branch — any other
+            # journal shape is corruption; fail closed rather than
+            # 'finish' into a wedge that keeps every send denied.
+            return escalate("restore_consent without a rollback "
+                            "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+            if state.get("restore_consent"):
+                # rollback's tree reset completed before the consent
+                # hold — a MERGE_HEAD here is drift
+                return escalate("restore_consent with MERGE_HEAD — "
+                                "refusing to classify")
             if not prev:
                 return escalate("MERGE_HEAD without known prev_sha")
             r = _git(["merge", "--abort"])
@@ -411,6 +621,13 @@ def recover(if_stale=False):
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
                 err = _restore_db(applying["backup_path"])
+                if err and err.startswith("restore_consent_pending:"):
+                    # held, not escalated: drainers stay stopped, both
+                    # markers stay up, 'applying' stays — each watchdog
+                    # pass re-checks the consent receipt until a bound
+                    # approval arrives.
+                    _report("restore_consent_pending", err)
+                    return 0
                 if err:
                     return escalate("rollback db restore: " + err)
             problems = _reconcile_membership(
@@ -445,6 +662,12 @@ def recover(if_stale=False):
                 _restart_gateway()
             return 0
         if prev and head == prev:
+            if state.get("restore_consent"):
+                # a held restore resolves ONLY through the head==target
+                # rollback branch; landing here means the journal
+                # drifted — escalate, never 'finish' into a wedge
+                return escalate("restore_consent hold lost its "
+                                "rollback target — refusing to classify")
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach

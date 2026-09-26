@@ -315,6 +315,26 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         warnings.append("local LLM endpoint 127.0.0.1:8080 not reachable — "
                         "extract_llm/semantic jobs will stall until "
                         "llama.cpp is up")
+    else:
+        # T19: a server advertising FEWER slots than the selected count
+        # is a mismatch — a call pinned past the advertised width goes
+        # unpinned and can land on the real-time slot. Flag it; never
+        # run unpinned.
+        try:
+            import local_llm
+            raw = urllib.request.urlopen(
+                LLM_MODELS_URL.rsplit("/v1/", 1)[0] + "/slots",
+                timeout=3).read()
+            advertised = len(json.loads(raw.decode("utf-8")))
+            if advertised < local_llm.SLOT_COUNT:
+                errors.append(
+                    f"llama-server advertises {advertised} slots but the "
+                    f"selected count is {local_llm.SLOT_COUNT} — fix -np "
+                    "or lower SLOT_COUNT; background work would pin "
+                    "out-of-range (unpinned) slots")
+        except Exception:
+            warnings.append("local LLM /slots unreadable — slot-count "
+                            "mismatch cannot be verified")
     profile = cfg.get("notify_bot_profile")
     if isinstance(profile, str) and profile \
             and not re.fullmatch(r"[a-z0-9_-]+", profile):
@@ -353,6 +373,28 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                 warnings.append(
                     f"LaunchAgent {label} not installed — templates and "
                     "install steps in deployment/launchagents/README.md")
+    # T20: with the admission boundary enabled, every MCS LLM route
+    # must be registered — a missing route fails closed FOREVER, so a
+    # misconfigured broker is a blocked-startup error, not a stall.
+    if os.environ.get("MCS_LLM_ADMISSION") not in (None, "", "0"):
+        try:
+            import local_llm
+            broker = local_llm._broker()
+            missing = [r for r in ("mcs.semantic", "mcs.extract")
+                       if broker.routes.get(r) != "BACKLOG"]
+            if missing:
+                errors.append(
+                    "admission broker route table lacks "
+                    + ", ".join(missing)
+                    + " — those callers are rejected permanently while "
+                      "MCS_LLM_ADMISSION is set")
+            elif not broker.is_open():
+                warnings.append(
+                    "admission epoch is closed — LLM work defers until "
+                    "the backend is verified empty and the epoch "
+                    "reopens")
+        except Exception as e:
+            errors.append(f"admission broker unusable: {e}")
     return errors, warnings
 
 
@@ -1040,6 +1082,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
 
 CRON_JOBS = [
     ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
+    ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
     ("MCS durable drain", "7,37 * * * *", "mcs_deep.sh"),
     ("MCS LLM catchup", "30 22 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
@@ -1379,6 +1422,28 @@ def cmd_services(args) -> int:
                     problems += 1
 
     # 5. manifest — the rollback snapshot's source of truth (R6)
+    # T19: record the selected/rollback backend slot counts and the
+    # checked-in plist's -np so drift between the deployed width and
+    # the code-side selection is visible in the snapshot
+    try:
+        import local_llm
+        plist_np = None
+        src = os.path.join(REPO_ROOT, "deployment", "launchagents",
+                           "ai.mcs.llamaserver.plist")
+        m = re.search(r"<string>-np</string><string>(\d+)</string>",
+                      open(src, encoding="utf-8").read())
+        plist_np = int(m.group(1)) if m else None
+        manifest["llm_slots"] = {
+            "selected": local_llm.SLOT_COUNT,
+            "rollback": local_llm.ROLLBACK_SLOT_COUNT,
+            "plist_np": plist_np,
+            "consistent": plist_np == local_llm.SLOT_COUNT}
+        if plist_np != local_llm.SLOT_COUNT:
+            note(f"WARNING: plist -np {plist_np} != selected "
+                 f"{local_llm.SLOT_COUNT} — deployment width drifts "
+                 "from the measured selection")
+    except (OSError, ValueError) as e:
+        note(f"manifest llm_slots: {e}")
     if not dry:
         try:
             _save_manifest(manifest)
