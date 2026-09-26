@@ -39,6 +39,7 @@ _ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
 _SDK_MEMBERS = {
     "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
     "ui.Modal", "ui.TextInput", "ui.View", "ui.Container",
+    "File",
     "ButtonStyle", "ButtonStyle.success", "ButtonStyle.secondary",
     "ButtonStyle.primary", "TextStyle.short", "TextStyle.paragraph",
     "Webhook.partial", "WebhookType.application",
@@ -208,7 +209,9 @@ def gate_plugin_sandbox() -> list[str]:
 
 # maintenance.py opens its BACKUP TARGET (a fresh tmp file) read-write —
 # that connect() writes the copy, never the source ledger.
-_SQLITE_RW_OK = {"maintenance.py"}
+# llm_admission.py's broker owns a dedicated admission store
+# (admission.db), not the ledger/snapshot surface.
+_SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}
 
 
 def gate_snapshot_readonly() -> list[str]:
