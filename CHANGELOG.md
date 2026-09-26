@@ -1,5 +1,169 @@
 # Changelog
 
+## [1.0.3] — 2026-09-26
+
+Discord 通知を「カード＋コンパニオンスレッド」の対話型モデルへ刷新
+（本文・添付は専用スレッドへ耐久化配送）、semantic v4 自己修復
+パイプラインと canonical 読取経路の追加、retired エンドポイント
+からの移行、モジュール第一層分割など基盤の大規模な更新。通知・
+収集の既存設定はそのまま使えるが、`hermes_plugin/` の変更を反映
+するには Hermes gateway の再起動が必要（後述）。
+
+### 動作が変わるもの
+
+- **本文・添付はカードのコンパニオンスレッドへ配送** —
+  `notify.card_thread`（既定on）で、患者スレッドごとのカードが
+  `💬 患者名 — MM-DD` の専用スレッドを立て、表示対象の本文全文と
+  対象添付（画像・PDF 等）をリアルタイムでスレッド内へ投稿する。
+  カード本体は送信者行・構造化要約・操作ボタンのみで肥大化しない。
+  本文は必要に応じて複数 chunk に分割される。スレッドを持てない
+  カード（オフ・作成失敗・削除済み）では `📄 本文表示` が残り、
+  押した本人のみに ephemeral 表示する従来動作がフォールバックと
+  して維持される
+- **通知配送はジャーナル化 parts** — card → thread → 本文 chunk →
+  添付を個別の durable part として記録し、worker 再起動・中断から
+  中断点で再開する。配送済み本文は remote match で重複投稿しない。
+  配送状態は render rollup（none/pending/complete/incomplete）と
+  part state（pending/delivered/not_sent/held）で追跡できる
+- **未読チェックの夜間間引き** — 投稿実績（全期間で新着のほぼ
+  全てが 07-21 時）に基づき、22-06 時は :00/:20/:40 のみ実行する
+  20分間隔に間引き。MCS セッションの失効上限 30 分を下回る設計で
+  bearer を維持し、auto_login を夜間のクリティカルパスに置かない。
+  あわせて `health.max_missed_runs=4`（freshness deadline
+  15→25分）で夜間 cadence の stale 誤検知を防止
+- **MCS 取得経路を現行エンドポイントへ移行** — `GET /projects/unread`
+  と `POST /projects/{id}/mark_as_read` がサーバ側で 403 に退場した
+  ため、未読列挙は `/projects?include_meta=1` の `is_unread`
+  フィルタに、既読化は messages GET 後の `oldest_unread_message`
+  確認に変更。`paginate.timestamp` は per-request 時計となり、
+  `snapshot_ts` は walk 内の最小値を採用（walk 途中到着の投稿が
+  既読化対象から漏れない不変条件を維持）
+- **`auto_login` はフォーム操作の前に live session を回復する** —
+  従来は login フォーム駆動のみだったため、token 失効とログアウトを
+  区別できず `manual_required` を繰り返し報告していた。`_recover_session()`
+  を最優先で試行し、fresh localStorage token + `check_session` で
+  資格情報を注入せず回復する経路を追加。login フォームが見つから
+  ない場合もログイン中アプリのリダイレクトと解釈して session 検証を
+  優先する。dead-session の `session_expired` アラートは throttle 済み
+- **ローカルLLM呼出しを admission broker 経由に** — slot 容量を
+  上限管理するブローカを導入し、バックグラウンド大量処理と
+  リアルタイム経路が取り合いにならないよう調停
+- **セマンティック抽出の LLM 呼出し予算を 300 秒に拡大** — v2 fact
+  抽出の実測時間に合わせた上限引上げ
+- **定期実行で自動既読化が有効** — 2026-09-23 の明示承認により
+  `mcs_check.sh`（cron tick）と `local.mcs-cmd`（cmd WatchPaths）に
+  `--mark-read` を付与。自動 ACK なし方針から、snapshot timestamp
+  必須の安全ゲートを保ったまま自動既読化へ移行
+- **レビュー候補シグナルを再設計** — 自己抑制・新検知器5種・
+  通知階層化。同一投稿由来の `med_change_no_followup` 通知を1通に
+  併合、否定文・digest 救済・coverage ゲートの扱いを修正、自己
+  identity は `/users/self` から自動取得
+
+### 修正した問題（通知・配送）
+
+- **空スレッドになる配送漏れを修復** — 複合要因:
+  (a) 長寿命 gateway が parts manifest 導入前の旧 plugin コードを
+  保持し、runner が発行した新形式 spec を旧 worker が処理して
+  thread だけ作成・本文と添付が未配送になる version skew。
+  `hermes_plugin/` 変更時の gateway 再起動必須を運用文書に明記
+  (b) 再開された sealed create spec が既存 thread に対して
+  `create_thread` を呼ぶと Discord が `http_400`（既に thread
+  あり）を返し、definitive reject として part `not_sent`・
+  capability scope の負キャッシュ・`thread_state='failed'` が
+  自己永続化していた。既存 thread（`msg.thread` → 起点
+  message.id と同一 snowflake の thread を `fetch_channel` で解決）
+  を bind して `delivered` として継続。message 個別の 4xx では
+  scope capability を負キャッシュしない（401/403 のみ対象）
+  (c) worker 死亡直後の reconcile receipt が `transport_begin` より
+  先に drain され `unknown_attempt` 棄却 → granted 孤児化。
+  drain を begins → receipts → others の順に修正
+- **`hermes_plugin/` 変更は gateway 再起動が必要** — gateway は
+  plugin を起動時に import する長寿命プロセスのため、再起動なし
+  では新旧 spec の世代ずれが起きる（2026-09 実機事案）
+- **stale unread の通知抑制** — 古い未読や backfill 由来の投稿が
+  新着として通知されないよう age cutoff を適用
+- **hold rescue の拡張** — stranded intent 全体への rescue と
+  atomic hold
+- **coverage_incomplete の誤検知を修正** — 実際の lag がある場合
+  のみ報告
+- **削除されたメッセージ由来の data leak を修正** — tombstone/
+  snippet 本文を evidence から除外し、追加の表記ゆれを検知対象に
+- **vital ラベルの誤認を修正** — 脈を血糖値として扱う誤り、
+  free-text 欄の guard、抽出 context の世代ずれ
+- **表示上の改善** — カード送信者行に記入時刻・職種・組織を表示、
+  カード面を Container で包みカードとして描画、複数ページカードに
+  ページ位置/件数を表示、apply-time re-render と drain-side sweep
+
+### 新しい運用機能
+
+- **interactive card pipeline** — sealed intent → 不変 render spec
+  → parts manifest の配送基盤。カード上のボタンから ✅確認・
+  👤担当・⏸保留・📝依頼作成・📄本文表示を操作。card task 管理・
+  staff directory・動的 project scope・コンパニオンスレッド内
+  クリックの認可・scope lock の適切な解放を含む
+- **Slack カード配送** — Discord と同じ card transport を Slack に
+  展開（transport-neutral 層で共有）。自己更新ライフサイクル
+  （update check → apply → recover）も実装
+- **semantic v4 パイプライン + canonical 読取** — s0_prep 〜
+  s8_publish の stage receipt を持つ自己修復型推論パイプライン。
+  PASS の成果のみが `semantic_facts_v4` read model として公開され、
+  `fact_source=canonical` 昇格は人手ラベルに基づく評価レポート
+  （G6 基準）を必須とする fail-closed ゲートで制御。PENDING/
+  NEEDS_REVIEW/STALE の中間状態と `v4_diagnostic`・cohort 退役・
+  repair 予約を持つ。canonical 読取は `semantic_facts_v2` を正本と
+  する経路
+- **自投稿・他者先読み投稿の取り込み** — `self_posts=true` で、
+  各患者の `messages/latest` を tick ごとに probe し、未保管の
+  最新 id があれば bounded 履歴取得して新着通知。取り切れない id
+  は `probe_mid` に記録して再取得ループを抑止
+- **ingest health watch + lifecycle recovery** — `health.json` の
+  契約ベース監視（presence・parseability・freshness）を
+  `mcs_health.sh` cron で常駐化、`mcs_recover.py --if-stale` が
+  中断した update apply を復旧
+- **governed external export contract** — 外部知識ストア向け出力の
+  契約化
+- **抽出 v3 の品質・処理量強化** — batch 推論（既定4件集約）、
+  検証 drop 時の1回限り repair 再問、llama.cpp timings を artifact
+  meta に集計、vitals の本文ラベル照合による誤キー自動修正、
+  Jev QC フィードバックによる1回限りの再抽出
+
+### 内部構造・開発者向け
+
+- **`mcs/` を第一層サブディレクトリに再編** — `core/`・`ingest/`・
+  `notify/`・`extract/`・`semantic/`・`views/`・`ops/` に分割。
+  エントリポイントは `import _mcs_path` の2行ブートストラップで
+  flat import（`import ledger` 等）を維持するため import 文の
+  変更は不要
+- **`mcs_delivery/` 配送基盤を分離** — Discord/Slack 共有の
+  transport-neutral 層（paths・journal・registry・envelopes・spec・
+  text・worker）
+- **テストツリーを領域別に再配置** — `tests/` も `core/`・`ingest/`・
+  `notify/`・`extract/`・`semantic/`・`views/`・`ops/`・`plugin/`・
+  `meta/` に整理。実LLM・実Jev endpoint はテスト transport 境界で
+  遮断され、テストは一時 DB + スタブのみを使う
+- **README をユーザー向けに分割** — `docs/DEVELOPMENT.md`（開発・
+  運用リファレンス、generated ブロックはこちらへ移転）、稼働
+  システム構成図・カード/スレッド図の SVG 追加。`update_readme.py`
+  は複数対象ファイルを処理する構成に
+- **表示例は完全合成のみ** — 実患者・実投稿由来の記録を
+  sanitized 版に差し替え、ドキュメントの画像も合成ケースで描画
+- **CI gates 強化** — incident 由来の静的ゲート（`ci/gates.py`・
+  `ci/mine_gates.py`）を追加・拡充し、発生した問題の再発を gate で
+  防止
+
+### 注意
+
+- **`hermes_plugin/` を更新したら `hermes gateway restart` が必要**
+  — 長寿命 gateway が起動時にコードを読むため。再起動しないと
+  新形式 spec を旧 worker が処理し、カードのみ届いてスレッド本文・
+  添付が欠落する（本リリースの修正前事案）
+- **auto_login は best-effort のフォールバック** — 本番ログで
+  `auto_login=ok` の記録はなく、フォーム投入→token 検証のフル
+  経路は未実証。夜間間引きがこの依存を避ける設計（20分 < 30分）
+- **semantic v4 は shadow 運用中** — canonical 昇格には人手ラベル
+  による G6 評価レポートが必須。現状は `semantic.mode=shadow` で
+  `semantic_facts_v4` は PASS 成果のみ発行される読み取り面
+
 ## [1.0.2] — 2026-09-23
 
 全体レビュー（46ファイル・実測）に基づく安全性・収集完全性・抽出
