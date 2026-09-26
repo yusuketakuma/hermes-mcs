@@ -117,10 +117,19 @@ LLM_MODEL = "Qwen3.5-9B"
 # turned every legitimate v2 chunk into a "model" failure.
 LLM_TIMEOUT = 300
 
+# v2 fact documents (facts + evidence + category_presence) and v4
+# summaries routinely exceed the shared 1400-token default — a real
+# clinical message hit finish_reason:"length" at exactly 1400 tokens
+# mid-document (measured 2026-09-27), which the acceptance check then
+# rejects as an eternal "model" failure.  The ceiling only bounds the
+# worst case; the timeout still bounds wall time.
+LLM_MAX_TOKENS = 4096
+
 
 # ---------- local LLM (existing endpoint, same isolation) ----------
 
-def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
+def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
+             max_tokens: int = LLM_MAX_TOKENS) -> str | None:
     """One local-llama.cpp chat call via the shared loopback adapter.
     The model gets no tools and no send capability; worker-isolated
     request, no proxy, no redirect, bounded bytes (INV-13, §15.3).
@@ -133,11 +142,12 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT) -> str | None:
         response = local_llm.admitted_chat(
             "mcs.semantic", prompt,
             endpoint=LLM_ENDPOINT, model=LLM_MODEL, timeout=timeout,
+            max_tokens=max_tokens,
             request_fn=local_llm.bounded_request)
     else:
         response = local_llm.chat(
             prompt, endpoint=LLM_ENDPOINT, model=LLM_MODEL,
-            timeout=timeout,
+            timeout=timeout, max_tokens=max_tokens,
             extra_payload={"id_slot": local_llm.request_slot()},
             request_fn=local_llm.bounded_request)
     # canonical acceptance: a length-truncated or empty completion is an

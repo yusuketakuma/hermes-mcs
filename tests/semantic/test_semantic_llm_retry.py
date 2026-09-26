@@ -158,6 +158,6 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
     assert body["model"] == semantic.LLM_MODEL
     assert body["messages"] == [{"role": "user", "content":
                                   "synthetic prompt"}]
-    assert body["max_tokens"] == 1400
+    assert body["max_tokens"] == semantic.LLM_MAX_TOKENS
     assert body["temperature"] == 0
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
