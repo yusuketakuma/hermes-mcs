@@ -83,7 +83,7 @@ mcs/ops/mcs_setup.py             CRON_JOBS+AGENT_LABELS 分割・manifest・upda
 mcs/ops/mcs_operations.py        validate_ops 登録 + ops handler（receipt_json 固定）
 mcs/ops/mcs_requests.py          validate() の projectless ops 例外（S1）
 hermes_plugin/__init__.py        _CONTROL_FIELDS/_confirm/projectless 認可（S2）
-mcs/ingest/notifier.py           outbox kind `update_notice` 追加（_format_event + _target）
+mcs/notify/notify_flush.py       outbox kind `update_notice` 追加（_format_event + _target）
 mcs/core/maintenance.py          preupdate_backup + 参照ベース prune
 deployment/scripts/mcs_llm_catchup.sh  marker 検査（quiesce 中の再 spawn 防止）
 install.sh                       recovery 配置 + watchdog bootstrap（6/6 段）
@@ -579,7 +579,7 @@ veto 猶予）にする方式を検討する。既定値の決定と併せて判
 | `mcs/ops/mcs_operations.py` | `validate_ops` に `ops.update_apply`（`tag` 任意・semver 厳格検証・`human_confirmed`/`actor`/`reason` 必須）と `ops.update_rollback` を登録。`apply_tx` に分岐追加: handler は `ls-remote` で tag→peeled sha 解決（timeout 15s・失敗は `rejected: tag_unresolvable`）→ receipt_json に `{cmd,tag,target_sha,base_sha,scheduled:true}` を固定して返却。**spawn は handler 内で行わない** — receipt commit 後に `drain_commands`/`apply_command` 層が `Popen(close_fds=True,start_new_session=True)` で `mcs_update.sh` を起動（commit 失敗時の spawn は receipt 不在で no-op に収束）。`mcs_update.sh` 未配置は `rejected: updater_not_deployed` |
 | `mcs/ops/mcs_requests.py` | `validate()`: `ops.update_apply`/`ops.update_rollback` を projectless ops 対象として `ops.card_resolve` 同型の早期 return 経路に追加（`positive(project_id)` ゲートが validate_ops 到達前に弾くため必須 — S1） |
 | `hermes_plugin/__init__.py` | `/mcs` の受理経路: `_CONTROL_FIELDS` に `update_apply`/`update_rollback` 登録、`_confirm` allowlist 追加、projectless 認可の迂回（card_resolve 同型・user/chat allowlist 維持）— 現在の `{"cmd":...}` は `_dispatch` で `bad_command`（S2） |
-| `mcs/ingest/notifier.py` | `update_notice` kind を `_format_event`（payload の凍結テキストをそのまま出力）と `_target`（system グループ → `notify_system_target`）に追加。sanitize ヘルパー（`@everyone`/`@here`/`<@id>`/`<@&id>`/`<#id>` の無害化） |
+| `mcs/notify/notify_flush.py` | `update_notice` kind を `_format_event`（payload の凍結テキストをそのまま出力）と `_target`（system グループ → `notify_system_target`）に追加。sanitize ヘルパー（`@everyone`/`@here`/`<@id>`/`<@&id>`/`<#id>` の無害化） |
 | `mcs/core/maintenance.py` | `preupdate_backup(ledger_path, ts)` — `daily_backup` と同じ `.backup`→`valid_mcs_db`→atomic rename で `data/backups/preupdate-<ts>.db`。`prune_preupdate_backups(referenced_paths)` — **参照ベース保持**（state が参照する backup は残し、未参照のみ期限 prune） |
 | `install.sh` | 6/6 段追加: `deployment/recovery/mcs_recover.py` → `~/.mcs-recovery/mcs_recover.py` コピー（既存は `.prev` に保持）+ `org.mcs.recovery.plist` を `~/Library/LaunchAgents/` に配置し bootstrap（install 所有・gateway 非依存の watchdog） |
 | `deployment/scripts/mcs_llm_catchup.sh`（及び drainer を spawn し得る補助 launcher 全般） | 起動時に `data/update_in_progress.marker` を検査して即 exit — quiesce 中の cron 発火による drainer 再 spawn を防止（S8） |

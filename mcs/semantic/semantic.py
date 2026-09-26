@@ -111,7 +111,11 @@ CONF_PATH = os.path.join(HOME, "config.json")
 
 LLM_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
 LLM_MODEL = "Qwen3.5-9B"
-LLM_TIMEOUT = 90
+# 300s, not 90: same failure class documented at extract_llm.TIMEOUT —
+# under dual-slot load decode runs ~3-5 t/s, and the v2 fact prompt
+# emits ~1K tokens (~140-160s measured 2026-09-26), so a 90s cap
+# turned every legitimate v2 chunk into a "model" failure.
+LLM_TIMEOUT = 300
 
 
 # ---------- local LLM (existing endpoint, same isolation) ----------
