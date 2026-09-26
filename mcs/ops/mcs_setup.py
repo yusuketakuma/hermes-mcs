@@ -1215,19 +1215,8 @@ def _save_manifest(manifest: dict) -> None:
                              indent=1, sort_keys=True))
 
 
-def cmd_services(args) -> int:
-    dry = getattr(args, "dry_run", False)
-    subs = {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
-            "DATA": os.path.join(HOME, "data")}
-    problems = 0
-    prev = _load_manifest()
-    manifest = {"v": 1, "at": time.time(), "scripts": [],
-                "agents": [], "cron": []}
-
-    def note(msg):
-        print(("  [dry] " if dry else "  ") + msg)
-
-    # 1. hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)
+def _sync_scripts(subs, manifest, note, dry) -> None:
+    """Stage 1: hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)."""
     src = os.path.join(REPO_ROOT, "deployment", "scripts")
     for name in sorted(os.listdir(src)):
         if not name.endswith(".sh"):
@@ -1249,182 +1238,186 @@ def cmd_services(args) -> int:
         if not dry:
             _write_atomic(dst, body, 0o755)
 
-    # 2. launchd agents (macOS only) — converge content AND loaded state
+
+def _sync_agents(subs, prev, manifest, note, dry) -> int:
+    """Stage 2: launchd agents (macOS only) — converge content AND
+    loaded state; retire owned-but-undesired agents from our naming
+    space only, never install.sh-owned labels (S5)."""
     if sys.platform != "darwin":
         note("launchd: not macOS — skipping agents")
-    else:
-        pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
-        uid = os.getuid()
-        for label in AGENT_LABELS:
-            srcp = os.path.join(pdir, label + ".plist")
-            body = _render_template(
-                open(srcp, encoding="utf-8").read(), subs)
-            dst = os.path.join(AGENTS_DIR, label + ".plist")
-            try:
-                cur = open(dst, encoding="utf-8").read()
-            except OSError:
-                cur = None
-            changed = cur != body
-            if changed:
-                note(f"agent {label}: write {dst}")
-                if not dry:
-                    _write_atomic(dst, body)
-            if changed or not _agent_loaded(label):
-                if not _agent_reconcile(label, dst, note, dry):
-                    problems += 1
-                    manifest["agents"].append(
-                        {"label": label, "sha256": _sha256(body),
-                         "loaded": False})
-                    continue
-            else:
-                note(f"agent {label}: loaded")
-            manifest["agents"].append({"label": label,
-                                       "sha256": _sha256(body),
-                                       "loaded": True})
-        # retire owned-but-undesired agents: our naming space only,
-        # never install.sh-owned labels (S5)
-        owned = set(AGENT_LABELS)
-        owned |= {a.get("label") for a in prev.get("agents", [])
-                  if isinstance(a, dict)}
-        for path in sorted(
-                p for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")) \
-                if os.path.isdir(AGENTS_DIR) else []:
-            label = path[:-6]
-            mcs_owned = label.startswith("local.mcs-") \
-                or label.startswith("ai.mcs.extract-")
-            if not mcs_owned or label in EXCLUDED_LABELS \
-                    or label in owned:
-                continue
-            note(f"agent {label}: undesired — bootout + remove")
+        return 0
+    problems = 0
+    pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
+    uid = os.getuid()
+    for label in AGENT_LABELS:
+        srcp = os.path.join(pdir, label + ".plist")
+        body = _render_template(
+            open(srcp, encoding="utf-8").read(), subs)
+        dst = os.path.join(AGENTS_DIR, label + ".plist")
+        try:
+            cur = open(dst, encoding="utf-8").read()
+        except OSError:
+            cur = None
+        changed = cur != body
+        if changed:
+            note(f"agent {label}: write {dst}")
             if not dry:
-                subprocess.run(["launchctl", "bootout",
-                                f"gui/{uid}/{label}"],
-                               capture_output=True, text=True)
-                try:
-                    os.unlink(os.path.join(AGENTS_DIR, path))
-                except OSError:
-                    pass
-
-    # 3. hermes cron jobs — create missing, edit drifted, remove
-    #    owned-but-undesired; unparseable list => unverifiable
-    cfg = load_config()
-    hermes = _hermes_exe(cfg)
-    if not _hermes_ok(hermes):
-        note(f"cron: hermes not resolvable ({hermes}) — skipped")
-        problems += 1
-    else:
-        entries = _cron_list(hermes)
-        if entries is None:
-            # fail CLOSED (M1): an unverifiable list is NOT 'no jobs' —
-            # creating on that assumption produces duplicates
-            note("cron: list unparseable — unverifiable, "
-                 "no cron mutations performed")
-            problems += 1
+                _write_atomic(dst, body)
+        if changed or not _agent_loaded(label):
+            if not _agent_reconcile(label, dst, note, dry):
+                problems += 1
+                manifest["agents"].append(
+                    {"label": label, "sha256": _sha256(body),
+                     "loaded": False})
+                continue
         else:
-            # derive identities from the SAME verified list — a second
-            # `cron list` call could fail transiently and return an
-            # empty set that looks like 'no jobs' (fail-open, M1)
-            existing = {v for e in entries for v in
-                        (e.get("name"), e.get("script")) if v}
-            by_script = {e.get("script"): e for e in entries
-                         if e.get("script")}
-            desired_scripts = {s for _, _, s in CRON_JOBS}
-            owned_scripts = desired_scripts | {
-                c.get("script") for c in prev.get("cron", [])
-                if isinstance(c, dict) and c.get("script")}
-            for name, sched, script in CRON_JOBS:
-                entry = by_script.get(script)
-                if entry is None and (name in existing
-                                      or script in existing):
-                    # identity seen but fields unparseable — leave it
-                    note(f"cron '{name}': exists")
-                    manifest["cron"].append(
-                        {"name": name, "schedule": sched,
-                         "script": script})
-                    continue
-                if entry is None:
-                    note(f"cron '{name}': create ({sched} -> {script})")
-                    if not dry:
-                        r = subprocess.run(
-                            [hermes, "cron", "create", sched,
-                             "--name", name, "--script", script,
-                             "--no-agent", "--deliver", "local"],
-                            capture_output=True, text=True)
-                        if r.returncode != 0:
-                            note(f"  create failed: "
-                                 f"{(r.stderr or r.stdout).strip()}")
-                            problems += 1
-                            continue
-                    manifest["cron"].append(
-                        {"name": name, "schedule": sched,
-                         "script": script})
-                    continue
-                cur_sched = _norm_sched(entry.get("schedule"))
-                want_sched = _norm_sched(sched)
-                if cur_sched and want_sched and cur_sched != want_sched:
-                    note(f"cron '{name}': schedule "
-                         f"{cur_sched} -> {sched}")
-                    if not dry:
-                        r = subprocess.run(
-                            [hermes, "cron", "edit", entry["id"],
-                             "--schedule", sched],
-                            capture_output=True, text=True)
-                        if r.returncode != 0:
-                            note(f"  edit failed: "
-                                 f"{(r.stderr or r.stdout).strip()}")
-                            problems += 1
-                else:
-                    note(f"cron '{name}': exists")
-                manifest["cron"].append(
-                    {"name": name, "schedule": sched, "script": script,
-                     "id": entry["id"]})
-            for entry in entries:
-                script = entry.get("script")
-                if script and script in owned_scripts \
-                        and script not in desired_scripts:
-                    note(f"cron '{entry.get('name', script)}': "
-                         f"undesired — remove {entry['id']}")
-                    if not dry:
-                        r = subprocess.run(
-                            [hermes, "cron", "remove", entry["id"]],
-                            capture_output=True, text=True)
-                        if r.returncode != 0:
-                            note(f"  remove failed: "
-                                 f"{(r.stderr or r.stdout).strip()}")
-                            problems += 1
+            note(f"agent {label}: loaded")
+        manifest["agents"].append({"label": label,
+                                   "sha256": _sha256(body),
+                                   "loaded": True})
+    # retire owned-but-undesired agents: our naming space only,
+    # never install.sh-owned labels (S5)
+    owned = set(AGENT_LABELS)
+    owned |= {a.get("label") for a in prev.get("agents", [])
+              if isinstance(a, dict)}
+    for path in sorted(
+            p for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")) \
+            if os.path.isdir(AGENTS_DIR) else []:
+        label = path[:-6]
+        mcs_owned = label.startswith("local.mcs-") \
+            or label.startswith("ai.mcs.extract-")
+        if not mcs_owned or label in EXCLUDED_LABELS \
+                or label in owned:
+            continue
+        note(f"agent {label}: undesired — bootout + remove")
+        if not dry:
+            subprocess.run(["launchctl", "bootout",
+                            f"gui/{uid}/{label}"],
+                           capture_output=True, text=True)
+            try:
+                os.unlink(os.path.join(AGENTS_DIR, path))
+            except OSError:
+                pass
+    return problems
 
-        # 4. hermes gateway — needed for either interactive transport
-        #    (Discord interactions / Slack socket mode); `gateway
-        #    install` creates the launchd service hermes owns.
-        ntf = cfg.get("notify") if isinstance(cfg, dict) else None
-        if isinstance(ntf, dict) \
-                and ntf.get("interactive") in ("discord", "slack"):
-            r = _hermes_cli(hermes, "", "gateway", "status")
-            up = bool(r and r.returncode == 0
-                      and "supervised" in (r.stdout or ""))
-            if up:
-                note("gateway: supervised")
-            elif dry:
-                note("gateway: install + start")
-            else:
-                ok = True
-                for sub in ("install", "start"):
-                    r = _hermes_cli(hermes, "", "gateway", sub)
-                    if not (r and r.returncode == 0):
-                        detail = (r.stderr or r.stdout).strip() \
-                            if r else "no response"
-                        note(f"gateway {sub} failed: {detail}")
-                        ok = False
-                        break
-                if ok:
-                    note("gateway: installed + started")
-                else:
+
+def _sync_cron(prev, hermes, manifest, note, dry) -> int:
+    """Stage 3: hermes cron jobs — create missing, edit drifted,
+    remove owned-but-undesired; an unparseable list fails CLOSED
+    (M1): 'unverifiable' is NOT 'no jobs', and creating on that
+    assumption produces duplicates."""
+    entries = _cron_list(hermes)
+    if entries is None:
+        note("cron: list unparseable — unverifiable, "
+             "no cron mutations performed")
+        return 1
+    problems = 0
+    # derive identities from the SAME verified list — a second
+    # `cron list` call could fail transiently and return an
+    # empty set that looks like 'no jobs' (fail-open, M1)
+    existing = {v for e in entries for v in
+                (e.get("name"), e.get("script")) if v}
+    by_script = {e.get("script"): e for e in entries
+                 if e.get("script")}
+    desired_scripts = {s for _, _, s in CRON_JOBS}
+    owned_scripts = desired_scripts | {
+        c.get("script") for c in prev.get("cron", [])
+        if isinstance(c, dict) and c.get("script")}
+    for name, sched, script in CRON_JOBS:
+        entry = by_script.get(script)
+        if entry is None and (name in existing
+                              or script in existing):
+            # identity seen but fields unparseable — leave it
+            note(f"cron '{name}': exists")
+            manifest["cron"].append(
+                {"name": name, "schedule": sched,
+                 "script": script})
+            continue
+        if entry is None:
+            note(f"cron '{name}': create ({sched} -> {script})")
+            if not dry:
+                r = subprocess.run(
+                    [hermes, "cron", "create", sched,
+                     "--name", name, "--script", script,
+                     "--no-agent", "--deliver", "local"],
+                    capture_output=True, text=True)
+                if r.returncode != 0:
+                    note(f"  create failed: "
+                         f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
+                    continue
+            manifest["cron"].append(
+                {"name": name, "schedule": sched,
+                 "script": script})
+            continue
+        cur_sched = _norm_sched(entry.get("schedule"))
+        want_sched = _norm_sched(sched)
+        if cur_sched and want_sched and cur_sched != want_sched:
+            note(f"cron '{name}': schedule "
+                 f"{cur_sched} -> {sched}")
+            if not dry:
+                r = subprocess.run(
+                    [hermes, "cron", "edit", entry["id"],
+                     "--schedule", sched],
+                    capture_output=True, text=True)
+                if r.returncode != 0:
+                    note(f"  edit failed: "
+                         f"{(r.stderr or r.stdout).strip()}")
+                    problems += 1
+        else:
+            note(f"cron '{name}': exists")
+        manifest["cron"].append(
+            {"name": name, "schedule": sched, "script": script,
+             "id": entry["id"]})
+    for entry in entries:
+        script = entry.get("script")
+        if script and script in owned_scripts \
+                and script not in desired_scripts:
+            note(f"cron '{entry.get('name', script)}': "
+                 f"undesired — remove {entry['id']}")
+            if not dry:
+                r = subprocess.run(
+                    [hermes, "cron", "remove", entry["id"]],
+                    capture_output=True, text=True)
+                if r.returncode != 0:
+                    note(f"  remove failed: "
+                         f"{(r.stderr or r.stdout).strip()}")
+                    problems += 1
+    return problems
 
-    # 5. manifest — the rollback snapshot's source of truth (R6)
-    # T19: record the selected/rollback backend slot counts and the
-    # checked-in plist's -np so drift between the deployed width and
-    # the code-side selection is visible in the snapshot
+
+def _sync_gateway(cfg, hermes, note, dry) -> int:
+    """Stage 4: hermes gateway — needed for either interactive
+    transport (Discord interactions / Slack socket mode); `gateway
+    install` creates the launchd service hermes owns."""
+    ntf = cfg.get("notify") if isinstance(cfg, dict) else None
+    if not (isinstance(ntf, dict)
+            and ntf.get("interactive") in ("discord", "slack")):
+        return 0
+    r = _hermes_cli(hermes, "", "gateway", "status")
+    up = bool(r and r.returncode == 0
+              and "supervised" in (r.stdout or ""))
+    if up:
+        note("gateway: supervised")
+        return 0
+    if dry:
+        note("gateway: install + start")
+        return 0
+    for sub in ("install", "start"):
+        r = _hermes_cli(hermes, "", "gateway", sub)
+        if not (r and r.returncode == 0):
+            detail = (r.stderr or r.stdout).strip() \
+                if r else "no response"
+            note(f"gateway {sub} failed: {detail}")
+            return 1
+    note("gateway: installed + started")
+    return 0
+
+
+def _record_llm_slots(manifest, note) -> None:
+    """Stage 5 (T19): record the selected/rollback backend slot counts
+    and the checked-in plist's -np so drift between the deployed width
+    and the code-side selection is visible in the snapshot."""
     try:
         import local_llm
         plist_np = None
@@ -1444,6 +1437,34 @@ def cmd_services(args) -> int:
                  "from the measured selection")
     except (OSError, ValueError) as e:
         note(f"manifest llm_slots: {e}")
+
+
+def cmd_services(args) -> int:
+    dry = getattr(args, "dry_run", False)
+    subs = {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
+            "DATA": os.path.join(HOME, "data")}
+    problems = 0
+    prev = _load_manifest()
+    manifest = {"v": 1, "at": time.time(), "scripts": [],
+                "agents": [], "cron": []}
+
+    def note(msg):
+        print(("  [dry] " if dry else "  ") + msg)
+
+    _sync_scripts(subs, manifest, note, dry)
+    problems += _sync_agents(subs, prev, manifest, note, dry)
+
+    cfg = load_config()
+    hermes = _hermes_exe(cfg)
+    if not _hermes_ok(hermes):
+        note(f"cron: hermes not resolvable ({hermes}) — skipped")
+        problems += 1
+    else:
+        problems += _sync_cron(prev, hermes, manifest, note, dry)
+        problems += _sync_gateway(cfg, hermes, note, dry)
+
+    _record_llm_slots(manifest, note)
+    # manifest — the rollback snapshot's source of truth (R6)
     if not dry:
         try:
             _save_manifest(manifest)

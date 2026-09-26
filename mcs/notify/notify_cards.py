@@ -796,11 +796,11 @@ def _update_parts_state(db, delivery_id, now) -> str:
     return state
 
 
-def _issue_render(db, card_id, cfg, now, specs, force=False):
-    """Issue the next render for a card when the display model demands
-    one. Precondition per §4: no unsettled attempt may own the card —
-    a granted/unknown attempt keeps exclusive send rights until its
-    factual result lands, so issuance here never races an HTTP call."""
+def _render_gates(db, card_id, cfg):
+    """Issuance preconditions: the card exists, belongs to the active
+    transport (and for Slack, still matches the configured scope), has
+    no unsettled attempt owning send rights, and is not frozen after a
+    DB restore."""
     card = _card_row(db, card_id)
     if card is None:
         return None
@@ -813,7 +813,12 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         return None
     if _restore_hold_active(db, card_id=card_id):
         return None                        # post-restore freeze
-    content = _card_content(db, card)
+    return card
+
+
+def _generation_drift(card, content) -> dict:
+    """Source/presentation fingerprint diff — the first observation
+    seeds each baseline without a generation bump."""
     pres_fp = _content_fp(content)
     gens = {}
     if card["source_fp"] is None:
@@ -827,9 +832,17 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         gens["presentation_generation"] = \
             card["presentation_generation"] + 1
         gens["content_fp"] = pres_fp
-    latest = db.execute(
-        "SELECT * FROM notification_renders WHERE card_id=? "
-        "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+    return gens
+
+
+def _render_needed(db, card, latest, gens, cfg, now, force) -> bool:
+    """Whether the display model owes a new render — cancelling a
+    queued/held render whose content already went stale, honoring the
+    update_failed suspension until a route_epoch bump or fresh drift
+    re-opens it, and the revoke special case: a delivered card that is
+    revoked owes Discord a delete (without this, archive-revoke left
+    the message up forever), while an already-delivered revoke render
+    must not re-issue."""
     epoch_changed = latest is not None and latest["route_epoch"] != route_epoch(cfg)
     live = latest is not None and latest["state"] in LIVE_RENDER
     if live and latest["state"] in ("queued", "held") and (gens or epoch_changed):
@@ -844,7 +857,7 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
                    (latest["delivery_id"],))
         live = False
     if live:
-        return None                        # in-flight render is current
+        return False                       # in-flight render is current
     # update_failed suspends the not_sent/cancelled auto-retry — but a
     # route_epoch bump (config changed) or fresh drift re-opens it
     suspended = (card["delivery_state"] == "update_failed"
@@ -853,35 +866,37 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     unbound_intent = db.execute(
         "SELECT 1 FROM notification_intent_cards WHERE card_id=? "
         "AND state='pending' AND delivery_id IS NULL LIMIT 1",
-        (card_id,)).fetchone() is not None
+        (card["card_id"],)).fetchone() is not None
     needed = force or bool(gens) or latest is None \
         or (not suspended and (unbound_intent or epoch_changed
                                or latest["state"] in ("not_sent", "cancelled")))
     if card["delivery_state"] == "revoked" and card["message_id"]:
-        # a delivered card that is revoked owes Discord a delete —
-        # without this, archive-revoke left the message up forever.
-        # An already-delivered revoke render must not re-issue.
         needed = not (latest is not None
                       and latest["op"] == "revoke"
                       and (latest["state"] == "delivered"
                            or (latest["state"] == "not_sent"
                                and not epoch_changed and not force
-                               and _resend_exhausted(db, card_id))))
-    if not needed:
-        return None                        # delivered/terminal & no drift
+                               and _resend_exhausted(db, card["card_id"]))))
+    return needed
 
+
+def _render_op(card) -> str | None:
+    """revoke for a revoked card that still has a Discord-side message;
+    create when unbound; otherwise update the bound message."""
     if card["delivery_state"] == "revoked":
         if card["message_id"] is None:
             return None      # never delivered — nothing exists on
                              # Discord to delete
-        op = "revoke"
-    elif card["message_id"] is None:
-        op = "create"        # never bound, or unbound after a proven
-    else:                    # delete — re-post instead of patching a
-        op = "update"        # ghost
-    rev = (latest["render_rev"] + 1) if latest is not None else 1
-    # cancel any leftover open renders of this card (defensive; the
-    # guards above mean at most stale queued/held rows can exist)
+        return "revoke"
+    if card["message_id"] is None:
+        return "create"      # never bound, or unbound after a proven
+    return "update"          # delete — re-post instead of patching a
+                             # ghost
+
+
+def _cancel_open_renders(db, card_id, now):
+    """Cancel any leftover open renders of this card (defensive; the
+    guards above mean at most stale queued/held rows can exist)."""
     for r in db.execute(
             "SELECT delivery_id FROM notification_renders WHERE card_id=?"
             " AND state IN ('queued','held')", (card_id,)).fetchall():
@@ -892,13 +907,18 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
                    "required_render_rev=0 WHERE delivery_id=?",
                    (r["delivery_id"],))
 
+
+def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
+    """Self-contained render spec: the pinned manifest row, bound
+    delivery scope, minted action tokens and the journaled parts
+    manifest — a worker never needs a registry/snapshot lookup to aim."""
     card.update(gens)
     cur = db.execute(
         """INSERT INTO notification_view_manifests(
              card_id,render_rev,source_generation,presentation_generation,
              digest,shown,created_at)
            VALUES(?,?,?,?,?,?,?)""",
-        (card_id, rev, card["source_generation"],
+        (card["card_id"], rev, card["source_generation"],
          card["presentation_generation"], 1 if card["kind"] == "digest" else 0,
          json.dumps(content["shown"], ensure_ascii=False), now))
     content["manifest_id"] = cur.lastrowid
@@ -909,7 +929,7 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     event_ids = sorted(
         r["event_id"] for r in db.execute(
             "SELECT event_id FROM notification_intent_cards "
-            "WHERE card_id=? AND state='pending'", (card_id,)))
+            "WHERE card_id=? AND state='pending'", (card["card_id"],)))
     correlation = secrets.token_hex(16)
     spec = {
         "schema": SLACK_RENDER_SCHEMA if card["transport"] == "slack" else RENDER_SCHEMA,
@@ -955,6 +975,13 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     # durable parts — the card stays a summary surface while the
     # thread carries the untruncated shown-set text (T7)
     _build_part_manifest(db, card, spec, content, in_thread_body)
+    return spec
+
+
+def _persist_render(db, card, spec, op, rev, now):
+    """Durable writes for an issued render: the renders row, seeded
+    parts journal, pending-intent binding and the card's generation /
+    desired_rev bookkeeping."""
     db.execute(
         """INSERT INTO notification_renders(
              delivery_id,card_id,op,render_rev,manifest_id,route_epoch,
@@ -963,25 +990,53 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
              spec_json,payload_hash,correlation,state,parts_state,
              created_at,updated_at)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued','pending',?,?)""",
-        (spec["delivery_id"], card_id, op, rev, content["manifest_id"],
-         spec["delivery"]["route_epoch"], scope.get("profile"),
-         scope.get("application_id"), scope.get("guild_id"),
-         scope.get("channel_id"), card["transport"], scope.get("team_id"),
+        (spec["delivery_id"], card["card_id"], op, rev,
+         spec["parts"]["manifest_id"],
+         spec["delivery"]["route_epoch"],
+         spec["delivery"].get("profile"),
+         spec["delivery"].get("application_id"),
+         spec["delivery"].get("guild_id"),
+         spec["delivery"].get("channel_id"),
+         card["transport"], spec["delivery"].get("team_id"),
          canonical(spec).decode(),
-         payload_hash(spec), correlation, now, now))
+         payload_hash(spec), spec["delivery"]["correlation"], now, now))
     _seed_parts(db, spec, now)
     db.execute(
         """UPDATE notification_intent_cards
            SET delivery_id=?, required_render_rev=?
            WHERE card_id=? AND state='pending'""",
-        (spec["delivery_id"], rev, card_id))
+        (spec["delivery_id"], rev, card["card_id"]))
     db.execute(
         """UPDATE notification_cards SET source_generation=?,
              source_fp=?, presentation_generation=?, content_fp=?,
              desired_render_rev=?, updated_at=? WHERE card_id=?""",
         (card["source_generation"], card["source_fp"],
          card["presentation_generation"], card["content_fp"],
-         rev, now, card_id))
+         rev, now, card["card_id"]))
+
+
+def _issue_render(db, card_id, cfg, now, specs, force=False):
+    """Issue the next render for a card when the display model demands
+    one. Precondition per §4: no unsettled attempt may own the card —
+    a granted/unknown attempt keeps exclusive send rights until its
+    factual result lands, so issuance here never races an HTTP call."""
+    card = _render_gates(db, card_id, cfg)
+    if card is None:
+        return None
+    content = _card_content(db, card)
+    gens = _generation_drift(card, content)
+    latest = db.execute(
+        "SELECT * FROM notification_renders WHERE card_id=? "
+        "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+    if not _render_needed(db, card, latest, gens, cfg, now, force):
+        return None                        # delivered/terminal & no drift
+    op = _render_op(card)
+    if op is None:
+        return None
+    rev = (latest["render_rev"] + 1) if latest is not None else 1
+    _cancel_open_renders(db, card_id, now)
+    spec = _build_spec(db, card, content, gens, op, rev, cfg, now)
+    _persist_render(db, card, spec, op, rev, now)
     specs.append(spec)
     return spec["delivery_id"]
 

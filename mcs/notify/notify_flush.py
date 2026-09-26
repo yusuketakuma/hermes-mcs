@@ -680,6 +680,178 @@ def _route(ev) -> str:
         return "text"
 
 
+def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
+    """Card-route intent. Sealed batches stay card-owned even with the
+    switch off — a text send here could double-deliver, and begins are
+    denied until the switch returns. The kill switch converts an
+    UNSEALED intent once (provably unsent) so it can flush as plain
+    text; returns False in that case so the caller falls through."""
+    import notify_cards
+    sealed = ledger.db.execute(
+        "SELECT 1 FROM notification_intent_batches "
+        "WHERE event_id=?", (ev["event_id"],)).fetchone()
+    if not sealed and not notify_cards.interactive_enabled(cfg):
+        notify_cards.revert_to_text(ledger, ev["event_id"])
+        return False
+    try:
+        outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
+        if outcome.get("error"):
+            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+            res["failed"] += 1
+        elif outcome.get("suppressed"):
+            res["suppressed"] += 1
+        elif not outcome.get("skipped"):
+            res["dispatched"] = res.get("dispatched", 0) + 1
+    except Exception:
+        if ev["attempts"] >= 4:
+            ledger.outbox_hold(ev["event_id"])
+        else:
+            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+        res["failed"] += 1
+    return True
+
+
+def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
+    """Format, chunk and send one text event — per-chunk progress is
+    journaled so a crash mid-event resumes at the first unacknowledged
+    chunk rather than duplicating accepted posts. Returns False when
+    the deadline cut the chunk loop short (caller ends the flush)."""
+    content, files = _format_event(ledger, ev)
+    render_state = (_semantic_render_state(ledger, ev)
+                    if ev["kind"] == "new_messages" else ())
+    chunks = (_semantic_chunks(content)
+              if ev["kind"] == "semantic_notice" else
+              [content[i:i + _MAX_LEN]
+               for i in range(0, len(content), _MAX_LEN)])
+    # resume at the first unacknowledged chunk — a crash after a
+    # partial send must not duplicate accepted chunks (B25)
+    start, sent_ids, previous, sending = _progress(
+        ev["progress"], len(chunks))
+    if sending is not None and sending > start:
+        # a previous attempt began chunk `sending` and died before
+        # recording the ack — delivery is UNCERTAIN: resending
+        # could duplicate a post that did go out. Hold it for
+        # human reconciliation instead (F19)
+        _hold_event(ledger, ev, cfg)
+        res["uncertain"] = res.get("uncertain", 0) + 1
+        return True
+    fingerprint = _delivery_fingerprint(target, chunks, files)
+    if start and previous != fingerprint:
+        _hold_event(ledger, ev, cfg)
+        res["failed"] += 1
+        return True
+    if not start:
+        ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
+    post_files = files
+    for i in range(start, len(chunks)):
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        if ev["kind"] == "semantic_notice":
+            try:
+                payload = json.loads(ev["payload"])
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ValueError("payload_invalid") from e
+            _semantic_gate(ledger, ev, payload,
+                           in_progress=bool(start or i))
+        elif render_state:
+            _semantic_render_gate(ledger, ev, render_state,
+                                  in_progress=bool(start or i))
+        # files ride the FIRST post only; on resume (start>0) they
+        # were already delivered with chunk 0. A usage rejection
+        # of the file-bearing send (exit 2 — never a delivery
+        # failure where acceptance is unknown) drops the files
+        # and retries text-only so a bad attachment can never
+        # sink the notification itself
+        try:
+            _send_marked(ledger, ev, i, sent_ids, fingerprint,
+                         argv, chunks[i],
+                         post_files if i == 0 else None,
+                         deadline)
+        except _SendUsage:
+            if i != 0 or not post_files:
+                raise
+            post_files = None
+            if ev["kind"] == "semantic_notice":
+                _semantic_gate(ledger, ev, payload,
+                               in_progress=bool(start or i))
+            elif render_state:
+                _semantic_render_gate(ledger, ev, render_state,
+                                      in_progress=bool(start or i))
+            _send_marked(ledger, ev, i, sent_ids, fingerprint,
+                         argv, chunks[i], None, deadline)
+        sent_ids.append(str(i + 1))
+        ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
+                               fingerprint)
+    ledger.outbox_mark(ev["event_id"], "accepted",
+                       sent_ids[-1] if sent_ids else "")
+    res["sent"] += 1
+    return True
+
+
+def _fail_event(ledger, ev, cfg, res, exc):
+    """Per-event failure accounting — quarantine, park, suppress or
+    backoff according to the exception class (_SendUncertain must be
+    checked before OSError, which it subclasses)."""
+    if isinstance(exc, _DeferredSend):
+        # stays pending but re-checks hourly, not every flush. A
+        # parked enforce intent is policy-blocked, not incomplete —
+        # count it separately so run_check's notify_incomplete signal
+        # doesn't flag every other tick while the mode gate is down
+        if _has_sent_progress(ev):
+            _hold_event(ledger, ev, cfg)
+            res["failed"] += 1
+        else:
+            ledger.db.execute(
+                "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                "WHERE event_id=?",
+                (time.time() + 3600, time.time(), ev["event_id"]))
+            ledger.db.commit()
+            res["parked"] += 1
+    elif isinstance(exc, _FreezeSend):
+        # An accepted chunk is immutable. Keep its receipt/progress and
+        # freeze the remaining chunks until an explicit retry decision.
+        _hold_event(ledger, ev, cfg)
+        res["failed"] += 1
+    elif isinstance(exc, _StaleSend):
+        if _has_sent_progress(ev):
+            _hold_event(ledger, ev, cfg)
+            res["failed"] += 1
+        else:
+            ledger.outbox_suppress(ev["event_id"])
+            res["suppressed"] += 1
+    elif isinstance(exc, _SendUsage):
+        # invocation itself refused (exit 2) — a CLI/config contract
+        # problem; retrying cannot fix it, quarantine the event.
+        # The refusal is provably pre-delivery, so held digest
+        # members may be salvaged.
+        _hold_event(ledger, ev, cfg, proven_undelivered=True)
+        res["failed"] += 1
+    elif isinstance(exc, _SendUncertain):
+        _hold_event(ledger, ev, cfg)
+        res["uncertain"] = res.get("uncertain", 0) + 1
+        res["failed"] += 1
+    elif isinstance(exc, ValueError):
+        _hold_event(ledger, ev, cfg)
+        res["failed"] += 1
+    elif isinstance(exc, (OSError, TimeoutError, KeyError)):
+        backoff = min(3600, 60 * (2 ** ev["attempts"]))
+        ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
+        res["failed"] += 1
+    else:
+        # Per-event containment: an unexpected failure inside
+        # _format_event/semantic_send_gate (broken import, sqlite error)
+        # must not escape flush and starve every later due event.
+        # Retry hourly first — a transient fault self-heals; a
+        # deterministic bug quarantines after 5 attempts instead of
+        # looping forever.
+        if ev["attempts"] >= 4:
+            _hold_event(ledger, ev, cfg)
+        else:
+            ledger.outbox_mark(ev["event_id"], "failed",
+                               retry_in=3600)
+        res["failed"] += 1
+
+
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
@@ -702,37 +874,9 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
-        if _route(ev) == "interactive":
-            import notify_cards
-            sealed = ledger.db.execute(
-                "SELECT 1 FROM notification_intent_batches "
-                "WHERE event_id=?", (ev["event_id"],)).fetchone()
-            if sealed or notify_cards.interactive_enabled(cfg):
-                # sealed intents stay card-owned even with the switch
-                # off — a text send here could double-deliver; begins
-                # are denied until the switch returns
-                try:
-                    outcome = notify_cards.dispatch_intent(
-                        ledger, ev, cfg)
-                    if outcome.get("error"):
-                        ledger.outbox_mark(ev["event_id"], "failed",
-                                           retry_in=3600)
-                        res["failed"] += 1
-                    elif outcome.get("suppressed"):
-                        res["suppressed"] += 1
-                    elif not outcome.get("skipped"):
-                        res["dispatched"] = res.get("dispatched", 0) + 1
-                except Exception:
-                    if ev["attempts"] >= 4:
-                        ledger.outbox_hold(ev["event_id"])
-                    else:
-                        ledger.outbox_mark(ev["event_id"], "failed",
-                                           retry_in=3600)
-                    res["failed"] += 1
-                continue
-            # kill switch: an UNSEALED interactive intent is provably
-            # unsent — convert once and let it flush as plain text
-            notify_cards.revert_to_text(ledger, ev["event_id"])
+        if _route(ev) == "interactive" \
+                and _dispatch_interactive(ledger, ev, cfg, res):
+            continue
         if not exe_ok:
             # no hermes exe — text events can't send, but an interactive
             # event later in the queue still dispatches (cards don't
@@ -746,132 +890,10 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             continue
         argv = _send_argv(cfg, target)
         try:
-            content, files = _format_event(ledger, ev)
-            render_state = (_semantic_render_state(ledger, ev)
-                            if ev["kind"] == "new_messages" else ())
-            chunks = (_semantic_chunks(content)
-                      if ev["kind"] == "semantic_notice" else
-                      [content[i:i + _MAX_LEN]
-                       for i in range(0, len(content), _MAX_LEN)])
-            # resume at the first unacknowledged chunk — a crash after a
-            # partial send must not duplicate accepted chunks (B25)
-            start, sent_ids, previous, sending = _progress(
-                ev["progress"], len(chunks))
-            if sending is not None and sending > start:
-                # a previous attempt began chunk `sending` and died before
-                # recording the ack — delivery is UNCERTAIN: resending
-                # could duplicate a post that did go out. Hold it for
-                # human reconciliation instead (F19)
-                _hold_event(ledger, ev, cfg)
-                res["uncertain"] = res.get("uncertain", 0) + 1
-                continue
-            fingerprint = _delivery_fingerprint(target, chunks, files)
-            if start and previous != fingerprint:
-                _hold_event(ledger, ev, cfg)
-                res["failed"] += 1
-                continue
-            if not start:
-                ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
-            post_files = files
-            for i in range(start, len(chunks)):
-                if deadline is not None and time.monotonic() >= deadline:
-                    res["skipped"] += len(due) - event_index
-                    return res
-                if ev["kind"] == "semantic_notice":
-                    try:
-                        payload = json.loads(ev["payload"])
-                    except (json.JSONDecodeError, TypeError) as e:
-                        raise ValueError("payload_invalid") from e
-                    _semantic_gate(ledger, ev, payload,
-                                   in_progress=bool(start or i))
-                elif render_state:
-                    _semantic_render_gate(ledger, ev, render_state,
-                                          in_progress=bool(start or i))
-                # files ride the FIRST post only; on resume (start>0) they
-                # were already delivered with chunk 0. A usage rejection
-                # of the file-bearing send (exit 2 — never a delivery
-                # failure where acceptance is unknown) drops the files
-                # and retries text-only so a bad attachment can never
-                # sink the notification itself
-                try:
-                    _send_marked(ledger, ev, i, sent_ids, fingerprint,
-                                 argv, chunks[i],
-                                 post_files if i == 0 else None,
-                                 deadline)
-                except _SendUsage:
-                    if i != 0 or not post_files:
-                        raise
-                    post_files = None
-                    if ev["kind"] == "semantic_notice":
-                        _semantic_gate(ledger, ev, payload,
-                                       in_progress=bool(start or i))
-                    elif render_state:
-                        _semantic_render_gate(ledger, ev, render_state,
-                                              in_progress=bool(start or i))
-                    _send_marked(ledger, ev, i, sent_ids, fingerprint,
-                                 argv, chunks[i], None, deadline)
-                sent_ids.append(str(i + 1))
-                ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
-                                       fingerprint)
-            ledger.outbox_mark(ev["event_id"], "accepted",
-                               sent_ids[-1] if sent_ids else "")
-            res["sent"] += 1
-        except _DeferredSend:
-            # stays pending but re-checks hourly, not every flush. A
-            # parked enforce intent is policy-blocked, not incomplete —
-            # count it separately so run_check's notify_incomplete signal
-            # doesn't flag every other tick while the mode gate is down
-            if _has_sent_progress(ev):
-                _hold_event(ledger, ev, cfg)
-                res["failed"] += 1
-            else:
-                ledger.db.execute(
-                    "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                    "WHERE event_id=?",
-                    (time.time() + 3600, time.time(), ev["event_id"]))
-                ledger.db.commit()
-                res["parked"] += 1
-        except _FreezeSend:
-            # An accepted chunk is immutable. Keep its receipt/progress and
-            # freeze the remaining chunks until an explicit retry decision.
-            _hold_event(ledger, ev, cfg)
-            res["failed"] += 1
-        except _StaleSend:
-            if _has_sent_progress(ev):
-                _hold_event(ledger, ev, cfg)
-                res["failed"] += 1
-            else:
-                ledger.outbox_suppress(ev["event_id"])
-                res["suppressed"] += 1
-        except _SendUsage:
-            # invocation itself refused (exit 2) — a CLI/config contract
-            # problem; retrying cannot fix it, quarantine the event.
-            # The refusal is provably pre-delivery, so held digest
-            # members may be salvaged.
-            _hold_event(ledger, ev, cfg, proven_undelivered=True)
-            res["failed"] += 1
-        except _SendUncertain:
-            _hold_event(ledger, ev, cfg)
-            res["uncertain"] = res.get("uncertain", 0) + 1
-            res["failed"] += 1
-        except ValueError:
-            _hold_event(ledger, ev, cfg)
-            res["failed"] += 1
-        except (OSError, TimeoutError, KeyError):
-            backoff = min(3600, 60 * (2 ** ev["attempts"]))
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
-            res["failed"] += 1
-        except Exception:
-            # Per-event containment: an unexpected failure inside
-            # _format_event/semantic_send_gate (broken import, sqlite error)
-            # must not escape flush and starve every later due event.
-            # Retry hourly first — a transient fault self-heals; a
-            # deterministic bug quarantines after 5 attempts instead of
-            # looping forever.
-            if ev["attempts"] >= 4:
-                _hold_event(ledger, ev, cfg)
-            else:
-                ledger.outbox_mark(ev["event_id"], "failed",
-                                   retry_in=3600)
-            res["failed"] += 1
+            if not _send_text(ledger, ev, cfg, argv, target, res,
+                              deadline):
+                res["skipped"] += len(due) - event_index
+                return res
+        except Exception as exc:
+            _fail_event(ledger, ev, cfg, res, exc)
     return res

@@ -717,6 +717,260 @@ def _commands_only(lock_fd, deadline) -> int:
             os.close(lock_fd)
 
 
+def _semantic_enabled(ledger, cfg, result) -> bool:
+    """Resolve the semantic layer's mode and refresh stale projections.
+    Config/module trouble forces semantic OFF — but it must be visible:
+    an enforced pipeline silently disabled is a missed evaluation, not
+    a clean "no work" tick."""
+    try:
+        import semantic as _sem
+        from semantic_store import invalidate_projections
+        scfg = _sem.semantic_config(cfg)[0]
+        invalidate_projections(ledger, scfg)
+        return scfg["mode"] != "off"
+    except Exception as e:
+        result["errors"].append(f"semantic_init: {type(e).__name__}")
+        return False
+
+
+def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
+                 sem_on, notify_max_age_s):
+    """Priority fetch work — unread, optional backfill and self-post
+    probes — skipped entirely by --jobs-only runs."""
+    if args.jobs_only:
+        result["jobs_only"] = True
+        return
+    stage_unread(adapter, ledger, args, result, deadline, run_id,
+                 semantic=sem_on,
+                 notify_max_age_s=notify_max_age_s)
+    if not args.no_backfill:
+        stage_backfill(adapter, ledger, result, deadline, run_id,
+                       semantic=sem_on,
+                       notify_max_age_s=notify_max_age_s)
+    self_posts = cfg.get("self_posts", False)
+    if type(self_posts) is not bool:
+        result["errors"].append("config: self_posts_invalid")
+        self_posts = False
+    if self_posts:
+        stage_self_probe(adapter, ledger, result, deadline, run_id,
+                         semantic=sem_on,
+                         notify_max_age_s=notify_max_age_s)
+
+
+def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
+              notify_max_age_s):
+    """Durable job machinery — command ingest, discovery, reply and
+    history drains, trickle seeding, reconcile and self profile."""
+    # cmd ingest first so requests are due THIS run; discovery and
+    # trickle seeding only enqueue — the drains below execute them.
+    job_ops.drain_commands(ledger, result)
+    try:
+        # interactive-notification command channel: plugin receipts
+        # and card actions apply mid-tick, not just via the watcher
+        import notify_cards
+        import notify_cmds
+        notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+        # a DB restore holds send grants until the journal-vs-DB
+        # reconcile lands — run it before draining cmd_int traffic
+        if notify_cards.restore_pending(
+                os.path.join(HOME, "data")) is not None:
+            import notify_reconcile
+            rep = notify_reconcile.reconcile_after_restore(
+                ledger, cfg)
+            result["restore_reconcile"] = rep["counts"]
+        notify_cmds.drain_int_commands(
+            ledger, result, cfg, os.path.join(HOME, "data"),
+            deadline=deadline)
+    except Exception as e:
+        result["errors"].append(f"cmd_int: {type(e).__name__}")
+    job_ops.seed_discovery(ledger)
+    discover_archived = cfg.get("discover_archived", False)
+    if type(discover_archived) is not bool:
+        result["errors"].append("config: discover_archived_invalid")
+        discover_archived = False
+    job_ops.run_discovery(adapter, ledger, result, deadline,
+                          include_archived=discover_archived)
+    job_ops.run_reply_jobs(adapter, ledger, result, deadline,
+                           semantic=sem_on,
+                           notify_max_age_s=notify_max_age_s)
+    job_ops.run_history_jobs(adapter, ledger, result, deadline,
+                             trickle=False, semantic=sem_on)
+
+    if args.download_files:
+        stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)
+
+    # -- idle-capacity deep history (trickle) ----------------------
+    deep_history = cfg.get("deep_history", True)
+    trickle_pages = cfg.get("trickle_pages", 3)
+    if type(deep_history) is not bool:
+        result["errors"].append("config: deep_history_invalid")
+        deep_history = True
+    if type(trickle_pages) is not int or not 1 <= trickle_pages <= 40:
+        result["errors"].append("config: trickle_pages_invalid")
+        trickle_pages = 3
+    # deep_history gates NEW seeding only — already-pending jobs
+    # (including archived patients' history_head final syncs) still
+    # drain on idle capacity. Same contract as discover_archived:
+    # a switch stops new work, never abandons committed work.
+    if deep_history:
+        seeded = job_ops.seed_trickle(ledger)
+        if seeded:
+            result["trickle_seeded"] = seeded
+    # --jobs-only runs exist FOR this work: bigger slice of the
+    # window, smaller safety margin than the priority tick
+    job_ops.run_history_jobs(
+        adapter, ledger, result, deadline, trickle=True,
+        trickle_pages=trickle_pages,
+        max_jobs=8 if args.jobs_only else None,
+        min_margin=30 if args.jobs_only else None,
+        semantic=sem_on)
+
+    # -- post-import reconcile: edits/deletions below the cutoff ---
+    job_ops.run_reconcile_jobs(adapter, ledger, result, deadline,
+                               semantic=sem_on)
+
+    # own identity: name/professions/stations from MCS, persisted
+    # as the signal engine's default self (config overrides). Never
+    # fails the run — an unusable profile is a logged warning.
+    try:
+        import mcs_signals
+        prof = adapter.self_profile()
+        with ledger.db:
+            if mcs_signals.record_self_profile(ledger.db, prof):
+                result["self_profile"] = "updated"
+    except Exception as e:
+        result["errors"].append(f"self_profile: {type(e).__name__}")
+
+
+def _notify_max_age_s(cfg, result):
+    """Validated notify_max_age_h config as seconds, or None."""
+    mah = cfg.get("notify_max_age_h")
+    if mah is not None and not (type(mah) in (int, float)
+                                and mah > 0):
+        result["errors"].append("config: notify_max_age_h_invalid")
+        return None
+    return mah * 3600 if type(mah) in (int, float) and mah > 0 else None
+
+
+def _deliver(ledger, args, cfg, result, deadline):
+    """Committed sends first — notify outbox flush, live-card sweep and
+    card gc — ahead of any new semantic analysis (§19.1)."""
+    if not args.no_notify:
+        try:
+            result["notify"] = notify_flush.flush(ledger, deadline=deadline)
+        except Exception as e:
+            result["errors"].append(f"notify: {type(e).__name__}")
+    import notify_cards
+    try:
+        # live-card sweep: edits/deletes, signal resolves, archive
+        # revokes, deferral expiry, stuck spec repair — bounded
+        result["card_sweep"] = notify_cards.sweep(
+            ledger, cfg, limit=50)
+    except Exception as e:
+        result["errors"].append(f"card_sweep: {type(e).__name__}")
+    try:
+        # expired tokens + settled spec payloads — bounded per tick
+        result["card_gc"] = notify_cards.gc(ledger, cfg)
+    except Exception as e:
+        result["errors"].append(f"card_gc: {type(e).__name__}")
+
+
+def _run_semantic(ledger, args, cfg, result, deadline, sem_on):
+    """Semantic layer drain (Phase J, feature-gated) — durable
+    'semantic' jobs on the same lock + remaining deadline. OFF is a
+    no-op here AND disables seeding above, so the flag truly stops
+    communication rather than only hiding output."""
+    if not sem_on:
+        return
+    try:
+        import semantic
+        result["semantic"] = semantic.run_due(
+            ledger, cfg, result, deadline, cfg_path=CONF_PATH,
+            max_jobs=12 if args.jobs_only else 4)
+    except Exception as e:
+        result["errors"].append(
+            f"semantic: {type(e).__name__}")
+
+
+def _housekeeping(result):
+    """Daily backup, log rotation and attachment pruning — each failure
+    lands in errors without failing the run."""
+    try:
+        maintenance.daily_backup(DB)
+    except maintenance.MaintenanceError as e:
+        result["errors"].append(f"backup: {e}")
+    except Exception as e:
+        result["errors"].append(f"backup: {type(e).__name__}")
+    try:
+        maintenance.rotate_log()
+    except Exception as e:
+        result["errors"].append(f"log_rotate: {type(e).__name__}")
+    try:
+        pruned = maintenance.prune_attachments(DB)
+        if pruned:
+            result["attachments_pruned"] = pruned
+    except Exception as e:
+        result["errors"].append(f"prune: {type(e).__name__}")
+
+
+def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
+    """Tail drain, run record and snapshot publish — returns the final
+    run status for the health write."""
+    if result.get("notify", {}).get("failed") \
+            or result.get("notify", {}).get("skipped"):
+        result["errors"].append("notify_incomplete")
+
+    result["ok"] = True
+    import notify_cards
+    import notify_cmds
+    try:
+        # last-chance drain: interactions queued while this tick ran
+        notify_cmds.drain_int_commands(
+            ledger, result, cfg, os.path.join(HOME, "data"),
+            deadline=deadline, limit=16)
+        notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+    except Exception as e:
+        result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
+    # Tail command failures must be included in the recorded run
+    # before its read-only snapshot is published.
+    status = "ok" if not result["errors"] and not result["incomplete"] \
+        else "partial"
+    ledger.finish_run(run_id, status,
+                      "; ".join(result["errors"][:8]))
+    try:
+        result["snapshot"] = maintenance.publish_snapshot(DB)
+        if result["snapshot"]:
+            notify_cards.clear_snapshot_dirty(ledger)
+        else:
+            raise RuntimeError("snapshot_verify_failed")
+    except Exception as e:
+        result["errors"].append(f"snapshot: {type(e).__name__}")
+        ledger.finish_run(run_id, "partial",
+                          "; ".join(result["errors"][:8]))
+        status = "partial"
+    return status
+
+
+def _fail_run(ledger, args, result, run_id, status, detail,
+              deadline, alert):
+    """Shared failed-run epilogue — record the run, append the detail
+    to errors, then best-effort alert + pending flush. A failed alert
+    must never mask the original failure; the caller still writes
+    health and prints the result."""
+    ledger.finish_run(run_id, status, detail)
+    result["errors"].append(detail)
+    try:  # operational alert — silent death is worse than noise
+        if alert == "session":
+            _alert_session_expired(ledger, run_id, detail)
+        else:
+            ledger.outbox_add("run_failed", None,
+                              {"run_id": run_id, "detail": detail})
+        if not args.no_notify:  # --no-notify suppresses ALL sends;
+            result["notify"] = notify_flush.flush(ledger, deadline=deadline)
+    except Exception:                                    # queued for a
+        pass                                             # later flush
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -767,128 +1021,14 @@ def main() -> int:
               "new_messages": 0, "backfilled": 0, "incomplete": [],
               "marked_read": [], "notify": {}, "errors": []}
     cfg = _config()
-    try:
-        import semantic as _sem
-        from semantic_store import invalidate_projections
-        scfg = _sem.semantic_config(cfg)[0]
-        sem_on = scfg["mode"] != "off"
-        invalidate_projections(ledger, scfg)
-    except Exception as e:
-        # config/module trouble forces semantic OFF — but it must be
-        # visible: an enforced pipeline silently disabled is a missed
-        # evaluation, not a clean "no work" tick
-        sem_on = False
-        result["errors"].append(f"semantic_init: {type(e).__name__}")
+    sem_on = _semantic_enabled(ledger, cfg, result)
+    notify_max_age_s = _notify_max_age_s(cfg, result)
 
     try:
-        # -- priority fetch work -------------------------------------
-        mah = cfg.get("notify_max_age_h")
-        if mah is not None and not (type(mah) in (int, float)
-                                    and mah > 0):
-            result["errors"].append("config: notify_max_age_h_invalid")
-            mah = None
-        notify_max_age_s = (mah * 3600
-                            if type(mah) in (int, float) and mah > 0
-                            else None)
-        if not args.jobs_only:
-            stage_unread(adapter, ledger, args, result, deadline, run_id,
-                         semantic=sem_on,
-                         notify_max_age_s=notify_max_age_s)
-            if not args.no_backfill:
-                stage_backfill(adapter, ledger, result, deadline, run_id,
-                               semantic=sem_on,
-                               notify_max_age_s=notify_max_age_s)
-            self_posts = cfg.get("self_posts", False)
-            if type(self_posts) is not bool:
-                result["errors"].append("config: self_posts_invalid")
-                self_posts = False
-            if self_posts:
-                stage_self_probe(adapter, ledger, result, deadline, run_id,
-                                 semantic=sem_on,
-                                 notify_max_age_s=notify_max_age_s)
-        else:
-            result["jobs_only"] = True
-
-        # -- durable job machinery ------------------------------------
-        # cmd ingest first so requests are due THIS run; discovery and
-        # trickle seeding only enqueue — the drains below execute them.
-        job_ops.drain_commands(ledger, result)
-        try:
-            # interactive-notification command channel: plugin receipts
-            # and card actions apply mid-tick, not just via the watcher
-            import notify_cards
-            import notify_cmds
-            notify_cards.ensure_dirs(os.path.join(HOME, "data"))
-            # a DB restore holds send grants until the journal-vs-DB
-            # reconcile lands — run it before draining cmd_int traffic
-            if notify_cards.restore_pending(
-                    os.path.join(HOME, "data")) is not None:
-                import notify_reconcile
-                rep = notify_reconcile.reconcile_after_restore(
-                    ledger, cfg)
-                result["restore_reconcile"] = rep["counts"]
-            notify_cmds.drain_int_commands(
-                ledger, result, cfg, os.path.join(HOME, "data"),
-                deadline=deadline)
-        except Exception as e:
-            result["errors"].append(f"cmd_int: {type(e).__name__}")
-        job_ops.seed_discovery(ledger)
-        discover_archived = cfg.get("discover_archived", False)
-        if type(discover_archived) is not bool:
-            result["errors"].append("config: discover_archived_invalid")
-            discover_archived = False
-        job_ops.run_discovery(adapter, ledger, result, deadline,
-                              include_archived=discover_archived)
-        job_ops.run_reply_jobs(adapter, ledger, result, deadline,
-                               semantic=sem_on,
-                               notify_max_age_s=notify_max_age_s)
-        job_ops.run_history_jobs(adapter, ledger, result, deadline,
-                                 trickle=False, semantic=sem_on)
-
-        if args.download_files:
-            stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)
-
-        # -- idle-capacity deep history (trickle) ----------------------
-        deep_history = cfg.get("deep_history", True)
-        trickle_pages = cfg.get("trickle_pages", 3)
-        if type(deep_history) is not bool:
-            result["errors"].append("config: deep_history_invalid")
-            deep_history = True
-        if type(trickle_pages) is not int or not 1 <= trickle_pages <= 40:
-            result["errors"].append("config: trickle_pages_invalid")
-            trickle_pages = 3
-        # deep_history gates NEW seeding only — already-pending jobs
-        # (including archived patients' history_head final syncs) still
-        # drain on idle capacity. Same contract as discover_archived:
-        # a switch stops new work, never abandons committed work.
-        if deep_history:
-            seeded = job_ops.seed_trickle(ledger)
-            if seeded:
-                result["trickle_seeded"] = seeded
-        # --jobs-only runs exist FOR this work: bigger slice of the
-        # window, smaller safety margin than the priority tick
-        job_ops.run_history_jobs(
-            adapter, ledger, result, deadline, trickle=True,
-            trickle_pages=trickle_pages,
-            max_jobs=8 if args.jobs_only else None,
-            min_margin=30 if args.jobs_only else None,
-            semantic=sem_on)
-
-        # -- post-import reconcile: edits/deletions below the cutoff ---
-        job_ops.run_reconcile_jobs(adapter, ledger, result, deadline,
-                                   semantic=sem_on)
-
-        # -- own identity: name/professions/stations from MCS, persisted
-        # as the signal engine's default self (config overrides). Never
-        # fails the run — an unusable profile is a logged warning.
-        try:
-            import mcs_signals
-            prof = adapter.self_profile()
-            with ledger.db:
-                if mcs_signals.record_self_profile(ledger.db, prof):
-                    result["self_profile"] = "updated"
-        except Exception as e:
-            result["errors"].append(f"self_profile: {type(e).__name__}")
+        _stage_fetch(adapter, ledger, args, cfg, result, deadline,
+                     run_id, sem_on, notify_max_age_s)
+        _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
+                  notify_max_age_s)
 
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice
@@ -897,115 +1037,20 @@ def main() -> int:
         stage_derive(ledger, result, deadline, cfg,
                      llm_budget_cap=240 if args.jobs_only else 90)
 
-        # -- delivery ----------------------------------------------------
-        # existing notification sends run BEFORE the semantic drain —
-        # §19.1 prioritizes committed work over new analysis, and an
-        # enforce-mode semantic_notice enqueued below simply sends on a
-        # later tick
-        if not args.no_notify:
-            try:
-                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
-            except Exception as e:
-                result["errors"].append(f"notify: {type(e).__name__}")
-        try:
-            # live-card sweep: edits/deletes, signal resolves, archive
-            # revokes, deferral expiry, stuck spec repair — bounded
-            result["card_sweep"] = notify_cards.sweep(
-                ledger, cfg, limit=50)
-        except Exception as e:
-            result["errors"].append(f"card_sweep: {type(e).__name__}")
-        try:
-            # expired tokens + settled spec payloads — bounded per tick
-            result["card_gc"] = notify_cards.gc(ledger, cfg)
-        except Exception as e:
-            result["errors"].append(f"card_gc: {type(e).__name__}")
-
-        # -- semantic layer (Phase J, feature-gated) --------------------
-        # drains durable 'semantic' jobs on the same lock + remaining
-        # deadline; OFF is a no-op here AND disables seeding above, so
-        # the flag truly stops communication rather than only hiding
-        # output
-        if sem_on:
-            try:
-                import semantic
-                result["semantic"] = semantic.run_due(
-                    ledger, cfg, result, deadline, cfg_path=CONF_PATH,
-                    max_jobs=12 if args.jobs_only else 4)
-            except Exception as e:
-                result["errors"].append(
-                    f"semantic: {type(e).__name__}")
-
-        # -- housekeeping ------------------------------------------------
-        try:
-            maintenance.daily_backup(DB)
-        except maintenance.MaintenanceError as e:
-            result["errors"].append(f"backup: {e}")
-        except Exception as e:
-            result["errors"].append(f"backup: {type(e).__name__}")
-        try:
-            maintenance.rotate_log()
-        except Exception as e:
-            result["errors"].append(f"log_rotate: {type(e).__name__}")
-        try:
-            pruned = maintenance.prune_attachments(DB)
-            if pruned:
-                result["attachments_pruned"] = pruned
-        except Exception as e:
-            result["errors"].append(f"prune: {type(e).__name__}")
-
-        if result.get("notify", {}).get("failed") \
-                or result.get("notify", {}).get("skipped"):
-            result["errors"].append("notify_incomplete")
-
-        result["ok"] = True
-        try:
-            # last-chance drain: interactions queued while this tick ran
-            notify_cmds.drain_int_commands(
-                ledger, result, cfg, os.path.join(HOME, "data"),
-                deadline=deadline, limit=16)
-            notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
-        except Exception as e:
-            result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
-        # Tail command failures must be included in the recorded run
-        # before its read-only snapshot is published.
-        status = "ok" if not result["errors"] and not result["incomplete"] \
-            else "partial"
-        ledger.finish_run(run_id, status,
-                          "; ".join(result["errors"][:8]))
-        try:
-            result["snapshot"] = maintenance.publish_snapshot(DB)
-            if result["snapshot"]:
-                notify_cards.clear_snapshot_dirty(ledger)
-            else:
-                raise RuntimeError("snapshot_verify_failed")
-        except Exception as e:
-            result["errors"].append(f"snapshot: {type(e).__name__}")
-            ledger.finish_run(run_id, "partial",
-                              "; ".join(result["errors"][:8]))
-            status = "partial"
+        _deliver(ledger, args, cfg, result, deadline)
+        _run_semantic(ledger, args, cfg, result, deadline, sem_on)
+        _housekeeping(result)
+        status = _finish_run(ledger, cfg, result, run_id, deadline)
         _write_health(ledger, result, status, run_id=run_id)
     except SessionExpired as e:
-        ledger.finish_run(run_id, "session_expired", _err_str(e))
-        result["errors"].append(_err_str(e))
-        try:  # operational alert — contains no patient data
-            _alert_session_expired(ledger, run_id, _err_str(e))
-            if not args.no_notify:  # --no-notify suppresses ALL sends;
-                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
-        except Exception:                                    # queued for a
-            pass                                             # later flush
+        _fail_run(ledger, args, result, run_id, "session_expired",
+                  _err_str(e), deadline, alert="session")
         _write_health(ledger, result, "session_expired", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 2
     except MCSError as e:
-        ledger.finish_run(run_id, "failed", _err_str(e))
-        result["errors"].append(_err_str(e))
-        try:  # operational alert — silent death is worse than noise
-            ledger.outbox_add("run_failed", None,
-                              {"run_id": run_id, "detail": _err_str(e)})
-            if not args.no_notify:
-                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
-        except Exception:
-            pass
+        _fail_run(ledger, args, result, run_id, "failed", _err_str(e),
+                  deadline, alert="run_failed")
         _write_health(ledger, result, "failed", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 1
@@ -1013,13 +1058,9 @@ def main() -> int:
         # outermost boundary — non-MCSError crashes (AttributeError, sqlite,
         # ...) must still record a failed run and alert, not die silently
         try:
-            ledger.finish_run(run_id, "failed", type(e).__name__)
-            result["errors"].append(f"crash: {type(e).__name__}")
-            ledger.outbox_add("run_failed", None,
-                              {"run_id": run_id,
-                               "detail": type(e).__name__})
-            if not args.no_notify:
-                result["notify"] = notify_flush.flush(ledger, deadline=deadline)
+            _fail_run(ledger, args, result, run_id, "failed",
+                      f"crash: {type(e).__name__}", deadline,
+                      alert="run_failed")
         except Exception:
             pass
         _write_health(ledger, result, "failed", run_id=run_id)
