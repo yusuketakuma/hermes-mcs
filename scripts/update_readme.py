@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regenerate the auto-generated blocks in README.md.
+"""Regenerate the auto-generated documentation blocks.
 
 Marked blocks (each between BEGIN/END GENERATED markers) are rebuilt from
-the code itself, so README tracks feature additions automatically:
+the code itself, so the docs track feature additions automatically:
 
     <!-- BEGIN GENERATED:modules -->  mcs/*.py docstring first lines
     <!-- BEGIN GENERATED:signals -->  mcs_signals.DETECTORS
@@ -10,9 +10,13 @@ the code itself, so README tracks feature additions automatically:
     <!-- BEGIN GENERATED:cli     -->  mcs_view subcommands
     <!-- END GENERATED:<name>    -->
 
+The markers currently live in docs/DEVELOPMENT.md; every file listed in
+TARGETS is processed, so adding a marked block to a new doc only needs a
+TARGETS entry.
+
 Usage:
-    python3 scripts/update_readme.py           # rewrite README.md in place
-    python3 scripts/update_readme.py --check   # exit 1 if README is stale
+    python3 scripts/update_readme.py           # rewrite docs in place
+    python3 scripts/update_readme.py --check   # exit 1 if any doc is stale
 
 CI runs --check on pull requests and auto-commits the rewrite on main.
 Keep module/function docstrings' first line a one-line summary — it is
@@ -25,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
+DEV_DOC = ROOT / "docs" / "DEVELOPMENT.md"
 MCS_DIR = ROOT / "mcs"
 TESTS_DIR = ROOT / "tests"
 
@@ -145,28 +150,39 @@ def render(readme: str) -> tuple[str, list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
-                    help="fail when README.md differs from generated output")
+                    help="fail when a doc differs from generated output")
     args = ap.parse_args()
-    old = README.read_text(encoding="utf-8")
-    new, failed = render(old)
-    if failed:
+    targets = [p for p in (README, DEV_DOC) if p.exists()]
+    rendered = []
+    failed_all = []
+    for path in targets:
+        old = path.read_text(encoding="utf-8")
+        new, failed = render(old)
+        rendered.append((path, old, new))
+        failed_all.extend(f"{path.name}:{name}" for name in failed)
+    if failed_all:
         # a failed generator keeps its old block — under --check that made
-        # `new == old` pass the drift gate on a README it could not verify
+        # `new == old` pass the drift gate on a doc it could not verify
         # (FIX-UR1). Fail in both modes; write mode must not commit a
-        # partial regeneration either.
-        print("error: generator(s) failed — README freshness cannot be "
-              f"verified: {', '.join(failed)}", file=sys.stderr)
+        # partial regeneration either — no file is written on failure.
+        print("error: generator(s) failed — doc freshness cannot be "
+              f"verified: {', '.join(failed_all)}", file=sys.stderr)
         return 1
-    if new == old:
-        if not args.check:
-            print("README.md already up to date")
-        return 0
+    stale = [(p, new) for p, old, new in rendered if new != old]
     if args.check:
-        print("README.md generated blocks are stale — "
-              "run: python3 scripts/update_readme.py", file=sys.stderr)
-        return 1
-    README.write_text(new, encoding="utf-8")
-    print("README.md regenerated")
+        if stale:
+            print("generated blocks are stale — "
+                  "run: python3 scripts/update_readme.py "
+                  f"({', '.join(p.name for p, _ in stale)})",
+                  file=sys.stderr)
+            return 1
+        return 0
+    if not stale:
+        print("generated blocks already up to date")
+        return 0
+    for path, new in stale:
+        path.write_text(new, encoding="utf-8")
+        print(f"{path.name} regenerated")
     return 0
 
 

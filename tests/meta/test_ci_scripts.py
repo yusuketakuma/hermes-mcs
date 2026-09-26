@@ -54,10 +54,42 @@ def test_update_readme_write_fails_without_partial_write(
         "x\n<!-- BEGIN GENERATED:signals -->\nold\n"
         "<!-- END GENERATED:signals -->\n")
     monkeypatch.setattr(ur, "README", readme)
+    monkeypatch.setattr(ur, "DEV_DOC", tmp_path / "absent.md")
     monkeypatch.setitem(ur.GENERATORS, "signals", _boom)
     monkeypatch.setattr(sys, "argv", ["update_readme.py"])
     assert ur.main() == 1
     assert "old" in readme.read_text()   # untouched — no partial write
+
+
+# ---------- generated blocks moved out of README into docs/ ----------
+
+def test_update_readme_check_flags_stale_dev_doc(monkeypatch, tmp_path):
+    ur = _load("update_readme_dev_check", "scripts/update_readme.py")
+    readme = tmp_path / "README.md"
+    readme.write_text("no markers — user doc only\n")
+    dev = tmp_path / "DEVELOPMENT.md"
+    dev.write_text(
+        "<!-- BEGIN GENERATED:signals -->\nSTALE\n"
+        "<!-- END GENERATED:signals -->\n")
+    monkeypatch.setattr(ur, "README", readme)
+    monkeypatch.setattr(ur, "DEV_DOC", dev)
+    monkeypatch.setitem(ur.GENERATORS, "signals", lambda: "FRESH")
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check"])
+    assert ur.main() == 1
+
+
+def test_update_readme_write_regenerates_dev_doc(monkeypatch, tmp_path):
+    ur = _load("update_readme_dev_write", "scripts/update_readme.py")
+    monkeypatch.setattr(ur, "README", tmp_path / "absent.md")  # skipped
+    dev = tmp_path / "DEVELOPMENT.md"
+    dev.write_text(
+        "<!-- BEGIN GENERATED:signals -->\nSTALE\n"
+        "<!-- END GENERATED:signals -->\n")
+    monkeypatch.setattr(ur, "DEV_DOC", dev)
+    monkeypatch.setitem(ur.GENERATORS, "signals", lambda: "FRESH")
+    monkeypatch.setattr(sys, "argv", ["update_readme.py"])
+    assert ur.main() == 0
+    assert "FRESH" in dev.read_text()
 
 
 # ---------- FIX-G1: sqlite connect must carry mode=ro on ITS line ------

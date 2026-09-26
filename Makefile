@@ -19,7 +19,7 @@ test:           ## run the full test suite
 lint:           ## ruff lint (same rule set as CI, via pyproject.toml)
 	$(RUFF) check $(LINT_PATHS)
 
-readme:         ## regenerate the auto-generated README module table
+readme:         ## regenerate the auto-generated doc blocks
 	python3 scripts/update_readme.py
 
 check:          ## lint + readme drift check (PR-gate equivalent)
