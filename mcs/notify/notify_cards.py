@@ -619,11 +619,10 @@ def _action_rows(db, card, content, now, context=None,
         # delivery — the 📄 button only remains where no thread can
         # carry it (card_thread off, failed/deleted thread)
         btn("body")
-    if kind == "thread" and card["transport"] != "slack":
+    if kind == "thread":
         # thread scope is the only scope a task list can be pinned to —
         # signal/digest cards span messages/projects the requests table
-        # does not key on. Slack cards get no 📋 for now: the adapter's
-        # followup sweep has no ephemeral surface to answer it with.
+        # does not key on.
         btn("tasks")
     rows.append(list(row))
     row.clear()

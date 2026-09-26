@@ -219,7 +219,7 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 
 # ---------- card content ----------
 
-def _signal_display(db, sig: dict, transport: str) -> list:
+def _signal_display(db, sig: dict) -> list:
     """Neutral display blocks for one signal row — shared by the signal
     card and the digest's per-candidate rendering. The evidence quote
     carries the full message body; the whole item is bounded to the
@@ -242,9 +242,7 @@ def _signal_display(db, sig: dict, transport: str) -> list:
             "FROM messages WHERE message_id=?", (mid,)).fetchone()
         if m and m["body_state"] != "deleted" and m["body_text"]:
             quote = (f"最新言及 {m['posted_at'] or '?'} "
-                     f"{_sender_tag(m)}:")
-            if transport != "slack":
-                quote += f" {m['body_text']}"
+                     f"{_sender_tag(m)}: {m['body_text']}")
             blocks.append({"type": "quote", "text": quote})
             sblk = _structured_block(db, mid)
             if sblk:
@@ -381,8 +379,7 @@ def _card_content(db, card) -> dict:
         keys = _anchor_keys(card)
         sigs = _latest_signals(db, keys)
         ordered = [k for k in keys if k in sigs]
-        sig_blocks = {k: _signal_display(db, sigs[k]["content"],
-                                         card["transport"])
+        sig_blocks = {k: _signal_display(db, sigs[k]["content"])
                       for k in ordered}
         containers = [{"type": "heading", "text":
                        (f"💬 レビュー候補（{len(ordered)}件）"

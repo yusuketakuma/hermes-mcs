@@ -7,7 +7,8 @@ from datetime import date
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import body_messages, ja
+from ..mcs_delivery.text import (body_messages, ja, task_done_text,
+                                 task_list_text)
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
@@ -19,6 +20,37 @@ _FIELDS = {
                 ("due_date", "期限 YYYY-MM-DD（任意）", False)),
     "dismiss": (("reason", "却下理由", True),),
 }
+
+
+def _task_blocks(items):
+    """Block Kit view of a task list — the shared list text plus one
+    actions row per task, carrying the runner-minted transition tokens
+    in the same mcs:a: namespace as card buttons. Transition buttons
+    cap at 25 like the Discord view (12 rows x <=2 cannot reach it)."""
+    text = task_list_text(items)
+    blocks = [{"type": "section",
+               "text": {"type": "plain_text",
+                        "text": text[i:i + 3000]}}
+              for i in range(0, len(text), 3000)]
+    count = 0
+    for task in items:
+        elements = []
+        for to, tr in (task.get("transitions") or {}).items():
+            if count >= 25:
+                return blocks
+            button = {"type": "button",
+                      "text": {"type": "plain_text",
+                               "text": f"{tr['label']} "
+                                       f"#{task['request_id']}"},
+                      "action_id": f"mcs:a:{tr['token']}",
+                      "value": tr["token"]}
+            if to == "done":
+                button["style"] = "primary"
+            elements.append(button)
+            count += 1
+        if elements:
+            blocks.append({"type": "actions", "elements": elements})
+    return blocks
 
 
 def origin(body, action, *, team_id, application_id, channel_id,
@@ -90,10 +122,16 @@ class Actions:
 
     def _pinned(self, token, origin, actor):
         ctx = self._reg.token(token)
-        if not ctx or ctx.get("team_id") != origin["team_id"] \
-                or ctx.get("channel_id") != origin["channel_id"] \
-                or ctx.get("message_id") != origin["message_id"]:
+        if not ctx:
             return None
+        if ctx.get("action") != "task_status" and (
+                ctx.get("team_id") != origin["team_id"]
+                or ctx.get("channel_id") != origin["channel_id"]
+                or ctx.get("message_id") != origin["message_id"]):
+            return None
+        # task_status tokens ride an ephemeral task list — the ctx pins
+        # only the card/project scope; origin() already bound the click
+        # to this app/team/channel and an allowed user.
         allowed = self._settings.get("project_ids")
         if not allowed and not self._settings.get("project_ids_auto"):
             return None
@@ -146,7 +184,7 @@ class Actions:
             return
         kind = ctx["action"]
         if kind not in ("ack", "assign", "defer", "body", "prev", "next",
-                        "request", "dismiss"):
+                        "request", "dismiss", "tasks", "task_status"):
             await self._say(origin["channel_id"], user, "操作できません。")
             return
         env = envelopes.notification(token, actor, origin)
@@ -381,5 +419,23 @@ class Actions:
                     and result.get("outcome") == "applied":
                 for message in body_messages(result):
                     await self._say(origin["channel_id"], rec["user"], message)
+            elif result.get("action") == "tasks" \
+                    and result.get("outcome") == "applied":
+                token_ctx = result.get("token_ctx") or {}
+                if token_ctx:
+                    await asyncio.to_thread(
+                        self._reg.put_tokens, token_ctx)
+                items = result.get("tasks") or []
+                if items:
+                    await self._say(origin["channel_id"], rec["user"],
+                                    task_list_text(items),
+                                    blocks=_task_blocks(items))
+                else:
+                    await self._say(origin["channel_id"], rec["user"],
+                                    "このスレッドのタスクはありません。")
+            elif result.get("action") == "task_status" \
+                    and result.get("outcome") == "applied":
+                await self._say(origin["channel_id"], rec["user"],
+                                task_done_text(result))
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
                 await self._say(origin["channel_id"], rec["user"], ja(result))

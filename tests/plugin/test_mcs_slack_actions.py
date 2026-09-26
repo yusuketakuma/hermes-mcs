@@ -230,6 +230,56 @@ def test_request_requires_preview_and_explicit_same_user_confirm(tmp_path):
     asyncio.run(scenario())
 
 
+def test_tasks_list_and_status_transition_reach_original_user(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="tasks")
+        body, action = click()
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        assert env["transport"] == "slack"
+        transition = "d" * 32
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="tasks",
+               tasks=[{"request_id": 7, "title": "合成タスク",
+                       "status": "open", "assignee": None,
+                       "due_date": None,
+                       "transitions": {
+                           "done": {"token": transition,
+                                    "label": "✅ 完了"}}}],
+               token_ctx={transition: {
+                   "action": "task_status", "card_key": "k" * 32,
+                   "kind": "thread", "project_id": 123}})
+        await actions.sweep_followups()
+        assert len(app.client.messages) == 1
+        listing = app.client.messages[0]
+        assert listing["user"] == "U_OPERATOR"
+        assert "合成タスク" in listing["text"]
+        buttons = [e for b in listing["blocks"] if b["type"] == "actions"
+                   for e in b["elements"]]
+        assert [b["action_id"] for b in buttons] == ["mcs:a:" + transition]
+        assert buttons[0]["value"] == transition
+
+        # the transition click arrives from the ephemeral message —
+        # its ts differs from the card's, which the task_status ctx
+        # is allowed for (card/project scope is still enforced)
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        body2 = {**body, "message": {"ts": "1790000000.000999"}}
+        await actions._action(
+            ack, body2,
+            {"action_id": "mcs:a:" + transition, "value": transition})
+        env2 = command(dirs)
+        assert env2["token"] == transition
+        result(dirs, env2["request_id"], request_id=env2["request_id"],
+               outcome="applied", action="task_status",
+               status="done", title="合成タスク")
+        await actions.sweep_followups()
+        assert len(app.client.messages) == 2
+        assert "完了" in app.client.messages[1]["text"]
+        assert app.client.messages[1]["user"] == "U_OPERATOR"
+    asyncio.run(scenario())
+
+
 def test_dismiss_cancel_never_writes_human_command(tmp_path):
     async def scenario():
         actions, app, _, dirs = fixture(tmp_path, kind="dismiss")
