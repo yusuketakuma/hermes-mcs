@@ -92,6 +92,8 @@ python3 mcs/ops/mcs_setup.py check  # 実機の必須条件検証
 
 `mcs/**/*.py` 追加・docstring 変更・検知器/統計/サブコマンド追加時は
 `python3 scripts/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
+生成ブロックは `docs/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
+`README.md` は利用者向けなので生成表は持たない。
 新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
