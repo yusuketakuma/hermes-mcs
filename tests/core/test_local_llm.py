@@ -207,8 +207,18 @@ def test_probe_format_pins_background_slot(monkeypatch):
 def test_request_slot_rejects_non_ascii_digits(monkeypatch):
     monkeypatch.setenv("MCS_LLM_SLOT", "²")
     assert local_llm.request_slot() == local_llm.BACKGROUND_SLOT
-    monkeypatch.setenv("MCS_LLM_SLOT", " 3 ")
-    assert local_llm.request_slot() == 3
+    monkeypatch.setenv("MCS_LLM_SLOT", " 1 ")
+    assert local_llm.request_slot() == 1
+
+
+def test_request_slot_rejects_out_of_range(monkeypatch):
+    """A slot index at/past the deployed count is invalid — llama.cpp
+    treats out-of-range id_slot as UNPINNED, which could land a
+    background call on the real-time slot (T19)."""
+    for bad in (str(local_llm.SLOT_COUNT), str(local_llm.SLOT_COUNT + 1),
+                "99"):
+        monkeypatch.setenv("MCS_LLM_SLOT", bad)
+        assert local_llm.request_slot() == local_llm.BACKGROUND_SLOT
 
 
 def test_probe_rejects_schema_ignored_by_server():

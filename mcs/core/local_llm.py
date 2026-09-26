@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import urllib.error
 
@@ -38,20 +39,188 @@ SLOT_2 = 2  # real-time
 BACKGROUND_SLOT = SLOT_1 - 1  # wire id_slot 0
 REALTIME_SLOT = SLOT_2 - 1    # wire id_slot 1
 
+# T19: the selected safe parallel width of the deployed server — the
+# checked-in ``-np`` value of ai.mcs.llamaserver.plist. This is the
+# measured deployment choice, not a promise: the selection record lives
+# in .omo/evidence/.../task-19/slot-capacity-selection.json and the
+# rollback count below is the configuration reverted to on regression.
+# A server advertising FEWER slots than this is a mismatch — flag it,
+# never let a call ride an out-of-range (unpinned) id_slot.
+SLOT_COUNT = 2
+ROLLBACK_SLOT_COUNT = 1
+
 
 def request_slot() -> int:
     """Wire id_slot for a background call. ``MCS_LLM_SLOT`` (decimal)
     overrides the default — scoped to whatever process the operator
     sets it on (the nightly QC drainer exports it to borrow the RT
     slot inside its window); unset everywhere else keeps slot 1's
-    real-time reservation."""
-    import os
+    real-time reservation. An override at or beyond the deployed slot
+    count is invalid — llama.cpp treats out-of-range id_slot as
+    UNPINNED, which could land on the real-time slot; fall back to the
+    background slot instead."""
     v = os.environ.get("MCS_LLM_SLOT")
     if v is not None:
         digits = v.strip()
         if digits and digits.isascii() and digits.isdecimal():
-            return int(digits)
+            slot = int(digits)
+            if 0 <= slot < SLOT_COUNT:
+                return slot
     return BACKGROUND_SLOT
+
+
+# ---------- cross-client admission boundary (T20, default off) ----------
+
+def admission_enabled() -> bool:
+    """The shared RT/BACKLOG admission boundary is opt-in until a
+    staged rollout proves direct-connection rejection on the deployed
+    topology. ``MCS_LLM_ADMISSION`` carries the broker SQLite path (or
+    ``1`` for the default location)."""
+    v = os.environ.get("MCS_LLM_ADMISSION")
+    return bool(v and v != "0")
+
+
+def _admission_db_path() -> str:
+    v = os.environ.get("MCS_LLM_ADMISSION") or ""
+    if v == "1":
+        return os.path.join(os.path.expanduser("~/.mcs"), "data",
+                            "llm_admission.db")
+    return v
+
+
+_BROKERS: dict = {}
+
+
+def _broker(path: str | None = None):
+    """Process-cached broker handle — one SQLite connection per path."""
+    import llm_admission
+    p = path or _admission_db_path()
+    b = _BROKERS.get(p)
+    if b is None or getattr(b, "_closed", False):
+        b = llm_admission.Broker(p, slots=SLOT_COUNT)
+        _BROKERS[p] = b
+    return b
+
+
+def admitted_chat(client_route: str, prompt: str, *,
+                  broker_path: str | None = None,
+                  wait_s: float = 0, deadline: float | None = None,
+                  error_out: dict | None = None,
+                  **kw) -> dict | None:
+    """One chat call through the RT/BACKLOG admission boundary.
+
+    ``client_route`` is an authenticated route name registered with
+    the broker — its bound class (never a caller value) decides
+    RT vs BACKLOG. Returns ``chat()``'s response on a sent request;
+    on admission denial/deferral returns
+    ``{"admission": <reason>, "status": None, "text": None, ...}`` —
+    a distinct, honest outcome the caller must not confuse with a
+    model answer. A transport failure is ``mark_unknown`` — the
+    permit keeps occupying its class until reconciled, never
+    optimistically retired."""
+    broker = _broker(broker_path)
+    cls = broker.routes.get(client_route)
+    if cls is None:
+        return {"text": None, "finish_reason": None, "usage": None,
+                "status": None, "admission": "unknown_client"}
+    acq = broker.acquire(client_route, cls)
+    pid = acq.get("permit_id")
+    if not acq.get("admitted") and acq.get("reason") == "waiting" \
+            and wait_s > 0 and pid is not None:
+        # an RT caller may wait out the protected-BG window — bounded
+        # by wait_s AND the caller deadline; the permit stays waiting
+        # (occupied) the whole time and never overlaps BACKLOG
+        until = time.monotonic() + wait_s
+        if deadline is not None:
+            until = min(until, deadline)
+        state = "waiting"
+        while time.monotonic() < until:
+            state = broker.poll(pid).get("state", "waiting")
+            if state != "waiting":
+                break
+            time.sleep(0.05)
+        if state == "admitted":
+            acq = {"admitted": True, "permit_id": pid,
+                   "epoch": acq.get("epoch")}
+        else:
+            return {"text": None, "finish_reason": None,
+                    "usage": None, "status": None,
+                    "admission": f"wait_{state}",
+                    "permit_id": pid, "epoch": acq.get("epoch")}
+    if not acq.get("admitted"):
+        # waiting RT or held backlog — honest deferral, no send
+        return {"text": None, "finish_reason": None, "usage": None,
+                "status": None,
+                "admission": acq.get("reason", "held"),
+                "permit_id": acq.get("permit_id"),
+                "epoch": acq.get("epoch")}
+    pid = acq["permit_id"]
+    sent = broker.sent(pid)
+    if not sent.get("sent"):
+        broker.terminal(pid, "not_sent",
+                        proof=sent.get("reason"))
+        return {"text": None, "finish_reason": None, "usage": None,
+                "status": None, "admission": sent.get("reason"),
+                "permit_id": pid}
+    extra = dict(kw.pop("extra_payload", None) or {})
+    extra["admission_token"] = sent["token"]
+    extra.setdefault("id_slot", request_slot())
+    # the caller's error_out still receives unreachable/transport so
+    # its deferral policy survives the gate
+    err_out = error_out if error_out is not None else {}
+    response = chat(prompt, deadline=deadline, extra_payload=extra,
+                    error_out=err_out, **kw)
+    if response is None:
+        if err_out.get("kind") == "unreachable":
+            # connection refused — provably never reached the backend
+            broker.terminal(pid, "not_sent", proof="unreachable")
+        else:
+            # transport failure — the backend may still be decoding;
+            # unknown, never assumed free
+            broker.mark_unknown(pid, "transport")
+    else:
+        broker.terminal(pid,
+                        "done" if response.get("status") == 200
+                        else f"http_{response.get('status')}")
+    return response
+
+
+def admitted_probe_format(client_route: str, endpoint: str, model: str,
+                          schema: dict | None, *,
+                          broker_path: str | None = None,
+                          **kw) -> str | None:
+    """``probe_format`` through the admission boundary — the probe's
+    ladder sends real inference POSTs, so it acquires one class permit
+    for the whole bounded probe (≤2 sequential sends, same class) and
+    injects the token into each. Returns the probe mode, or
+    ``"plain"`` — a denied/held admission also yields ``"plain"``
+    (callers cache with a bounded cooldown, and the verdict is
+    visible in the permit ledger)."""
+    broker = _broker(broker_path)
+    cls = broker.routes.get(client_route)
+    if cls is None:
+        return "plain"
+    acq = broker.acquire(client_route, cls)
+    if not acq.get("admitted"):
+        return "plain"
+    pid = acq["permit_id"]
+    sent = broker.sent(pid)
+    if not sent.get("sent"):
+        broker.terminal(pid, "not_sent", proof=sent.get("reason"))
+        return "plain"
+    try:
+        return probe_format(endpoint, model, schema,
+                            admission_token=sent["token"], **kw)
+    except Exception:
+        broker.mark_unknown(pid, "probe_error")
+        raise
+    finally:
+        # a returned probe means every send reached a terminal HTTP
+        # answer; an exception already parked the permit as unknown —
+        # never overwrite that
+        p = broker._permit(pid)
+        if p is not None and p["state"] == "sent":
+            broker.terminal(pid, "done", proof="probe_returned")
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
                     deadline: float | None = None):
@@ -206,7 +375,8 @@ def acceptance_error(response: dict | None) -> str | None:
 def probe_format(endpoint: str, model: str, schema: dict | None,
                  timeout: float = 10, verify=None,
                  deadline: float | None = None, request_fn=None,
-                 slot: int | None = None) -> str | None:
+                 slot: int | None = None,
+                 admission_token: str | None = None) -> str | None:
     """Detect the best ``response_format`` the server accepts.
 
     Ladder: json_schema (if *schema* given) -> json_object -> plain.
@@ -221,10 +391,12 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     does the calls they precede.
     """
     verify = verify or (lambda text: isinstance(_json_obj(text), dict))
-    # A malformed caller slot must not become an unpinned request —
-    # llama.cpp treats out-of-range id_slot as unpinned, which could land
-    # the probe on the real-time slot. Fall back to the default resolver.
-    id_slot = slot if type(slot) is int and slot >= 0 else request_slot()
+    # A malformed OR out-of-range caller slot must not become an
+    # unpinned request — llama.cpp treats out-of-range id_slot as
+    # unpinned, which could land the probe on the real-time slot.
+    # Fall back to the default resolver.
+    id_slot = slot if type(slot) is int \
+        and 0 <= slot < SLOT_COUNT else request_slot()
     candidates = []
     if schema is not None:
         # A server that ignores json_schema will echo the prompt's "ok"
@@ -248,10 +420,13 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
         if remaining <= 0:
             break
         try:
+            payload = {"id_slot": id_slot}
+            if admission_token is not None:
+                payload["admission_token"] = admission_token
             response = chat(
                 'Reply with {"ok": true}', endpoint=endpoint, model=model,
                 max_tokens=20, timeout=remaining, deadline=operation_deadline,
-                response_format=rf, extra_payload={"id_slot": id_slot},
+                response_format=rf, extra_payload=payload,
                 request_fn=request_fn)
             if response is None:
                 break
