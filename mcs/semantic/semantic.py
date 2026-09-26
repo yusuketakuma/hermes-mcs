@@ -111,11 +111,12 @@ CONF_PATH = os.path.join(HOME, "config.json")
 
 LLM_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
 LLM_MODEL = "Qwen3.5-9B"
-# 300s, not 90: same failure class documented at extract_llm.TIMEOUT —
-# under dual-slot load decode runs ~3-5 t/s, and the v2 fact prompt
-# emits ~1K tokens (~140-160s measured 2026-09-26), so a 90s cap
-# turned every legitimate v2 chunk into a "model" failure.
-LLM_TIMEOUT = 300
+# 600s: the v2 fact document can emit ~2-4K tokens, and under dual-slot
+# load decode runs ~3-5 t/s — a single call was measured at 322s
+# (2026-09-27), so anything below ~450 still turns legitimate v2
+# documents into retrying "model" failures.  The drain also uses this
+# constant as its per-call timeout_cap.
+LLM_TIMEOUT = 600
 
 # v2 fact documents (facts + evidence + category_presence) and v4
 # summaries routinely exceed the shared 1400-token default — a real
@@ -259,7 +260,7 @@ def main() -> int:
             return 0 if root else 1
         result = {"errors": []}
         out = run_due(ledger, load_config(CONF_PATH), result,
-                      time.monotonic() + 300, max_jobs=args.max_jobs,
+                      time.monotonic() + 600, max_jobs=args.max_jobs,
                       cfg_path=CONF_PATH)
         out["errors"] = result["errors"]
         print(json.dumps(out, ensure_ascii=False))
