@@ -54,6 +54,11 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `card_workers.py`(worker 設定解決・factory) · `projects.py` · `integration/`(hermes E2E) · `deployment/` · `docs/`
 - `scripts/` — `run_tests.sh`、`update_readme.py`
 
+`hermes_plugin/` は長寿命の Hermes gateway が起動時に読込む。変更を
+有効化するには `hermes gateway restart` が必要 — 再起動なしでは
+runner が発行する新形式 spec を旧世代 worker が処理し、card は
+届くが companion thread の本文・添付が欠落する（2026-09 実例）。
+
 ## コマンド
 
 ```bash

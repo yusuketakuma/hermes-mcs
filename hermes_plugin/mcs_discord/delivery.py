@@ -20,6 +20,10 @@ from . import cards
 # Discord delete of an already-gone message achieves the revoke goal.
 REVOKE_GONE_STATUS = frozenset({404, 410})
 
+# Only an authorization-class answer judges the scope's thread
+# capability; other 4xx verdicts are per-message, never per-scope.
+CAPABILITY_REJECT = frozenset({401, 403})
+
 
 def _file_matches(path: str, part: dict) -> bool:
     """The file on disk must still be the sealed payload — a changed
@@ -138,7 +142,9 @@ class DeliveryWorker(worker.DeliveryWorker):
                            ctx: dict) -> dict:
         """Create the companion thread (create/notice) or verify the
         bound one is still live (update backfill). The capability cache
-        mirrors the legacy path: a definitive reject caches False."""
+        mirrors the legacy path: only an authorization-class reject is
+        a scope verdict — a per-message 4xx (gone, already-threaded,
+        bad name) says nothing about thread capability."""
         spec = claim["spec"]
         delivery = spec["delivery"]
         if delivery.get("thread_id"):
@@ -153,9 +159,22 @@ class DeliveryWorker(worker.DeliveryWorker):
         try:
             channel = await self._channel(delivery["channel_id"])
             msg = await channel.fetch_message(int(ctx["card_message_id"]))
-            thread = await msg.create_thread(name=part["name"])
+            try:
+                thread = await msg.create_thread(name=part["name"])
+            except Exception as create_exc:
+                # the goal may already hold — a thread bound under the
+                # card message by a crashed or older-generation worker
+                # between spec publication and this claim. Discord gives
+                # a message-started thread the message's own snowflake,
+                # so bind that thread instead of failing a dup create.
+                thread = getattr(msg, "thread", None)
+                if thread is None:
+                    try:
+                        thread = await self._channel(str(msg.id))
+                    except Exception:
+                        raise create_exc
         except Exception as exc:
-            if worker.is_definitive_reject(exc):
+            if getattr(exc, "status", None) in CAPABILITY_REJECT:
                 self._reg.put_capability(scope_key, False)
             raise
         self._reg.put_capability(scope_key, True)
@@ -206,13 +225,25 @@ class DeliveryWorker(worker.DeliveryWorker):
         try:
             channel = await self._channel(spec["delivery"]["channel_id"])
             sent_message = await channel.fetch_message(int(message_id))
-            thread = await sent_message.create_thread(name=name)
+            try:
+                thread = await sent_message.create_thread(name=name)
+            except Exception as create_exc:
+                # same already-exists recovery as _thread_part — the
+                # thread a previous attempt or older worker left under
+                # this card message satisfies the create goal
+                thread = getattr(sent_message, "thread", None)
+                if thread is None:
+                    try:
+                        thread = await self._channel(
+                            str(sent_message.id))
+                    except Exception:
+                        raise create_exc
             self._reg.put_capability(scope_key, True)
             env = envelopes.thread_receipt(
                 spec["delivery_id"], message_id,
                 thread_id=str(thread.id))
         except Exception as exc:
-            if worker.is_definitive_reject(exc):
+            if getattr(exc, "status", None) in CAPABILITY_REJECT:
                 self._reg.put_capability(scope_key, False)
             env = envelopes.thread_receipt(
                 spec["delivery_id"], message_id,
