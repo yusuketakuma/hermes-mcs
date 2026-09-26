@@ -120,7 +120,15 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   定期 tick を餓死させない。残 backlog は翌晩に持ち越し。
 
 `MCS_LLM_SLOT=<N>` はプロセス単位の wire id_slot オーバーライド
-（`local_llm.request_slot()`）。llama-server のフラグは
+（`local_llm.request_slot()`）。T19 で選択済みのスロット数は
+`local_llm.SLOT_COUNT = 2`（checked-in `-np 2`、ロールバック値は
+`ROLLBACK_SLOT_COUNT = 1`）— `MCS_LLM_SLOT`・`--slot`・明示 probe
+スロットはいずれも `0 <= N < SLOT_COUNT` 範囲外なら unpinned を
+避けて background slot にフォールバックする（llama.cpp は範囲外
+id_slot を unpinned 扱いするため）。サーバが選択数より少ない
+slot を広告した場合は `mcs_setup check` がエラーとして報告し、
+`service_manifest.json` の `llm_slots` に selected/rollback/plist
+整合が記録される。llama-server のフラグは
 `-c 65536 -np 2 --spec-type ngram-simple -fa on -ctk q4_0 -ctv q4_0
 -ub 512 --cache-ram 1024`（per-slot 32768）— 同梱テンプレート
 `ai.mcs.llamaserver.plist` の実値で、実機の hermes 管理ラベル
@@ -129,6 +137,19 @@ hermes 管理 agent を検出してテンプレート導入を skip するため
 常駐ラベルは `ai.hermes.llamacpp` のまま）。`-c 49152` は
 prompt cache が slot context を埋め尽くして実行中 task が cancel
 される退行が実測されたため差し戻し（2026-09-23）。
+
+`MCS_LLM_ADMISSION=<path|1>` は全クライアント共通の RT/BACKLOG
+受付境界（`mcs/core/llm_admission.py`、T20）を有効化する
+プロセス単位のフラグ。**既定は off** — 実配備トポロジで
+トークン無しの直接接続が拒否されることが認可付き段階的導入で
+検証されるまで従来の slot pin 経路のまま。`1` は既定パス
+`~/.mcs/data/llm_admission.db`、それ以外の値は broker SQLite の
+パスとして解釈される。有効時は `mcs.semantic`/`mcs.extract` の全
+呼出しが許可証を取得してから送信し、クラス（RT/BACKLOG）が同時に
+占有することはない。接続拒否は `not_sent`、timeout/切断は
+`unknown`（照合が済むまでクラスを閉じたまま）として durable に
+記録される。ルート表に無い MCS 呼出し経路がある状態での有効化は
+`mcs_setup check` がエラーとして報告する（blocked startup）。
 
 ## llama-server 再起動ガード
 

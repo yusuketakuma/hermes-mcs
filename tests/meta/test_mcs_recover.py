@@ -385,6 +385,31 @@ def _mk_db(path, version):
     con.close()
 
 
+def _consent(rec, live, back, cid="cid-consent", report=None):
+    """Commit a synthetic ops.restore_approve receipt bound to the
+    current loss report — the same row the human-approval path writes."""
+    import sqlite3
+    if report is None:
+        report = rec._loss_report(str(back))
+    con = sqlite3.connect(str(live))
+    con.execute("""CREATE TABLE IF NOT EXISTS command_receipts(
+      command_id TEXT PRIMARY KEY, payload_hash TEXT, project_id INTEGER,
+      request_id INTEGER,
+      outcome TEXT CHECK(outcome IN ('applied','rejected')),
+      receipt_json TEXT, processed_at REAL)""")
+    con.execute(
+        "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
+        "'applied',?,?)",
+        (cid, "h" * 64, json.dumps({
+            "cmd": "ops.restore_approve", "scheduled": True,
+            "command_id": cid, "report_id": report["report_id"],
+            "backup_sha256": report["backup_sha256"],
+            "backup_schema": report["backup_schema"]}), time.time()))
+    con.commit()
+    con.close()
+    return report
+
+
 def test_restore_db_rejects_unreadable_backup(rec, tmp_path, monkeypatch):
     live = tmp_path / "data" / "ledger.db"
     _mk_db(live, 7)
@@ -429,10 +454,50 @@ def test_restore_db_reports_copy_failure(rec, tmp_path, monkeypatch):
     _mk_db(live, 8)
     _mk_db(back, 7)
     monkeypatch.setattr(rec, "LEDGER", str(live))
+    _consent(rec, live, back)
     os.mkdir(str(live) + ".recover-tmp")      # blocks the tmp write
     err = rec._restore_db(str(back))
     assert err and err.startswith("restore_failed:")
     assert rec._db_version(str(live)) == 8    # live DB untouched
+
+
+def test_restore_db_holds_without_consent(rec, tmp_path, monkeypatch):
+    """No bound receipt => no swap: the marker holds senders in
+    awaiting_consent phase, the loss report is durable, the live DB is
+    byte-identical, and the error token names the pending consent."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    before = (tmp_path / "data" / "ledger.db").read_bytes()
+    err = rec._restore_db(str(back))
+    assert err and err.startswith("restore_consent_pending:")
+    assert (tmp_path / "data" / "ledger.db").read_bytes() == before
+    marker = json.loads((tmp_path / "data"
+                         / "restore_pending.json").read_text())
+    assert marker["phase"] == "awaiting_consent"
+    report = json.loads(
+        (tmp_path / "data" / "restore_report.json").read_text())
+    assert marker["report_id"] == report["report_id"]
+    assert report["report_id"] == err.split(":", 1)[1]
+    assert report["backup_schema"] == 7
+
+
+def test_restore_db_stale_consent_rejected(rec, tmp_path, monkeypatch):
+    """A receipt bound to a DIFFERENT report never unlocks the swap —
+    the approval must match the exact loss report bytes+schema."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    _consent(rec, live, back,
+             report={"report_id": "f" * 64, "backup_sha256": "e" * 64,
+                     "backup_schema": 7})
+    err = rec._restore_db(str(back))
+    assert err and err.startswith("restore_consent_pending:")
+    assert rec._db_version(str(live)) == 8
 
 
 def test_restore_db_verify_mismatch(rec, tmp_path, monkeypatch):
@@ -443,8 +508,10 @@ def test_restore_db_verify_mismatch(rec, tmp_path, monkeypatch):
     _mk_db(live, 8)
     _mk_db(back, 7)
     monkeypatch.setattr(rec, "LEDGER", str(live))
-    calls = iter([8, 7, 8])     # live, backup, post-restore live
-    monkeypatch.setattr(rec, "_db_version", lambda p: next(calls))
+    # live always reads 8 — even after the swap (the verify read)
+    monkeypatch.setattr(rec, "_db_version",
+                        lambda p: 7 if p == str(back) else 8)
+    _consent(rec, live, back)
     assert rec._restore_db(str(back)) == "restore_verify_failed"
 
 
@@ -454,8 +521,12 @@ def test_restore_db_replaces_and_verifies(rec, tmp_path, monkeypatch):
     _mk_db(live, 8)
     _mk_db(back, 7)
     monkeypatch.setattr(rec, "LEDGER", str(live))
+    _consent(rec, live, back)
     assert rec._restore_db(str(back)) is None
     assert rec._db_version(str(live)) == 7
+    marker = json.loads((tmp_path / "data"
+                         / "restore_pending.json").read_text())
+    assert marker["phase"] == "restored"
 
 
 def _rollback_state(rec, tmp_path, backup_path):
@@ -502,6 +573,7 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "LEDGER", str(live))
     monkeypatch.setattr(rec, "_notify", lambda *a: None)
     monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    _consent(rec, live, back)
     assert rec.recover() == 0
     assert rec._db_version(str(live)) == 7
     report = json.load(open(rec.REPORT_PATH))
@@ -509,3 +581,31 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     after = json.load(open(rec.STATE_PATH))
     assert after["executed"]["cid-rb"]["result"] == "rolled_back"
     assert after["applied"] == []
+
+
+def test_recover_holds_at_restore_consent(rec, tmp_path, monkeypatch):
+    """Independent watchdog with NO consent receipt: publish the loss
+    report, hold in awaiting_consent — no swap, applying state survives
+    for the next watchdog pass (per-restore human approval gate)."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_notify", lambda *a: None)
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    live_before = live.read_bytes()
+    assert rec.recover() == 0
+    assert live.read_bytes() == live_before        # no unauthorized swap
+    state = json.load(open(rec.STATE_PATH))
+    assert state["applying"]["rollback"] is True   # journal survives held
+    marker = json.loads((tmp_path / "data"
+                         / "restore_pending.json").read_text())
+    assert marker["phase"] == "awaiting_consent"
+    rep = json.load(open(rec.REPORT_PATH))
+    assert rep["result"] == "restore_consent_pending"
+    assert rep["detail"].startswith("restore_consent_pending:")
+    # second pass is stable — still held, still no swap
+    assert rec.recover() == 0
+    assert live.read_bytes() == live_before

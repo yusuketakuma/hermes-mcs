@@ -75,10 +75,12 @@ def _config() -> dict:
 # SUBSYSTEMS did. Monitors must read this file — a partial run exits 0
 # by design (work happened), so exit-status-only monitoring hides it.
 
-def _health(ledger, result: dict, status: str) -> dict:
+def _health(ledger, result: dict, status: str,
+            run_id: int | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
     notification completion, extract/QC backlog lag, and current
-    extraction-generation coverage. Every query is a count — never bodies."""
+    extraction-generation coverage. Every query is a count — never bodies.
+    `run_id` binds this evidence to the source run that produced it."""
     import extract_llm
     import notify_cards
     now = time.time()
@@ -131,6 +133,7 @@ def _health(ledger, result: dict, status: str) -> dict:
                else "ok")
     return {
         "overall": overall, "run_status": status,
+        "run_id": run_id,
         "at": now,
         "collection": collection,
         "incomplete_projects": result.get("incomplete") or [],
@@ -155,18 +158,26 @@ def _health(ledger, result: dict, status: str) -> dict:
     }
 
 
-def _write_health(ledger, result: dict, status: str) -> None:
-    """Best-effort atomic health.json — monitoring consumes this file;
-    a write failure must never turn a completed run into a crash."""
+def _write_health(ledger, result: dict, status: str,
+                  run_id: int | None = None) -> None:
+    """Atomic health.json — monitoring consumes this file. A write
+    failure must never turn committed ingest work into a crash, but it
+    must not be silent either: a durable 'health_write_failed' incident
+    is queued so the gap is itself visible (GAP-1)."""
     try:
-        health = _health(ledger, result, status)
+        health = _health(ledger, result, status, run_id=run_id)
         result["health"] = health
-        tmp = HEALTH_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(health, f, ensure_ascii=False)
-        os.replace(tmp, HEALTH_FILE)
-    except Exception:
-        pass
+        maintenance.atomic_publish_text(
+            HEALTH_FILE, json.dumps(health, ensure_ascii=False))
+    except Exception as e:
+        result["errors"].append(
+            f"health_write_failed: {type(e).__name__}")
+        try:
+            ledger.outbox_add("health_write_failed", None,
+                              {"detail": type(e).__name__,
+                               "run_id": run_id})
+        except Exception:
+            pass
 
 
 SESSION_ALERT_MIN_INTERVAL_S = 3600
@@ -516,11 +527,32 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     try:
         import extract_llm
+        # T18: under the v4 engine (fact_source=canonical) the legacy
+        # v3 extractor admits NOTHING new — its only remaining work is
+        # the explicit, finite conversion manifests declared through
+        # semantic_v4. Outside canonical mode admission is unchanged.
+        admitted = None
+        try:
+            import semantic_policy
+            scfg = semantic_policy.semantic_config(cfg or {})[0]
+            canonical_mode = scfg.get("fact_source") == "canonical"
+        except Exception:
+            canonical_mode = False  # config unreadable → legacy behavior
+        if canonical_mode:
+            try:
+                import semantic_v4
+                admitted = semantic_v4.active_legacy_admissions(ledger)
+            except Exception:
+                # canonical mode defaults v3 admission to ZERO — a
+                # manifest read error must fail CLOSED, not open the
+                # legacy engine to unrestricted new inference
+                admitted = set()
         remain = (deadline - time.monotonic()) - 45
         result["extract_llm"] = (
             extract_llm.run_pending(
                 ledger, limit=15, budget_s=min(llm_budget_cap,
                                                max(0, remain)),
+                admitted_ids=admitted,
                 # drainers take the newest rows (DESC); the tick walks
                 # the tail so the two never re-process the same rows.
                 # batch_k amortizes the per-call cost over context-free
@@ -556,6 +588,49 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
 # ---------- main ----------
 
+def _consent_only(lock_fd) -> int:
+    """Tick while a schema-bump DB replace awaits human consent: drain
+    ONLY the ops.restore_approve channel (drain_commands defers every
+    other file while the marker stands). No adapter, no ingest, no
+    reconcile — nothing may write a table the loss report counts."""
+    try:
+        ledger = Ledger(DB)
+    except Exception:
+        os.close(lock_fd)
+        print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
+        return 1
+    result = {"ok": True, "restore_consent_hold": True,
+              "commands": 0, "errors": []}
+    try:
+        job_ops.drain_commands(ledger, result)
+        result["commands"] = result.get("command_commands", 0)
+        # The receipt may predate this tick (an earlier spawn lost the
+        # run.lock race). Re-check the bound consent directly — when a
+        # matching receipt exists, relaunch the updater so the held
+        # restore converges without waiting for the periodic check.
+        import notify_cards
+        marker = notify_cards.restore_awaiting_consent(
+            os.path.join(HOME, "data"))
+        if marker and marker.get("backup_path"):
+            try:
+                import mcs_update
+                report = mcs_update._restore_loss_report(
+                    marker["backup_path"])
+                if mcs_update._restore_consent(report) is not None:
+                    mcs_update.spawn_detached()
+            except Exception:
+                result["errors"].append("consent_respawn_failed")
+    except Exception as e:
+        result["ok"] = False
+        result["errors"].append(f"cmd:{type(e).__name__}")
+    print(json.dumps(result, ensure_ascii=False))
+    try:
+        ledger.close()
+    finally:
+        os.close(lock_fd)
+    return 0 if result["ok"] else 1
+
+
 def _commands_only(lock_fd, deadline) -> int:
     """Interactive-notification command worker: drains data/cmd (shared
     queue — operator card_resolve lives there) and data/cmd_int, repairs
@@ -576,9 +651,29 @@ def _commands_only(lock_fd, deadline) -> int:
     root = os.path.join(HOME, "data")
     try:
         notify_cards.ensure_dirs(root)
+        if notify_cards.restore_awaiting_consent(root) is not None:
+            # schema-bump DB replace held for human consent — freeze
+            # every writer except the consent drain so the approved
+            # loss report cannot drift (drain_commands itself is
+            # consent-only while the marker stands)
+            job_ops.drain_commands(ledger, result)
+            result["restore_consent_hold"] = True
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result["ok"] else 1
         # startup/periodic recovery: missing spec files, flags,
         # stale-claim visibility — before any command is applied
         notify_cards.recover(ledger, cfg, result)
+        # a DB restore holds all send grants until the journal-vs-DB
+        # reconcile finishes — run it before draining new commands
+        if notify_cards.restore_pending(root) is not None:
+            try:
+                import notify_reconcile
+                rep = notify_reconcile.reconcile_after_restore(
+                    ledger, cfg)
+                result["restore_reconcile"] = rep["counts"]
+            except Exception as e:
+                result["errors"].append(
+                    f"restore_reconcile:{type(e).__name__}")
         # dependency order: existing data/cmd traffic first (a resolve
         # may settle an attempt a receipt then reports), then cmd_int
         cmds_before = result.get("command_commands", 0)
@@ -650,6 +745,13 @@ def main() -> int:
     deadline = time.monotonic() + RUN_DEADLINE_S
     if args.commands_only:
         return _commands_only(lock_fd, deadline)
+    import notify_cards as _notify_cards
+    if _notify_cards.restore_awaiting_consent(
+            os.path.join(HOME, "data")) is not None:
+        # schema-bump DB replace held for human consent — ingest,
+        # derive, reconcile and sends all stay frozen so the approved
+        # loss report cannot drift; only the consent command drains
+        return _consent_only(lock_fd)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
     try:
@@ -717,6 +819,14 @@ def main() -> int:
             import notify_cards
             import notify_cmds
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+            # a DB restore holds send grants until the journal-vs-DB
+            # reconcile lands — run it before draining cmd_int traffic
+            if notify_cards.restore_pending(
+                    os.path.join(HOME, "data")) is not None:
+                import notify_reconcile
+                rep = notify_reconcile.reconcile_after_restore(
+                    ledger, cfg)
+                result["restore_reconcile"] = rep["counts"]
             notify_cmds.drain_int_commands(
                 ledger, result, cfg, os.path.join(HOME, "data"),
                 deadline=deadline)
@@ -873,7 +983,7 @@ def main() -> int:
             ledger.finish_run(run_id, "partial",
                               "; ".join(result["errors"][:8]))
             status = "partial"
-        _write_health(ledger, result, status)
+        _write_health(ledger, result, status, run_id=run_id)
     except SessionExpired as e:
         ledger.finish_run(run_id, "session_expired", _err_str(e))
         result["errors"].append(_err_str(e))
@@ -883,7 +993,7 @@ def main() -> int:
                 result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:                                    # queued for a
             pass                                             # later flush
-        _write_health(ledger, result, "session_expired")
+        _write_health(ledger, result, "session_expired", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 2
     except MCSError as e:
@@ -896,7 +1006,7 @@ def main() -> int:
                 result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:
             pass
-        _write_health(ledger, result, "failed")
+        _write_health(ledger, result, "failed", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 1
     except Exception as e:
@@ -912,7 +1022,7 @@ def main() -> int:
                 result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception:
             pass
-        _write_health(ledger, result, "failed")
+        _write_health(ledger, result, "failed", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 1
     finally:

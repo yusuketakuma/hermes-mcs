@@ -1348,3 +1348,52 @@ def test_thread_partial_pages_survive_session_loss(tmp_path):
     assert json.loads(pending["payload"])["page"] == 2
     assert pending["attempts"] == 0
     db.close()
+
+
+def test_consent_hold_defers_everything_but_restore_approve(
+        tmp_path, monkeypatch):
+    """While restore_pending.json is phase=awaiting_consent, the drain
+    consumes ONLY ops.restore_approve: every other command's writes
+    would be wiped by the pending DB swap, so they stay queued until
+    the bound consent lands (T13)."""
+    import uuid
+    import notify_cards
+    import mcs_requests
+    import mcs_update
+
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    data = tmp_path / "data"
+    data.mkdir()
+    cmd_dir = data / "cmd"
+    cmd_dir.mkdir()
+    notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
+                               phase="awaiting_consent")
+    rid = "c" * 64
+    for req in (
+            {"cmd": "ops.pause", "project_id": 1, "feature": "semantic"},
+            {"cmd": "request.create", "project_id": 1,
+             "source_message_id": 1, "source_hash": "e" * 64,
+             "title": "synthetic"},
+            {"cmd": "ops.restore_approve", "project_id": None,
+             "report_id": rid, "backup_sha256": "d" * 64,
+             "backup_schema": 7, "reason": "synthetic"}):
+        req.update({"version": 1, "command_id": str(uuid.uuid4()),
+                    "actor": "t", "human_confirmed": True})
+        mcs_requests.enqueue(req, str(cmd_dir))
+    spawned = []
+    monkeypatch.setattr(mcs_update, "spawn_detached",
+                        lambda: spawned.append(1))
+    result = {"errors": []}
+    job_ops.drain_commands(db, result, str(cmd_dir))
+
+    assert result["command_commands"] == 1        # consent only
+    assert result["ops_commands"] == 1
+    assert spawned == [1]                         # updater launched post-commit
+    left = sorted(p.name for p in cmd_dir.glob("*.json"))
+    assert len(left) == 2                         # pause + import stayed
+    receipt = json.loads(db.db.execute(
+        "SELECT receipt_json FROM command_receipts").fetchone()[0])
+    assert receipt["cmd"] == "ops.restore_approve"
+    assert receipt["outcome"] == "applied"
+    assert receipt["report_id"] == rid

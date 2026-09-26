@@ -6,7 +6,7 @@ Drives the update lifecycle documented in docs/auto-update-plan.md:
   check     daily cron driver: detect latest tag, notify once, scan the
             command_receipts approval queue, auto-apply when mode=auto
   apply     run the staged apply pipeline for a pending approval (or
-            --tag explicit). Takes run.lock -> update.lock, journals
+            --tag explicit). Takes update.lock -> run.lock, journals
             every stage, quiesces resident drainers, merges, then runs
             post-merge steps in a NEW-code subprocess (locks held).
   rollback  restore the last applied entry's prev_sha (+ DB restore when
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -53,6 +54,7 @@ RUN_LOCK = os.path.join(DATA, "run.lock")
 MARKER_PATH = os.path.join(DATA, "update_in_progress.marker")
 MANIFEST_PATH = os.path.join(DATA, "service_manifest.json")
 REPORT_PATH = os.path.join(DATA, "recovery_report.json")
+RESTORE_REPORT_PATH = os.path.join(DATA, "restore_report.json")
 BACKUP_DIR = os.path.join(DATA, "backups")
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
@@ -98,6 +100,18 @@ _TRANSIENT_BAIL = frozenset({"run_lock_timeout", "update_lock_busy"})
 
 class UpdateError(Exception):
     """Gate/stage failure with a stable reason token for the journal."""
+
+
+class RestoreConsentPending(UpdateError):
+    """The schema-bump DB replace is durably held: no ops.restore_approve
+    receipt matches the current loss report. Writers/senders stay frozen
+    and the next check/watchdog pass re-evaluates — this is a hold, not
+    a failure, so callers must NOT consume the receipt or restart
+    drainers."""
+
+    def __init__(self, report: dict):
+        super().__init__("restore_consent_pending:" + report["report_id"])
+        self.report = report
 
 
 # ---------------------------------------------------------------- state
@@ -910,6 +924,51 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             try:
                 _rollback_tree(state["applying"])
                 reason += " (rolled back)"
+            except RestoreConsentPending as e:
+                # rollback reached the DB replace and is held on consent:
+                # keep drainers stopped, both markers up, and a
+                # rollback-shaped 'applying' record — the tree is already
+                # reset to prev_sha, so the next recover pass must see
+                # head == target and reach _restore_db again (an
+                # apply-shaped record would classify as head == prev and
+                # drop the consent hold without ever restoring).
+                rid = e.report["report_id"]
+                entry = state["applying"]
+                state["applying"] = {
+                    "tag": "rollback:" + (entry.get("tag") or "?"),
+                    "sha": entry["prev_sha"],
+                    "prev_sha": entry.get("sha"),
+                    "rollback": True,
+                    "plugin_changed": entry.get("plugin_changed"),
+                    "schema_bump": entry.get("schema_bump"),
+                    "backup_path": entry.get("backup_path"),
+                    "manifest_snapshot":
+                        entry.get("manifest_snapshot"),
+                    "command_id": command_id or entry.get("command_id"),
+                    "at": time.time()}
+                state["restore_consent"] = {
+                    "report_id": rid,
+                    "backup_path":
+                        state["applying"].get("backup_path"),
+                    "backup_sha256": e.report["backup_sha256"],
+                    "backup_schema": e.report["backup_schema"],
+                    "intervening_messages":
+                        e.report["intervening_messages"],
+                    "external_effect_rows":
+                        e.report["external_effect_rows"],
+                    "at": time.time()}
+                reason += " (rollback held: consent pending " \
+                    + rid[:16] + "…)"
+                if command_id:
+                    state.setdefault("executed", {})[command_id] = {
+                        "result": "failed",
+                        "detail": reason[:200], "at": time.time()}
+                _record_attempt(state, tag, "failed", reason)
+                save_state(state)
+                _report("restore_consent_pending",
+                        rid + " — restore_report.json を確認し "
+                        "ops.restore_approve で承認")
+                return 2
             except Exception as e:
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
@@ -1213,6 +1272,7 @@ def rollback(command_id: str | None = None) -> int:
         return 2
     run_fd = None
     quiesced = False
+    consent_hold = False
     try:
         state = load_state()            # fresh view under the lock
         applied = state.get("applied") or []
@@ -1247,6 +1307,31 @@ def rollback(command_id: str | None = None) -> int:
             rb_error = None
             try:
                 _rollback_tree(entry)
+            except RestoreConsentPending as e:
+                # HOLD, don't unwind: drainers stay stopped, senders
+                # stay denied (awaiting_consent marker + update marker),
+                # the rollback receipt stays pending, and every later
+                # check/watchdog pass re-evaluates the same report until
+                # a bound ops.restore_approve receipt lands.
+                rid = e.report["report_id"]
+                state = load_state()
+                state["restore_consent"] = {
+                    "report_id": rid,
+                    "backup_path": entry.get("backup_path"),
+                    "backup_sha256": e.report["backup_sha256"],
+                    "backup_schema": e.report["backup_schema"],
+                    "intervening_messages":
+                        e.report["intervening_messages"],
+                    "external_effect_rows":
+                        e.report["external_effect_rows"],
+                    "at": time.time()}
+                save_state(state)
+                _report("restore_consent_pending",
+                        rid + " — restore_report.json を確認し "
+                        "ops.restore_approve で承認")
+                print("restore held: consent pending", rid)
+                consent_hold = True
+                return 2
             except Exception as e:
                 # not just UpdateError — any failure here must still
                 # reach restart_agents() below (drainers are quiesced)
@@ -1266,6 +1351,7 @@ def rollback(command_id: str | None = None) -> int:
             state["applied"] = applied[:-1]
             state["applying"] = None
             state["stages"] = []
+            state.pop("restore_consent", None)
             state.setdefault("attempts", {})[
                 entry.get("tag") or "?"] = {
                 "result": "rolled_back", "at": time.time()}
@@ -1292,7 +1378,9 @@ def rollback(command_id: str | None = None) -> int:
             print("rollback failed:", e)
             return 1
     finally:
-        if quiesced:
+        # a consent hold keeps BOTH markers: they are what durably holds
+        # writers/senders frozen until the bound approval arrives
+        if quiesced and not consent_hold:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -1310,21 +1398,213 @@ def _db_version(path: str) -> int | None:
         return None
 
 
+# ----------------------------------------------------- restore consent
+
+# Records the swap would silently erase. Stored data = rows written
+# after the backup's watermark; external effects = per-table deltas of
+# every notification/send-tracking table (send evidence, queued work).
+_STORED_TABLES = ("messages", "attachments")
+_EFFECT_TABLES = ("notification_cards", "notification_renders",
+                  "notification_delivery_attempts",
+                  "notification_render_parts", "notification_restore_holds",
+                  "notification_view_manifests", "notify_outbox")
+
+
+def _table_count(con: sqlite3.Connection, table: str) -> int:
+    """COUNT(*) or 0 when the table is absent (older schema) — a missing
+    table can lose nothing."""
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+
+def _file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _restore_loss_report(backup_path: str) -> dict:
+    """Loss report a human must approve before the live DB is replaced.
+    Deterministic over (backup bytes, backup schema, live-vs-backup row
+    deltas) — any write that slips past the writer hold changes the
+    report_id and invalidates every receipt bound to the stale one."""
+    try:
+        live = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        raise UpdateError(f"restore_report_live_db: {e}") from e
+    try:
+        back = sqlite3.connect(
+            "file:" + backup_path + "?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        live.close()
+        raise UpdateError(f"restore_report_backup_db: {e}") from e
+    try:
+        try:
+            watermark = back.execute(
+                "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
+        except sqlite3.Error:
+            watermark = None
+        stored = {t: _table_count(live, t) - _table_count(back, t)
+                  for t in _STORED_TABLES}
+        effects = {t: _table_count(live, t) - _table_count(back, t)
+                   for t in _EFFECT_TABLES}
+    finally:
+        live.close()
+        back.close()
+    metrics = {"v": 1,
+               "backup_sha256": _file_sha256(backup_path),
+               "backup_schema": _db_version(backup_path),
+               "watermark_ts": watermark,
+               "stored_since_backup": stored,
+               "external_effects": effects,
+               "intervening_messages": sum(max(0, n)
+                                           for n in stored.values()),
+               "external_effect_rows": sum(max(0, n)
+                                           for n in effects.values())}
+    metrics["report_id"] = hashlib.sha256(
+        json.dumps(metrics, sort_keys=True, separators=(",", ":"),
+                   ensure_ascii=False).encode("utf-8")).hexdigest()
+    report = dict(metrics, computed_at=time.time())
+    os.makedirs(DATA, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rreport.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, RESTORE_REPORT_PATH)
+        dfd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return report
+
+
+def _restore_consent(report: dict) -> str | None:
+    """Scan command_receipts (read-only, same discipline as
+    scan_pending_approvals) for an ops.restore_approve approval bound
+    to THIS exact loss report — an earlier update/rollback approval
+    does not substitute (the human must see the loss numbers first)."""
+    try:
+        con = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            rows = con.execute(
+                "SELECT command_id, receipt_json FROM command_receipts"
+                " WHERE outcome='applied' ORDER BY processed_at DESC,"
+                " rowid DESC").fetchall()
+        except sqlite3.Error:
+            return None
+    finally:
+        con.close()
+    for cid, rj in rows:
+        try:
+            rec = json.loads(rj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("cmd") != "ops.restore_approve" \
+                or rec.get("scheduled") is not True:
+            continue
+        if rec.get("report_id") == report["report_id"] \
+                and rec.get("backup_sha256") == report["backup_sha256"] \
+                and rec.get("backup_schema") == report["backup_schema"]:
+            return cid
+    return None
+
+
+def _reconcile_restored() -> None:
+    """Post-swap journal-vs-DB reconcile while writers stay quiesced —
+    on failure the restore_pending marker stays up (send grants keep
+    denying) and the caller escalates for the next pass to retry."""
+    import ledger
+    import notify_reconcile
+    restored = ledger.Ledger(LEDGER)
+    try:
+        notify_reconcile.reconcile_after_restore(restored, load_config())
+    except Exception as e:
+        raise UpdateError(
+            f"restore_reconcile_failed: {type(e).__name__}") from e
+    finally:
+        restored.close()
+
+
 def _restore_db(backup_path: str) -> None:
     """Verified restore — validate the backup before touching the live
     DB. Skips when the live schema already matches the backup (a failed
     apply may never have migrated). Removes WAL/SHM sidecars FIRST so a
     stale journal can never be replayed against the restored file
     (F9); caller already quiesced every writer.
+    A real replace requires a per-restore human consent receipt bound
+    to the exact backup bytes/schema/loss report (R2 — an earlier
+    update or rollback approval does not substitute): missing consent
+    raises RestoreConsentPending and callers must HOLD, not unwind.
     Loses records written between apply and restore; Discord posts
     already sent cannot be retracted (design R2)."""
     import ledger
+    import notify_cards
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
     live_ver = _db_version(LEDGER)
     back_ver = _db_version(backup_path)
     if live_ver is not None and live_ver == back_ver:
-        return                              # already at backup schema
+        # Nothing to replace — but a crash between the post-swap marker
+        # rewrite and the swap can leave an awaiting_consent marker
+        # pinning every send; promote it and reconcile normally.
+        if notify_cards.restore_awaiting_consent(DATA) is not None:
+            try:
+                notify_cards.mark_restored(DATA, backup_path=backup_path,
+                                           by="mcs_update")
+            except OSError as e:
+                raise UpdateError(
+                    f"restore_marker_failed: {e}") from e
+            _reconcile_restored()
+        return
+    # Sender hold BEFORE measuring the loss — a grant slipping between
+    # the count and the swap would lose its record silently.
+    try:
+        notify_cards.mark_restored(DATA, backup_path=backup_path,
+                                   by="mcs_update",
+                                   phase="awaiting_consent")
+    except OSError as e:
+        raise UpdateError(f"restore_marker_failed: {e}") from e
+    report = _restore_loss_report(backup_path)
+    try:
+        # re-pin the hold with the report identity so operators and the
+        # watchdog can correlate marker <-> restore_report.json
+        notify_cards.mark_restored(DATA, backup_path=backup_path,
+                                   by="mcs_update",
+                                   phase="awaiting_consent",
+                                   report_id=report["report_id"])
+    except OSError as e:
+        raise UpdateError(f"restore_marker_failed: {e}") from e
+    if _restore_consent(report) is None:
+        raise RestoreConsentPending(report)
+    # Mark BEFORE the file swap: a crash after the replace but before
+    # the marker write must not leave senders running against a rewound
+    # DB. A stale marker is harmless — the next tick's reconcile finds
+    # nothing to hold and clears it.
+    try:
+        notify_cards.mark_restored(DATA, backup_path=backup_path,
+                                   by="mcs_update",
+                                   report_id=report["report_id"])
+    except OSError as e:
+        raise UpdateError(f"restore_marker_failed: {e}") from e
     for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
         try:
             os.unlink(side)
@@ -1349,6 +1629,13 @@ def _restore_db(backup_path: str) -> None:
         raise UpdateError(f"restore_failed: {e}") from e
     if not ledger.valid_mcs_db(LEDGER):
         raise UpdateError("restore_verify_failed")
+    # The DB just rewound — records of sends between the backup and now
+    # are gone while the remote messages/journal survive. Reconcile
+    # journal vs restored DB here, while drainers are still quiesced;
+    # if it fails the restore_pending marker stays up (send grants keep
+    # denying) and the escalate path reports it for the next tick to
+    # retry.
+    _reconcile_restored()
 
 
 # -------------------------------------------------------------- recover
@@ -1407,7 +1694,21 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 + ((" restart:" + ",".join(problems)) if problems else ""))
             return 1
 
+        if state.get("restore_consent") and not (
+                applying and applying.get("rollback")
+                and applying.get("backup_path")):
+            # A held schema-bump DB replace must reach _restore_db again
+            # via the head==target rollback branch — any other journal
+            # shape is corruption; fail closed rather than 'finish' into
+            # a wedge that keeps every send denied forever.
+            return escalate("restore_consent without a rollback "
+                            "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+            if state.get("restore_consent"):
+                # the rollback tree reset already completed before the
+                # consent hold began — a MERGE_HEAD here is drift
+                return escalate("restore_consent with MERGE_HEAD — "
+                                "refusing to classify")
             if not prev:
                 return escalate("MERGE_HEAD without known prev_sha")
             r = _git(["merge", "--abort"])
@@ -1447,6 +1748,27 @@ def recover_interrupted(if_stale: bool = False) -> int:
             if applying.get("rollback") and applying.get("backup_path"):
                 try:
                     _restore_db(applying["backup_path"])
+                except RestoreConsentPending as e:
+                    # held, not escalated: drainers stay stopped, both
+                    # markers stay up, the receipt and 'applying' stay —
+                    # each later recover pass re-checks the consent
+                    # receipt against a fresh loss report.
+                    rid = e.report["report_id"]
+                    state["restore_consent"] = {
+                        "report_id": rid,
+                        "backup_path": applying.get("backup_path"),
+                        "backup_sha256": e.report["backup_sha256"],
+                        "backup_schema": e.report["backup_schema"],
+                        "intervening_messages":
+                            e.report["intervening_messages"],
+                        "external_effect_rows":
+                            e.report["external_effect_rows"],
+                        "at": time.time()}
+                    save_state(state)
+                    _report("restore_consent_pending",
+                            rid + " — restore_report.json を確認し "
+                            "ops.restore_approve で承認")
+                    return 0
                 except UpdateError as e:
                     return escalate("rollback db restore: " + str(e))
             try:
@@ -1473,6 +1795,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     result = "applied"
                 state["applying"] = None
                 state["stages"] = []
+                state.pop("restore_consent", None)
                 cid = applying.get("command_id")
                 if cid:
                     state.setdefault("executed", {})[cid] = {
@@ -1488,6 +1811,12 @@ def recover_interrupted(if_stale: bool = False) -> int:
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
         if prev and head == prev:
+            if state.get("restore_consent"):
+                # a held restore resolves ONLY through the head==target
+                # rollback branch; landing here means the journal
+                # drifted — escalate, never 'finish' into a wedge
+                return escalate("restore_consent hold lost its "
+                                "rollback target — refusing to classify")
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
@@ -1520,6 +1849,7 @@ def _finish_recovery(state: dict, result: str, removed: list) -> None:
             "result": result, "at": time.time()}
     state["applying"] = None
     state["stages"] = []
+    state.pop("restore_consent", None)
     save_state(state)
     _remove_marker()
     problems = restart_agents()
@@ -1584,12 +1914,19 @@ def cmd_check() -> int:
             impact = []
     # --- serialized state update + decision --------------------------
     picked = auto = None
+    held = False
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         return 0                        # another updater is alive
     try:
         state = load_state()            # fresh view under the lock
-        if tag:
+        if state.get("applying") or state.get("stages"):
+            # an interrupted/held update owns the journal — check must
+            # defer to recovery AFTER releasing update.lock (a
+            # consent-held restore re-enters here via spawn_detached
+            # once its receipt lands)
+            held = True
+        elif tag:
             if tag != state.get("latest_tag"):
                 state.update({"latest_tag": tag, "latest_sha": sha,
                               "current_tag": cur_tag,
@@ -1609,21 +1946,25 @@ def cmd_check() -> int:
                           '"reason":"<理由>"}']
                 if _enqueue_notice("\n".join(lines), use_run_lock=True):
                     state["notified_at"] = tag
-        pendings, consumed = scan_pending_approvals(state)
-        for cid, result in consumed:
-            state.setdefault("executed", {})[cid] = {
-                "result": result, "at": time.time()}
-        picked = pendings[0] if pendings else None
-        if not picked and mode == "auto" and tag and sha \
-                and sha != cur_sha:
-            delay = upd.get("auto_delay_h", 24)
-            first_seen = state.get("first_seen") or 0
-            if time.time() - first_seen >= delay * 3600 \
-                    and not state.get("attempts", {}).get(tag):
-                auto = (tag, sha)
-        save_state(state)
+        if not held:
+            pendings, consumed = scan_pending_approvals(state)
+            for cid, result in consumed:
+                state.setdefault("executed", {})[cid] = {
+                    "result": result, "at": time.time()}
+            picked = pendings[0] if pendings else None
+            if not picked and mode == "auto" and tag and sha \
+                    and sha != cur_sha:
+                delay = upd.get("auto_delay_h", 24)
+                first_seen = state.get("first_seen") or 0
+                if time.time() - first_seen >= delay * 3600 \
+                        and not state.get("attempts", {}).get(tag):
+                    auto = (tag, sha)
+            save_state(state)
     finally:
-        os.close(upd_fd)
+        if upd_fd is not None:
+            os.close(upd_fd)
+    if held:
+        return recover_interrupted()
     # --- execution (apply/rollback re-acquire their own locks) --------
     if mode == "off":
         return 0                        # receipts stay dormant (Q17)

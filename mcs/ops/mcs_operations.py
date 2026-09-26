@@ -155,6 +155,27 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
         if not _text(req.get("reason"), 2000):
             return "bad_reason"
         return None
+    if cmd == "ops.restore_approve":
+        # Per-restore consent for a schema-bump DB replace — bound to
+        # the exact loss report (report_id) + backup bytes/schema, so an
+        # earlier update/rollback approval can never substitute. Same
+        # projectless lifecycle surface as the update ops.
+        if req.get("project_id") is not None:
+            return "bad_project_id"
+        allowed = base | {"report_id", "backup_sha256", "backup_schema",
+                          "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if not valid_hash(req.get("report_id")):
+            return "bad_report_id"
+        if not valid_hash(req.get("backup_sha256")):
+            return "bad_backup_sha256"
+        if type(req.get("backup_schema")) is not int \
+                or req["backup_schema"] < 0:
+            return "bad_backup_schema"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+        return None
     if cmd in ("ops.update_apply", "ops.update_rollback"):
         # System-wide lifecycle ops — no project_id (the mcs_requests
         # early-return routes them here before the positive-pid gate).
@@ -735,6 +756,21 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     return None, extra
 
 
+def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
+    """Record the per-restore consent — the committed receipt IS the
+    approval (same boundary as the update ops). Consumed by the updater
+    and the independent watchdog when they reach the DB-replace step;
+    nothing executes inside this transaction. scheduled=True also makes
+    job_ops spawn the updater so a held rollback converges at once."""
+    extra = {"cmd": req["cmd"], "scheduled": True,
+             "report_id": req["report_id"],
+             "backup_sha256": req["backup_sha256"],
+             "backup_schema": req["backup_schema"]}
+    if _text(req.get("reason"), 2000):
+        extra["reason"] = req["reason"]
+    return None, extra
+
+
 def apply_tx(db, req: dict, now: float | None = None, *,
              filesystem_changes=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
@@ -754,6 +790,8 @@ def apply_tx(db, req: dict, now: float | None = None, *,
         return _apply_signal_policy_tx(db, req, current)
     if req["cmd"] == "ops.refstat_approve":
         return _apply_refstat_approve_tx(db, req, current, filesystem_changes)
+    if req["cmd"] == "ops.restore_approve":
+        return _apply_restore_op_tx(db, req, current)
     if req["cmd"] in ("ops.update_apply", "ops.update_rollback"):
         return _apply_update_op_tx(db, req, current)
     return "unknown_ops_cmd", {}

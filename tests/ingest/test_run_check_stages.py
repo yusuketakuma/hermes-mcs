@@ -618,6 +618,40 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
     db.close()
 
 
+def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
+    """A health.json write failure must not roll back committed ingest
+    work nor mark the stored run failed — it raises a separate
+    machine-readable 'health_write_failed' incident instead (GAP-1)."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    result = {"errors": [], "notify": {}}
+    monkeypatch.setattr(run_check, "HEALTH_FILE",
+                        str(tmp_path / "health.json"))
+
+    # happy path first — fresh present evidence bound to its source run
+    run_check._write_health(db, result, "ok", run_id=7)
+    h = json.loads((tmp_path / "health.json").read_text())
+    assert h["overall"] == "ok" and h["run_id"] == 7 and h["at"]
+
+    # now break the atomic publish: stored messages stay, run row stays
+    # 'ok', and exactly one incident lands in the durable outbox
+    def boom(path, text):
+        raise OSError("synthetic full disk")
+    monkeypatch.setattr(run_check.maintenance, "atomic_publish_text", boom)
+    run_id = db.begin_run(None, "tick")
+    db.finish_run(run_id, "ok", "")
+    run_check._write_health(db, result, "ok", run_id=run_id)
+    assert any(e.startswith("health_write_failed")
+               for e in result["errors"])
+    kinds = [r[0] for r in db.db.execute(
+        "SELECT kind FROM notify_outbox WHERE kind='health_write_failed'")]
+    assert kinds == ["health_write_failed"]
+    assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 1
+    assert db.db.execute("SELECT status FROM runs WHERE run_id=?",
+                         (run_id,)).fetchone()[0] == "ok"
+    db.close()
+
+
 # ---------- self-post / latest probe ----------
 
 
@@ -920,3 +954,67 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     ).fetchone()[0] == "partial"
     db.close()
     assert json.loads((data / "health.json").read_text())["run_status"] == "partial"
+
+
+def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
+                                                   capsys):
+    """An awaiting_consent restore marker switches the tick to
+    consent-only: no adapter, no ingest, no reconcile — only the
+    ops.restore_approve drain runs so the approved loss report cannot
+    drift (T13)."""
+    import notify_cards
+    import mcs_requests
+    import uuid
+
+    data = tmp_path / "data"
+    data.mkdir()
+    config = tmp_path / "config.json"
+    config.write_text('{"deep_history":false}', encoding="utf-8")
+    for name, value in {
+        "HOME": tmp_path, "DB": data / "ledger.db",
+        "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
+        "CONF_PATH": config, "CACHE": tmp_path / "absent-token.json",
+    }.items():
+        monkeypatch.setattr(run_check, name, str(value))
+    monkeypatch.setattr(run_check, "MCSAdapter",
+                        lambda *a, **k: pytest.fail(
+                            "adapter must not be built during the hold"))
+    notify_cards.mark_restored(str(data), backup_path=str(data / "b.db"),
+                               phase="awaiting_consent")
+    cmd = data / "cmd"
+    cmd.mkdir()
+    drain = job_ops.drain_commands
+    monkeypatch.setattr(job_ops, "drain_commands",
+                        lambda db, result: drain(db, result, str(cmd)))
+    # an unrelated op stays queued — its writes would be wiped by the swap
+    mcs_requests.enqueue(
+        {"version": 1, "cmd": "ops.pause",
+         "command_id": str(uuid.uuid4()), "actor": "t",
+         "human_confirmed": True, "project_id": 1,
+         "feature": "semantic"}, str(cmd))
+    rid = "a" * 64
+    mcs_requests.enqueue(
+        {"version": 1, "cmd": "ops.restore_approve",
+         "command_id": str(uuid.uuid4()), "actor": "t",
+         "human_confirmed": True, "project_id": None,
+         "report_id": rid, "backup_sha256": "b" * 64,
+         "backup_schema": 7, "reason": "synthetic"}, str(cmd))
+    import mcs_update
+    spawned = []
+    monkeypatch.setattr(mcs_update, "spawn_detached",
+                        lambda: spawned.append(1))
+    # the respawn path recomputes the report — stub the backup read but
+    # keep the REAL consent scan against the tick's own ledger
+    monkeypatch.setattr(mcs_update, "_restore_loss_report",
+                        lambda p: {"report_id": rid,
+                                   "backup_sha256": "b" * 64,
+                                   "backup_schema": 7})
+    monkeypatch.setattr(mcs_update, "LEDGER", str(data / "ledger.db"))
+    monkeypatch.setattr(sys, "argv", ["run_check"])
+    assert run_check.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["restore_consent_hold"] is True
+    assert out["commands"] == 1                # only the consent op ran
+    assert spawned                             # updater re-launched
+    left = [p.name for p in cmd.glob("*.json")]
+    assert len(left) == 1                      # pause stayed queued

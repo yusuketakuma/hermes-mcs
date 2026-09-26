@@ -301,3 +301,94 @@ def test_update_apply_pinned_sha_skips_remote(tmp_path, monkeypatch):
     assert receipt["target_sha"] == "d" * 40
     assert calls == []
     db.close()
+
+
+# -------------------------------------------------------- restore consent
+
+def test_restore_approve_commits_bound_receipt(tmp_path):
+    """Per-restore consent: the committed receipt carries the exact
+    report/backup binding the consent gate compares (T13)."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    req = _update_command(
+        "ops.restore_approve",
+        report_id="a" * 64, backup_sha256="b" * 64,
+        backup_schema=7, reason="loss reviewed")
+    receipt = mcs_requests.apply_command(db, req)
+    assert receipt["outcome"] == "applied"
+    assert receipt["scheduled"] is True
+    assert receipt["cmd"] == "ops.restore_approve"
+    assert receipt["report_id"] == "a" * 64
+    assert receipt["backup_sha256"] == "b" * 64
+    assert receipt["backup_schema"] == 7
+    assert receipt["reason"] == "loss reviewed"
+    # idempotent replay — the same command_id re-reads the receipt
+    again = mcs_requests.apply_command(db, req)
+    assert again == receipt
+    db.close()
+
+
+def test_restore_approve_rejects_bad_binding(tmp_path):
+    """The binding fields are the gate — malformed/absent ones reject
+    before any receipt commits (T13)."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    base = _update_command(
+        "ops.restore_approve",
+        report_id="a" * 64, backup_sha256="b" * 64,
+        backup_schema=7, reason="r")
+    for field, value in (
+            ("report_id", "short"),
+            ("backup_sha256", None),
+            ("backup_schema", "7"),
+            ("backup_schema", -1)):
+        bad = dict(base, command_id=str(uuid.uuid4()))
+        bad[field] = value
+        assert mcs_requests.apply_command(db, bad)["outcome"] == "rejected"
+    # no report binding at all
+    bad = dict(base, command_id=str(uuid.uuid4()))
+    del bad["report_id"]
+    assert mcs_requests.apply_command(db, bad)["error"] == "bad_report_id"
+    # project scope forbidden — lifecycle ops are projectless
+    bad = dict(base, command_id=str(uuid.uuid4()), project_id=9)
+    assert mcs_requests.apply_command(db, bad)["error"] == "bad_project_id"
+    # unknown fields never silently ignored
+    bad = dict(base, command_id=str(uuid.uuid4()), scope="ev")
+    assert mcs_requests.apply_command(db, bad)["error"] == "unknown_field"
+    # human_confirmed is the shared envelope gate
+    bad = dict(base, command_id=str(uuid.uuid4()), human_confirmed=False)
+    assert mcs_requests.apply_command(db, bad)["error"] == \
+        "human_confirmation_required"
+    db.close()
+
+
+def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
+    """While the awaiting_consent marker stands, drain_commands must
+    still accept ops.restore_approve (it is the only way out) and spawn
+    the updater after the commit — while every other command stays
+    queued (T13)."""
+    import notify_cards
+    data = tmp_path / "data"
+    data.mkdir()
+    db = Ledger(str(data / "ledger.db"))
+    db.ensure_patient(1)
+    cmd_dir = data / "cmd"
+    cmd_dir.mkdir()
+    notify_cards.mark_restored(
+        str(tmp_path / "data"), backup_path="/b.db",
+        phase="awaiting_consent")
+    mcs_requests.enqueue(_update_command(
+        "ops.restore_approve",
+        report_id="a" * 64, backup_sha256="b" * 64,
+        backup_schema=7, reason="ok"), str(cmd_dir))
+    mcs_requests.enqueue(_command("ops.pause", feature="semantic"),
+                         str(cmd_dir))
+    import mcs_update
+    spawned = []
+    monkeypatch.setattr(mcs_update, "spawn_detached",
+                        lambda: spawned.append(1))
+    result = {"errors": []}
+    job_ops.drain_commands(db, result, str(cmd_dir))
+    assert result["command_commands"] == 1       # only the consent op
+    assert spawned == [1]                        # updater re-launched
+    left = [p.name for p in cmd_dir.glob("*.json")]
+    assert len(left) == 1                        # pause stayed queued
+    db.close()
