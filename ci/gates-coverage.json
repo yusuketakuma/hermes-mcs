@@ -193,7 +193,8 @@
       "status": "covered",
       "summary": "mandatory_render silently truncated verified facts past the 40-line cap; omission now disclosed as a limitation",
       "tests": [
-        "test_mandatory_render_dedupes_and_caps"
+        "test_mandatory_render_dedupes_without_cap",
+        "test_mandatory_render_covers_41_facts_with_identity"
       ]
     },
     "FIX-SE4": {

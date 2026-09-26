@@ -32,7 +32,7 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 ## 構成
 
 - `mcs/` — 実行モジュール。**flat import維持のまま第一層サブディレクトリに分割**:
-  `core/`(ledger・mcs_util・mcs_queries・local_llm・maintenance・bounded_http) ·
+  `core/`(ledger・mcs_util・mcs_queries・local_llm・llm_admission・maintenance・bounded_http) ·
   `ingest/`(mcs_adapter・mcs_worker・job_ops・run_check・init_data) ·
   `notify/`(notify_flush・notify_cards・notify_cmds・notify_render・notify_transport) ·
   `extract/`(extract・extract_llm・extract_bench・rollup) ·
@@ -90,3 +90,28 @@ python3 mcs/ops/mcs_setup.py check  # 実機の必須条件検証
 新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
+
+<!-- BEGIN DEVFLOW MANAGED -->
+## Devflow 共通運用（managed block — この block 内のみ devflow が更新する）
+
+- 中央管理: `~/.config/devflow/`（registry/policy/roles/bin）,
+  task 正本: `~/.local/state/devflow/tasks/mcs/<task_id>/`,
+  worktree: `~/.herdr/worktrees/devflow/mcs/<task_id>/`
+- agmsg team `devflow-mcs` seats: planner(codex) / builder(devin) / reviewer(codex)。
+  delivery: codex seats=turn（`.codex/hooks.json` Stop+PostToolUse hook）、
+  builder=off（手動受信 `bash ~/.agents/skills/agmsg/scripts/inbox.sh devflow-mcs builder`）。
+  agmsg は通知用のみ — task 状態の正本は PLAN/STATUS/git/VERIFY/REVIEW。
+- 役割定義: `~/.config/devflow/roles/`（planner=計画のみ / builder=worktree内実装 /
+  reviewer=独立レビュー・修正禁止）
+- 実行権限: Astra planner/reviewer = Auto 相当（codex `-s workspace-write
+  -a on-request` + `approvals_reviewer="user"` + `sandbox_workspace_write.network_access=false`。
+  workspace-write は業務コードへの書込みを技術的に禁止しない — 計画/レビュー専任は
+  role 規約と diff 検査で守る）。Devin builder = Bypass（`--permission-mode dangerous`、
+  OS sandbox 無し — 境界は role 規約と devflow 権限 deny ルール）。
+- task packet: PLAN.md ACCEPTANCE.md STATUS.json HANDOFF.md VERIFY.md REVIEW.md。
+  PLAN/ACCEPTANCE は `devflow ready` で hash 固定。変更は Planner へ差し戻し新版で。
+- 外部操作禁止: push/PR/merge/deploy/外部送信/本番・実データ変更は明示承認のみ。
+  commit は Builder が PLAN の Commit Group 設計に沿った検証済み論理グループ単位で
+  worktree 内の作業 branch にのみ行う。秘密情報・患者情報を agmsg/文書に含めない。
+- 受入: ACCEPTED は技術的受入のみ。merge/deploy の許可ではない。
+<!-- END DEVFLOW MANAGED -->
