@@ -121,7 +121,7 @@ def test_slack_thread_body_stays_off_public_card(led):
 
 
 @pytest.mark.parametrize("kind", ["signal", "digest"])
-def test_slack_signal_body_lands_in_card_thread(led, kind):
+def test_slack_signal_body_matches_discord_card_and_thread(led, kind):
     _seed_thread(led)
     private_body = "PRIVATE-SYNTHETIC-GATE-BODY"
     led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
@@ -138,11 +138,13 @@ def test_slack_signal_body_lands_in_card_thread(led, kind):
     public_parts = {"containers": spec["parts"]["containers"],
                     "footer": spec["parts"]["footer"]}
     fallback, blocks = slack_cards.render(spec)
-    assert private_body not in json.dumps(public_parts, ensure_ascii=False)
-    assert private_body not in json.dumps({"text": fallback, "blocks": blocks},
-                                          ensure_ascii=False)
+    # transport parity — the evidence quote carries the body on the
+    # public card exactly like Discord
+    assert private_body in json.dumps(public_parts, ensure_ascii=False)
+    assert private_body in json.dumps({"text": fallback, "blocks": blocks},
+                                      ensure_ascii=False)
 
-    # the verified body travels as durable thread parts, not a
+    # the verified body also travels as durable thread parts, not a
     # click-gated ephemeral answer — no 📄 token is minted at all
     chunks = spec["parts"]["thread_body_parts"]
     assert private_body in "".join(chunks)
