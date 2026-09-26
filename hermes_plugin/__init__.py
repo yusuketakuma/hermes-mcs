@@ -68,10 +68,14 @@ _CONTROL_FIELDS = {
         "tag", "reason", "target_sha", "base_sha",
     },
     "update_rollback": _CONTROL_COMMON_FIELDS | {"tag", "reason"},
+    "restore_approve": _CONTROL_COMMON_FIELDS | {
+        "report_id", "backup_sha256", "backup_schema", "reason",
+    },
 }
 # Lifecycle ops are system-wide — they carry no project_id and get the
 # user/chat allowlist only (project check would always deny them).
-_PROJECTLESS_OPS = frozenset({"ops.update_apply", "ops.update_rollback"})
+_PROJECTLESS_OPS = frozenset({"ops.update_apply", "ops.update_rollback",
+                              "ops.restore_approve"})
 _CONFIRM_FIELDS = frozenset({"op", "phase", "payload", "payload_hash", "origin"})
 _ORIGIN_KEYS = ("user_id", "chat_id", "scope_id", "profile")
 
@@ -469,7 +473,8 @@ def _new_control(
         # these cmds before the positive-pid gate and the receipt lands
         # with project_id NULL (command_receipts.project_id is nullable).
         payload["reason"] = fields["reason"]
-        for key in ("tag", "target_sha", "base_sha"):
+        for key in ("tag", "target_sha", "base_sha", "report_id",
+                    "backup_sha256", "backup_schema"):
             if key in fields:
                 payload[key] = fields[key]
     else:
@@ -552,7 +557,7 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
                            identity: dict[str, str | None]) -> str:
     retry_budget = None
     action = data.get("action")
-    if action in ("update_apply", "update_rollback"):
+    if action in ("update_apply", "update_rollback", "restore_approve"):
         # Projectless lifecycle ops — user/chat allowlist only; no view
         # needed (there is no project scope to resolve against).
         error = _authorize_system(settings, identity)
@@ -757,7 +762,8 @@ def _confirm(data: dict, settings: dict[str, Any],
                     != payload.get("comparison_hash")):
                 return _deny("comparison_changed")
         elif command not in {"ops.pause", "ops.resume",
-                             "ops.update_apply", "ops.update_rollback"}:
+                             "ops.update_apply", "ops.update_rollback",
+                             "ops.restore_approve"}:
             return _deny("invalid_command")
     finally:
         if view is not None:

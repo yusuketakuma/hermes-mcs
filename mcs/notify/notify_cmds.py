@@ -25,13 +25,15 @@ import notify_transport
 from mcs_requests import canonical, positive, valid_hash, valid_uuid
 
 TRANSPORT_OPS = ("transport_begin", "transport_receipt",
-                 "thread_receipt")
+                 "thread_receipt", "part_receipt")
 NOTIFY_OPS = ("notification", "refresh")
 HUMAN_CMDS = ("request.create", "ops.signal_dismiss")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
 
 _TOKEN_COMMAND_ID = re.compile(r"^[0-9a-f]{32}:[0-9a-f]{16}$")
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{16}$")
+_PART_ATTEMPT_ID = re.compile(r"^p:[0-9a-f]{32}:[A-Za-z0-9:._-]{1,48}$")
+_PART_ID = re.compile(r"^[A-Za-z0-9:._-]{1,64}$")
 _WORKER_ID = re.compile(r"^[0-9a-f]{16}$")
 _CORRELATION = re.compile(r"^[0-9a-f]{32}$")
 
@@ -201,6 +203,51 @@ def validate_int(req) -> str | None:
                 or not _opt_text(req.get("error_code"), 200):
             return "bad_result_fields"
         return None
+    if op == "part_receipt":
+        if _fields(req, {"version", "op", "command_id", "attempt_id",
+                         "delivery_id", "render_rev", "payload_hash",
+                         "route_epoch", "correlation", "profile",
+                         "application_id", "guild_id", "channel_id",
+                         "part_id", "kind", "result", "remote_id",
+                         "error_code"}):
+            return "unknown_field"
+        if not valid_uuid(cid):
+            return "bad_command_id"
+        if not (isinstance(req.get("attempt_id"), str)
+                and _PART_ATTEMPT_ID.match(req["attempt_id"])):
+            return "bad_attempt_id"
+        if not valid_uuid(req.get("delivery_id")):
+            return "bad_delivery_id"
+        if not positive(req.get("render_rev")):
+            return "bad_render_rev"
+        if not valid_hash(req.get("payload_hash")):
+            return "bad_payload_hash"
+        if not positive(req.get("route_epoch")):
+            return "bad_route_epoch"
+        if not (isinstance(req.get("correlation"), str)
+                and _CORRELATION.match(req["correlation"])):
+            return "bad_correlation"
+        for k in ("profile", "application_id", "channel_id"):
+            if not _text(req.get(k), 200 if k == "profile" else 64):
+                return f"bad_{k}"
+        if not _opt_text(req.get("guild_id"), 64):
+            return "bad_guild_id"
+        if not (isinstance(req.get("part_id"), str)
+                and _PART_ID.match(req["part_id"])):
+            return "bad_part_id"
+        if req.get("kind") is not None \
+                and req["kind"] not in (
+                    "card", "thread", "body_part", "attachment_part"):
+            return "bad_kind"
+        if req.get("result") not in ("delivered", "not_sent", "unknown"):
+            return "bad_result"
+        if req["result"] == "delivered" \
+                and not _id_str(req.get("remote_id")):
+            return "bad_remote_id"
+        if not _opt_text(req.get("remote_id"), 64) \
+                or not _opt_text(req.get("error_code"), 200):
+            return "bad_result_fields"
+        return None
     if op == "thread_receipt":
         allowed = {"version", "op", "command_id", "delivery_id",
                    "message_id", "thread_id", "error_code"}
@@ -238,6 +285,8 @@ def dispatch(ledger, req, cfg, root, now=None):
         return notify_transport.apply_transport_receipt(ledger, req, cfg, now)
     if op == "thread_receipt":
         return notify_transport.apply_thread_receipt(ledger, req, cfg, now)
+    if op == "part_receipt":
+        return notify_transport.apply_part_receipt(ledger, req, cfg, now)
     if req.get("cmd") in HUMAN_CMDS:
         error = _human_cmd_check(req)
         if error:
@@ -297,10 +346,12 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         pending.append((path, req))
     receipts = [p for p in pending
                 if p[1].get("op") in ("transport_receipt",
-                                      "thread_receipt")]
+                                      "thread_receipt",
+                                      "part_receipt")]
     others = [p for p in pending
               if p[1].get("op") not in ("transport_receipt",
-                                        "thread_receipt")]
+                                        "thread_receipt",
+                                        "part_receipt")]
     done = 0
     for path, req in receipts + others:
         if deadline is not None and time.monotonic() > deadline:

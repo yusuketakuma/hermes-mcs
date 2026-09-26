@@ -1,0 +1,528 @@
+"""T7 — durable per-part delivery plan under the existing render/transport
+framework: card/thread/body_part/attachment_part identities bound to the
+sealed spec, journaled independently, and rolled up so a delivered card
+can never hide missing body or attachment content.
+
+Synthetic fixtures + a temp DB only; no Discord, no network, no real
+MCS data."""
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import uuid as _uuid_mod
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
+import _mcs_path  # noqa: F401
+
+import ledger as _ledger
+import notify_cards
+import notify_render
+import notify_transport
+from test_notify_cards import (
+    CFG, NOW, SCOPE, _begin, _card, _dispatch, _intent, _latest_render,
+    _msg, _receipt, _seed_thread, _uuid)
+
+
+@pytest.fixture()
+def led(tmp_path):
+    db_path = tmp_path / "data" / "ledger.db"
+    (tmp_path / "data").mkdir()
+    led = _ledger.Ledger(str(db_path))
+    yield led
+    led.close()
+
+
+def _parts(led, delivery_id):
+    return [dict(r) for r in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? "
+        "ORDER BY idx", (delivery_id,)).fetchall()]
+
+
+def _part(led, delivery_id, part_id):
+    r = led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? "
+        "AND part_id=?", (delivery_id, part_id)).fetchone()
+    return dict(r) if r else None
+
+
+def _part_receipt(led, render, part_id, result="delivered",
+                  remote_id="r-1", error_code=None, aid=None, n=50,
+                  mutate=None):
+    req = {"version": 1, "op": "part_receipt", "command_id": _uuid(n),
+           "attempt_id": aid or f"p:{render['delivery_id'].replace('-', '')}:{part_id}",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "part_id": part_id, "result": result}
+    if remote_id is not None:
+        req["remote_id"] = remote_id
+    if error_code is not None:
+        req["error_code"] = error_code
+    if mutate:
+        mutate(req)
+    return notify_transport.apply_part_receipt(led, req, CFG, now=NOW)
+
+
+def _spec(render):
+    return json.loads(render["spec_json"])
+
+
+# ---------- spec manifest / parts seeding ---------------------------------
+
+def test_render_manifest_and_parts_seeded(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    spec = _spec(render)
+    # source-bound logical identity travels with the spec
+    assert spec["logical_intent_id"] == "v1|thread|1|100"
+    manifest = spec["parts"]["manifest"]
+    assert [p["part_id"] for p in manifest][:2] == ["card", "thread"]
+    kinds = [p["kind"] for p in manifest]
+    assert kinds[0] == "card" and kinds[1] == "thread"
+    body_parts = [p for p in manifest if p["kind"] == "body_part"]
+    assert len(body_parts) == len(spec["parts"]["thread_body_parts"]) >= 1
+    for i, p in enumerate(manifest):
+        assert p["index"] == i                      # ordered positions
+    for chunk, part in zip(spec["parts"]["thread_body_parts"], body_parts):
+        assert part["sha256"] == \
+            hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+        assert part["bytes"] == len(chunk.encode("utf-8"))
+    # every declared part is a durable row bound to this delivery
+    rows = _parts(led, render["delivery_id"])
+    assert [r["part_id"] for r in rows] == [p["part_id"] for p in manifest]
+    assert {r["state"] for r in rows} == {"pending"}
+    assert render["parts_state"] == "pending"
+
+
+def test_long_body_uncapped_parts(led):
+    """A >7,600-char body must emit >4 planned parts — BODY_MAX_CHUNKS=4
+    is not a delivery cap (each part stays under the 1900 message bound)."""
+    _seed_thread(led)
+    _msg(led, 102, parent=100, body="行" * 8000)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    chunks = spec["parts"]["thread_body_parts"]
+    assert len(chunks) >= 5
+    assert all(0 < len(c) <= 1900 for c in chunks)
+    body_parts = [p for p in spec["parts"]["manifest"]
+                  if p["kind"] == "body_part"]
+    assert len(body_parts) == len(chunks)
+    joined = "".join(chunks)
+    full_body = notify_render_body(led)
+    assert joined == full_body            # nothing silently dropped
+
+
+def notify_render_body(led):
+    """The exact body text the render planned (test oracle re-derives it
+    through the same public helper the spec used)."""
+    card = _card(led)
+    man = led.db.execute(
+        "SELECT * FROM notification_view_manifests ORDER BY manifest_id "
+        "DESC LIMIT 1").fetchone()
+    return notify_render._card_body_text(
+        led.db, card, man, max_chars=None)[1]
+
+
+def test_many_facts_long_thread_parts(led):
+    """>40 fact-equivalent shown rows produce all required parts with
+    stable part ids/hashes — re-issue of the same card only re-plans on
+    the next render_rev."""
+    _seed_thread(led, mids=(100,))
+    mids = [100] + list(range(200, 245))          # 46 shown messages
+    for m in range(200, 245):
+        _msg(led, m, parent=100, body=f"記録 {m} " + "x" * 300)
+    _dispatch(led, _intent(led, payload={"message_ids": mids}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    assert len(spec["parts"]["manifest"]) > 3
+    parts = _parts(led, render["delivery_id"])
+    assert len(parts) == len(spec["parts"]["manifest"])
+    # identity is stable across re-reads: same ids, same hashes
+    again = _parts(led, render["delivery_id"])
+    assert [(p["part_id"], p["payload_sha256"]) for p in parts] \
+        == [(p["part_id"], p["payload_sha256"]) for p in again]
+
+
+def test_spec_manifest_validates(led):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    spec = _spec(render)
+    assert spec_mod.validate(spec) is spec
+
+
+def test_spec_rejects_manifest_drift(led):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    spec = _spec(render)
+    bad = json.loads(json.dumps(spec))
+    bad["parts"]["manifest"][1]["sha256"] = "0" * 64   # thread hash tamper
+    with pytest.raises(ValueError):
+        spec_mod.validate(bad)
+    bad = json.loads(json.dumps(spec))
+    del bad["parts"]["manifest"][2]                   # part dropped
+    with pytest.raises(ValueError):
+        spec_mod.validate(bad)
+
+
+# ---------- card part mirrors attempt settlement ---------------------------
+
+def test_card_part_mirrors_attempt_result(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    grant = _begin(led, render)
+    assert grant["granted"] is True
+    aid = grant["attempt_id"]
+    _receipt(led, render, aid, result="delivered", message_id="m-9")
+    p = _part(led, render["delivery_id"], "card")
+    assert p["state"] == "delivered"
+    assert p["remote_id"] == "m-9"
+    assert p["attempt_id"] == aid
+    # card success alone: dependents still pending -> not complete
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],)).fetchone()["parts_state"] == "pending"
+
+
+def test_parts_complete_requires_all_delivered(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    did = render["delivery_id"]
+    grant = _begin(led, render)
+    _receipt(led, render, grant["attempt_id"], message_id="m-9")
+    # deliver thread + every body part
+    out = _part_receipt(led, render, "thread", remote_id="t-1", n=51)
+    assert out["applied"] is True
+    body_ids = [p["part_id"] for p in spec_parts(led, did)
+                if p["kind"] == "body_part"]
+    assert body_ids
+    for i, pid in enumerate(body_ids):
+        _part_receipt(led, render, pid, remote_id=f"b-{i}", n=60 + i)
+    row = led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (did,)).fetchone()
+    assert row["parts_state"] == "complete"
+
+
+def spec_parts(led, delivery_id):
+    return _parts(led, delivery_id)
+
+
+def test_thread_failure_holds_dependents(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    did = render["delivery_id"]
+    grant = _begin(led, render)
+    _receipt(led, render, grant["attempt_id"], message_id="m-9")
+    out = _part_receipt(led, render, "thread", result="not_sent",
+                        remote_id=None, error_code="http_403", n=52)
+    assert out["applied"] is True
+    parts = _parts(led, did)
+    assert _part(led, did, "thread")["state"] == "not_sent"
+    dependents = [p for p in parts
+                  if p["kind"] in ("body_part", "attachment_part")]
+    assert dependents and all(p["state"] == "held" for p in dependents)
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (did,)).fetchone()["parts_state"] == "incomplete"
+
+
+def test_card_failure_holds_dependents(led, tmp_path):
+    """A card that never delivers leaves its sealed parts nothing to
+    attach to — they hold (planned-but-blocked), never linger pending,
+    so a terminal render releases its spec file to gc."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    did = render["delivery_id"]
+    spec_path = (tmp_path / "data" / "discord_render"
+                 / (did + ".json"))
+    assert spec_path.exists()
+    grant = _begin(led, render)
+    _receipt(led, render, grant["attempt_id"], result="not_sent",
+             message_id=None, error_code="http_404", n=10)
+    parts = _parts(led, did)
+    assert _part(led, did, "card")["state"] == "not_sent"
+    dependents = [p for p in parts if p["kind"] != "card"]
+    assert dependents and all(p["state"] == "held" for p in dependents)
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (did,)).fetchone()["parts_state"] == "incomplete"
+    out = notify_cards.gc(led, CFG, now=NOW)
+    assert out["spec_files"] >= 1 and not spec_path.exists()
+
+
+def test_unknown_part_state_settles_without_resend(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    did = render["delivery_id"]
+    _begin_and_deliver_card(led, render)
+    out = _part_receipt(led, render, "body:0001", result="unknown",
+                        remote_id=None, n=53)
+    assert out["applied"] is True
+    assert _part(led, did, "body:0001")["state"] == "unknown"
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (did,)).fetchone()["parts_state"] == "incomplete"
+
+
+def _begin_and_deliver_card(led, render, message_id="m-9"):
+    grant = _begin(led, render)
+    _receipt(led, render, grant["attempt_id"], message_id=message_id)
+
+
+# ---------- receipt echo identity ------------------------------------------
+
+def test_part_receipt_echo_checks(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    did = render["delivery_id"]
+    _begin_and_deliver_card(led, render)
+    body = "body:0001"
+    # correlation / rev / hash / scope must echo the stored render —
+    # a mismatched receipt never marks a part settled
+    out = _part_receipt(led, render, body,
+                        mutate=lambda r: r.update(correlation="ef" * 16),
+                        n=54)
+    assert out["applied"] is False
+    assert out["error"] == "correlation_mismatch"
+    out = _part_receipt(led, render, body,
+                        mutate=lambda r: r.update(render_rev=99),
+                        n=55)
+    assert out["error"] == "render_rev_mismatch"
+    out = _part_receipt(led, render, body,
+                        mutate=lambda r: r.update(payload_hash="ab" * 32),
+                        n=56)
+    assert out["error"] == "payload_hash_mismatch"
+    out = _part_receipt(led, render, body,
+                        mutate=lambda r: r.update(channel_id="other"),
+                        n=57)
+    assert out["error"] == "scope_mismatch"
+    # unknown part id never lands
+    out = _part_receipt(led, render, "body:9999", n=58)
+    assert out["applied"] is False
+    assert out["error"] == "unknown_part"
+    # and nothing settled
+    assert _part(led, did, body)["state"] == "pending"
+
+
+def test_part_receipt_idempotent_and_conflict(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    out = _part_receipt(led, render, "thread", remote_id="t-7", n=59)
+    assert out["applied"] is True
+    # same fact re-delivered is idempotent
+    out = _part_receipt(led, render, "thread", remote_id="t-7", n=60)
+    assert out["applied"] is True
+    # a different fact on the same terminal part is a conflict
+    out = _part_receipt(led, render, "thread", remote_id="t-8", n=61)
+    assert out["applied"] is False
+    assert out["error"] == "part_conflict"
+
+
+def test_part_receipt_needs_remote_or_error(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    out = _part_receipt(led, render, "thread", remote_id=None, n=62)
+    assert out["applied"] is False
+    assert out["error"] == "remote_id_required"
+    out = _part_receipt(led, render, "thread", result="not_sent",
+                        remote_id=None, n=63)
+    assert out["error"] == "error_code_required"
+
+
+# ---------- attachments in the part manifest -------------------------------
+
+def _attach(led, mid, aid=None, state="downloaded",
+            local_path="/tmp/fake.txt", sha256="ab" * 32, name="f.txt",
+            nbytes=10):
+    led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,"
+        "bytes,sha256,state,downloaded_at,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (mid, f"file-{mid}", name, local_path, nbytes, sha256,
+         state, NOW, NOW))
+    led.db.commit()
+    return aid or led.db.execute(
+        "SELECT attachment_id FROM attachments WHERE message_id=?",
+        (mid,)).fetchone()["attachment_id"]
+
+
+def test_downloaded_attachment_is_a_part(led, tmp_path):
+    _seed_thread(led)
+    f = tmp_path / "note.txt"
+    f.write_bytes(b"synthetic attachment bytes")
+    sha = hashlib.sha256(b"synthetic attachment bytes").hexdigest()
+    aid = _attach(led, 100, local_path=str(f), sha256=sha,
+                  nbytes=len(b"synthetic attachment bytes"))
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    att = [p for p in spec["parts"]["manifest"]
+           if p["kind"] == "attachment_part"]
+    assert len(att) == 1
+    assert att[0]["attachment_id"] == aid
+    assert att[0]["sha256"] == sha
+    assert att[0]["name"] == "f.txt"
+    row = _part(led, render["delivery_id"], att[0]["part_id"])
+    assert row["state"] == "pending"
+    # the manifest-owned file does not also go out as a text followup
+    _begin_and_deliver_card(led, render)
+    rows = led.db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='attachment_followup'"
+    ).fetchall()
+    assert not rows
+
+
+def test_unavailable_attachment_disclosed_not_omitted(led):
+    _seed_thread(led)
+    _attach(led, 100, state="failed", local_path=None, sha256=None,
+            name="gone.txt", nbytes=None)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    att = [p for p in spec["parts"]["manifest"]
+           if p["kind"] == "attachment_part"]
+    assert len(att) == 1
+    assert att[0].get("unavailable") is True
+    row = _part(led, render["delivery_id"], att[0]["part_id"])
+    assert row["state"] == "not_sent"
+    assert row["error_code"] == "attachment_unavailable"
+    # disclosed as incomplete for this generation — never silently dropped
+    _begin_and_deliver_card(led, render)
+    _part_receipt(led, render, "thread", remote_id="t-1", n=64)
+    for p in _parts(led, render["delivery_id"]):
+        if p["kind"] == "body_part":
+            _part_receipt(led, render, p["part_id"], remote_id="b", n=65)
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],)).fetchone()["parts_state"] == "incomplete"
+
+
+def test_pending_download_not_in_manifest(led):
+    """A still-downloading file is not sealed into this render — the
+    existing attachment_followup path owns it."""
+    _seed_thread(led)
+    _attach(led, 100, state="pending", local_path=None, sha256=None)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    assert not [p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part"]
+
+
+# ---------- generation / scope isolation ------------------------------------
+
+def test_old_render_parts_do_not_satisfy_new_generation(led):
+    """A source bump re-plans a fresh delivery: receipts for the old
+    delivery_id never settle the new render's parts."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    _begin_and_deliver_card(led, r1)
+    _part_receipt(led, r1, "thread", remote_id="t-1", n=70)
+    for p in _parts(led, r1["delivery_id"]):
+        if p["kind"] == "body_part":
+            _part_receipt(led, r1, p["part_id"], remote_id="b", n=71)
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (r1["delivery_id"],)).fetchone()["parts_state"] == "complete"
+    # source drift -> new render, fresh parts
+    _msg(led, 300, parent=100, body="新しい記録")
+    event = _intent(led, payload={"message_ids": [300]})
+    _dispatch(led, event)
+    r2 = _latest_render(led)
+    assert r2["delivery_id"] != r1["delivery_id"]
+    parts2 = _parts(led, r2["delivery_id"])
+    assert parts2 and all(p["state"] == "pending" for p in parts2)
+    # a receipt keyed to the OLD delivery can never touch the new one:
+    # the echo fields no longer match the render it names
+    out = _part_receipt(led, r2, "thread", remote_id="t-1",
+                        mutate=lambda q: q.update(
+                            delivery_id=r1["delivery_id"]),
+                        n=72)
+    assert out["applied"] is False
+    assert _part(led, r2["delivery_id"], "thread")["state"] == "pending"
+
+
+def test_no_second_card_post_semantics(led):
+    """Render-level guarantee: body-part failure settles no card part —
+    a subsequent tick issues no new create render to rescue the body."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    out = _part_receipt(led, render, "body:0001", result="not_sent",
+                        remote_id=None, error_code="http_500", n=73)
+    assert out["applied"] is True
+    # card stays delivered; no new render is queued to repost the card
+    renders = led.db.execute(
+        "SELECT op,state FROM notification_renders WHERE card_id=1 "
+        "ORDER BY render_rev").fetchall()
+    assert len(renders) == 1 and renders[0]["state"] == "delivered"
+
+
+# ---------- cmd_int plumbing -----------------------------------------------
+
+def test_part_receipt_cmd_validation(led, tmp_path):
+    """The envelope a worker emits passes the cmd_int validator and is
+    settled through drain_int_commands."""
+    import notify_cmds
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    env = {"version": 1, "op": "part_receipt",
+           "command_id": str(_uuid_mod.uuid4()),
+           "attempt_id":
+               f"p:{render['delivery_id'].replace('-', '')}:thread",
+           "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "part_id": "thread", "result": "delivered",
+           "remote_id": "t-5"}
+    assert notify_cmds.validate_int(env) is None
+    root = notify_cards.data_root(led)
+    notify_cards.ensure_dirs(root)
+    dirs = notify_cards.notify_dirs(root)
+    notify_cards.publish_file(
+        dirs["cmd_int"], env["command_id"] + ".json",
+        json.dumps(env).encode())
+    notify_cmds.drain_int_commands(led, {}, CFG, root)
+    assert _part(led, render["delivery_id"], "thread")["state"] \
+        == "delivered"
+
+
+def test_parts_state_stat(led):
+    from mcs_stats import run_stats
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    out = run_stats(led.db, int(NOW), {"stat": "card_parts"})
+    data = out["stats"]["card_parts"]
+    assert data["status"] == "ok"
+    assert data["total_parts"] >= 3
+    assert data["by_state"].get("delivered") == 1   # card part
+    assert data["by_state"].get("pending", 0) >= 2
+    assert data["renders_incomplete"] == 1

@@ -53,6 +53,21 @@ def is_definitive_reject(exc: BaseException) -> bool:
     return isinstance(status, int) and status in NOT_SENT_STATUS
 
 
+def _card_message_id(records: dict, delivery_id: str) -> str | None:
+    """Latest factual card result for a delivery — dependent parts may
+    only attach to a card the journal proves was posted."""
+    res = [r for rows in records.values() for r in rows
+           if r.get("phase") == "result"
+           and r.get("delivery_id") == delivery_id
+           and not r.get("part_id")]
+    res.sort(key=lambda r: r.get("ts") or 0)
+    last = res[-1] if res else None
+    if last and last.get("result") == "delivered" \
+            and last.get("message_id"):
+        return str(last["message_id"])
+    return None
+
+
 class DeliveryWorker:
     """The durable claim/grant/send/receipt loop; a transport subclass
     supplies ``_perform`` and any companion-message bookkeeping."""
@@ -329,6 +344,179 @@ class DeliveryWorker:
         transports with no second post-deliver call leave it a no-op."""
         return None
 
+    # -- durable render parts (T7) -------------------------------------
+
+    async def _deliver_parts(self, claim: dict, message_id: str) -> None:
+        """Dependent-part delivery after a settled card send — the
+        sealed manifest's thread/body/attachment parts each journal
+        their own started/result/receipt. A spec without a manifest
+        falls back to the legacy companion-thread path."""
+        spec = claim["spec"]
+        manifest = (spec.get("parts") or {}).get("manifest")
+        if not manifest:
+            await self._maybe_thread(claim, message_id)
+            return
+        ctx = {"card_message_id": message_id, "thread": None,
+               "thread_id": spec["delivery"].get("thread_id"),
+               "history": None, "consumed": set()}
+        records = await asyncio.to_thread(journal.scan, self._dirs["state"])
+        await self._drive_parts(claim, manifest, ctx, records)
+
+    async def _resume_parts(self, spec: dict,
+                            records: dict | None = None) -> None:
+        """Restart-resume a settled spec's dependent parts — only parts
+        the journal proves never began; a started-only attempt stays
+        honestly unknown and is never resent."""
+        manifest = (spec.get("parts") or {}).get("manifest")
+        if not manifest or len(manifest) < 2:
+            return
+        if records is None:
+            records = await asyncio.to_thread(
+                journal.scan, self._dirs["state"])
+        mid = _card_message_id(records, spec["delivery_id"])
+        if not mid:
+            return            # card unproven — nothing to attach to
+        claim = {"attempt_id": "resume", "worker_id": self._worker_id,
+                 "spec": spec,
+                 "payload_hash": envelopes.payload_hash(spec),
+                 "spec_path": None, "phase": "settled"}
+        ctx = {"card_message_id": mid, "thread": None,
+               "thread_id": spec["delivery"].get("thread_id"),
+               "history": None, "consumed": set()}
+        await self._drive_parts(claim, manifest, ctx, records)
+
+    async def _drive_parts(self, claim: dict, manifest: list,
+                           ctx: dict, records: dict) -> None:
+        """Walk the manifest in declared order; every unjournaled part
+        gets exactly one attempt, journaled phases dedupe the rest.
+        After a complete pass all parts are final, so the delivery is
+        marked done — the registry flag bounds resume scans to one
+        journal read per pending spec per tick."""
+        spec = claim["spec"]
+        for part in manifest:
+            kind = part.get("kind")
+            if kind == "card" or part.get("unavailable"):
+                continue              # card mirrors the primary attempt;
+                                      # unavailable was disclosed at issue
+            aid = envelopes.part_attempt_id(spec["delivery_id"],
+                                            part["part_id"])
+            rows = records.get(aid, [])
+            phases = {r.get("phase") for r in rows}
+            if "receipt" not in phases and "result" in phases:
+                await self._republish_part_receipt(claim, part, rows)
+            if phases & {"result", "receipt", "denied"}:
+                if kind == "thread":
+                    res = next((r for r in reversed(rows)
+                                if r.get("phase") == "result"), None)
+                    ctx["thread_id"] = str(res["remote_id"]) \
+                        if res and res.get("result") == "delivered" \
+                        and res.get("remote_id") else None
+                continue
+            if "started" in phases:
+                continue              # unknown — reconcile reports it
+            if kind != "thread" and not ctx.get("thread_id"):
+                continue              # held — dependents need a thread
+            await self._attempt_part(claim, part, ctx)
+        self._reg.put_parts_done(spec["delivery_id"])
+
+    async def _republish_part_receipt(self, claim: dict, part: dict,
+                                      rows: list) -> None:
+        """A journaled result whose receipt never published gets its
+        recorded envelope replayed — the stored truth, never a guess."""
+        import uuid
+        res = next((r for r in reversed(rows)
+                    if r.get("phase") == "result"), None)
+        env = res.get("receipt_envelope") if res else None
+        if not isinstance(env, dict):
+            return
+        env = dict(env)
+        env["command_id"] = str(uuid.uuid4())
+        try:
+            await asyncio.to_thread(
+                envelopes.publish_command, self._dirs["cmd_int"], env)
+        except OSError:
+            return                        # next resume retries
+        self._journal("receipt",
+                      attempt_id=envelopes.part_attempt_id(
+                          claim["spec"]["delivery_id"], part["part_id"]),
+                      delivery_id=claim["spec"]["delivery_id"],
+                      part_id=part["part_id"], kind=part["kind"],
+                      result=env["result"], republish=True)
+
+    async def _attempt_part(self, claim: dict, part: dict,
+                            ctx: dict) -> None:
+        """One journaled attempt for one part — the same ordering
+        contract as the card send: started before HTTP, result before
+        receipt, crash-anywhere classifiable."""
+        spec = claim["spec"]
+        aid = envelopes.part_attempt_id(spec["delivery_id"],
+                                        part["part_id"])
+        self._journal("started", attempt_id=aid,
+                      delivery_id=spec["delivery_id"],
+                      part_id=part["part_id"], kind=part["kind"],
+                      receipt_envelope=envelopes.part_receipt(
+                          claim, part, "unknown"))
+        try:
+            outcome = await self._perform_part(claim, part, ctx)
+        except asyncio.CancelledError:
+            raise                            # unknown by omission
+        except Exception as exc:
+            if is_definitive_reject(exc):
+                outcome = {"result": "not_sent",
+                           "error_code": err_code(exc)}
+            else:
+                outcome = {"result": "unknown",
+                           "error_code": err_code(exc)}
+        # past the wire — journal the true outcome before any fallible
+        # publish so a crash replays fact, never a resend
+        env = envelopes.part_receipt(
+            claim, part, outcome["result"],
+            remote_id=outcome.get("remote_id"),
+            error_code=outcome.get("error_code"))
+        self._journal("result", attempt_id=aid,
+                      delivery_id=spec["delivery_id"],
+                      part_id=part["part_id"], kind=part["kind"],
+                      result=outcome["result"],
+                      remote_id=outcome.get("remote_id"),
+                      error_code=outcome.get("error_code"),
+                      receipt_envelope=env)
+        await asyncio.to_thread(
+            envelopes.publish_command, self._dirs["cmd_int"], env)
+        self._journal("receipt", attempt_id=aid,
+                      delivery_id=spec["delivery_id"],
+                      part_id=part["part_id"], kind=part["kind"],
+                      result=outcome["result"])
+        if part["kind"] == "thread":
+            # the card's thread binding also rides the legacy
+            # thread_receipt envelope — best-effort, because the
+            # journaled part_receipt already carries the truth
+            try:
+                env2 = envelopes.thread_receipt(
+                    spec["delivery_id"], ctx["card_message_id"],
+                    thread_id=outcome.get("remote_id")
+                    if outcome["result"] == "delivered" else None,
+                    error_code=outcome.get("error_code")
+                    if outcome["result"] != "delivered" else None)
+                await asyncio.to_thread(
+                    envelopes.publish_command,
+                    self._dirs["cmd_int"], env2)
+            except OSError:
+                pass
+            if outcome["result"] == "delivered" \
+                    and outcome.get("remote_id"):
+                ctx["thread_id"] = str(outcome["remote_id"])
+                ctx["thread"] = outcome.get("thread")
+            else:
+                ctx["thread"] = None
+                ctx["thread_id"] = None     # dependents hold, not retry
+
+    async def _perform_part(self, claim: dict, part: dict,
+                            ctx: dict) -> dict:
+        """One part's wire call. Returns
+        {result, remote_id?, error_code?}; definitive rejects map to
+        not_sent exactly like the card attempt."""
+        raise NotImplementedError
+
     # -- the per-claim step ----------------------------------------------
 
     async def _step_claim(self, claim: dict) -> None:
@@ -366,13 +554,15 @@ class DeliveryWorker:
                     claim["retry_at"] = now + RETRY_IN_FLIGHT_S
                     self._reg.claim(spec["delivery_id"], claim)
                     return
-                # interactive_off is a transient denial — the queued
-                # render stays legitimate, so no dead tombstone: the
-                # flags check above already stops the re-claim churn,
-                # and the spec must be claimable again once the kill
-                # switch lifts
+                # transient denials — the queued render stays
+                # legitimate, so no dead tombstone: the flags check
+                # above already stops the re-claim churn, and the spec
+                # must be claimable again once the window lifts
+                # (interactive_off kill switch, restore_pending gate)
                 await self._drop_claim(
-                    claim, dead=error != "denied_interactive_off")
+                    claim, dead=error not in (
+                        "denied_interactive_off",
+                        "denied_restore_pending"))
                 return
             if not self._verify_grant(claim, result):
                 self._journal("denied",
@@ -437,7 +627,7 @@ class DeliveryWorker:
             claim["phase"] = "settled"
             mid = outcome.get("message_id")
             if outcome["result"] == "delivered" and mid:
-                await self._maybe_thread(claim, str(mid))
+                await self._deliver_parts(claim, str(mid))
         if claim["phase"] == "settled":
             await self._drop_claim(claim)
 
@@ -505,19 +695,26 @@ class DeliveryWorker:
         # window, stranding the queued render. Skip new claims; in-
         # flight claims still step (settlement is not a send).
         flags = await asyncio.to_thread(paths.read_flags, self._root)
+        # restore_pending: a DB restore is unreconciled — claiming a
+        # spec now can only earn a denial; in-flight claims still step
+        # (settlement is not a send)
         claimable = flags.get("interactive") is not False \
-            and flags.get("transport", "discord") == self.transport
+            and flags.get("transport", "discord") == self.transport \
+            and not flags.get("restore_pending")
         live_ids = set()
         # batch registry saves across the whole pass — one flush per
         # tick instead of ~3 full-file rewrites per claim (RC20: the
         # O(n^2) serialization was the delivery bottleneck at 1k cards)
         with self._reg.batch():
             self._reg.expire()
+            resume = []
             for path, spec in scanned:
                 delivery_id = spec["delivery_id"]
                 live_ids.add(delivery_id)
                 if self._reg.is_dead(delivery_id) \
                         and self._reg.claimed(delivery_id) is None:
+                    if not self._reg.parts_done(delivery_id):
+                        resume.append(spec)
                     continue          # dropped claims never re-claim
                 claim = self._reg.claimed(delivery_id)
                 if claim is None and not claimable:
@@ -563,6 +760,21 @@ class DeliveryWorker:
                     except Exception as e:
                         self._log("claim_step_error",
                                   delivery_id=delivery_id,
+                                  error=type(e).__name__)
+            # dead specs whose dependent parts never finished get their
+            # unjournaled remainder driven once per tick — journal
+            # phases dedupe everything already proven
+            if resume:
+                records = await asyncio.to_thread(
+                    journal.scan, self._dirs["state"])
+                for spec in resume:
+                    try:
+                        await self._resume_parts(spec, records)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._log("parts_resume_error",
+                                  delivery_id=spec["delivery_id"],
                                   error=type(e).__name__)
             # settle claims whose spec vanished mid-flight — the runner
             # may have cancelled the render; a granted attempt must not

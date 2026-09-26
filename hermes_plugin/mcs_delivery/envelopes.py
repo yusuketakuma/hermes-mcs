@@ -117,6 +117,47 @@ def transport_receipt(claim: dict, result: str,
     return env
 
 
+def part_receipt(claim: dict, part: dict, result: str,
+                 remote_id: str | None = None,
+                 error_code: str | None = None) -> dict:
+    """Factual outcome of one durable part (thread/body/attachment).
+
+    Same echo contract as transport_receipt — every identity field is
+    re-checked against the stored render, so a receipt can only settle
+    the exact sealed part it names."""
+    delivery = claim["spec"]["delivery"]
+    env = {"version": 1, "op": "part_receipt",
+           "command_id": str(uuid.uuid4()),
+           "attempt_id": part_attempt_id(
+               claim["spec"]["delivery_id"], part["part_id"]),
+           "delivery_id": claim["spec"]["delivery_id"],
+           "render_rev": claim["spec"]["render_rev"],
+           "payload_hash": claim["payload_hash"],
+           "route_epoch": delivery["route_epoch"],
+           "correlation": delivery["correlation"],
+           "profile": delivery.get("profile"),
+           "application_id": delivery.get("application_id"),
+           "channel_id": delivery.get("channel_id"),
+           "part_id": part["part_id"], "kind": part["kind"],
+           "result": result}
+    if delivery.get("guild_id"):
+        env["guild_id"] = delivery["guild_id"]
+    if delivery.get("transport") == "slack":
+        env.update(version=2, transport="slack", team_id=delivery["team_id"])
+    if remote_id is not None:
+        env["remote_id"] = str(remote_id)
+    if error_code is not None:
+        env["error_code"] = error_code
+    return env
+
+
+def part_attempt_id(delivery_id: str, part_id: str) -> str:
+    """Journal key for one part attempt — the part's durable identity
+    is (delivery_id, part_id), never the card attempt that happened to
+    send it."""
+    return f"p:{delivery_id.replace('-', '')}:{part_id}"
+
+
 def thread_receipt(delivery_id: str, message_id: str,
                    thread_id: str | None = None,
                    error_code: str | None = None) -> dict:

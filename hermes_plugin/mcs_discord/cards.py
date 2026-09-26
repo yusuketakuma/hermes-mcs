@@ -84,3 +84,12 @@ def build_view(spec: dict):
     view.add_item(discord.ui.Container(
         *children, accent_color=_ACCENTS.get(spec.get("kind"))))
     return view
+
+
+async def send_attachment(target, path: str, name: str):
+    """File upload for a durable attachment part — kept here so
+    delivery.py stays SDK-free (only cards/actions may import
+    discord.py, and only inside functions)."""
+    import discord  # SDK required only inside the handler boundary
+    return await target.send(
+        file=discord.File(path, filename=name))

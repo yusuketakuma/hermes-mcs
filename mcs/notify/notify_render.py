@@ -289,10 +289,12 @@ def _signal_body(db, sig: dict) -> str:
     return "\n".join(lines)
 
 
-def _card_body_text(db, card, man) -> tuple:
+def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
-    page, so a concurrent nav cannot swap the view under the click."""
+    page, so a concurrent nav cannot swap the view under the click.
+    ``max_chars=None`` returns the untruncated body — durable thread
+    delivery plans every part instead of dropping a tail."""
     try:
         shown = json.loads(man["shown"] or "[]")
     except (json.JSONDecodeError, TypeError):
@@ -328,8 +330,8 @@ def _card_body_text(db, card, man) -> tuple:
             if k in sigs)
         title = ("レビュー候補 — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
-    if len(text) > BODY_MAX_CHARS:
-        text = text[:BODY_MAX_CHARS - 1] + "…\n（省略 — 原本を参照）"
+    if max_chars is not None and len(text) > max_chars:
+        text = text[:max_chars - 1] + "…\n（省略 — 原本を参照）"
     return title, text or "（表示できる本文がありません）"
 
 

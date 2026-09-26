@@ -39,15 +39,21 @@ def ja(result: dict | None) -> str:
 
 
 BODY_CHUNK = 1900          # under the 2000-char message ceiling
-BODY_MAX_CHUNKS = 4        # runner caps ~6k chars; never spam a channel
+BODY_MAX_CHUNKS = 4        # ephemeral replies only — durable thread
+                           # delivery passes max_chunks=None
 
 
-def split_body(text: str, limit: int = BODY_CHUNK) -> list:
+def split_body(text: str, limit: int = BODY_CHUNK,
+               max_chunks: int | None = BODY_MAX_CHUNKS) -> list:
     """Split a full-text answer on line boundaries into <=limit chunks,
-    hard-wrapping overlong lines. Bounded so a huge body stays a few
-    ephemeral messages, never a flood."""
+    hard-wrapping overlong lines.
+
+    ``max_chunks`` bounds ephemeral interaction replies (a huge body
+    stays a few messages). Durable part delivery passes ``None`` — the
+    render must plan every chunk, never silently discard a tail."""
     if limit <= 0:
         raise ValueError("chunk_limit_must_be_positive")
+    capped = max_chunks is not None
     out, cur = [], ""
     start = 0
     while start <= len(text):
@@ -58,10 +64,10 @@ def split_body(text: str, limit: int = BODY_CHUNK) -> list:
             if cur:
                 out.append(cur)
                 cur = ""
-                if len(out) == BODY_MAX_CHUNKS:
+                if capped and len(out) == max_chunks:
                     return out
             out.append(text[start:start + limit])
-            if len(out) == BODY_MAX_CHUNKS:
+            if capped and len(out) == max_chunks:
                 return out
             start += limit
             continue
@@ -72,7 +78,7 @@ def split_body(text: str, limit: int = BODY_CHUNK) -> list:
         cand = (cur + "\n" + line) if cur else line
         if len(cand) > limit:
             out.append(cur)
-            if len(out) == BODY_MAX_CHUNKS:
+            if capped and len(out) == max_chunks:
                 return out
             cur = line
         else:

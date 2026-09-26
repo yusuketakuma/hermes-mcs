@@ -239,3 +239,160 @@ def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, mo
     assert seen[1][1] == []
     assert seen[1][2]["json"]["blocks"][0]["type"] == "header"
     assert client.retry_handlers is original_handlers
+
+
+def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
+    """The durable part path over the REAL AsyncWebClient — every wire
+    call goes through the stubbed HTTP layer with retry_handlers=[],
+    body chunks post under thread_ts, and files.uploadV2 runs its
+    three-step external upload into the same thread."""
+    import hashlib
+
+    from hermes_plugin.mcs_delivery import envelopes, journal, registry
+    from hermes_plugin.mcs_slack import paths as slack_paths
+    from hermes_plugin.mcs_slack.delivery import (
+        DeliveryWorker, SlackCardAdapter)
+    from plugins.platforms.slack.adapter import SlackAdapter
+    from slack_sdk.web import async_base_client
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    monkeypatch.setattr(socket.socket, "connect",
+                        lambda *_: (_ for _ in ()).throw(
+                            AssertionError("no network in integration test")))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    blob = b"synthetic-upload-bytes"
+    f = tmp_path / "syn.bin"
+    f.write_bytes(blob)
+    replies = []
+    seen = []
+    ts_n = [1]
+
+    async def fake_http(**request):
+        url = request["api_url"]
+        method = ("upload" if "files.slack.com" in url
+                  else url.rsplit("/", 1)[-1])
+        seen.append((method, request["retry_handlers"], request["req_args"]))
+        ts_n[0] += 1
+        if method == "auth.test":
+            data = {"ok": True, "team_id": "T_SYNTHETIC",
+                    "bot_id": "B_INT", "user_id": "U_BOT"}
+        elif method == "upload":
+            return {"status_code": 200, "body": b"", "headers": {}}
+        elif method == "files.getUploadURLExternal":
+            data = {"ok": True,
+                    "upload_url": "https://files.slack.com/upload/v1/SYN",
+                    "file_id": "F_INT_0001"}
+        elif method == "files.completeUploadExternal":
+            data = {"ok": True, "files": [{"id": "F_INT_0001"}]}
+        elif method == "chat.postMessage":
+            js = request["req_args"].get("json", {})
+            ts = f"1790000000.{ts_n[0]:06d}"
+            if js.get("thread_ts"):
+                replies.append({"ts": ts, "text": js.get("text"),
+                                "bot_id": "B_INT"})
+            data = {"ok": True, "channel": js.get("channel"), "ts": ts}
+        elif method == "conversations.replies":
+            root = request["req_args"].get("params", {}).get("ts")
+            data = {"ok": True, "messages": [
+                {"ts": root, "text": "<card>", "bot_id": "B_INT"},
+                *replies]}
+        else:
+            data = {"ok": True}
+        return {"data": data, "headers": {}, "status_code": 200}
+
+    monkeypatch.setattr(async_base_client, "_request_with_session", fake_http)
+    client = AsyncWebClient(token="xoxb-synthetic")
+    native_adapter = object.__new__(SlackAdapter)
+    native_adapter._team_clients = {"T_SYNTHETIC": client}
+    native_adapter._channel_team = {}
+    native_adapter._app = SimpleNamespace(client=object())
+    adapter = SlackCardAdapter(
+        native_adapter._app, native_adapter=native_adapter,
+        team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
+        channel_id="C_SYNTHETIC", profile="cco",
+        allowed_user_ids={"U_OPERATOR"})
+
+    scope = {"transport": "slack", "profile": "cco",
+             "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
+             "channel_id": "C_SYNTHETIC"}
+    root = tmp_path / "mcs-data"
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (root / name).mkdir(parents=True)
+    dirs = slack_paths.ensure_dirs(str(root))
+    reg = registry.Registry(dirs["state"], scope=scope)
+    worker = DeliveryWorker(
+        sender=adapter, settings=scope, root=str(root), reg=reg,
+        worker_id=registry.new_worker_id(), log=lambda *_a, **_k: None)
+
+    spec = _spec()
+    spec["delivery"].update(scope)
+    parts = spec["parts"]
+    parts["thread_body_parts"] = ["chunk-1 of the synthetic body",
+                                  "chunk-2 of the synthetic body"]
+
+    def _sha(t):
+        return hashlib.sha256(t.encode("utf-8")).hexdigest()
+    card_sha = hashlib.sha256(json.dumps(
+        {"containers": parts["containers"], "footer": parts["footer"],
+         "action_rows": parts["action_rows"]},
+        sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False).encode("utf-8")).hexdigest()
+    parts["manifest"] = [
+        {"part_id": "card", "kind": "card", "index": 0,
+         "sha256": card_sha},
+        {"part_id": "thread", "kind": "thread", "index": 1,
+         "name": "synthetic-thread",
+         "sha256": _sha("synthetic-thread")},
+        {"part_id": "body:0001", "kind": "body_part", "index": 2,
+         "sha256": _sha(parts["thread_body_parts"][0]),
+         "bytes": len(parts["thread_body_parts"][0].encode())},
+        {"part_id": "body:0002", "kind": "body_part", "index": 3,
+         "sha256": _sha(parts["thread_body_parts"][1]),
+         "bytes": len(parts["thread_body_parts"][1].encode())},
+        {"part_id": "attach:0001", "kind": "attachment_part", "index": 4,
+         "attachment_id": 1, "name": "syn.bin", "path": str(f),
+         "sha256": hashlib.sha256(blob).hexdigest(),
+         "bytes": len(blob)},
+    ]
+    claim = {"spec": spec, "attempt_id": "a" * 16,
+             "worker_id": worker._worker_id,
+             "payload_hash": envelopes.payload_hash(spec),
+             "spec_path": None, "phase": "settled"}
+
+    async def drive():
+        assert await adapter.bind()
+        out = await adapter.perform(spec)
+        await worker._deliver_parts(claim, out["message_id"])
+        return out
+
+    card_ts = asyncio.run(drive())
+    assert card_ts["result"] == "delivered"
+    root_ts = card_ts["message_id"]
+    methods = [m for m, _, _ in seen]
+    # card post + two thread replies + the upload trio — no hidden call
+    assert methods.count("chat.postMessage") == 3
+    assert methods.count("files.getUploadURLExternal") == 1
+    assert methods.count("upload") == 1
+    assert methods.count("files.completeUploadExternal") == 1
+    # every send-side call ran with retries stripped — the shared
+    # client's own list is untouched and still the SDK default
+    assert all(handlers == [] for _, handlers, _ in seen[1:])
+    assert client.retry_handlers
+    posts = [r for m, _, r in seen if m == "chat.postMessage"]
+    assert posts[0]["json"].get("thread_ts") is None   # the card itself
+    assert all(p["json"]["thread_ts"] == root_ts for p in posts[1:])
+    assert [p["json"]["text"] for p in posts[1:]] \
+        == spec["parts"]["thread_body_parts"]
+    complete = next(r for m, _, r in seen
+                    if m == "files.completeUploadExternal")
+    assert complete["params"]["channel_id"] == "C_SYNTHETIC"
+    assert complete["params"]["thread_ts"] == root_ts
+    assert "F_INT_0001" in complete["params"]["files"]
+    # the exact verified bytes hit the external upload URL
+    raw = next(r for m, _, r in seen if m == "upload")
+    assert raw["data"] == blob
+    # every part journaled its own delivered receipt with a remote id
+    rows = [r for rs in journal.scan(dirs["state"]).values() for r in rs
+            if r.get("phase") == "receipt" and r.get("part_id")]
+    assert {r["part_id"] for r in rows} \
+        == {"thread", "body:0001", "body:0002", "attach:0001"}

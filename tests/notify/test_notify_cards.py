@@ -113,14 +113,16 @@ def _begin(led, render, n=1, worker="bb" * 8, cfg=CFG):
 
 
 def _receipt(led, render, attempt_id, result="delivered",
-             message_id="m-1", n=9):
-    return notify_transport.apply_transport_receipt(led, {
-        "version": 1, "op": "transport_receipt", "command_id": _uuid(n),
-        "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
-        "render_rev": render["render_rev"],
-        "payload_hash": render["payload_hash"], "route_epoch": 1,
-        "correlation": render["correlation"], **SCOPE,
-        "result": result, "message_id": message_id}, CFG, now=NOW)
+             message_id="m-1", error_code=None, n=9):
+    req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(n),
+           "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
+           "render_rev": render["render_rev"],
+           "payload_hash": render["payload_hash"], "route_epoch": 1,
+           "correlation": render["correlation"], **SCOPE,
+           "result": result, "message_id": message_id}
+    if error_code is not None:
+        req["error_code"] = error_code
+    return notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
 
 
 def _signal_row(led, key, pid=1, state="open", stype="med_followup",
@@ -1506,6 +1508,17 @@ def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
     assert spec_path.exists()
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    # the card settled but its durable parts are pending — the spec
+    # file is the only copy a restart-resume can replay, so gc keeps
+    # it until the part plan reaches a terminal mix
+    out = notify_cards.gc(led, CFG, now=NOW)
+    assert out["spec_files"] == 0 and spec_path.exists()
+    led.db.execute(
+        "UPDATE notification_render_parts SET state='delivered' "
+        "WHERE delivery_id=?", (render["delivery_id"],))
+    notify_cards._update_parts_state(
+        led.db, render["delivery_id"], NOW)
+    led.db.commit()
     out = notify_cards.gc(led, CFG, now=NOW)
     assert out["spec_files"] >= 1 and not spec_path.exists()
     led.db.execute("UPDATE notification_action_tokens SET expires_at=?",
@@ -1617,7 +1630,9 @@ def test_created_thread_update_carries_body_not_button(led, tmp_path):
         (tmp_path / "data" / "discord_render"
          / (upd["delivery_id"] + ".json")).read_text())
     assert spec["delivery"]["thread_id"] == "th-1"
-    assert spec["parts"]["thread_body"]
+    assert spec["parts"]["thread_body_parts"]   # durable part text (T7)
+    assert [p for p in spec["parts"]["manifest"]
+            if p["kind"] == "body_part"]
     ids = {b["id"] for row in spec["parts"]["action_rows"]
            for b in row}
     assert "body" not in ids
@@ -2003,6 +2018,14 @@ def test_bounded_gc_advances_past_deleted_terminal_spec_files(led, tmp_path):
     paths = [tmp_path / 'data' / 'discord_render' / (r['delivery_id'] + '.json')
              for r in (first, second)]
     assert all(path.exists() for path in paths)
+    # parts pending keeps each spec replayable for restart-resume —
+    # settle the plans so gc can advance (limit=1 covers one file per pass)
+    for r in (first, second):
+        led.db.execute(
+            "UPDATE notification_render_parts SET state='delivered' "
+            "WHERE delivery_id=?", (r["delivery_id"],))
+        notify_cards._update_parts_state(led.db, r["delivery_id"], NOW)
+    led.db.commit()
     notify_cards.gc(led, CFG, now=NOW + 10, limit=1)
     notify_cards.gc(led, CFG, now=NOW + 20, limit=1)
     assert not any(path.exists() for path in paths)

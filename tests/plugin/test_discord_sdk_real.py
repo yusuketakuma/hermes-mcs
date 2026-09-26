@@ -131,6 +131,33 @@ def test_defer_type_is_message_update_for_components():
     assert src.name == "interactions.py"
 
 
+def test_send_attachment_wraps_sealed_file_in_real_discord_file(tmp_path):
+    """cards.send_attachment is the single discord.py import site for
+    durable attachment parts — it must produce a real discord.File
+    addressed to the part's target thread, nothing else."""
+    import asyncio
+    from types import SimpleNamespace
+
+    f = tmp_path / "sealed.bin"
+    f.write_bytes(b"synthetic-sealed-bytes")
+    sent = []
+
+    class FakeThread:
+        async def send(self, **kwargs):
+            sent.append(kwargs)
+            return SimpleNamespace(id=4242)
+
+    out = asyncio.run(cards.send_attachment(
+        FakeThread(), str(f), "sealed.bin"))
+    assert out.id == 4242
+    (kw,) = sent
+    file = kw["file"]
+    assert isinstance(file, discord.File)
+    assert file.filename == "sealed.bin"
+    file.fp.seek(0)
+    assert file.fp.read() == b"synthetic-sealed-bytes"
+
+
 def test_webhook_partial_accepts_client_for_followup():
     """sweep_followups uses Webhook.partial(app_id, token, client=bot)
     — the client kwarg is what borrows the bot's session/state."""

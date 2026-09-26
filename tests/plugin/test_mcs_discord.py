@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import time
 import types
@@ -151,9 +152,19 @@ def _fake_discord():
 
 # ---------- fake discord objects ----------------------------------------
 
+BOT_USER = SimpleNamespace(id=4242)
+FOREIGN_USER = SimpleNamespace(id=9999)
+
+
 class _HistMsg:
-    def __init__(self, content):
+    _next = 0
+
+    def __init__(self, content, author=BOT_USER):
         self.content = content
+        self.author = author           # posts through the fake are ours
+        type(self)._next += 1
+        self.id = type(self)._next     # remote message identity —
+                                       # dedupe binds to it, not content
 
 
 class FakeThread:
@@ -225,6 +236,7 @@ class FakeBot:
     def __init__(self, channel_id=42):
         self.channels = {channel_id: FakeChannel(channel_id)}
         self.channels[channel_id].bot = self
+        self.user = BOT_USER
         self.listeners = []
 
     def get_channel(self, cid):
@@ -586,6 +598,102 @@ def test_delivery_end_to_end(world):
     _, spec = world.spec()
     tok = world.token(spec, "ack")
     assert reg.token(tok)["action"] == "ack"
+
+
+def test_restore_after_send_holds_until_reconcile(world):
+    """DB restored to just-before-send: the journal + spec file prove
+    the card delivered remotely, so the rewound DB must not resend —
+    grants deny while restore_pending, reconcile holds the scope, and
+    only an operator rebind (remote receipt verified) releases it."""
+    import uuid
+
+    import notify_reconcile
+
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    channel = bot.channels[42]
+
+    # backup BEFORE the send — predates begin/send/receipt entirely
+    backup = world.data / "ledger-backup.db"
+    dst = sqlite3.connect(str(backup))
+    world.led.db.backup(dst)
+    dst.close()
+
+    async def run():
+        sent = await _deliver(world, worker)
+        assert len(sent) == 1
+        return sent[0]
+    msg = asyncio.run(run())
+    assert world.card()["delivery_state"] == "delivered"
+    delivery_id = world.spec()[0]["delivery_id"]
+
+    # rewind: the live DB is replaced by the pre-send backup; the
+    # journal + spec file + remote message all survive the restore
+    world.led.close()
+    os.replace(backup, world.data / "ledger.db")
+    world.led = _ledger.Ledger(str(world.data / "ledger.db"))
+    notify_cards.mark_restored(str(world.data), backup_path=str(backup),
+                               by="test")
+    notify_cards.publish_flags(CFG, str(world.data))
+
+    # a restarted worker sees restore_pending and never even claims
+    worker2, reg2, _ = world.mkworker(bot=bot)
+
+    async def tick_and_drain():
+        await worker2.tick()
+        notify_cmds.drain_int_commands(world.led, {}, CFG,
+                                       str(world.data))
+        await worker2.tick()
+        notify_cmds.drain_int_commands(world.led, {}, CFG,
+                                       str(world.data))
+
+    asyncio.run(tick_and_drain())
+    assert len(channel.sent) == 1          # zero NEW sends
+    assert not reg2.claims()
+
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert rep["counts"].get("held") == 1
+    assert notify_cards.restore_pending(str(world.data)) is None
+    notify_cards.publish_flags(CFG, str(world.data))
+
+    # reconcile done but the lost delivery stays held — a re-claim is
+    # denied by the held render, so still no resend
+    asyncio.run(tick_and_drain())
+    assert len(channel.sent) == 1
+    assert world.led.db.execute(
+        "SELECT state FROM notification_renders WHERE delivery_id=?",
+        (delivery_id,)).fetchone()["state"] == "held"
+    card = dict(world.led.db.execute(
+        "SELECT * FROM notification_cards WHERE card_id=1"
+        ).fetchone())
+    assert card["delivery_state"] == "delivery_unknown"
+
+    # operator verifies the remote receipt and rebinds — the effect
+    # stays delivered, holds release, and nothing ever resent
+    aid = next(iter(journal.scan(str(world.data / "discord_state"))))
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(uuid.uuid4()), "actor": "op-user",
+           "human_confirmed": True,
+           "reason": "remote message verified on channel",
+           "delivery_id": delivery_id, "attempt_id": aid,
+           "result": "mark_delivered",
+           "profile": "mcs", "application_id": "1", "guild_id": "7",
+           "channel_id": "42", "message_id": str(msg.id),
+           "evidence": {"method": "remote_receipt",
+                        "ref": f"msg:{msg.id}"}}
+    out = notify_transport.apply_card_resolve(world.led, req, CFG)
+    assert out["outcome"] == "applied"
+    card = dict(world.led.db.execute(
+        "SELECT * FROM notification_cards WHERE card_id=1"
+        ).fetchone())
+    assert card["delivery_state"] == "delivered"
+    assert card["message_id"] == str(msg.id)
+    assert not world.led.db.execute(
+        "SELECT 1 FROM notification_restore_holds "
+        "WHERE released_at IS NULL").fetchone()
+    asyncio.run(tick_and_drain())
+    assert len(channel.sent) == 1          # still exactly one send
 
 
 def test_delivery_denied_revoked_card(world):
@@ -1960,7 +2068,7 @@ def test_thread_opens_with_body_and_card_drops_body_button(world):
     ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
     assert "body" not in ids
     assert {"ack", "assign", "defer", "tasks"} <= ids
-    assert spec["parts"].get("thread_body")
+    assert spec["parts"].get("thread_body_parts")   # durable part text
 
 
 def test_body_button_survives_without_card_thread(world):
@@ -1978,8 +2086,10 @@ def test_body_button_survives_without_card_thread(world):
 
 
 def test_thread_body_send_failure_only_logs(world, monkeypatch):
-    """A chunk-send failure inside the fresh thread is a log event,
-    never a delivery fault — the card and thread stay settled."""
+    """A chunk-send failure inside the fresh thread is a durable part
+    outcome, never a delivery fault — the card and thread stay settled
+    while every body part records its honest 'unknown' (a 500 can
+    have committed; it is never resent)."""
     world.seed()
     world.dispatch()
     worker, reg, bot = world.mkworker()
@@ -1999,7 +2109,17 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     card = world.card()
     assert card["delivery_state"] == "delivered"
     assert card["thread_state"] == "created"
-    assert any(e == "thread_body_failed" for e, _ in world.logs)
+    parts = world.led.db.execute(
+        "SELECT kind,state FROM notification_render_parts "
+        "ORDER BY idx").fetchall()
+    assert [p["kind"] for p in parts][:2] == ["card", "thread"]
+    assert parts[0]["state"] == "delivered"
+    assert parts[1]["state"] == "delivered"
+    bodies = [p["state"] for p in parts if p["kind"] == "body_part"]
+    assert bodies and set(bodies) == {"unknown"}
+    render = world.led.db.execute(
+        "SELECT parts_state FROM notification_renders").fetchone()
+    assert render["parts_state"] == "incomplete"
 
 
 def test_update_backfills_body_into_legacy_thread(world, monkeypatch):
@@ -2035,9 +2155,15 @@ def test_update_backfills_body_into_legacy_thread(world, monkeypatch):
         assert thread.sent                   # backfilled
         assert "本文" in "\n".join(thread.sent)
         n = len(thread.sent)
-        # re-running the same spec posts nothing — already there
+        # re-running the same delivery posts nothing — the journal
+        # already proves every part of this spec
         _, spec2 = world.spec()
-        await worker._thread_body(spec2, thread, dedupe=True)
+        claim2 = {"attempt_id": "replay", "worker_id": "w9",
+                  "spec": spec2,
+                  "payload_hash": envelopes.payload_hash(spec2),
+                  "spec_path": None, "phase": "settled"}
+        await worker._deliver_parts(
+            claim2, str(spec2["delivery"]["message_id"]))
         assert len(thread.sent) == n
         # a changed body posts the new version (latest text lands last)
         world.led.db.execute(

@@ -5,9 +5,16 @@ render never reaches a transport, and ``token_map`` captures each
 button's render-time context for the worker registry. Transports add
 their own scope checks and rendering on top (Slack's ``v2`` wraps this
 ``v1`` validator after checking its workspace fields).
+
+A v1 spec may carry a sealed ``parts.manifest`` — the durable delivery
+plan (card/thread/body_part/attachment_part identities, ordered
+positions, payload hashes). Validation recomputes every verifiable
+hash so a tampered or truncated plan fails closed before any send.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 SCHEMA = "mcs-card-render/v1"
@@ -24,6 +31,15 @@ MAX_ROWS = 5                  # ActionRow per view
 MAX_BUTTONS = 5               # buttons per ActionRow
 MAX_LABEL = 80
 MAX_THREAD_NAME = 100
+MAX_PARTS = 256                # declared bound — the runner adds a
+                               # visible marker part rather than
+                               # exceeding it silently
+MAX_PART_ID = 64
+MAX_PART_NAME = 200
+MAX_ATTACH_PATH = 512
+MAX_BODY_PART_CHARS = 2000
+PART_KINDS = ("card", "thread", "body_part", "attachment_part")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -67,6 +83,9 @@ def validate(spec) -> dict:
             _err("bad_card_key")
         if spec.get("kind") not in KINDS:
             _err("bad_kind")
+    if spec.get("logical_intent_id") is not None \
+            and not _text(spec.get("logical_intent_id"), 200):
+        _err("bad_logical_intent_id")
     delivery = spec.get("delivery")
     if not isinstance(delivery, dict):
         _err("bad_delivery")
@@ -158,7 +177,98 @@ def validate(spec) -> dict:
     name = parts.get("thread_name")
     if name is not None and not _text(name, MAX_THREAD_NAME):
         _err("bad_thread_name")
+    _validate_part_plan(spec)
     return spec
+
+
+def _sha_bytes(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _canonical(value) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _validate_part_plan(spec: dict) -> None:
+    """Sealed delivery-plan integrity: ordered unique part ids, bounded
+    counts, and every locally verifiable payload hash recomputed. A
+    spec without a manifest is a legacy pre-plan render — allowed, it
+    simply has no durable parts to track."""
+    parts = spec["parts"]
+    chunks = parts.get("thread_body_parts")
+    if chunks is not None:
+        if not isinstance(chunks, list) or len(chunks) > MAX_PARTS:
+            _err("bad_thread_body_parts")
+        for c in chunks:
+            if not _text(c, MAX_BODY_PART_CHARS):
+                _err("body_part_too_long")
+    manifest = parts.get("manifest")
+    if manifest is None:
+        return
+    if not isinstance(manifest, list) or not manifest \
+            or len(manifest) > MAX_PARTS:
+        _err("bad_manifest")
+    seen, last_idx, body_n = set(), -1, 0
+    for i, p in enumerate(manifest):
+        if not isinstance(p, dict) \
+                or not _text(p.get("part_id"), MAX_PART_ID):
+            _err("bad_part_id")
+        if p["part_id"] in seen:
+            _err("duplicate_part_id")
+        seen.add(p["part_id"])
+        if p.get("kind") not in PART_KINDS:
+            _err("bad_part_kind")
+        if type(p.get("index")) is not int or p["index"] <= last_idx:
+            _err("bad_part_index")
+        last_idx = p["index"]
+        if p.get("sha256") is not None \
+                and not _HEX64.match(str(p["sha256"])):
+            _err("bad_part_sha256")
+        kind = p["kind"]
+        if kind == "card" and i != 0:
+            _err("bad_card_part")
+        if kind == "thread":
+            if not _text(p.get("name"), MAX_PART_NAME) \
+                    or p.get("sha256") != _sha_bytes(p["name"]):
+                _err("bad_thread_part")
+        elif kind == "body_part":
+            body_n += 1
+        elif kind == "attachment_part":
+            if type(p.get("attachment_id")) is not int \
+                    or p["attachment_id"] < 1:
+                _err("bad_attachment_id")
+            if not _text(p.get("name"), MAX_PART_NAME):
+                _err("bad_attachment_name")
+            if p.get("unavailable") is True:
+                continue
+            if not _text(p.get("path"), MAX_ATTACH_PATH):
+                _err("bad_attachment_path")
+            if not _HEX64.match(str(p.get("sha256") or "")):
+                _err("bad_attachment_sha256")
+            if type(p.get("bytes")) is not int or p["bytes"] < 0:
+                _err("bad_attachment_bytes")
+    # recompute the locally verifiable payloads — a dropped or
+    # rehashed part can never ride the manifest
+    card = manifest[0]
+    if card["kind"] != "card":
+        _err("bad_card_part")
+    card_sha = hashlib.sha256(_canonical(
+        {"containers": parts["containers"], "footer": parts["footer"],
+         "action_rows": parts["action_rows"]})).hexdigest()
+    if card.get("sha256") != card_sha:
+        _err("card_part_sha256")
+    body_parts = [p for p in manifest if p["kind"] == "body_part"]
+    if chunks is not None or body_parts:
+        # declared chunks and declared body parts must pair one-for-one
+        # in BOTH directions — a spec that drops every body part while
+        # keeping its chunks is as corrupt as the reverse
+        if chunks is None or len(chunks) != len(body_parts):
+            _err("body_part_count")
+        for p, c in zip(body_parts, chunks):
+            if p.get("sha256") != _sha_bytes(c) \
+                    or p.get("bytes") != len(c.encode("utf-8")):
+                _err("body_part_sha256")
 
 
 def token_map(spec: dict) -> dict:

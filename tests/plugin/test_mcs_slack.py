@@ -1,6 +1,7 @@
 """Slack native client boundary exercised without a network or real MCS data."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from hermes_plugin.mcs_delivery import envelopes, journal, registry
 from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
+import notify_reconcile
 from test_mcs_slack_cards import _spec
 from test_notify_slack import (
     SLACK, SCOPE, _dispatch, _intent, _latest_render, _seed_thread,
@@ -31,25 +33,81 @@ def isolated_slack_ledger(tmp_path):
 
 
 class FakeClient:
-    def __init__(self, *, team="T_SYNTHETIC", retries=None):
+    def __init__(self, *, team="T_SYNTHETIC", retries=None, uploads=True):
         self.retry_handlers = [] if retries is None else retries
         self.team = team
         self.calls = []
         self.ephemeral_calls = []
         self.send_retry_handlers = []
         self.failure: Exception | None = None
+        self.thread_failure: Exception | None = None
+        # indexes into thread_posts that must fail exactly once
+        self.thread_fail_at: set[int] = set()
+        self.thread_posts = []
+        self.replies: dict[str, list] = {}
+        # upload edge — uploads=False models an SDK without
+        # files_upload_v2 (instance attr so the single_attempt copy
+        # inherits the capability exactly)
+        self.upload_calls = []
+        self.upload_fail_at: set[int] = set()
+        self.upload_failure: Exception | None = None
+        self._fid_n = 0
+        if uploads:
+            self.files_upload_v2 = self._files_upload_v2
+        self.bot_id = "B_SYNTHETIC"
+        self._ts_n = 1
+
+    def _next_ts(self):
+        self._ts_n += 1
+        return f"1790000000.{self._ts_n:06d}"
 
     async def auth_test(self):
         self.calls.append(("auth_test", {}))
-        return {"ok": True, "team_id": self.team}
+        return {"ok": True, "team_id": self.team, "bot_id": self.bot_id,
+                "user_id": "U_BOT"}
 
     async def chat_postMessage(self, **kwargs):
         self.calls.append(("create", kwargs))
         self.send_retry_handlers.append(self.retry_handlers)
         if self.failure is not None:
             raise self.failure
+        if "thread_ts" in kwargs:
+            if len(self.thread_posts) in self.thread_fail_at:
+                self.thread_fail_at.discard(len(self.thread_posts))
+                raise self.thread_failure or TimeoutError("synthetic")
+            ts = self._next_ts()
+            self.thread_posts.append(kwargs)
+            self.replies.setdefault(kwargs["thread_ts"], []).append(
+                {"ts": ts, "text": kwargs["text"],
+                 "bot_id": self.bot_id})
+            return {"ok": True, "channel": kwargs["channel"], "ts": ts}
         return {"ok": True, "channel": kwargs["channel"],
                 "ts": "1790000000.000001"}
+
+    async def _files_upload_v2(self, **kwargs):
+        self.calls.append(("files_upload_v2", kwargs))
+        self.send_retry_handlers.append(self.retry_handlers)
+        if len(self.upload_calls) in self.upload_fail_at:
+            self.upload_fail_at.discard(len(self.upload_calls))
+            raise self.upload_failure or TimeoutError("synthetic")
+        self.upload_calls.append(kwargs)
+        self._fid_n += 1
+        blob = kwargs.get("file") or b""
+        entry = {"id": f"F_SYNTHETIC_{self._fid_n:04d}",
+                 "name": kwargs.get("filename"),
+                 "size": len(blob),
+                 "sha256": hashlib.sha256(blob).hexdigest()}
+        ts = self._next_ts()
+        self.replies.setdefault(kwargs["thread_ts"], []).append(
+            {"ts": ts, "bot_id": self.bot_id, "files": [entry]})
+        return {"ok": True, "files": [entry]}
+
+    async def conversations_replies(self, **kwargs):
+        self.calls.append(("replies", kwargs))
+        root = kwargs["ts"]
+        msgs = [{"ts": root, "text": "<card>", "bot_id": self.bot_id}]
+        msgs += list(self.replies.get(root, []))
+        return {"ok": True, "messages": msgs}
 
     async def chat_update(self, **kwargs):
         self.calls.append(("update", kwargs))
@@ -321,7 +379,9 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
         log=lambda *_args, **_kw: None)
     spec = json.loads(_latest_render(led)["spec_json"])
     token = next(b["token"] for row in spec["parts"]["action_rows"]
-                 for b in row if b["id"] == "body")
+                 for b in row if b["id"] == "ack")
+    n_body = sum(1 for p in spec["parts"]["manifest"]
+                 if p["kind"] == "body_part")
 
     async def replay():
         assert await sender.bind()
@@ -337,14 +397,16 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
         reg._batch_depth = 1
         claim = next(iter(reg.claims().values()))
         await worker._step_claim(claim)
-        assert [kind for kind, _ in client.calls].count("create") == 1
+        # card post + one journaled reply per body part
+        assert [kind for kind, _ in client.calls].count("create") \
+            == 1 + n_body
         phases = [row["phase"] for rows in journal.scan(dirs["state"]).values()
                   for row in rows]
         assert phases.index("started") < phases.index("result") \
             < phases.index("receipt")
         result = {"errors": []}
         assert runner_cmds.drain_int_commands(
-            led, result, SLACK, str(root)) == 1
+            led, result, SLACK, str(root)) == n_body + 3
         assert not result["errors"]
         worker.release_scope_lock()
 
@@ -388,12 +450,21 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
                 led, result, SLACK, str(root)) == 1
             assert not result["errors"]
             await actions.sweep_followups()
-            assert private_body in json.dumps(
-                client.ephemeral_calls, ensure_ascii=False)
-            assert client.ephemeral_calls[0]["user"] == "U_SYNTHETIC"
+            # the surviving action still applies through the crash-
+            # recovered token binding; the body itself already lives
+            # in-thread, so nothing ephemeral is owed for an ack
+            outcomes = [
+                json.loads(p.read_text())
+                for p in Path(dirs["cmd_results"]).glob("*.json")]
+            outcome = next(
+                o for o in outcomes if o.get("action") == "ack")
+            assert outcome["outcome"] == "applied"
+            assert private_body in "".join(
+                p["text"] for p in client.thread_posts)
             actions.unload()
             await replacement.tick()
-            assert [kind for kind, _ in client.calls].count("create") == 1
+            assert [kind for kind, _ in client.calls].count("create") \
+                == 1 + n_body
         finally:
             replacement.release_scope_lock()
 
@@ -403,7 +474,7 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
     ).fetchone()[0] == "delivered"
 
 
-def test_runner_grant_posts_card_and_replies_body_privately(led):
+def test_runner_grant_posts_card_and_body_inside_card_thread(led):
     _seed_thread(led)
     private_body = "PRIVATE-SYNTHETIC-MESSAGE"
     led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
@@ -425,6 +496,9 @@ def test_runner_grant_posts_card_and_replies_body_privately(led):
         sender=sender, settings=SCOPE, root=str(root),
         reg=reg, worker_id=registry.new_worker_id(),
         log=lambda *_args, **_kw: None)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    n_body = sum(1 for p in spec["parts"]["manifest"]
+                 if p["kind"] == "body_part")
 
     async def deliver():
         assert await sender.bind()
@@ -438,65 +512,467 @@ def test_runner_grant_posts_card_and_replies_body_privately(led):
             assert not result["errors"]
             await worker.tick()
             assert [kind for kind, _ in client.calls] == [
-                "auth_test", "create",
-            ]
+                "auth_test"] + ["create"] * (1 + n_body)
+            # card settle + every part receipt (+ the legacy
+            # thread_receipt twin) drains in one pass
             result = {"errors": []}
             assert runner_cmds.drain_int_commands(
-                led, result, SLACK, str(root)) == 1
+                led, result, SLACK, str(root)) == n_body + 3
             assert not result["errors"]
             await worker.tick()
-
-            spec = json.loads(_latest_render(led)["spec_json"])
-            token = next(
-                button["token"] for row in spec["parts"]["action_rows"]
-                for button in row if button["id"] == "body")
-            app = SimpleNamespace(
-                client=client, action=lambda _matcher: lambda handler: handler,
-                view=lambda _matcher: lambda handler: handler)
-            actions = Actions(
-                app=app, settings={
-                    **SCOPE, "project_ids": frozenset({1}),
-                    "allowed_user_ids": frozenset({"U_SYNTHETIC"}),
-                }, dirs=dirs, reg=reg, sender=sender,
-                log=lambda *_args, **_kw: None)
-            actions.register()
-            acked = []
-
-            async def ack():
-                acked.append(True)
-
-            body = {"team": {"id": SCOPE["team_id"]},
-                    "api_app_id": SCOPE["application_id"],
-                    "channel": {"id": SCOPE["channel_id"]},
-                    "user": {"id": "U_SYNTHETIC"},
-                    "message": {"ts": "1790000000.000001"}}
-            await actions._action(
-                ack, body,
-                {"action_id": "mcs:a:" + token, "value": token})
-            assert acked == [True]
-            assert not client.ephemeral_calls
-            result = {"errors": []}
-            assert runner_cmds.drain_int_commands(
-                led, result, SLACK, str(root)) == 1
-            assert not result["errors"]
-            await actions.sweep_followups()
-            actions.unload()
         finally:
             worker.release_scope_lock()
 
     asyncio.run(deliver())
     public = json.dumps(client.calls[1][1], ensure_ascii=False)
     assert private_body not in public
-    assert client.ephemeral_calls
-    assert all(item["user"] == "U_SYNTHETIC"
-               and item["channel"] == SCOPE["channel_id"]
-               for item in client.ephemeral_calls)
-    assert private_body in json.dumps(
-        client.ephemeral_calls, ensure_ascii=False)
+    # every body chunk landed as a reply on the card's own ts — never a
+    # top-level channel message, never an ephemeral one
+    card_ts = "1790000000.000001"
+    assert len(client.thread_posts) == n_body
+    assert all(p["channel"] == SCOPE["channel_id"]
+               and p["thread_ts"] == card_ts
+               for p in client.thread_posts)
+    assert private_body in "".join(
+        p["text"] for p in client.thread_posts)
+    assert "".join(p["text"] for p in client.thread_posts) \
+        == "".join(spec["parts"]["thread_body_parts"])
+    assert not client.ephemeral_calls
     assert any(block["type"] == "actions"
                for block in client.calls[1][1]["blocks"])
+    # thread parts posted through the send-safe single-attempt client
+    assert client.send_retry_handlers == [[]] * (1 + n_body)
     assert led.db.execute(
-        "SELECT delivery_state FROM notification_cards"
-    ).fetchone()[0] == "delivered"
+        "SELECT delivery_state,thread_state FROM notification_cards"
+    ).fetchone()[:] == ("delivered", "created")
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders").fetchone()[0] \
+        == "complete"
     render = _latest_render(led)
     assert render["transport"] == "slack"
+
+
+# ---------- T9: durable body parts inside the card's own thread ----------
+
+
+class FakeSlackError(Exception):
+    """SlackApiError-shaped fake — definitive 4xx reject vs ambiguous
+    transport failures are two different part outcomes."""
+    def __init__(self, status, error):
+        super().__init__(error)
+        self.response = SimpleNamespace(status_code=status,
+                                        data={"ok": False, "error": error})
+
+
+def _mkworld(led, team=SCOPE["team_id"], channel=SCOPE["channel_id"],
+             uploads=True):
+    """Dispatch a slack render and wire the worker boundary."""
+    root = Path(runner_cards.data_root(led))
+    runner_cards.publish_flags(SLACK, str(root))
+    dirs = slack_paths.ensure_dirs(str(root))
+    reg = registry.Registry(dirs["state"], scope=SCOPE)
+    client = FakeClient(team=team, uploads=uploads)
+    sender = SlackCardAdapter(
+        SimpleNamespace(client=client),
+        team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
+        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
+        allowed_user_ids={"U_SYNTHETIC"})
+    worker = DeliveryWorker(
+        sender=sender, settings=SCOPE, root=str(root),
+        reg=reg, worker_id=registry.new_worker_id(),
+        log=lambda *_args, **_kw: None)
+    return SimpleNamespace(root=root, dirs=dirs, reg=reg,
+                           client=client, sender=sender, worker=worker)
+
+
+def _big_body(led, chars=4200):
+    """Force a multi-part body — two 1900-char chunks can't suffice."""
+    led.db.execute(
+        "UPDATE messages SET body_text=? WHERE message_id=100",
+        ("SYNTHETIC-THREAD-BODY " + "x" * chars,))
+    led.db.commit()
+
+
+async def _granted_card(w, led, root):
+    """tick -> grant -> tick — card delivered, parts driven."""
+    assert await w._sender.bind()
+    w.acquire_scope_lock()
+    try:
+        await w.tick()
+        result = {"errors": []}
+        runner_cmds.drain_int_commands(led, result, SLACK, str(root))
+        await w.tick()
+        runner_cmds.drain_int_commands(
+            led, {"errors": []}, SLACK, str(root))
+    finally:
+        w.release_scope_lock()
+
+
+def test_slack_thread_parts_post_under_bound_root_only(led):
+    _seed_thread(led)
+    _big_body(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    n_body = sum(1 for p in spec["parts"]["manifest"]
+                 if p["kind"] == "body_part")
+    assert n_body >= 3
+    asyncio.run(_granted_card(w.worker, led, w.root))
+
+    # every chunk is a reply on the card's own ts in manifest order —
+    # the top-level posts count is exactly one (the card)
+    tops = [kw for kind, kw in w.client.calls
+            if kind == "create" and "thread_ts" not in kw]
+    assert len(tops) == 1
+    assert [p["text"] for p in w.client.thread_posts] \
+        == spec["parts"]["thread_body_parts"]
+    assert all(p["thread_ts"] == "1790000000.000001"
+               and p["channel"] == SCOPE["channel_id"]
+               and "blocks" not in p for p in w.client.thread_posts)
+
+    # restart: every journaled part dedupes — nothing reposts
+    restored = registry.Registry(w.dirs["state"], scope=SCOPE)
+    replacement = DeliveryWorker(
+        sender=w.sender, settings=SCOPE, root=str(w.root),
+        reg=restored, worker_id=registry.new_worker_id(),
+        log=lambda *_args, **_kw: None)
+    asyncio.run(replacement._resume_parts(spec))
+    assert len(w.client.thread_posts) == n_body
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders"
+    ).fetchone()[0] == "complete"
+
+
+def test_slack_started_only_part_is_unknown_and_never_resent(led):
+    _seed_thread(led)
+    _big_body(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    spec = json.loads(_latest_render(led)["spec_json"])
+
+    # an ack click issues an update render — fresh delivery_id, fresh
+    # pending part rows over the same thread
+    tok = next(b["token"] for row in spec["parts"]["action_rows"]
+               for b in row if b["id"] == "ack")
+    env = envelopes.notification(
+        tok, "slack:T_SYNTHETIC:U_SYNTHETIC",
+        {**SCOPE, "message_id": "1790000000.000001"})
+    envelopes.publish_command(w.dirs["cmd_int"], env)
+    result = {"errors": []}
+    runner_cmds.drain_int_commands(led, result, SLACK, str(w.root))
+    assert not result["errors"]
+    update = _latest_render(led)
+    uspec = json.loads(update["spec_json"])
+    assert uspec["op"] == "update"
+
+    # plant the crash window on the update's second body part:
+    # 'started' journaled, the worker died before the result landed —
+    # a re-drive must never repost it, the wire may have committed
+    did = update["delivery_id"]
+    second = next(p for p in uspec["parts"]["manifest"]
+                  if p["part_id"] == "body:0002")
+    journal.append(w.dirs["state"], "dead-worker", {
+        "phase": "started",
+        "attempt_id": envelopes.part_attempt_id(did, "body:0002"),
+        "delivery_id": did, "part_id": "body:0002",
+        "kind": "body_part",
+        "receipt_envelope": envelopes.part_receipt(
+            {"spec": uspec,
+             "payload_hash": envelopes.payload_hash(uspec),
+             "attempt_id": "resume", "worker_id": "dead-worker"},
+            second, "unknown")})
+
+    claim = {"attempt_id": "resume",
+             "worker_id": w.worker._worker_id, "spec": uspec,
+             "payload_hash": envelopes.payload_hash(uspec),
+             "spec_path": None, "phase": "settled"}
+    ctx = {"card_message_id": "1790000000.000001", "thread": None,
+           "thread_id": "1790000000.000001", "history": None,
+           "consumed": set()}
+    records = journal.scan(w.dirs["state"])
+    asyncio.run(w.worker._drive_parts(
+        claim, uspec["parts"]["manifest"], ctx, records))
+    # the started-only part is skipped — its journal holds a 'started'
+    # row and must never gain a result; siblings bind existing replies
+    # or post their genuinely-new text under the same root
+    skipped = [r for rows in journal.scan(w.dirs["state"]).values()
+               for r in rows if r.get("attempt_id") ==
+               envelopes.part_attempt_id(did, "body:0002")]
+    assert {r["phase"] for r in skipped} == {"started"}
+    assert all(p["thread_ts"] == "1790000000.000001"
+               for p in w.client.thread_posts)
+    result = {"errors": []}
+    runner_cmds.drain_int_commands(led, result, SLACK, str(w.root))
+    assert not result["errors"]
+
+    # the runner-side reconcile settles the unjournaled outcome as
+    # honest unknown — visible, never silently lost
+    out = notify_reconcile.reconcile_after_restore(led, SLACK)
+    assert out["counts"].get("settled", 0) >= 1
+    row = led.db.execute(
+        "SELECT state,error_code FROM notification_render_parts "
+        "WHERE delivery_id=? AND part_id='body:0002'", (did,)).fetchone()
+    assert row["state"] == "unknown" and row["error_code"] == "worker_crash"
+
+
+def test_slack_ambiguous_part_failure_stays_unknown_no_resend(led):
+    _seed_thread(led)
+    _big_body(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    n_body = sum(1 for p in spec["parts"]["manifest"]
+                 if p["kind"] == "body_part")
+    # the second body post times out — possibly accepted on the wire
+    w.client.thread_fail_at = {1}
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    posted = len(w.client.thread_posts)
+    assert posted == n_body - 1
+
+    # restart resume — the journaled 'unknown' is never resent
+    restored = registry.Registry(w.dirs["state"], scope=SCOPE)
+    replacement = DeliveryWorker(
+        sender=w.sender, settings=SCOPE, root=str(w.root),
+        reg=restored, worker_id=registry.new_worker_id(),
+        log=lambda *_args, **_kw: None)
+    asyncio.run(replacement._resume_parts(spec))
+    assert len(w.client.thread_posts) == posted
+
+    rows = [r for rows in journal.scan(w.dirs["state"]).values()
+            for r in rows
+            if r.get("part_id") == "body:0002" and r["phase"] == "result"]
+    assert rows and rows[-1]["result"] == "unknown"
+
+
+def test_slack_definitive_part_reject_is_not_sent_not_unknown(led):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    w.client.thread_fail_at = {0}
+    w.client.thread_failure = FakeSlackError(404, "channel_not_found")
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    rows = [r for rows in journal.scan(w.dirs["state"]).values()
+            for r in rows
+            if r.get("part_id") == "body:0001" and r["phase"] == "result"]
+    assert rows and rows[-1]["result"] == "not_sent"
+    assert rows[-1]["error_code"] == "channel_not_found"
+
+
+def test_slack_update_binds_own_reply_foreign_never_binds(led):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    posted = len(w.client.thread_posts)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    chunk = spec["parts"]["thread_body_parts"][0]
+    our_ts = w.client.replies["1790000000.000001"][0]["ts"]
+
+    # a foreign user typed the exact chunk text into the thread — it
+    # must never satisfy a part's remote verification
+    w.client.replies["1790000000.000001"].insert(0, {
+        "ts": "1790000000.000099", "text": chunk, "user": "U_FOREIGN"})
+    ctx = {"history": None, "consumed": set()}
+    mid = asyncio.run(w.worker._remote_match(
+        "1790000000.000001", chunk, ctx))
+    assert mid == our_ts
+
+    # with no provably-ours reply left, the part posts fresh rather
+    # than impersonating the foreign message
+    w.client.replies["1790000000.000001"] = [
+        {"ts": "1790000000.000099", "text": chunk, "user": "U_FOREIGN"}]
+    out = asyncio.run(w.worker._body_part(
+        {**spec, "op": "update"}, chunk,
+        {"thread_id": "1790000000.000001",
+         "history": None, "consumed": set()}))
+    assert out["result"] == "delivered"
+    assert out["remote_id"] != "1790000000.000099"
+    assert len(w.client.thread_posts) == posted + 1
+    assert w.client.thread_posts[-1]["text"] == chunk
+
+
+def _attach(led, tmp_path, mid=100, name="syn.bin",
+            blob=b"synthetic-bytes", state="downloaded"):
+    """Seed a real on-disk file as a downloaded attachment on a shown
+    message — the part manifest then seals path+sha256+bytes."""
+    f = tmp_path / name
+    f.write_bytes(blob)
+    cur = led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,"
+        "state) VALUES(?,?,?,?,?)",
+        (mid, f"file-{name}", name, str(f), state))
+    aid = cur.lastrowid
+    if state == "downloaded":
+        led.attachment_saved(aid, str(f), len(blob),
+                             hashlib.sha256(blob).hexdigest())
+    return aid, f, blob
+
+
+def _parts(led, did):
+    return {r["part_id"]: dict(r) for r in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=?",
+        (did,))}
+
+
+def test_slack_attachment_uploads_inside_bound_thread(led, tmp_path):
+    _seed_thread(led)
+    ids = [_attach(led, tmp_path, name=f"syn-{i}.bin",
+                  blob=f"synthetic-file-{i}".encode())
+           for i in range(2)]
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    kinds = [p["kind"] for p in spec["parts"]["manifest"]]
+    assert kinds.count("attachment_part") == 2
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    # every upload rides the card's own thread root on the bound
+    # channel — nothing ever posts at channel top level
+    assert len(w.client.upload_calls) == 2
+    assert all(u["channel"] == SCOPE["channel_id"]
+               and u["thread_ts"] == "1790000000.000001"
+               for u in w.client.upload_calls)
+    by_name = {u["filename"]: u for u in w.client.upload_calls}
+    for aid, f, blob in ids:
+        u = by_name[f.name]
+        assert u["file"] == blob          # the verified bytes went out
+        parts = _parts(led, render["delivery_id"])
+        row = parts[f"attach:{aid:04d}"]
+        assert row["state"] == "delivered"
+        assert row["remote_id"].startswith("F_SYNTHETIC")
+
+
+def test_slack_attachment_corrupt_after_seal_is_not_sent(led, tmp_path):
+    _seed_thread(led)
+    aid, f, _blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    f.write_bytes(b"mutated-after-seal")        # post-seal mutation
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    assert not w.client.upload_calls            # never sent bad bytes
+    row = _parts(led, _latest_render(led)["delivery_id"])[
+        f"attach:{aid:04d}"]
+    assert row["state"] == "not_sent"
+    assert row["error_code"] == "attachment_mismatch"
+
+
+def test_slack_attachment_sdk_capability_missing_is_held(led, tmp_path):
+    _seed_thread(led)
+    aid, _f, _blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    # an SDK without files_upload_v2 — the part is explicitly held,
+    # never reported complete
+    w = _mkworld(led, uploads=False)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    row = _parts(led, _latest_render(led)["delivery_id"])[
+        f"attach:{aid:04d}"]
+    assert row["state"] == "not_sent"
+    assert row["error_code"] == "sdk_capability_missing"
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders").fetchone()[0] \
+        == "incomplete"
+
+
+def test_slack_attachment_timeout_is_unknown_no_resend(led, tmp_path):
+    _seed_thread(led)
+    aid, _f, _blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    w.client.upload_fail_at = {0}
+    w.client.upload_failure = TimeoutError("synthetic")
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    attempts = [c for c in w.client.calls if c[0] == "files_upload_v2"]
+    assert len(attempts) == 1
+    did = _latest_render(led)["delivery_id"]
+    row = _parts(led, did)[f"attach:{aid:04d}"]
+    assert row["state"] == "unknown"
+    spec = json.loads(_latest_render(led)["spec_json"])
+    asyncio.run(DeliveryWorker(
+        sender=w.sender, settings=SCOPE, root=str(w.root),
+        reg=registry.Registry(w.dirs["state"], scope=SCOPE),
+        worker_id=registry.new_worker_id(),
+        log=lambda *_a, **_k: None)._resume_parts(spec))
+    # started past the wire once — the ambiguous outcome is never
+    # silently re-uploaded
+    assert [c for c in w.client.calls
+            if c[0] == "files_upload_v2"] == attempts
+
+
+def test_slack_attachment_update_binds_remote_file(led, tmp_path):
+    _seed_thread(led)
+    aid, f, blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    uploads = len(w.client.upload_calls)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part")
+    fid = w.client.upload_calls and \
+        w.client.replies["1790000000.000001"][-1]["files"][0]["id"]
+    out = asyncio.run(w.worker._attachment_part(
+        {**spec, "op": "update"}, part,
+        {"thread_id": "1790000000.000001",
+         "history": None, "consumed": set()}))
+    # the same file already remote binds its real id — no re-upload
+    assert out["result"] == "delivered" and out["remote_id"] == fid
+    assert len(w.client.upload_calls) == uploads
+
+
+def test_slack_attachment_foreign_file_never_binds(led, tmp_path):
+    _seed_thread(led)
+    aid, _f, blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part")
+    # a foreign user dropped a same-name/size/hash file in the thread —
+    # it can never satisfy our part's remote verification
+    w.client.replies["1790000000.000001"] = [
+        {"ts": "1790000000.000099", "user": "U_FOREIGN",
+         "files": [{"id": "F_FOREIGN", "name": "syn.bin",
+                    "size": len(blob),
+                    "sha256": hashlib.sha256(blob).hexdigest()}]}]
+    out = asyncio.run(w.worker._attachment_part(
+        {**spec, "op": "update"}, part,
+        {"thread_id": "1790000000.000001",
+         "history": None, "consumed": set()}))
+    assert out["result"] == "delivered"
+    assert out["remote_id"] != "F_FOREIGN"
+    assert len(w.client.upload_calls) == 1
+
+
+def test_slack_attachment_unavailable_stays_disclosed(led, tmp_path):
+    _seed_thread(led)
+    aid, _f, _blob = _attach(led, tmp_path, state="failed")
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    row = _parts(led, _latest_render(led)["delivery_id"])[
+        f"attach:{aid:04d}"]
+    # a terminally unavailable source file is disclosed, never
+    # attempted, never counted as sent
+    assert row["state"] == "not_sent"
+    assert row["error_code"] == "attachment_unavailable"
+    assert not w.client.upload_calls
+
+
+def test_slack_thread_part_needs_the_proven_card_root(led):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    part = {"part_id": "thread", "kind": "thread", "index": 1,
+            "name": "synthetic-thread"}
+    # no delivered card message id — no thread to bind, never a guess
+    out = asyncio.run(w.worker._perform_part(
+        {"spec": json.loads(_latest_render(led)["spec_json"])},
+        part, {}))
+    assert out == {"result": "not_sent",
+                   "error_code": "thread_root_missing"}
+    out = asyncio.run(w.worker._perform_part(
+        {"spec": json.loads(_latest_render(led)["spec_json"])},
+        part, {"card_message_id": "1790000000.000001"}))
+    assert out == {"result": "delivered",
+                   "remote_id": "1790000000.000001"}

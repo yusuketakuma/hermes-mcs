@@ -31,6 +31,7 @@ Config (config.json):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -59,6 +60,17 @@ TOKEN_WRITE_S = 7 * 86400
 DEFER_S = 86400           # fixed 'hold' duration for v1
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
+RESTORE_MARKER = "restore_pending.json"
+RESTORE_RECEIPT = "restore_reconcile.json"
+
+# durable part plan (T7): thread bodies split under the 2000-char
+# message bound; MAX_PARTS is a DECLARED bound — a pathological body
+# still gets a visible marker part, never a silently dropped tail
+THREAD_PART_LIMIT = 1900
+MAX_PARTS = 256
+_TRUNCATED_PART = "（上限を超えたため残りは省略 — 原本を参照）"
+_ATTACHMENT_UNAVAILABLE = frozenset(
+    {"failed", "deleted", "withdrawn", "pruned"})
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_cards(
@@ -127,6 +139,7 @@ CREATE TABLE IF NOT EXISTS notification_renders(
   state TEXT NOT NULL DEFAULT 'queued'
     CHECK(state IN ('queued','sending','delivered','not_sent',
                     'unknown','held','cancelled')),
+  parts_state TEXT NOT NULL DEFAULT 'none',
   created_at REAL NOT NULL, updated_at REAL NOT NULL,
   UNIQUE(card_id, render_rev));
 CREATE INDEX IF NOT EXISTS idx_nrenders_card
@@ -142,6 +155,23 @@ CREATE TABLE IF NOT EXISTS notification_delivery_attempts(
   created_at REAL NOT NULL, finished_at REAL);
 CREATE INDEX IF NOT EXISTS idx_nattempts_delivery
   ON notification_delivery_attempts(delivery_id);
+-- Durable per-render delivery plan: card/thread/body_part/
+-- attachment_part identities bound to the sealed spec (generation,
+-- render_rev, scope, ordered hashes). A delivered card never implies
+-- complete delivery — full completion requires every planned part
+-- delivered. 'held' marks dependents blocked by a failed thread.
+CREATE TABLE IF NOT EXISTS notification_render_parts(
+  delivery_id TEXT NOT NULL,
+  part_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('card','thread','body_part',
+                                    'attachment_part')),
+  idx INTEGER NOT NULL,
+  payload_sha256 TEXT, bytes INTEGER, name TEXT, attachment_id INTEGER,
+  state TEXT NOT NULL DEFAULT 'pending'
+    CHECK(state IN ('pending','delivered','not_sent','unknown','held')),
+  remote_id TEXT, error_code TEXT, attempt_id TEXT,
+  updated_at REAL,
+  PRIMARY KEY(delivery_id, part_id));
 CREATE TABLE IF NOT EXISTS notification_view_manifests(
   manifest_id INTEGER PRIMARY KEY AUTOINCREMENT,
   card_id INTEGER NOT NULL REFERENCES notification_cards(card_id),
@@ -182,6 +212,23 @@ CREATE INDEX IF NOT EXISTS idx_ntokens_card
 CREATE TABLE IF NOT EXISTS notification_meta(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   notify_dirty INTEGER NOT NULL DEFAULT 0);
+-- Post-restore holds: a DB rewind can erase attempt/render rows that
+-- the delivery journal proves had external effects. Each row pins one
+-- held scope until an operator (ops.card_resolve) or a factual receipt
+-- releases it — a held card never re-issues a render.
+CREATE TABLE IF NOT EXISTS notification_restore_holds(
+  hold_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id INTEGER REFERENCES notification_cards(card_id),
+  delivery_id TEXT,
+  attempt_id TEXT,
+  events_json TEXT,
+  reason TEXT NOT NULL,
+  scope_json TEXT,
+  held_at REAL NOT NULL,
+  released_at REAL,
+  release_command_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_nholds_active
+  ON notification_restore_holds(card_id, released_at);
 """
 
 # card action vocabulary -> (label, discord style, class)
@@ -282,6 +329,85 @@ def delivery_scope(cfg: dict) -> dict | None:
     return out
 
 
+def restore_pending(root: str) -> dict | None:
+    """A restore marker blocks every send grant until reconcile runs.
+    A corrupt or unreadable marker still blocks — fail closed."""
+    try:
+        with open(os.path.join(root, RESTORE_MARKER), "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8"))
+    except OSError:
+        return None
+    except ValueError:
+        return {"unreadable": True}
+    return data if isinstance(data, dict) else {"unreadable": True}
+
+
+def mark_restored(root: str, backup_path=None, by="manual",
+                  now=None, phase="restored", report_id=None) -> str:
+    """Durable 'a restore happened' witness — written by every restore
+    path so the runner can hold sends until reconcile completes.
+    phase='awaiting_consent' holds sends while a schema-bump rollback
+    waits on its per-restore human approval; nothing was swapped yet,
+    so restored_at stays unset and reconcile must NOT clear it."""
+    marker = {"v": 1, "phase": phase, "backup_path": backup_path,
+              "by": by, "at": now if now is not None else time.time()}
+    if phase == "restored":
+        marker["restored_at"] = marker["at"]
+    if report_id is not None:
+        marker["report_id"] = report_id
+    return publish_file(root, RESTORE_MARKER, canonical(marker))
+
+
+def restore_awaiting_consent(root: str) -> dict | None:
+    """A restore marker in the consent-hold phase: writers and senders
+    stay frozen until the bound receipt arrives and the swap lands."""
+    marker = restore_pending(root)
+    if isinstance(marker, dict) \
+            and marker.get("phase") == "awaiting_consent":
+        return marker
+    return None
+
+
+def clear_restore_pending(root: str) -> None:
+    try:
+        os.unlink(os.path.join(root, RESTORE_MARKER))
+    except FileNotFoundError:
+        pass
+
+
+def _restore_hold_active(db, *, card_id=None, delivery_id=None) -> bool:
+    """An unreleased restore hold on this card/delivery freezes it."""
+    if card_id is not None and db.execute(
+            "SELECT 1 FROM notification_restore_holds "
+            "WHERE released_at IS NULL AND card_id=? LIMIT 1",
+            (card_id,)).fetchone():
+        return True
+    return delivery_id is not None and db.execute(
+        "SELECT 1 FROM notification_restore_holds "
+        "WHERE released_at IS NULL AND delivery_id=? LIMIT 1",
+        (delivery_id,)).fetchone() is not None
+
+
+def release_holds(db, *, delivery_id=None, card_id=None,
+                  command_id=None, now=None) -> int:
+    """Release active restore holds for a settled scope."""
+    now = time.time() if now is None else now
+    clauses, vals = [], []
+    if delivery_id is not None:
+        clauses.append("delivery_id=?")
+        vals.append(delivery_id)
+    if card_id is not None:
+        clauses.append("card_id=?")
+        vals.append(card_id)
+    if not clauses:
+        return 0
+    return db.execute(
+        "UPDATE notification_restore_holds SET released_at=?,"
+        "release_command_id=? WHERE released_at IS NULL AND ("
+        + " OR ".join(clauses) + ")",
+        [now, command_id, *vals]).rowcount
+
+
 def mark_snapshot_dirty(db) -> None:
     """The published snapshot is now behind for notification tables;
     persists across a crash so the next run republishes (RC21). Owns
@@ -338,6 +464,7 @@ def publish_flags(cfg: dict, root: str) -> bool:
         "transport": active_transport(cfg),
         "route_epoch": route_epoch(cfg),
         "card_thread": n.get("card_thread") is True,
+        "restore_pending": restore_pending(root) is not None,
         "at": time.time(),
     }
     raw = canonical(flags)
@@ -490,7 +617,7 @@ def _action_rows(db, card, content, now, context=None,
     if not in_thread_body:
         # cards with a companion thread show the body inside it on
         # delivery — the 📄 button only remains where no thread can
-        # carry it (slack transport, card_thread off)
+        # carry it (card_thread off, failed/deleted thread)
         btn("body")
     if kind == "thread" and card["transport"] != "slack":
         # thread scope is the only scope a task list can be pinned to —
@@ -524,6 +651,151 @@ def _action_rows(db, card, content, now, context=None,
     return rows
 
 
+# ---------- durable part plan (T7) --------------------------------------
+
+def _sha_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
+    """Lossless chunks <= limit for the durable thread plan —
+    ``"".join(chunks) == text`` always holds: lines keep their trailing
+    newline and overlong lines hard-wrap, so planned parts reassemble
+    byte-exact into the sealed body (the plugin sends these verbatim)."""
+    chunks, cur = [], ""
+    for seg in text.splitlines(keepends=True):
+        while len(seg) > limit:
+            take = limit - len(cur)
+            if take <= 0:
+                chunks.append(cur)
+                cur = ""
+                take = limit
+            cur += seg[:take]
+            seg = seg[take:]
+        if cur and len(cur) + len(seg) > limit:
+            chunks.append(cur)
+            cur = ""
+        cur += seg
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _plan_attachments(db, shown) -> list:
+    """Attachment parts from the render's sealed shown-set — never the
+    mutable outbox. Downloaded files are deliverable parts; terminally
+    unavailable files are disclosed as unavailable items (visible
+    incompleteness, not silent omission)."""
+    ids = [m for m in shown if type(m) is int]
+    if not ids:
+        return []
+    ph = ",".join("?" * len(ids))
+    rows = db.execute(
+        f"""SELECT a.attachment_id,a.name,a.local_path,a.bytes,a.sha256,
+                   a.state,m.body_state
+            FROM attachments a
+            JOIN messages m ON m.message_id=a.message_id
+            WHERE a.message_id IN ({ph})
+            ORDER BY a.attachment_id""", ids).fetchall()
+    out = []
+    for a in rows:
+        entry = {"attachment_id": a["attachment_id"],
+                 "name": a["name"] or f"file-{a['attachment_id']}"}
+        if a["state"] == "pending":
+            continue      # in-flight download — followup path owns it
+        if a["state"] == "downloaded" and a["local_path"] \
+                and a["sha256"] and a["body_state"] != "deleted":
+            out.append({**entry, "path": a["local_path"],
+                        "sha256": a["sha256"],
+                        "bytes": a["bytes"] or 0})
+        else:
+            # failed/withdrawn/deleted-source — disclosed, not sent
+            out.append({**entry, "unavailable": True})
+    return out
+
+
+def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
+    """Seal the ordered delivery plan into the spec: the card is always
+    part 0; a thread-bound render adds the thread, every body chunk and
+    every covered attachment as individually journaled parts."""
+    parts = spec["parts"]
+    card_payload = canonical({"containers": parts["containers"],
+                              "footer": parts["footer"],
+                              "action_rows": parts["action_rows"]})
+    manifest = [{"part_id": "card", "kind": "card", "index": 0,
+                 "sha256": hashlib.sha256(card_payload).hexdigest(),
+                 "bytes": len(card_payload)}]
+    if not in_thread_body or spec["op"] == "revoke":
+        parts["manifest"] = manifest
+        return
+    idx = 1
+    tname = parts.get("thread_name") or card["card_key"]
+    manifest.append({"part_id": "thread", "kind": "thread",
+                     "index": idx, "name": tname,
+                     "sha256": _sha_text(tname)})
+    idx += 1
+    man = {"shown": json.dumps(content["shown"], ensure_ascii=False)}
+    body = _card_body_text(db, card, man, max_chars=None)[1]
+    chunks = _split_body_chunks(body)      # lossless — no chunk dropped
+    truncated = len(chunks) > MAX_PARTS - 3   # card+thread+marker room
+    if truncated:
+        chunks = chunks[:MAX_PARTS - 3] + [_TRUNCATED_PART]
+    parts["thread_body_parts"] = chunks
+    for i, chunk in enumerate(chunks):
+        manifest.append({"part_id": f"body:{i + 1:04d}",
+                         "kind": "body_part", "index": idx,
+                         "sha256": _sha_text(chunk),
+                         "bytes": len(chunk.encode("utf-8"))})
+        idx += 1
+    for a in _plan_attachments(db, content["shown"]):
+        entry = {"part_id": f"attach:{a['attachment_id']:04d}",
+                 "kind": "attachment_part", "index": idx, **a}
+        manifest.append(entry)
+        idx += 1
+    parts["manifest"] = manifest
+
+
+def _seed_parts(db, spec, now) -> None:
+    """Persist the sealed plan rows in the same transaction as the
+    render insert — restart-stable identities from the first write."""
+    for p in spec["parts"]["manifest"]:
+        unavailable = p.get("unavailable") is True
+        db.execute(
+            """INSERT INTO notification_render_parts(
+                 delivery_id,part_id,kind,idx,payload_sha256,bytes,name,
+                 attachment_id,state,error_code,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (spec["delivery_id"], p["part_id"], p["kind"], p["index"],
+             p.get("sha256"), p.get("bytes"), p.get("name"),
+             p.get("attachment_id"),
+             "not_sent" if unavailable else "pending",
+             "attachment_unavailable" if unavailable else None, now))
+
+
+def _rollup_parts_state(db, delivery_id) -> str:
+    """none / pending / complete / incomplete — complete iff the planned
+    part-id set equals the delivered part-id set."""
+    rows = db.execute(
+        "SELECT state FROM notification_render_parts WHERE delivery_id=?",
+        (delivery_id,)).fetchall()
+    if not rows:
+        return "none"
+    states = {r["state"] for r in rows}
+    if states <= {"delivered"}:
+        return "complete"
+    if states <= {"pending", "delivered"}:
+        return "pending"      # still could complete — nothing failed
+    return "incomplete"
+
+
+def _update_parts_state(db, delivery_id, now) -> str:
+    state = _rollup_parts_state(db, delivery_id)
+    db.execute(
+        "UPDATE notification_renders SET parts_state=?,updated_at=? "
+        "WHERE delivery_id=?", (state, now, delivery_id))
+    return state
+
+
 def _issue_render(db, card_id, cfg, now, specs, force=False):
     """Issue the next render for a card when the display model demands
     one. Precondition per §4: no unsettled attempt may own the card —
@@ -539,6 +811,8 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         return None
     if _unsettled_attempt(db, card_id):
         return None
+    if _restore_hold_active(db, card_id=card_id):
+        return None                        # post-restore freeze
     content = _card_content(db, card)
     pres_fp = _content_fp(content)
     gens = {}
@@ -640,6 +914,7 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     spec = {
         "schema": SLACK_RENDER_SCHEMA if card["transport"] == "slack" else RENDER_SCHEMA,
         "delivery_id": str(uuid.uuid4()),
+        "logical_intent_id": card["card_key"],
         "card_key": card["card_key"], "kind": card["kind"], "op": op,
         "render_rev": rev,
         "source_generation": card["source_generation"],
@@ -656,9 +931,11 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
             spec["delivery"][k] = card[k]
     context = _render_context(db, card)
     # failed/deleted threads can never carry the body — those cards
-    # keep the 📄 button so the full text stays reachable
-    in_thread_body = (card["transport"] != "slack"
-                      and notify_cfg(cfg).get("card_thread") is True
+    # keep the 📄 button so the full text stays reachable. Slack honors
+    # the same card_thread switch: its posted ts is the thread root, so
+    # the body lands as channel-visible replies (T9), not an ephemeral
+    # answer only the clicker can see.
+    in_thread_body = (notify_cfg(cfg).get("card_thread") is True
                       and card["thread_state"] not in ("failed", "deleted"))
     spec["parts"] = {
         "containers": content["containers"],
@@ -674,26 +951,25 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         spec["parts"]["thread_name"] = _thread_name(db, card)
     elif notify_cfg(cfg).get("card_thread") is True:
         spec["parts"]["thread_name"] = _digest_thread_name(content)
-    if in_thread_body:
-        # the body travels inside the spec so the companion thread is
-        # populated atomically with its creation — no button needed
-        spec["parts"]["thread_body"] = _card_body_text(
-            db, card,
-            {"shown": json.dumps(content["shown"],
-                                 ensure_ascii=False)})[1]
+    # the body travels inside the spec as individually journaled
+    # durable parts — the card stays a summary surface while the
+    # thread carries the untruncated shown-set text (T7)
+    _build_part_manifest(db, card, spec, content, in_thread_body)
     db.execute(
         """INSERT INTO notification_renders(
              delivery_id,card_id,op,render_rev,manifest_id,route_epoch,
              profile,application_id,guild_id,channel_id,
              transport,team_id,
-             spec_json,payload_hash,correlation,state,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)""",
+             spec_json,payload_hash,correlation,state,parts_state,
+             created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued','pending',?,?)""",
         (spec["delivery_id"], card_id, op, rev, content["manifest_id"],
          spec["delivery"]["route_epoch"], scope.get("profile"),
          scope.get("application_id"), scope.get("guild_id"),
          scope.get("channel_id"), card["transport"], scope.get("team_id"),
          canonical(spec).decode(),
          payload_hash(spec), correlation, now, now))
+    _seed_parts(db, spec, now)
     db.execute(
         """UPDATE notification_intent_cards
            SET delivery_id=?, required_render_rev=?
@@ -1540,14 +1816,19 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 (now, r["delivery_id"]))
             cleared += 1
         # spec files for terminal renders can go — a begin against them
-        # would be denied anyway; unknown stays for investigation
+        # would be denied anyway; unknown stays for investigation. A
+        # render whose durable parts are still pending keeps its spec:
+        # it is the only copy a restart-resume can replay (spec_json
+        # is cleared on settle), so removing it would strand parts
+        # the journal could still finish.
         removed = 0
         root = data_root(ledger)
         dirs = notify_dirs(root)
         for r in db.execute(
                 "SELECT delivery_id,transport FROM notification_renders "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
-                "AND spec_published=1 ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
+                "AND spec_published=1 AND parts_state!='pending' "
+                "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             try:
