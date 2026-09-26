@@ -312,8 +312,11 @@ def _human_cmd_check(req) -> str | None:
 
 def drain_int_commands(ledger, result, cfg, root, deadline=None,
                        limit=32) -> int:
-    """Bounded two-pass drain of data/cmd_int. Pass 1 settles receipts
-    (dependency resolution); pass 2 applies begins/interactions. Each
+    """Bounded three-class drain of data/cmd_int. Begins apply first —
+    the attempt row a receipt settles must exist, and a receipt drained
+    before its begin would hit unknown_attempt yet still be consumed,
+    leaving a granted attempt orphaned until an operator resolve. Then
+    receipts (dependency resolution), then interactions. Each
     command gets a result file under data/cmd_results/ and the command
     file is consumed; permanently unparsable files are quarantined
     (publication is atomic, so a parse failure is never mid-write), and
@@ -344,16 +347,19 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         except OSError:
             continue                       # transient — next drain
         pending.append((path, req))
+    begins = [p for p in pending
+              if p[1].get("op") == "transport_begin"]
     receipts = [p for p in pending
                 if p[1].get("op") in ("transport_receipt",
                                       "thread_receipt",
                                       "part_receipt")]
     others = [p for p in pending
-              if p[1].get("op") not in ("transport_receipt",
+              if p[1].get("op") not in ("transport_begin",
+                                        "transport_receipt",
                                         "thread_receipt",
                                         "part_receipt")]
     done = 0
-    for path, req in receipts + others:
+    for path, req in begins + receipts + others:
         if deadline is not None and time.monotonic() > deadline:
             result.setdefault("errors", []).append(
                 "cmd_int_drain_deadline")

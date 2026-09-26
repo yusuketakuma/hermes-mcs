@@ -1069,16 +1069,19 @@ def test_drain_int_two_pass_and_results(led, tmp_path):
     result = {"errors": []}
     n = notify_cmds.drain_int_commands(led, result, CFG, str(root))
     assert n == 2
-    # pass order: the receipt lands BEFORE the begin is consumed...
-    # actually receipt-first ordering means the receipt was processed
-    # while the attempt existed? No: receipts sort first but the
-    # receipt targets an attempt that must exist — it does not yet.
-    # The receipt is rejected, the begin granted; both result files
-    # exist and the command files are consumed.
+    # begins apply before receipts within one drain: the attempt row
+    # exists when its receipt lands, so the begin grants AND the
+    # receipt settles it delivered in the same pass — no orphaned
+    # grant from an unknown_attempt reject.
     res_dir = root / "cmd_results"
     results = sorted(p.name for p in res_dir.iterdir())
     assert results == [_uuid(1) + ".json", _uuid(2) + ".json"]
     assert not list(int_dir.iterdir())
+    row = led.db.execute(
+        "SELECT state,message_id FROM notification_delivery_attempts "
+        "WHERE attempt_id=?", ("0" * 15 + "7",)).fetchone()
+    assert row["state"] == "delivered" and row["message_id"] == "m-7"
+    assert _card(led)["delivery_state"] == "delivered"
 
 
 def test_drain_int_receipts_first_settles_then_begin(led, tmp_path):

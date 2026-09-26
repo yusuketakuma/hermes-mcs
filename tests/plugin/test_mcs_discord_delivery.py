@@ -11,7 +11,7 @@ import types
 import pytest
 
 from hermes_plugin.mcs_delivery import envelopes, journal, paths
-from hermes_plugin.mcs_delivery.registry import Registry
+from hermes_plugin.mcs_delivery.registry import Registry, scope_key
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
 
 # cards.send_attachment lazy-imports the SDK inside the function —
@@ -413,6 +413,91 @@ def test_thread_create_failure_holds_dependents_no_card_repost(tmp_path):
     # body parts never even attempted — runner holds them
     assert not [e for e in envs if e["op"] == "part_receipt"
                 and e.get("part_id", "").startswith("body:")]
+
+
+def test_thread_part_binds_thread_left_by_earlier_attempt(tmp_path):
+    """A sealed create-spec races a thread created between publication
+    and the claim (older-generation worker, crash retry): Discord
+    rejects the dup create with 400 but the goal already holds — bind
+    the existing thread instead of failing, and carry on with body
+    parts. msg.thread populated = the discord.py fast path."""
+    chunks = _chunks(3)
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(chunks)                    # create, no bound thread_id
+    claim = _claim(spec)
+    ch = bot.channels[42]
+    msg = ch.sent[0]
+    existing = FakeThread(9001)             # Discord: thread.id == msg.id
+    ch.threads.append(existing)
+    msg.thread = existing                   # discord.py Message.thread
+    ch.thread_fail = FakeHTTP(400)          # "already has a thread"
+
+    asyncio.run(w._deliver_parts(claim, "9001"))
+    assert len(ch.threads) == 1             # bound, never re-created
+    assert [m.content for m in existing.sent] == chunks
+    parts = _sent_parts(_state(tmp_path))
+    assert parts["thread"]["result"] == "delivered"
+    assert parts["thread"]["remote_id"] == "9001"
+    envs = [e for e in _receipts(tmp_path / "cmd_int")
+            if e["op"] == "thread_receipt"]
+    assert envs and envs[0].get("thread_id") == "9001"
+
+
+def test_thread_part_binds_thread_via_channel_lookup(tmp_path):
+    """Same race when the message payload carries no .thread (older
+    SDK, cold cache): fall back to resolving the thread under its
+    starter-message snowflake — fetch_channel(msg.id)."""
+    chunks = _chunks(2)
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(chunks)
+    claim = _claim(spec)
+    ch = bot.channels[42]
+    existing = FakeThread(9001)
+    ch.threads.append(existing)             # msg.thread stays unset
+    ch.thread_fail = FakeHTTP(400)
+
+    asyncio.run(w._deliver_parts(claim, "9001"))
+    assert [m.content for m in existing.sent] == chunks
+    parts = _sent_parts(_state(tmp_path))
+    assert parts["thread"]["result"] == "delivered"
+    assert parts["thread"]["remote_id"] == "9001"
+
+
+def test_thread_create_failure_without_existing_thread_still_fails(
+        tmp_path):
+    """A genuine 400 (no thread under the message) must NOT bind —
+    the part stays not_sent and the original error is preserved."""
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(_chunks(2))
+    claim = _claim(spec)
+    bot.channels[42].thread_fail = FakeHTTP(400)
+
+    asyncio.run(w._deliver_parts(claim, "9001"))
+    ch = bot.channels[42]
+    assert not ch.threads
+    parts = _sent_parts(_state(tmp_path))
+    assert parts["thread"]["result"] == "not_sent"
+    assert parts["thread"]["error_code"] == "http_400"
+    assert not [k for k in parts if k.startswith("body:")]
+    # a per-message 400 is not a scope verdict — capability stays open
+    cap = reg.capability(scope_key(w.scope()))
+    assert not (cap and cap.get("ok") is False)
+
+
+def test_thread_create_auth_failure_blocks_scope(tmp_path):
+    """A 403 *is* a scope verdict: the thread part fails, dependents
+    hold, and the capability cache marks the scope unable."""
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(_chunks(2))
+    claim = _claim(spec)
+    bot.channels[42].thread_fail = FakeHTTP(403)
+
+    asyncio.run(w._deliver_parts(claim, "9001"))
+    parts = _sent_parts(_state(tmp_path))
+    assert parts["thread"]["result"] == "not_sent"
+    assert parts["thread"]["error_code"] == "http_403"
+    cap = reg.capability(scope_key(w.scope()))
+    assert cap and cap.get("ok") is False
 
 
 def test_update_backfill_dedupe_remote_verified(tmp_path):
