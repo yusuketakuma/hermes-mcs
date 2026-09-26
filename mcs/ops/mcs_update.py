@@ -884,6 +884,81 @@ def _update_mode(cfg: dict) -> str:
     return upd.get("mode", "off")
 
 
+def _hold_rollback_for_consent(state, e, tag, command_id,
+                               reason) -> int:
+    """Rollback reached the DB replace and is held on consent: keep
+    drainers stopped, both markers up, and a rollback-shaped 'applying'
+    record — the tree is already reset to prev_sha, so the next recover
+    pass must see head == target and reach _restore_db again (an
+    apply-shaped record would classify as head == prev and drop the
+    consent hold without ever restoring)."""
+    rid = e.report["report_id"]
+    entry = state["applying"]
+    state["applying"] = {
+        "tag": "rollback:" + (entry.get("tag") or "?"),
+        "sha": entry["prev_sha"],
+        "prev_sha": entry.get("sha"),
+        "rollback": True,
+        "plugin_changed": entry.get("plugin_changed"),
+        "schema_bump": entry.get("schema_bump"),
+        "backup_path": entry.get("backup_path"),
+        "manifest_snapshot": entry.get("manifest_snapshot"),
+        "command_id": command_id or entry.get("command_id"),
+        "at": time.time()}
+    state["restore_consent"] = {
+        "report_id": rid,
+        "backup_path": state["applying"].get("backup_path"),
+        "backup_sha256": e.report["backup_sha256"],
+        "backup_schema": e.report["backup_schema"],
+        "intervening_messages": e.report["intervening_messages"],
+        "external_effect_rows": e.report["external_effect_rows"],
+        "at": time.time()}
+    reason += " (rollback held: consent pending " + rid[:16] + "…)"
+    if command_id:
+        state.setdefault("executed", {})[command_id] = {
+            "result": "failed", "detail": reason[:200],
+            "at": time.time()}
+    _record_attempt(state, tag, "failed", reason)
+    save_state(state)
+    _report("restore_consent_pending",
+            rid + " — restore_report.json を確認し "
+            "ops.restore_approve で承認")
+    return 2
+
+
+def _run_post_merge(sha: str) -> None:
+    """Spawn the post-merge child under the NEW code while the parent
+    keeps both locks held — start_new_session so a timeout can killpg()
+    grandchildren too. Raises UpdateError unless the child either exits
+    cleanly or proves it already wrote 'done' (H5)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in _UPDATE_ENV_STRIP}
+    env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
+    child = subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--post-merge"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env, start_new_session=True)
+    try:
+        cout, cerr = child.communicate(timeout=T_POST_MERGE)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, 9)
+        except OSError:
+            pass
+        cout, cerr = "", "post_merge_timeout"
+        child.returncode = -9
+    if child.returncode != 0:
+        state = load_state()
+        stages = [s.get("stage") for s in state.get("stages", [])]
+        if not ("done" in stages
+                and state.get("applying") is None):
+            # the child may have already written 'done' and died
+            # between save and exit — that IS a success (H5)
+            raise UpdateError(
+                "post_merge_failed: "
+                + (cerr or cout or "").strip()[:300])
+
+
 def apply(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None) -> int:
     """The staged apply pipeline (④).
@@ -925,50 +1000,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 _rollback_tree(state["applying"])
                 reason += " (rolled back)"
             except RestoreConsentPending as e:
-                # rollback reached the DB replace and is held on consent:
-                # keep drainers stopped, both markers up, and a
-                # rollback-shaped 'applying' record — the tree is already
-                # reset to prev_sha, so the next recover pass must see
-                # head == target and reach _restore_db again (an
-                # apply-shaped record would classify as head == prev and
-                # drop the consent hold without ever restoring).
-                rid = e.report["report_id"]
-                entry = state["applying"]
-                state["applying"] = {
-                    "tag": "rollback:" + (entry.get("tag") or "?"),
-                    "sha": entry["prev_sha"],
-                    "prev_sha": entry.get("sha"),
-                    "rollback": True,
-                    "plugin_changed": entry.get("plugin_changed"),
-                    "schema_bump": entry.get("schema_bump"),
-                    "backup_path": entry.get("backup_path"),
-                    "manifest_snapshot":
-                        entry.get("manifest_snapshot"),
-                    "command_id": command_id or entry.get("command_id"),
-                    "at": time.time()}
-                state["restore_consent"] = {
-                    "report_id": rid,
-                    "backup_path":
-                        state["applying"].get("backup_path"),
-                    "backup_sha256": e.report["backup_sha256"],
-                    "backup_schema": e.report["backup_schema"],
-                    "intervening_messages":
-                        e.report["intervening_messages"],
-                    "external_effect_rows":
-                        e.report["external_effect_rows"],
-                    "at": time.time()}
-                reason += " (rollback held: consent pending " \
-                    + rid[:16] + "…)"
-                if command_id:
-                    state.setdefault("executed", {})[command_id] = {
-                        "result": "failed",
-                        "detail": reason[:200], "at": time.time()}
-                _record_attempt(state, tag, "failed", reason)
-                save_state(state)
-                _report("restore_consent_pending",
-                        rid + " — restore_report.json を確認し "
-                        "ops.restore_approve で承認")
-                return 2
+                return _hold_rollback_for_consent(
+                    state, e, tag, command_id, reason)
             except Exception as e:
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
@@ -1107,34 +1140,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             raise UpdateError("merge_verify_failed")
 
         # post-merge under NEW code; parent keeps both locks held.
-        # start_new_session so a timeout can killpg() grandchildren too.
         journal(state, "post_merge")
-        env = {k: v for k, v in os.environ.items()
-               if k not in _UPDATE_ENV_STRIP}
-        env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
-        child = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--post-merge"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=env, start_new_session=True)
-        try:
-            cout, cerr = child.communicate(timeout=T_POST_MERGE)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(child.pid, 9)
-            except OSError:
-                pass
-            cout, cerr = "", "post_merge_timeout"
-            child.returncode = -9
-        if child.returncode != 0:
-            state = load_state()
-            stages = [s.get("stage") for s in state.get("stages", [])]
-            if not ("done" in stages
-                    and state.get("applying") is None):
-                # the child may have already written 'done' and died
-                # between save and exit — that IS a success (H5)
-                raise UpdateError(
-                    "post_merge_failed: "
-                    + (cerr or cout or "").strip()[:300])
+        _run_post_merge(sha)
 
         state = load_state()
         state.setdefault("executed", {})
