@@ -87,19 +87,53 @@ Recorded: 2026-09-20
 | lint | 新規コード0件（16件全てbaseline E702/E741/F401 — `git stash` で baseline と完全一致を確認済み） |
 | OFF regression | `mode:"off"` で job生成0・drain即return・非semantic系88件のPhase R系テスト全パス |
 
-## 6. 未実施・前提（正直な記録）
+## 6. 検証記録と未確認範囲
 
-- **G2 実API評価 実施済み**（2026-09-21）: `python semantic_jev.py --smoke --live` で合成文1リクエストを実 `evaluate()` 経路に送信し厳格検証を通過。結果: `{"ok": true, "model_echo": "jev-1.13.0", "noul": 0.99, "requests": 1}` — wire shape・model echo・noul/choice 検証とも実APIで conform。`/v1/models` listing はこのキーでは空リストを返した（`fixed_model_listed: false`）が、固定modelでの evaluate が成功したため契約上問題なし（listing は設計どおり非権威）。
-- **choice 型 wire 契約の実検証**（2026-09-21、候補版マージ後）: 旧クライアントでは claim監査用 choice 質問が `contract_error:http_422` で全滅していた（API は choice 型にも `criteria` を必須とし、応答は `probabilities` キーを返す — 候補版は両方に対応済み）。マージ後コードで実API検証: 幻覚claim「臍下離開部膿瘍があり」→ `not_supported` (conf 1.0)、真正claim「頻脈が持続している」→ `supports` (conf 0.99) と**正しく識別**。旧 `extract_llm` 要約に実在しない「臍下離開部膿瘍」が混入していた実例に対し、Jev がまさにその種の誤りを拒否できることを確認 — 「良いclaimを通す・悪いclaimを止める」両方向の動作を実APIで確認済み。
-- **候補版採用**（2026-09-21）: 並行ブランチ `mcs-continuation-20260921`（5コミット、+15k行、336テスト・G1 hash照合PASS・実API検証済みwire契約）を正本としてマージ。先行実装の facade+5モジュール分割は候補版の大規模分割（`semantic_runtime`/`extraction`/`assessment`/`blind`/`evaluation`/`quantities`/`mcs_operations`/`request_loops`/`summary_review`/`hermes_plugin`）に置換。先行側からの移植差分: parked集計分離（`_DeferredSend` 未送信を `skipped` から除外）、JST日次予算境界、verdicts→要約prompt配線、oversize meta永続化、seed() の project_ids スコープ、`models()` transport例外ラップ。閾値順序違反は候補版のfail-closed契約（mode=off）を採用。
-- **責務分離リファクタ第2弾**（2026-09-21、マージ後整理）: `semantic.py` 1992行を責務別に分割 — `semantic_policy.py`（定数・config検証、leaf）、`semantic_store.py`（bundle/artifact helpers）、`semantic_llm.py`（prompt・抽出・要約）、`semantic_audit.py`（監査ゲート）、`semantic_render.py`（通知レンダリング）、`semantic_drain.py`（durable job worker 841行）。facade `semantic.py` は 261行（re-export + llm_chat transport + seed/status/CLI）。patch点（`semantic._process_job`/`audit_claims`/`thread_bundle`/`llm_chat`/`LLM_*`）は drain が `semantic.X` 経由で解決するため保持。`__all__` で re-export 面を文書化。併せて dead code 削除（ledger×7, mcs_adapter×2, semantic定数×4等）、`_env()` 3箇所を `mcs_util.env_value` へ、`_json_block` コピーを `mcs_util.json_object` へ統合。
-- **日次Jev予算 40→300**（2026-09-21）: 実測コスト $0.003/41req ≈ $0.00007/req（累計$4）。流入 ~126 jobs/日（attachment coverage が大半）× ~1.2req/job ≈ 150req/日の需要に対し40/日では構造的にキュー増大していたため引上げ。300/日 ≈ $0.02/日・月$0.6 程度の上限で暴走防止としても十分。coverage job の Jev assess skip（非eligible化）や TTL sweep は代替案として保留。
-- **LLM prompt品質**: 抽出・要約promptは構造検証済みだが実モデル（Qwen3.5-9B等）での品質は未評価 — shadow観察で人間が audit分布を確認してから assist/enforce へ。
-- **degraded/audit notifyの二重送信**: degraded送出後に遅れて PASS した場合、監査済み通知も別 delivery_key で送信され得る（両方とも正確・重複は新着通知とは別eventとして識別される）。
-- **tick内 mid-run OFF**: job境界で config reload（`cfg_path` 指定時のみ）。ジョブ内部の外部呼出し途中でのOFF検知は次のjobまで遅延する。
-- **RF-OPS**（phase-r-record §8）: 複数tick観察・lock競合・snapshot読取・rollback実演は2026-09-20に実演済み。残るのは長期log/backup観察のみ（機構稼働中・傾向は継続確認）。
-- **レビュー第3ラウンド修正**（2026-09-20）: `seed()` の origin を `{"source": ...}` 形に統一（replay由来が payload で識別可能に）。drain優先順位を `payload LIKE` 文字列一致から `json_extract` へ変更（区切り whitespace に非依存）。`payload.targets` 欠落時の root が `target` role を得るよう修正（loop-relation pass が黙って skip されていたedge）。回帰テスト3件追加、計148件パス。
-- **レビュー第4ラウンド修正 + 責務分離リファクタ**（2026-09-21）: oversize stub の meta永続化（PENDING再監査で `_input_oversize` を復元し空stubのPASS化を防止）、`verdicts` を要約promptへ実装（`_verdicts_brief`）、`match_threshold > nomatch_threshold` の順序検証追加、notifier の enforce ゲートを `semantic_config` 正規化へ統一、parked semantic intent を `skipped` から分離し `parked` 集計へ（慢性 notify_incomplete の解消）、local LLM呼出しを tick残予算でクリップ、日次予算境界を UTC→JST 0時へ、`models()` の transport例外を JevError 化、`seed()` に project_ids スコープ適用、既存message編集時の再seed（`_upsert_message` が変更検知し3経路の seed に `changed_ids` を合流）、stale/loops持ち越し時の二重 defer を解消（`_process_job` が自己再スケジュールし drain は集計のみ）。モジュール分割: `semantic_model`/`semantic_llm`/`semantic_audit`/`semantic_loops`/`semantic_notice` + facade 化した `semantic.py`。**※この分割構成は同日の候補版マージで置換済み — 現行構成は §1 参照。**回帰テスト追加、計157件パス（semantic系69件）。
+以下は当時の作業記録を技術面に限定して整理したものです。実データ由来の
+個別識別子、投稿本文、診療情報、利用実績、稼働設定値は含めていません。
+この整理に際して試験・実API通信・実データ照会を新たに実施してはいません。
+過去の結果を現在のコードや配備状態の検証成功として扱わないでください。
+
+### 記録されている技術検証
+
+- **G2の限定疎通確認**：合成文を使用する `semantic_jev.py --smoke --live`
+  の実API実行が記録されています。要求・応答の契約検査、固定モデルの
+  応答識別、確率値の検査を通過したという記録です。モデル一覧取得と
+  固定モデルでの評価要求は別の確認として扱っています。
+- **choice型の契約修正**：要求側の必須 `criteria` と応答側の
+  `probabilities` に対応しました。対応後に支持・非支持の双方の応答を
+  確認したという記録があります。この確認に使用された個別の入力内容は
+  本書に保持せず、合成試験だったとの説明も付加しません。
+- **候補版採用時の回帰確認**：候補ブランチ採用に伴う回帰試験、保存済み
+  ソースhashの照合、既存の読取り・通知・予算・scope契約の確認が記録
+  されています。結果は当時の候補版に対するもので、現在のtree全体へ
+  引き継がれるものではありません。
+- **責務分離後の接続確認**：policy、保存、LLM、監査、描画、drainの分割と、
+  テストが使用するpatch箇所の維持が記録されています。先行する分割構成は
+  候補版採用時に置き換えられており、当時の構成図を現行配置とみなしません。
+- **追加回帰の対象**：seedのscope・origin、job優先順位、対象role、
+  過大入力の保留、要約への評価結果の受渡し、閾値の順序検証、通知保留の
+  集計、残り時間によるLLM呼出し制限、日次予算の時刻境界、transport例外、
+  原文更新時の再seed、重複した再スケジュールの抑制を確認した記録があります。
+- **運用機構の確認**：複数tickの観察、lock競合、snapshot読取り、当時の
+  復旧手順の実演が別のPhase R記録にあります。対象版・条件を限定した
+  証拠であり、現行環境の復元可能性や長期運用の健全性を保証しません。
+
+### 未確認事項と結果の限界
+
+- 限定的なwire疎通や支持・非支持の応答確認は、臨床的な意味精度、抽出の
+  網羅性、実運用での誤判定率、人間ラベルを用いた品質評価の代わりには
+  なりません。promptの構造検査も実モデル品質の保証にはなりません。
+- 当時の要求予算は観測結果に基づき調整されていますが、本書は実績値や
+  稼働値を保持しません。現在の費用上限や適切な予算を示す記録ではありません。
+- 縮退通知の後に監査が通過した場合、別の配送識別子で追加通知され得る
+  という設計上の留意事項が記録されています。配送のexactly-onceを
+  保証したという検証ではありません。
+- 当時の停止反映にはjob境界という制約が記録されています。後続実装で
+  変更され得るため、現在の通信停止タイミングは現行コードと対応する
+  試験で確認する必要があります。
+- 長期のログ・backup保持、現在のサービス配置・権限、実通知、現行版での
+  復旧演習は、この記録の整理によって新たに確認されたものではありません。
 
 ## 7. 有効化手順（OFF→shadow→assist→enforce）
 
