@@ -35,6 +35,7 @@ import json
 import os
 import sys
 import time
+from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -176,14 +177,10 @@ def _write_health(ledger, result: dict, status: str,
     except Exception as e:
         result["errors"].append(
             f"health_write_failed: {type(e).__name__}")
-        try:
+        with suppress(Exception):
             ledger.outbox_add("health_write_failed", None,
                               {"detail": type(e).__name__,
                                "run_id": run_id})
-        except Exception:
-            pass
-
-
 SESSION_ALERT_MIN_INTERVAL_S = 3600
 # a flapping session must not drive auto_login in a loop — each wrapped
 # stage allows one attempt, and this bounds the per-run total
@@ -300,7 +297,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                 raise SessionExpired(
                     "auto_login=ok_then_expired") from e2
         else:
-            raise SessionExpired(f"auto_login={state}")
+            raise SessionExpired(f"auto_login={state}") from e
     ledger.db.execute("UPDATE runs SET snapshot_ts=? WHERE run_id=?",
                       (snap.timestamp, run_id))
     ledger.db.commit()
@@ -1161,12 +1158,10 @@ def main() -> int:
     except Exception as e:
         # outermost boundary — non-MCSError crashes (AttributeError, sqlite,
         # ...) must still record a failed run and alert, not die silently
-        try:
+        with suppress(Exception):
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
-        except Exception:
-            pass
         _write_health(ledger, result, "failed", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 1

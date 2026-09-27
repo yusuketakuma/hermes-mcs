@@ -560,7 +560,7 @@ def test_backfill_deferred_certification_is_not_an_error(tmp_path):
     db.close()
 
 
-@pytest.mark.parametrize("status,expected", [(404, "failed"), (429, "pending")])
+@pytest.mark.parametrize(("status", "expected"), [(404, "failed"), (429, "pending")])
 def test_download_failure_status_reaches_retry_policy(tmp_path, monkeypatch, status, expected):
     import urllib.error
     import mcs_worker

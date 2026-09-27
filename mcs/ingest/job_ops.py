@@ -24,6 +24,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from contextlib import suppress
 
 from mcs_adapter import MCSError, SessionExpired
 from ledger import TERMINAL_BODY_STATES
@@ -166,10 +167,9 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     mcs_update.spawn_detached()
                 except Exception:
                     result["errors"].append("update_spawn_failed")
-            try:
+            # Receipt makes the next drain idempotent.
+            with suppress(OSError):
                 os.unlink(path)
-            except OSError:
-                pass  # Receipt makes the next drain idempotent.
             result["command_commands"] = result.get("command_commands", 0) + 1
             bucket = ("request_commands" if req["cmd"].startswith("request.")
                       else "ops_commands")
@@ -206,15 +206,11 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                         "since": since, "page": 1,
                         "pages": req.get("pages", 10), "cmd": name})
         if ok:
-            try:
+            with suppress(OSError):
                 os.unlink(path)
-            except OSError:
-                pass
         else:
-            try:
+            with suppress(OSError):
                 os.replace(path, path + ".invalid")
-            except OSError:
-                pass
         if not ok:
             result["errors"].append(f"cmd_invalid: {reason}")
 

@@ -39,6 +39,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
+from contextlib import suppress
 
 from mcs_util import env_value, load_config, no_proxy_opener
 from mcs_worker import WorkerError, bounded_call
@@ -227,12 +228,8 @@ class _WSConn:
                 return b"".join(parts)
 
     def close(self):
-        try:
+        with suppress(OSError):
             self._sock.close()
-        except OSError:
-            pass
-
-
 def _ws_eval(ws_url: str, expression: str, timeout: float = 15):
     """Runtime.evaluate over the minimal ws client; returns the
     result.value, or raises BootstrapError/MCSError — never a bare
@@ -309,7 +306,7 @@ class Message:
     body_state: str            # unknown | snippet | full
     is_unread: bool
     reply_count: int
-    replies: list["Message"] = field(default_factory=list)
+    replies: list[Message] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
     # whether the response enumerated `files` at all — only a complete
     # list (possibly empty) may reconcile the stored attachment set;
@@ -394,7 +391,7 @@ def _has_next(pag: dict, label: str) -> bool:
     return value
 
 
-def _unread_patient(p, src: str) -> "UnreadPatient":
+def _unread_patient(p, src: str) -> UnreadPatient:
     """Project row -> UnreadPatient — shape shared by the /projects
     readers (unread list and full inventory)."""
     if not isinstance(p, dict) or not _valid_id(p.get("id")):
@@ -560,7 +557,7 @@ class MCSAdapter:
     def _write_cache(self, token: str):
         if not self._token_cache:
             return
-        try:
+        with suppress(OSError):
             d = os.path.dirname(self._token_cache)
             os.makedirs(d, exist_ok=True)
             os.chmod(d, 0o700)
@@ -570,9 +567,6 @@ class MCSAdapter:
                 json.dump({"token": token, "fetched_at": time.time()}, f)
             os.replace(tmp, self._token_cache)
             os.chmod(self._token_cache, 0o600)
-        except OSError:
-            pass
-
     def _token_via_cdp(self) -> str:
         targets = self._cdp_json("/json/list")
         page = next((t for t in targets if t.get("type") == "page"
@@ -756,12 +750,10 @@ class MCSAdapter:
         except Exception:
             return False
         self._token = tok
-        try:
+        with suppress(Exception):
             if self.check_session():
                 self._write_cache(tok)
                 return True
-        except Exception:
-            pass
         return False
 
     def auto_login(self, profile_dir: str = "", chrome_bin: str = "",
@@ -913,8 +905,9 @@ class MCSAdapter:
                                       extend_session=extend_session)
         try:
             out = json.loads(body)
-        except json.JSONDecodeError:
-            raise SessionExpired(f"{path} non-json (login redirect?)")
+        except json.JSONDecodeError as e:
+            raise SessionExpired(
+                f"{path} non-json (login redirect?)") from e
         if not isinstance(out, dict):
             raise SchemaError(f"{path} -> non-object json")
         return out
@@ -1328,10 +1321,8 @@ class MCSAdapter:
             return result
         except BaseException:
             # _io has already killed and reaped any timed-out writer.
-            try:
+            with suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
 
     def _download_to_part(self, url: str, tmp: str) -> dict:
@@ -1357,10 +1348,8 @@ class MCSAdapter:
             return {"bytes": total, "sha256": h.hexdigest()}
         except Exception as e:
             # every failure path must remove the partial file (Oracle B28)
-            try:
+            with suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             if isinstance(e, MCSError):
                 raise
             if isinstance(e, urllib.error.HTTPError):
