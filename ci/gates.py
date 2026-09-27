@@ -56,7 +56,7 @@ def _lazy_sdk_import(path, node, parents) -> bool:
         return False
     ancestor = parents.get(node)
     while ancestor is not None:
-        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(ancestor, ast.FunctionDef | ast.AsyncFunctionDef):
             return True
         ancestor = parents.get(ancestor)
     return False
@@ -150,11 +150,14 @@ def gate_no_direct_platform_api() -> list[str]:
                 bad.append(f"{path.name}:{i} direct platform API URL")
         docstrings = {id(node.value) for node in ast.walk(tree)
                       if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                    and id(node) not in docstrings and node.lineno not in provisioning
-                    and _PLATFORM_TOKENS.search(node.value)):
-                bad.append(f"{path.name}:{node.lineno} platform token env read")
+        bad += [
+            f"{path.name}:{node.lineno} platform token env read"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+            and node.lineno not in provisioning
+            and _PLATFORM_TOKENS.search(node.value)]
     return bad
 
 
@@ -270,7 +273,7 @@ def gate_writer_lock() -> list[str]:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         functions = {node.name: node for node in tree.body
-                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+                     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
         parents = {child: parent for parent in ast.walk(tree)
                    for child in ast.iter_child_nodes(parent)}
         calls = {name: set() for name in functions}
@@ -280,7 +283,7 @@ def gate_writer_lock() -> list[str]:
                 continue
             owner = parents.get(node)
             while owner is not None and not isinstance(
-                    owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    owner, ast.FunctionDef | ast.AsyncFunctionDef):
                 owner = parents.get(owner)
             name = owner.name if owner is not None \
                 and functions.get(owner.name) is owner else None
@@ -300,14 +303,14 @@ def gate_writer_lock() -> list[str]:
             for callee in callees & functions.keys():
                 callers[callee].add(name)
 
-        def reaches_lock(name, seen):
+        def reaches_lock(name, seen, calls=calls, functions=functions):
             if name in seen:
                 return False
             return "acquire_run_lock" in calls[name] or any(
                 reaches_lock(callee, seen | {name})
                 for callee in calls[name] & functions.keys())
 
-        def protected(name, seen):
+        def protected(name, seen, callers=callers):
             if name in seen:
                 return False
             if reaches_lock(name, set()):

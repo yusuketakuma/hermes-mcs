@@ -97,10 +97,7 @@ def _same_origin(pinned: dict, current: dict,
     keys = ["application_id", "channel_id", "guild_id"]
     if strict_message:
         keys.append("message_id")
-    for k in keys:
-        if (pinned.get(k) or None) != (current.get(k) or None):
-            return False
-    return True
+    return all((pinned.get(k) or None) == (current.get(k) or None) for k in keys)
 
 
 class Actions:
@@ -165,6 +162,22 @@ class Actions:
                 return result
             await asyncio.sleep(RESULT_POLL_S)
         return None
+
+    async def _dispatch_notification(self, interaction, env):
+        """Publish a notification command and wait for the runner's
+        result — (result, True) when published, (None, False) when the
+        OSError followup was already sent and the caller must stop."""
+        try:
+            await asyncio.to_thread(envelopes.publish_command,
+                                    self._dirs["cmd_int"], env)
+        except OSError:
+            await self._followup(
+                interaction,
+                "送信に失敗しました。もう一度操作してください。")
+            return None, False
+        cid = env["request_id"]
+        return (await self._wait_result(cid, RESULT_WAIT_S,
+                                        request_id=cid), True)
 
     # -- listener --------------------------------------------------------
 
@@ -286,15 +299,10 @@ class Actions:
         await interaction.response.defer()
         env = envelopes.notification(token, actor, origin)
         cid = env["request_id"]
-        try:
-            await asyncio.to_thread(envelopes.publish_command,
-                                    self._dirs["cmd_int"], env)
-        except OSError:
-            await self._followup(
-                interaction,
-                "送信に失敗しました。もう一度操作してください。")
+        result, published = await self._dispatch_notification(
+            interaction, env)
+        if not published:
             return
-        result = await self._wait_result(cid, RESULT_WAIT_S, request_id=cid)
         self._result_log(interaction, action, result)
         if result is None:
             self._reg.put_followup(cid, {
@@ -384,18 +392,11 @@ class Actions:
         # runner's stored params, not our cache, drive the preview
         env = envelopes.notification(
             pending["token"], actor, pending["origin"])
-        try:
-            await asyncio.to_thread(envelopes.publish_command,
-                                    self._dirs["cmd_int"], env)
-        except OSError:
-            # keep the modal — a resubmit replays the same command_id
-            await self._followup(
-                interaction,
-                "送信に失敗しました。もう一度操作してください。")
+        # keep the modal — a resubmit replays the same command_id
+        result, published = await self._dispatch_notification(
+            interaction, env)
+        if not published:
             return
-        result = await self._wait_result(env["request_id"],
-                                         RESULT_WAIT_S,
-                                         request_id=env["request_id"])
         if result is None:
             # the drain may still be running — keep the modal so a
             # resubmit replays the same command idempotently

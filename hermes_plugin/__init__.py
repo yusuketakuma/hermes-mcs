@@ -355,18 +355,25 @@ def _verify_loop_ref(payload: dict, view, project_id: int,
     return None
 
 
-def _new_command(requests, identity: dict[str, str | None], fields: dict,
-                 project_id: int, command: str, *, source_hash: str | None = None,
-                 revision: int | None = None,
-                 loop_ref: dict | None = None) -> dict:
+def _command_base(requests, identity: dict[str, str | None], fields: dict,
+                  project_id, command: str) -> dict:
+    """Shared head of every human-confirmed payload — the runner
+    re-validates command_id, so both sides reject a malformed one."""
     command_id = fields.get("command_id") or str(uuid.uuid4())
     if not requests.valid_uuid(command_id):
         raise ValueError("bad_command_id")
-    payload = {
+    return {
         "version": 1, "cmd": command, "command_id": command_id,
         "actor": _actor(identity), "human_confirmed": True,
         "project_id": project_id,
     }
+
+
+def _new_command(requests, identity: dict[str, str | None], fields: dict,
+                 project_id: int, command: str, *, source_hash: str | None = None,
+                 revision: int | None = None,
+                 loop_ref: dict | None = None) -> dict:
+    payload = _command_base(requests, identity, fields, project_id, command)
     if command == "request.create":
         payload.update({
             "source_message_id": fields["source_message_id"],
@@ -440,14 +447,7 @@ def _new_control(
     expected_payload_hash: str | None = None,
     comparison: dict | None = None,
 ) -> dict:
-    command_id = fields.get("command_id") or str(uuid.uuid4())
-    if not requests.valid_uuid(command_id):
-        raise ValueError("bad_command_id")
-    payload = {
-        "version": 1, "cmd": command, "command_id": command_id,
-        "actor": _actor(identity), "human_confirmed": True,
-        "project_id": project_id,
-    }
+    payload = _command_base(requests, identity, fields, project_id, command)
     if command == "ops.scan":
         payload.update({
             "days": fields.get("days", 14),

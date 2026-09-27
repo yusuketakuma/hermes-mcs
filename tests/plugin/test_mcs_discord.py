@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from contextlib import suppress
 import sys
 import time
 import types
@@ -313,7 +314,7 @@ class FakeInteraction:
 
 # ---------- fixtures ------------------------------------------------------
 
-@pytest.fixture()
+@pytest.fixture
 def world(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     data = tmp_path / "data"
@@ -521,7 +522,7 @@ def test_real_spec_validates_and_builds(world):
     assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex
 
 
-@pytest.mark.parametrize("mutate,error", [
+@pytest.mark.parametrize(("mutate", "error"), [
     (lambda s: s.update(schema="bogus"), "bad_schema"),
     (lambda s: s.update(op="explode"), "bad_op"),
     (lambda s: s["delivery"].update(correlation="zz"), "bad_correlation"),
@@ -1288,10 +1289,8 @@ def test_supervisor_registers_and_stops(world):
         assert len(bot.listeners) == 1
         sup.unload()
         spawned[0].cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await spawned[0]
-        except asyncio.CancelledError:
-            pass
         assert not bot.listeners
 
     asyncio.run(run())
@@ -1781,10 +1780,8 @@ def test_supervisor_profile_scopes_do_not_mix(world, monkeypatch):
         for t in spawned:
             t.cancel()
         for t in spawned:
-            try:
+            with suppress(asyncio.CancelledError):
                 await t
-            except asyncio.CancelledError:
-                pass
 
     asyncio.run(run())
 
@@ -1846,10 +1843,8 @@ def test_supervisor_yields_scope_when_bot_closes(world):
         for t in spawned:
             t.cancel()
         for t in spawned:
-            try:
+            with suppress(asyncio.CancelledError):
                 await t
-            except asyncio.CancelledError:
-                pass
 
     asyncio.run(run())
 

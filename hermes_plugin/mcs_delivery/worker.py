@@ -27,6 +27,7 @@ from typing import Any
 
 from . import envelopes, journal, paths, registry
 from . import spec as spec_mod
+from contextlib import suppress
 
 POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
@@ -51,6 +52,20 @@ def is_definitive_reject(exc: BaseException) -> bool:
     Timeouts, disconnects and cancellations cannot prove that."""
     status = getattr(exc, "status", None)
     return isinstance(status, int) and status in NOT_SENT_STATUS
+
+
+async def _outcome_of(awaitable):
+    """Attempt outcome for a past-the-wire call: CancelledError stays
+    unknown-by-omission (re-raised), a definitive reject is not_sent,
+    every other failure is unknown — journaled fact, never a resend."""
+    try:
+        return await awaitable
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_definitive_reject(exc):
+            return {"result": "not_sent", "error_code": err_code(exc)}
+        return {"result": "unknown", "error_code": err_code(exc)}
 
 
 def _card_message_id(records: dict, delivery_id: str) -> str | None:
@@ -118,10 +133,8 @@ class DeliveryWorker:
 
     def release_scope_lock(self) -> None:
         if self._lock_fd is not None:
-            try:
+            with suppress(OSError):
                 fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
             os.close(self._lock_fd)
             self._lock_fd = None
 
@@ -237,11 +250,7 @@ class DeliveryWorker:
         for k in ("profile", "application_id", "channel_id"):
             if str(delivery.get(k) or "") != str(mine.get(k) or ""):
                 return False
-        if mine.get("guild_id") \
-                and str(delivery.get("guild_id") or "") \
-                != str(mine["guild_id"]):
-            return False
-        return True
+        return not (mine.get("guild_id") and str(delivery.get("guild_id") or "") != str(mine["guild_id"]))
 
     async def _claim_spec(self, spec_path: str, spec: dict) -> None:
         """Write the claim marker, journal it, register the claim and
@@ -269,21 +278,8 @@ class DeliveryWorker:
 
     @staticmethod
     def _write_marker(path: str, raw: bytes) -> None:
-        import tempfile
-        fd, tmp = tempfile.mkstemp(prefix=".claim-", suffix=".tmp",
-                                   dir=os.path.dirname(path))
-        try:
-            with os.fdopen(fd, "wb") as s:
-                s.write(raw)
-                s.flush()
-                os.fsync(s.fileno())
-            os.replace(tmp, path)
-        except OSError:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        paths.atomic_write(path, raw, tmp_prefix=".claim-",
+                           dir_fsync=False)
 
     async def _publish_begin(self, claim: dict) -> None:
         # republish re-sends the SAME envelope/command_id — the runner
@@ -326,10 +322,7 @@ class DeliveryWorker:
             return False
         if result.get("payload_hash") != claim["payload_hash"]:
             return False
-        if result.get("route_epoch") \
-                != spec["delivery"]["route_epoch"]:
-            return False
-        return True
+        return result.get("route_epoch") == spec["delivery"]["route_epoch"]
 
     # -- transport edges (subclasses override) --------------------------
 
@@ -342,7 +335,7 @@ class DeliveryWorker:
     async def _maybe_thread(self, claim: dict, message_id: str) -> None:
         """Companion-message bookkeeping after a delivered send —
         transports with no second post-deliver call leave it a no-op."""
-        return None
+        return
 
     # -- durable render parts (T7) -------------------------------------
 
@@ -456,17 +449,8 @@ class DeliveryWorker:
                       part_id=part["part_id"], kind=part["kind"],
                       receipt_envelope=envelopes.part_receipt(
                           claim, part, "unknown"))
-        try:
-            outcome = await self._perform_part(claim, part, ctx)
-        except asyncio.CancelledError:
-            raise                            # unknown by omission
-        except Exception as exc:
-            if is_definitive_reject(exc):
-                outcome = {"result": "not_sent",
-                           "error_code": err_code(exc)}
-            else:
-                outcome = {"result": "unknown",
-                           "error_code": err_code(exc)}
+        outcome = await _outcome_of(
+            self._perform_part(claim, part, ctx))
         # past the wire — journal the true outcome before any fallible
         # publish so a crash replays fact, never a resend
         env = envelopes.part_receipt(
@@ -490,7 +474,7 @@ class DeliveryWorker:
             # the card's thread binding also rides the legacy
             # thread_receipt envelope — best-effort, because the
             # journaled part_receipt already carries the truth
-            try:
+            with suppress(OSError):
                 env2 = envelopes.thread_receipt(
                     spec["delivery_id"], ctx["card_message_id"],
                     thread_id=outcome.get("remote_id")
@@ -500,8 +484,6 @@ class DeliveryWorker:
                 await asyncio.to_thread(
                     envelopes.publish_command,
                     self._dirs["cmd_int"], env2)
-            except OSError:
-                pass
             if outcome["result"] == "delivered" \
                     and outcome.get("remote_id"):
                 ctx["thread_id"] = str(outcome["remote_id"])
@@ -519,65 +501,71 @@ class DeliveryWorker:
 
     # -- the per-claim step ----------------------------------------------
 
-    async def _step_claim(self, claim: dict) -> None:
+    async def _step_begin(self, claim: dict) -> None:
+        """begin_sent phase: read the grant decision, retry or settle,
+        and on grant fall through so the send happens in the same tick."""
         spec = claim["spec"]
         now = time.time()
-        if claim["phase"] == "begin_sent":
-            if now < claim.get("retry_at", 0):
-                return
-            result = await asyncio.to_thread(
-                self._read_begin_result, claim)
-            if result is None:
-                if now - claim.get("begin_at", now) > REPUBLISH_BEGIN_S \
-                        and claim.get("begin_retries", 0) \
-                        < MAX_BEGIN_RETRIES:
-                    claim["begin_retries"] += 1
-                    await self._publish_begin(claim)   # same command_id
-                return
-            if not result.get("granted"):
-                self._journal("denied",
-                              attempt_id=claim["attempt_id"],
-                              delivery_id=spec["delivery_id"],
-                              error=result.get("error"))
-                error = str(result.get("error") or "")
-                if error == "denied_in_flight" \
-                        and claim["begin_retries"] < MAX_BEGIN_RETRIES:
-                    # another attempt owns the card — a re-begin needs a
-                    # fresh attempt_id AND a fresh envelope (the stored
-                    # begin_env still carries the dead attempt_id and
-                    # re-sending it just replays the same denial)
-                    claim["begin_retries"] += 1
-                    claim["attempt_id"] = registry.new_attempt_id()
-                    claim["begin_env"] = None
-                    claim["begin_cid"] = None
-                    claim["begin_at"] = 0
-                    claim["retry_at"] = now + RETRY_IN_FLIGHT_S
-                    self._reg.claim(spec["delivery_id"], claim)
-                    return
-                # transient denials — the queued render stays
-                # legitimate, so no dead tombstone: the flags check
-                # above already stops the re-claim churn, and the spec
-                # must be claimable again once the window lifts
-                # (interactive_off kill switch, restore_pending gate)
-                await self._drop_claim(
-                    claim, dead=error not in (
-                        "denied_interactive_off",
-                        "denied_restore_pending"))
-                return
-            if not self._verify_grant(claim, result):
-                self._journal("denied",
-                              attempt_id=claim["attempt_id"],
-                              delivery_id=spec["delivery_id"],
-                              error="grant_mismatch")
-                await self._drop_claim(claim)
-                return
-            self._journal("granted",
+        if now < claim.get("retry_at", 0):
+            return
+        result = await asyncio.to_thread(
+            self._read_begin_result, claim)
+        if result is None:
+            if now - claim.get("begin_at", now) > REPUBLISH_BEGIN_S \
+                    and claim.get("begin_retries", 0) \
+                    < MAX_BEGIN_RETRIES:
+                claim["begin_retries"] += 1
+                await self._publish_begin(claim)   # same command_id
+            return
+        if not result.get("granted"):
+            self._journal("denied",
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
-                          correlation=spec["delivery"]["correlation"])
-            claim["phase"] = "granted"
-            self._reg.claim(spec["delivery_id"], claim)
-            # fall through — the send happens in the same tick
+                          error=result.get("error"))
+            error = str(result.get("error") or "")
+            if error == "denied_in_flight" \
+                    and claim["begin_retries"] < MAX_BEGIN_RETRIES:
+                # another attempt owns the card — a re-begin needs a
+                # fresh attempt_id AND a fresh envelope (the stored
+                # begin_env still carries the dead attempt_id and
+                # re-sending it just replays the same denial)
+                claim["begin_retries"] += 1
+                claim["attempt_id"] = registry.new_attempt_id()
+                claim["begin_env"] = None
+                claim["begin_cid"] = None
+                claim["begin_at"] = 0
+                claim["retry_at"] = now + RETRY_IN_FLIGHT_S
+                self._reg.claim(spec["delivery_id"], claim)
+                return
+            # transient denials — the queued render stays legitimate,
+            # so no dead tombstone: the flags check above already stops
+            # the re-claim churn, and the spec must be claimable again
+            # once the window lifts (interactive_off kill switch,
+            # restore_pending gate)
+            await self._drop_claim(
+                claim, dead=error not in (
+                    "denied_interactive_off",
+                    "denied_restore_pending"))
+            return
+        if not self._verify_grant(claim, result):
+            self._journal("denied",
+                          attempt_id=claim["attempt_id"],
+                          delivery_id=spec["delivery_id"],
+                          error="grant_mismatch")
+            await self._drop_claim(claim)
+            return
+        self._journal("granted",
+                      attempt_id=claim["attempt_id"],
+                      delivery_id=spec["delivery_id"],
+                      correlation=spec["delivery"]["correlation"])
+        claim["phase"] = "granted"
+        self._reg.claim(spec["delivery_id"], claim)
+        # fall through — the send happens in the same tick
+
+    async def _step_claim(self, claim: dict) -> None:
+        spec = claim["spec"]
+        if claim["phase"] == "begin_sent":
+            await self._step_begin(claim)
         if claim["phase"] == "granted":
             # fsync'd BEFORE the HTTP request — the single line that
             # separates provable-not-sent from honest-unknown on crash
@@ -586,17 +574,7 @@ class DeliveryWorker:
                           delivery_id=spec["delivery_id"],
                           correlation=spec["delivery"]["correlation"])
             claim["phase"] = "started"
-            try:
-                outcome = await self._perform(claim)
-            except asyncio.CancelledError:
-                raise                            # unknown by omission
-            except Exception as exc:
-                if is_definitive_reject(exc):
-                    outcome = {"result": "not_sent",
-                               "error_code": err_code(exc)}
-                else:
-                    outcome = {"result": "unknown",
-                               "error_code": err_code(exc)}
+            outcome = await _outcome_of(self._perform(claim))
             # Move past HTTP before any fallible journal/receipt I/O. A
             # retry settles this outcome; it must never call the transport
             # again.
@@ -633,11 +611,9 @@ class DeliveryWorker:
 
     async def _drop_claim(self, claim: dict, dead: bool = True) -> None:
         spec = claim["spec"]
-        try:
+        with suppress(OSError):
             await asyncio.to_thread(
                 os.unlink, self._claim_path(claim["spec_path"]))
-        except OSError:
-            pass
         if dead:
             self._reg.drop_claim(spec["delivery_id"])
         else:
@@ -663,10 +639,8 @@ class DeliveryWorker:
                 # queued render whose spec vanished)
                 self._log("spec_corrupt",
                           delivery_id=os.path.basename(path)[:-5])
-                try:
+                with suppress(OSError):
                     os.replace(path, path + ".invalid")
-                except OSError:
-                    pass
                 continue
             except OSError:
                 continue                       # transient — next tick
@@ -683,6 +657,89 @@ class DeliveryWorker:
 
     def _validate_spec(self, spec: dict) -> None:
         spec_mod.validate(spec)
+
+    async def _fresh_claim(self, path: str, spec: dict,
+                           now: float) -> dict | None:
+        """Claim a live spec — an orphan marker (no registry claim) must
+        age past CLAIM_STALE_S first, or it could still belong to a
+        just-started peer whose lock acquisition we can't see."""
+        delivery_id = spec["delivery_id"]
+        marker = self._claim_path(path)
+        if await asyncio.to_thread(os.path.exists, marker):
+            # the scope lock makes us the only live sender, so a marker
+            # without a registry claim is an orphan left by a worker
+            # that died mid-claim.
+            try:
+                st = await asyncio.to_thread(os.stat, marker)
+            except OSError:
+                st = None
+            if st is None:
+                return None                     # vanished — next tick
+            if now - st.st_mtime < CLAIM_STALE_S:
+                return None                     # fresh claim in flight
+            try:
+                await asyncio.to_thread(os.unlink, marker)
+            except OSError:
+                return None                     # vanished — next tick
+            self._log("claim_stale_reclaimed", delivery_id=delivery_id)
+        try:
+            await self._claim_spec(path, spec)
+        except OSError as e:
+            self._log("claim_failed", delivery_id=delivery_id,
+                      error=type(e).__name__)
+            return None
+        return self._reg.claimed(delivery_id)
+
+    async def _resume_dead(self, resume: list) -> None:
+        """dead specs whose dependent parts never finished get their
+        unjournaled remainder driven once per tick — journal phases
+        dedupe everything already proven."""
+        records = await asyncio.to_thread(
+            journal.scan, self._dirs["state"])
+        for spec in resume:
+            try:
+                await self._resume_parts(spec, records)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log("parts_resume_error",
+                          delivery_id=spec["delivery_id"],
+                          error=type(e).__name__)
+
+    async def _settle_orphan_claims(self, live_ids: set) -> None:
+        """settle claims whose spec vanished mid-flight — the runner
+        may have cancelled the render; a granted attempt must not hang
+        as an unsettled row forever."""
+        for delivery_id, claim in list(self._reg.claims().items()):
+            if delivery_id in live_ids:
+                continue
+            if claim["phase"] in ("started", "result", "settled"):
+                await self._step_claim(claim)
+                continue
+            if claim["phase"] == "begin_sent":
+                result, code = "not_sent", "spec_withdrawn"
+            elif claim["phase"] == "granted":
+                started = await asyncio.to_thread(
+                    self._started, claim)
+                result = "unknown" if started else "not_sent"
+                code = "spec_withdrawn" if not started \
+                    else "worker_crash"
+            else:
+                await self._drop_claim(claim)
+                continue
+            env = envelopes.transport_receipt(
+                claim, result, error_code=code)
+            try:
+                await asyncio.to_thread(
+                    envelopes.publish_command,
+                    self._dirs["cmd_int"], env)
+                self._journal("receipt",
+                              attempt_id=claim["attempt_id"],
+                              delivery_id=delivery_id,
+                              result=result, error_code=code)
+            except OSError:
+                continue                         # keep claim — retry next
+            await self._drop_claim(claim)
 
     async def tick(self) -> None:
         if self._stopping:
@@ -720,38 +777,7 @@ class DeliveryWorker:
                 if claim is None and not claimable:
                     continue
                 if claim is None:
-                    marker = self._claim_path(path)
-                    if await asyncio.to_thread(os.path.exists, marker):
-                        # the scope lock makes us the only live sender,
-                        # so a marker without a registry claim is an
-                        # orphan left by a worker that died mid-claim.
-                        # Age it past CLAIM_STALE_S before reclaiming —
-                        # a fresher one could still belong to a
-                        # just-started peer whose lock acquisition we
-                        # can't see here.
-                        try:
-                            st = await asyncio.to_thread(
-                                os.stat, marker)
-                        except OSError:
-                            st = None
-                        if st is None:
-                            continue            # vanished — next tick
-                        if now - st.st_mtime < CLAIM_STALE_S:
-                            continue            # fresh claim in flight
-                        try:
-                            await asyncio.to_thread(os.unlink, marker)
-                        except OSError:
-                            continue            # vanished — next tick
-                        self._log("claim_stale_reclaimed",
-                                  delivery_id=delivery_id)
-                    try:
-                        await self._claim_spec(path, spec)
-                    except OSError as e:
-                        self._log("claim_failed",
-                                  delivery_id=delivery_id,
-                                  error=type(e).__name__)
-                        continue
-                    claim = self._reg.claimed(delivery_id)
+                    claim = await self._fresh_claim(path, spec, now)
                 if claim is not None:
                     try:
                         await self._step_claim(claim)
@@ -761,54 +787,9 @@ class DeliveryWorker:
                         self._log("claim_step_error",
                                   delivery_id=delivery_id,
                                   error=type(e).__name__)
-            # dead specs whose dependent parts never finished get their
-            # unjournaled remainder driven once per tick — journal
-            # phases dedupe everything already proven
             if resume:
-                records = await asyncio.to_thread(
-                    journal.scan, self._dirs["state"])
-                for spec in resume:
-                    try:
-                        await self._resume_parts(spec, records)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        self._log("parts_resume_error",
-                                  delivery_id=spec["delivery_id"],
-                                  error=type(e).__name__)
-            # settle claims whose spec vanished mid-flight — the runner
-            # may have cancelled the render; a granted attempt must not
-            # hang as an unsettled row forever
-            for delivery_id, claim in list(self._reg.claims().items()):
-                if delivery_id in live_ids:
-                    continue
-                if claim["phase"] in ("started", "result", "settled"):
-                    await self._step_claim(claim)
-                    continue
-                if claim["phase"] == "begin_sent":
-                    result, code = "not_sent", "spec_withdrawn"
-                elif claim["phase"] == "granted":
-                    started = await asyncio.to_thread(
-                        self._started, claim)
-                    result = "unknown" if started else "not_sent"
-                    code = "spec_withdrawn" if not started \
-                        else "worker_crash"
-                else:
-                    await self._drop_claim(claim)
-                    continue
-                env = envelopes.transport_receipt(
-                    claim, result, error_code=code)
-                try:
-                    await asyncio.to_thread(
-                        envelopes.publish_command,
-                        self._dirs["cmd_int"], env)
-                    self._journal("receipt",
-                                  attempt_id=claim["attempt_id"],
-                                  delivery_id=delivery_id,
-                                  result=result, error_code=code)
-                except OSError:
-                    continue                     # keep claim — retry next
-                await self._drop_claim(claim)
+                await self._resume_dead(resume)
+            await self._settle_orphan_claims(live_ids)
 
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'

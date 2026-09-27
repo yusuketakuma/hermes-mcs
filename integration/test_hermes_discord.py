@@ -64,8 +64,8 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
     semantic_loops.update_loops(db, 1, bundle, {1: [fact]}, None, config, time.monotonic() + 30)
     candidate = db.artifacts('loop_candidate', project_id=1)[0]
     snapshot = publish_snapshot(str(db_path), str(tmp_path / 'snapshots'))
-    settings = dict(snapshot=snapshot, inbox=str(inbox), allowed_user_ids=['42'],
-                    allowed_chat_ids=['123', '124'], project_ids=[1])
+    settings = {'snapshot': snapshot, 'inbox': str(inbox), 'allowed_user_ids': ['42'],
+                    'allowed_chat_ids': ['123', '124'], 'project_ids': [1]}
     config = {'plugins': {'enabled': ['mcs-discord-commands'], 'entries': {
         'mcs-discord-commands': {'settings': settings}}}}
     (home / 'config.yaml').write_text(yaml.safe_dump(config))

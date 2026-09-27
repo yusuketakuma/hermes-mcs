@@ -6,6 +6,7 @@ Run with the Hermes test runner; no Slack connection or MCS data is used.
 import asyncio
 import json
 import socket
+from contextlib import suppress
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -179,10 +180,8 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
         finally:
             supervisor.unload()
             supervisor._task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await supervisor._task
-            except asyncio.CancelledError:
-                pass
 
     assert asyncio.run(one_synthetic_card()) == {
         "result": "delivered", "message_id": "1790000000.000001",

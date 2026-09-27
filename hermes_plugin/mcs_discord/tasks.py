@@ -23,6 +23,7 @@ from typing import Any
 from ..mcs_delivery import paths, registry
 from ..mcs_delivery.worker import POLL_S
 from . import actions, delivery
+from contextlib import suppress
 
 # Takeover window for the scope lock after a bot rebuild: the host
 # disconnects a fatally-failed adapter (client.close()) BEFORE the
@@ -83,12 +84,9 @@ class Supervisor:
         return True
 
     def _stop_listener(self) -> None:
-        try:
+        with suppress(Exception):
             self._bot.remove_listener(
                 self._actions.on_interaction, "on_interaction")
-        except Exception:
-            pass
-
     def unload(self) -> None:
         """ctx.on_unload callback — stop intake now; the supervised task
         is cancelled by the host and releases the scope lock itself."""

@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+from contextlib import suppress
 import sqlite3
 import sys
 import time
@@ -599,10 +600,8 @@ def _run_narrative(tmp_path):
                     return await orig(claim, part, ctx)
 
                 sw2.worker._perform_part = exploding
-                try:
+                with suppress(asyncio.CancelledError):
                     await sw2.worker.tick()
-                except asyncio.CancelledError:
-                    pass
             finally:
                 sw2.worker.release_scope_lock()
 
@@ -716,10 +715,8 @@ def _run_narrative(tmp_path):
                 and not N.overlap(),
                 {"live": N.live_permits()})
     finally:
-        try:
+        with suppress(Exception):
             led.close()
-        except Exception:
-            pass
         N.close_admission()
     return N
 

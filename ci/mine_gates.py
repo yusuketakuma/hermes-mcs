@@ -102,12 +102,12 @@ def main() -> int:
         refs = list(e.get("gates", [])) + list(e.get("tests", []))
         if not refs:
             problems.append(f"{iid}: covered but no gate/test listed")
-        for g in e.get("gates", []):
-            if g not in gates:
-                problems.append(f"{iid}: gate {g!r} not in gates.py")
-        for t in e.get("tests", []):
-            if t not in tests:
-                problems.append(f"{iid}: test {t!r} not in tests/")
+        problems += [
+            f"{iid}: gate {g!r} not in gates.py"
+            for g in e.get("gates", []) if g not in gates]
+        problems += [
+            f"{iid}: test {t!r} not in tests/"
+            for t in e.get("tests", []) if t not in tests]
         print(f"  COVERED  {iid} — {e.get('summary', '')} [{len(refs)} refs]")
 
     print("\n## process/review tasks (visibility only)")

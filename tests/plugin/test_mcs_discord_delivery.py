@@ -215,7 +215,7 @@ def _sent_parts(state_dir, delivery_id=DELIVERY_ID):
     """part_id -> journal 'result' rows across all worker journals."""
     rec = journal.scan(str(state_dir))
     out = {}
-    for aid, rows in rec.items():
+    for rows in rec.values():
         for r in rows:
             if r.get("phase") == "result" \
                     and r.get("delivery_id") == delivery_id \
@@ -226,10 +226,8 @@ def _sent_parts(state_dir, delivery_id=DELIVERY_ID):
 
 def _receipts(cmd_int):
     from pathlib import Path
-    out = []
-    for p in sorted(Path(cmd_int).glob("*.json")):
-        out.append(json.loads(p.read_text()))
-    return out
+    return [json.loads(p.read_text())
+            for p in sorted(Path(cmd_int).glob("*.json"))]
 
 
 def _journal_card_delivered(state_dir, message_id="9001"):
@@ -339,7 +337,7 @@ def test_crash_after_result_before_receipt_republishes(tmp_path):
     old = wm.envelopes.publish_command
     wm.envelopes.publish_command = crashy
     try:
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match="simulated crash"):
             asyncio.run(w._deliver_parts(claim, "9001"))
     finally:
         wm.envelopes.publish_command = old
