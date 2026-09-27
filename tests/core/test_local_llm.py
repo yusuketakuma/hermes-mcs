@@ -246,7 +246,7 @@ def test_probe_accepts_enforced_schema_marker():
         request_fn=send) == "schema"
 
 
-@pytest.mark.parametrize("schema,content,expected", [
+@pytest.mark.parametrize(("schema", "content", "expected"), [
     ({"name": "synthetic"}, '{"probe":"schema"}', "object"),
     (None, '{"ok":true}', "plain"),
 ])

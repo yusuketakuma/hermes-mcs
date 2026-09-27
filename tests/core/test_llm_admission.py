@@ -8,6 +8,7 @@ counting pre-send reservations through confirmed terminal retirement.
 """
 import json
 import sqlite3
+from contextlib import suppress
 import time
 
 import pytest
@@ -286,10 +287,8 @@ def admitted_env(tmp_path, monkeypatch):
     local_llm._BROKERS.clear()
     yield path
     for b in local_llm._BROKERS.values():
-        try:
+        with suppress(Exception):
             b.close()
-        except Exception:
-            pass
     local_llm._BROKERS.clear()
 
 

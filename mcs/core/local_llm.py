@@ -288,7 +288,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         raise ValueError("prompt_invalid")
     if not bounded_http._loopback_endpoint_allowed(endpoint):
         raise ValueError("local_endpoint_not_allowed")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) \
             or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout_invalid")
     if max_tokens is not None and (type(max_tokens) is not int
