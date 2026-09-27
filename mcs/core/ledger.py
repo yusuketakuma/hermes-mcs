@@ -24,6 +24,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+from contextlib import suppress
 
 from mcs_util import html_to_text
 
@@ -1335,35 +1336,48 @@ class Ledger:
         input generation so replaying the same input cannot silently erase
         its accumulated attempts.
         """
+    def _semantic_member(self, row) -> dict:
+        """Canonical member dict of the thread-input digest contract —
+        one shape shared by the per-thread and per-message fingerprints."""
+        body = row["body_text"] or ""
+        return {
+            "message_id": row["message_id"],
+            "parent_id": row["parent_id"],
+            "revision": row["content_hash"]
+                        or hashlib.sha256(body.encode()).hexdigest(),
+            "body_state": row["body_state"] or "unknown",
+            "reply_count": row["reply_count"] or 0,
+            "sender_id": row["sender_id"],
+            "sender_name": row["sender_name"] or "",
+            "sender_type": row["sender_type"] or "",
+            "profession": row["profession"] or "",
+            "organization": row["organization"] or "",
+            "posted_at": row["posted_at"] or "",
+            "attachments": self._semantic_attachments(row["message_id"]),
+        }
+
+    @staticmethod
+    def _semantic_digest(payload) -> str:
+        return hashlib.sha256(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+
+    def _semantic_source_generation(self, project_id: int, root: int) -> str:
+        """Digest the stored thread input used by a semantic seed.
+
+        This is deliberately semantic-specific.  Generic fetch jobs retain
+        their existing revive/reset contract; semantic retries need a stable
+        input generation so replaying the same input cannot silently erase
+        its accumulated attempts.
+        """
         rows = self.db.execute(
             "SELECT message_id,parent_id,content_hash,body_state,body_text,"
             "reply_count,sender_id,sender_name,sender_type,profession,"
             "organization,posted_at FROM messages WHERE project_id=? "
             "AND (message_id=? OR parent_id=?) "
             "ORDER BY posted_at_ts,message_id", (project_id, root, root))
-        members = []
-        for row in rows:
-            body = row["body_text"] or ""
-            revision = row["content_hash"]
-            if not revision:
-                revision = hashlib.sha256(body.encode()).hexdigest()
-            members.append({
-                "message_id": row["message_id"],
-                "parent_id": row["parent_id"],
-                "revision": revision,
-                "body_state": row["body_state"] or "unknown",
-                "reply_count": row["reply_count"] or 0,
-                "sender_id": row["sender_id"],
-                "sender_name": row["sender_name"] or "",
-                "sender_type": row["sender_type"] or "",
-                "profession": row["profession"] or "",
-                "organization": row["organization"] or "",
-                "posted_at": row["posted_at"] or "",
-                "attachments": self._semantic_attachments(row["message_id"]),
-            })
-        return hashlib.sha256(json.dumps(
-            members, ensure_ascii=False, sort_keys=True,
-            separators=(",", ":")).encode()).hexdigest()
+        members = [self._semantic_member(row) for row in rows]
+        return self._semantic_digest(members)
 
     def _semantic_message_fingerprint(self, project_id: int,
                                       message_id: int) -> str | None:
@@ -1376,27 +1390,7 @@ class Ledger:
             (project_id, message_id)).fetchone()
         if row is None:
             return None
-        body = row["body_text"] or ""
-        revision = row["content_hash"]
-        if not revision:
-            revision = hashlib.sha256(body.encode()).hexdigest()
-        member = {
-            "message_id": row["message_id"],
-            "parent_id": row["parent_id"],
-            "revision": revision,
-            "body_state": row["body_state"] or "unknown",
-            "reply_count": row["reply_count"] or 0,
-            "sender_id": row["sender_id"],
-            "sender_name": row["sender_name"] or "",
-            "sender_type": row["sender_type"] or "",
-            "profession": row["profession"] or "",
-            "organization": row["organization"] or "",
-            "posted_at": row["posted_at"] or "",
-            "attachments": self._semantic_attachments(row["message_id"]),
-        }
-        return hashlib.sha256(json.dumps(
-            member, ensure_ascii=False, sort_keys=True,
-            separators=(",", ":")).encode()).hexdigest()
+        return self._semantic_digest(self._semantic_member(row))
 
     def _semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict):
@@ -1845,10 +1839,8 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     os.chmod(dest_dir, 0o700)
     tmp = os.path.join(dest_dir, "snapshot.tmp")
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
-    try:
+    with suppress(FileNotFoundError):
         os.unlink(tmp)
-    except FileNotFoundError:
-        pass
     src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
                           uri=True)
     dst = sqlite3.connect(tmp)
@@ -1862,17 +1854,13 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     finally:
         dst.close()
         src.close()
-    try:
+    with suppress(sqlite3.DatabaseError):
         chk = sqlite3.connect(tmp)
         chk.execute("PRAGMA journal_mode=DELETE")
         chk.close()
-    except sqlite3.DatabaseError:
-        pass
     if not valid_mcs_db(tmp):
-        try:
+        with suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         return None
     os.chmod(tmp, 0o600)   # PHI copy: tighten before the atomic publish
     os.replace(tmp, dest)

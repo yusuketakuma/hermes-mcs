@@ -4,7 +4,9 @@ Centralizes the small pieces several modules used to keep private copies
 of: config loading, HTML-to-text, the no-redirect HTTP guard, the
 single-writer run lock, shared path constants, and the text utilities
 (chunking / evidence-quote location) used by the extract and semantic
-layers. Keep this module dependency-free so every entry point
+layers, and the LLM-lane stability gates (circuit breaker / disk floor)
+shared by extract_llm and semantic_drain. Keep this module
+dependency-free so every entry point
 (run_check, init_data, the extract CLIs, notify_flush, mcs_adapter)
 can import it without side effects.
 """
@@ -14,7 +16,9 @@ import html
 import json
 import os
 import re
+import tempfile
 import urllib.request
+from contextlib import suppress
 
 HOME = os.path.expanduser("~/.mcs")
 CONF_PATH = os.path.join(HOME, "config.json")
@@ -49,8 +53,8 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     for path in (paths if paths is not None else
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
-        try:
-            for line in open(path, encoding="utf-8"):
+        with suppress(OSError), open(path, encoding="utf-8") as f:
+            for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip().strip('"').strip("'")
                     if v:
@@ -59,9 +63,119 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
                     # as an empty env var, it must not shadow a real
                     # value in a later dotenv file
                     break
-        except OSError:
-            pass
     return None
+
+
+def atomic_write(path: str, writer, mode: int | None = None,
+                 tmp_prefix: str = ".atomic.") -> None:
+    """tmp -> fsync -> [chmod] -> os.replace -> dir fsync: consumers see
+    the whole old file or the whole new one, and a mid-write crash never
+    leaves a torn file behind (tmp is unlinked on failure).  ``writer``
+    receives the open text-mode file object."""
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=tmp_prefix,
+                             suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            writer(f)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        dfd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+# ---------- LLM lane stability gates ----------
+# Shared by extract_llm and semantic_drain so both lanes defer under the
+# same conditions instead of each inventing a gate.  The breaker state is
+# a JSON file beside the ledger (independent of the DB's own health — a
+# corrupted ledger must not hide an outage); once the failure streak hits
+# _CIRCUIT_TRIP the lane stays closed for a cooldown that doubles per
+# streak (cap 30min), so an outage degrades to one file read per drain.
+# The disk floor guards the artifact writers: a nearly-full volume turns
+# every guarded INSERT into an I/O error storm — rows stay pending and
+# the drain reports disk_free_mb instead of burning attempts.
+_CIRCUIT_TRIP = 3
+_CIRCUIT_BASE_S = 120.0
+_CIRCUIT_MAX_S = 1800.0
+
+
+def _db_file(ledger) -> str:
+    return ledger.db.execute("PRAGMA database_list").fetchone()[2]
+
+
+def circuit_state_path(ledger):
+    from pathlib import Path
+    return Path(_db_file(ledger)).with_name("llm_circuit.json")
+
+
+def _circuit_state(ledger) -> dict:
+    try:
+        d = json.loads(circuit_state_path(ledger).read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def circuit_open_s(ledger) -> float:
+    """Seconds the breaker stays open; 0 when closed. An unreadable or
+    corrupt state file fails closed-open — it never blocks the lane."""
+    import time as _time
+    until = _circuit_state(ledger).get("open_until")
+    return max(0.0, until - _time.time()) \
+        if type(until) in (int, float) else 0.0
+
+
+def circuit_success(ledger) -> None:
+    """Any answered call proves the endpoint is alive — reset state."""
+    with suppress(OSError):
+        circuit_state_path(ledger).unlink(missing_ok=True)
+
+
+def circuit_failure(ledger) -> None:
+    """Endpoint-down observation: count consecutive probes and open the
+    breaker on a doubling cooldown once the streak trips."""
+    import time as _time
+    path = circuit_state_path(ledger)
+    state = _circuit_state(ledger)
+    fails = (state.get("failures") or 0) + 1
+    out = {"failures": fails, "streak": state.get("streak") or 0}
+    if fails >= _CIRCUIT_TRIP:
+        out["streak"] += 1
+        out["open_until"] = _time.time() + min(
+            _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
+        out["failures"] = 0
+    payload = json.dumps(out)
+    with suppress(OSError):
+        atomic_write(str(path), lambda f: f.write(payload))
+
+
+def disk_free_mb(ledger) -> float | None:
+    """Free space (MiB) on the volume holding the ledger; None when
+    unmeasurable — an unreadable fs must not gate the lane."""
+    try:
+        import shutil
+        return shutil.disk_usage(_db_file(ledger)).free / (1024 * 1024)
+    except (OSError, TypeError, IndexError):
+        return None
+
+
+def disk_floor_mb() -> float:
+    """MiB floor under which the LLM lane defers; 0 disables the guard."""
+    try:
+        return float(os.environ.get("MCS_DISK_GUARD_MB", "512"))
+    except ValueError:
+        return 512.0
 
 
 def file_sha256(path) -> str:

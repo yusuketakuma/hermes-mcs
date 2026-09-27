@@ -75,12 +75,9 @@ def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
               f"{qc_source_id(msg, version=version)}")
 
 
-def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
-    """Predicate: a canonical_projection row is usable right now —
-    valid payloads, no error, hash-current to the source message, and not
-    superseded by a later source save (meta.invalidated).  Shared by
-    current_projection_id and mcs_requests.candidates — the T12 shadow
-    rule must be identical on every read path."""
+def _projection_pred(art: str, hash_ref: str, *,
+                     engine_version: int | None = None) -> str:
+    """Build the shared current-row predicate for both projection kinds."""
     col = f"{art}." if art else ""
     return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
             f"THEN json_type({col}content)='object' "
@@ -88,8 +85,18 @@ def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
             f"AND COALESCE(json_extract({col}content,'$._error'),0)=0 "
             f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
             f"AND json_extract({col}meta,'$.hash')={hash_ref} "
-            f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
+            + (f"AND json_extract({col}meta,'$.engine_version')="
+               f"{engine_version} " if engine_version is not None else "")
+            + f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
             "ELSE 0 END")
+
+
+def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
+    """Predicate: a canonical_projection row is usable right now —
+    valid payloads, no error, hash-current to the source message, and not
+    superseded by a later source save (meta.invalidated). Shared by
+    current_projection_id and mcs_requests.candidates."""
+    return _projection_pred(art, hash_ref)
 
 
 def current_projection_id(msg: str = "m") -> str:
@@ -109,16 +116,7 @@ def current_projection_id(msg: str = "m") -> str:
 def current_v4_pred(art: str = "v", hash_ref: str = "?") -> str:
     """Predicate: a semantic_facts_v4 row is usable — same contract as
     current_projection_pred plus the engine version pin."""
-    col = f"{art}." if art else ""
-    return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
-            f"THEN json_type({col}content)='object' "
-            f"AND json_type({col}meta)='object' "
-            f"AND COALESCE(json_extract({col}content,'$._error'),0)=0 "
-            f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
-            f"AND json_extract({col}meta,'$.hash')={hash_ref} "
-            f"AND json_extract({col}meta,'$.engine_version')=4 "
-            f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
-            "ELSE 0 END")
+    return _projection_pred(art, hash_ref, engine_version=4)
 
 
 def current_v4_id(msg: str = "m") -> str:

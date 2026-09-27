@@ -269,24 +269,21 @@ class Broker:
                     return {"admitted": False, "reason": "class_full",
                             "epoch": epoch}
                 # no BACKLOG occupying — RT goes straight to admitted
-                now = time.time()
-                cur = self.db.execute(
-                    "INSERT INTO permits(epoch,client,cls,job_gen,"
-                    "request_id,state,created_at,admitted_at)"
-                    " VALUES(?,?,?,?,?,'admitted',?,?)",
-                    (epoch, client, cls, job_gen, request_id,
-                     now, now))
-                return {"admitted": True,
-                        "permit_id": cur.lastrowid, "epoch": epoch}
-            now = time.time()
-            cur = self.db.execute(
-                "INSERT INTO permits(epoch,client,cls,job_gen,"
-                "request_id,state,created_at,admitted_at)"
-                " VALUES(?,?,?,?,?,'admitted',?,?)",
-                (epoch, client, cls, job_gen, request_id,
-                 now, now))
-            return {"admitted": True, "permit_id": cur.lastrowid,
-                    "epoch": epoch}
+                return self._admit(epoch, client, cls, job_gen,
+                                   request_id)
+            return self._admit(epoch, client, cls, job_gen, request_id)
+
+    def _admit(self, epoch, client, cls, job_gen, request_id) -> dict:
+        """Insert an 'admitted' permit — created_at == admitted_at since
+        the permit never waited."""
+        now = time.time()
+        cur = self.db.execute(
+            "INSERT INTO permits(epoch,client,cls,job_gen,"
+            "request_id,state,created_at,admitted_at)"
+            " VALUES(?,?,?,?,?,'admitted',?,?)",
+            (epoch, client, cls, job_gen, request_id, now, now))
+        return {"admitted": True, "permit_id": cur.lastrowid,
+                "epoch": epoch}
 
     def _permit(self, permit_id: int) -> sqlite3.Row | None:
         return self.db.execute(
@@ -406,18 +403,26 @@ class Broker:
                     "rt_waiting-1 WHERE singleton=1")
         return {"terminal": True}
 
+    def _live_permit(self, permit_id: int):
+        """(permit, error) — error is the result dict to return when the
+        verb may not proceed (unknown permit, stale epoch, or an
+        already-terminal state reported as ok)."""
+        p = self._permit(permit_id)
+        if p is None:
+            return None, {"ok": False, "reason": "unknown_permit"}
+        if p["epoch"] != self._meta()["epoch"]:
+            return p, {"ok": False, "reason": "stale_epoch"}
+        if p["state"] in TERMINAL:
+            return p, {"ok": True, "state": p["state"]}
+        return p, None
+
     def cancel(self, permit_id: int) -> dict:
         """A cancel verb is NOT an acknowledgement — the permit moves
         to cancel_pending and keeps occupying its class until a
         confirmed terminal lands."""
-        p = self._permit(permit_id)
-        if p is None:
-            return {"ok": False, "reason": "unknown_permit"}
-        meta = self._meta()
-        if p["epoch"] != meta["epoch"]:
-            return {"ok": False, "reason": "stale_epoch"}
-        if p["state"] in TERMINAL:
-            return {"ok": True, "state": p["state"]}
+        p, err = self._live_permit(permit_id)
+        if err:
+            return err
         if p["state"] == "waiting":
             # never sent — cancelling a waiting intent retires it and
             # releases the RT-waiting flag immediately
@@ -444,14 +449,9 @@ class Broker:
         response) — the permit stays occupied. The class remains
         closed to the other class until reconciled with backend
         evidence."""
-        p = self._permit(permit_id)
-        if p is None:
-            return {"ok": False, "reason": "unknown_permit"}
-        meta = self._meta()
-        if p["epoch"] != meta["epoch"]:
-            return {"ok": False, "reason": "stale_epoch"}
-        if p["state"] in TERMINAL:
-            return {"ok": True, "state": p["state"]}
+        p, err = self._live_permit(permit_id)
+        if err:
+            return err
         with self.db:
             self.db.execute(
                 "UPDATE permits SET state='unknown', outcome=?"

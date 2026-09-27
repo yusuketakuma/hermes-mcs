@@ -25,6 +25,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -89,7 +90,7 @@ def _http_worker_main() -> int:
                 or not all(isinstance(e, str) for e in allowed)
                 or not _worker_endpoint_allowed(endpoint, allowed)
                 or method not in ("GET", "POST")
-                or not isinstance(timeout, (int, float))
+                or not isinstance(timeout, int | float)
                 or isinstance(timeout, bool) or not math.isfinite(timeout)
                 or timeout <= 0
                 or (api_key is not None and not isinstance(api_key, str))
@@ -165,13 +166,13 @@ def bounded_http_request(endpoint: str, method: str, body,
             raise ValueError("local_endpoint_not_allowed")
     elif not isinstance(api_key, str) or endpoint not in allowed:
         raise ValueError("endpoint_not_allowed")
-    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+    if (isinstance(timeout, bool) or not isinstance(timeout, int | float)
             or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout_invalid")
     operation_deadline = time.monotonic() + float(timeout)
     if deadline is not None:
         if (isinstance(deadline, bool)
-                or not isinstance(deadline, (int, float))
+                or not isinstance(deadline, int | float)
                 or not math.isfinite(deadline)):
             raise ValueError("deadline_invalid")
         operation_deadline = min(operation_deadline, float(deadline))
@@ -206,10 +207,8 @@ def bounded_http_request(endpoint: str, method: str, body,
     except BaseException:
         if process.poll() is None:
             process.kill()
-        try:
+        with suppress(Exception):
             process.communicate()
-        except Exception:
-            pass
         raise
     if time.monotonic() >= operation_deadline:
         raise TimeoutError("http worker deadline exceeded")

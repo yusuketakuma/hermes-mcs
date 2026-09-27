@@ -11,8 +11,10 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
+from contextlib import suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
+from mcs_util import atomic_write
 
 HOME = os.path.expanduser("~/.mcs")
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -33,27 +35,7 @@ def atomic_publish_text(path: str, text: str) -> None:
     """tmp -> fsync -> os.replace -> dir fsync: consumers either see the
     whole previous file or the whole new one — a mid-write crash never
     leaves a torn JSON behind (same contract as the backup chain)."""
-    parent = os.path.dirname(path)
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".pub.",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(path, lambda f: f.write(text), tmp_prefix=".pub.")
 
 
 def daily_backup(db_path: str):
@@ -67,10 +49,8 @@ def daily_backup(db_path: str):
     if valid_mcs_db(dest):
         return
     tmp = dest + ".tmp"
-    try:
+    with suppress(FileNotFoundError):
         os.unlink(tmp)
-    except FileNotFoundError:
-        pass
     src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
                           uri=True)
     dst = sqlite3.connect(tmp)
@@ -87,10 +67,8 @@ def daily_backup(db_path: str):
     os.replace(tmp, dest)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
-        try:
+        with suppress(OSError):
             os.unlink(old)
-        except OSError:
-            pass
     prune_preupdate_backups()
 
 
@@ -147,11 +125,9 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
     for path in glob.glob(os.path.join(BACKUP_DIR, "preupdate-*.db")):
         if os.path.abspath(path) in referenced:
             continue
-        try:
+        with suppress(OSError):
             os.unlink(path)
             removed += 1
-        except OSError:
-            pass
     return removed
 
 
@@ -168,15 +144,11 @@ def rotate_log(paths=None):
                           os.path.join(HOME, "data", "extract_llm.log"),
                           os.path.join(HOME, "data",
                                        "semantic_drain.log")):
-        try:
+        with suppress(OSError):
             if os.path.getsize(path) > LOG_MAX:
                 shutil.copyfile(path, path + ".1")
                 with open(path, "w"):
                     pass
-        except OSError:
-            pass
-
-
 def prune_attachments(db_path: str) -> int:
     """Delete downloaded attachment payloads older than 14 days —
     retention-bound the unbounded attachments/ dir (10GB in the first
