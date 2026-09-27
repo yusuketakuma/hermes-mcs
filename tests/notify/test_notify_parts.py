@@ -27,7 +27,7 @@ from test_notify_cards import (
     _msg, _receipt, _seed_thread, _uuid)
 
 
-@pytest.fixture()
+@pytest.fixture
 def led(tmp_path):
     db_path = tmp_path / "data" / "ledger.db"
     (tmp_path / "data").mkdir()
@@ -89,7 +89,7 @@ def test_render_manifest_and_parts_seeded(led):
     assert len(body_parts) == len(spec["parts"]["thread_body_parts"]) >= 1
     for i, p in enumerate(manifest):
         assert p["index"] == i                      # ordered positions
-    for chunk, part in zip(spec["parts"]["thread_body_parts"], body_parts):
+    for chunk, part in zip(spec["parts"]["thread_body_parts"], body_parts, strict=False):
         assert part["sha256"] == \
             hashlib.sha256(chunk.encode("utf-8")).hexdigest()
         assert part["bytes"] == len(chunk.encode("utf-8"))
@@ -159,6 +159,18 @@ def test_spec_manifest_validates(led):
     assert spec_mod.validate(spec) is spec
 
 
+def test_spec_rejects_card_content_changed_after_sealing(led):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    spec = _spec(render)
+    spec["parts"]["containers"].append({"type": "text", "text": "合成追記"})
+
+    with pytest.raises(ValueError, match="card_part_sha256"):
+        spec_mod.validate(spec)
+
+
 def test_spec_rejects_manifest_drift(led):
     from hermes_plugin.mcs_delivery import spec as spec_mod
     _seed_thread(led)
@@ -167,11 +179,11 @@ def test_spec_rejects_manifest_drift(led):
     spec = _spec(render)
     bad = json.loads(json.dumps(spec))
     bad["parts"]["manifest"][1]["sha256"] = "0" * 64   # thread hash tamper
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad_thread_part"):
         spec_mod.validate(bad)
     bad = json.loads(json.dumps(spec))
     del bad["parts"]["manifest"][2]                   # part dropped
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="body_part_count"):
         spec_mod.validate(bad)
 
 

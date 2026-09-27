@@ -18,6 +18,7 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import suppress
 
 import mcs_requests
 import notify_cards
@@ -56,6 +57,76 @@ def _fields(req, allowed) -> str | None:
         if req.get("op") in TRANSPORT_OPS:
             allowed |= {"team_id"}
     return None if req.keys() <= allowed else "unknown_field"
+
+
+def _delivery_ids(req, cid, attempt_re, worker=False) -> str | None:
+    """command/attempt/[worker]/delivery id chain shared by the
+    transport ops — check order fixed so the first error code is
+    identical to the hand-rolled blocks."""
+    if not valid_uuid(cid):
+        return "bad_command_id"
+    if not (isinstance(req.get("attempt_id"), str)
+            and attempt_re.match(req["attempt_id"])):
+        return "bad_attempt_id"
+    if worker and not (isinstance(req.get("worker_id"), str)
+                       and _WORKER_ID.match(req["worker_id"])):
+        return "bad_worker_id"
+    if not valid_uuid(req.get("delivery_id")):
+        return "bad_delivery_id"
+    return None
+
+
+def _delivery_integrity(req) -> str | None:
+    if not positive(req.get("render_rev")):
+        return "bad_render_rev"
+    if not valid_hash(req.get("payload_hash")):
+        return "bad_payload_hash"
+    if not positive(req.get("route_epoch")):
+        return "bad_route_epoch"
+    return None
+
+
+def _route_identity(req) -> str | None:
+    for k in ("profile", "application_id", "channel_id"):
+        if not _text(req.get(k), 200 if k == "profile" else 64):
+            return f"bad_{k}"
+    return None
+
+
+def _guild_id(req) -> str | None:
+    return None if _opt_text(req.get("guild_id"), 64) \
+        else "bad_guild_id"
+
+
+def _correlation(req) -> str | None:
+    return None if (isinstance(req.get("correlation"), str)
+                    and _CORRELATION.match(req["correlation"])) \
+        else "bad_correlation"
+
+
+def _part_identity(req) -> str | None:
+    if not (isinstance(req.get("part_id"), str)
+            and _PART_ID.match(req["part_id"])):
+        return "bad_part_id"
+    if req.get("kind") is not None \
+            and req["kind"] not in (
+                "card", "thread", "body_part", "attachment_part"):
+        return "bad_kind"
+    return None
+
+
+def _result_fields(req, remote_key) -> str | None:
+    """delivered/not_sent/unknown + remote id + error_code — remote_key
+    is 'message_id' on transport receipts, 'remote_id' on part
+    receipts."""
+    if req.get("result") not in ("delivered", "not_sent", "unknown"):
+        return "bad_result"
+    if req["result"] == "delivered" and not _id_str(req.get(remote_key)):
+        return f"bad_{remote_key}"
+    if not _opt_text(req.get(remote_key), 64) \
+            or not _opt_text(req.get("error_code"), 200):
+        return "bad_result_fields"
+    return None
 
 
 def _origin(v, slack=False) -> bool:
@@ -108,167 +179,120 @@ def validate_int(req) -> str | None:
         return "unknown_op"
     cid = req.get("command_id")
     if op == "notification":
-        if _fields(req, {"version", "op", "command_id", "actor",
-                         "token", "origin", "request_id"}):
-            return "unknown_field"
-        if "request_id" in req and not valid_uuid(req["request_id"]):
-            return "bad_request_id"
-        if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.match(cid):
-            return "bad_command_id"
-        if not _text(req.get("actor"), 120):
-            return "bad_actor"
-        if not (isinstance(req.get("token"), str)
-                and len(req["token"]) == 32):
-            return "bad_token"
-        if cid.split(":", 1)[0] != req["token"]:
-            # the idempotency key must be derived from the token it
-            # applies — a mismatched pair could otherwise replay one
-            # token under another action's receipt identity
-            return "command_id_mismatch"
-        if not _origin(req.get("origin"), slack):
-            return "bad_origin"
-        return None
+        return _val_notification(req, cid, slack)
     if op == "refresh":
-        if _fields(req, {"version", "op", "command_id", "actor",
-                         "origin"}):
-            return "unknown_field"
-        if not valid_uuid(cid):
-            return "bad_command_id"
-        if not _text(req.get("actor"), 120):
-            return "bad_actor"
-        if not _origin(req.get("origin"), slack):
-            return "bad_origin"
-        return None
+        return _val_refresh(req, cid, slack)
     if op == "transport_begin":
-        if _fields(req, {"version", "op", "command_id", "attempt_id",
-                         "worker_id", "delivery_id", "render_rev",
-                         "payload_hash", "route_epoch", "profile",
-                         "application_id", "guild_id", "channel_id"}):
-            return "unknown_field"
-        if not valid_uuid(cid):
-            return "bad_command_id"
-        if not (isinstance(req.get("attempt_id"), str)
-                and _ATTEMPT_ID.match(req["attempt_id"])):
-            return "bad_attempt_id"
-        if not (isinstance(req.get("worker_id"), str)
-                and _WORKER_ID.match(req["worker_id"])):
-            return "bad_worker_id"
-        if not valid_uuid(req.get("delivery_id")):
-            return "bad_delivery_id"
-        if not positive(req.get("render_rev")):
-            return "bad_render_rev"
-        if not valid_hash(req.get("payload_hash")):
-            return "bad_payload_hash"
-        if not positive(req.get("route_epoch")):
-            return "bad_route_epoch"
-        for k in ("profile", "application_id", "channel_id"):
-            if not _text(req.get(k), 200 if k == "profile" else 64):
-                return f"bad_{k}"
-        if not _opt_text(req.get("guild_id"), 64):
-            return "bad_guild_id"
-        return None
+        return _val_transport_begin(req, cid)
     if op == "transport_receipt":
-        if _fields(req, {"version", "op", "command_id", "attempt_id",
-                         "delivery_id", "render_rev", "payload_hash",
-                         "route_epoch", "correlation", "profile",
-                         "application_id", "guild_id", "channel_id",
-                         "result", "message_id", "error_code"}):
-            return "unknown_field"
-        if not valid_uuid(cid):
-            return "bad_command_id"
-        if not (isinstance(req.get("attempt_id"), str)
-                and _ATTEMPT_ID.match(req["attempt_id"])):
-            return "bad_attempt_id"
-        if not valid_uuid(req.get("delivery_id")):
-            return "bad_delivery_id"
-        if not positive(req.get("render_rev")):
-            return "bad_render_rev"
-        if not valid_hash(req.get("payload_hash")):
-            return "bad_payload_hash"
-        if not positive(req.get("route_epoch")):
-            return "bad_route_epoch"
-        if not (isinstance(req.get("correlation"), str)
-                and _CORRELATION.match(req["correlation"])):
-            return "bad_correlation"
-        for k in ("profile", "application_id", "channel_id"):
-            if not _text(req.get(k), 200 if k == "profile" else 64):
-                return f"bad_{k}"
-        if not _opt_text(req.get("guild_id"), 64):
-            return "bad_guild_id"
-        if req.get("result") not in ("delivered", "not_sent", "unknown"):
-            return "bad_result"
-        if req["result"] == "delivered" and not _id_str(req.get("message_id")):
-            return "bad_message_id"
-        if not _opt_text(req.get("message_id"), 64) \
-                or not _opt_text(req.get("error_code"), 200):
-            return "bad_result_fields"
-        return None
+        return _val_transport_receipt(req, cid)
     if op == "part_receipt":
-        if _fields(req, {"version", "op", "command_id", "attempt_id",
-                         "delivery_id", "render_rev", "payload_hash",
-                         "route_epoch", "correlation", "profile",
-                         "application_id", "guild_id", "channel_id",
-                         "part_id", "kind", "result", "remote_id",
-                         "error_code"}):
-            return "unknown_field"
-        if not valid_uuid(cid):
-            return "bad_command_id"
-        if not (isinstance(req.get("attempt_id"), str)
-                and _PART_ATTEMPT_ID.match(req["attempt_id"])):
-            return "bad_attempt_id"
-        if not valid_uuid(req.get("delivery_id")):
-            return "bad_delivery_id"
-        if not positive(req.get("render_rev")):
-            return "bad_render_rev"
-        if not valid_hash(req.get("payload_hash")):
-            return "bad_payload_hash"
-        if not positive(req.get("route_epoch")):
-            return "bad_route_epoch"
-        if not (isinstance(req.get("correlation"), str)
-                and _CORRELATION.match(req["correlation"])):
-            return "bad_correlation"
-        for k in ("profile", "application_id", "channel_id"):
-            if not _text(req.get(k), 200 if k == "profile" else 64):
-                return f"bad_{k}"
-        if not _opt_text(req.get("guild_id"), 64):
-            return "bad_guild_id"
-        if not (isinstance(req.get("part_id"), str)
-                and _PART_ID.match(req["part_id"])):
-            return "bad_part_id"
-        if req.get("kind") is not None \
-                and req["kind"] not in (
-                    "card", "thread", "body_part", "attachment_part"):
-            return "bad_kind"
-        if req.get("result") not in ("delivered", "not_sent", "unknown"):
-            return "bad_result"
-        if req["result"] == "delivered" \
-                and not _id_str(req.get("remote_id")):
-            return "bad_remote_id"
-        if not _opt_text(req.get("remote_id"), 64) \
-                or not _opt_text(req.get("error_code"), 200):
-            return "bad_result_fields"
-        return None
+        return _val_part_receipt(req, cid)
     if op == "thread_receipt":
-        allowed = {"version", "op", "command_id", "delivery_id",
-                   "message_id", "thread_id", "error_code"}
-        if slack:
-            allowed |= {"profile", "application_id", "channel_id"}
-            for k in ("profile", "application_id", "channel_id"):
-                if not _text(req.get(k), 200 if k == "profile" else 64):
-                    return f"bad_{k}"
-        if _fields(req, allowed):
-            return "unknown_field"
-        if not valid_uuid(cid):
-            return "bad_command_id"
-        if not valid_uuid(req.get("delivery_id")):
-            return "bad_delivery_id"
-        if not _id_str(req.get("message_id")):
-            return "bad_message_id"
-        if not _opt_text(req.get("thread_id"), 64) \
-                or not _opt_text(req.get("error_code"), 200):
-            return "bad_result_fields"
-        return None
+        return _val_thread_receipt(req, cid, slack)
     return None  # human cmd — validated by mcs_requests
+
+
+def _val_notification(req, cid, slack: bool) -> str | None:
+    if _fields(req, {"version", "op", "command_id", "actor",
+                     "token", "origin", "request_id"}):
+        return "unknown_field"
+    if "request_id" in req and not valid_uuid(req["request_id"]):
+        return "bad_request_id"
+    if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.match(cid):
+        return "bad_command_id"
+    if not _text(req.get("actor"), 120):
+        return "bad_actor"
+    if not (isinstance(req.get("token"), str)
+            and len(req["token"]) == 32):
+        return "bad_token"
+    if cid.split(":", 1)[0] != req["token"]:
+        # the idempotency key must be derived from the token it
+        # applies — a mismatched pair could otherwise replay one
+        # token under another action's receipt identity
+        return "command_id_mismatch"
+    if not _origin(req.get("origin"), slack):
+        return "bad_origin"
+    return None
+
+
+def _val_refresh(req, cid, slack: bool) -> str | None:
+    if _fields(req, {"version", "op", "command_id", "actor",
+                     "origin"}):
+        return "unknown_field"
+    if not valid_uuid(cid):
+        return "bad_command_id"
+    if not _text(req.get("actor"), 120):
+        return "bad_actor"
+    if not _origin(req.get("origin"), slack):
+        return "bad_origin"
+    return None
+
+
+def _val_transport_begin(req, cid) -> str | None:
+    if _fields(req, {"version", "op", "command_id", "attempt_id",
+                     "worker_id", "delivery_id", "render_rev",
+                     "payload_hash", "route_epoch", "profile",
+                     "application_id", "guild_id", "channel_id"}):
+        return "unknown_field"
+    return (_delivery_ids(req, cid, _ATTEMPT_ID, worker=True)
+            or _delivery_integrity(req)
+            or _route_identity(req)
+            or _guild_id(req))
+
+
+def _val_transport_receipt(req, cid) -> str | None:
+    if _fields(req, {"version", "op", "command_id", "attempt_id",
+                     "delivery_id", "render_rev", "payload_hash",
+                     "route_epoch", "correlation", "profile",
+                     "application_id", "guild_id", "channel_id",
+                     "result", "message_id", "error_code"}):
+        return "unknown_field"
+    return (_delivery_ids(req, cid, _ATTEMPT_ID)
+            or _delivery_integrity(req)
+            or _correlation(req)
+            or _route_identity(req)
+            or _guild_id(req)
+            or _result_fields(req, "message_id"))
+
+
+def _val_part_receipt(req, cid) -> str | None:
+    if _fields(req, {"version", "op", "command_id", "attempt_id",
+                     "delivery_id", "render_rev", "payload_hash",
+                     "route_epoch", "correlation", "profile",
+                     "application_id", "guild_id", "channel_id",
+                     "part_id", "kind", "result", "remote_id",
+                     "error_code"}):
+        return "unknown_field"
+    return (_delivery_ids(req, cid, _PART_ATTEMPT_ID)
+            or _delivery_integrity(req)
+            or _correlation(req)
+            or _route_identity(req)
+            or _guild_id(req)
+            or _part_identity(req)
+            or _result_fields(req, "remote_id"))
+
+
+def _val_thread_receipt(req, cid, slack: bool) -> str | None:
+    allowed = {"version", "op", "command_id", "delivery_id",
+               "message_id", "thread_id", "error_code"}
+    if slack:
+        allowed |= {"profile", "application_id", "channel_id"}
+        err = _route_identity(req)
+        if err:
+            return err
+    if _fields(req, allowed):
+        return "unknown_field"
+    if not valid_uuid(cid):
+        return "bad_command_id"
+    if not valid_uuid(req.get("delivery_id")):
+        return "bad_delivery_id"
+    if not _id_str(req.get("message_id")):
+        return "bad_message_id"
+    if not _opt_text(req.get("thread_id"), 64) \
+            or not _opt_text(req.get("error_code"), 200):
+        return "bad_result_fields"
+    return None
 
 
 def dispatch(ledger, req, cfg, root, now=None):
@@ -304,9 +328,9 @@ def _human_cmd_check(req) -> str | None:
             return "reason_required"
         if not positive(req.get("expected_signal_artifact_id")):
             return "expected_signal_artifact_id_required"
-    if req.get("cmd") == "request.create":
-        if not _text(req.get("reason"), 2000):
-            return "reason_required"
+    if req.get("cmd") == "request.create" \
+            and not _text(req.get("reason"), 2000):
+        return "reason_required"
     return None
 
 
@@ -339,10 +363,8 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             # publication is atomic (mkstemp+rename), so a readable file
             # that fails to parse is permanently corrupt — quarantine it
             # instead of re-reading it on every drain
-            try:
+            with suppress(OSError):
                 os.replace(path, path + ".invalid")
-            except OSError:
-                pass
             continue
         except OSError:
             continue                       # transient — next drain

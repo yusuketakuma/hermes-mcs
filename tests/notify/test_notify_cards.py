@@ -46,7 +46,7 @@ def _uuid(n: int) -> str:
     return f"{n:08x}-0000-4000-8000-{n:012x}"[:36]
 
 
-@pytest.fixture()
+@pytest.fixture
 def led(tmp_path):
     db_path = tmp_path / "data" / "ledger.db"
     (tmp_path / "data").mkdir()
@@ -2076,11 +2076,10 @@ def _tasks_click(led, spec, msg_id="m-9", suffix="ab"):
     """Each click needs a fresh command_id — a repeated one replays the
     stored receipt by design."""
     tok = _token_for(spec, "tasks")
-    r = notify_cards.apply_notification(
+    return notify_cards.apply_notification(
         led, {**_notif(tok), "command_id": f"{tok}:{suffix * 8}",
               "origin": dict(ORIGIN, message_id=msg_id)},
         CFG, now=NOW)
-    return r
 
 
 def test_tasks_button_only_on_thread_cards(led, tmp_path):

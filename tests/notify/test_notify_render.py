@@ -5,12 +5,53 @@ import json
 import pytest
 
 import notify_cards
+import notify_render
 from test_notify_cards import (
     CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render,
     _msg, _notif, _patient, _receipt, _signal_row, _token_for, led,
 )
 
 __all__ = ["led"]  # shared isolated-ledger fixture
+
+
+@pytest.mark.parametrize(
+    ("message_ids", "expected"),
+    [([100, 101], "後の投稿"), ([100, "invalid"], "退院時の投稿")],
+)
+def test_signal_display_and_body_select_same_evidence(
+        led, message_ids, expected):
+    _patient(led)
+    _msg(led, 100, body="最初の投稿")
+    _msg(led, 101, body="後の投稿")
+    _msg(led, 102, body="退院時の投稿")
+    sig = {"project_id": 1, "type": "med_followup", "note": "合成候補",
+           "evidence": {
+        "message_ids": message_ids, "discharge_message_id": 102,
+        "message_id": 100}}
+
+    blocks = notify_render._signal_display(led.db, sig)
+    body = notify_render._signal_body(led.db, sig)
+
+    quotes = [block["text"] for block in blocks if block["type"] == "quote"]
+    assert len(quotes) == 1 and expected in quotes[0]
+    assert expected in body
+    assert all(other not in body for other in
+               ("最初の投稿", "後の投稿", "退院時の投稿") if other != expected)
+
+
+def test_deleted_signal_evidence_differs_between_card_and_body(led):
+    _patient(led)
+    _msg(led, 100, body="消された本文")
+    led.db.execute(
+        "UPDATE messages SET body_state='deleted' WHERE message_id=100")
+    sig = {"project_id": 1, "type": "med_followup", "note": "合成候補",
+           "evidence": {"message_id": 100}}
+
+    blocks = notify_render._signal_display(led.db, sig)
+    body = notify_render._signal_body(led.db, sig)
+
+    assert all(block["type"] != "quote" for block in blocks)
+    assert "（削除済み）" in body and "消された本文" not in body
 
 
 @pytest.mark.parametrize("change", ["edit", "delete"])

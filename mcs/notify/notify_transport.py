@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import suppress
 
 from mcs_requests import canonical, payload_hash, positive, valid_uuid
 import notify_cards as cards
@@ -192,9 +193,7 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
             "SELECT * FROM notification_delivery_attempts "
             "WHERE begin_command_id=?", (cid,)).fetchone()
         if old is not None:
-            render = db.execute(
-                "SELECT * FROM notification_renders WHERE delivery_id=?",
-                (old["delivery_id"],)).fetchone()
+            render = _render_for(db, old["delivery_id"])
             if not cards._scope_match(render, req):
                 return {"granted": False, "error": "denied_scope_mismatch",
                         "command_id": cid}
@@ -275,20 +274,14 @@ def _unlink_spec(ledger, delivery_id, transport) -> None:
     """Remove a definitively dead spec file. The runner owns
     discord_render; a missing file just means 'nothing to claim' —
     the watchdog republishes a live render's spec_json if needed."""
-    try:
+    with suppress(OSError):
         os.unlink(os.path.join(
             cards.notify_dirs(cards.data_root(ledger))[transport + "_render"],
             str(delivery_id) + ".json"))
-    except OSError:
-        pass
-
-
 def _begin_check(db, req, cfg) -> str | None:
     if not cards.interactive_enabled(cfg):
         return "interactive_off"
-    render = db.execute(
-        "SELECT * FROM notification_renders WHERE delivery_id=?",
-        (req["delivery_id"],)).fetchone()
+    render = _render_for(db, req["delivery_id"])
     if render is None:
         return "unknown_delivery"
     if render["transport"] != cards.active_transport(cfg) \
@@ -368,9 +361,7 @@ def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
             "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
         render = None
         if attempt is not None:
-            render = db.execute(
-                "SELECT * FROM notification_renders WHERE delivery_id=?",
-                (attempt["delivery_id"],)).fetchone()
+            render = _render_for(db, attempt["delivery_id"])
         error = _receipt_check(attempt, render, req)
         if error:
             receipt = {"applied": False, "error": error,
@@ -408,19 +399,31 @@ def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
     return receipt
 
 
+def _render_for(db, delivery_id):
+    """The sealed render a verb names — None means unknown delivery."""
+    return db.execute(
+        "SELECT * FROM notification_renders WHERE delivery_id=?",
+        (delivery_id,)).fetchone()
+
+
+def _sealed_echo(render, req) -> str | None:
+    """Receipt echo fields must equal the sealed render's — a receipt
+    settles only the exact render it names (card attempt and render
+    part share this chain)."""
+    for k in ("render_rev", "payload_hash", "route_epoch", "correlation"):
+        if req.get(k) != render[k]:
+            return f"{k}_mismatch"
+    return None if cards._scope_match(render, req) else "scope_mismatch"
+
+
 def _receipt_check(attempt, render, req) -> str | None:
     if attempt is None or render is None:
         return "unknown_attempt"
     if attempt["delivery_id"] != req["delivery_id"]:
         return "delivery_mismatch"
-    for k, want in (("render_rev", render["render_rev"]),
-                    ("payload_hash", render["payload_hash"]),
-                    ("route_epoch", render["route_epoch"]),
-                    ("correlation", render["correlation"])):
-        if req.get(k) != want:
-            return f"{k}_mismatch"
-    if not cards._scope_match(render, req):
-        return "scope_mismatch"
+    err = _sealed_echo(render, req)
+    if err:
+        return err
     if req["result"] == "delivered" \
             and not isinstance(req.get("message_id"), str):
         return "message_id_required"
@@ -440,9 +443,7 @@ def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
     now = time.time() if now is None else now
     with db:
         db.execute("BEGIN IMMEDIATE")
-        render = db.execute(
-            "SELECT * FROM notification_renders WHERE delivery_id=?",
-            (req["delivery_id"],)).fetchone()
+        render = _render_for(db, req["delivery_id"])
         part = db.execute(
             "SELECT * FROM notification_render_parts WHERE delivery_id=? "
             "AND part_id=?",
@@ -525,14 +526,9 @@ def _part_receipt_check(render, part, req) -> str | None:
         return "unknown_part"
     if part["kind"] == "card":
         return "card_part_excluded"
-    for k, want in (("render_rev", render["render_rev"]),
-                    ("payload_hash", render["payload_hash"]),
-                    ("route_epoch", render["route_epoch"]),
-                    ("correlation", render["correlation"])):
-        if req.get(k) != want:
-            return f"{k}_mismatch"
-    if not cards._scope_match(render, req):
-        return "scope_mismatch"
+    err = _sealed_echo(render, req)
+    if err:
+        return err
     if req["result"] == "delivered" \
             and not (isinstance(req.get("remote_id"), str)
                      and req["remote_id"]):
@@ -549,9 +545,7 @@ def apply_thread_receipt(ledger, req, cfg, now=None) -> dict:
     now = time.time() if now is None else now
     with db:
         db.execute("BEGIN IMMEDIATE")
-        render = db.execute(
-            "SELECT * FROM notification_renders WHERE delivery_id=?",
-            (req["delivery_id"],)).fetchone()
+        render = _render_for(db, req["delivery_id"])
         if render is None or render["card_id"] is None:
             return {"applied": False, "error": "unknown_delivery"}
         if render["transport"] != req.get("transport", "discord") \
@@ -684,9 +678,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
             attempt = db.execute(
                 "SELECT * FROM notification_delivery_attempts "
                 "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-            render = db.execute(
-                "SELECT * FROM notification_renders WHERE delivery_id=?",
-                (req["delivery_id"],)).fetchone() if attempt else None
+            render = _render_for(db, req["delivery_id"]) \
+                if attempt else None
             card = (cards._card_row(db, render["card_id"])
                     if render is not None
                     and render["card_id"] is not None else None)
@@ -831,13 +824,13 @@ def _resolve_check(attempt, render, card, req) -> str | None:
     for k in cards.scope_fields(render["transport"]):
         if render[k] != req.get(k):
             return "scope_mismatch"
-    if req["result"] == "mark_delivered":
-        # create binds a discovered message once; update/revoke must
-        # match the message the card already knows
-        if card is not None and render["op"] != "create" \
-                and card.get("message_id") is not None \
-                and str(req["message_id"]) != card["message_id"]:
-            return "message_id_mismatch"
+    # create binds a discovered message once; update/revoke must
+    # match the message the card already knows
+    if req["result"] == "mark_delivered" and card is not None \
+            and render["op"] != "create" \
+            and card.get("message_id") is not None \
+            and str(req["message_id"]) != card["message_id"]:
+        return "message_id_mismatch"
     return None
 
 
