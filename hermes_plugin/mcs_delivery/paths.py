@@ -8,6 +8,8 @@ under the configured data root.
 from __future__ import annotations
 
 import os
+import tempfile
+from contextlib import suppress
 
 # short key -> on-disk dir under the MCS data root
 SUBDIRS = {"render": "discord_render", "state": "discord_state",
@@ -44,6 +46,36 @@ def safe_name(command_id) -> str:
     """cmd_results filenames follow the runner's sanitize rule."""
     return ("".join(c if c.isalnum() or c in "._-" else "_"
                     for c in str(command_id))[:120] or "unknown")
+
+
+def atomic_write(path: str, raw: bytes, tmp_prefix: str = ".atomic-",
+                 mode: int | None = None, dir_fsync: bool = True) -> str:
+    """tmp -> fsync -> [chmod] -> os.replace -> [dir fsync]: readers see
+    the whole old file or the whole new one, and a mid-write crash
+    leaves no torn file (the tmp file is unlinked on failure).
+    Returns ``path``."""
+    fd, tmp = tempfile.mkstemp(prefix=tmp_prefix, suffix=".tmp",
+                               dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        if dir_fsync:
+            dfd = os.open(os.path.dirname(path),
+                          os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+    except OSError:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return path
 
 
 def read_result(results_dir: str, command_id: str) -> dict | None:

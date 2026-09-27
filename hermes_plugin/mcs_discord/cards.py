@@ -62,9 +62,9 @@ def build_view(spec: dict):
             continue                       # correlation — not displayed
         else:
             lines.append(c["text"])
-    for c in spec["parts"].get("footer") or []:
-        if c.get("type") == "text":
-            lines.append(f"-# {c['text']}")
+    lines.extend(f"-# {c['text']}"
+                 for c in spec["parts"].get("footer") or []
+                 if c.get("type") == "text")
     children = [discord.ui.TextDisplay(chunk)
                 for chunk in _text_chunks(lines)]
     for row in spec["parts"].get("action_rows") or []:

@@ -172,7 +172,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                     try:
                         thread = await self._channel(str(msg.id))
                     except Exception:
-                        raise create_exc
+                        raise create_exc from None
         except Exception as exc:
             if getattr(exc, "status", None) in CAPABILITY_REJECT:
                 self._reg.put_capability(scope_key, False)
@@ -237,7 +237,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                         thread = await self._channel(
                             str(sent_message.id))
                     except Exception:
-                        raise create_exc
+                        raise create_exc from None
             self._reg.put_capability(scope_key, True)
             env = envelopes.thread_receipt(
                 spec["delivery_id"], message_id,

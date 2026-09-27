@@ -49,6 +49,10 @@ def _reset_environment() -> None:
     os.environ["XDG_CACHE_HOME"] = os.path.join(_TEST_HOME, "cache")
     os.environ["XDG_DATA_HOME"] = os.path.join(_TEST_HOME, "data")
     os.environ["TMPDIR"] = os.path.join(_TEST_HOME, "tmp")
+    # Synthetic test bodies are placeholders, not clinical text — keep
+    # the historical "every pending message is extracted" contract; the
+    # prefilter path is exercised by tests that opt in explicitly.
+    os.environ["MCS_EXTRACT_PREFILTER"] = "off"
     for name in ("config", "cache", "data", "tmp"):
         os.makedirs(os.path.join(_TEST_HOME, name), exist_ok=True)
 

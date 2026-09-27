@@ -14,10 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import uuid
 
-from .paths import safe_name
+from .paths import atomic_write, safe_name
 
 MAX_COMMAND_BYTES = 16384
 
@@ -41,28 +40,10 @@ def publish_command(cmd_int_dir: str, envelope: dict) -> str:
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
     name = safe_name(envelope["command_id"]) + ".json"
-    fd, temp = tempfile.mkstemp(prefix=".int-", suffix=".tmp",
-                                dir=cmd_int_dir)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # deterministic name — a crash-and-retry lands on the same file
-        # with identical content, which the runner treats idempotently
-        os.replace(temp, os.path.join(cmd_int_dir, name))
-        dfd = os.open(cmd_int_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except OSError:
-        try:
-            os.unlink(temp)
-        except OSError:
-            pass
-        raise
-    return os.path.join(cmd_int_dir, name)
+    # deterministic name — a crash-and-retry lands on the same file
+    # with identical content, which the runner treats idempotently
+    return atomic_write(os.path.join(cmd_int_dir, name), raw,
+                        tmp_prefix=".int-")
 
 
 # ---------- transport envelopes ------------------------------------
@@ -89,14 +70,14 @@ def transport_begin(claim: dict) -> dict:
     return env
 
 
-def transport_receipt(claim: dict, result: str,
-                      message_id: str | None = None,
-                      error_code: str | None = None) -> dict:
-    """Factual outcome of the granted attempt — never a guess."""
+def _receipt_env(claim: dict, op: str, result: str, attempt_id: str,
+                 extra: dict | None = None) -> dict:
+    """Shared receipt envelope — every identity field echoes the sealed
+    render so a receipt settles only the exact render it names."""
     delivery = claim["spec"]["delivery"]
-    env = {"version": 1, "op": "transport_receipt",
+    env = {"version": 1, "op": op,
            "command_id": str(uuid.uuid4()),
-           "attempt_id": claim["attempt_id"],
+           "attempt_id": attempt_id,
            "delivery_id": claim["spec"]["delivery_id"],
            "render_rev": claim["spec"]["render_rev"],
            "payload_hash": claim["payload_hash"],
@@ -104,12 +85,24 @@ def transport_receipt(claim: dict, result: str,
            "correlation": delivery["correlation"],
            "profile": delivery.get("profile"),
            "application_id": delivery.get("application_id"),
-           "channel_id": delivery.get("channel_id"),
-           "result": result}
+           "channel_id": delivery.get("channel_id")}
+    if extra:
+        env.update(extra)
+    env["result"] = result
     if delivery.get("guild_id"):
         env["guild_id"] = delivery["guild_id"]
     if delivery.get("transport") == "slack":
-        env.update(version=2, transport="slack", team_id=delivery["team_id"])
+        env.update(version=2, transport="slack",
+                   team_id=delivery["team_id"])
+    return env
+
+
+def transport_receipt(claim: dict, result: str,
+                      message_id: str | None = None,
+                      error_code: str | None = None) -> dict:
+    """Factual outcome of the granted attempt — never a guess."""
+    env = _receipt_env(claim, "transport_receipt", result,
+                       claim["attempt_id"])
     if message_id is not None:
         env["message_id"] = str(message_id)
     if error_code is not None:
@@ -125,25 +118,11 @@ def part_receipt(claim: dict, part: dict, result: str,
     Same echo contract as transport_receipt — every identity field is
     re-checked against the stored render, so a receipt can only settle
     the exact sealed part it names."""
-    delivery = claim["spec"]["delivery"]
-    env = {"version": 1, "op": "part_receipt",
-           "command_id": str(uuid.uuid4()),
-           "attempt_id": part_attempt_id(
-               claim["spec"]["delivery_id"], part["part_id"]),
-           "delivery_id": claim["spec"]["delivery_id"],
-           "render_rev": claim["spec"]["render_rev"],
-           "payload_hash": claim["payload_hash"],
-           "route_epoch": delivery["route_epoch"],
-           "correlation": delivery["correlation"],
-           "profile": delivery.get("profile"),
-           "application_id": delivery.get("application_id"),
-           "channel_id": delivery.get("channel_id"),
-           "part_id": part["part_id"], "kind": part["kind"],
-           "result": result}
-    if delivery.get("guild_id"):
-        env["guild_id"] = delivery["guild_id"]
-    if delivery.get("transport") == "slack":
-        env.update(version=2, transport="slack", team_id=delivery["team_id"])
+    env = _receipt_env(claim, "part_receipt", result,
+                       part_attempt_id(claim["spec"]["delivery_id"],
+                                       part["part_id"]),
+                       {"part_id": part["part_id"],
+                        "kind": part["kind"]})
     if remote_id is not None:
         env["remote_id"] = str(remote_id)
     if error_code is not None:

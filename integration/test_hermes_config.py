@@ -28,7 +28,7 @@ def test_setup_stdin_credentials_follow_the_selected_home(tmp_path, monkeypatch)
     executable.chmod(0o700)
     homes = [tmp_path / "a", tmp_path / "b"]
     values = ["synthetic-a-first", "synthetic-b", "synthetic-a-last"]
-    for home, value in zip([homes[0], homes[1], homes[0]], values):
+    for home, value in zip([homes[0], homes[1], homes[0]], values, strict=False):
         monkeypatch.setenv("HERMES_HOME", str(home))
         assert mcs_setup._hermes_config_set(
             str(executable), "", "DISCORD_BOT_TOKEN", value)

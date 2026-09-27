@@ -63,7 +63,7 @@ def single_attempt(client):
     # Its default connection retry can duplicate a post whose response was
     # lost; changing retry_handlers on the shared client races Hermes sends.
     handlers = getattr(client, "retry_handlers", None)
-    if not isinstance(handlers, (list, tuple)):
+    if not isinstance(handlers, list | tuple):
         return None
     sender = copy.copy(client)
     sender.retry_handlers = []

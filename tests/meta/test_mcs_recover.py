@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -106,7 +107,7 @@ def test_no_state_no_action(rec):
 def test_corrupt_state_escalates(rec, tmp_path):
     (tmp_path / "data" / "update_state.json").write_text("{broken")
     assert rec.recover() == 2
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "corrupt_state"
 
 
@@ -117,9 +118,9 @@ def test_pre_merge_interrupt_restores(rec, tmp_path):
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
     assert rec.recover() == 0
-    after = json.load(open(rec.STATE_PATH))
+    after = json.loads(Path(rec.STATE_PATH).read_text())
     assert after["applying"] is None and after["stages"] == []
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "interrupted_pre_merge"
 
 
@@ -135,7 +136,7 @@ def test_mixed_tree_resets_to_prev(rec, tmp_path):
     assert rec.recover() == 0
     assert (repo / "f.txt").read_text() == "one"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] in ("mixed_tree_reset",)
 
 
@@ -181,8 +182,8 @@ def test_git_status_error_does_not_complete_recovery(rec, tmp_path,
 
     assert rec.recover() == 1
     assert (repo / "f.txt").read_text() == "interrupted checkout"
-    assert json.load(open(rec.STATE_PATH))["applying"] == state["applying"]
-    assert json.load(open(rec.REPORT_PATH))["result"] == "escalate"
+    assert json.loads(Path(rec.STATE_PATH).read_text())["applying"] == state["applying"]
+    assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "escalate"
 
 
 def test_merge_head_aborted(rec, tmp_path):
@@ -194,7 +195,7 @@ def test_merge_head_aborted(rec, tmp_path):
         json.dump(state, f)
     assert rec.recover() == 0
     assert not (repo / ".git" / "MERGE_HEAD").exists()
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "merge_aborted"
 
 
@@ -206,7 +207,7 @@ def test_if_stale_respects_fresh_apply(rec, tmp_path):
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
     assert rec.recover(if_stale=True) == 0
-    after = json.load(open(rec.STATE_PATH))
+    after = json.loads(Path(rec.STATE_PATH).read_text())
     assert after["applying"] is not None      # untouched
     assert not os.path.exists(rec.REPORT_PATH)
 
@@ -218,7 +219,7 @@ def test_if_stale_recovers_old_apply(rec, tmp_path):
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
     assert rec.recover(if_stale=True) == 0
-    after = json.load(open(rec.STATE_PATH))
+    after = json.loads(Path(rec.STATE_PATH).read_text())
     assert after["applying"] is None
 
 
@@ -229,7 +230,7 @@ def test_unclassifiable_escalates_no_destruction(rec, tmp_path):
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
     assert rec.recover() == 1
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     assert _git(repo, "rev-parse", "HEAD").returncode == 0
 
@@ -267,7 +268,7 @@ def test_busy_update_lock_defers(rec, tmp_path):
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         assert rec.recover() == 0          # deferred, untouched
-        after = json.load(open(rec.STATE_PATH))
+        after = json.loads(Path(rec.STATE_PATH).read_text())
         assert after["applying"] is not None
     finally:
         os.close(fd)
@@ -288,15 +289,13 @@ def test_busy_lock_closes_failed_descriptor(rec, monkeypatch):
     monkeypatch.setattr(rec.os, "open", record_open)
     try:
         assert rec._try_lock(rec.UPDATE_LOCK) is None
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(attempted[0])
     finally:
         os.close(held)
         for fd in attempted:
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
 
 
 @pytest.mark.parametrize("result", [None, subprocess.CompletedProcess([], 1, "", "failed")])
@@ -553,10 +552,10 @@ def test_recover_escalates_on_rollback_db_restore(rec, tmp_path,
     monkeypatch.setattr(rec, "LEDGER", str(live))
     monkeypatch.setattr(rec, "_notify", lambda *a: None)
     assert rec.recover() == 1
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     assert "backup_unreadable" in report["detail"]
-    after = json.load(open(rec.STATE_PATH))
+    after = json.loads(Path(rec.STATE_PATH).read_text())
     assert after["executed"]["cid-rb"]["result"] == "escalated"
     # applying record preserved for the human — not consumed
     assert after["applying"]["rollback"] is True
@@ -576,9 +575,9 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     _consent(rec, live, back)
     assert rec.recover() == 0
     assert rec._db_version(str(live)) == 7
-    report = json.load(open(rec.REPORT_PATH))
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "resumed"
-    after = json.load(open(rec.STATE_PATH))
+    after = json.loads(Path(rec.STATE_PATH).read_text())
     assert after["executed"]["cid-rb"]["result"] == "rolled_back"
     assert after["applied"] == []
 
@@ -598,12 +597,12 @@ def test_recover_holds_at_restore_consent(rec, tmp_path, monkeypatch):
     live_before = live.read_bytes()
     assert rec.recover() == 0
     assert live.read_bytes() == live_before        # no unauthorized swap
-    state = json.load(open(rec.STATE_PATH))
+    state = json.loads(Path(rec.STATE_PATH).read_text())
     assert state["applying"]["rollback"] is True   # journal survives held
     marker = json.loads((tmp_path / "data"
                          / "restore_pending.json").read_text())
     assert marker["phase"] == "awaiting_consent"
-    rep = json.load(open(rec.REPORT_PATH))
+    rep = json.loads(Path(rec.REPORT_PATH).read_text())
     assert rep["result"] == "restore_consent_pending"
     assert rep["detail"].startswith("restore_consent_pending:")
     # second pass is stable — still held, still no swap

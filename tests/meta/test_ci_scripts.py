@@ -114,7 +114,7 @@ def test_snapshot_gate_flags_connect_line_without_mode_ro(
     assert not any("ok.py" in b for b in bads)
 
 
-@pytest.mark.parametrize("call,allowed", [
+@pytest.mark.parametrize(("call", "allowed"), [
     ("sqlite3.connect(\n 'file:synthetic?mode=ro', uri=True)", True),
     ("sqlite3.connect(\n f'file:{path}?mode=ro', uri=True)", True),
     ("sqlite3.connect('file:synthetic?mode=ro')", False),
@@ -175,7 +175,7 @@ def test_mine_gates_extracts_ids_from_nested_records(monkeypatch, tmp_path):
     assert "FIX-NEST9" in mg.extract_ids()["defects"]
 
 
-@pytest.mark.parametrize("relative,source,allowed", [
+@pytest.mark.parametrize(("relative", "source", "allowed"), [
     ("mcs_discord/cards.py", "def make():\n import discord\n return discord.ui.View()\n", True),
     ("mcs_discord/cards.py", "import discord\n", False),
     ("other.py", "def make():\n import discord\n", False),
@@ -194,7 +194,7 @@ def test_sdk_gate_allows_only_lazy_host_ui(monkeypatch, tmp_path, relative, sour
     assert bool(gates.gate_stdlib_only()) is not allowed
 
 
-@pytest.mark.parametrize("relative,source,allowed", [
+@pytest.mark.parametrize(("relative", "source", "allowed"), [
     ("mcs_discord/tasks.py", "import asyncio\nasync def poll():\n await asyncio.sleep(1)\n", True),
     ("other.py", "import asyncio\n", False),
     ("mcs_discord/actions.py", "import asyncio as a\nasync def run():\n await a.create_subprocess_exec('bad')\n", False),
@@ -214,7 +214,7 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     assert bool(gates.gate_plugin_sandbox()) is not allowed
 
 
-@pytest.mark.parametrize("source,locked", [
+@pytest.mark.parametrize(("source", "locked"), [
     ('"acquire_run_lock"\ndef write():\n return Ledger("synthetic.db")\n', False),
     ('def unused():\n acquire_run_lock()\n'
      'def write():\n return Ledger("synthetic.db")\n', False),

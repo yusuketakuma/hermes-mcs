@@ -93,5 +93,5 @@ def test_render_rejects_invalid_delivery_before_building_blocks():
     spec = {**_spec(), "delivery": {}}
 
     # When rendered, then it fails closed before any network consumer.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad_slack_scope"):
         render(spec)

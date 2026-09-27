@@ -13,6 +13,8 @@ import os
 import secrets
 import time
 
+from . import paths
+
 CONFIRM_TTL_S = 600          # pending_confirms: preview -> confirm
 FOLLOWUP_TTL_S = 840         # Discord interaction tokens die ~15 min
 CAPABILITY_NEG_S = 900       # negative thread-capability cache
@@ -63,7 +65,7 @@ class _RegistryBatch:
     """Context manager returned by Registry.batch — defers save() calls
     and flushes once on exit."""
 
-    def __init__(self, reg: "Registry") -> None:
+    def __init__(self, reg: Registry) -> None:
         self._reg = reg
 
     def __enter__(self):
@@ -142,29 +144,8 @@ class Registry:
         self._dirty = False
         raw = json.dumps(self._data, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
-        fd, temp = None, None
-        import tempfile
-        fd, temp = tempfile.mkstemp(prefix=".reg-", suffix=".tmp",
-                                    dir=os.path.dirname(self._path))
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(temp, 0o600)
-            os.replace(temp, self._path)
-            dfd = os.open(os.path.dirname(self._path),
-                          os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
-        except OSError:
-            try:
-                os.unlink(temp)
-            except OSError:
-                pass
-            raise
+        paths.atomic_write(self._path, raw, tmp_prefix=".reg-",
+                           mode=0o600)
 
     # -- claims ----------------------------------------------------
 
