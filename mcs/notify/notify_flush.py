@@ -69,7 +69,8 @@ def _target(cfg: dict, kind: str) -> str | None:
     config must never spill bodies into a fallback destination
     (Oracle B15). System alerts may override via notify_system_target."""
     t = cfg.get("notify_target")
-    if kind in ("session_expired", "run_failed", "update_notice"):
+    if kind in ("session_expired", "session_recovered",
+                "run_failed", "update_notice"):
         st = cfg.get("notify_system_target")
         if isinstance(st, str) and st.strip():
             t = st
@@ -222,6 +223,11 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         raise ValueError("payload_invalid")
     if ev["kind"] == "session_expired":
         return ("[MCS] セッション失効 — 手動再ログインが必要です\n"
+                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
+    if ev["kind"] == "session_recovered":
+        # auto_login succeeded at the failure point — the expiry is
+        # reported as resolved, not as a manual-login demand
+        return ("[MCS] セッション失効 → 自動再ログインで復旧しました\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"

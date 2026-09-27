@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **セッション失効時の in-run 自動再ログイン** — `SessionExpired` が
+  unread/backfill/self_probe/discovery/reply/history/trickle/reconcile
+  の各ステージで発生した時点で `auto_login` を1回試行し、成功すれば
+  その run のまま再開する（従来は jobs_only・backfill・probe 系の
+  失効は run を即 abort し、復旧は次回 tick まで持ち越しだった）。
+  結果は通知される: 復旧→`session_recovered`、失敗→従来どおり
+  `session_expired`（detail に `auto_login=<state>`）。
+  `session_expired` は kind 単位1時間 throttle、`session_recovered`
+  は既出の失効アラートを解消する通知なので throttle しない。
+  試行は run log の `relogin_attempts` に残る（auto_login 自体の
+  例外は `detail` に repr で記録）
+- **PHI ファイルのパーミション統一** — `ledger.db`(WAL/SHM 含む)、
+  日次・preupdate バックアップ、公開スナップショット、
+  `data/`・`data/cmd`・`chrome-profile`・`data/attachments`・
+  `data/backups`・`data/snapshots` の各ディレクトリを
+  0600/0700 に統一（従来は `data/` の 0700 に依存し、
+  ファイル自体は umask 任せだった）
+
 ## [1.0.3] — 2026-09-26
 
 Discord 通知を「カード＋コンパニオンスレッド」の対話型モデルへ刷新

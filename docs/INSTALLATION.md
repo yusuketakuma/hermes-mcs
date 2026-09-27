@@ -329,7 +329,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 | `signals.self_professions` | list[str] | 自動検出 | 自職種（同上） |
 | `signals.request_targets` | list[str] | なし | 依頼先として数える宛名 |
 | `signals.med_exclude_names` | list[str] | なし | 薬剤判定から除外する語 |
-| `semantic.mode` | choice | `off` | `shadow`=記録のみ / `enforce`=判定に使用 |
+| `semantic.mode` | choice | `off` | `off`以外は本文を外部 Jev API へ送信。`shadow`=記録のみ / `enforce`=判定に使用 |
 | `semantic.project_ids` | list[int] | — | 対象プロジェクトID（mode が off 以外では必須） |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
 | `semantic.daily_request_budget` | int | 既定 | Jev 呼出の1日上限 |
@@ -375,7 +375,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 | `llama-server advertises N slots` | `-np` が選択スロット数（2）未満 — plist の `-np 2` を確認 |
 | `hermes CLI not resolvable` | hermes 未導入（Path B では想定内。Path A なら `install.sh` 再実行か `hermes_bin` 設定） |
 | `hermes gateway is not supervised` | `services` を実行（`hermes gateway install`+`start` で常駐化） |
-| `session_expired` 通知が来る | セッション失効 — `auto_login` が `_recover_session`→フォーム投入で復旧を試みる。`manual_required`/`keychain_locked` は上記 Keychain 節を参照 |
+| `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` を確認。`manual_required`/`keychain_locked` は上記 Keychain 節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
 | カードだけ届きスレッド本文が無い | gateway が旧 plugin を保持 — `hermes gateway restart`（§A-6） |
 | `TYPESAFE_API_KEY is not resolvable` | semantic 有効時に必須 — `~/.mcs/.env` に登録 |
 

@@ -630,8 +630,11 @@ MCS パスワード登録・`~/.mcs/.env` に `TYPESAFE_API_KEY` 保存・
 `check` は必須キーの型・Keychain・Chrome・トークン解決・
 ローカルLLM 到達性・gateway の supervised 状態を typesafe に検証する。
 
-セッション切れ時の自動再ログイン(`auto_login`)の戻り値は run status と
-通知の detail に出る。`keychain_locked` は「エントリはあるが login
+セッション切れは tick 内の失敗点で `auto_login` が1回試行され、成功すれば
+その run のまま再開する。結果は通知に出る — 成功なら `session_recovered`
+(`run N: <stage>: ...`)、失敗なら従来どおり `session_expired` で detail に
+`auto_login=<state>` が付く。run log の `relogin_attempts` に試行記録が残る。
+`keychain_locked` は「エントリはあるが login
 keychain がロック中で読めない」状態 — `security unlock-keychain` または
 GUI ログインで解除してから次回 run を待てばよい(エントリ再登録は不要)。
 `~/.mcs/.env` の `MCS_PASSWORD` はリブート直後のロック中にも効く

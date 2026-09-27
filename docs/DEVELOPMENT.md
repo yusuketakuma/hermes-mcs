@@ -148,7 +148,11 @@
   `~/.hermes/hermes-agent/venv/bin/python mcs/ingest/run_check.py --json`
 - フラグ: `--mark-read`(手動のみ。snapshot timestamp 必須で型強制)
   `--download-files` `--no-backfill` `--no-notify`
-- exit codes: 0 ok / 1 failed / 2 session_expired(手動要) / 3 lock_held
+- exit codes: 0 ok / 1 failed / 2 session_expired / 3 lock_held
+- セッション失効時は失敗点のステージ内で `auto_login` を1回試行し、
+  成功すれば同じ run のまま再開 (`relogin_attempts` が run log に残る)。
+  結果は通知される: 成功→`session_recovered`、失敗→`session_expired`
+  (`auto_login=<state>` 付き、手動再ログイン要)。いずれも1時間 throttle。
 
 ## 履歴取込 (init_data.py)
 

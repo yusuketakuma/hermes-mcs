@@ -60,7 +60,8 @@ def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
     fresh backup (Oracle B24)."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
     stamp = time.strftime("%Y%m%d")
     dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
     if valid_mcs_db(dest):
@@ -82,6 +83,7 @@ def daily_backup(db_path: str):
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
+    os.chmod(tmp, 0o600)
     os.replace(tmp, dest)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
@@ -96,7 +98,8 @@ def preupdate_backup(db_path: str) -> str:
     """Verified .backup before an apply — distinct 'preupdate-' prefix
     so the daily ledger-* rotation can never evict a rollback point
     (B3). Returns the published path."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     fd, tmp = tempfile.mkstemp(
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
@@ -114,6 +117,7 @@ def preupdate_backup(db_path: str) -> str:
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
+    os.chmod(tmp, 0o600)
     os.replace(tmp, dest)
     return dest
 

@@ -107,6 +107,7 @@ class Ledger:
     def __init__(self, path: str):
         self.db = sqlite3.connect(path, timeout=30)
         try:
+            os.chmod(path, 0o600)   # PHI store: never umask-loose
             self.db.row_factory = sqlite3.Row
             version = self.db.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
@@ -121,6 +122,9 @@ class Ledger:
             self._init()
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
+            for side in (path + "-wal", path + "-shm"):
+                if os.path.exists(side):
+                    os.chmod(side, 0o600)
         except Exception:
             self.db.close()
             raise
@@ -1837,7 +1841,8 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     """Verified point-in-time copy for read-only consumers.
     backup -> tmp -> quick_check -> atomic rename; consumers never see a
     half-written snapshot. Returns the published path or None."""
-    os.makedirs(dest_dir, exist_ok=True)
+    os.makedirs(dest_dir, mode=0o700, exist_ok=True)
+    os.chmod(dest_dir, 0o700)
     tmp = os.path.join(dest_dir, "snapshot.tmp")
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
     try:
@@ -1869,6 +1874,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
         except OSError:
             pass
         return None
+    os.chmod(tmp, 0o600)   # PHI copy: tighten before the atomic publish
     os.replace(tmp, dest)
     # atomic rename: a consumer mid-open keeps its old inode (still valid),
     # a consumer opening after sees the new generation — no torn reads.

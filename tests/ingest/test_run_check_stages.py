@@ -1018,3 +1018,239 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
     assert spawned                             # updater re-launched
     left = [p.name for p in cmd.glob("*.json")]
     assert len(left) == 1                      # pause stayed queued
+
+
+# ---------- in-run session recovery ----------
+
+def test_with_relogin_recovers_and_replays_stage(tmp_path):
+    """A mid-stage SessionExpired triggers one auto_login; on success the
+    stage replays and a session_recovered notice is queued — the channel
+    sees the blip and its resolution, not a manual-login demand."""
+    db = _ledger(tmp_path)
+    calls = []
+
+    def stage():
+        calls.append(1)
+        if len(calls) == 1:
+            raise mcs_adapter.SessionExpired(status=403)
+        return "done"
+
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok")
+    result = {"errors": [], "run_id": 7}
+    assert run_check._with_relogin(
+        adapter, db, result, "history_jobs", stage) == "done"
+    assert len(calls) == 2
+    row = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchone()
+    assert row["kind"] == "session_recovered"
+    assert "history_jobs" in json.loads(row["payload"])["detail"]
+    assert result["relogin_attempts"] == [
+        {"stage": "history_jobs", "error": "session_expired(status=403)",
+         "state": "ok"}]
+    db.close()
+
+
+def test_with_relogin_failed_login_escalates_with_state(tmp_path):
+    """A failed auto_login aborts with 'auto_login=<state>' detail so the
+    session_expired alert carries the attempt's outcome."""
+    db = _ledger(tmp_path)
+    adapter = SimpleNamespace(auto_login=lambda **kw: "keychain_locked")
+    result = {"errors": [], "run_id": 1}
+
+    def stage():
+        raise mcs_adapter.SessionExpired(status=403)
+
+    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+        run_check._with_relogin(adapter, db, result, "discovery", stage)
+    assert exc.value.detail == "auto_login=keychain_locked"
+    assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
+                         ).fetchone()[0] == 0
+    db.close()
+
+
+def test_with_relogin_no_double_attempt_for_stage_owned_login(tmp_path):
+    """A stage that already ran its own auto_login (detail
+    'auto_login=…') must not be re-attempted by the wrapper — one try
+    per failure point."""
+    db = _ledger(tmp_path)
+    calls = []
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: calls.append(1) or "ok")
+    result = {"errors": [], "run_id": 1}
+
+    def stage():
+        raise mcs_adapter.SessionExpired("auto_login=manual_required")
+
+    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+        run_check._with_relogin(adapter, db, result, "unread", stage)
+    assert exc.value.detail == "auto_login=manual_required"
+    assert calls == []
+    db.close()
+
+
+def test_with_relogin_reexpiry_after_recovery_aborts(tmp_path):
+    """Recovery followed by an immediate second expiry aborts — the
+    wrapper never loops on a flapping session."""
+    db = _ledger(tmp_path)
+    calls = []
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok")
+    result = {"errors": [], "run_id": 1}
+
+    def stage():
+        calls.append(1)
+        raise mcs_adapter.SessionExpired(status=403)
+
+    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+        run_check._with_relogin(adapter, db, result, "unread", stage)
+    assert exc.value.detail == "auto_login=ok_then_expired"
+    assert len(calls) == 2
+    db.close()
+
+
+def test_with_relogin_budget_caps_attempts_per_run(tmp_path):
+    """A session dying across several stages stops re-attempting after
+    RELOGIN_MAX_PER_RUN — auth thrash never eats the run."""
+    db = _ledger(tmp_path)
+    logins = []
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: logins.append(1) or "ok")
+    result = {"errors": [], "run_id": 1}
+
+    def once_fail():
+        state = {"n": 0}
+
+        def stage():
+            state["n"] += 1
+            if state["n"] == 1:
+                raise mcs_adapter.SessionExpired(status=403)
+            return "done"
+        return stage
+
+    for _ in range(run_check.RELOGIN_MAX_PER_RUN):
+        assert run_check._with_relogin(
+            adapter, db, result, "unread", once_fail()) == "done"
+    assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
+
+    def expired():
+        raise mcs_adapter.SessionExpired(status=403)
+
+    with pytest.raises(mcs_adapter.SessionExpired) as exc:
+        run_check._with_relogin(adapter, db, result, "unread", expired)
+    assert exc.value.detail == ""      # raw — no further attempt made
+    assert len(logins) == run_check.RELOGIN_MAX_PER_RUN
+    db.close()
+
+
+def test_session_recovered_alert_not_throttled(tmp_path):
+    """session_recovered is deliberately NOT throttled: it resolves a
+    possibly-visible session_expired alert, so suppressing it would
+    leave a stale manual-login demand standing in the channel."""
+    db = _ledger(tmp_path)
+    run_check._alert_session_recovered(db, 1, "d")
+    run_check._alert_session_recovered(db, 2, "d")
+    rows = db.db.execute(
+        "SELECT kind FROM notify_outbox WHERE kind='session_recovered'"
+        ).fetchall()
+    assert len(rows) == 2
+    # session_expired itself stays throttled
+    assert run_check._alert_session_expired(db, 3, "d") is True
+    assert run_check._alert_session_expired(db, 4, "d") is False
+    db.close()
+
+
+def test_attempt_relogin_journals_exception_detail(tmp_path):
+    """An auto_login that raises (not just returns a failure state) is
+    journaled with the exception repr so a broken login path is
+    diagnosable from the run log alone."""
+    db = _ledger(tmp_path)
+
+    def boom(**kw):
+        raise RuntimeError("cdp_gone")
+
+    adapter = SimpleNamespace(auto_login=boom)
+    result = {"errors": [], "run_id": 1}
+    state = run_check._attempt_relogin(
+        adapter, db, result, "unread",
+        mcs_adapter.SessionExpired(status=403))
+    assert state == "failed"
+    assert result["relogin_attempts"][-1]["detail"] == \
+        "RuntimeError('cdp_gone')"
+    db.close()
+
+
+def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
+                                                  capsys):
+    """A session that dies inside a tick is re-logged-in at the failure
+    point and the run completes; the session_recovered intent is queued
+    for delivery (flush suppressed by --no-notify)."""
+    import maintenance
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+
+    class Adapter:
+        def __init__(self, **kwargs):
+            self.list_calls = 0
+            self.logins = 0
+
+        def set_deadline(self, deadline):
+            pass
+
+        def list_unread(self):
+            self.list_calls += 1
+            if self.list_calls == 1:
+                raise mcs_adapter.SessionExpired(status=403)
+            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+
+        def auto_login(self, **kw):
+            self.logins += 1
+            return "ok"
+
+        def self_profile(self):
+            return {}
+
+    adapter = Adapter()
+    data = tmp_path / "data"
+    data.mkdir()
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"deep_history":false,"semantic":{"mode":"off"}}',
+        encoding="utf-8")
+    for name, value in {
+        "HOME": tmp_path, "DB": data / "ledger.db",
+        "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
+        "HEALTH_FILE": data / "health.json", "CONF_PATH": config,
+        "MCSAdapter": lambda *a, **k: adapter,
+        "stage_derive": lambda *a, **k: None,
+    }.items():
+        monkeypatch.setattr(run_check, name, str(value)
+                            if isinstance(value, Path) else value)
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
+                 "gc", "clear_snapshot_dirty"):
+        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
+    monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(
+        sys, "argv", ["run_check", "--no-notify", "--no-backfill"])
+
+    assert run_check.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] and out["relogin_attempts"][0]["state"] == "ok"
+    assert adapter.logins == 1 and adapter.list_calls == 2
+    db = ledger.Ledger(str(data / "ledger.db"))
+    row = db.db.execute(
+        "SELECT kind,payload,state FROM notify_outbox").fetchone()
+    assert row["kind"] == "session_recovered" and row["state"] == "pending"
+    assert db.db.execute(
+        "SELECT status FROM runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()[0] == "ok"
+    db.close()
