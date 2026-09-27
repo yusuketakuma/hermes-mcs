@@ -42,7 +42,7 @@ class WorkflowError(ValueError):
 
 
 def _num(value, field):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+    if isinstance(value, bool) or not isinstance(value, int | float) \
             or not math.isfinite(float(value)) or value <= 0:
         raise WorkflowError(f"cost_model_invalid:{field}")
     return float(value)

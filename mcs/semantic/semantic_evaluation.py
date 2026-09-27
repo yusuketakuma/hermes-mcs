@@ -47,7 +47,7 @@ class EvaluationError(ValueError):
 def _id(value, field: str) -> str:
     if value is None:
         raise EvaluationError(f"{field}_missing")
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
+    if isinstance(value, bool) or not isinstance(value, str | int):
         raise EvaluationError(f"{field}_invalid")
     value = str(value).strip()
     if not value:
@@ -72,7 +72,7 @@ def _finite_number(value, field: str, integer: bool = False) -> float | int:
         if type(value) is not int or value < 0:
             raise EvaluationError(f"{field}_invalid")
         return value
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+    if isinstance(value, bool) or not isinstance(value, int | float) \
             or not math.isfinite(float(value)) or value < 0:
         raise EvaluationError(f"{field}_invalid")
     return float(value)
@@ -127,6 +127,18 @@ def _percentile(values: list[float], p: float) -> float | None:
     return values[low] + (values[high] - values[low]) * (pos - low)
 
 
+def _eval_member(case: dict, msg: dict, cid: str) -> dict:
+    """Synthetic ledger-member input for an eval message — one shape
+    shared by every benchmark harness."""
+    return {"project_id": case.get("project_id", "eval"),
+            "message_id": msg.get("message_id", cid),
+            "revision": str(msg.get("revision", "r1")),
+            "body_original": msg.get("body", ""),
+            "body_state": "full",
+            "posted_at": msg.get("posted_at", ""),
+            "sender": {"id": "eval", "type": "staff", "profession": ""}}
+
+
 def _item_id(item: dict, field: str) -> str:
     return _id(item.get(field), field)
 
@@ -178,8 +190,8 @@ def validate_criteria(criteria: dict) -> dict:
     if any(name not in METRICS for name in minimums) \
             or any(name not in METRICS for name in maximums):
         raise EvaluationError("criteria_metric_invalid")
-    for name, value in {**minimums, **maximums}.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+    for value in {**minimums, **maximums}.values():
+        if isinstance(value, bool) or not isinstance(value, int | float) \
                 or not math.isfinite(float(value)) or not 0 <= value <= 1:
             raise EvaluationError("criteria_threshold_invalid")
     splits = criteria.get("required_splits", ["test"])
@@ -465,7 +477,7 @@ def _normalized(value, field: str):
             return value
     if isinstance(value, str):
         return value.strip().casefold()
-    if isinstance(value, (list, dict)):
+    if isinstance(value, list | dict):
         return json.dumps(value, ensure_ascii=False, sort_keys=True,
                           separators=(",", ":"))
     return value
@@ -658,18 +670,18 @@ def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
         reasons.append("required_split_missing")
     heldout = report["splits"]["test"]
     metrics = heldout["metrics"]
-    for name in METRICS:
-        if metrics[name]["denominator"] == 0:
-            reasons.append(f"denominator_zero:{name}")
+    reasons.extend(f"denominator_zero:{name}" for name in METRICS
+                   if metrics[name]["denominator"] == 0)
     if heldout["latency"]["denominator"] == 0:
         reasons.append("denominator_zero:latency")
     if heldout["usage"]["denominator"] == 0:
         reasons.append("denominator_zero:usage")
     if heldout["latency"]["missing"]:
         reasons.append("telemetry_missing:latency")
-    for field in ("requests", "input_tokens", "output_tokens"):
-        if heldout["usage"][field]["denominator"] < heldout["cases"]:
-            reasons.append(f"telemetry_missing:{field}")
+    reasons.extend(f"telemetry_missing:{field}"
+                   for field in ("requests", "input_tokens", "output_tokens")
+                   if heldout["usage"][field]["denominator"]
+                   < heldout["cases"])
     for name in criteria["required_metrics"]:
         metric = metrics.get(name)
         if metric is None:
@@ -960,14 +972,7 @@ def evaluate_jev_incremental(cases: list, llm_fn, jev_client,
             {"message_id": cid, "revision": "r1",
              "body": case.get("body", "")}]
         for msg in messages:
-            member = {"project_id": case.get("project_id", "eval"),
-                      "message_id": msg.get("message_id", cid),
-                      "revision": str(msg.get("revision", "r1")),
-                      "body_original": msg.get("body", ""),
-                      "body_state": "full",
-                      "posted_at": msg.get("posted_at", ""),
-                      "sender": {"id": "eval", "type": "staff",
-                                 "profession": ""}}
+            member = _eval_member(case, msg, cid)
             mid = f"{cid}:{member['message_id']}"
             try:
                 result = semantic_extraction.extract_facts_v2(
@@ -1058,14 +1063,7 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
         case_doc_facts = 0
         all_audits_passed = True
         for msg in messages:
-            member = {"project_id": case.get("project_id", "eval"),
-                      "message_id": msg.get("message_id", cid),
-                      "revision": str(msg.get("revision", "r1")),
-                      "body_original": msg.get("body", ""),
-                      "body_state": "full",
-                      "posted_at": msg.get("posted_at", ""),
-                      "sender": {"id": "eval", "type": "staff",
-                                 "profession": ""}}
+            member = _eval_member(case, msg, cid)
             try:
                 result = semantic_extraction.extract_facts_v2(
                     llm_fn, member, deadline, jev_client=jev_client,

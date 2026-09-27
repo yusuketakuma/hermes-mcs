@@ -99,7 +99,7 @@ def _sha256(text: str) -> str:
 
 
 def _id_value(value, field: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
+    if isinstance(value, bool) or not isinstance(value, str | int):
         _fail(f"{field}_invalid")
     value = str(value).strip()
     if not value:
@@ -336,7 +336,7 @@ def validate_obligation(obligation: dict) -> dict:
     confidence = obligation.get("confidence")
     if confidence is not None:
         if isinstance(confidence, bool) or not isinstance(
-                confidence, (int, float)) \
+                confidence, int | float) \
                 or not math.isfinite(float(confidence)) \
                 or not 0.0 <= float(confidence) <= 1.0:
             _fail("obligation_confidence_invalid")
@@ -431,7 +431,7 @@ def validate_relation(relation: dict) -> dict:
     confidence = relation.get("confidence")
     if confidence is not None:
         if isinstance(confidence, bool) or not isinstance(
-                confidence, (int, float)) \
+                confidence, int | float) \
                 or not math.isfinite(float(confidence)) \
                 or not 0.0 <= float(confidence) <= 1.0:
             _fail("relation_confidence_invalid")

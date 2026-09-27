@@ -105,14 +105,14 @@ def test_cost_model_without_bounds_rejected(model):
 
 
 def test_case_schema_validated():
+    bad = _case()
+    bad["targets"] = []
     with pytest.raises(workflow.WorkflowError, match="case_targets_empty"):
-        bad = _case()
-        bad["targets"] = []
         workflow.measure_case(bad)
+    bad = _case()
+    bad["messages"].append({"message_id": "m1", "chars": 1,
+                            "has_quote_for": []})
     with pytest.raises(workflow.WorkflowError, match="case_message_id"):
-        bad = _case()
-        bad["messages"].append({"message_id": "m1", "chars": 1,
-                                "has_quote_for": []})
         workflow.measure_case(bad)
 
 

@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -156,7 +157,7 @@ def cmd_run(args) -> int:
     circuit state, and semantic-mode gates that the scheduled drain
     enforces (S-5). Use sparingly and only when a live check is
     intended."""
-    corpus = json.load(open(args.corpus))
+    corpus = json.loads(Path(args.corpus).read_text())
     import semantic
     jev_client = None
     if args.jev:
@@ -184,7 +185,7 @@ def cmd_run(args) -> int:
 
 def cmd_report(args) -> int:
     for path in args.results:
-        d = json.load(open(path))
+        d = json.loads(Path(path).read_text())
         a = d["aggregate"]
         print(f"[{d.get('tag') or path}] cases={a['cases']} "
               f"claims={a['claims']} findings={a['findings_total']} "
@@ -193,8 +194,10 @@ def cmd_report(args) -> int:
                               key=lambda x: -x[1]):
             print(f"    {code}: {n}")
     if len(args.results) == 2:
-        a = json.load(open(args.results[0]))["aggregate"]["finding_codes"]
-        b = json.load(open(args.results[1]))["aggregate"]["finding_codes"]
+        a = json.loads(Path(args.results[0])
+                       .read_text())["aggregate"]["finding_codes"]
+        b = json.loads(Path(args.results[1])
+                       .read_text())["aggregate"]["finding_codes"]
         print("delta (first -> second):")
         for code in sorted(set(a) | set(b)):
             print(f"    {code}: {a.get(code, 0)} -> {b.get(code, 0)}")
@@ -218,9 +221,9 @@ def cmd_calibrate(args) -> int:
             ca = (json.loads(meta or "{}").get("claim_audit") or {})
         except (TypeError, json.JSONDecodeError):
             continue
-        for cid, ans in ca.items():
+        for ans in ca.values():
             c = ans.get("confidence")
-            if isinstance(c, (int, float)):
+            if isinstance(c, int | float):
                 confs.append((c, ans.get("choice")))
     if not confs:
         print("no claim_audit data yet — accumulate audits first")

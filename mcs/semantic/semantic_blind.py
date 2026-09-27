@@ -56,7 +56,7 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
         random.SystemRandom().shuffle(methods)
         review_id = uuid.uuid4().hex
         choices, mapping, candidate_hashes = [], {}, {}
-        for label, method in zip(("A", "B", "C"), methods):
+        for label, method in zip(("A", "B", "C"), methods, strict=False):
             output = _dict(outputs[method], "output")
             if output.get("bundle_fingerprint") != fingerprint:
                 raise EvaluationError("output_bundle_mismatch")
@@ -256,7 +256,7 @@ def snapshot_records(path: str, selections: list[dict], baseline_fn) -> list[dic
             records.append(record)
             inputs.append((bundle, target, candidate, final))
     prepare(records)  # Reject split leakage/duplicate cases before local generation.
-    for record, args in zip(records, inputs):
+    for record, args in zip(records, inputs, strict=False):
         record["outputs"] = fixed_bundle_outputs(*args, baseline_fn)
     return records
 

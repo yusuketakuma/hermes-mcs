@@ -47,11 +47,11 @@ def test_guard_rechecks_config_generation_and_off(tmp_path):
                          "daily_request_budget": 10, "project_ids": [1]}}
     cfg_path.write_text(json.dumps(cfg))
     expected = runtime.config_generation(cfg)
-    common = dict(
-        ledger=db, token=token, deadline=time.monotonic() + 10,
-        expected_config_generation=expected, expected_mode="shadow",
-        cfg_path=str(cfg_path), load_cfg=semantic.load_config,
-        parse_cfg=semantic.semantic_config)
+    common = {
+        "ledger": db, "token": token, "deadline": time.monotonic() + 10,
+        "expected_config_generation": expected, "expected_mode": "shadow",
+        "cfg_path": str(cfg_path), "load_cfg": semantic.load_config,
+        "parse_cfg": semantic.semantic_config}
     runtime.guard(**common)
 
     cfg_path.write_text(json.dumps({"semantic": {"mode": "off"}}))

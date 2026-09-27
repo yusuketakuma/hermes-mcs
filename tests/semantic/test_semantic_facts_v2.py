@@ -276,7 +276,7 @@ def test_v2_cache_reuses_evidence_bearing_chunks():
     assert not calls  # every chunk reused — zero model calls
     assert second["reused_chunks"] == first["completed_chunks"]
     sf.validate_facts_doc(second["doc"])
-    ev = [e for e in second["doc"]["evidence"]]
+    ev = list(second["doc"]["evidence"])
     assert ev and body[ev[0]["start"]:ev[0]["end"]] == ev[0]["quote"]
 
 

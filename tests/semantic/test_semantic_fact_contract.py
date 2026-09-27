@@ -135,35 +135,35 @@ def test_facts_doc_cross_reference_validation():
     validated = sf.validate_facts_doc(doc)
     assert validated["version"] == sf.CONTRACT_VERSION
 
+    bad = _doc(facts=[_fact(evidence_ids=["ev_missing"])])
     with pytest.raises(sf.ContractError,
                        match="contract:doc_fact_evidence_unknown"):
-        bad = _doc(facts=[_fact(evidence_ids=["ev_missing"])])
         sf.validate_facts_doc(bad)
+    bad = _doc(facts=[_fact(validation_status="verified")])
     with pytest.raises(sf.ContractError,
                        match="contract:doc_verified_without_evidence"):
-        bad = _doc(facts=[_fact(validation_status="verified")])
         sf.validate_facts_doc(bad)
+    bad = _doc()
+    bad["atoms"].append({"atom_id": "atom_a2", "kind": "clause",
+                         "start": 20, "end": 40, "text_hash": "th2"})
     with pytest.raises(sf.ContractError,
                        match="contract:doc_core_coverage_incomplete"):
-        bad = _doc()
-        bad["atoms"].append({"atom_id": "atom_a2", "kind": "clause",
-                             "start": 20, "end": 40, "text_hash": "th2"})
         sf.validate_facts_doc(bad)
+    bad = _doc(facts=[fact], obligations=[obligation],
+               relations=[relation])
+    bad["evidence"] = [evidence]
     with pytest.raises(sf.ContractError,
                        match="contract:doc_relation_fact_unknown"):
-        bad = _doc(facts=[fact], obligations=[obligation],
-                   relations=[relation])
-        bad["evidence"] = [evidence]
         sf.validate_facts_doc(bad)
+    bad = _doc(obligations=[{"obligation_id": "obl_o2",
+                             "owner_id": "chk_c1",
+                             "category": "symptom_state",
+                             "source": "jev_pre", "status": "open"}],
+               coverage={"category_counts": {"symptom_state": 1},
+                         "open_obligation_ids": ["obl_o2"],
+                         "limitations": [], "status": "complete"})
     with pytest.raises(sf.ContractError,
                        match="contract:doc_coverage_complete_with_open"):
-        bad = _doc(obligations=[{"obligation_id": "obl_o2",
-                                 "owner_id": "chk_c1",
-                                 "category": "symptom_state",
-                                 "source": "jev_pre", "status": "open"}],
-                   coverage={"category_counts": {"symptom_state": 1},
-                             "open_obligation_ids": ["obl_o2"],
-                             "limitations": [], "status": "complete"})
         sf.validate_facts_doc(bad)
 
 

@@ -87,7 +87,7 @@ class JevError(Exception):
 
 
 def _finite(value) -> float | None:
-    if type(value) is bool or not isinstance(value, (int, float)):
+    if type(value) is bool or not isinstance(value, int | float):
         return None
     v = float(value)
     return v if math.isfinite(v) else None
@@ -307,8 +307,7 @@ class JevClient:
                 finally:
                     self._active_deadline = previous_deadline
             except (OSError, urllib.error.URLError, TimeoutError) as e:
-                kind = ("timeout" if isinstance(e, (TimeoutError,
-                                                       socket.timeout))
+                kind = ("timeout" if isinstance(e, TimeoutError | socket.timeout)
                         else "transport")
                 last = JevError(kind, type(e).__name__,
                                 retryable=True)
@@ -390,16 +389,15 @@ class JevClient:
         except (OSError, urllib.error.URLError, TimeoutError) as e:
             # surface transport failure as JevError like evaluate() does —
             # the smoke harness only catches JevError
-            kind = ("timeout" if isinstance(e, (TimeoutError,
-                                                socket.timeout))
+            kind = ("timeout" if isinstance(e, TimeoutError | socket.timeout)
                     else "transport")
-            raise JevError(kind, type(e).__name__, retryable=True)
+            raise JevError(kind, type(e).__name__, retryable=True) from e
         if status != 200:
             raise JevError("protocol_error", f"http_{status}", status=status)
         try:
             d = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            raise JevError("protocol_error", "not_json")
+            raise JevError("protocol_error", "not_json") from None
         if not isinstance(d, dict):
             raise JevError("protocol_error", "models_shape")
         items = d.get("data") or d.get("models")

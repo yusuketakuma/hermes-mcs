@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401  registers every subdir as import root
 
 from functools import wraps
-import inspect
 import json
 import time
 
@@ -67,6 +66,16 @@ def _jev_failure_class(error) -> str:
     if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key"}:
         return "resource"
     return "retry" if getattr(error, "retryable", False) else "failed"
+
+
+def _jev_fail_flag(error) -> str | None:
+    """Map a Jev failure onto this pass's accounting flags —
+    'resource' waits (never counted against the input), 'retryable'
+    retried, 'hard' stops the generation.  None when no error."""
+    if error is None:
+        return None
+    return {"resource": "resource",
+            "retry": "retryable"}.get(_jev_failure_class(error), "hard")
 
 
 def _plan_exists(ledger, message_id: int, fp: str,
@@ -589,12 +598,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     meta_base["technical_status"] = (
                         "retry_wait" if e.retryable else "error")
                     meta_base["error_kind"] = e.kind
-                    if _jev_failure_class(e) == "resource":
-                        resource_wait = True
-                    elif e.retryable:
-                        retryable_failure = True
-                    else:
-                        hard_fail = True
+                    flag = _jev_fail_flag(e)
+                    resource_wait |= flag == "resource"
+                    retryable_failure |= flag == "retryable"
+                    hard_fail |= flag == "hard"
             meta_base["jev_requests"] = (
                 jev_client.requests_made - req0) if jev_client else 0
             if answers is None:
@@ -695,9 +702,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 error = getattr(jev_client, "last_error", None)
                 if error is not None and _jev_failure_class(error) == "failed":
                     hard_fail = True
-                elif error is not None and _jev_failure_class(error) == "retry":
-                    retryable_failure = True
-                elif coverage.get("failure_reason") == "model":
+                elif (error is not None and _jev_failure_class(error) == "retry"
+                      or coverage.get("failure_reason") == "model"):
                     retryable_failure = True
                 break
     if incomplete:
@@ -801,14 +807,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             jev_f, evaluated = semantic.audit_claims(jev_client, bundle,
                                             summary, deadline, scfg["match_threshold"])
             if not evaluated and jev_client is not None:
-                error = getattr(jev_client, "last_error", None)
-                if error is not None:
-                    if _jev_failure_class(error) == "resource":
-                        resource_wait = True
-                    elif getattr(error, "retryable", False):
-                        retryable_failure = True
-                    else:
-                        hard_fail = True
+                flag = _jev_fail_flag(getattr(jev_client, "last_error",
+                                              None))
+                resource_wait |= flag == "resource"
+                retryable_failure |= flag == "retryable"
+                hard_fail |= flag == "hard"
             findings = code_f + jev_f
             status = audit_status_for(code_f, jev_f, evaluated,
                                       repaired)
@@ -911,14 +914,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                      facts_by_target, jev_client,
                                      scfg, deadline)
         if not loops_done and jev_client is not None:
-            error = getattr(jev_client, "last_error", None)
-            if error is not None:
-                if _jev_failure_class(error) == "resource":
-                    resource_wait = True
-                elif getattr(error, "retryable", False):
-                    retryable_failure = True
-                else:
-                    hard_fail = True
+            flag = _jev_fail_flag(getattr(jev_client, "last_error", None))
+            resource_wait |= flag == "resource"
+            retryable_failure |= flag == "retryable"
+            hard_fail |= flag == "hard"
     # notification eligibility is derived from the stored origin event,
     # not from this job's seed provenance (INV-20, §20.3) — evaluated
     # per target below: a covering new_messages intent must exist for
@@ -993,9 +992,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                      "text": text}, ensure_ascii=False),
                     project_id=pid, message_id=mid,
                     meta=plan_meta)
-        if not stale and not pending and loops_done:
-            if not runtime.transition_tx(ledger, token, "done"):
-                raise runtime.RuntimeStale("promote")
+        if (not stale and not pending and loops_done
+                and not runtime.transition_tx(ledger, token, "done")):
+            raise runtime.RuntimeStale("promote")
     if stale:
         return "stale"
     if hard_fail:
@@ -1079,14 +1078,7 @@ def _timed_llm(fn):
     when the inner callable accepts it (``llm_call`` inspects the
     signature the same way)."""
     acc = {"s": 0.0}
-    try:
-        params = inspect.signature(fn).parameters.values()
-        accepts_timeout = any(
-            p.name == "timeout" or p.kind is inspect.Parameter.VAR_KEYWORD
-            for p in params)
-    except (TypeError, ValueError):
-        accepts_timeout = False
-    if accepts_timeout:
+    if runtime.accepts_timeout(fn):
         def timed(prompt, timeout=None):
             started = time.perf_counter()
             try:
@@ -1216,6 +1208,20 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     from semantic_store import invalidate_projections
     invalidate_projections(ledger, scfg)
     if scfg["mode"] == "off":
+        return out
+    # Stability guards shared with the extract lane: a nearly-full
+    # volume turns per-job artifact writes into an I/O error storm, and
+    # an open endpoint breaker means every llm_fn call pays a dead
+    # timeout — defer the whole window instead of churning jobs.
+    import mcs_util
+    free_mb = mcs_util.disk_free_mb(ledger)
+    if free_mb is not None \
+            and free_mb < mcs_util.disk_floor_mb():
+        out["disk_free_mb"] = round(free_mb)
+        return out
+    circuit_s = mcs_util.circuit_open_s(ledger)
+    if circuit_s:
+        out["circuit_open_s"] = round(circuit_s)
         return out
     drain_started = time.perf_counter()
     out["job_metrics"] = []

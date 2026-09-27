@@ -12,6 +12,7 @@ import bisect
 import json
 import re
 import time
+from contextlib import suppress
 
 import semantic_facts as sf
 from semantic_policy import KIND_MANIFEST
@@ -222,15 +223,13 @@ def build_manifest(source: str, source_fp: str,
 
 def _manifest_specs(manifest: dict) -> list[dict]:
     """Adapt manifest chunks to the durable spec shape used below."""
-    specs = []
-    for chunk in manifest["chunks"]:
-        specs.append({"index": chunk["index"], "text": chunk["text"],
-                      "start": chunk["start"], "end": chunk["end"],
-                      "hash": chunk["hash"], "chunk_id": chunk["chunk_id"],
-                      "core_atom_ids": chunk["core_atom_ids"],
-                      "context_atom_ids": chunk["context_atom_ids"],
-                      "dependency_atom_ids": chunk["dependency_atom_ids"]})
-    return specs
+    return [{"index": chunk["index"], "text": chunk["text"],
+             "start": chunk["start"], "end": chunk["end"],
+             "hash": chunk["hash"], "chunk_id": chunk["chunk_id"],
+             "core_atom_ids": chunk["core_atom_ids"],
+             "context_atom_ids": chunk["context_atom_ids"],
+             "dependency_atom_ids": chunk["dependency_atom_ids"]}
+            for chunk in manifest["chunks"]]
 
 
 def _evidence_atom(manifest: dict, start: int, end: int) -> str | None:
@@ -259,13 +258,11 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
     existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
                                 message_id=message_id)
     for row in existing or []:
-        try:
+        with suppress(TypeError, json.JSONDecodeError):
             meta = json.loads(row["meta"] or "{}")
             if meta.get("source_fingerprint") == source_fp \
                     and meta.get("version") == MANIFEST_VERSION:
                 return
-        except (TypeError, json.JSONDecodeError):
-            continue
     doc = {
         "version": MANIFEST_VERSION,
         "source_fingerprint": source_fp,
@@ -293,6 +290,71 @@ def _json_object(response, semantic):
     except Exception:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _member_prelude(member, llm_fn, project_id, source_fingerprint):
+    """Shared input validation for the extraction entry points."""
+    if not isinstance(member, dict) or not callable(llm_fn):
+        raise ValueError("extraction_input_invalid")
+    source = member.get("body_original")
+    message_id = member.get("message_id")
+    if not isinstance(source, str) or message_id is None:
+        raise ValueError("member_source_invalid")
+    project_id = member.get("project_id") if project_id is None else project_id
+    revision = member.get("revision", "")
+    if not isinstance(revision, str):
+        revision = str(revision)
+    return (source, message_id, project_id, revision,
+            _source_fingerprint(member, source_fingerprint),
+            _sha256(source))
+
+
+def _chunk_llm(llm_fn, prompt: str, deadline):
+    """One chunk extraction call -> (parsed_doc, reason).  reason is
+    "model" or "deadline" on failure; RuntimeGuardError propagates so
+    the runtime boundary still aborts the job."""
+    import semantic
+    from semantic_runtime import RuntimeGuardError
+    try:
+        response = llm_fn(prompt)
+    except RuntimeGuardError:
+        raise
+    except Exception:
+        return None, "model"
+    if deadline is not None and time.monotonic() > deadline:
+        return None, "deadline"
+    return _json_object(response, semantic), None
+
+
+def _preflight_verdict(jev_client, text: str, deadline, chunk_id):
+    """jev_preflight adjudication for one chunk; "failed" on transport
+    errors, RuntimeGuardError propagates."""
+    from semantic_runtime import RuntimeGuardError
+    try:
+        return jev_preflight(jev_client, text, deadline, chunk_id=chunk_id)
+    except RuntimeGuardError:
+        raise
+    except Exception:
+        return "failed"
+
+
+def _collect_facts(facts: list, evidence: dict) -> list:
+    """Pop per-fact internals (_evidence/_chunk_id) into ``evidence``
+    keyed by evidence_id, and return the cleaned fact list."""
+    clean = []
+    for fact in facts:
+        ev = fact.pop("_evidence", None)
+        fact.pop("_chunk_id", None)
+        if ev is not None:
+            evidence[ev["evidence_id"]] = ev
+        clean.append(fact)
+    return clean
+
+
+def _category_counts(clean_facts: list) -> dict:
+    return {category: sum(1 for f in clean_facts
+                          if sf.KIND_CATEGORY[f["kind"]] == category)
+            for category in sf.MANDATORY_CATEGORIES}
 
 
 def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
@@ -441,6 +503,24 @@ def _normalise_facts(items: list, member: dict, source: str,
     return facts, dropped
 
 
+def _chunk_progress(specs, completed, reused, failed, failure_reason,
+                    failed_dropped, source_fp) -> dict:
+    """Resumable-chunk accounting tail shared by the v1/v2 result
+    schemas — the durable chunk ledger's view of what ran."""
+    pending = [index for index in range(len(specs))
+               if index not in completed]
+    return {"dropped": 0,
+            "chunks_total": len(specs),
+            "chunks_completed": len(completed),
+            "completed_chunks": completed,
+            "reused_chunks": reused,
+            "failed_chunks": failed,
+            "pending_chunks": pending,
+            "failure_reason": failure_reason,
+            "dropped_in_failed_chunk": failed_dropped,
+            "source_fingerprint": source_fp}
+
+
 def _persist_chunk(ledger, project_id, message_id, model, source_fp,
                    body_hash, revision, spec, facts, dropped, chunk_count,
                    *, kind: str = KIND_CHUNK, schema: str = SCHEMA_VERSION,
@@ -488,21 +568,10 @@ def extract_facts_resumable(llm_fn, member: dict,
     facts are partial only when ``complete`` is false, and callers must keep
     them out of a terminal/pass artifact until the pending chunks succeed.
     """
-    if not isinstance(member, dict) or not callable(llm_fn):
-        raise ValueError("extraction_input_invalid")
     import semantic
-    from semantic_runtime import RuntimeGuardError
 
-    source = member.get("body_original")
-    message_id = member.get("message_id")
-    if not isinstance(source, str) or message_id is None:
-        raise ValueError("member_source_invalid")
-    project_id = member.get("project_id") if project_id is None else project_id
-    revision = member.get("revision", "")
-    if not isinstance(revision, str):
-        revision = str(revision)
-    source_fp = _source_fingerprint(member, source_fingerprint)
-    body_hash = _sha256(source)
+    source, message_id, project_id, revision, source_fp, body_hash = \
+        _member_prelude(member, llm_fn, project_id, source_fingerprint)
     manifest = build_manifest(source, source_fp, chunk_size)
     if chunker is None:
         # Canonical path: atom-owned chunks cover the source exactly once.
@@ -532,19 +601,12 @@ def extract_facts_resumable(llm_fn, member: dict,
             failed.append(index)
             failure_reason = "deadline"
             break
-        try:
-            response = llm_fn(semantic._FACT_PROMPT % spec["text"])
-        except RuntimeGuardError:
-            raise
-        except Exception:
+        parsed, reason = _chunk_llm(
+            llm_fn, semantic._FACT_PROMPT % spec["text"], deadline)
+        if reason is not None:
             failed.append(index)
-            failure_reason = "model"
+            failure_reason = reason
             break
-        if deadline is not None and time.monotonic() > deadline:
-            failed.append(index)
-            failure_reason = "deadline"
-            break
-        parsed = _json_object(response, semantic)
         items = parsed.get("facts") if parsed is not None else None
         if not isinstance(items, list):
             failed.append(index)
@@ -568,21 +630,11 @@ def extract_facts_resumable(llm_fn, member: dict,
         completed.append(index)
 
     complete = len(completed) == len(specs) and not failed
-    pending = [index for index in range(len(specs))
-               if index not in completed]
     return {
         "facts": facts,
         "complete": complete,
-        "dropped": 0,
-        "chunks_total": len(specs),
-        "chunks_completed": len(completed),
-        "completed_chunks": completed,
-        "reused_chunks": reused,
-        "failed_chunks": failed,
-        "pending_chunks": pending,
-        "failure_reason": failure_reason,
-        "dropped_in_failed_chunk": failed_dropped,
-        "source_fingerprint": source_fp,
+        **_chunk_progress(specs, completed, reused, failed,
+                          failure_reason, failed_dropped, source_fp),
     }
 
 
@@ -858,23 +910,12 @@ def extract_facts_v2(llm_fn, member: dict,
     no obligation remains open/ambiguous/failed.  Completed chunks are
     persisted before the next model call so a restart reuses the prefix.
     """
-    if not isinstance(member, dict) or not callable(llm_fn):
-        raise ValueError("extraction_input_invalid")
     import semantic
     import semantic_llm
-    from semantic_runtime import RuntimeGuardError
 
-    source = member.get("body_original")
-    message_id = member.get("message_id")
-    if not isinstance(source, str) or message_id is None:
-        raise ValueError("member_source_invalid")
-    project_id = member.get("project_id") if project_id is None else project_id
-    revision = member.get("revision", "")
-    if not isinstance(revision, str):
-        revision = str(revision)
+    source, message_id, project_id, revision, source_fp, body_hash = \
+        _member_prelude(member, llm_fn, project_id, source_fingerprint)
     posted_at = member.get("posted_at") or ""
-    source_fp = _source_fingerprint(member, source_fingerprint)
-    body_hash = _sha256(source)
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
     _persist_manifest(ledger, project_id, message_id, semantic.LLM_MODEL,
@@ -890,20 +931,7 @@ def extract_facts_v2(llm_fn, member: dict,
         for aid in chunk["core_atom_ids"]:
             atom_owner[aid] = chunk["chunk_id"]
 
-    obligations = {}
-    for chunk in manifest["chunks"]:
-        for category in sf.MANDATORY_CATEGORIES:
-            oid = sf.obligation_id(chunk["chunk_id"], category,
-                                   "deterministic")
-            obligations[oid] = {
-                "obligation_id": oid,
-                "owner_id": chunk["chunk_id"],
-                "category": category,
-                "source": "deterministic",
-                "importance": "unknown",
-                "status": "open",
-                "fact_ids": [],
-            }
+    obligations = _v2_obligations(manifest)
 
     facts = []
     presence = {}
@@ -937,39 +965,22 @@ def extract_facts_v2(llm_fn, member: dict,
             elif jev_client is not None:
                 # Cached chunks extracted before preflight existed still
                 # get adjudicated — the call is cheap and honest.
-                try:
-                    jev_verdicts[cid] = jev_preflight(
-                        jev_client, spec["text"], deadline, chunk_id=cid)
-                except RuntimeGuardError:
-                    raise
-                except Exception:
-                    jev_verdicts[cid] = "failed"
+                jev_verdicts[cid] = _preflight_verdict(
+                    jev_client, spec["text"], deadline, cid)
             continue
         if deadline is not None and time.monotonic() > deadline:
             failed.append(index)
             failure_reason = "deadline"
             break
         if jev_client is not None:
-            try:
-                jev_verdicts[cid] = jev_preflight(
-                    jev_client, spec["text"], deadline, chunk_id=cid)
-            except RuntimeGuardError:
-                raise
-            except Exception:
-                jev_verdicts[cid] = "failed"
-        try:
-            response = llm_fn(semantic_llm._FACT_V2_PROMPT % spec["text"])
-        except RuntimeGuardError:
-            raise
-        except Exception:
+            jev_verdicts[cid] = _preflight_verdict(
+                jev_client, spec["text"], deadline, cid)
+        parsed, reason = _chunk_llm(
+            llm_fn, semantic_llm._FACT_V2_PROMPT % spec["text"], deadline)
+        if reason is not None:
             failed.append(index)
-            failure_reason = "model"
+            failure_reason = reason
             break
-        if deadline is not None and time.monotonic() > deadline:
-            failed.append(index)
-            failure_reason = "deadline"
-            break
-        parsed = _json_object(response, semantic)
         items = parsed.get("facts") if parsed is not None else None
         verdicts = parsed.get("category_presence") \
             if parsed is not None else None
@@ -1049,105 +1060,20 @@ def extract_facts_v2(llm_fn, member: dict,
             seen[key] = fact
             facts.append(fact)
 
-    # Two chunks can report an identical fact (same kind/subject/
-    # statement/evidence -> same stable ID).  Chunk IDs are deliberately
-    # excluded from fact identity, so merge the duplicates and union the
-    # obligation links rather than emitting a duplicate ID.
-    merged_facts = []
-    by_fact_id = {}
-    for fact in facts:
-        existing = by_fact_id.get(fact["fact_id"])
-        if existing is None:
-            by_fact_id[fact["fact_id"]] = fact
-            merged_facts.append(fact)
-            continue
-        for oid in fact["obligation_ids"]:
-            if oid not in existing["obligation_ids"]:
-                existing["obligation_ids"].append(oid)
-        for prov in fact["provenance"].split("+"):
-            if prov not in existing["provenance"].split("+"):
-                existing["provenance"] += "+" + prov
-        if fact["validation_status"] == "verified":
-            existing["validation_status"] = "verified"
-        if fact.get("_evidence") and not existing.get("_evidence"):
-            existing["_evidence"] = fact["_evidence"]
-    facts = merged_facts
+    facts = _merge_dupe_facts(facts)
 
     # Close obligations from verdicts, signals, and linked facts.
     signals = {chunk["chunk_id"]: _v1_category_signals(chunk["text"],
                                                      posted_at)
                for chunk in manifest["chunks"]}
-    open_ids = []
-    for chunk in manifest["chunks"]:
-        cid = chunk["chunk_id"]
-        for category in sf.MANDATORY_CATEGORIES:
-            oid = sf.obligation_id(cid, category, "deterministic")
-            ob = obligations[oid]
-            verdict = presence.get(cid, {}).get(category)
-            has_signal = category in signals[cid]
-            if chunk_status[cid] == "failed":
-                ob["status"] = "failed"
-            elif chunk_status[cid] == "pending":
-                ob["status"] = "open"
-            elif verdict in ("one", "multiple"):
-                ob["status"] = "covered" if ob["fact_ids"] else "open"
-            elif verdict == "none":
-                ob["status"] = "ambiguous" \
-                    if ob["fact_ids"] or has_signal \
-                    else "explicit_no_fact"
-            elif verdict == "ambiguous":
-                ob["status"] = "ambiguous"
-            else:
-                ob["status"] = "open"
-            if ob["status"] in ("open", "ambiguous", "failed"):
-                open_ids.append(oid)
-
-    # Jev preflight obligations — a second adjudication source per
-    # (chunk, category).  They exist only where a verdict was actually
-    # produced; a "present" verdict without facts, or an "absent" verdict
-    # contradicted by model/deterministic signals, never closes.
+    open_ids = _close_obligations(manifest, obligations, presence,
+                                  signals, chunk_status)
     if jev_client is not None:
-        det_by_owner = {(ob["owner_id"], ob["category"]): ob
-                        for ob in obligations.values()}
-        for chunk in manifest["chunks"]:
-            cid = chunk["chunk_id"]
-            verdicts = jev_verdicts.get(cid)
-            if verdicts is None:
-                continue
-            for category in sf.MANDATORY_CATEGORIES:
-                oid = sf.obligation_id(cid, category, "jev_pre")
-                det = det_by_owner[(cid, category)]
-                ob = {"obligation_id": oid, "owner_id": cid,
-                      "category": category, "source": "jev_pre",
-                      "importance": "unknown", "status": "open",
-                      "fact_ids": list(det["fact_ids"])}
-                if verdicts == "failed":
-                    ob["status"] = "failed"
-                else:
-                    verdict = verdicts.get(category)
-                    det_v = presence.get(cid, {}).get(category)
-                    has_signal = category in signals[cid]
-                    if verdict == "present":
-                        ob["status"] = "covered" if ob["fact_ids"] \
-                            else "open"
-                    elif verdict == "absent":
-                        ob["status"] = "explicit_no_fact" \
-                            if (not ob["fact_ids"] and det_v == "none"
-                                and not has_signal) else "ambiguous"
-                    else:
-                        ob["status"] = "ambiguous"
-                if ob["status"] in ("open", "ambiguous", "failed"):
-                    open_ids.append(oid)
-                obligations[oid] = ob
+        open_ids.extend(_jev_obligations(manifest, obligations,
+                                       jev_verdicts, presence, signals))
 
     evidence = {}
-    clean_facts = []
-    for fact in facts:
-        ev = fact.pop("_evidence", None)
-        fact.pop("_chunk_id", None)
-        if ev is not None:
-            evidence[ev["evidence_id"]] = ev
-        clean_facts.append(fact)
+    clean_facts = _collect_facts(facts, evidence)
 
     limitations = []
     if failed:
@@ -1158,10 +1084,7 @@ def extract_facts_v2(llm_fn, member: dict,
     status = "complete" \
         if complete and not open_ids and not limitations else "incomplete"
     coverage = {
-        "category_counts": {
-            category: sum(1 for f in clean_facts
-                          if sf.KIND_CATEGORY[f["kind"]] == category)
-            for category in sf.MANDATORY_CATEGORIES},
+        "category_counts": _category_counts(clean_facts),
         "open_obligation_ids": open_ids,
         "limitations": limitations,
         "status": status,
@@ -1202,8 +1125,6 @@ def extract_facts_v2(llm_fn, member: dict,
         "coverage": coverage,
     }
     sf.validate_facts_doc(doc)
-    pending = [index for index in range(len(specs))
-               if index not in completed]
     return {
         "doc": doc,
         "facts": clean_facts,
@@ -1212,17 +1133,129 @@ def extract_facts_v2(llm_fn, member: dict,
         "manifest": manifest,
         "complete": complete and status == "complete",
         "extraction_complete": complete,
-        "dropped": 0,
-        "chunks_total": len(specs),
-        "chunks_completed": len(completed),
-        "completed_chunks": completed,
-        "reused_chunks": reused,
-        "failed_chunks": failed,
-        "pending_chunks": pending,
-        "failure_reason": failure_reason,
-        "dropped_in_failed_chunk": failed_dropped,
-        "source_fingerprint": source_fp,
+        **_chunk_progress(specs, completed, reused, failed,
+                          failure_reason, failed_dropped, source_fp),
     }
+
+
+def _v2_obligations(manifest: dict) -> dict:
+    """One open deterministic obligation per (chunk, category)."""
+    obligations = {}
+    for chunk in manifest["chunks"]:
+        for category in sf.MANDATORY_CATEGORIES:
+            oid = sf.obligation_id(chunk["chunk_id"], category,
+                                   "deterministic")
+            obligations[oid] = {
+                "obligation_id": oid,
+                "owner_id": chunk["chunk_id"],
+                "category": category,
+                "source": "deterministic",
+                "importance": "unknown",
+                "status": "open",
+                "fact_ids": [],
+            }
+    return obligations
+
+
+def _merge_dupe_facts(facts: list) -> list:
+    """Two chunks can report an identical fact (same kind/subject/
+    statement/evidence -> same stable ID).  Chunk IDs are deliberately
+    excluded from fact identity, so merge the duplicates and union the
+    obligation links rather than emitting a duplicate ID."""
+    merged_facts = []
+    by_fact_id = {}
+    for fact in facts:
+        existing = by_fact_id.get(fact["fact_id"])
+        if existing is None:
+            by_fact_id[fact["fact_id"]] = fact
+            merged_facts.append(fact)
+            continue
+        for oid in fact["obligation_ids"]:
+            if oid not in existing["obligation_ids"]:
+                existing["obligation_ids"].append(oid)
+        for prov in fact["provenance"].split("+"):
+            if prov not in existing["provenance"].split("+"):
+                existing["provenance"] += "+" + prov
+        if fact["validation_status"] == "verified":
+            existing["validation_status"] = "verified"
+        if fact.get("_evidence") and not existing.get("_evidence"):
+            existing["_evidence"] = fact["_evidence"]
+    return merged_facts
+
+
+def _close_obligations(manifest: dict, obligations: dict,
+                       presence: dict, signals: dict,
+                       chunk_status: dict) -> list:
+    """Close deterministic obligations from verdicts, signals, and
+    linked facts — returns the still-open ids."""
+    open_ids = []
+    for chunk in manifest["chunks"]:
+        cid = chunk["chunk_id"]
+        for category in sf.MANDATORY_CATEGORIES:
+            oid = sf.obligation_id(cid, category, "deterministic")
+            ob = obligations[oid]
+            verdict = presence.get(cid, {}).get(category)
+            has_signal = category in signals[cid]
+            if chunk_status[cid] == "failed":
+                ob["status"] = "failed"
+            elif chunk_status[cid] == "pending":
+                ob["status"] = "open"
+            elif verdict in ("one", "multiple"):
+                ob["status"] = "covered" if ob["fact_ids"] else "open"
+            elif verdict == "none":
+                ob["status"] = "ambiguous" \
+                    if ob["fact_ids"] or has_signal \
+                    else "explicit_no_fact"
+            elif verdict == "ambiguous":
+                ob["status"] = "ambiguous"
+            else:
+                ob["status"] = "open"
+            if ob["status"] in ("open", "ambiguous", "failed"):
+                open_ids.append(oid)
+    return open_ids
+
+
+def _jev_obligations(manifest: dict, obligations: dict,
+                   jev_verdicts: dict, presence: dict,
+                   signals: dict) -> list:
+    """Jev preflight obligations — a second adjudication source per
+    (chunk, category).  They exist only where a verdict was actually
+    produced; a "present" verdict without facts, or an "absent" verdict
+    contradicted by model/deterministic signals, never closes."""
+    open_ids = []
+    det_by_owner = {(ob["owner_id"], ob["category"]): ob
+                    for ob in obligations.values()}
+    for chunk in manifest["chunks"]:
+        cid = chunk["chunk_id"]
+        verdicts = jev_verdicts.get(cid)
+        if verdicts is None:
+            continue
+        for category in sf.MANDATORY_CATEGORIES:
+            oid = sf.obligation_id(cid, category, "jev_pre")
+            det = det_by_owner[(cid, category)]
+            ob = {"obligation_id": oid, "owner_id": cid,
+                  "category": category, "source": "jev_pre",
+                  "importance": "unknown", "status": "open",
+                  "fact_ids": list(det["fact_ids"])}
+            if verdicts == "failed":
+                ob["status"] = "failed"
+            else:
+                verdict = verdicts.get(category)
+                det_v = presence.get(cid, {}).get(category)
+                has_signal = category in signals[cid]
+                if verdict == "present":
+                    ob["status"] = "covered" if ob["fact_ids"] \
+                        else "open"
+                elif verdict == "absent":
+                    ob["status"] = "explicit_no_fact" \
+                        if (not ob["fact_ids"] and det_v == "none"
+                            and not has_signal) else "ambiguous"
+                else:
+                    ob["status"] = "ambiguous"
+            if ob["status"] in ("open", "ambiguous", "failed"):
+                open_ids.append(oid)
+            obligations[oid] = ob
+    return open_ids
 
 
 # ---------------------------------------------------------------------
@@ -1255,7 +1288,6 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                 "repaired_fact_ids": [], "owner_chunk_ids": []}
     import semantic
     import semantic_llm
-    from semantic_runtime import RuntimeGuardError
 
     source = member.get("body_original")
     if not isinstance(source, str):
@@ -1324,14 +1356,10 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         base = semantic_llm._FACT_V2_PROMPT % spec["text"]
         base = base.rsplit("JSON:", 1)[0]
         prompt = base + semantic_llm._FACT_V2_REPAIR_SUFFIX % feedback
-        try:
-            response = llm_fn(prompt)
-        except RuntimeGuardError:
-            raise
-        except Exception:
+        parsed, _reason = _chunk_llm(llm_fn, prompt, None)
+        if parsed is None:
             continue
-        parsed = _json_object(response, semantic)
-        items = parsed.get("facts") if parsed is not None else None
+        items = parsed.get("facts")
         if not isinstance(items, list):
             continue
         repaired_items[cid] = items
@@ -1386,13 +1414,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     # repaired facts contribute their fresh _evidence entries.
     evidence = {e["evidence_id"]: e for e in doc.get("evidence", [])
                 if isinstance(e, dict) and e.get("evidence_id")}
-    clean_facts = []
-    for fact in facts:
-        ev = fact.pop("_evidence", None)
-        fact.pop("_chunk_id", None)
-        if ev is not None:
-            evidence[ev["evidence_id"]] = ev
-        clean_facts.append(fact)
+    clean_facts = _collect_facts(facts, evidence)
 
     # Re-derive statuses conservatively: linked facts cover; a covered
     # obligation that lost all links falls back to open, never to
@@ -1421,10 +1443,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
            for f in clean_facts):
         limitations.append("unverified_facts")
     coverage = {
-        "category_counts": {
-            category: sum(1 for f in clean_facts
-                          if sf.KIND_CATEGORY[f["kind"]] == category)
-            for category in sf.MANDATORY_CATEGORIES},
+        "category_counts": _category_counts(clean_facts),
         "open_obligation_ids": open_ids,
         "limitations": limitations,
         "status": "complete" if not open_ids and not limitations
