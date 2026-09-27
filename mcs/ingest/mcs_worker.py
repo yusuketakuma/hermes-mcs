@@ -32,13 +32,13 @@ def bounded_call(payload: dict, *, timeout: float, deadline=None) -> dict:
     trickling response that would otherwise keep renewing a socket timeout.
     The worker never renames an attachment into its final destination.
     """
-    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+    if (isinstance(timeout, bool) or not isinstance(timeout, int | float)
             or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout_invalid")
     end = time.monotonic() + timeout
     if deadline is not None:
         if (isinstance(deadline, bool)
-                or not isinstance(deadline, (int, float))
+                or not isinstance(deadline, int | float)
                 or not math.isfinite(deadline)):
             raise ValueError("deadline_invalid")
         end = min(end, deadline)
@@ -101,7 +101,7 @@ def _loopback_url(url: str, scheme: str):
             or parsed.fragment):
         raise WorkerError("url_not_allowed")
     # Access validates malformed or out-of-range ports as well.
-    parsed.port
+    parsed.port  # noqa: B018
 
 
 def _execute(envelope: dict) -> dict:

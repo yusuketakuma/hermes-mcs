@@ -49,9 +49,9 @@ def freshness_deadline(cfg: dict) -> int:
     h = h if isinstance(h, dict) else {}
     tick = h.get("tick_interval_s", DEFAULT_TICK_S)
     missed = h.get("max_missed_runs", DEFAULT_MAX_MISSED)
-    if not (isinstance(tick, (int, float)) and tick > 0):
+    if not (isinstance(tick, int | float) and tick > 0):
         tick = DEFAULT_TICK_S
-    if not (isinstance(missed, (int, float)) and missed >= 0):
+    if not (isinstance(missed, int | float) and missed >= 0):
         missed = DEFAULT_MAX_MISSED
     return int(tick * (int(missed) + 1))
 
@@ -69,7 +69,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     except json.JSONDecodeError:
         return {"status": "corrupt"}
     if not isinstance(h, dict) \
-            or not isinstance(h.get("at"), (int, float)):
+            or not isinstance(h.get("at"), int | float):
         return {"status": "corrupt"}
     overall = h.get("overall")
     if overall not in OVERALL_STATUS:

@@ -323,11 +323,10 @@ def test_assert_allowed_url_bad_port_is_mcserror():
     urlparse's .port raise ValueError — it must surface as MCSError
     'url_not_allowed', not leak as a bare ValueError that escapes
     stage_attachments' except MCSError and poisons the whole tick."""
-    import pytest as _pt
     for bad in ("https://www.medical-care.net:bad/x",
                 "https://www.medical-care.net:99999/x",
                 "https://[::1/x"):
-        with _pt.raises(mcs_adapter.MCSError) as e:
+        with pytest.raises(mcs_adapter.MCSError) as e:
             mcs_adapter._assert_allowed_url(bad)
         assert e.value.kind == "url_not_allowed"
     # allowed still passes
@@ -408,12 +407,8 @@ def test_ws_handshake_verifies_accept_key():
 def test_ws_handshake_rejects_wrong_accept():
     conn = _ws_conn(b"HTTP/1.1 101 Switching Protocols\r\n"
                     b"Sec-WebSocket-Accept: wrong\r\n\r\n")
-    try:
+    with pytest.raises(mcs_adapter.BootstrapError, match="handshake"):
         conn._handshake("127.0.0.1", 9222, "/x")
-    except mcs_adapter.BootstrapError as e:
-        assert "handshake" in str(e)
-    else:
-        raise AssertionError("wrong Accept must be refused")
 
 
 def test_ws_constructor_closes_socket_after_failed_handshake(monkeypatch):
@@ -450,12 +445,8 @@ def test_ws_recv_close_and_oversize_fail():
         raise AssertionError("close frame must end the connection")
     conn = _ws_conn(_ws_frame(b"x" * 100, fin=False))
     conn._MAX_MSG = 10
-    try:
+    with pytest.raises(mcs_adapter.BootstrapError, match="too_large"):
         conn.recv_message()
-    except mcs_adapter.BootstrapError as e:
-        assert "too_large" in str(e)
-    else:
-        raise AssertionError("oversized message must be refused")
 
 
 def test_ws_recv_rejects_masked_server_frames():
@@ -464,7 +455,7 @@ def test_ws_recv_rejects_masked_server_frames():
         conn.recv_message()
 
 
-@pytest.mark.parametrize("prefix,opcode", [(b"", 0x1),
+@pytest.mark.parametrize(("prefix", "opcode"), [(b"", 0x1),
                           (_ws_frame(b"12345678", fin=False), 0x0)])
 def test_ws_rejects_oversize_from_header_before_reading_body(prefix, opcode):
     # No payload follows the advertised length: rejecting before reading it
@@ -476,7 +467,7 @@ def test_ws_rejects_oversize_from_header_before_reading_body(prefix, opcode):
         conn.recv_message()
 
 
-@pytest.mark.parametrize("opcode,fin,length", [(0x9, True, 126),
+@pytest.mark.parametrize(("opcode", "fin", "length"), [(0x9, True, 126),
                                                (0x9, False, 1),
                                                (0xA, True, 126),
                                                (0x8, True, 126)])
@@ -734,11 +725,15 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     destination = tmp_path / "downloaded"
     destination.write_bytes(b"previous-complete-file")
     started = time.monotonic()
-    with pytest.raises(mcs_adapter.MCSError) as error:
-        if operation == "download":
-            adapter.download("https://www.medical-care.net/f", str(destination))
-        else:
+    if operation == "download":
+        def call():
+            adapter.download("https://www.medical-care.net/f",
+                             str(destination))
+    else:
+        def call():
             adapter._request("GET", "/projects", retries=0)
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        call()
     assert error.value.kind == "deadline_exceeded"
     assert time.monotonic() - started < 6
     assert started_file.exists()
