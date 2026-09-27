@@ -14,7 +14,11 @@ Responsibility split:
 Exit codes:
   0 = run ok (may include per-patient partial failures — see result.errors)
   1 = run failed (bootstrap/network/schema-level failure)
-  2 = session expired and auto-login could not recover -> human re-login
+  2 = session expired mid-run — stages attempt one auto_login at the
+      failure point and retry; exit 2 means the run still aborted
+      (relogin failed or the session re-died). The notice carries the
+      outcome: 'session_recovered' on success, 'session_expired' with
+      auto_login=<state> on failure -> human re-login
   3 = another instance holds the lock (overlap prevented)
 
 Privacy: stdout/stderr carries ids, counts, states only. Patient names,
@@ -181,22 +185,90 @@ def _write_health(ledger, result: dict, status: str,
 
 
 SESSION_ALERT_MIN_INTERVAL_S = 3600
+# a flapping session must not drive auto_login in a loop — each wrapped
+# stage allows one attempt, and this bounds the per-run total
+RELOGIN_MAX_PER_RUN = 3
 
 
-def _alert_session_expired(ledger, run_id: int, detail: str) -> bool:
-    """Enqueue the session_expired alert — throttled so a session that
-    stays dead does not re-alert on every tick: one per hour keeps it
-    visible without flooding the channel. The run row and health file
-    still record every expiry; only the notification is gated."""
+def _alert_throttled(ledger, kind: str, run_id: int, detail: str) -> bool:
+    """Enqueue a system alert — throttled so a persistent condition does
+    not re-alert on every tick: one per kind per hour keeps it visible
+    without flooding the channel. The run row and health file still
+    record every occurrence; only the notification is gated."""
     last = ledger.db.execute(
         "SELECT MAX(created_at) t FROM notify_outbox"
-        " WHERE kind='session_expired'").fetchone()["t"]
+        " WHERE kind=?", (kind,)).fetchone()["t"]
     if last is not None \
             and time.time() - float(last) < SESSION_ALERT_MIN_INTERVAL_S:
         return False
-    ledger.outbox_add("session_expired", None,
-                      {"run_id": run_id, "detail": detail})
+    ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail})
     return True
+
+
+def _alert_session_expired(ledger, run_id: int, detail: str) -> bool:
+    """Enqueue the session_expired alert (one per hour max)."""
+    return _alert_throttled(ledger, "session_expired", run_id, detail)
+
+
+def _alert_session_recovered(ledger, run_id: int, detail: str) -> None:
+    """Enqueue the session_recovered notice — NOT throttled: it resolves
+    a possibly-visible session_expired alert, so suppressing it would
+    leave a stale 'manual re-login required' standing in the channel.
+    Volume stays bounded in practice because a session that flaps past
+    RELOGIN_MAX_PER_RUN aborts the run instead of recovering again."""
+    ledger.outbox_add("session_recovered", None,
+                      {"run_id": run_id, "detail": detail})
+
+
+def _attempt_relogin(adapter, ledger, result, where: str,
+                     err: "SessionExpired") -> str:
+    """One bounded auto_login at the point a stage died on
+    SessionExpired. Every attempt is journaled in
+    result['relogin_attempts'] for the run log; on success a
+    session_recovered notice is queued so the channel sees the blip AND
+    its resolution instead of silence or a false manual-login alert."""
+    attempt = {"stage": where, "error": _err_str(err)}
+    result.setdefault("relogin_attempts", []).append(attempt)
+    try:
+        state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                   chrome_bin=CHROME_BIN)
+    except Exception as exc:
+        state = "failed"
+        attempt["detail"] = repr(exc)
+    attempt["state"] = state
+    if state == "ok":
+        _alert_session_recovered(ledger, result.get("run_id"),
+                                 f"{where}: {attempt['error']}")
+    return state
+
+
+def _with_relogin(adapter, ledger, result, where: str, fn, *args,
+                  **kwargs):
+    """Run one adapter-bound stage with a single in-run session
+    recovery. A mid-stage SessionExpired no longer abandons the whole
+    tick: auto_login is tried once at the failure point, and on success
+    the stage replays — every stage is idempotent (deduped saves,
+    durable job cursors, snapshot-gated marks), so a replay cannot
+    double-apply committed work. A stage that already ran its own
+    auto_login (detail 'auto_login=…'), a run over the relogin budget,
+    or a session that dies again right after recovery is not retried —
+    it escalates to the run boundary."""
+    try:
+        return fn(*args, **kwargs)
+    except SessionExpired as e:
+        if "auto_login=" in (e.detail or ""):
+            raise
+        if len(result.get("relogin_attempts") or []) \
+                >= RELOGIN_MAX_PER_RUN:
+            raise
+        state = _attempt_relogin(adapter, ledger, result, where, e)
+        if state != "ok":
+            raise SessionExpired(f"auto_login={state}") from e
+        try:
+            return fn(*args, **kwargs)
+        except SessionExpired as e2:
+            raise SessionExpired(
+                "auto_login=ok_then_expired") from e2
 
 
 # ---------- stage: unread pipeline ----------
@@ -211,12 +283,22 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
     months-old history). Returns the snapshot for downstream stages."""
     try:
         snap = adapter.list_unread()
-    except SessionExpired:
-        # credential-free recovery: saved-password autofill + submit click
-        state = adapter.auto_login(profile_dir=CHROME_PROFILE,
-                                   chrome_bin=CHROME_BIN)
+    except SessionExpired as e:
+        # credential-free recovery: saved-password autofill + submit
+        # click — journaled + notified like every other relogin path
+        if len(result.get("relogin_attempts") or []) \
+                >= RELOGIN_MAX_PER_RUN:
+            raise
+        state = _attempt_relogin(adapter, ledger, result, "unread", e)
         if state == "ok":
-            snap = adapter.list_unread()
+            try:
+                snap = adapter.list_unread()
+            except SessionExpired as e2:
+                # a session that dies again right after this stage's own
+                # auto_login carries the marker, so _with_relogin does
+                # not spend a second attempt re-running the whole stage
+                raise SessionExpired(
+                    "auto_login=ok_then_expired") from e2
         else:
             raise SessionExpired(f"auto_login={state}")
     ledger.db.execute("UPDATE runs SET snapshot_ts=? WHERE run_id=?",
@@ -740,21 +822,24 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     if args.jobs_only:
         result["jobs_only"] = True
         return
-    stage_unread(adapter, ledger, args, result, deadline, run_id,
-                 semantic=sem_on,
-                 notify_max_age_s=notify_max_age_s)
+    _with_relogin(adapter, ledger, result, "unread",
+                  stage_unread, adapter, ledger, args, result, deadline,
+                  run_id, semantic=sem_on,
+                  notify_max_age_s=notify_max_age_s)
     if not args.no_backfill:
-        stage_backfill(adapter, ledger, result, deadline, run_id,
-                       semantic=sem_on,
-                       notify_max_age_s=notify_max_age_s)
+        _with_relogin(adapter, ledger, result, "backfill",
+                      stage_backfill, adapter, ledger, result, deadline,
+                      run_id, semantic=sem_on,
+                      notify_max_age_s=notify_max_age_s)
     self_posts = cfg.get("self_posts", False)
     if type(self_posts) is not bool:
         result["errors"].append("config: self_posts_invalid")
         self_posts = False
     if self_posts:
-        stage_self_probe(adapter, ledger, result, deadline, run_id,
-                         semantic=sem_on,
-                         notify_max_age_s=notify_max_age_s)
+        _with_relogin(adapter, ledger, result, "self_probe",
+                      stage_self_probe, adapter, ledger, result,
+                      deadline, run_id, semantic=sem_on,
+                      notify_max_age_s=notify_max_age_s)
 
 
 def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
@@ -788,13 +873,16 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     if type(discover_archived) is not bool:
         result["errors"].append("config: discover_archived_invalid")
         discover_archived = False
-    job_ops.run_discovery(adapter, ledger, result, deadline,
-                          include_archived=discover_archived)
-    job_ops.run_reply_jobs(adapter, ledger, result, deadline,
-                           semantic=sem_on,
-                           notify_max_age_s=notify_max_age_s)
-    job_ops.run_history_jobs(adapter, ledger, result, deadline,
-                             trickle=False, semantic=sem_on)
+    _with_relogin(adapter, ledger, result, "discovery",
+                  job_ops.run_discovery, adapter, ledger, result,
+                  deadline, include_archived=discover_archived)
+    _with_relogin(adapter, ledger, result, "reply_jobs",
+                  job_ops.run_reply_jobs, adapter, ledger, result,
+                  deadline, semantic=sem_on,
+                  notify_max_age_s=notify_max_age_s)
+    _with_relogin(adapter, ledger, result, "history_jobs",
+                  job_ops.run_history_jobs, adapter, ledger, result,
+                  deadline, trickle=False, semantic=sem_on)
 
     if args.download_files:
         stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)
@@ -818,16 +906,18 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
             result["trickle_seeded"] = seeded
     # --jobs-only runs exist FOR this work: bigger slice of the
     # window, smaller safety margin than the priority tick
-    job_ops.run_history_jobs(
-        adapter, ledger, result, deadline, trickle=True,
-        trickle_pages=trickle_pages,
-        max_jobs=8 if args.jobs_only else None,
-        min_margin=30 if args.jobs_only else None,
-        semantic=sem_on)
+    _with_relogin(adapter, ledger, result, "trickle_jobs",
+                  job_ops.run_history_jobs,
+                  adapter, ledger, result, deadline, trickle=True,
+                  trickle_pages=trickle_pages,
+                  max_jobs=8 if args.jobs_only else None,
+                  min_margin=30 if args.jobs_only else None,
+                  semantic=sem_on)
 
     # -- post-import reconcile: edits/deletions below the cutoff ---
-    job_ops.run_reconcile_jobs(adapter, ledger, result, deadline,
-                               semantic=sem_on)
+    _with_relogin(adapter, ledger, result, "reconcile",
+                  job_ops.run_reconcile_jobs, adapter, ledger, result,
+                  deadline, semantic=sem_on)
 
     # own identity: name/professions/stations from MCS, persisted
     # as the signal engine's default self (config overrides). Never
@@ -962,9 +1052,11 @@ def _fail_run(ledger, args, result, run_id, status, detail,
     try:  # operational alert — silent death is worse than noise
         if alert == "session":
             _alert_session_expired(ledger, run_id, detail)
-        else:
+        elif alert:
             ledger.outbox_add("run_failed", None,
                               {"run_id": run_id, "detail": detail})
+        # alert=None: the session_recovered notice was already queued by
+        # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
             result["notify"] = notify_flush.flush(ledger, deadline=deadline)
     except Exception:                                    # queued for a
@@ -989,7 +1081,8 @@ def main() -> int:
     args = ap.parse_args()
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
-    os.makedirs(ATTACH_DIR, exist_ok=True)
+    os.makedirs(ATTACH_DIR, mode=0o700, exist_ok=True)
+    os.chmod(ATTACH_DIR, 0o700)
 
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
@@ -1043,8 +1136,19 @@ def main() -> int:
         status = _finish_run(ledger, cfg, result, run_id, deadline)
         _write_health(ledger, result, status, run_id=run_id)
     except SessionExpired as e:
+        detail = _err_str(e)
+        recovered = False
+        if "auto_login=" not in detail:
+            # an expiry escaping an unwrapped path still earns one
+            # recovery attempt before a manual-login alert goes out;
+            # the wrapped stages already tried (their detail carries
+            # 'auto_login=<state>'), so don't double-attempt them
+            state = _attempt_relogin(adapter, ledger, result, "run", e)
+            detail = f"{detail} auto_login={state}"
+            recovered = state == "ok"
         _fail_run(ledger, args, result, run_id, "session_expired",
-                  _err_str(e), deadline, alert="session")
+                  detail, deadline,
+                  alert=None if recovered else "session")
         _write_health(ledger, result, "session_expired", run_id=run_id)
         print(json.dumps(result, ensure_ascii=False))
         return 2

@@ -555,7 +555,8 @@ WIZARD = [
     ]),
     ("意味解析 semantic（要約の自動検査など・通常は off のまま）", [
         ("semantic.mode", "choice:off,shadow,enforce", "off",
-         "意味解析モード — shadow=記録のみ / enforce=判定に使用", None),
+         "意味解析モード — off以外は本文を外部Jev APIへ送信 "
+         "shadow=記録のみ / enforce=判定に使用", None),
         ("semantic.project_ids", "reqintlist", None,
          "対象プロジェクトID・カンマ区切り（modeがoff以外では必須）",
          _semantic_on),
@@ -924,9 +925,12 @@ def cmd_init(args) -> int:
     if not args.yes:
         _wizard(cfg)
 
-    os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
-    os.makedirs(os.path.join(HOME, "data", "cmd"), exist_ok=True)
-    os.makedirs(os.path.join(HOME, "chrome-profile"), exist_ok=True)
+    for d in (os.path.join(HOME, "data"),
+              os.path.join(HOME, "data", "cmd"),
+              os.path.join(HOME, "chrome-profile")):
+        # PHI/session stores: owner-only even when the dir pre-existed
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: wrote {CONF_PATH}")

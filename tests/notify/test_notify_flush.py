@@ -237,3 +237,28 @@ def test_deleted_message_cannot_supply_notification_content(tmp_path):
                                             "payload": json.dumps(payload)})
     finally:
         db.close()
+
+
+def test_session_recovered_renders_as_resolved_notice(tmp_path):
+    """The recovery notice is a plain system text event — it reports the
+    expiry AS resolved and rides notify_system_target like
+    session_expired."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        eid = db.outbox_add("session_recovered", None,
+                            {"run_id": 5,
+                             "detail": "history_jobs: "
+                                       "session_expired(status=403)"})
+        ev = db.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                           (eid,)).fetchone()
+        text, files = notify_flush._format_event(db, ev)
+        assert "自動再ログインで復旧" in text
+        assert "run 5" in text and "history_jobs" in text
+        assert "手動再ログインが必要" not in text
+        assert files == []
+        cfg = {"notify_target": "discord:1",
+               "notify_system_target": "slack:#ops"}
+        assert notify_flush._target(cfg, "session_recovered") == \
+            "slack:#ops"
+    finally:
+        db.close()
