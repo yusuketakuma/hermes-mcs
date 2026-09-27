@@ -50,9 +50,9 @@ def _observe(c, cfg) -> dict:
     def q(sql, p=()):
         return c.execute(sql, p).fetchall()
 
-    jobs = {s: n for s, n in q(
+    jobs = dict(q(
         "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
-        "GROUP BY state")}
+        "GROUP BY state"))
     history = audit_history(ledger)
     eligible_pending = q(
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
@@ -81,8 +81,36 @@ def _observe(c, cfg) -> dict:
         "FROM artifacts WHERE kind='semantic_usage' AND created_at >= ?",
         (jst_start,))[0][0]
     # ---- T14: queue ages, cohort split, scheduler, recent rates ----
-    # every field stays None (unknown) when its data is absent — a
-    # missing measurement is never reported as zero
+    queue_ages, cohorts, scheduler = _queue_stats(c)
+    recent = _recent_runs(c)
+    extract_recent = _extract_recent(c)
+    return {
+        "ts": int(time.time()),
+        "jobs": jobs,
+        "eligible_pending": eligible_pending,
+        **history,
+        "audit_statuses_scope": "history",
+        "history": history,
+        "current_quality": current_quality(ledger, cfg),
+        "jev_requests_today": int(jev_today),
+        "jev_daily_budget": _daily_budget(cfg),
+        "extract_llm_left": extract_left,
+        "queue_ages_s": queue_ages,
+        "cohorts": cohorts,
+        "scheduler": scheduler,
+        "recent_drain": recent,
+        "extract_recent": extract_recent,
+    }
+
+
+def _queue_stats(c):
+    """T14: queue ages, cohort split, scheduler — every field stays
+    None (unknown) when its data is absent; a missing measurement is
+    never reported as zero."""
+    def q(sql, p=()):
+        return c.execute(sql, p).fetchall()
+
+    from extract_llm import EXTRACT_VERSION
     now = time.time()
     queue_ages = {}
     for name, kinds in (("semantic", (JOB_KIND,)),
@@ -107,13 +135,12 @@ def _observe(c, cfg) -> dict:
     queue_ages["extract_llm"] = (max(0.0, now - oldest_msg)
                                  if oldest_msg is not None else None)
     cohorts = {"arrival": 0, "backfill": 0}
-    for cohort, n in q(
-            "SELECT CASE WHEN json_valid(payload) "
-            "AND json_extract(payload,'$.eligible')=1 "
-            "THEN 'arrival' ELSE 'backfill' END, COUNT(*) "
-            "FROM fetch_jobs WHERE kind=? AND state='pending' "
-            "GROUP BY 1", (JOB_KIND,)):
-        cohorts[cohort] = n
+    cohorts.update(q(
+        "SELECT CASE WHEN json_valid(payload) "
+        "AND json_extract(payload,'$.eligible')=1 "
+        "THEN 'arrival' ELSE 'backfill' END, COUNT(*) "
+        "FROM fetch_jobs WHERE kind=? AND state='pending' "
+        "GROUP BY 1", (JOB_KIND,)))
     sched_row = q("SELECT payload FROM fetch_jobs WHERE kind=? "
                   "AND project_id=0 AND message_id=0", (SCHED_KIND,))
     sched = {}
@@ -127,9 +154,14 @@ def _observe(c, cfg) -> dict:
         "backfill_selected": sched.get("backfill_selected"),
         "backfill_last_served_at": sched.get("backfill_last_served_at"),
     }
-    drain_rows = q("SELECT content FROM artifacts "
-                   "WHERE kind='semantic_drain_run' "
-                   "ORDER BY artifact_id DESC LIMIT 100")
+    return queue_ages, cohorts, scheduler
+
+
+def _recent_runs(c) -> dict:
+    """Aggregates over the last 100 semantic_drain_run artifacts."""
+    drain_rows = c.execute(
+        "SELECT content FROM artifacts WHERE kind='semantic_drain_run' "
+        "ORDER BY artifact_id DESC LIMIT 100").fetchall()
     recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0,
               "llm_s": None, "jev_s": None, "post_s": None,
               "queue_wait_s_max": None, "usage_tokens": None}
@@ -177,9 +209,14 @@ def _observe(c, cfg) -> dict:
                        "post_s": post_s, "queue_wait_s_max": qw_max})
     if have_usage:
         recent["usage_tokens"] = tokens
-    integrity_rows = q(
+    return recent
+
+
+def _extract_recent(c) -> dict:
+    """Aggregates over the last 200 extract_llm integrity metas."""
+    integrity_rows = c.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_llm' "
-        "ORDER BY artifact_id DESC LIMIT 200")
+        "ORDER BY artifact_id DESC LIMIT 200").fetchall()
     extract_recent = {"artifacts": 0, "calls": None,
                       "prompt_ms": None, "predicted_ms": None,
                       "tokens": None}
@@ -217,23 +254,7 @@ def _observe(c, cfg) -> dict:
         extract_recent.update({"prompt_ms": pms, "predicted_ms": dms})
     if have_toks:
         extract_recent["tokens"] = toks
-    return {
-        "ts": int(time.time()),
-        "jobs": jobs,
-        "eligible_pending": eligible_pending,
-        **history,
-        "audit_statuses_scope": "history",
-        "history": history,
-        "current_quality": current_quality(ledger, cfg),
-        "jev_requests_today": int(jev_today),
-        "jev_daily_budget": _daily_budget(cfg),
-        "extract_llm_left": extract_left,
-        "queue_ages_s": queue_ages,
-        "cohorts": cohorts,
-        "scheduler": scheduler,
-        "recent_drain": recent,
-        "extract_recent": extract_recent,
-    }
+    return extract_recent
 
 
 def _daily_budget(cfg) -> int:
@@ -271,7 +292,7 @@ def main() -> int:
           f"extract_llm backlog left: {snap['extract_llm_left']}")
     ages = snap["queue_ages_s"]
     print("queue ages: " + ", ".join(
-        f"{k}={'%.0fs' % v if v is not None else 'unknown'}"
+        f"{k}={f'{v:.0f}s' if v is not None else 'unknown'}"
         for k, v in ages.items()))
     co = snap["cohorts"]
     sched = snap["scheduler"]

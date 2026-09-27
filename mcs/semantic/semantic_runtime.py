@@ -16,6 +16,7 @@ import socket
 import time
 import urllib.error
 import uuid
+from contextlib import suppress
 
 from mcs_requests import payload_hash
 
@@ -100,7 +101,7 @@ class JobToken:
     source_generation: str | None
 
     @classmethod
-    def from_row(cls, row: dict | object) -> "JobToken":
+    def from_row(cls, row: dict | object) -> JobToken:
         def get(name, default=None):
             return row.get(name, default) if isinstance(row, dict) \
                 else row[name]
@@ -259,9 +260,9 @@ def _circuit_failure_class(error) -> str | None:
         return "http_429"
     if kind in ("transport", "timeout"):
         return kind
-    if isinstance(error, (TimeoutError, socket.timeout)):
+    if isinstance(error, TimeoutError | socket.timeout):
         return "timeout"
-    if isinstance(error, (OSError, urllib.error.URLError)):
+    if isinstance(error, OSError | urllib.error.URLError):
         return "transport"
     return None
 
@@ -376,6 +377,19 @@ def _call_guard(guard, stage: str):
     guard(stage)
 
 
+def accepts_timeout(fn) -> bool:
+    """Whether an injected callable takes a ``timeout`` kwarg — inspect
+    the signature rather than catch a TypeError that could hide a real
+    model failure."""
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "timeout"
+               or p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in params)
+
+
 def llm_call(fn, prompt: str, deadline: float,
              timeout_cap: float | None = None):
     """Call an injected local model while propagating remaining timeout.
@@ -388,14 +402,8 @@ def llm_call(fn, prompt: str, deadline: float,
     if remaining <= 0:
         raise RuntimeBudget("llm")
     timeout = remaining if timeout_cap is None else min(remaining, timeout_cap)
-    try:
-        params = inspect.signature(fn).parameters.values()
-        accepts_timeout = any(
-            p.name == "timeout" or p.kind is inspect.Parameter.VAR_KEYWORD
-            for p in params)
-    except (TypeError, ValueError):
-        accepts_timeout = False
-    return fn(prompt, timeout=timeout) if accepts_timeout else fn(prompt)
+    return (fn(prompt, timeout=timeout) if accepts_timeout(fn)
+            else fn(prompt))
 
 
 class _GuardedLLM:
@@ -424,10 +432,8 @@ class _GuardedJev:
             value = self._client.evaluate(state, questions, deadline)
         except Exception as error:
             if hasattr(error, "kind") and hasattr(error, "retryable"):
-                try:
+                with suppress(Exception):
                     self._client.last_error = error
-                except Exception:
-                    pass
             raise
         _call_guard(self._guard, "jev_result")
         return value
@@ -461,10 +467,8 @@ class _HookedJev:
                 return self._client.evaluate(state, questions, deadline)
             except Exception as error:
                 if hasattr(error, "kind") and hasattr(error, "retryable"):
-                    try:
+                    with suppress(Exception):
                         self._client.last_error = error
-                    except Exception:
-                        pass
                 raise
         finally:
             self._client.before_attempt = old_before

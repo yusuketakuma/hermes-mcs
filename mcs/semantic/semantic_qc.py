@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import suppress
 
 from mcs_util import load_config
 from mcs_queries import current_qc_pred, qc_source_id
@@ -26,6 +27,16 @@ def qc_scope_sql(now: float, msg: str = "m") -> tuple[str, tuple]:
     """Shared post-age eligibility for QC seeding, processing, and display."""
     return (f"({msg}.posted_at_ts IS NOT NULL AND {msg}.posted_at_ts >= ?)",
             (now - QC_REALTIME_MAX_AGE_S,))
+
+
+def _drop_stale_qc(ledger, mid: int, current_hash: str) -> None:
+    """Replace QC rows left over from a superseded message hash — the
+    replacement lands in the caller's tx so the row is never left
+    claimable without its result."""
+    ledger.db.execute(
+        "DELETE FROM artifacts WHERE kind=? AND message_id=?"
+        " AND json_valid(meta) AND json_extract(meta,'$.hash') != ?",
+        (QC_ARTIFACT, mid, current_hash))
 
 
 def _qc_seed(ledger, now: float, limit: int = 32) -> int:
@@ -55,6 +66,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
             'pending', ?, ?, ?
           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
           WHERE a.artifact_id={qc_source_id(version=version)}
+            AND json_extract(a.meta,'$.prefilter') IS NULL
             AND {scope}
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                            WHERE q.kind=? AND q.message_id=a.message_id
@@ -101,7 +113,7 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
     as index — a key mislabel ('脈は48' -> bs:48) reads as NO_MATCH."""
     questions, layout, ctx_items = {}, [], {}
     n = QC_MAX_ITEMS
-    for section in ("meds", "symptoms", "events"):
+    for section in ("meds", "symptoms", "events", "labs"):
         for i, item in enumerate((ex.get(section) or [])[:n]):
             label = (item if section == "events"
                      else json.dumps(item, ensure_ascii=False))
@@ -221,10 +233,8 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                              scfg["max_questions_per_request"])
                if questions else {"answers": {}})
     except jev.JevError as error:
-        try:
+        with suppress(Exception):
             jev_client.last_error = error
-        except Exception:
-            pass
         cls = _jev_failure_class(error)
         if cls == "resource":
             return "deferred"
@@ -239,11 +249,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         except (runtime.RuntimeOff, runtime.RuntimeBudget):
             return "deferred"
         with ledger.db:
-            ledger.db.execute(
-                "DELETE FROM artifacts WHERE kind=? AND message_id=?"
-                " AND json_valid(meta)"
-                " AND json_extract(meta,'$.hash') != ?",
-                (QC_ARTIFACT, mid, art[1]))
+            _drop_stale_qc(ledger, mid, art[1])
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps({"qc": "unevaluated",
                                          "reason": error.kind},
@@ -254,7 +260,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                       "source_artifact_id": art[2],
                       "qc": "unevaluated"})
             if not runtime.transition_tx(ledger, token, "done"):
-                raise runtime.RuntimeStale("qc:write")
+                raise runtime.RuntimeStale("qc:write") from None
         return "done"
     except runtime.RuntimeStale:
         return "stale"
@@ -285,10 +291,10 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                               scfg["nomatch_threshold"]),
                           "noul": ans.get("noul")})
     by_field = {}
-    for field in ("meds", "symptoms", "events", "requests", "vitals",
-                  "summary", "points", "urgency"):
+    for field in ("meds", "symptoms", "events", "labs", "requests",
+                  "vitals", "summary", "points", "urgency"):
         value = ex.get(field)
-        total = len(value) if isinstance(value, (list, dict)) \
+        total = len(value) if isinstance(value, list | dict) \
             else int(isinstance(value, str) and bool(value))
         checked = sum(item["section"] == field for item in items)
         if field == "urgency":
@@ -301,7 +307,8 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                "coverage": {"checked": checked_items, "total": total_items,
                             "unchecked": total_items - checked_items,
                             "capped": sum(by_field[s]["total"] for s in
-                                ("meds", "symptoms", "events")) > QC_MAX_ITEMS,
+                                ("meds", "symptoms", "events", "labs"))
+                                > QC_MAX_ITEMS,
                             "by_field": by_field}}
     if urgency is not None:
         content["urgency"] = urgency
@@ -311,11 +318,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             # stale QC rows for a superseded hash are replaced in the
             # same tx; the job transition lands here too so the row is
             # never left claimable after its result
-            ledger.db.execute(
-                "DELETE FROM artifacts WHERE kind=? AND message_id=?"
-                " AND json_valid(meta)"
-                " AND json_extract(meta,'$.hash') != ?",
-                (QC_ARTIFACT, mid, art[1]))
+            _drop_stale_qc(ledger, mid, art[1])
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,

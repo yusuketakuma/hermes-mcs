@@ -250,7 +250,7 @@ def test_extra_loop_candidate_cannot_disappear_from_quality_gate():
     assert not report["gate"]["pass"]
 
 
-@pytest.mark.parametrize("prediction,precision,missed", [
+@pytest.mark.parametrize(("prediction", "precision", "missed"), [
     ([{"loop_id": "loop-1", "resolved": False},
       {"loop_id": "extra", "resolved": False}], 0.5, 0),
     ([], None, 1),

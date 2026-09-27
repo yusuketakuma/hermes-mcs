@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from contextlib import suppress
 
 from mcs_requests import payload_hash
 import semantic_jev as jev
@@ -215,9 +216,7 @@ def jev_usage_today(ledger) -> int:
     for r in ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
             (KIND_USAGE, day)):
-        try:
+        with suppress(json.JSONDecodeError, TypeError, ValueError):
             total += int(json.loads(r["meta"] or "{}")
                          .get("jev_requests", 0))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
     return total

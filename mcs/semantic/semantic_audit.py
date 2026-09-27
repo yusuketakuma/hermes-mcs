@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import suppress
 
 import semantic_jev as jev
 from semantic_quantities import claim_quantity_findings
@@ -130,10 +131,8 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
                 state, {c["claim_id"]: questions[c["claim_id"]]},
                 deadline)
         except jev.JevError as error:
-            try:
+            with suppress(Exception):
                 jev_client.last_error = error
-            except Exception:
-                pass
             return findings + [{"code": "support_unevaluated",
                                 "claim": c["claim_id"]}], False
         ans = out["answers"][c["claim_id"]]
@@ -324,10 +323,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         try:
             out = jev_client.evaluate(state, {fid: question}, deadline)
         except Exception as error:
-            try:
+            with suppress(Exception):
                 jev_client.last_error = error
-            except Exception:
-                pass
             findings.append({"code": "fact_audit_unevaluated",
                              "fact": fid})
             return {"status": "INCOMPLETE", "evaluated": False,
@@ -342,7 +339,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
             return {"status": "INCOMPLETE", "evaluated": False,
                     "findings": findings, "fact_verdicts": verdicts}
         verdicts[fid] = {"choice": choice, "confidence": confidence}
-        if isinstance(confidence, (int, float)) \
+        if isinstance(confidence, int | float) \
                 and confidence < match_threshold:
             findings.append({"code": "fact_low_confidence", "fact": fid})
         if choice in ("contradicts", "not_supported"):

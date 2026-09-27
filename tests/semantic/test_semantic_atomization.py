@@ -68,7 +68,7 @@ def test_core_chunks_own_each_atom_exactly_once():
     for chunk in manifest["chunks"]:
         core = [by_id[a] for a in chunk["core_atom_ids"]]
         assert core[0]["start"] == cursor
-        for left, right in zip(core, core[1:]):
+        for left, right in zip(core, core[1:], strict=False):
             assert left["end"] == right["start"]
         cursor = core[-1]["end"]
         assert chunk["text"] == body[chunk["start"]:chunk["end"]]
@@ -212,7 +212,7 @@ def test_durable_prefix_reuse_after_interruption():
 
 def test_malformed_chunker_or_unresolved_dependency_fails_closed():
     body = "本文です。"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk_size_invalid"):
         extraction.build_manifest(body, FP, chunk_size=0)
     # A manifest with a gap must not validate as a facts doc.
     manifest = extraction.build_manifest(body, FP, chunk_size=10)

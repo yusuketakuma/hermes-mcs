@@ -209,9 +209,8 @@ def extract_quantities(text: object) -> list[dict]:
             item["scope"] = "per_day"
         elif re.search(r"[0-9]+\s*回(?:量|あたり)?\s*$", prefix):
             item["scope"] = "per_dose"
-        elif re.search(r"[0-9]+\s*日\s*$", prefix):
-            item["scope"] = "per_day_total"
-        elif re.match(r"\s*[／/]\s*日", suffix):
+        elif (re.search(r"[0-9]+\s*日\s*$", prefix)
+              or re.match(r"\s*[／/]\s*日", suffix)):
             item["scope"] = "per_day_total"
 
     # Stable source order, with amount before a same-position frequency only
@@ -228,9 +227,12 @@ def _claim_quantities(claim: dict) -> list[dict]:
     return extract_quantities(claim.get("text"))
 
 
-def _evidence_quantities(facts: list, refs: list[int]) -> tuple[list[dict], list[int]]:
+def _evidence_quantities(
+        facts: list, refs: list[int]
+) -> tuple[list[dict], list[int], dict[int, dict[str, int]]]:
     quantities: list[dict] = []
     evidence_facts: list[int] = []
+    counts_by_fact: dict[int, dict[str, int]] = {}
     for index in refs:
         if type(index) is not int or index < 0 or index >= len(facts):
             continue
@@ -240,8 +242,13 @@ def _evidence_quantities(facts: list, refs: list[int]) -> tuple[list[dict], list
         if not isinstance(quote, str):
             continue
         evidence_facts.append(index)
-        quantities.extend(extract_quantities(quote))
-    return quantities, evidence_facts
+        extracted = extract_quantities(quote)
+        quantities.extend(extracted)
+        counts_by_fact[index] = {
+            "amount": sum(q["kind"] == "amount" for q in extracted),
+            "frequency": sum(q["kind"] == "frequency" for q in extracted),
+        }
+    return quantities, evidence_facts, counts_by_fact
 
 
 def _finding(code: str, claim_id: object, *, quantity: dict | None = None,
@@ -300,7 +307,8 @@ def claim_quantity_findings(claim: dict, facts: list) -> list[dict]:
     refs = claim.get("fact_refs")
     refs = refs if isinstance(refs, list) else []
     claim_id = claim.get("claim_id")
-    evidence_quantities, evidence_facts = _evidence_quantities(facts, refs)
+    evidence_quantities, evidence_facts, quantity_counts_by_fact = \
+        _evidence_quantities(facts, refs)
     if not claim_quantities:
         # A repair must not evade the deterministic check by deleting the
         # number while still citing a fact whose exact quote contains one.
@@ -318,14 +326,6 @@ def claim_quantity_findings(claim: dict, facts: list) -> list[dict]:
     # establish which amount belongs to which claim.  Keep the relation
     # explicitly unverified rather than claiming the values were swapped
     # safely (spec §16.1).
-    quantity_counts_by_fact: dict[int, dict[str, int]] = {}
-    for index in evidence_facts:
-        evidence = facts[index].get("_evidence")
-        quote = evidence.get("quote") if isinstance(evidence, dict) else ""
-        counts = {"amount": 0, "frequency": 0}
-        for quantity in extract_quantities(quote):
-            counts[quantity["kind"]] += 1
-        quantity_counts_by_fact[index] = counts
     claim_amounts = [q for q in claim_quantities if q["kind"] == "amount"]
     if claim_quantities and (
             len(evidence_facts) > 1
