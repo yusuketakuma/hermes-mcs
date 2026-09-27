@@ -7,7 +7,7 @@ import stat
 import tempfile
 import time
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from datetime import date
 from pathlib import Path
 
@@ -219,7 +219,6 @@ def apply_command(ledger, req):
         rid = None
         now = time.time()
         extra = {}
-        loop_candidate = None
         receipt_loop_ref = None
         if req.get("cmd") in ("request.create", "request.update") \
                 and isinstance(req.get("loop_ref"), dict):
@@ -232,90 +231,8 @@ def apply_command(ledger, req):
             error, extra = apply_tx(db, req, now=now,
                                    filesystem_changes=filesystem_changes)
         elif not error:
-            if req["cmd"] == "request.update":
-                row = db.execute("SELECT * FROM requests WHERE request_id=? AND project_id=?",
-                                 (req["request_id"], pid)).fetchone()
-                before = dict(row) if row else None
-                if before is None:
-                    error = "request_not_found"
-                elif before["revision"] != req["expected_revision"]:
-                    error = "revision_conflict"
-            if not error:
-                mid = req["source_message_id"] if req["cmd"] == "request.create" \
-                    else before["source_message_id"]
-                source = db.execute("SELECT content_hash,body_state FROM messages WHERE message_id=? AND project_id=?",
-                                    (mid, pid)).fetchone()
-                expected = req.get("source_hash", req.get("expected_source_hash"))
-                if source is None:
-                    error = "source_missing"
-                elif source["body_state"] != "full":
-                    error = "source_incomplete"
-                elif source["content_hash"] != expected:
-                    error = "source_changed"
-                if not error and "loop_ref" in req:
-                    from request_loops import current_candidate
-                    try:
-                        loop_candidate = current_candidate(
-                            db, pid, req["loop_ref"]["artifact_id"], mid)
-                    except ValueError as exc:
-                        error = str(exc)
-                    else:
-                        ref = req["loop_ref"]
-                        if (ref["artifact_id"] != loop_candidate["artifact_id"]
-                                or ref["source_fingerprint"]
-                                != loop_candidate["source_fingerprint"]
-                                or ref["policy_fingerprint"]
-                                != loop_candidate["policy_fingerprint"]):
-                            error = "loop_ref_stale"
-                if not error:
-                    if req["cmd"] == "request.create":
-                        from mcs_queries import resolve_staff
-                        assignee = req.get("assignee")
-                        if assignee:
-                            # 台帳 link — materialize name（facility） when
-                            # the directory resolves it unambiguously
-                            assignee = resolve_staff(db, assignee, pid)
-                        rid = db.execute("""
-                          INSERT INTO requests(project_id,source_message_id,source_hash,title,
-                            assignee,due_date,status,revision,created_at,updated_at)
-                          VALUES(?,?,?,?,?,?,'open',1,?,?)
-                        """, (pid, mid, expected, req["title"], assignee,
-                              req.get("due_date"), now, now)).lastrowid
-                    else:
-                        rid = before["request_id"]
-                        fields = req["patch"]
-                        if fields.get("assignee"):
-                            from mcs_queries import resolve_staff
-                            fields = {**fields, "assignee": resolve_staff(
-                                db, fields["assignee"], pid)}
-                        changed = db.execute(
-                            "UPDATE requests SET " + ",".join(f"{k}=?" for k in fields)
-                            + ",revision=revision+1,updated_at=? WHERE request_id=? AND revision=?",
-                            (*fields.values(), now, rid, req["expected_revision"]))
-                        if changed.rowcount != 1:
-                            raise RuntimeError("request_revision_changed")
-                    after = dict(db.execute("SELECT * FROM requests WHERE request_id=?", (rid,)).fetchone())
-                    if loop_candidate is not None:
-                        link = {
-                            "request_id": rid,
-                            "loop_artifact_id": loop_candidate["artifact_id"],
-                            "source_fingerprint": loop_candidate["source_fingerprint"],
-                            "policy_fingerprint": loop_candidate["policy_fingerprint"],
-                            "command_id": req["command_id"],
-                            "actor": req["actor"],
-                            "reason": req["reason"],
-                        }
-                        db.execute(
-                            "INSERT INTO artifacts(kind,project_id,message_id,"
-                            "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
-                            ("request_loop_link", pid, mid,
-                             json.dumps(link, ensure_ascii=False, sort_keys=True,
-                                        separators=(",", ":"), allow_nan=False),
-                             "human", json.dumps({
-                                 "command_id": req["command_id"],
-                                 "actor": req["actor"]}, ensure_ascii=False,
-                                 sort_keys=True, separators=(",", ":")), now),
-                        )
+            error, rid, before, after = _apply_request_tx(
+                db, req, pid, now)
         receipt = {"command_id": req["command_id"], "payload_hash": digest,
                    "project_id": pid, "request_id": rid,
                    "outcome": "rejected" if error else "applied", "error": error,
@@ -333,6 +250,100 @@ def apply_command(ledger, req):
                    (req["command_id"], digest, pid, rid, receipt["outcome"],
                     canonical(receipt).decode(), now))
     return receipt
+
+
+def _apply_request_tx(db, req, pid, now):
+    """request.create/update write path inside the receipt-first tx —
+    returns (error, rid, before, after)."""
+    error = None
+    before = after = None
+    rid = None
+    loop_candidate = None
+    if req["cmd"] == "request.update":
+        row = db.execute("SELECT * FROM requests WHERE request_id=? AND project_id=?",
+                         (req["request_id"], pid)).fetchone()
+        before = dict(row) if row else None
+        if before is None:
+            error = "request_not_found"
+        elif before["revision"] != req["expected_revision"]:
+            error = "revision_conflict"
+    if not error:
+        mid = req["source_message_id"] if req["cmd"] == "request.create" \
+            else before["source_message_id"]
+        source = db.execute("SELECT content_hash,body_state FROM messages WHERE message_id=? AND project_id=?",
+                            (mid, pid)).fetchone()
+        expected = req.get("source_hash", req.get("expected_source_hash"))
+        if source is None:
+            error = "source_missing"
+        elif source["body_state"] != "full":
+            error = "source_incomplete"
+        elif source["content_hash"] != expected:
+            error = "source_changed"
+        if not error and "loop_ref" in req:
+            from request_loops import current_candidate
+            try:
+                loop_candidate = current_candidate(
+                    db, pid, req["loop_ref"]["artifact_id"], mid)
+            except ValueError as exc:
+                error = str(exc)
+            else:
+                ref = req["loop_ref"]
+                if (ref["artifact_id"] != loop_candidate["artifact_id"]
+                        or ref["source_fingerprint"]
+                        != loop_candidate["source_fingerprint"]
+                        or ref["policy_fingerprint"]
+                        != loop_candidate["policy_fingerprint"]):
+                    error = "loop_ref_stale"
+        if not error:
+            if req["cmd"] == "request.create":
+                from mcs_queries import resolve_staff
+                assignee = req.get("assignee")
+                if assignee:
+                    # 台帳 link — materialize name（facility） when
+                    # the directory resolves it unambiguously
+                    assignee = resolve_staff(db, assignee, pid)
+                rid = db.execute("""
+                  INSERT INTO requests(project_id,source_message_id,source_hash,title,
+                    assignee,due_date,status,revision,created_at,updated_at)
+                  VALUES(?,?,?,?,?,?,'open',1,?,?)
+                """, (pid, mid, expected, req["title"], assignee,
+                      req.get("due_date"), now, now)).lastrowid
+            else:
+                rid = before["request_id"]
+                fields = req["patch"]
+                if fields.get("assignee"):
+                    from mcs_queries import resolve_staff
+                    fields = {**fields, "assignee": resolve_staff(
+                        db, fields["assignee"], pid)}
+                changed = db.execute(
+                    "UPDATE requests SET " + ",".join(f"{k}=?" for k in fields)
+                    + ",revision=revision+1,updated_at=? WHERE request_id=? AND revision=?",
+                    (*fields.values(), now, rid, req["expected_revision"]))
+                if changed.rowcount != 1:
+                    raise RuntimeError("request_revision_changed")
+            after = dict(db.execute("SELECT * FROM requests WHERE request_id=?", (rid,)).fetchone())
+            if loop_candidate is not None:
+                link = {
+                    "request_id": rid,
+                    "loop_artifact_id": loop_candidate["artifact_id"],
+                    "source_fingerprint": loop_candidate["source_fingerprint"],
+                    "policy_fingerprint": loop_candidate["policy_fingerprint"],
+                    "command_id": req["command_id"],
+                    "actor": req["actor"],
+                    "reason": req["reason"],
+                }
+                db.execute(
+                    "INSERT INTO artifacts(kind,project_id,message_id,"
+                    "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
+                    ("request_loop_link", pid, mid,
+                     json.dumps(link, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":"), allow_nan=False),
+                     "human", json.dumps({
+                         "command_id": req["command_id"],
+                         "actor": req["actor"]}, ensure_ascii=False,
+                         sort_keys=True, separators=(",", ":")), now),
+                )
+    return error, rid, before, after
 
 
 def enqueue(req, cmd_dir):
@@ -364,10 +375,10 @@ def enqueue(req, cmd_dir):
             raise
         return {**receipt, "outcome": "unknown", "error": "queue_durability_unknown"}
     finally:
-        try:
+        # An ignored .tmp is safer than masking the primary result or
+        # deleting published input.
+        with suppress(OSError):
             Path(temp).unlink(missing_ok=True)
-        except OSError:
-            pass  # An ignored .tmp is safer than masking the primary result or deleting published input.
     return receipt
 
 

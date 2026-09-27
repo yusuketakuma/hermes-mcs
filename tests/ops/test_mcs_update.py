@@ -6,6 +6,7 @@ network. No real MCS, Discord, Keychain, or external repo access.
 import json
 import os
 import sqlite3
+from contextlib import suppress
 import subprocess
 import time
 from pathlib import Path
@@ -568,7 +569,7 @@ def test_recover_escalates_unclassifiable(updater, tmp_path,
     updater.save_state(state)
     rc = updater.recover_interrupted()
     assert rc == 1
-    report = json.load(open(mcs_update.REPORT_PATH))
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     # destructive actions must not have run
     assert _git(repo, "rev-parse", "HEAD").returncode == 0
@@ -592,7 +593,7 @@ def test_recover_pre_applying_remnant_is_cleaned(updater, tmp_path,
     assert updater.recover_interrupted() == 0
     after = updater.load_state()
     assert after["stages"] == [] and after["applying"] is None
-    report = json.load(open(mcs_update.REPORT_PATH))
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "interrupted_pre_merge"
 
 
@@ -614,7 +615,7 @@ def test_recover_completes_done_bookkeeping(updater, tmp_path,
     after = updater.load_state()
     assert after["stages"] == []
     assert after["executed"]["cid-9"]["result"] == "applied"
-    report = json.load(open(mcs_update.REPORT_PATH))
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "resumed_done"
 
 
@@ -830,10 +831,8 @@ def _mk_schema(path, version, messages=0):
     lg.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     lg.db.close()
     for side in (str(path) + "-wal", str(path) + "-shm"):
-        try:
+        with suppress(OSError):
             os.unlink(side)
-        except OSError:
-            pass
 
 
 def _schema_bump_world(updater, tmp_path, monkeypatch):
@@ -1009,7 +1008,7 @@ def test_recover_escalates_orphaned_restore_consent(updater, tmp_path,
     updater.save_state(state)
     rc = updater.recover_interrupted()
     assert rc == 1
-    report = json.load(open(mcs_update.REPORT_PATH))
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     assert "restore_consent" in report["detail"]
     # journal preserved for a human — nothing classified away

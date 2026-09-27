@@ -37,9 +37,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
+from contextlib import suppress
+from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -47,7 +48,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from mcs_util import CONF_PATH, HOME, env_value, load_config
+from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
+                      load_config)
 
 ENV_PATH = os.path.join(HOME, ".env")
 KEYCHAIN_SERVICE = "mcs-adapter"
@@ -134,11 +136,11 @@ def _validate_notify(ntf: dict) -> list[str]:
         elif not isinstance(d, dict):
             errors.append(f"notify.{transport}: must be an object")
         else:
-            for k in ("profile", "application_id", tenant,
-                      "channel_id"):
-                if not isinstance(d.get(k), str) or not d[k].strip():
-                    errors.append(f"notify.{transport}.{k}: "
-                                  "must be a non-empty string")
+            errors.extend(
+                f"notify.{transport}.{k}: must be a non-empty string"
+                for k in ("profile", "application_id", tenant,
+                          "channel_id")
+                if not isinstance(d.get(k), str) or not d[k].strip())
             # delivery_scope() rejects a slack block carrying
             # guild_id outright — flag it at config time too
             if transport == "slack" and "guild_id" in d:
@@ -170,8 +172,8 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     errors, warnings = [], []
     if not isinstance(cfg, dict):
         return ["config.json is not a JSON object"], []
-    for key in sorted(set(cfg) - set(CONFIG_RULES)):
-        warnings.append(f"unknown config key: {key}")
+    warnings.extend(f"unknown config key: {key}"
+                    for key in sorted(set(cfg) - set(CONFIG_RULES)))
     for key, (required, check) in CONFIG_RULES.items():
         if key not in cfg:
             if required:
@@ -367,12 +369,13 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                         "semantic.mode is enabled")
     if sys.platform == "darwin":
         agents = os.path.expanduser("~/Library/LaunchAgents")
-        for label in ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-rt",
-                      "local.mcs-cmd", "local.mcs-int"):
-            if not os.path.exists(os.path.join(agents, f"{label}.plist")):
-                warnings.append(
-                    f"LaunchAgent {label} not installed — templates and "
-                    "install steps in deployment/launchagents/README.md")
+        warnings.extend(
+            f"LaunchAgent {label} not installed — templates and "
+            "install steps in deployment/launchagents/README.md"
+            for label in ("ai.mcs.extract-drainer",
+                          "ai.mcs.extract-drainer-rt",
+                          "local.mcs-cmd", "local.mcs-int")
+            if not os.path.exists(os.path.join(agents, f"{label}.plist")))
     # T20: with the admission boundary enabled, every MCS LLM route
     # must be registered — a missing route fails closed FOREVER, so a
     # misconfigured broker is a blocked-startup error, not a stall.
@@ -403,11 +406,8 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
 def _env_write(path: str, updates: dict[str, str]):
     """Merge KEY=value lines — existing keys preserved unless updated."""
     lines, seen = [], set()
-    try:
-        with open(path, encoding="utf-8") as stream:
-            lines = stream.read().splitlines()
-    except FileNotFoundError:
-        pass
+    with suppress(FileNotFoundError), open(path, encoding="utf-8") as stream:
+        lines = stream.read().splitlines()
     out = []
     for line in lines:
         key = line.split("=", 1)[0]
@@ -1113,28 +1113,7 @@ def _write_atomic(path: str, body: str, mode: int | None = None) -> None:
     crash never leaves a truncated script/plist behind, and the file
     never exists at the destination with the wrong mode (S: atomic
     render)."""
-    parent = os.path.dirname(path)
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".svc.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(body)
-            f.flush()
-            os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.replace(tmp, path)
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(path, lambda f: f.write(body), mode, tmp_prefix=".svc.")
 
 
 def _sha256(text: str) -> str:
@@ -1226,15 +1205,13 @@ def _sync_scripts(subs, manifest, note, dry) -> None:
         if not name.endswith(".sh"):
             continue
         body = _render_template(
-            open(os.path.join(src, name), encoding="utf-8").read(), subs)
+            Path(os.path.join(src, name)).read_text(encoding="utf-8"), subs)
         dst = os.path.join(SCRIPTS_DIR, name)
         manifest["scripts"].append({"name": name,
                                     "sha256": _sha256(body)})
         cur = None
-        try:
-            cur = open(dst, encoding="utf-8").read()
-        except OSError:
-            pass
+        with suppress(OSError):
+            cur = Path(dst).read_text(encoding="utf-8")
         if cur == body:
             note(f"script {name}: up to date")
             continue
@@ -1256,10 +1233,10 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
     for label in AGENT_LABELS:
         srcp = os.path.join(pdir, label + ".plist")
         body = _render_template(
-            open(srcp, encoding="utf-8").read(), subs)
+            Path(srcp).read_text(encoding="utf-8"), subs)
         dst = os.path.join(AGENTS_DIR, label + ".plist")
         try:
-            cur = open(dst, encoding="utf-8").read()
+            cur = Path(dst).read_text(encoding="utf-8")
         except OSError:
             cur = None
         changed = cur != body
@@ -1298,10 +1275,8 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
             subprocess.run(["launchctl", "bootout",
                             f"gui/{uid}/{label}"],
                            capture_output=True, text=True)
-            try:
+            with suppress(OSError):
                 os.unlink(os.path.join(AGENTS_DIR, path))
-            except OSError:
-                pass
     return problems
 
 
@@ -1428,7 +1403,7 @@ def _record_llm_slots(manifest, note) -> None:
         src = os.path.join(REPO_ROOT, "deployment", "launchagents",
                            "ai.mcs.llamaserver.plist")
         m = re.search(r"<string>-np</string><string>(\d+)</string>",
-                      open(src, encoding="utf-8").read())
+                      Path(src).read_text(encoding="utf-8"))
         plist_np = int(m.group(1)) if m else None
         manifest["llm_slots"] = {
             "selected": local_llm.SLOT_COUNT,

@@ -200,7 +200,7 @@ def test_truncated_is_explicit_never_silent(tmp_path):
 
 def test_bad_scope_rejected(tmp_path):
     db = _db(tmp_path, (1,))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read_model_scope_invalid"):
         read_model.read_model(db.db, scope="everything")
     db.close()
 

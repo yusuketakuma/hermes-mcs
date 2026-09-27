@@ -203,7 +203,7 @@ def test_export_failed_publication_preserves_previous_file(env, monkeypatch):
         raise OSError("synthetic publication failure")
 
     monkeypatch.setattr(brain_export.os, "replace", fail_replace)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="synthetic publication failure"):
         brain_export.run(out, snap)
     assert (out / "meta.md").read_bytes() == previous
     assert not list(out.rglob("*.tmp"))
@@ -285,7 +285,7 @@ def test_not_a_snapshot(tmp_path):
     conn.execute("CREATE TABLE t (x)")
     conn.commit()
     conn.close()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="snapshot_upgrade_required"):
         brain_export.run(tmp_path / "out", bad)
 
 

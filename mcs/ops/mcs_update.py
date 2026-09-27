@@ -36,12 +36,14 @@ import tempfile
 import time
 import unicodedata
 import urllib.request
+from contextlib import suppress
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 
-from mcs_util import acquire_run_lock, load_config  # noqa: E402
+from mcs_util import (acquire_run_lock, atomic_write,  # noqa: E402
+                      load_config)
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
@@ -140,26 +142,10 @@ def load_state() -> dict:
 def save_state(state: dict) -> None:
     """tmp -> fsync -> os.replace -> dir fsync (R13). Caller holds
     update.lock (or is the --locks-held post-merge child)."""
-    os.makedirs(DATA, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".update_state.",
-                             suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, STATE_PATH)
-        dfd = os.open(DATA, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(STATE_PATH,
+                 lambda f: json.dump(state, f, ensure_ascii=False,
+                                     sort_keys=True),
+                 tmp_prefix=".update_state.")
 
 
 def journal(state: dict, stage: str) -> None:
@@ -198,10 +184,10 @@ def _git(args: list[str], timeout: int = T_GIT) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", REPO, *args],
                               capture_output=True, text=True,
                               timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        raise UpdateError("git_timeout: " + " ".join(args[:1]))
+    except subprocess.TimeoutExpired as e:
+        raise UpdateError("git_timeout: " + " ".join(args[:1])) from e
     except OSError as e:
-        raise UpdateError(f"git_spawn_failed: {e}")
+        raise UpdateError(f"git_spawn_failed: {e}") from e
 
 
 def _git_out(args: list[str], timeout: int = T_GIT) -> str:
@@ -361,12 +347,10 @@ def precheck_local(cfg: dict) -> list[str]:
         errors.extend("config: " + e for e in errs)
     except Exception as e:
         errors.append(f"validate_config_failed: {type(e).__name__}")
-    try:
+    with suppress(OSError):
         need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
-    except OSError:
-        pass
     import mcs_setup
     hermes = mcs_setup._hermes_exe(cfg)
     if not mcs_setup._hermes_ok(hermes):
@@ -435,9 +419,8 @@ def precheck_tag(tag: str) -> list[str]:
             input="\0".join(paths), capture_output=True, text=True,
             timeout=T_GIT)
         if r.returncode == 0:
-            for name in r.stdout.split("\0"):
-                if name:
-                    errors.append(f"ignored_path_tracked: {name}")
+            errors.extend(f"ignored_path_tracked: {name}"
+                          for name in r.stdout.split("\0") if name)
         elif r.returncode > 1:
             errors.append("check_ignore_failed")
     # untracked collision: merge would refuse, but name the files first
@@ -514,8 +497,8 @@ def precheck_tag(tag: str) -> list[str]:
                           + (probe.stderr or "").strip()[:200])
         else:
             try:
-                for e in json.loads(probe.stdout.strip() or "[]"):
-                    errors.append("new_config: " + e)
+                errors.extend("new_config: " + e
+                              for e in json.loads(probe.stdout.strip() or "[]"))
             except json.JSONDecodeError:
                 errors.append("preflight_unparseable")
     except (UpdateError, subprocess.TimeoutExpired, OSError) as e:
@@ -556,12 +539,8 @@ def _write_marker() -> None:
 
 
 def _remove_marker() -> None:
-    try:
+    with suppress(OSError):
         os.unlink(MARKER_PATH)
-    except OSError:
-        pass
-
-
 def _stray_drainer_pids() -> list[int]:
     """Same-uid python processes running the drainer scripts — the
     pattern requires an interpreter argv0 so editors, test runners and
@@ -600,10 +579,8 @@ def quiesce() -> list[str]:
             break
         sig = 15 if i < 3 else 9       # TERM, then KILL on the last pass
         for pid in pids:
-            try:
+            with suppress(OSError):
                 os.kill(pid, sig)
-            except OSError:
-                pass
         time.sleep(1)
     if _stray_drainer_pids():
         raise UpdateError("stray_drainer_survived")
@@ -671,13 +648,11 @@ def _clean_stale_git_locks() -> list[str]:
     cutoff = time.time() - GIT_LOCK_MIN_AGE_S
     for path in glob.glob(os.path.join(REPO, ".git", "**", "*.lock"),
                           recursive=True):
-        try:
+        with suppress(OSError):
             if os.path.getmtime(path) >= cutoff:
                 continue
             os.unlink(path)
             removed.append(path)
-        except OSError:
-            pass
     return removed
 
 
@@ -763,13 +738,10 @@ def spawn_detached() -> None:
     env = {k: v for k, v in os.environ.items()
            if k not in _UPDATE_ENV_STRIP}
     os.makedirs(DATA, exist_ok=True)
-    log = open(os.path.join(DATA, "update.log"), "ab")
-    try:
+    with open(os.path.join(DATA, "update.log"), "ab") as log:
         subprocess.Popen([WRAPPER], stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, env=env,
                          close_fds=True, start_new_session=True)
-    finally:
-        log.close()
 
 
 # ------------------------------------------------------------- pipeline
@@ -839,9 +811,8 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         errors.extend("new_env_error: " + e for e in new)
     except Exception:
         errors.append("postcheck_unverifiable")
-    for label in RESIDENT_LABELS:
-        if _agent_pid(label) is None:
-            errors.append(f"drainer_not_running:{label}")
+    errors.extend(f"drainer_not_running:{label}"
+                  for label in RESIDENT_LABELS if _agent_pid(label) is None)
     return errors
 
 
@@ -884,6 +855,31 @@ def _update_mode(cfg: dict) -> str:
     return upd.get("mode", "off")
 
 
+def _consent_hold_record(e, backup_path) -> dict:
+    """The restore_consent hold record — the SAME report_id binds every
+    later ops.restore_approve receipt, so all three hold sites build it
+    identically."""
+    return {"report_id": e.report["report_id"],
+            "backup_path": backup_path,
+            "backup_sha256": e.report["backup_sha256"],
+            "backup_schema": e.report["backup_schema"],
+            "intervening_messages": e.report["intervening_messages"],
+            "external_effect_rows": e.report["external_effect_rows"],
+            "at": time.time()}
+
+
+def _consent_hold(state, e, backup_path) -> str:
+    """Persist a consent hold (record + state save + operator-facing
+    pending report). Returns the binding report_id."""
+    rid = e.report["report_id"]
+    state["restore_consent"] = _consent_hold_record(e, backup_path)
+    save_state(state)
+    _report("restore_consent_pending",
+            rid + " — restore_report.json を確認し "
+            "ops.restore_approve で承認")
+    return rid
+
+
 def _hold_rollback_for_consent(state, e, tag, command_id,
                                reason) -> int:
     """Rollback reached the DB replace and is held on consent: keep
@@ -905,14 +901,8 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
         "manifest_snapshot": entry.get("manifest_snapshot"),
         "command_id": command_id or entry.get("command_id"),
         "at": time.time()}
-    state["restore_consent"] = {
-        "report_id": rid,
-        "backup_path": state["applying"].get("backup_path"),
-        "backup_sha256": e.report["backup_sha256"],
-        "backup_schema": e.report["backup_schema"],
-        "intervening_messages": e.report["intervening_messages"],
-        "external_effect_rows": e.report["external_effect_rows"],
-        "at": time.time()}
+    state["restore_consent"] = _consent_hold_record(
+        e, state["applying"].get("backup_path"))
     reason += " (rollback held: consent pending " + rid[:16] + "…)"
     if command_id:
         state.setdefault("executed", {})[command_id] = {
@@ -941,10 +931,8 @@ def _run_post_merge(sha: str) -> None:
     try:
         cout, cerr = child.communicate(timeout=T_POST_MERGE)
     except subprocess.TimeoutExpired:
-        try:
+        with suppress(OSError):
             os.killpg(child.pid, 9)
-        except OSError:
-            pass
         cout, cerr = "", "post_merge_timeout"
         child.returncode = -9
     if child.returncode != 0:
@@ -1236,10 +1224,8 @@ def _reconcile_membership(desired: dict) -> list[str]:
             subprocess.run(["launchctl", "bootout",
                             f"gui/{_uid()}/{label}"],
                            capture_output=True, timeout=T_GIT)
-            try:
+            with suppress(OSError):
                 os.unlink(path)
-            except OSError:
-                pass
     return problems
 
 
@@ -1320,22 +1306,8 @@ def rollback(command_id: str | None = None) -> int:
                 # the rollback receipt stays pending, and every later
                 # check/watchdog pass re-evaluates the same report until
                 # a bound ops.restore_approve receipt lands.
-                rid = e.report["report_id"]
                 state = load_state()
-                state["restore_consent"] = {
-                    "report_id": rid,
-                    "backup_path": entry.get("backup_path"),
-                    "backup_sha256": e.report["backup_sha256"],
-                    "backup_schema": e.report["backup_schema"],
-                    "intervening_messages":
-                        e.report["intervening_messages"],
-                    "external_effect_rows":
-                        e.report["external_effect_rows"],
-                    "at": time.time()}
-                save_state(state)
-                _report("restore_consent_pending",
-                        rid + " — restore_report.json を確認し "
-                        "ops.restore_approve で承認")
+                rid = _consent_hold(state, e, entry.get("backup_path"))
                 print("restore held: consent pending", rid)
                 consent_hold = True
                 return 2
@@ -1476,26 +1448,10 @@ def _restore_loss_report(backup_path: str) -> dict:
         json.dumps(metrics, sort_keys=True, separators=(",", ":"),
                    ensure_ascii=False).encode("utf-8")).hexdigest()
     report = dict(metrics, computed_at=time.time())
-    os.makedirs(DATA, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rreport.",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, RESTORE_REPORT_PATH)
-        dfd = os.open(DATA, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(RESTORE_REPORT_PATH,
+                 lambda f: json.dump(report, f, ensure_ascii=False,
+                                     sort_keys=True),
+                 tmp_prefix=".rreport.")
     return report
 
 
@@ -1613,10 +1569,8 @@ def _restore_db(backup_path: str) -> None:
     except OSError as e:
         raise UpdateError(f"restore_marker_failed: {e}") from e
     for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
-        try:
+        with suppress(OSError):
             os.unlink(side)
-        except OSError:
-            pass
     tmp = LEDGER + ".restore-tmp"
     try:
         with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
@@ -1760,21 +1714,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     # markers stay up, the receipt and 'applying' stay —
                     # each later recover pass re-checks the consent
                     # receipt against a fresh loss report.
-                    rid = e.report["report_id"]
-                    state["restore_consent"] = {
-                        "report_id": rid,
-                        "backup_path": applying.get("backup_path"),
-                        "backup_sha256": e.report["backup_sha256"],
-                        "backup_schema": e.report["backup_schema"],
-                        "intervening_messages":
-                            e.report["intervening_messages"],
-                        "external_effect_rows":
-                            e.report["external_effect_rows"],
-                        "at": time.time()}
-                    save_state(state)
-                    _report("restore_consent_pending",
-                            rid + " — restore_report.json を確認し "
-                            "ops.restore_approve で承認")
+                    _consent_hold(state, e, applying.get("backup_path"))
                     return 0
                 except UpdateError as e:
                     return escalate("rollback db restore: " + str(e))
@@ -1868,19 +1808,13 @@ def _finish_recovery(state: dict, result: str, removed: list) -> None:
 def _report(result: str, detail: str) -> None:
     """Atomic report write — a torn report must never mislead a human
     checking `status` after a crash."""
-    try:
-        fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".ureport.",
-                                   suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"result": result, "detail": detail,
-                       "at": time.time()}, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, REPORT_PATH)
-    except OSError:
-        pass
-
-
+    with suppress(OSError):
+        atomic_write(REPORT_PATH,
+                     lambda f: json.dump({"result": result,
+                                          "detail": detail,
+                                          "at": time.time()},
+                                         f, ensure_ascii=False),
+                     tmp_prefix=".ureport.")
 # -------------------------------------------------------------------- CLI
 
 def cmd_check() -> int:
@@ -1908,12 +1842,10 @@ def cmd_check() -> int:
     cur_tag, cur_sha = current_version()
     notes = impact = None
     if tag and tag != state.get("latest_tag"):
-        try:
+        with suppress(UpdateError):
             # fetch objects BEFORE notes/impact — otherwise the summary
             # silently runs against missing objects (dead code, F15)
             _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
-        except UpdateError:
-            pass
         notes = fetch_notes(tag)
         try:
             impact = impact_summary(cur_sha, tag) if cur_sha else []

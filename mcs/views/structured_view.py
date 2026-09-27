@@ -18,6 +18,18 @@ import json
 from mcs_queries import (current_fact_pred, med_is_patient_current)
 
 
+def _content_dict(r) -> dict | None:
+    """json.loads an artifact content blob — non-object or corrupt JSON
+    is simply absent, never a view-killing error."""
+    if not r:
+        return None
+    try:
+        d = json.loads(r["content"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
 def latest_artifact(db, kind: str, mid: int) -> dict | None:
     r = db.execute(
         "SELECT a.content FROM artifacts a JOIN messages m "
@@ -29,13 +41,7 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
         "AND CASE WHEN json_valid(a.content) THEN "
         "json_type(a.content)='object' ELSE 0 END "
         "ORDER BY a.artifact_id DESC LIMIT 1", (kind, mid)).fetchone()
-    if not r:
-        return None
-    try:
-        d = json.loads(r["content"])
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return d if isinstance(d, dict) else None
+    return _content_dict(r)
 
 
 def latest_fact_artifact(db, mid: int) -> dict | None:
@@ -53,13 +59,7 @@ def latest_fact_artifact(db, mid: int) -> dict | None:
         "json_type(a.content)='object' ELSE 0 END "
         f"{current_fact_pred('a', 'm')} "
         "ORDER BY a.artifact_id DESC LIMIT 1", (mid,)).fetchone()
-    if not r:
-        return None
-    try:
-        d = json.loads(r["content"])
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return d if isinstance(d, dict) else None
+    return _content_dict(r)
 
 
 RX_LABEL = {"start": "開始", "stop": "中止", "change": "変更",
@@ -72,6 +72,12 @@ EVT_LABEL = {"admission": "入院", "discharge": "退院", "exam": "受診/検�
              "care": "介護", "eol": "看取り", "media_ref": "添付",
              "transfer": "転院/移動", "fall": "転倒",
              "family_contact": "家族連絡", "other": "その他"}
+# schema v4 detail labels
+_SEVERITY_JP = {"mild": "軽度", "moderate": "中等度", "severe": "重度"}
+_ROUTE_JP = {"oral": "内服", "topical": "外用", "injection": "注射",
+             "infusion": "点滴", "inhalation": "吸入", "tube": "経管",
+             "other": "その他"}
+_LAB_FLAG_JP = {"high": "高", "low": "低"}
 
 
 # Canonical-only categories: these v2 kinds have no legacy slot, so
@@ -109,14 +115,7 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
     return out
 
 
-def structured_lines(db, mid: int) -> list[str]:
-    """Compact structured summary from extract_v1 + the current fact
-    artifact (canonical_projection shadows extract_llm).  Returns []
-    when nothing usable exists (caller falls back to raw only)."""
-    v1 = latest_artifact(db, "extract_v1", mid) or {}
-    llm = latest_fact_artifact(db, mid) or {}
-    if not v1 and not llm:
-        return []
+def _head_lines(llm: dict, v1: dict) -> list[str]:
     lines: list[str] = []
     if (llm.get("summary") or "").strip():
         lines.append(f"要約: {llm['summary'].strip()[:80]}")
@@ -128,19 +127,42 @@ def structured_lines(db, mid: int) -> list[str]:
            if e in EVT_LABEL]
     if evs:
         lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs[:5]))
+    return lines
+
+
+def _vital_line(llm: dict, v1: dict):
     vit = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else None
     if not vit and isinstance(v1.get("vitals"), dict):
         vit = v1["vitals"]
-    if vit:
-        parts = []
-        if vit.get("sbp") is not None:
-            parts.append(f"BP {vit['sbp']}/{vit.get('dbp')}")
-        for k, lab in (("bt", "BT"), ("hr", "HR"), ("rr", "RR"),
-                       ("spo2", "SpO2"), ("bs", "BS")):
-            if vit.get(k) is not None:
-                parts.append(f"{lab} {vit[k]}")
-        if parts:
-            lines.append("バイタル: " + "  ".join(parts))
+    if not vit:
+        return None
+    parts = []
+    if vit.get("sbp") is not None:
+        parts.append(f"BP {vit['sbp']}/{vit.get('dbp')}")
+    for k, lab in (("bt", "BT"), ("hr", "HR"), ("rr", "RR"),
+                   ("spo2", "SpO2"), ("bs", "BS")):
+        if vit.get(k) is not None:
+            parts.append(f"{lab} {vit[k]}")
+    return "バイタル: " + "  ".join(parts) if parts else None
+
+
+def _lab_line(llm: dict):
+    """Reported lab values (v4) — name+value+unit plus the body's own
+    out-of-range marker; the view never invents reference ranges."""
+    out = []
+    for lb in llm.get("labs") or []:
+        if not isinstance(lb, dict) or not lb.get("name"):
+            continue
+        d = f"{lb['name']} {lb.get('value')}"
+        if isinstance(lb.get("unit"), str) and lb["unit"]:
+            d += lb["unit"]
+        if lb.get("flag") in _LAB_FLAG_JP:
+            d += f"({_LAB_FLAG_JP[lb['flag']]})"
+        out.append(d)
+    return "検査: " + "・".join(out[:6]) if out else None
+
+
+def _symptom_line(llm: dict, v1: dict):
     syms, neg, seen, neg_seen = [], [], set(), set()
     llm_symptoms = [s for s in llm.get("symptoms") or []
                     if isinstance(s, dict) and isinstance(s.get("text"), str)
@@ -155,7 +177,14 @@ def structured_lines(db, mid: int) -> list[str]:
                     neg.append(s["text"])
         elif s["text"] not in seen:
             seen.add(s["text"])
-            syms.append(s["text"])
+            parts = []
+            sev = _SEVERITY_JP.get(s.get("severity"))
+            if sev:
+                parts.append(sev)
+            parts += [x.strip() for x in (s.get("onset"), s.get("duration"))
+                      if isinstance(x, str) and x.strip()]
+            syms.append(s["text"]
+                        + (f"({'・'.join(parts)})" if parts else ""))
     for s in v1.get("symptoms") or []:
         if not isinstance(s, str):
             continue
@@ -163,12 +192,16 @@ def structured_lines(db, mid: int) -> list[str]:
             continue  # Typed polarity/subject must not reappear through rules.
         if s and s not in seen:
             syms.append(s)
-    if syms or neg:
-        line = "症状: " + "、".join(syms[:6])
-        if neg:
-            line += ("　" if syms else "") + "、".join(
-                f"{n}なし" for n in neg[:4])
-        lines.append(line)
+    if not syms and not neg:
+        return None
+    line = "症状: " + "、".join(syms[:6])
+    if neg:
+        line += ("　" if syms else "") + "、".join(
+            f"{n}なし" for n in neg[:4])
+    return line
+
+
+def _med_lines(llm: dict, v1: dict) -> list[str]:
     meds = []
     for m in llm.get("meds") or []:
         if not isinstance(m, dict) or not m.get("name"):
@@ -182,25 +215,39 @@ def structured_lines(db, mid: int) -> list[str]:
             d += f"[{RX_LABEL[m['action']]}]"
         if m.get("status") == "planned":
             d += "[予定]"
+        tail = []
+        if m.get("route") in _ROUTE_JP:
+            tail.append(_ROUTE_JP[m["route"]])
+        if isinstance(m.get("freq"), str) and m["freq"]:
+            tail.append(m["freq"])
+        if m.get("prn") is True:
+            tail.append("頓服")
+        if tail:
+            d += f"({'・'.join(tail)})"
         meds.append(d)
     unverified_meds = []
     if not llm.get("meds"):
         # v1 fallback only when the LLM saw NO meds — if it saw meds
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
-        for m in v1.get("medications") or []:
-            if isinstance(m, dict) and m.get("name"):
-                unverified_meds.append(str(m["name"]) +
-                                       (f" {m['dose']}" if m.get("dose") else ""))
+        unverified_meds.extend(
+            str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
+            for m in v1.get("medications") or []
+            if isinstance(m, dict) and m.get("name"))
         unverified_meds.extend(
             f"{RX_LABEL[a['action']]}:{a['ctx'][:18]}"
             for a in v1.get("rx_actions") or []
             if isinstance(a, dict) and a.get("action") in RX_LABEL
             and a.get("ctx"))
+    lines = []
     if meds:
         lines.append("薬剤: " + "、".join(meds[:6]))
     if unverified_meds:
         lines.append("薬剤候補（未確認）: " + "、".join(unverified_meds[:6]))
+    return lines
+
+
+def _request_lines(llm: dict, v1: dict) -> list[str]:
     reqs = []
     for r in llm.get("requests") or []:
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
@@ -215,12 +262,30 @@ def structured_lines(db, mid: int) -> list[str]:
             reqs.append(prefix + to + str(r.get("action") or "")[:30]
                         + suffix)
     if not reqs:
-        for r in v1.get("requests") or []:
-            if isinstance(r, dict) and r.get("ctx"):
-                reqs.append(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"
-                            f"{r['ctx'][:24]}")
-    if reqs:
-        lines.append("依頼: " + " / ".join(reqs[:3]))
+        reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"
+                    f"{r['ctx'][:24]}"
+                    for r in v1.get("requests") or []
+                    if isinstance(r, dict) and r.get("ctx"))
+    return ["依頼: " + " / ".join(reqs[:3])] if reqs else []
+
+
+def structured_lines(db, mid: int) -> list[str]:
+    """Compact structured summary from extract_v1 + the current fact
+    artifact (canonical_projection shadows extract_llm).  Returns []
+    when nothing usable exists (caller falls back to raw only)."""
+    v1 = latest_artifact(db, "extract_v1", mid) or {}
+    llm = latest_fact_artifact(db, mid) or {}
+    if not v1 and not llm:
+        return []
+    lines: list[str] = _head_lines(llm, v1)
+    if (line := _vital_line(llm, v1)) is not None:
+        lines.append(line)
+    if (line := _lab_line(llm)) is not None:
+        lines.append(line)
+    if (line := _symptom_line(llm, v1)) is not None:
+        lines.append(line)
+    lines.extend(_med_lines(llm, v1))
+    lines.extend(_request_lines(llm, v1))
     if v1.get("med_periods"):
         mp = v1["med_periods"][0]
         if isinstance(mp, dict) and mp.get("start"):

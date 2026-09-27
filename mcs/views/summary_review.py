@@ -18,7 +18,7 @@ def _json_object(value, code: str) -> dict:
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError):
-        raise ValueError(code)
+        raise ValueError(code) from None
     if not isinstance(parsed, dict):
         raise ValueError(code)
     return parsed
@@ -66,9 +66,9 @@ def _baseline_lines(content: dict) -> list[str]:
     summary = content.get("summary")
     if isinstance(summary, str) and summary.strip():
         lines.append(f"summary: {summary.strip()}")
-    for point in content.get("points") or []:
-        if isinstance(point, str) and point.strip():
-            lines.append(f"point: {point.strip()}")
+    lines.extend(f"point: {point.strip()}"
+                 for point in content.get("points") or []
+                 if isinstance(point, str) and point.strip())
     return lines
 
 
@@ -81,9 +81,9 @@ def _candidate_lines(content: dict) -> list[str]:
         section = claim.get("section")
         label = f"claim[{section}]" if isinstance(section, str) and section else "claim"
         lines.append(f"{label}: {text}")
-    for limitation in content.get("limitations") or []:
-        if limitation.strip():
-            lines.append(f"limitation: {limitation.strip()}")
+    lines.extend(f"limitation: {limitation.strip()}"
+                 for limitation in content.get("limitations") or []
+                 if limitation.strip())
     return lines
 
 
@@ -170,6 +170,72 @@ def _adoption_rows(db, project_id: int, message_id: int,
     return result
 
 
+def _load_baseline(db, project_id: int, message_id: int,
+                   source_full: bool, source_hash, reasons: list):
+    """Latest extract_llm artifact + its staleness classification."""
+    row = db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts "
+        "WHERE kind=? AND project_id=? AND message_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        ("extract_llm", project_id, message_id),
+    ).fetchone()
+    if row is None:
+        reasons.append("baseline_missing")
+        return None
+    baseline = _artifact(row, "baseline")
+    baseline_ok = _validate_baseline(baseline["content"])
+    baseline_has_text = bool(_baseline_lines(baseline["content"]))
+    baseline_error = bool(baseline["meta"].get("error")
+                          or baseline["content"].get("_error"))
+    baseline["current"] = bool(
+        baseline_ok and baseline_has_text and not baseline_error and source_full
+        and valid_hash(source_hash)
+        and baseline["meta"].get("hash") == source_hash)
+    if baseline_error:
+        reasons.append("baseline_error")
+    elif not baseline_has_text:
+        reasons.append("baseline_empty")
+    elif not baseline["current"]:
+        reasons.append("baseline_stale")
+    return baseline
+
+
+def _load_candidate(db, project_id: int, message_id: int,
+                    summary_artifact_id, reasons: list):
+    """The audited assist summary — latest, or the pinned artifact_id."""
+    if summary_artifact_id is None:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE kind=? AND project_id=? AND message_id=? "
+            "ORDER BY artifact_id DESC LIMIT 1",
+            ("semantic_summary", project_id, message_id),
+        ).fetchone()
+    else:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
+            (summary_artifact_id, "semantic_summary", project_id,
+             message_id),
+        ).fetchone()
+        if row is None:
+            exists = db.execute(
+                "SELECT 1 FROM artifacts WHERE artifact_id=?",
+                (summary_artifact_id,)).fetchone()
+            if exists:
+                raise ValueError("candidate_artifact_mismatch")
+    if row is None:
+        reasons.append("candidate_missing")
+        return None
+    candidate = _artifact(row, "candidate")
+    candidate_has_text = _validate_candidate(candidate["content"])
+    if not candidate_has_text:
+        reasons.append("candidate_empty")
+    target_id = candidate["content"].get("target_message_id")
+    if type(target_id) is not int or target_id != message_id:
+        reasons.append("candidate_target_mismatch")
+    return candidate
+
+
 def comparison(db, project_id: int, message_id: int,
                summary_artifact_id: int | None = None) -> dict:
     """Compare the current extraction with one audited assist summary.
@@ -195,63 +261,10 @@ def comparison(db, project_id: int, message_id: int,
         and isinstance(source["body_text"], str)
     reasons: list[str] = []
 
-    baseline_row = db.execute(
-        "SELECT artifact_id,content,meta FROM artifacts "
-        "WHERE kind=? AND project_id=? AND message_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        ("extract_llm", project_id, message_id),
-    ).fetchone()
-    baseline = None
-    if baseline_row is None:
-        reasons.append("baseline_missing")
-    else:
-        baseline = _artifact(baseline_row, "baseline")
-        baseline_ok = _validate_baseline(baseline["content"])
-        baseline_has_text = bool(_baseline_lines(baseline["content"]))
-        baseline_error = bool(baseline["meta"].get("error")
-                              or baseline["content"].get("_error"))
-        baseline["current"] = bool(
-            baseline_ok and baseline_has_text and not baseline_error and source_full
-            and valid_hash(source_hash)
-            and baseline["meta"].get("hash") == source_hash)
-        if baseline_error:
-            reasons.append("baseline_error")
-        elif not baseline_has_text:
-            reasons.append("baseline_empty")
-        elif not baseline["current"]:
-            reasons.append("baseline_stale")
-
-    candidate_row = None
-    if summary_artifact_id is None:
-        candidate_row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
-            "WHERE kind=? AND project_id=? AND message_id=? "
-            "ORDER BY artifact_id DESC LIMIT 1",
-            ("semantic_summary", project_id, message_id),
-        ).fetchone()
-    else:
-        candidate_row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
-            "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
-            (summary_artifact_id, "semantic_summary", project_id, message_id),
-        ).fetchone()
-        if candidate_row is None:
-            exists = db.execute(
-                "SELECT 1 FROM artifacts WHERE artifact_id=?",
-                (summary_artifact_id,)).fetchone()
-            if exists:
-                raise ValueError("candidate_artifact_mismatch")
-    candidate = None
-    if candidate_row is None:
-        reasons.append("candidate_missing")
-    else:
-        candidate = _artifact(candidate_row, "candidate")
-        candidate_has_text = _validate_candidate(candidate["content"])
-        if not candidate_has_text:
-            reasons.append("candidate_empty")
-        target_id = candidate["content"].get("target_message_id")
-        if type(target_id) is not int or target_id != message_id:
-            reasons.append("candidate_target_mismatch")
+    baseline = _load_baseline(db, project_id, message_id,
+                              source_full, source_hash, reasons)
+    candidate = _load_candidate(db, project_id, message_id,
+                                summary_artifact_id, reasons)
 
     bundle = None
     policy = None

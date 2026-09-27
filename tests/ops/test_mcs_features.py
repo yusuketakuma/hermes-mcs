@@ -309,7 +309,7 @@ def test_inbox_rejections_faults_and_commit_before_unlink(tmp_path, monkeypatch,
         requests.parse_command(b'{"cmd":"import","cmd":"request.create"}')
     real_sync = os.fsync
     monkeypatch.setattr(requests.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("synthetic")))
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="synthetic"):
         requests.enqueue(create, inbox)
     assert not list(inbox.glob("*.json"))
     sync_calls = 0

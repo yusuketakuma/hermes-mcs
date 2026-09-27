@@ -119,7 +119,7 @@ def load_authorization(path, now: float | None = None) -> dict:
         raise ContractError("auth_not_human_confirmed")
     if raw.get("revoked"):
         raise ContractError("auth_revoked")
-    if not isinstance(raw.get("expires_at"), (int, float)) \
+    if not isinstance(raw.get("expires_at"), int | float) \
             or raw["expires_at"] <= now:
         raise ContractError("auth_expired")
     fields = raw.get("fields")
@@ -149,7 +149,7 @@ def _check_record_keys(rec: dict) -> None:
                 raise ContractError(
                     f"forbidden_field:{sorted(bad)[0]}")
             stack.extend(node.values())
-        elif isinstance(node, (list, tuple)):
+        elif isinstance(node, list | tuple):
             stack.extend(node)
 
 
@@ -166,10 +166,9 @@ def build_envelope(records: list[dict], auth: dict,
     if auth.get("scope", "aggregate") != "aggregate":
         raise ContractError("envelope_scope_not_aggregate")
     max_age = auth.get("max_snapshot_age_s")
-    if max_age is not None:
-        if snapshot_generated_at is None \
-                or now - snapshot_generated_at > max_age:
-            raise ContractError("snapshot_stale")
+    if max_age is not None and (snapshot_generated_at is None
+                                or now - snapshot_generated_at > max_age):
+        raise ContractError("snapshot_stale")
     allowed = set(auth.get("fields") or RECORD_TYPES)
     patients = auth.get("patients", "all")
     eligible_pids = None if patients == "all" else set(patients)

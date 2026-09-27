@@ -74,7 +74,7 @@ def test_capture_writes_pending_with_hash(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] and out["file_hash"]
     path = mcs_refstats._ref_path(tmp_path, "base", "pending")
-    ref = json.load(open(path))
+    ref = json.loads(Path(path).read_text())
     assert ref["schema"] == "refstat_v1" and ref["name"] == "base"
     assert "overview" in ref["stats"]
 
@@ -142,8 +142,8 @@ def test_capture_pins_as_of(tmp_path):
     db.save_messages([_msg()])
     db.close()
     _capture(tmp_path)
-    ref = json.load(open(mcs_refstats._ref_path(tmp_path, "base",
-                                                "pending")))
+    ref = json.loads(Path(mcs_refstats._ref_path(tmp_path, "base",
+                                                "pending")).read_text())
     assert ref["query"]["as_of"]  # frozen window — republish ≠ drift
 
 
@@ -349,7 +349,7 @@ def test_verify_flags_file_without_artifact(tmp_path):
         db, _approve_req("base", _pending_hash(tmp_path)))
     # tamper: rewrite the approved file after approval
     approved = mcs_refstats._ref_path(tmp_path, "base", "approved")
-    data = json.load(open(approved))
+    data = json.loads(Path(approved).read_text())
     data["stats"]["overview"]["posts_in_scope"] = 999
     with open(approved, "w") as f:
         json.dump(data, f)
@@ -386,7 +386,7 @@ def test_verify_superseded_after_reapproval(tmp_path, capsys):
     requests.apply_command(
         db, _approve_req("base", _pending_hash(tmp_path)))
     approved = mcs_refstats._ref_path(tmp_path, "base", "approved")
-    v1_bytes = open(approved, "rb").read()   # stash the v1 baseline
+    v1_bytes = Path(approved).read_bytes()   # stash the v1 baseline
     # new data + re-capture (v2 pending overwrites), approve again
     db.save_messages([_msg(2, "another post")])
     _capture(tmp_path)
