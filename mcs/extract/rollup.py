@@ -78,6 +78,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
 
     latest_vitals = None
+    latest_labs = {}
     med_period = None
     as_of = datetime.fromtimestamp(out["generated_at"], JST).date()
     next_period_check = None
@@ -126,93 +127,25 @@ def build_rollup(ledger, project_id: int) -> dict:
             vit = lm.get("vitals") or v1.get("vitals")
             if isinstance(vit, dict) and vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
-        for period in reversed(_dicts(v1.get("med_periods"))):
-            try:
-                start = date.fromisoformat(period["start"])
-                end = date.fromisoformat(period["end"])
-            except (KeyError, TypeError, ValueError):
-                continue  # undated or invalid is evidence, not current
-            raw = period.get("raw")
-            context = ""
-            if isinstance(raw, str) and m["body_text"]:
-                pos = m["body_text"].find(raw)
-                if pos >= 0:
-                    context = m["body_text"][
-                        max(0, pos - 16):pos + len(raw) + 16]
-            if re.search(r"予定|検討", context):
-                continue  # a dated plan is not evidence of current use
-            if start > as_of:
-                boundary = start
-            elif start <= as_of <= end:
-                if med_period is None:
-                    med_period = period
-                boundary = end + timedelta(days=1) if end < date.max else None
-            else:
-                boundary = None
-            if boundary is not None:
-                at = datetime.combine(boundary, datetime.min.time(), JST).timestamp()
-                if next_period_check is None or at < next_period_check:
-                    next_period_check = at
-        mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
-                          if isinstance(x.get("name"), str)}
-        # Chunk merging retains source order. The last mention within a
-        # post wins; another person's mention never changes this patient's state.
-        for x in reversed(_dicts(lm.get("meds"))):
-            name = x.get("name")
-            if not isinstance(name, str) or name in ("", "処方薬", "薬"):
-                continue
-            if x.get("subject") in ("family", "other"):
-                continue
-            if name in med_state:
-                continue  # newest mention already decided this name
-            if x.get("unverified"):
-                med_state[name] = ("unverified", x, m["posted_at"])
-            elif x.get("action") == "stop" or x.get("negated") \
-                    or x.get("status") == "past":
-                med_state[name] = ("suppressed", x, m["posted_at"])
-            elif med_is_patient_current(x) \
-                    and x.get("status", "current") == "current":
-                med_state[name] = ("current", x, m["posted_at"])
-            elif not x.get("negated") \
-                    and x.get("subject", "patient") == "patient" \
-                    and x.get("status") == "planned":
-                med_state[name] = ("planned", x, m["posted_at"])
-            else:
-                # stop/past/negated/other-person — suppresses any older
-                # 'current' mention of the same name
-                med_state[name] = ("suppressed", x, m["posted_at"])
-        for x in _dicts(v1.get("medications")):
-            name = x.get("name")
-            if isinstance(name, str) and name and name not in med_state \
-                    and name not in mentioned_meds:
-                med_state[name] = ("unverified", x, m["posted_at"])
-        for s in v1.get("symptoms") \
-                if isinstance(v1.get("symptoms"), list) else []:
-            if not isinstance(s, str) or not s:
-                continue
-            if any(x.get("text") == s for x in _dicts(lm.get("symptoms"))):
-                continue
-            sym_pos.setdefault(s, ts)
-        for s in _dicts(lm.get("symptoms")):
-            t = s.get("text")
-            if not isinstance(t, str) or not t:
-                continue
-            if s.get("subject") in ("family", "other") or s.get("unverified"):
-                continue
-            # LLM polarity: a negation newer than a positive mention
-            # RESOLVES the symptom — it must cancel v1/rule positives,
-            # not just be skipped (Oracle B24). resolved/past statuses
-            # resolve the same way — they are not ongoing symptoms.
-            if s.get("negated") or s.get("status") in ("resolved", "past"):
-                sym_neg.setdefault(t, ts)
-            else:
-                sym_pos.setdefault(t, ts)
-        for rq in _dicts(v1.get("requests")):
-            requests.append({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
-                             "at": m["posted_at"], "mid": m["message_id"]})
-        for rq in _dicts(lm.get("requests")):
-            requests.append({"kind": rq.get("to"), "ctx": rq.get("action"),
-                             "at": m["posted_at"], "mid": m["message_id"]})
+        # v4 labs: newest report per analyte wins (msgs walk newest-first)
+        for lb in lm.get("labs") or []:
+            if isinstance(lb, dict) and isinstance(lb.get("name"), str) \
+                    and lb["name"].strip() and lb["name"] not in latest_labs:
+                latest_labs[lb["name"]] = {"at": m["posted_at"], **lb}
+        per, chk = _period_candidates(m, v1, as_of)
+        if med_period is None:
+            med_period = per
+        if chk is not None \
+                and (next_period_check is None or chk < next_period_check):
+            next_period_check = chk
+        _med_states(m, v1, lm, med_state)
+        _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg)
+        requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
+                         "at": m["posted_at"], "mid": m["message_id"]}
+                        for rq in _dicts(v1.get("requests")))
+        requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
+                         "at": m["posted_at"], "mid": m["message_id"]}
+                        for rq in _dicts(lm.get("requests")))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
@@ -237,6 +170,8 @@ def build_rollup(ledger, project_id: int) -> dict:
             symptoms[t] = msgs_by_ts(msgs, pts)
     if latest_vitals:
         out["latest_vitals"] = latest_vitals
+    if latest_labs:
+        out["recent_labs"] = list(latest_labs.values())[:15]
     if med_period:
         out["current_med_period"] = med_period
     if next_period_check is not None:
@@ -244,7 +179,9 @@ def build_rollup(ledger, project_id: int) -> dict:
     for bucket, key, cap in (("current", "medications", 20),
                              ("unverified", "unverified_medications", 20),
                              ("planned", "planned_medications", 10)):
-        rows = [{"name": k, "dose": v[1].get("dose"), "last": v[2]}
+        rows = [{"name": k, "dose": v[1].get("dose"), "last": v[2],
+                 **{f: v[1][f] for f in ("route", "freq", "prn")
+                    if f in v[1]}}
                 for k, v in med_state.items() if v[0] == bucket][:cap]
         if rows:
             out[key] = rows
@@ -268,6 +205,108 @@ def build_rollup(ledger, project_id: int) -> dict:
         m["message_id"] for m in msgs
         if (m["updated_seen"] or 0) < cutoff][:20]
     return out
+
+
+def _period_candidates(m, v1: dict, as_of):
+    """(med_period, next_boundary_ts) contributed by one message —
+    undated/invalid periods are evidence, not current use."""
+    best = None
+    earliest = None
+    for period in reversed(_dicts(v1.get("med_periods"))):
+        try:
+            start = date.fromisoformat(period["start"])
+            end = date.fromisoformat(period["end"])
+        except (KeyError, TypeError, ValueError):
+            continue  # undated or invalid is evidence, not current
+        raw = period.get("raw")
+        context = ""
+        if isinstance(raw, str) and m["body_text"]:
+            pos = m["body_text"].find(raw)
+            if pos >= 0:
+                context = m["body_text"][
+                    max(0, pos - 16):pos + len(raw) + 16]
+        if re.search(r"予定|検討", context):
+            continue  # a dated plan is not evidence of current use
+        if start > as_of:
+            boundary = start
+        elif start <= as_of <= end:
+            if best is None:
+                best = period
+            boundary = end + timedelta(days=1) if end < date.max else None
+        else:
+            boundary = None
+        if boundary is not None:
+            at = datetime.combine(boundary, datetime.min.time(), JST).timestamp()
+            if earliest is None or at < earliest:
+                earliest = at
+    return best, earliest
+
+
+def _med_states(m, v1: dict, lm: dict, med_state: dict):
+    """name -> (bucket, item, posted_at): every med name resolves ONCE,
+    on its newest mention — a stop/negation/past report newer than a
+    'current' mention suppresses it; an item missing status/subject
+    and a rule-extracted name are candidates, never silently current
+    (F06/F08)."""
+    mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
+                      if isinstance(x.get("name"), str)}
+    # Chunk merging retains source order. The last mention within a
+    # post wins; another person's mention never changes this patient's state.
+    for x in reversed(_dicts(lm.get("meds"))):
+        name = x.get("name")
+        if not isinstance(name, str) or name in ("", "処方薬", "薬"):
+            continue
+        if x.get("subject") in ("family", "other"):
+            continue
+        if name in med_state:
+            continue  # newest mention already decided this name
+        if x.get("unverified"):
+            med_state[name] = ("unverified", x, m["posted_at"])
+        elif x.get("action") == "stop" or x.get("negated") \
+                or x.get("status") == "past":
+            med_state[name] = ("suppressed", x, m["posted_at"])
+        elif med_is_patient_current(x) \
+                and x.get("status", "current") == "current":
+            med_state[name] = ("current", x, m["posted_at"])
+        elif not x.get("negated") \
+                and x.get("subject", "patient") == "patient" \
+                and x.get("status") == "planned":
+            med_state[name] = ("planned", x, m["posted_at"])
+        else:
+            # stop/past/negated/other-person — suppresses any older
+            # 'current' mention of the same name
+            med_state[name] = ("suppressed", x, m["posted_at"])
+    for x in _dicts(v1.get("medications")):
+        name = x.get("name")
+        if isinstance(name, str) and name and name not in med_state \
+                and name not in mentioned_meds:
+            med_state[name] = ("unverified", x, m["posted_at"])
+
+
+def _symptom_ts(m, v1: dict, lm: dict, ts,
+                sym_pos: dict, sym_neg: dict):
+    """term -> latest positive/negated ts (msgs iterated newest-first)."""
+    for s in v1.get("symptoms") \
+            if isinstance(v1.get("symptoms"), list) else []:
+        if not isinstance(s, str) or not s:
+            continue
+        if any(x.get("text") == s for x in _dicts(lm.get("symptoms"))):
+            continue
+        sym_pos.setdefault(s, ts)
+    for s in _dicts(lm.get("symptoms")):
+        t = s.get("text")
+        if not isinstance(t, str) or not t:
+            continue
+        if s.get("subject") in ("family", "other") or s.get("unverified"):
+            continue
+        # LLM polarity: a negation newer than a positive mention
+        # RESOLVES the symptom — it must cancel v1/rule positives,
+        # not just be skipped (Oracle B24). resolved/past statuses
+        # resolve the same way — they are not ongoing symptoms.
+        if s.get("negated") or s.get("status") in ("resolved", "past"):
+            sym_neg.setdefault(t, ts)
+        else:
+            sym_pos.setdefault(t, ts)
 
 
 def msgs_by_ts(msgs, ts: float) -> str:

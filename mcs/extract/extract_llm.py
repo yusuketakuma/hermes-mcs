@@ -20,6 +20,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -36,8 +37,10 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_util import (acquire_run_lock, json_object, load_config,
-                      locate_quote_span, text_chunks)
+from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
+                      circuit_success, disk_floor_mb, disk_free_mb,
+                      json_object, load_config, locate_quote_span,
+                      text_chunks)
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -51,14 +54,15 @@ MODEL = "Qwen3.5-9B"
 TIMEOUT = 300
 # Output remains schema v2; a new extraction generation reapplies the
 # evidence/subject contract to bodies already processed by generation 2.
-EXTRACT_VERSION = 3
+EXTRACT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
                        ("local_llm", local_llm.__file__))}
 # evidence quotes lengthen output; 900 truncated dense messages mid-JSON
-# (which then burned all 5 retries into permanent errors).
-MAX_TOKENS = 1400
+# (which then burned all 5 retries into permanent errors).  v4 adds
+# severity/onset/route/freq/labs fields, so dense bodies emit ~15% more.
+MAX_TOKENS = 1600
 
 # Concatenated, never %-formatted — a literal % in few-shot examples or
 # body text would raise ValueError OUTSIDE the request try-block and kill
@@ -78,11 +82,12 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 「参考コンテキスト」がある場合は意味解釈の参考にのみ使い、そこから項目やevidenceを引用してはいけません。
 
 出力キー(全て任意):
-- "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
-- "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
+- "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "route": "oral|topical|injection|infusion|inhalation|tube|other または省略", "freq": "服用頻度の原文表現(例:1日2回、隔日) または省略", "prn": 頓服なら true, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
+- "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "severity": "mild|moderate|severe(強さの記述がある場合のみ)", "onset": "発症時期の原文表現(例:昨日から) または省略", "duration": "継続期間の原文表現(例:3日間) または省略", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
 - "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
 - "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "依頼者(職種・家族等) または null", "action": "依頼内容を15字以内で", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null"}]
 - "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
+- "labs": 本文に結果が明記された検査値の配列 [{"name": "検査項目名", "value": 数値または短い結果表現, "unit": "単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用"}] — 推測の基準値判定はしない。記載の無い検査は含めない
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
 - "urgency": "high" または "routine" (至急・緊急・救急・搬送等ならhigh)
@@ -233,6 +238,12 @@ _SCHEMA = {
                     "subject": {"type": "string",
                                 "enum": ["patient", "family", "other"]},
                     "negated": {"type": "boolean"},
+                    "route": {"type": ["string", "null"],
+                              "enum": ["oral", "topical", "injection",
+                                       "infusion", "inhalation", "tube",
+                                       "other", None]},
+                    "freq": {"type": ["string", "null"]},
+                    "prn": {"type": "boolean"},
                     "evidence": {"type": "string"}},
                 "required": ["name"],
                 "additionalProperties": False}},
@@ -246,6 +257,11 @@ _SCHEMA = {
                                         "past"]},
                     "subject": {"type": "string",
                                 "enum": ["patient", "family", "other"]},
+                    "severity": {"type": ["string", "null"],
+                                 "enum": ["mild", "moderate", "severe",
+                                          None]},
+                    "onset": {"type": ["string", "null"]},
+                    "duration": {"type": ["string", "null"]},
                     "evidence": {"type": "string"}},
                 "required": ["text"],
                 "additionalProperties": False}},
@@ -269,6 +285,17 @@ _SCHEMA = {
                 k: {"type": "number"} for k in
                 ("bt", "hr", "rr", "sbp", "dbp", "spo2", "bs")},
                 "additionalProperties": False},
+            "labs": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "value": {"type": ["string", "number"]},
+                    "unit": {"type": ["string", "null"]},
+                    "flag": {"type": ["string", "null"],
+                             "enum": ["high", "low", None]},
+                    "evidence": {"type": "string"}},
+                "required": ["name", "value"],
+                "additionalProperties": False}},
             "summary": {"type": "string", "minLength": 1},
             "points": {"type": "array", "items": {"type": "string"}},
             "urgency": {"type": "string", "enum": ["high", "routine"]}},
@@ -420,11 +447,11 @@ def _vitals_guard(body: str | None, vit: dict,
         best = None
         back = body[max(0, s - _VITAL_WIN_BACK):s]
         for cls, rx in _VITAL_LABELS.items():
-            m = None
+            m_end = None
             for m in rx.finditer(back):
-                pass
-            if m is not None:
-                dist = len(back) - m.end()
+                m_end = m.end()
+            if m_end is not None:
+                dist = len(back) - m_end
                 if best is None or dist < best[0]:
                     best = (dist, cls)
         for cls, rx in _VITAL_LABELS.items():
@@ -506,6 +533,12 @@ _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
 _MED_STATUSES = {"current", "past", "planned"}
 _MED_SUBJECTS = {"patient", "family", "other"}
 _SYM_STATUSES = {"new", "ongoing", "resolved", "past"}
+# schema v4 detail fields — present-but-invalid enum drops the ITEM
+# (never normalize a guess); absent stays absent.
+_RX_ROUTES = {"oral", "topical", "injection", "infusion",
+              "inhalation", "tube", "other"}
+_SYM_SEVERITY = {"mild", "moderate", "severe"}
+_LAB_FLAGS = {"high", "low"}
 _DUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -549,38 +582,70 @@ def _validate(d: dict, body: str | None = None,
     `drops`, when given, collects bounded failure detail for the repair
     pass: {"ev": [rejected quotes], "items": [fields with dropped
     items]} — capped so a pathological output can't blow memory."""
-    import math
-    out = {}
-    ev_dropped = items_dropped = 0
+    out: dict = {}
+    v = _Validator(body, drops)
+    try:
+        v.meds(d, out)
+        v.symptoms(d, out)
+        v.labs(d, out)
+        v.events(d, out)
+        v.requests(d, out)
+        v.vitals(d, out)
+        v.scalars(d, out)
+        if v.ev_dropped:
+            out["_evidence_dropped"] = v.ev_dropped
+        if v.items_dropped:
+            out["_items_dropped"] = v.items_dropped
+        # when every recognized key was corrupt (or emptied by drops)
+        # the output is a failure, not an empty extraction
+        if v.items_dropped and not any(
+                (isinstance(x, list) and x)
+                or (isinstance(x, dict) and x)
+                or (isinstance(x, str) and x.strip())
+                for k, x in out.items() if not k.startswith("_")):
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out
 
-    def drop_item(field: str):
-        nonlocal items_dropped
-        items_dropped += 1
-        if drops is not None:
-            lst = drops.setdefault("items", [])
+
+class _Validator:
+    """Per-field schema cleaning shared state: the evidence verifier +
+    drop accounting used by every item validator in _validate."""
+
+    def __init__(self, body, drops):
+        self.body = body
+        self.drops = drops
+        self.ev_dropped = 0
+        self.items_dropped = 0
+
+    def drop_item(self, field: str):
+        self.items_dropped += 1
+        if self.drops is not None:
+            lst = self.drops.setdefault("items", [])
             if field not in lst and len(lst) < 5:
                 lst.append(field)
 
-    def ev(item: dict, source: dict):
-        nonlocal ev_dropped
+    def ev(self, item: dict, source: dict):
         q = source.get("evidence")
         if q is None:
             # no evidence key at all — the claim is real input but
             # cannot be quote-verified: keep it, mark it (F08)
             item["unverified"] = True
             return
-        span = locate_quote_span(body, q) if isinstance(q, str) \
-            and q.strip() and body is not None else None
+        span = locate_quote_span(self.body, q) if isinstance(q, str) \
+            and q.strip() and self.body is not None else None
         if span is None:
-            ev_dropped += 1
-            if drops is not None:
-                lst = drops.setdefault("ev", [])
+            self.ev_dropped += 1
+            if self.drops is not None:
+                lst = self.drops.setdefault("ev", [])
                 if len(lst) < 5:
                     lst.append(str(q)[:60])
             item["unverified"] = True
         else:
-            item["evidence"] = body[span[0]:span[1]]
+            item["evidence"] = self.body[span[0]:span[1]]
 
+    @staticmethod
     def enum(source: dict, key: str, allowed: set):
         """Normalized enum value, or None when absent. An invalid value
         returns False so the caller can drop the item."""
@@ -590,164 +655,226 @@ def _validate(d: dict, body: str | None = None,
         v = str(v).strip().lower()
         return v if v in allowed else False
 
-    try:
-        if "meds" in d:
-            if isinstance(d["meds"], list):
-                meds = []
-                for m in d["meds"]:
-                    st = enum(m, "status", _MED_STATUSES) \
-                        if isinstance(m, dict) else False
-                    sj = enum(m, "subject", _MED_SUBJECTS) \
-                        if isinstance(m, dict) else False
-                    if not (isinstance(m, dict)
-                            and isinstance(m.get("name"), str)
-                            and m["name"].strip()
-                            and m.get("action") in _RX_ACTS
-                            and ("negated" not in m
-                                 or type(m.get("negated")) is bool)
-                            and st is not False and sj is not False):
-                        drop_item("meds")
-                        continue
-                    dose = m.get("dose")
-                    if type(dose) in (int, float) \
-                            and math.isfinite(dose):
-                        dose = str(dose)
-                    elif not isinstance(dose, (str, type(None))):
-                        dose = None
-                    item = {"name": m["name"], "dose": dose,
-                            "action": m.get("action"),
-                            "negated": m.get("negated", False)}
-                    # absent status/subject is preserved, never filled
-                    # with a fabricated 'current'/'patient' (F08) —
-                    # downstream patient-state consumers must treat the
-                    # item as a candidate, not confirmed current
-                    if st:
-                        item["status"] = st
-                    if sj:
-                        item["subject"] = sj
-                    if st is None or sj is None or "negated" not in m:
-                        item["unverified"] = True
-                    ev(item, m)
-                    meds.append(item)
-                out["meds"] = meds
+    def meds(self, d: dict, out: dict):
+        if "meds" not in d:
+            return
+        if not isinstance(d["meds"], list):
+            self.drop_item("meds")
+            return
+        meds = []
+        for m in d["meds"]:
+            st = self.enum(m, "status", _MED_STATUSES) \
+                if isinstance(m, dict) else False
+            sj = self.enum(m, "subject", _MED_SUBJECTS) \
+                if isinstance(m, dict) else False
+            rt = self.enum(m, "route", _RX_ROUTES) \
+                if isinstance(m, dict) else False
+            if not (isinstance(m, dict)
+                    and isinstance(m.get("name"), str)
+                    and m["name"].strip()
+                    and m.get("action") in _RX_ACTS
+                    and ("negated" not in m
+                         or type(m.get("negated")) is bool)
+                    and ("prn" not in m
+                         or type(m.get("prn")) is bool)
+                    and st is not False and sj is not False
+                    and rt is not False):
+                self.drop_item("meds")
+                continue
+            dose = m.get("dose")
+            if type(dose) in (int, float) \
+                    and math.isfinite(dose):
+                dose = str(dose)
+            elif not isinstance(dose, str | type(None)):
+                dose = None
+            item = {"name": m["name"], "dose": dose,
+                    "action": m.get("action"),
+                    "negated": m.get("negated", False)}
+            if rt:
+                item["route"] = rt
+            freq = _clean_text(m.get("freq"), 30)
+            if freq:
+                item["freq"] = freq
+            if m.get("prn") is True:
+                item["prn"] = True
+            # absent status/subject is preserved, never filled
+            # with a fabricated 'current'/'patient' (F08) —
+            # downstream patient-state consumers must treat the
+            # item as a candidate, not confirmed current
+            if st:
+                item["status"] = st
+            if sj:
+                item["subject"] = sj
+            if st is None or sj is None or "negated" not in m:
+                item["unverified"] = True
+            self.ev(item, m)
+            meds.append(item)
+        out["meds"] = meds
+
+    def symptoms(self, d: dict, out: dict):
+        if "symptoms" not in d:
+            return
+        if not isinstance(d["symptoms"], list):
+            self.drop_item("symptoms")
+            return
+        syms = []
+        for s in d["symptoms"]:
+            st = self.enum(s, "status", _SYM_STATUSES) \
+                if isinstance(s, dict) else False
+            sj = self.enum(s, "subject", _MED_SUBJECTS) \
+                if isinstance(s, dict) else False
+            sv = self.enum(s, "severity", _SYM_SEVERITY) \
+                if isinstance(s, dict) else False
+            if not (isinstance(s, dict)
+                    and isinstance(s.get("text"), str)
+                    and s["text"].strip()
+                    and ("negated" not in s
+                         or type(s.get("negated")) is bool)
+                    and st is not False and sj is not False
+                    and sv is not False):
+                self.drop_item("symptoms")
+                continue
+            item = {"text": s["text"],
+                    "negated": s.get("negated", False)}
+            if st:
+                item["status"] = st
+            if sj:
+                item["subject"] = sj
+            if sv:
+                item["severity"] = sv
+            onset = _clean_text(s.get("onset"), 30)
+            if onset:
+                item["onset"] = onset
+            duration = _clean_text(s.get("duration"), 30)
+            if duration:
+                item["duration"] = duration
+            if st is None or sj is None or "negated" not in s:
+                item["unverified"] = True
+            self.ev(item, s)
+            syms.append(item)
+        out["symptoms"] = syms
+
+    def labs(self, d: dict, out: dict):
+        """Reported lab results — only what the body states verbatim.
+        `flag` is kept only when the body itself calls the value out of
+        range; the extractor never invents reference ranges."""
+        if "labs" not in d:
+            return
+        if not isinstance(d["labs"], list):
+            self.drop_item("labs")
+            return
+        labs = []
+        for lb in d["labs"]:
+            fl = self.enum(lb, "flag", _LAB_FLAGS) \
+                if isinstance(lb, dict) else False
+            if not (isinstance(lb, dict)
+                    and isinstance(lb.get("name"), str)
+                    and lb["name"].strip()
+                    and type(lb.get("value")) in (int, float, str)
+                    and fl is not False):
+                self.drop_item("labs")
+                continue
+            item = {"name": lb["name"].strip()[:40]}
+            val = lb["value"]
+            if type(val) in (int, float) and math.isfinite(val):
+                item["value"] = val
             else:
-                drop_item("meds")
-        if "symptoms" in d:
-            if isinstance(d["symptoms"], list):
-                syms = []
-                for s in d["symptoms"]:
-                    st = enum(s, "status", _SYM_STATUSES) \
-                        if isinstance(s, dict) else False
-                    sj = enum(s, "subject", _MED_SUBJECTS) \
-                        if isinstance(s, dict) else False
-                    if not (isinstance(s, dict)
-                            and isinstance(s.get("text"), str)
-                            and s["text"].strip()
-                            and ("negated" not in s
-                                 or type(s.get("negated")) is bool)
-                            and st is not False and sj is not False):
-                        drop_item("symptoms")
-                        continue
-                    item = {"text": s["text"],
-                            "negated": s.get("negated", False)}
-                    if st:
-                        item["status"] = st
-                    if sj:
-                        item["subject"] = sj
-                    if st is None or sj is None or "negated" not in s:
-                        item["unverified"] = True
-                    ev(item, s)
-                    syms.append(item)
-                out["symptoms"] = syms
-            else:
-                drop_item("symptoms")
-        if "events" in d:
-            if isinstance(d["events"], list):
-                out["events"] = [e for e in d["events"]
-                                 if isinstance(e, str) and e in _EVENTS]
-            else:
-                drop_item("events")
-        if "requests" in d:
-            if isinstance(d["requests"], list):
-                reqs = []
-                for r in d["requests"]:
-                    if not (isinstance(r, dict)
-                            and (r.get("to") is None
-                                 or isinstance(r.get("to"), str))
-                            and (r.get("action") is None
-                                 or isinstance(r.get("action"), str))
-                            and (r.get("from") is None
-                                 or isinstance(r.get("from"), str))):
-                        drop_item("requests")
-                        continue
-                    item = {"to": r.get("to"), "action": r.get("action")}
-                    if isinstance(r.get("from"), str):
-                        item["from"] = r["from"].strip()
-                    if isinstance(r.get("due"), str) \
-                            and _valid_date(r["due"].strip()):
-                        item["due"] = r["due"].strip()
-                    # F09: relative phrasing ('明日まで') is preserved
-                    # verbatim — never coerced into a guessed ISO date
-                    if isinstance(r.get("due_text"), str) \
-                            and r["due_text"].strip():
-                        item["due_text"] = r["due_text"].strip()[:60]
-                    ev(item, r)
-                    reqs.append(item)
-                out["requests"] = reqs
-            else:
-                drop_item("requests")
-        if "vitals" in d:
-            v = d["vitals"]
-            if isinstance(v, dict):
-                vit = {}
-                for k in _VITAL_KEYS:
-                    val = v.get(k)
-                    if val is None:
-                        continue
-                    if type(val) not in (int, float) \
-                            or not math.isfinite(val):
-                        drop_item("vitals")
-                        continue
-                    vit[k] = float(val)
-                if vit and body is not None:
-                    vit = _vitals_guard(body, vit, drops)
-                if vit:
-                    out["vitals"] = vit
-            else:
-                drop_item("vitals")
+                sv = _clean_text(val, 30)
+                if not sv:
+                    self.drop_item("labs")
+                    continue
+                item["value"] = sv
+            unit = _clean_text(lb.get("unit"), 15)
+            if unit:
+                item["unit"] = unit
+            if fl:
+                item["flag"] = fl
+            self.ev(item, lb)
+            labs.append(item)
+        out["labs"] = labs
+
+    def events(self, d: dict, out: dict):
+        if "events" not in d:
+            return
+        if isinstance(d["events"], list):
+            out["events"] = [e for e in d["events"]
+                             if isinstance(e, str) and e in _EVENTS]
+        else:
+            self.drop_item("events")
+
+    def requests(self, d: dict, out: dict):
+        if "requests" not in d:
+            return
+        if not isinstance(d["requests"], list):
+            self.drop_item("requests")
+            return
+        reqs = []
+        for r in d["requests"]:
+            if not (isinstance(r, dict)
+                    and (r.get("to") is None
+                         or isinstance(r.get("to"), str))
+                    and (r.get("action") is None
+                         or isinstance(r.get("action"), str))
+                    and (r.get("from") is None
+                         or isinstance(r.get("from"), str))):
+                self.drop_item("requests")
+                continue
+            item = {"to": r.get("to"), "action": r.get("action")}
+            if isinstance(r.get("from"), str):
+                item["from"] = r["from"].strip()
+            if isinstance(r.get("due"), str) \
+                    and _valid_date(r["due"].strip()):
+                item["due"] = r["due"].strip()
+            # F09: relative phrasing ('明日まで') is preserved
+            # verbatim — never coerced into a guessed ISO date
+            if isinstance(r.get("due_text"), str) \
+                    and r["due_text"].strip():
+                item["due_text"] = r["due_text"].strip()[:60]
+            self.ev(item, r)
+            reqs.append(item)
+        out["requests"] = reqs
+
+    def vitals(self, d: dict, out: dict):
+        if "vitals" not in d:
+            return
+        v = d["vitals"]
+        if not isinstance(v, dict):
+            self.drop_item("vitals")
+            return
+        vit = {}
+        for k in _VITAL_KEYS:
+            val = v.get(k)
+            if val is None:
+                continue
+            if type(val) not in (int, float) \
+                    or not math.isfinite(val):
+                self.drop_item("vitals")
+                continue
+            vit[k] = float(val)
+        if vit and self.body is not None:
+            vit = _vitals_guard(self.body, vit, self.drops)
+        if vit:
+            out["vitals"] = vit
+
+    def scalars(self, d: dict, out: dict):
         if "summary" in d:
             s = _clean_text(d["summary"], 60)
             if s:
                 out["summary"] = s
             else:
-                drop_item("summary")
+                self.drop_item("summary")
         if "urgency" in d:
             if d["urgency"] in ("high", "routine"):
                 out["urgency"] = d["urgency"]
             else:
-                drop_item("urgency")
+                self.drop_item("urgency")
         if "points" in d:
             if isinstance(d["points"], list):
                 out["points"] = [p for p in
                                  (_clean_text(x, 40) for x in d["points"])
                                  if p][:3]
             else:
-                drop_item("points")
-        if ev_dropped:
-            out["_evidence_dropped"] = ev_dropped
-        if items_dropped:
-            out["_items_dropped"] = items_dropped
-        # when every recognized key was corrupt (or emptied by drops)
-        # the output is a failure, not an empty extraction
-        if items_dropped and not any(
-                (isinstance(v, list) and v)
-                or (isinstance(v, dict) and v)
-                or (isinstance(v, str) and v.strip())
-                for k, v in out.items() if not k.startswith("_")):
-            return None
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return out
+                self.drop_item("points")
 
 
 _CHUNK_SIZE = 3000
@@ -1186,6 +1313,13 @@ def _llm_up(deadline: float | None = None) -> bool:
         return False
 
 
+# ---------- stability guards live in mcs_util ----------
+# circuit_* / disk_* keep the extract and semantic lanes on one gate; see
+# mcs_util's "LLM lane stability gates" section.  Without the breaker a
+# dead llama-server costs every drain a full socket timeout plus
+# lease/fail bookkeeping per claimed row.
+
+
 def _fail_tx(ledger, r, attempts: int):
     """In-transaction error artifact insert — caller holds `with
     ledger.db` AND has already cleared prior error rows in the same tx.
@@ -1271,7 +1405,8 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
-                     qc_fix: dict | None = None):
+                     qc_fix: dict | None = None,
+                     extra_meta: dict | None = None):
     """Atomically write the current-version artifact and remove every
     superseded valid-meta row for the message — readers must never see
     two 'current' rows for one body (they disagree: stats scan oldest-
@@ -1303,6 +1438,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         meta["integrity"] = integrity
     if qc_fix is not None:
         meta["qc_fix"] = qc_fix
+    if extra_meta:
+        meta.update(extra_meta)
     with ledger.db:
         # A guarded INSERT takes the write lock before superseding any
         # result. An edit/deletion during inference must preserve the
@@ -1455,8 +1592,10 @@ def _choose_slot(deadline: float | None = None) -> int:
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
                          # lease only costs bounded duplicate inference
 
-_BATCH_K = 4                     # context-free bodies per batched call
-_BATCH_MAX_TOKENS = MAX_TOKENS * 2   # K outputs share one envelope
+_BATCH_K = 4                     # context-free bodies per batched call —
+                                 # K=8 needs ~500s, over TIMEOUT=300
+_BATCH_MAX_TOKENS = MAX_TOKENS * 3   # K outputs share one envelope;
+                                     # v4 fields raise per-item output
 
 # Doomed-call floors from measured artifact timings (Sep 2026):
 # singles p50 ~23s / p90 ~45s / max 69s; batch calls p50 ~102s /
@@ -1582,6 +1721,68 @@ def _rule_hints(r):
         return d if isinstance(d, dict) else None
     except Exception:
         return None
+
+
+# ---------- low-signal prefilter ----------
+# A body whose rule pass produced nothing AND carries no clinical-signal
+# token at all never needs an LLM call: it is settled with a durable
+# meta.prefilter='no_signal' marker so "skipped by filter" is recorded —
+# never confused with "extractor found nothing" — and a body edit (hash
+# change) re-enters the queue normally. The regex is deliberately a
+# SUPERSET of the v1 keyword lists (a second net, not the first):
+# anything ambiguous — any digit (dose/vital/date), request or care
+# vocabulary, sender-of-record terms — keeps the row on the LLM path.
+# Disabled via MCS_EXTRACT_PREFILTER=off for rollback without a deploy.
+_SIGNAL_RE = re.compile(
+    r"[0-9０-９]"  # doses, vitals, dates, times — never guess
+    r"|[ァ-ヶー]{4,}"  # long katakana runs: drug/item names
+    r"|薬|内服|外用|点眼|貼付|処方|注射|点滴|坐薬|座薬|単位|錠|一包化"
+    r"|インスリン|オピオイド|ステロイド|抗生|利尿|降圧"
+    r"|発熱|熱[がはも]|痛|嘔吐|吐き気|嘔気|下痢|便秘|咳|痰|喘鳴"
+    r"|呼吸困難|息苦し|めまい|ふらつ|転倒|むくみ|浮腫|食欲|不眠|睡眠"
+    r"|せん妄|誤嚥|嚥下|出血|血便|血尿|褥瘡|創傷|皮膚|発疹|かゆみ"
+    r"|倦怠|疲労|脱水|血糖|痙攣|意識|麻痺|しびれ|胸痛|腹痛|頭痛|動悸"
+    r"|黄疸|摂取|水分|排尿|排便|失禁|体調|容態|様子|経過"
+    r"|体温|血圧|脈拍|心拍|呼吸数|[Ss]p[oO]2|酸素|バイタル|Glu"
+    r"|訪問|診察|往診|診療|入院|退院|転院|搬送|救急|看取り|終末期"
+    r"|緩和|ACP|逝去|死亡|お亡くなり|デイ|ショートステイ|ケアプラン"
+    r"|要介護|介護度|サービス|リハビリ|カテーテル|ストマ|吸引|経管"
+    r"|胃ろう|胃瘻|在宅酸素|人工呼吸|入浴|清拭|移乗|体位|離床|ADL"
+    r"|至急|緊急|早急|急ぎ|すぐに|連絡|確認|相談|依頼|お願い|報告"
+    r"|共有|教えて|予約|変更|調整|検討|再評価|カンファレンス"
+    r"|モニタリング|アセスメント|家族|娘|息子|嫁|ご主人|奥様|妻|夫"
+    r"|親御|親族|本人|患者|利用者|御本人"
+    r"|検査|採血|血液|レントゲン|エコー|心電図|異常|正常|上昇|低下")
+
+# Empty extraction payload for filtered bodies — same shape as a
+# validated extraction so every reader (rollup/structured_view/stats)
+# treats it as "nothing found", while meta.prefilter keeps the
+# distinction auditable.
+_PREFILTER_CONTENT = ('{"meds":[],"symptoms":[],"events":[],'
+                      '"requests":[],"vitals":{},"summary":"",'
+                      '"points":[],"urgency":"routine"}')
+
+
+def _prefilter_enabled() -> bool:
+    return os.environ.get("MCS_EXTRACT_PREFILTER", "on") \
+        not in ("0", "off", "false")
+
+
+def _low_signal(body: str, hints: dict | None) -> bool:
+    """True only when BOTH nets miss: v1 produced no fields and the
+    broadened signal regex finds no token worth an LLM read. A hints
+    parse failure (None) can never prove emptiness — never skip."""
+    if hints is None or len(hints) > 1:   # {"v":1} = the empty dict
+        return False
+    return _SIGNAL_RE.search(body) is None
+
+
+def _mark_prefiltered(ledger, r) -> bool:
+    """Settle a no-signal row without an LLM call — same guarded write
+    path as _replace_current (v4 fence, hash gate, supersede sweep)."""
+    return _replace_current(
+        ledger, r, _PREFILTER_CONTENT,
+        extra_meta={"prefilter": "no_signal"})
 
 
 def _ensure_v1(ledger, r, hints) -> None:
@@ -1746,13 +1947,26 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # thread contexts + any durable chunk checkpoints are loaded on the
     # calling thread — worker threads never touch the sqlite handle
     jobs = []
+    skipped = 0
+    # Manifest-declared conversions (admitted_ids) were explicitly
+    # requested — the prefilter never overrides them.
+    prefilter = _prefilter_enabled() and admitted_ids is None
     for r in rows:
-        context = _thread_context(ledger, r)
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
+        hints = _rule_hints(r)
+        if prefilter and qc is None \
+                and _low_signal(r["body_text"] or "", hints):
+            # no clinical signal on either net — settle with a durable
+            # marker + v1 coverage instead of burning an LLM call
+            _ensure_v1(ledger, r, hints)
+            if _mark_prefiltered(ledger, r):
+                skipped += 1
+            continue
+        context = _thread_context(ledger, r)
         jobs.append((r, context, _saved_chunks(ledger, r, context),
-                     _rule_hints(r), qc))
+                     hints, qc))
     metas = [None] * len(jobs)
     checkpoints = queue.SimpleQueue()
     parallel = workers > 1 and len(jobs) > 1
@@ -1801,7 +2015,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 failed += 1
                 if endpoint_down or not _llm_up(deadline=deadline):
                     # Endpoint unreachable — don't burn budget/attempts
-                    # on error rows.
+                    # on error rows. The failure feeds the breaker so
+                    # a sustained outage closes the lane across drains —
+                    # counted once per run, not once per queued row.
+                    if not endpoint_down:
+                        circuit_failure(ledger)
                     endpoint_down = True
                     return
                 if qc is not None:
@@ -1833,6 +2051,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             _fail_tx(ledger, r,
                                      max(r["attempts"], prev))
                 return
+            circuit_success(ledger)   # an answered call = endpoint alive
             d["_model"] = MODEL
             with lock(per_write_lock) as held:
                 # QC-flagged rows already hold a current artifact —
@@ -1861,11 +2080,21 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             _release(ledger, r, lease)
 
+    # stability gates before any claim: an open circuit breaker (dead
+    # endpoint) or a nearly-full volume skips the LLM lane entirely —
+    # rows stay pending for the next drain instead of churning leases
+    # and timeouts. Prefilter markers above still settled no-signal
+    # rows, since they never needed the endpoint.
+    circuit_s = circuit_open_s(ledger)
+    free_mb = disk_free_mb(ledger)
+    disk_low = free_mb is not None and free_mb < disk_floor_mb()
     # claim each row before inference — a live lease held by another
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
     for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
+        if circuit_s or disk_low:
+            break
         lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
                                       deadline - time.monotonic() + TIMEOUT + 30))
         if lease is not None:
@@ -2037,7 +2266,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         try:
             _flush_checkpoints()
         finally:
-            for index, r, ctx, saved, hints, qc, lease in claimed:
+            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
     left = ledger.db.execute("""
       SELECT COUNT(*) FROM messages m
@@ -2100,6 +2329,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         llm_calls["tokens"] = None
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
+            "skipped": skipped,
+            "circuit_open_s": round(circuit_s) or None,
+            "disk_free_mb": round(free_mb) if free_mb is not None
+                            else None,
             "pids": sorted(done_pids),
             "queue_ages_s": {
                 "oldest": (now_ts - age_min) if age_min is not None

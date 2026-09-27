@@ -28,7 +28,7 @@ def _add_period(db, mid, period, body="合成薬を内服"):
                     meta={"hash": _hash(db, mid)})
 
 
-@pytest.mark.parametrize("period,body", [
+@pytest.mark.parametrize(("period", "body"), [
     ({"raw": "9/1-9/14", "start": "2026-09-01", "end": "2026-09-14"},
      "合成薬を9/1-9/14に内服"),
     ({"raw": "9/25-10/5", "start": "2026-09-25", "end": "2026-10-05"},

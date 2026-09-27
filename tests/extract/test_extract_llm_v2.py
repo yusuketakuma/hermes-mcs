@@ -88,7 +88,7 @@ def test_validate_all_corrupt_is_failure_not_empty():
     assert out["_items_dropped"] == 1
 
 
-@pytest.mark.parametrize("section,field", [("meds", "name"), ("symptoms", "text")])
+@pytest.mark.parametrize(("section", "field"), [("meds", "name"), ("symptoms", "text")])
 @pytest.mark.parametrize("value", ["", " \t "])
 def test_validate_rejects_blank_clinical_identifiers(section, field, value):
     item = {field: value, "action": "none", "subject": "patient",
@@ -933,7 +933,7 @@ def test_unreachable_endpoint_defers_not_fails(tmp_path, monkeypatch):
 
     def _down(prompt, **kw):
         kw["error_out"]["kind"] = "unreachable"
-        return None
+        return
     monkeypatch.setattr(extract_llm.local_llm, "chat", _down)
     assert extract_llm.llm_extract("本文1") is extract_llm._DEFERRED
 
@@ -955,7 +955,7 @@ def test_transport_error_still_fails(tmp_path, monkeypatch):
 
     def _timeout(prompt, **kw):
         kw["error_out"]["kind"] = "transport"
-        return None
+        return
     monkeypatch.setattr(extract_llm.local_llm, "chat", _timeout)
     # budget above the doomed-call floor so the call actually fires
     res = extract_llm.run_pending(db, limit=10, budget_s=120)
@@ -1870,4 +1870,75 @@ def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
         "SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]
     assert seen["hints"] == extract.extract_message(
         body, "2026-09-19T00:00:00+09:00")
+    db.close()
+
+
+# ---------- schema v4 detail fields ----------
+
+def test_validate_v4_med_route_freq_prn():
+    body = "カロナール500mgを頓服で、1日3回まで内服可能です"
+    out = extract_llm._validate({"meds": [{
+        "name": "カロナール", "dose": "500mg", "action": "none",
+        "status": "current", "subject": "patient", "negated": False,
+        "route": "oral", "freq": "1日3回まで", "prn": True,
+        "evidence": "カロナール500mgを頓服で"}]}, body)
+    med = out["meds"][0]
+    assert med["route"] == "oral" and med["freq"] == "1日3回まで"
+    assert med["prn"] is True
+
+
+def test_validate_v4_invalid_route_drops_item_not_field():
+    body = "プレドニンを中止しました"
+    out = extract_llm._validate({"meds": [
+        {"name": "プレドニン", "action": "stop", "route": "bogus"},
+        {"name": "ロキソプロフェン", "action": "none"}]}, body)
+    assert [m["name"] for m in out["meds"]] == ["ロキソプロフェン"]
+
+
+def test_validate_v4_symptom_severity_onset_duration():
+    body = "昨日から強い頭痛が3日間続いています"
+    out = extract_llm._validate({"symptoms": [{
+        "text": "頭痛", "severity": "severe", "onset": "昨日から",
+        "duration": "3日間", "evidence": "強い頭痛"}]}, body)
+    s = out["symptoms"][0]
+    assert s["severity"] == "severe" and s["onset"] == "昨日から"
+    assert s["duration"] == "3日間"
+
+
+def test_validate_v4_labs():
+    body = "採血結果: HbA1c 7.2%と高め、BNPは正常でした"
+    out = extract_llm._validate({"labs": [
+        {"name": "HbA1c", "value": 7.2, "unit": "%", "flag": "high",
+         "evidence": "HbA1c 7.2%と高め"},
+        {"name": "BNP", "value": "正常", "evidence": "BNPは正常"},
+        {"name": "途中だけ", "value": None},          # no value -> drop
+        {"name": "CRP", "value": 0.3, "flag": "bogus"},  # bad flag -> drop
+    ]}, body)
+    assert [(x["name"], x.get("flag")) for x in out["labs"]] == [
+        ("HbA1c", "high"), ("BNP", None)]
+
+
+def test_structured_view_shows_v4_detail(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="合成の本文")])
+    chash = _hash(db, 1)
+    db.artifact_add("extract_llm", json.dumps({
+        "meds": [{"name": "トラマドール", "dose": "25mg",
+                  "action": "start", "status": "current",
+                  "subject": "patient", "negated": False,
+                  "route": "oral", "freq": "1日2回"}],
+        "symptoms": [{"text": "疼痛", "negated": False,
+                      "status": "ongoing", "subject": "patient",
+                      "severity": "moderate", "onset": "昨日から"}],
+        "labs": [{"name": "HbA1c", "value": 7.2, "unit": "%",
+                  "flag": "high"}],
+        "summary": "疼痛コントロール中"}),
+        project_id=1, message_id=1,
+        meta={"hash": chash,
+              "extract_version": extract_llm.EXTRACT_VERSION})
+    lines = structured_view.structured_lines(db.db, 1)
+    joined = "\n".join(lines)
+    assert "トラマドール 25mg[開始](内服・1日2回)" in joined
+    assert "疼痛(中等度・昨日から)" in joined
+    assert "検査: HbA1c 7.2%(高)" in joined
     db.close()

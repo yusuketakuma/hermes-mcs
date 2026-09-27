@@ -92,7 +92,7 @@ def test_aggregate_f1():
 
 
 @pytest.mark.parametrize(
-    "output,counts",
+    ("output", "counts"),
     [(None, {"tp": 0, "fp": 0, "fn": 1}),
      ({"requests": []}, {"tp": 0, "fp": 0, "fn": 1}),
      ({"requests": [{"action": "確認", "to": "家族"}]},
