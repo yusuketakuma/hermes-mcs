@@ -138,7 +138,7 @@ def test_failed_benchmark_counts_safety_attribute_misses():
     assert scored["fields"]["med_negated"]["fn"] == 1
 
 
-@pytest.mark.parametrize("body,posted,start,end", [
+@pytest.mark.parametrize(("body", "posted", "start", "end"), [
     ("内服薬12/28-1/10まで投与した", "2027-01-20", "2026-12-28", "2027-01-10"),
     ("内服薬2025/9/1-9/14", "2026-09-23", "2025-09-01", "2025-09-14"),
 ])
@@ -205,7 +205,7 @@ def test_chunk_merge_preserves_restart_and_separate_subjects():
     assert {s["subject"] for s in merged["symptoms"]} == {"patient", "family"}
 
 
-@pytest.mark.parametrize('body,posted,expected', [
+@pytest.mark.parametrize(("body", "posted", "expected"), [
     ('2025/2/29 訪問しました', '2025-03-01', {}),
     ('2/20 訪問しました。次回3/1', '不明', {}),
     ('2024/2/29 訪問しました', '不明', {'visit_date': '2024-02-29'}),

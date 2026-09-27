@@ -32,6 +32,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -159,25 +160,24 @@ def _score_case(case: dict, out: dict | None) -> dict:
         expected = [e for e in exp.get("meds", []) if e.get(k) is not None]
         tp = len(_match_pairs(
             expected, got_meds,
-            lambda e, items: _med_name_hit(e, items[0])
+            lambda e, items, k=k: _med_name_hit(e, items[0])
             and items[0].get(k) == e[k]))
         fn = len(expected) - tp
         if tp + fn:
             fields[f"med_{k}"] = {"tp": tp, "fp": 0, "fn": fn}
     violations = []
-    for fm in forbid.get("meds", []):
-        if _match_med(fm, got_meds):
-            violations.append(f"meds:{fm.get('name')}")
-    for fs in forbid.get("symptoms", []):
-        if _match_symptom(fs, got_syms):
-            violations.append(f"symptoms:{fs.get('text')}")
-    for fe in forbid.get("events", []):
-        if fe in got_events:
-            violations.append(f"events:{fe}")
-            fields["events"]["fp"] += 1
-    for request in forbid.get("requests", []):
-        if _match_request(request, got_requests):
-            violations.append(f"requests:{request.get('action')}")
+    violations.extend(f"meds:{fm.get('name')}" for fm in
+                      forbid.get("meds", []) if _match_med(fm, got_meds))
+    violations.extend(f"symptoms:{fs.get('text')}" for fs in
+                      forbid.get("symptoms", [])
+                      if _match_symptom(fs, got_syms))
+    matched_events = [fe for fe in forbid.get("events", [])
+                      if fe in got_events]
+    violations.extend(f"events:{fe}" for fe in matched_events)
+    fields["events"]["fp"] += len(matched_events)
+    violations.extend(f"requests:{request.get('action')}"
+                      for request in forbid.get("requests", [])
+                      if _match_request(request, got_requests))
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
         violations.append(f"urgency:{forbid['urgency']}")
     return {"id": case["id"], "fields": fields,
@@ -205,7 +205,7 @@ def _aggregate(scores: list[dict]) -> dict:
 
 
 def _load_cases(path: str) -> list:
-    corpus = json.load(open(path))
+    corpus = json.loads(Path(path).read_text())
     cases = corpus.get("cases")
     if not isinstance(cases, list):
         raise ValueError("cases file must contain a 'cases' list")
@@ -270,7 +270,7 @@ def cmd_run(args) -> int:
 
 
 def cmd_report(args) -> int:
-    reps = [json.load(open(p)) for p in args.files]
+    reps = [json.loads(Path(p).read_text()) for p in args.files]
     fields = sorted({f for r in reps for f in r["fields"]})
     print(f"{'field':10s}" + "".join(f"{r['tag']:>24s}" for r in reps))
     for field in fields:
