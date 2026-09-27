@@ -58,7 +58,7 @@ def _parse_when(text: str) -> int:
             raise ValueError("bad_time_arg")
         return int(dt.timestamp())
     except (ValueError, OverflowError):
-        raise ValueError("bad_time_arg")
+        raise ValueError("bad_time_arg") from None
 
 
 def _scope(args: dict, snapshot_ts: int) -> dict:
@@ -81,7 +81,7 @@ def _scope(args: dict, snapshot_ts: int) -> dict:
     try:
         limit = min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)
     except (TypeError, ValueError):
-        raise ValueError("bad_limit")
+        raise ValueError("bad_limit") from None
     return {"since": since, "until": until, "as_of": as_of,
             "project_id": args.get("project"), "limit": limit}
 
@@ -155,17 +155,29 @@ def st_data_quality(db, scope):
             ON m.message_id=a.message_id
             WHERE a.kind='extract_llm' AND NOT json_valid(a.meta){w}""",
         p).fetchone()[0]
+    # low-signal prefilter markers: 'parsed' includes them (the message
+    # IS processed — never pending again), but the count stays visible
+    # so "no extraction" is never conflated with "extracted nothing"
+    prefiltered = db.execute(
+        f"""SELECT COUNT(*) FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id
+            WHERE a.kind='extract_llm' AND json_valid(a.meta)
+              AND json_extract(a.meta,'$.prefilter') IS NOT NULL{w}""",
+        p).fetchone()[0]
     return _result("ok", scope, {
         "stages": {
             "fetched": _ratio(fetched, total, "messages"),
             "parsed_current_revision": _ratio(parsed, total, "messages"),
             "stat_ready_timestamped": _ratio(timed, total, "messages")},
-        "body_states": {s: n for s, n in body_states},
+        "body_states": dict(body_states),
         "stale_parsed": stale,
         "extract_meta_unparseable": meta_bad,
+        "extract_prefiltered": prefiltered,
         "notes": ["body_absent_vs_unparsed kept separate",
                   "stale_parsed = extraction exists but for an older "
-                  "content revision"]})
+                  "content revision",
+                  "extract_prefiltered = marked no-signal without an "
+                  "LLM call"]})
 
 
 # ---------------- T1 ----------------
@@ -196,7 +208,7 @@ def st_overview(db, scope):
     ).fetchone()
     return _result("ok", scope, {
         "rooms_total": rooms,
-        "rooms_by_state": {s: n for s, n in state_rows},
+        "rooms_by_state": dict(state_rows),
         # rooms ≠ confirmed patients — never reported as patient count
         "patient_count_note": "rooms, not confirmed patients",
         "rooms_with_posts_in_scope": active_rooms,
@@ -357,7 +369,7 @@ def st_meds(db, scope):
     per_month = {}
     action_counts = {}
     names = set()
-    for pid, mid, med, ts in _med_rows(db, scope):
+    for _pid, _mid, med, ts in _med_rows(db, scope):
         month = datetime.fromtimestamp(ts, JST).strftime("%Y-%m") \
             if ts is not None else "unknown"
         name = (med.get("name") or "").strip() or "(unnamed)"
@@ -383,7 +395,7 @@ def st_meds(db, scope):
 def st_med_mentions(db, scope):
     """ST-008: distinct med names per room in scope."""
     per_room = {}
-    for pid, mid, med, ts in _med_rows(db, scope):
+    for pid, _mid, med, _ts in _med_rows(db, scope):
         name = (med.get("name") or "").strip()
         if name:
             per_room.setdefault(pid, set()).add(name)
@@ -403,7 +415,7 @@ def st_med_change_burden(db, scope):
     Windows are JST calendar days ending on the as_of date — unlike
     patient_activity's exact N*86400s epoch windows (noted below)."""
     changes = {}  # (pid, day) -> count ; pid -> total
-    for pid, mid, med, ts in _med_rows(db, scope):
+    for pid, _mid, med, ts in _med_rows(db, scope):
         if med.get("action") not in CHANGE_ACTIONS:
             continue
         day = datetime.fromtimestamp(ts, JST).date().isoformat() \

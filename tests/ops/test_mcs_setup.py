@@ -1,4 +1,6 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
+from pathlib import Path
+
 import mcs_setup
 
 
@@ -599,7 +601,8 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     assert any("mcs_update.sh" in c for c in creates)
     # the service manifest was written with all rendered identities
     import json as _json
-    manifest = _json.load(open(tmp_path / "data" / "service_manifest.json"))
+    manifest = _json.loads(
+        (tmp_path / "data" / "service_manifest.json").read_text())
     assert len(manifest["scripts"]) == 6
     assert len(manifest["agents"]) == 4
     assert len(manifest["cron"]) == 6
@@ -619,9 +622,9 @@ def test_services_skips_loaded_agents_and_existing_cron(
             "DATA": str(tmp_path / "data")}
     (tmp_path / "agents").mkdir(parents=True)
     for label in mcs_setup.AGENT_LABELS:
-        body = mcs_setup._render_template(open(
-            mcs_setup.REPO_ROOT + "/deployment/launchagents/"
-            + label + ".plist").read(), subs)
+        body = mcs_setup._render_template(
+            (Path(mcs_setup.REPO_ROOT) / "deployment/launchagents"
+             / f"{label}.plist").read_text(), subs)
         (tmp_path / "agents" / f"{label}.plist").write_text(body)
     assert mcs_setup.cmd_services(args) == 0
     assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
@@ -700,8 +703,8 @@ def test_services_gateway_skipped_when_off(monkeypatch, tmp_path):
 
 def _plugin_args(**kw):
     from types import SimpleNamespace
-    base = dict(yes=True, plugin_profile="", plugin_user_ids=None,
-                plugin_chat_ids=None, plugin_project_ids=None)
+    base = {"yes": True, "plugin_profile": "", "plugin_user_ids": None,
+                "plugin_chat_ids": None, "plugin_project_ids": None}
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -788,7 +791,7 @@ def test_env_merge_failure_preserves_existing_credentials(tmp_path, monkeypatch)
         raise OSError("synthetic publication failure")
 
     monkeypatch.setattr(mcs_setup.os, "replace", fail_replace)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="synthetic publication failure"):
         mcs_setup._env_write(str(path), {"SAMPLE_TOKEN": "synthetic-new"})
     assert path.read_bytes() == original
     assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]

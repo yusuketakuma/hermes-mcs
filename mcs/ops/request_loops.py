@@ -31,7 +31,7 @@ def _decode(value, code: str):
     try:
         result = json.loads(value or "{}")
     except (json.JSONDecodeError, TypeError):
-        raise ValueError(code)
+        raise ValueError(code) from None
     if not isinstance(result, dict):
         raise ValueError(code)
     return result

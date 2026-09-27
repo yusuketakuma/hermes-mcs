@@ -97,7 +97,7 @@ def _thresholds(db):
         return th
     policy = content.get("policy")
     if isinstance(policy, dict):
-        for name, (default, lo, hi) in THRESHOLDS.items():
+        for name, (_default, lo, hi) in THRESHOLDS.items():
             v = policy.get(name)
             if type(v) is int and lo <= v <= hi:
                 th[name] = v
@@ -833,7 +833,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     # latest parseable state row per key — artifacts are append-only,
     # so artifact_id order is the lifecycle order
     existing = {}
-    for aid, content_s, meta_s in ledger.db.execute(
+    for _aid, content_s, meta_s in ledger.db.execute(
             "SELECT artifact_id, content, meta FROM artifacts "
             "WHERE kind=? ORDER BY artifact_id",
             (ARTIFACT_KIND,)).fetchall():
@@ -1162,7 +1162,7 @@ def _notify_opened(ledger, items, now, th, sig_cfg):
     for members in sig_units(
             [(med_group_key(s), (k, s)) for k, s in imm]):
         n += _notify(ledger, members, now, th)
-    for key, sig in dig:
+    for key, _sig in dig:
         added, m = _digest_add(ledger, key, now, th, interval_h)
         n += added
         merged += 1 if m else 0
@@ -1256,7 +1256,7 @@ def current_open(db, project_id=None, limit=50):
         params.append(project_id)
     sql += " ORDER BY artifact_id"
     latest = {}
-    for aid, pid, content_s, meta_s in db.execute(sql, params):
+    for _aid, _pid, content_s, meta_s in db.execute(sql, params):
         meta = json.loads(meta_s)
         content = json.loads(content_s)
         if (isinstance(meta, dict) and isinstance(content, dict)

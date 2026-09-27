@@ -1345,7 +1345,7 @@ def test_adherence_past_status_excluded(led):
                 if s["type"] == "adherence_concern"]
 
 
-@pytest.mark.parametrize("body,expected", [
+@pytest.mark.parametrize(("body", "expected"), [
     ("服薬管理できています", False),
     ("服薬管理できるようになりました", False),
     ("服薬管理できません", True),

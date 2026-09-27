@@ -33,6 +33,23 @@ def _reason(value):
     return value if value in REASONS else "not_recorded" if not value else "other_error"
 
 
+def _artifact_json(r):
+    """meta/content decode for artifact view rows — a corrupt blob
+    renders as empty meta / null content rather than breaking the
+    whole listing."""
+    try:
+        meta = json.loads(r["meta"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    try:
+        content = json.loads(r["content"])
+    except (json.JSONDecodeError, TypeError):
+        content = None
+    return meta, content
+
+
 class View:
     def __init__(self, path):
         self.reader = LedgerReader(str(path))
@@ -261,16 +278,7 @@ class View:
                     "FROM artifacts WHERE kind='extract_qc' AND "
                     "message_id=? AND project_id=? "
                     "ORDER BY artifact_id DESC LIMIT 10", (mid, pid)):
-                try:
-                    meta = json.loads(r["meta"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
-                if not isinstance(meta, dict):
-                    meta = {}
-                try:
-                    content = json.loads(r["content"])
-                except (json.JSONDecodeError, TypeError):
-                    content = None
+                meta, content = _artifact_json(r)
                 rows.append({"artifact_id": r["artifact_id"],
                              "model": r["model"], "meta": meta,
                              "content": content,
@@ -459,16 +467,7 @@ class View:
                     f"message_id IN ({marks}) AND project_id=? "
                     f"ORDER BY artifact_id DESC LIMIT 5",
                     (kind, *keys, pid)):
-                try:
-                    meta = json.loads(r["meta"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
-                if not isinstance(meta, dict):
-                    meta = {}
-                try:
-                    content = json.loads(r["content"])
-                except (json.JSONDecodeError, TypeError):
-                    content = None
+                meta, content = _artifact_json(r)
                 fp_key = meta.get("fingerprint") \
                     or meta.get("source_fingerprint")
                 current = bool(fingerprint and fp_key == fingerprint)
@@ -728,7 +727,7 @@ class View:
         try:
             limit = min(max(int(args.get("limit") or 50), 1), 200)
         except (TypeError, ValueError):
-            raise ValueError("bad_limit")
+            raise ValueError("bad_limit") from None
         result = mcs_signals.current_open(
             self.db, project_id=args.get("project"), limit=limit)
         return {"snapshot": self.meta,

@@ -8,7 +8,7 @@ receipt transaction.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import hashlib
 import json
 import os
@@ -67,149 +67,178 @@ def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
     return None
 
 
+def _v_scan(req: dict, base: set) -> str | None:
+    if req.keys() - (base | {"days", "pages"}):
+        return "unknown_field"
+    if "days" in req and not _bounded_int(req["days"], 1, 365):
+        return "bad_days"
+    if "pages" in req and not _bounded_int(req["pages"], 1, 40):
+        return "bad_pages"
+    return None
+
+
+def _v_retry(req: dict, base: set) -> str | None:
+    allowed = base | {"job_id", "expected_payload_hash",
+                      "additional_attempts", "reason"}
+    if req.keys() - allowed:
+        return "unknown_field"
+    if not positive(req.get("job_id")):
+        return "bad_job_id"
+    if not valid_hash(req.get("expected_payload_hash")):
+        return "bad_payload_hash"
+    if "additional_attempts" in req:
+        if not _bounded_int(req["additional_attempts"],
+                            1, _MAX_ADDITIONAL_ATTEMPTS):
+            return "bad_additional_attempts"
+        if not _text(req.get("reason"), 2000):
+            return "bad_reason"
+    elif "reason" in req and not _text(req["reason"], 2000):
+        return "bad_reason"
+    return None
+
+
+def _v_pause_resume(req: dict, base: set) -> str | None:
+    if req.keys() - (base | {"feature"}):
+        return "unknown_field"
+    if req.get("feature") != _FEATURE:
+        return "bad_feature"
+    return None
+
+
+def _v_adopt_summary(req: dict, base: set) -> str | None:
+    allowed = base | {"message_id", "summary_artifact_id",
+                      "comparison_hash", "reason"}
+    if req.keys() - allowed:
+        return "unknown_field"
+    if not positive(req.get("message_id")):
+        return "bad_message_id"
+    if not positive(req.get("summary_artifact_id")):
+        return "bad_summary_artifact_id"
+    if not valid_hash(req.get("comparison_hash")):
+        return "bad_comparison_hash"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
+def _v_signal_dismiss(req: dict, base: set) -> str | None:
+    allowed = base | {"signal_key", "reason",
+                      "expected_signal_artifact_id"}
+    if req.keys() - allowed:
+        return "unknown_field"
+    if not _text(req.get("signal_key"), 300):
+        return "bad_signal_key"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    if "expected_signal_artifact_id" in req \
+            and not positive(req["expected_signal_artifact_id"]):
+        return "bad_expected_artifact_id"
+    return None
+
+
+def _v_signal_policy(req: dict, base: set) -> str | None:
+    if req.keys() - (base | {"policy", "reason"}):
+        return "unknown_field"
+    if (not isinstance(req.get("policy"), dict)
+            or not req["policy"]
+            or not all(isinstance(k, str) for k in req["policy"])):
+        return "bad_policy"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
+def _v_refstat_approve(req: dict, base: set) -> str | None:
+    if req.keys() - (base | {"name", "file_hash", "reason"}):
+        return "unknown_field"
+    if not isinstance(req.get("name"), str) \
+            or not _REFSTAT_NAME_RE.fullmatch(req["name"]):
+        return "bad_refstat_name"
+    if not valid_hash(req.get("file_hash")):
+        return "bad_file_hash"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
+def _v_restore_approve(req: dict, base: set) -> str | None:
+    # Per-restore consent for a schema-bump DB replace — bound to
+    # the exact loss report (report_id) + backup bytes/schema, so an
+    # earlier update/rollback approval can never substitute. Same
+    # projectless lifecycle surface as the update ops.
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    allowed = base | {"report_id", "backup_sha256", "backup_schema",
+                      "reason"}
+    if req.keys() - allowed:
+        return "unknown_field"
+    if not valid_hash(req.get("report_id")):
+        return "bad_report_id"
+    if not valid_hash(req.get("backup_sha256")):
+        return "bad_backup_sha256"
+    if type(req.get("backup_schema")) is not int \
+            or req["backup_schema"] < 0:
+        return "bad_backup_schema"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
+def _v_update(req: dict, base: set) -> str | None:
+    # System-wide lifecycle ops — no project_id (the mcs_requests
+    # early-return routes them here before the positive-pid gate).
+    # tag/target_sha/base_sha pin WHAT is being approved so a moved
+    # tag can never silently redirect the apply (F5/S18).
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    if req.get("cmd") == "ops.update_apply":
+        allowed = base | {"tag", "reason", "target_sha", "base_sha"}
+    else:
+        # rollback only needs an optional tag hint — silently
+        # accepted-but-ignored fields are worse than a rejection
+        allowed = base | {"tag", "reason"}
+    if req.keys() - allowed:
+        return "unknown_field"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    if req.get("cmd") == "ops.update_apply" and (
+            not isinstance(req.get("tag"), str)
+            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
+                                req["tag"])):
+        return "bad_tag"
+    if "tag" in req and (
+            not isinstance(req["tag"], str)
+            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
+                                req["tag"])):
+        return "bad_tag"
+    for k in ("target_sha", "base_sha"):
+        if k in req and (not isinstance(req[k], str)
+                         or not re.fullmatch(r"[0-9a-f]{40}",
+                                             req[k])):
+            return "bad_sha"
+    return None
+
+
+_OPS_VALIDATORS = {
+    "ops.scan": _v_scan,
+    "ops.retry": _v_retry,
+    "ops.pause": _v_pause_resume,
+    "ops.resume": _v_pause_resume,
+    "ops.adopt_summary": _v_adopt_summary,
+    "ops.signal_dismiss": _v_signal_dismiss,
+    "ops.signal_policy": _v_signal_policy,
+    "ops.refstat_approve": _v_refstat_approve,
+    "ops.restore_approve": _v_restore_approve,
+    "ops.update_apply": _v_update,
+    "ops.update_rollback": _v_update,
+}
+
+
 def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
     """Validate the operation-specific portion after common identity checks."""
     base = set(_OPS_COMMON if common is None else common)
-    cmd = req.get("cmd")
-    if cmd == "ops.scan":
-        allowed = base | {"days", "pages"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if "days" in req and not _bounded_int(req["days"], 1, 365):
-            return "bad_days"
-        if "pages" in req and not _bounded_int(req["pages"], 1, 40):
-            return "bad_pages"
-        return None
-    if cmd == "ops.retry":
-        allowed = base | {"job_id", "expected_payload_hash",
-                          "additional_attempts", "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not positive(req.get("job_id")):
-            return "bad_job_id"
-        if not valid_hash(req.get("expected_payload_hash")):
-            return "bad_payload_hash"
-        if "additional_attempts" in req:
-            if not _bounded_int(req["additional_attempts"],
-                                1, _MAX_ADDITIONAL_ATTEMPTS):
-                return "bad_additional_attempts"
-            if not _text(req.get("reason"), 2000):
-                return "bad_reason"
-        elif "reason" in req and not _text(req["reason"], 2000):
-            return "bad_reason"
-        return None
-    if cmd in ("ops.pause", "ops.resume"):
-        allowed = base | {"feature"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if req.get("feature") != _FEATURE:
-            return "bad_feature"
-        return None
-    if cmd == "ops.adopt_summary":
-        allowed = base | {"message_id", "summary_artifact_id",
-                           "comparison_hash", "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not positive(req.get("message_id")):
-            return "bad_message_id"
-        if not positive(req.get("summary_artifact_id")):
-            return "bad_summary_artifact_id"
-        if not valid_hash(req.get("comparison_hash")):
-            return "bad_comparison_hash"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        return None
-    if cmd == "ops.signal_dismiss":
-        allowed = base | {"signal_key", "reason",
-                          "expected_signal_artifact_id"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not _text(req.get("signal_key"), 300):
-            return "bad_signal_key"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        if "expected_signal_artifact_id" in req \
-                and not positive(req["expected_signal_artifact_id"]):
-            return "bad_expected_artifact_id"
-        return None
-    if cmd == "ops.signal_policy":
-        allowed = base | {"policy", "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if (not isinstance(req.get("policy"), dict)
-                or not req["policy"]
-                or not all(isinstance(k, str) for k in req["policy"])):
-            return "bad_policy"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        return None
-    if cmd == "ops.refstat_approve":
-        allowed = base | {"name", "file_hash", "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not isinstance(req.get("name"), str) \
-                or not _REFSTAT_NAME_RE.fullmatch(req["name"]):
-            return "bad_refstat_name"
-        if not valid_hash(req.get("file_hash")):
-            return "bad_file_hash"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        return None
-    if cmd == "ops.restore_approve":
-        # Per-restore consent for a schema-bump DB replace — bound to
-        # the exact loss report (report_id) + backup bytes/schema, so an
-        # earlier update/rollback approval can never substitute. Same
-        # projectless lifecycle surface as the update ops.
-        if req.get("project_id") is not None:
-            return "bad_project_id"
-        allowed = base | {"report_id", "backup_sha256", "backup_schema",
-                          "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not valid_hash(req.get("report_id")):
-            return "bad_report_id"
-        if not valid_hash(req.get("backup_sha256")):
-            return "bad_backup_sha256"
-        if type(req.get("backup_schema")) is not int \
-                or req["backup_schema"] < 0:
-            return "bad_backup_schema"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        return None
-    if cmd in ("ops.update_apply", "ops.update_rollback"):
-        # System-wide lifecycle ops — no project_id (the mcs_requests
-        # early-return routes them here before the positive-pid gate).
-        # tag/target_sha/base_sha pin WHAT is being approved so a moved
-        # tag can never silently redirect the apply (F5/S18).
-        if req.get("project_id") is not None:
-            return "bad_project_id"
-        if cmd == "ops.update_apply":
-            allowed = base | {"tag", "reason", "target_sha", "base_sha"}
-        else:
-            # rollback only needs an optional tag hint — silently
-            # accepted-but-ignored fields are worse than a rejection
-            allowed = base | {"tag", "reason"}
-        if req.keys() - allowed:
-            return "unknown_field"
-        if not _text(req.get("reason"), 2000):
-            return "bad_reason"
-        if cmd == "ops.update_apply" and (
-                not isinstance(req.get("tag"), str)
-                or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                    req["tag"])):
-            return "bad_tag"
-        if "tag" in req and (
-                not isinstance(req["tag"], str)
-                or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                    req["tag"])):
-            return "bad_tag"
-        for k in ("target_sha", "base_sha"):
-            if k in req and (not isinstance(req[k], str)
-                             or not re.fullmatch(r"[0-9a-f]{40}",
-                                                 req[k])):
-                return "bad_sha"
-        return None
-    return "unknown_ops_cmd"
+    handler = _OPS_VALIDATORS.get(req.get("cmd"))
+    return handler(req, base) if handler else "unknown_ops_cmd"
 
 
 def _history_payload(raw) -> dict | None:
@@ -621,12 +650,8 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         # after a committed receipt must not turn success into a retry.
         for path in ((staged,) if recovering else (staged, backup, claimed)):
             if path is not None:
-                try:
+                with suppress(OSError):
                     os.unlink(path)
-                except OSError:
-                    pass
-
-
 def _apply_refstat_approve_tx(db, req: dict, now: float,
                              filesystem_changes) -> tuple[str | None, dict]:
     """Human-approved promotion of a captured stats reference set:
@@ -723,12 +748,10 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
     if not os.path.isfile(mcs_update.WRAPPER):
         return "updater_not_deployed", {}
     upd = {}
-    try:
+    with suppress(Exception):
         cfg = load_config()
         if isinstance(cfg.get("update"), dict):
             upd = cfg["update"]
-    except Exception:
-        pass
     if upd.get("mode", "off") == "off":
         # fail fast: accepting a receipt under mode=off would leave it
         # silently dormant while telling the user it was scheduled

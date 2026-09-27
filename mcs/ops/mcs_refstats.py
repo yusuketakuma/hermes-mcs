@@ -36,6 +36,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -70,7 +71,7 @@ def _diff(want, got, path: str = "") -> list:
     """Recursive structural diff; returns ['path: want -> got', ...]."""
     out = []
     if type(want) is not type(got) and not (
-            isinstance(want, (int, float)) and isinstance(got, (int, float))
+            isinstance(want, int | float) and isinstance(got, int | float)
             and not isinstance(want, bool) and not isinstance(got, bool)):
         return [f"{path or '<root>'}: type {type(want).__name__}"
                 f" -> {type(got).__name__}"]
@@ -85,10 +86,10 @@ def _diff(want, got, path: str = "") -> list:
     elif isinstance(want, list):
         if len(want) != len(got):
             out.append(f"{path}: len {len(want)} -> {len(got)}")
-        for i, (w, g) in enumerate(zip(want, got)):
+        for i, (w, g) in enumerate(zip(want, got, strict=False)):
             out.extend(_diff(w, g, f"{path}[{i}]"))
     elif want != got:
-        if isinstance(want, (int, float)) and isinstance(got, (int, float)) \
+        if isinstance(want, int | float) and isinstance(got, int | float) \
                 and not isinstance(want, bool) and not isinstance(got, bool) \
                 and abs(want - got) < 1e-9:
             return out
@@ -193,7 +194,7 @@ def _fold_as_of(stats_obj):
     for st in (stats_obj or {}).values():
         scope = st.get("scope") if isinstance(st, dict) else None
         if isinstance(scope, dict) \
-                and isinstance(scope.get("as_of"), (int, float)) \
+                and isinstance(scope.get("as_of"), int | float) \
                 and not isinstance(scope["as_of"], bool):
             scope["as_of"] = int(scope["as_of"])
 
@@ -221,7 +222,7 @@ def cmd_verify(args) -> int:
         print(json.dumps({"ok": False, "error": "refstat_not_approved"}))
         return 1
     try:
-        raw = open(path, "rb").read()
+        raw = Path(path).read_bytes()
     except OSError:
         print(json.dumps({"ok": False, "error": "refstat_corrupt"}))
         return 1

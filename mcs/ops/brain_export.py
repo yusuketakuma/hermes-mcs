@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -177,9 +178,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     title = f"MCS {name}"
     lines = [_fm(title), f"# {name}\n\n"]
     lines.append(f"- project_id: {pid}\n")
-    for k in ("project_type", "disease", "station_name"):
-        if info.get(k):
-            lines.append(f"- {k}: {info[k]}\n")
+    lines.extend(f"- {k}: {info[k]}\n"
+                 for k in ("project_type", "disease", "station_name")
+                 if info.get(k))
     lines.append(f"- last_activity: {roll.get('last_activity', '?')}\n"
                  f"- messages: {roll.get('msg_count', 0)} "
                  f"(replies {roll.get('reply_count', 0)})\n")
@@ -197,13 +198,13 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
                                   ensure_ascii=False)[:1000] + "\n```\n")
     if roll.get("medications"):
         lines.append("\n## current medications\n\n| name | dose | last |\n| --- | --- | --- |\n")
-        for m in roll["medications"]:
-            lines.append(f"| {_cell(m.get('name'))} | {_cell(m.get('dose') or '')} "
-                         f"| {m.get('last') or ''} |\n")
+        lines.extend(f"| {_cell(m.get('name'))} | {_cell(m.get('dose') or '')} "
+                     f"| {m.get('last') or ''} |\n"
+                     for m in roll["medications"])
     if roll.get("recent_symptoms"):
         lines.append("\n## recent symptoms\n\n| symptom | last |\n| --- | --- |\n")
-        for s in roll["recent_symptoms"]:
-            lines.append(f"| {_cell(s.get('symptom'))} | {s.get('last')} |\n")
+        lines.extend(f"| {_cell(s.get('symptom'))} | {s.get('last')} |\n"
+                     for s in roll["recent_symptoms"])
     if roll.get("recent_requests"):
         lines.append("\n## open-looking requests\n\n| at | kind | ctx |\n| --- | --- | --- |\n")
         for r in roll["recent_requests"]:
@@ -312,10 +313,8 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         for row in view.db.execute(
                 "SELECT project_id,content FROM artifacts "
                 "WHERE kind='patient_rollup' ORDER BY artifact_id"):
-            try:
+            with suppress(json.JSONDecodeError, TypeError):
                 rolls[row["project_id"]] = json.loads(row["content"])
-            except (json.JSONDecodeError, TypeError):
-                continue
         seen = set()
         for pid, roll in rolls.items():
             name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"

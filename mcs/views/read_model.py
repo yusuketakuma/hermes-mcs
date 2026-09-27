@@ -30,6 +30,7 @@ Missing/unmeasurable inputs stay null (unknown), never zero.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
@@ -138,86 +139,95 @@ def _message_records(db, scope: str, project_id, limit):
             "'semantic_facts_v4') "
             "ORDER BY artifact_id DESC",
             (mid,)).fetchall()
-        by_kind: dict = {}
-        for kind in EXTRACTION_KINDS:
-            kind_rows = [r for r in art_rows if r["kind"] == kind]
-            st = _kind_state(kind_rows, msg["content_hash"])
-            entry = {"state": st["state"],
-                     "artifact_id": st["artifact_id"]}
-            if st["last_error"]:
-                entry["last_error"] = True
-            cm = st.get("current_meta") or {}
-            if cm.get("engine_version") is not None:
-                # T18: version-pinned readers can tell a v4 PASS row
-                # from a legacy current without parsing content
-                entry["engine_version"] = cm["engine_version"]
-            by_kind[kind] = entry
-        proj = by_kind["canonical_projection"]
-        extraction = by_kind["extract_llm"]
-        v1 = by_kind["extract_v1"]
-        v4row = by_kind["semantic_facts_v4"]
-        if msg["body_state"] == "deleted":
-            # the source is a tombstone — nothing derived from it may
-            # read as current even if hashes still match
-            state = "stale"
-        elif any(k["state"] == "current"
-                 for k in (v4row, proj, extraction, v1)):
-            state = "current"
-        elif all(k["state"] == "pending"
-                 for k in (v4row, proj, extraction, v1)):
-            state = "pending"
-        elif any(k["state"] == "unknown"
-                 for k in (v4row, proj, extraction, v1)):
-            state = "unknown"
-        else:
-            state = "stale"
+        by_kind = _kind_map(art_rows, msg["content_hash"])
         rec = {"project_id": msg["project_id"], "message_id": mid,
                "parent_id": msg["parent_id"],
                "posted_at_ts": msg["posted_at_ts"],
                "body_state": msg["body_state"],
                "content_hash": msg["content_hash"],
                "extraction_eligible": bool(msg["eligible"]),
-               "state": state,
+               "state": _record_state(msg, by_kind),
                "extraction": by_kind}
-        # fact/relation ids from the CURRENT published extraction —
-        # v4 outranks the canonical projection (T18 precedence);
-        # evidence binding stays exact (ids + quote only in detail)
-        facts, relations = [], []
-        src = v4row if v4row["state"] == "current" else proj
-        if src["state"] == "current" and src["artifact_id"]:
-            row = next((r for r in art_rows
-                        if r["artifact_id"] == src["artifact_id"]), None)
-            if row is not None:
-                try:
-                    doc = json.loads(row["content"])
-                except (json.JSONDecodeError, TypeError):
-                    doc = None
-                if isinstance(doc, dict):
-                    for fact in doc.get("canonical_facts") or []:
-                        if not isinstance(fact, dict):
-                            continue
-                        f = {"fact_id": fact.get("fact_id"),
-                             "kind": fact.get("kind"),
-                             "validation_status":
-                                 fact.get("validation_status"),
-                             "workflow_status":
-                                 fact.get("workflow_status"),
-                             "evidence_ids":
-                                 fact.get("evidence_ids") or []}
-                        if scope == "detail":
-                            f["statement"] = fact.get("statement")
-                            f["evidence_quote"] = fact.get("evidence_quote")
-                        facts.append(f)
-                    for rel in doc.get("canonical_relations") or []:
-                        if isinstance(rel, dict):
-                            relations.append({
-                                "left_fact_id": rel.get("left_fact_id"),
-                                "right_fact_id": rel.get("right_fact_id"),
-                                "kind": rel.get("kind")})
+        facts, relations = _fact_relations(by_kind, art_rows, scope)
         rec["facts"] = facts
         rec["relations"] = relations
         records.append(rec)
     return records, total, truncated
+
+
+def _kind_map(art_rows, content_hash) -> dict:
+    by_kind: dict = {}
+    for kind in EXTRACTION_KINDS:
+        kind_rows = [r for r in art_rows if r["kind"] == kind]
+        st = _kind_state(kind_rows, content_hash)
+        entry = {"state": st["state"],
+                 "artifact_id": st["artifact_id"]}
+        if st["last_error"]:
+            entry["last_error"] = True
+        cm = st.get("current_meta") or {}
+        if cm.get("engine_version") is not None:
+            # T18: version-pinned readers can tell a v4 PASS row
+            # from a legacy current without parsing content
+            entry["engine_version"] = cm["engine_version"]
+        by_kind[kind] = entry
+    return by_kind
+
+
+def _record_state(msg, by_kind: dict) -> str:
+    kinds = (by_kind["semantic_facts_v4"], by_kind["canonical_projection"],
+             by_kind["extract_llm"], by_kind["extract_v1"])
+    if msg["body_state"] == "deleted":
+        # the source is a tombstone — nothing derived from it may
+        # read as current even if hashes still match
+        return "stale"
+    if any(k["state"] == "current" for k in kinds):
+        return "current"
+    if all(k["state"] == "pending" for k in kinds):
+        return "pending"
+    if any(k["state"] == "unknown" for k in kinds):
+        return "unknown"
+    return "stale"
+
+
+def _fact_relations(by_kind: dict, art_rows, scope: str):
+    """fact/relation ids from the CURRENT published extraction —
+    v4 outranks the canonical projection (T18 precedence); evidence
+    binding stays exact (ids + quote only in detail)."""
+    facts, relations = [], []
+    v4row = by_kind["semantic_facts_v4"]
+    src = v4row if v4row["state"] == "current" \
+        else by_kind["canonical_projection"]
+    if not (src["state"] == "current" and src["artifact_id"]):
+        return facts, relations
+    row = next((r for r in art_rows
+                if r["artifact_id"] == src["artifact_id"]), None)
+    if row is None:
+        return facts, relations
+    try:
+        doc = json.loads(row["content"])
+    except (json.JSONDecodeError, TypeError):
+        doc = None
+    if not isinstance(doc, dict):
+        return facts, relations
+    for fact in doc.get("canonical_facts") or []:
+        if not isinstance(fact, dict):
+            continue
+        f = {"fact_id": fact.get("fact_id"),
+             "kind": fact.get("kind"),
+             "validation_status": fact.get("validation_status"),
+             "workflow_status": fact.get("workflow_status"),
+             "evidence_ids": fact.get("evidence_ids") or []}
+        if scope == "detail":
+            f["statement"] = fact.get("statement")
+            f["evidence_quote"] = fact.get("evidence_quote")
+        facts.append(f)
+    relations.extend({
+        "left_fact_id": rel.get("left_fact_id"),
+        "right_fact_id": rel.get("right_fact_id"),
+        "kind": rel.get("kind")}
+        for rel in doc.get("canonical_relations") or []
+        if isinstance(rel, dict))
+    return facts, relations
 
 
 def _attachments(db, scope: str):
@@ -248,11 +258,9 @@ def _coverage(db, records) -> dict:
             extraction[kind][rec["extraction"][kind]["state"]] += 1
     collection = {"patients": None, "messages": len(records),
                   "deleted": None, "extraction_eligible": None}
-    try:
+    with suppress(Exception):
         collection["patients"] = db.execute(
             "SELECT COUNT(*) FROM patients").fetchone()[0]
-    except Exception:
-        pass
     collection["deleted"] = sum(
         1 for r in records if r["body_state"] == "deleted")
     collection["extraction_eligible"] = sum(
