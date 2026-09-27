@@ -10,6 +10,7 @@ here is deterministic over the ledger so content fingerprints (source_fp
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 from mcs_requests import payload_hash, positive
@@ -219,6 +220,21 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 
 # ---------- card content ----------
 
+def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
+    """Select and fetch the message cited by a signal's latest evidence."""
+    ev = sig.get("evidence") or {}
+    mids = ev.get("message_ids") or []
+    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
+        or ev.get("discharge_message_id") or ev.get("message_id")
+    if type(mid) is not int:
+        return None, None
+    message = db.execute(
+        "SELECT sender_name,profession,organization,posted_at,"
+        "body_text,body_state "
+        "FROM messages WHERE message_id=?", (mid,)).fetchone()
+    return mid, message
+
+
 def _signal_display(db, sig: dict) -> list:
     """Neutral display blocks for one signal row — shared by the signal
     card and the digest's per-candidate rendering. The evidence quote
@@ -231,22 +247,14 @@ def _signal_display(db, sig: dict) -> list:
     name = _patient_name(db, pid)
     if name:
         blocks.append({"type": "field", "name": "患者", "value": name})
-    ev = sig.get("evidence") or {}
-    mids = ev.get("message_ids") or []
-    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
-        or ev.get("discharge_message_id") or ev.get("message_id")
-    if type(mid) is int:
-        m = db.execute(
-            "SELECT sender_name,profession,organization,posted_at,"
-            "body_text,body_state "
-            "FROM messages WHERE message_id=?", (mid,)).fetchone()
-        if m and m["body_state"] != "deleted" and m["body_text"]:
-            quote = (f"最新言及 {m['posted_at'] or '?'} "
-                     f"{_sender_tag(m)}: {m['body_text']}")
-            blocks.append({"type": "quote", "text": quote})
-            sblk = _structured_block(db, mid)
-            if sblk:
-                blocks.append(sblk)
+    mid, m = _signal_evidence(db, sig)
+    if m and m["body_state"] != "deleted" and m["body_text"]:
+        quote = (f"最新言及 {m['posted_at'] or '?'} "
+                 f"{_sender_tag(m)}: {m['body_text']}")
+        blocks.append({"type": "quote", "text": quote})
+        sblk = _structured_block(db, mid)
+        if sblk:
+            blocks.append(sblk)
     state = sig.get("state")
     if state and state != "open":
         blocks.append({"type": "field", "name": "状態",
@@ -263,24 +271,16 @@ def _signal_body(db, sig: dict) -> str:
     name = _patient_name(db, sig.get("project_id"))
     if name:
         lines.append(f"患者: {name}")
-    ev = sig.get("evidence") or {}
-    mids = ev.get("message_ids") or []
-    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
-        or ev.get("discharge_message_id") or ev.get("message_id")
-    if type(mid) is int:
-        m = db.execute(
-            "SELECT sender_name,profession,organization,posted_at,"
-            "body_text,body_state "
-            "FROM messages WHERE message_id=?", (mid,)).fetchone()
-        if m and m["body_text"]:
-            body = ("（削除済み）" if m["body_state"] == "deleted"
-                    else m["body_text"])
-            lines.append(f"最新言及 {m['posted_at'] or '?'} "
-                         f"{_sender_tag(m)}: {body}")
-            if m["body_state"] != "deleted":
-                sblk = _structured_block(db, mid)
-                if sblk:
-                    lines.append(sblk["text"])
+    mid, m = _signal_evidence(db, sig)
+    if m and m["body_text"]:
+        body = ("（削除済み）" if m["body_state"] == "deleted"
+                else m["body_text"])
+        lines.append(f"最新言及 {m['posted_at'] or '?'} "
+                     f"{_sender_tag(m)}: {body}")
+        if m["body_state"] != "deleted":
+            sblk = _structured_block(db, mid)
+            if sblk:
+                lines.append(sblk["text"])
     state = sig.get("state")
     if state and state != "open":
         lines.append(f"状態: {state}")

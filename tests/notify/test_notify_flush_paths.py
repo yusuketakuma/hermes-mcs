@@ -133,7 +133,7 @@ def test_media_path_aliases_extensionless_files(tmp_path):
     p = notify_flush._media_path("IMG_1.JPG", str(src))
     assert p == str(src) + ".jpg"
     assert os.path.exists(p)                 # alias created
-    assert open(p, "rb").read() == b"jpg-bytes"
+    assert Path(p).read_bytes() == b"jpg-bytes"
     assert notify_flush._media_path("IMG_1.JPG", str(src)) == p  # idempotent
     # name without a sane extension, or path already carrying one -> unchanged
     assert notify_flush._media_path("noext", str(src)) == str(src)

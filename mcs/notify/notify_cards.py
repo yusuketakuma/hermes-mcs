@@ -38,6 +38,7 @@ import secrets
 import tempfile
 import time
 import uuid
+from contextlib import suppress
 
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
@@ -369,12 +370,8 @@ def restore_awaiting_consent(root: str) -> dict | None:
 
 
 def clear_restore_pending(root: str) -> None:
-    try:
+    with suppress(FileNotFoundError):
         os.unlink(os.path.join(root, RESTORE_MARKER))
-    except FileNotFoundError:
-        pass
-
-
 def _restore_hold_active(db, *, card_id=None, delivery_id=None) -> bool:
     """An unreleased restore hold on this card/delivery freezes it."""
     if card_id is not None and db.execute(
@@ -446,10 +443,8 @@ def publish_file(directory: str, name: str, raw: bytes) -> str:
         finally:
             os.close(dirfd)
     except BaseException:
-        try:
+        with suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
     return os.path.join(directory, name)
 
@@ -1056,6 +1051,17 @@ def _digest_thread_name(content) -> str:
     return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
 
 
+def _source_hash(db, mid) -> str | None:
+    """Pinned content hash of a displayed source message — only a
+    full-body message with a valid hash can anchor a render."""
+    r = db.execute(
+        "SELECT content_hash,body_state FROM messages "
+        "WHERE message_id=?", (mid,)).fetchone()
+    if r and r["body_state"] == "full" and valid_hash(r["content_hash"]):
+        return r["content_hash"]
+    return None
+
+
 def _render_context(db, card) -> dict:
     """Modal-flow context pinned at render time — the plugin builds
     request.create/ops.signal_dismiss from THIS, so a confirmed command
@@ -1073,12 +1079,9 @@ def _render_context(db, card) -> dict:
         if positive(mid):
             ctx["project_id"] = card["project_id"]
             ctx["source_message_id"] = mid
-            r = db.execute(
-                "SELECT content_hash,body_state FROM messages "
-                "WHERE message_id=?", (mid,)).fetchone()
-            if r and r["body_state"] == "full" \
-                    and valid_hash(r["content_hash"]):
-                ctx["source_hash"] = r["content_hash"]
+            pin = _source_hash(db, mid)
+            if pin is not None:
+                ctx["source_hash"] = pin
         return ctx
     keys = _anchor_keys(card)
     sigs = _latest_signals(db, keys)
@@ -1097,12 +1100,9 @@ def _render_context(db, card) -> dict:
     if type(mid) is int:
         ctx["project_id"] = card["project_id"]
         ctx["source_message_id"] = mid
-        r = db.execute(
-            "SELECT content_hash,body_state FROM messages "
-            "WHERE message_id=?", (mid,)).fetchone()
-        if r and r["body_state"] == "full" \
-                and valid_hash(r["content_hash"]):
-            ctx["source_hash"] = r["content_hash"]
+        pin = _source_hash(db, mid)
+        if pin is not None:
+            ctx["source_hash"] = pin
     return ctx
 
 
@@ -1278,16 +1278,17 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 return {"error": "scope_mismatch"}
             # sealed already — a flush re-entry only repairs + completes
             _complete_intent(db, event_id, now)
-            for r in db.execute(
+            specs.extend(
+                json.loads(r["spec_json"])
+                for r in db.execute(
                     """SELECT r.spec_json, r.delivery_id
                        FROM notification_renders r
                        JOIN notification_intent_cards ic
                          ON ic.delivery_id = r.delivery_id
                        WHERE ic.event_id=? AND r.state='queued'
                          AND (r.spec_published=0 OR r.spec_json IS NULL)""",
-                    (event_id,)).fetchall():
-                if r["spec_json"]:
-                    specs.append(json.loads(r["spec_json"]))
+                    (event_id,)).fetchall()
+                if r["spec_json"])
             outcome["resealed"] = True
         else:
             if scope is None:
@@ -1475,38 +1476,9 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
     if replay is not None and action not in ("body", "request", "dismiss"):
         return replay
     if action in ("prev", "next"):
-        if tok["need_ui_rev"] is not None \
-                and tok["need_ui_rev"] != card["ui_revision"]:
-            return {**base, "outcome": "rejected", "error": "stale_ui",
-                    "hint": "refresh"}
-        page = tok_params.get("page")
-        content = _card_content(db, card)
-        if type(page) is not int or not 0 <= page < content["pages"]:
-            return {**base, "outcome": "rejected", "error": "bad_page"}
-        db.execute(
-            "UPDATE notification_cards SET ui_state=?,ui_revision=?,"
-            "updated_at=? WHERE card_id=?",
-            (json.dumps({"page": page}), card["ui_revision"] + 1,
-             now, card["card_id"]))
-        # a nav consumes the old tokens — issue the next render so the
-        # card actually changes page and carries fresh ui_rev tokens
-        # (§2: view操作は適用後に新revision/token)
-        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
-        return {**base, "outcome": "applied", "action": "page",
-                "page": page, "delivery_id": new_render}
+        return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
-        # view-only: answer with the untruncated text of the shown set
-        # the click's manifest froze — no state change, no re-render
-        man = db.execute(
-            "SELECT * FROM notification_view_manifests "
-            "WHERE manifest_id=? AND card_id=?",
-            (tok["need_manifest_id"], card["card_id"])).fetchone()
-        if man is None or man["invalidated"]:
-            return {**base, "outcome": "rejected",
-                    "error": "manifest_invalid"}
-        title, body_text = _card_body_text(db, card, man)
-        return {**base, "outcome": "applied", "action": "body",
-                "title": title, "body": body_text}
+        return _act_body(db, base, card, tok)
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -1515,87 +1487,11 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return {**base, "outcome": "applied", "action": "tasks",
                 "tasks": items, "token_ctx": token_ctx}
     if action == "task_status":
-        rid, to = tok_params.get("request_id"), tok_params.get("status")
-        row = (db.execute(
-            "SELECT * FROM requests WHERE request_id=? AND project_id=?",
-            (rid, card["project_id"])).fetchone()
-            if positive(rid) else None)
-        if row is None or to not in ("in_progress", "done"):
-            return {**base, "outcome": "rejected",
-                    "error": "request_not_found"}
-        if tok["need_request_rev"] is not None \
-                and tok["need_request_rev"] != row["revision"]:
-            return {**base, "outcome": "rejected",
-                    "error": "stale_task", "hint": "tasks"}
-        if row["status"] == to:
-            return {**base, "outcome": "applied", "action": "task_status",
-                    "request_id": rid, "status": to, "absorbed": True,
-                    "title": row["title"]}
-        if row["status"] not in ("open", "in_progress"):
-            return {**base, "outcome": "rejected",
-                    "error": "request_not_open"}
-        cur = db.execute(
-            "UPDATE requests SET status=?,revision=revision+1,"
-            "updated_at=? WHERE request_id=? AND revision=?",
-            (to, now, rid, row["revision"]))
-        if cur.rowcount != 1:
-            # raced transition — answer against what actually landed
-            again = db.execute(
-                "SELECT status FROM requests WHERE request_id=?",
-                (rid,)).fetchone()
-            if again and again["status"] == to:
-                return {**base, "outcome": "applied",
-                        "action": "task_status", "request_id": rid,
-                        "status": to, "absorbed": True,
-                        "title": row["title"]}
-            return {**base, "outcome": "rejected",
-                    "error": "stale_task", "hint": "tasks"}
-        return {**base, "outcome": "applied", "action": "task_status",
-                "request_id": rid, "status": to, "title": row["title"],
-                "revision": row["revision"] + 1}
+        return _act_task_status(db, base, card, tok, tok_params, now)
     if action == "ack":
-        mid = tok["need_manifest_id"]
-        man = db.execute(
-            "SELECT * FROM notification_view_manifests "
-            "WHERE manifest_id=? AND card_id=?",
-            (mid, card["card_id"])).fetchone()
-        if man is None or man["invalidated"]:
-            return {**base, "outcome": "rejected",
-                    "error": "manifest_invalid"}
-        dupe = db.execute(
-            "SELECT 1 FROM notification_acknowledgements "
-            "WHERE card_id=? AND manifest_id=? AND actor=?",
-            (card["card_id"], mid, actor)).fetchone()
-        if dupe:
-            return {**base, "outcome": "applied", "action": "ack",
-                    "absorbed": True, "manifest_id": mid}
-        db.execute(
-            "INSERT INTO notification_acknowledgements("
-            "card_id,manifest_id,actor,command_id,receipt_ref,created_at)"
-            " VALUES(?,?,?,?,?,?)",
-            (card["card_id"], mid, actor, req["command_id"],
-             req["command_id"], now))
-        shown = json.loads(man["shown"] or "[]")
-        # the footer now shows the ack — re-render immediately like a
-        # nav click, not at the next sweep (§2: applied state must show
-        # in the card itself within the interaction budget)
-        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
-        return {**base, "outcome": "applied", "action": "ack",
-                "manifest_id": mid, "shown": shown,
-                "delivery_id": new_render}
+        return _act_ack(db, base, req, card, tok, cfg, now, specs)
     if action == "assign":
-        db.execute(
-            """INSERT INTO notification_triage(
-                 card_id,owner,defer_until,state,revision,last_actor,
-                 updated_at) VALUES(?,?,NULL,'assigned',1,?,?)
-               ON CONFLICT(card_id) DO UPDATE SET
-                 owner=excluded.owner,defer_until=NULL,state='assigned',
-                 revision=revision+1,last_actor=excluded.last_actor,
-                 updated_at=excluded.updated_at""",
-            (card["card_id"], actor, actor, now))
-        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
-        return {**base, "outcome": "applied", "action": "assign",
-                "owner": actor, "delivery_id": new_render}
+        return _act_assign(db, base, card, actor, cfg, now, specs)
     if action == "defer":
         until = now + DEFER_S
         db.execute(
@@ -1620,6 +1516,131 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 "modal": True, "params": tok_params}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
+
+
+def _act_page(db, base, card, tok, tok_params, cfg, now, specs) -> dict:
+    if tok["need_ui_rev"] is not None \
+            and tok["need_ui_rev"] != card["ui_revision"]:
+        return {**base, "outcome": "rejected", "error": "stale_ui",
+                "hint": "refresh"}
+    page = tok_params.get("page")
+    content = _card_content(db, card)
+    if type(page) is not int or not 0 <= page < content["pages"]:
+        return {**base, "outcome": "rejected", "error": "bad_page"}
+    db.execute(
+        "UPDATE notification_cards SET ui_state=?,ui_revision=?,"
+        "updated_at=? WHERE card_id=?",
+        (json.dumps({"page": page}), card["ui_revision"] + 1,
+         now, card["card_id"]))
+    # a nav consumes the old tokens — issue the next render so the
+    # card actually changes page and carries fresh ui_rev tokens
+    # (§2: view操作は適用後に新revision/token)
+    new_render = _issue_render(db, card["card_id"], cfg, now, specs)
+    return {**base, "outcome": "applied", "action": "page",
+            "page": page, "delivery_id": new_render}
+
+
+def _act_body(db, base, card, tok) -> dict:
+    # view-only: answer with the untruncated text of the shown set
+    # the click's manifest froze — no state change, no re-render
+    man = db.execute(
+        "SELECT * FROM notification_view_manifests "
+        "WHERE manifest_id=? AND card_id=?",
+        (tok["need_manifest_id"], card["card_id"])).fetchone()
+    if man is None or man["invalidated"]:
+        return {**base, "outcome": "rejected",
+                "error": "manifest_invalid"}
+    title, body_text = _card_body_text(db, card, man)
+    return {**base, "outcome": "applied", "action": "body",
+            "title": title, "body": body_text}
+
+
+def _act_task_status(db, base, card, tok, tok_params, now) -> dict:
+    rid, to = tok_params.get("request_id"), tok_params.get("status")
+    row = (db.execute(
+        "SELECT * FROM requests WHERE request_id=? AND project_id=?",
+        (rid, card["project_id"])).fetchone()
+        if positive(rid) else None)
+    if row is None or to not in ("in_progress", "done"):
+        return {**base, "outcome": "rejected",
+                "error": "request_not_found"}
+    if tok["need_request_rev"] is not None \
+            and tok["need_request_rev"] != row["revision"]:
+        return {**base, "outcome": "rejected",
+                "error": "stale_task", "hint": "tasks"}
+    if row["status"] == to:
+        return {**base, "outcome": "applied", "action": "task_status",
+                "request_id": rid, "status": to, "absorbed": True,
+                "title": row["title"]}
+    if row["status"] not in ("open", "in_progress"):
+        return {**base, "outcome": "rejected",
+                "error": "request_not_open"}
+    cur = db.execute(
+        "UPDATE requests SET status=?,revision=revision+1,"
+        "updated_at=? WHERE request_id=? AND revision=?",
+        (to, now, rid, row["revision"]))
+    if cur.rowcount != 1:
+        # raced transition — answer against what actually landed
+        again = db.execute(
+            "SELECT status FROM requests WHERE request_id=?",
+            (rid,)).fetchone()
+        if again and again["status"] == to:
+            return {**base, "outcome": "applied",
+                    "action": "task_status", "request_id": rid,
+                    "status": to, "absorbed": True,
+                    "title": row["title"]}
+        return {**base, "outcome": "rejected",
+                "error": "stale_task", "hint": "tasks"}
+    return {**base, "outcome": "applied", "action": "task_status",
+            "request_id": rid, "status": to, "title": row["title"],
+            "revision": row["revision"] + 1}
+
+
+def _act_ack(db, base, req, card, tok, cfg, now, specs) -> dict:
+    mid = tok["need_manifest_id"]
+    man = db.execute(
+        "SELECT * FROM notification_view_manifests "
+        "WHERE manifest_id=? AND card_id=?",
+        (mid, card["card_id"])).fetchone()
+    if man is None or man["invalidated"]:
+        return {**base, "outcome": "rejected",
+                "error": "manifest_invalid"}
+    dupe = db.execute(
+        "SELECT 1 FROM notification_acknowledgements "
+        "WHERE card_id=? AND manifest_id=? AND actor=?",
+        (card["card_id"], mid, base["actor"])).fetchone()
+    if dupe:
+        return {**base, "outcome": "applied", "action": "ack",
+                "absorbed": True, "manifest_id": mid}
+    db.execute(
+        "INSERT INTO notification_acknowledgements("
+        "card_id,manifest_id,actor,command_id,receipt_ref,created_at)"
+        " VALUES(?,?,?,?,?,?)",
+        (card["card_id"], mid, base["actor"], req["command_id"],
+         req["command_id"], now))
+    shown = json.loads(man["shown"] or "[]")
+    # the footer now shows the ack — re-render immediately like a
+    # nav click, not at the next sweep (§2: applied state must show
+    # in the card itself within the interaction budget)
+    new_render = _issue_render(db, card["card_id"], cfg, now, specs)
+    return {**base, "outcome": "applied", "action": "ack",
+            "manifest_id": mid, "shown": shown,
+            "delivery_id": new_render}
+
+
+def _act_assign(db, base, card, actor, cfg, now, specs) -> dict:
+    db.execute(
+        """INSERT INTO notification_triage(
+             card_id,owner,defer_until,state,revision,last_actor,
+             updated_at) VALUES(?,?,NULL,'assigned',1,?,?)
+           ON CONFLICT(card_id) DO UPDATE SET
+             owner=excluded.owner,defer_until=NULL,state='assigned',
+             revision=revision+1,last_actor=excluded.last_actor,
+             updated_at=excluded.updated_at""",
+        (card["card_id"], actor, actor, now))
+    new_render = _issue_render(db, card["card_id"], cfg, now, specs)
+    return {**base, "outcome": "applied", "action": "assign",
+            "owner": actor, "delivery_id": new_render}
 
 
 def _thread_tasks(db, card, tok, now):
@@ -1820,11 +1841,12 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                        (now, card["card_id"]))
         # watchdog: live renders whose spec never published (or whose
         # file vanished) get their stored bytes republished
-        for r in db.execute(
+        specs.extend(
+            json.loads(r["spec_json"])
+            for r in db.execute(
                 "SELECT delivery_id,spec_json FROM notification_renders "
-                "WHERE state='queued' AND spec_published=0").fetchall():
-            if r["spec_json"]:
-                specs.append(json.loads(r["spec_json"]))
+                "WHERE state='queued' AND spec_published=0").fetchall()
+            if r["spec_json"])
         if specs:
             mark_snapshot_dirty(db)
     _publish_specs(db, dirs, specs, now)
@@ -1908,12 +1930,10 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             if not n.endswith(".json"):
                 continue
             path = os.path.join(dirs["cmd_results"], n)
-            try:
+            with suppress(OSError):
                 if now - os.stat(path).st_mtime > TOKEN_WRITE_S:
                     os.unlink(path)
                     results += 1
-            except OSError:
-                pass
         return {"tokens": tokens, "spec_json_cleared": cleared,
                 "spec_files": removed, "result_files": results}
 
@@ -1959,11 +1979,9 @@ def recover(ledger, cfg, result) -> dict:
             claimed = []
         stale = 0
         for n in claimed:
-            try:
+            with suppress(OSError):
                 if now - os.stat(n).st_mtime > 60:
                     stale += 1
-            except OSError:
-                pass
         fixed["missing_claimed"] = stale
         if stale:
             result.setdefault("errors", []).append(

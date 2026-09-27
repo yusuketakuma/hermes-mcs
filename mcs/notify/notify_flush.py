@@ -213,6 +213,74 @@ def _signal_unit_text(ledger, sigs: list[dict]):
         sig_view)
 
 
+def _signal_notice_text(ledger, payload: dict) -> str:
+    """Review-candidate notice: resolve the current explanation/evidence.
+    Last-moment gates like semantic_notice: the flag may have been
+    turned off, or the signal may have resolved while queued —
+    both are terminal drops, not retries."""
+    sig_cfg = _config().get("signals")
+    if not (isinstance(sig_cfg, dict)
+            and sig_cfg.get("notify") is True):
+        raise _StaleSend("signals_notify_disabled")
+    # Member keys: a merged same-post med intent carries
+    # signal_keys[]; a legacy/single intent carries signal_key.
+    skeys = payload.get("signal_keys")
+    keys = ([k for k in skeys if type(k) is str and k]
+            if isinstance(skeys, list) else [])
+    skey = payload.get("signal_key")
+    if not keys and type(skey) is str and skey:
+        keys = [skey]
+    # a member that resolved while queued drops out of a merged
+    # notice; only a fully-resolved group cancels the send. Digest
+    # payloads carry project_id=None, so the per-event archived
+    # gate in flush() can't see them — members of an archived
+    # patient drop out here instead.
+    open_sigs = [s for _, s in mcs_signals.open_signal_rows(
+        ledger.db, keys)
+        if not (s.get("project_id")
+                and ledger.is_archived(s["project_id"]))]
+    if not open_sigs:
+        raise _StaleSend("signal_not_open")
+    # Rebuild text at send time: notes can change while evidence
+    # IDs stay the same, a digest re-groups its live members, and a
+    # merged med notice shrinks to whoever is still open.
+    if payload.get("digest") is True:
+        units = mcs_signals.sig_units(
+            [(mcs_signals.med_group_key(s), s) for s in open_sigs])
+        parts = [_signal_unit_text(ledger, us) for us in units]
+        text = (f"[MCS] レビュー候補ダイジェスト"
+                f"（{len(open_sigs)}件）\n\n" + "\n\n".join(parts))
+    else:
+        text = _signal_unit_text(ledger, open_sigs)
+        if payload.get("urgent") is True:
+            head, _, tail = text.partition("\n")
+            text = f"{head} — 原投稿が urgency:high" \
+                   + (f"\n{tail}" if tail else "")
+    if not isinstance(text, str) or not text:
+        raise ValueError("payload_invalid")
+    return text
+
+
+def _followup_files(ledger, payload: dict):
+    """a body notice went out before this file downloaded — deliver
+    just the file now (F11). If the file is no longer sendable
+    (pruned/withdrawn/never finished) the intent is terminal."""
+    aid = payload.get("attachment_id")
+    if type(aid) is not int:
+        raise ValueError("payload_invalid")
+    a = ledger.db.execute(
+        "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256"
+        " FROM attachments a JOIN messages m ON m.message_id=a.message_id"
+        " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'",
+        (aid,)).fetchone()
+    if not a or a["state"] != "downloaded" or not a["local_path"]:
+        raise _StaleSend("attachment_not_ready")
+    files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
+    if not files:
+        raise _StaleSend("attachment_unsendable")
+    return (f"[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
+
+
 def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     """Returns (content, files). files = [(filename, local_path)] to upload."""
     try:
@@ -253,69 +321,15 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             raise ValueError("payload_invalid")
         return text, []
     if ev["kind"] == "signal":
-        # Review-candidate notice: resolve the current explanation/evidence.
-        # Last-moment gates like semantic_notice: the flag may have been
-        # turned off, or the signal may have resolved while queued —
-        # both are terminal drops, not retries.
-        sig_cfg = _config().get("signals")
-        if not (isinstance(sig_cfg, dict)
-                and sig_cfg.get("notify") is True):
-            raise _StaleSend("signals_notify_disabled")
-        # Member keys: a merged same-post med intent carries
-        # signal_keys[]; a legacy/single intent carries signal_key.
-        skeys = payload.get("signal_keys")
-        keys = ([k for k in skeys if type(k) is str and k]
-                if isinstance(skeys, list) else [])
-        skey = payload.get("signal_key")
-        if not keys and type(skey) is str and skey:
-            keys = [skey]
-        # a member that resolved while queued drops out of a merged
-        # notice; only a fully-resolved group cancels the send. Digest
-        # payloads carry project_id=None, so the per-event archived
-        # gate in flush() can't see them — members of an archived
-        # patient drop out here instead.
-        open_sigs = [s for _, s in mcs_signals.open_signal_rows(
-            ledger.db, keys)
-            if not (s.get("project_id")
-                    and ledger.is_archived(s["project_id"]))]
-        if not open_sigs:
-            raise _StaleSend("signal_not_open")
-        # Rebuild text at send time: notes can change while evidence
-        # IDs stay the same, a digest re-groups its live members, and a
-        # merged med notice shrinks to whoever is still open.
-        if payload.get("digest") is True:
-            units = mcs_signals.sig_units(
-                [(mcs_signals.med_group_key(s), s) for s in open_sigs])
-            parts = [_signal_unit_text(ledger, us) for us in units]
-            text = (f"[MCS] レビュー候補ダイジェスト"
-                    f"（{len(open_sigs)}件）\n\n" + "\n\n".join(parts))
-        else:
-            text = _signal_unit_text(ledger, open_sigs)
-            if payload.get("urgent") is True:
-                head, _, tail = text.partition("\n")
-                text = f"{head} — 原投稿が urgency:high" \
-                       + (f"\n{tail}" if tail else "")
-        if not isinstance(text, str) or not text:
-            raise ValueError("payload_invalid")
-        return text, []
+        return _signal_notice_text(ledger, payload), []
     if ev["kind"] == "attachment_followup":
-        # a body notice went out before this file downloaded — deliver
-        # just the file now (F11). If the file is no longer sendable
-        # (pruned/withdrawn/never finished) the intent is terminal.
-        aid = payload.get("attachment_id")
-        if type(aid) is not int:
-            raise ValueError("payload_invalid")
-        a = ledger.db.execute(
-            "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256"
-            " FROM attachments a JOIN messages m ON m.message_id=a.message_id"
-            " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'",
-            (aid,)).fetchone()
-        if not a or a["state"] != "downloaded" or not a["local_path"]:
-            raise _StaleSend("attachment_not_ready")
-        files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
-        if not files:
-            raise _StaleSend("attachment_unsendable")
-        return (f"[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
+        return _followup_files(ledger, payload)
+    return _message_notice(ledger, ev, payload)
+
+
+def _msg_rows(ledger, payload: dict) -> list:
+    """message_ids shape check + row load — missing/deleted bodies are
+    dropped, a fully-empty result means the intent went stale."""
     ids = payload.get("message_ids") or []
     if (not isinstance(ids, list)
             or any(type(mid) is not int or mid <= 0 for mid in ids)):
@@ -329,11 +343,65 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             (mid,)).fetchone()
         if r:
             rows.append(r)
-    src = payload.get("source", "unread")
     if not rows:
         raise _StaleSend("messages_unavailable")
+    return rows
+
+
+def _fmt_row(ledger, ev, att_map: dict, r, indent="") -> str:
+    s_lines = structured_view.structured_lines(
+        ledger.db, r["message_id"])
+    urg = _urgency(ledger, r["message_id"])
+    body = html_to_text(r["body_html"])
+    cap = 500 if s_lines else 600
+    if len(body) > cap:
+        body = body[:cap] + "…"
+    who = r["sender_name"] or "不明"
+    meta = " / ".join(x for x in (r["profession"], r["organization"]) if x)
+    parent = " (返信)" if r["parent_id"] and not indent else ""
+    state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
+    warn = " ⚠️" if urg == "high" else ""
+    head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
+            f"{parent}{state}{warn}\n"
+            f"{indent}{who}{f' ({meta})' if meta else ''} — "
+            f"{r['posted_at'][:16]}")
+    atts = att_map.get(r["message_id"], [])
+    att_line = ""
+    if atts:
+        marks = []
+        for a in atts:
+            nm = str(a["name"] or a["file_id"] or "file")
+            if a["state"] == "downloaded":
+                if (a["bytes"] or 0) > _MAX_FILE_BYTES:
+                    nm += " (25MB超·未送信)"
+            else:
+                nm += " (未取得)"
+            marks.append(nm)
+        att_line = f"\n{indent}📎 {'、'.join(marks[:5])}"
+    if s_lines:
+        struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
+        return (f"{head}\n{indent}📋 構造化\n{struct}\n"
+                f"{indent}───── 原文 ─────\n"
+                f"{indent}{body or '(本文なし)'}{att_line}")
+    return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"
+
+
+def _sem_block(ledger, r) -> str:
+    """Audited summary section — the enforce-mode policy lives in
+    semantic_send_gate.semantic_summary_block."""
+    try:
+        return semantic_send_gate.semantic_summary_block(
+            ledger, r, _config())
+    except Exception:
+        return ""   # never let a summary render break delivery
+
+
+def _message_notice(ledger, ev, payload: dict):
+    """New-message notice body — replies group under their parent when
+    both are new in this event; file order follows the text order."""
+    rows = _msg_rows(ledger, payload)
+    src = payload.get("source", "unread")
     att_map = _attachments_map(ledger, [r["message_id"] for r in rows])
-    # group replies under their parent when both are new in this event
     by_id = {r["message_id"]: r for r in rows}
     parents = [r for r in rows if not r["parent_id"]
                or r["parent_id"] not in by_id]
@@ -341,61 +409,14 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     for r in rows:
         if r["parent_id"] and r["parent_id"] in by_id:
             kids.setdefault(r["parent_id"], []).append(r)
-
-    def _fmt(r, indent=""):
-        s_lines = structured_view.structured_lines(
-            ledger.db, r["message_id"])
-        urg = _urgency(ledger, r["message_id"])
-        body = html_to_text(r["body_html"])
-        cap = 500 if s_lines else 600
-        if len(body) > cap:
-            body = body[:cap] + "…"
-        who = r["sender_name"] or "不明"
-        meta = " / ".join(x for x in (r["profession"], r["organization"]) if x)
-        parent = " (返信)" if r["parent_id"] and not indent else ""
-        state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
-        warn = " ⚠️" if urg == "high" else ""
-        head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
-                f"{parent}{state}{warn}\n"
-                f"{indent}{who}{f' ({meta})' if meta else ''} — "
-                f"{r['posted_at'][:16]}")
-        atts = att_map.get(r["message_id"], [])
-        att_line = ""
-        if atts:
-            marks = []
-            for a in atts:
-                nm = str(a["name"] or a["file_id"] or "file")
-                if a["state"] == "downloaded":
-                    if (a["bytes"] or 0) > _MAX_FILE_BYTES:
-                        nm += " (25MB超·未送信)"
-                else:
-                    nm += " (未取得)"
-                marks.append(nm)
-            att_line = f"\n{indent}📎 {'、'.join(marks[:5])}"
-        if s_lines:
-            struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
-            return (f"{head}\n{indent}📋 構造化\n{struct}\n"
-                    f"{indent}───── 原文 ─────\n"
-                    f"{indent}{body or '(本文なし)'}{att_line}")
-        return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"
-
-    def _sem_block(r):
-        """Audited summary section — the enforce-mode policy lives in
-        semantic_send_gate.semantic_summary_block."""
-        try:
-            return semantic_send_gate.semantic_summary_block(
-                ledger, r, _config())
-        except Exception:
-            return ""   # never let a summary render break delivery
-
     out = []
     order = []
     for r in parents:
-        out.append(_fmt(r) + _sem_block(r))
+        out.append(_fmt_row(ledger, ev, att_map, r) + _sem_block(ledger, r))
         order.append(r["message_id"])
         for k in sorted(kids.get(r["message_id"], []),
                         key=lambda x: x["posted_at"]):
-            out.append(_fmt(k, "↳ "))
+            out.append(_fmt_row(ledger, ev, att_map, k, "↳ "))
             order.append(k["message_id"])
     head = f"[MCS {src}] 新着 {len(rows)} 件"
     return (head + "\n\n" + "\n\n".join(out),
@@ -839,7 +860,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
     elif isinstance(exc, ValueError):
         _hold_event(ledger, ev, cfg)
         res["failed"] += 1
-    elif isinstance(exc, (OSError, TimeoutError, KeyError)):
+    elif isinstance(exc, OSError | TimeoutError | KeyError):
         backoff = min(3600, 60 * (2 ** ev["attempts"]))
         ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
         res["failed"] += 1

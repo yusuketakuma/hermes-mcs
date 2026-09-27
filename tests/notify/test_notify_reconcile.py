@@ -35,7 +35,7 @@ CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
        "signals": {"notify": True}}
 
 
-@pytest.fixture()
+@pytest.fixture
 def world(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
