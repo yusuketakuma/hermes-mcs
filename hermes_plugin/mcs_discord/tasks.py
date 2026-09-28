@@ -17,7 +17,6 @@ its listener without a process restart.
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any
 
 from ..mcs_delivery import paths, registry
@@ -98,17 +97,13 @@ class Supervisor:
 
     async def _run(self) -> None:
         try:
-            deadline = time.monotonic() + LOCK_WAIT_S
-            while not self._worker.acquire_scope_lock():
-                # another worker owns this delivery scope — wait out a
-                # dying predecessor (fatal adapter rebuild closes its
-                # bot, which releases the lock within one poll), but
-                # never race a live foreign owner
-                if self._stopping or _bot_closed(self._bot) \
-                        or time.monotonic() >= deadline:
-                    self._log("scope_lock_unavailable")
-                    return
-                await asyncio.sleep(0.25)
+            # another worker owns this delivery scope — wait out a
+            # dying predecessor (fatal adapter rebuild closes its bot,
+            # which releases the lock within one poll)
+            if not await self._worker.wait_scope_lock(
+                    LOCK_WAIT_S,
+                    lambda: self._stopping or _bot_closed(self._bot)):
+                return
             self._reg.reload()
             with self._reg.batch():
                 stats = await self._worker.reconcile()

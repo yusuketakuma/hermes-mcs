@@ -31,6 +31,8 @@ import os
 import time
 from collections.abc import Mapping
 
+from .paths import atomic_write, fsync_dir
+
 PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
 
@@ -59,27 +61,16 @@ def append(state_dir: str, worker_id: str, record: dict, *,
     if created:
         # A file fsync alone does not make its new directory entry durable.
         # Losing the journal name must not turn a sent attempt into not_sent.
-        dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(state_dir)
     return path
 
 
 def _scan_file(path: str, out: dict) -> None:
     try:
         with open(path, "rb") as handle:
+            # line by line: rows read before an I/O error still count
             for raw in handle:
-                try:
-                    row = json.loads(raw)
-                except ValueError:
-                    continue  # torn tail line — earlier rows still count
-                if not isinstance(row, dict):
-                    continue
-                aid = row.get("attempt_id")
-                if isinstance(aid, str):
-                    out.setdefault(aid, []).append(row)
+                _parse_rows(raw.rstrip(b"\n"), out)
     except OSError:
         return
 
@@ -100,7 +91,6 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
     Each rewrite is atomic (tmp + fsync + rename + dir fsync), so a crash
     leaves either the old or the new file, never half an attempt.
     """
-    from .paths import atomic_write
     try:
         names = _names(state_dir)
     except OSError:
@@ -150,11 +140,7 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
                              mode=0o600)
             else:
                 os.unlink(path)
-                dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(dfd)
-                finally:
-                    os.close(dfd)
+                fsync_dir(state_dir)
         except OSError:
             continue
         dropped += len(lines) - len(keep)
@@ -174,12 +160,11 @@ def scan(state_dir: str) -> dict[str, list[dict]]:
 
 
 def _parse_rows(data: bytes, out: dict) -> None:
-    # line-for-line what _scan_file keeps from the same bytes
     for raw in data.split(b"\n"):
         try:
             row = json.loads(raw)
         except ValueError:
-            continue
+            continue  # torn tail line — earlier rows still count
         if not isinstance(row, dict):
             continue
         aid = row.get("attempt_id")

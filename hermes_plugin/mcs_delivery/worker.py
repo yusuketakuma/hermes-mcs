@@ -153,11 +153,28 @@ class DeliveryWorker:
             os.close(self._lock_fd)
             self._lock_fd = None
 
+    async def wait_scope_lock(self, timeout: float, give_up) -> bool:
+        """Poll for the scope lock up to ``timeout`` seconds — a dying
+        predecessor releases it within the window, but a live foreign
+        owner is never raced. ``give_up()`` aborts early."""
+        deadline = time.monotonic() + timeout
+        while not self.acquire_scope_lock():
+            if give_up() or time.monotonic() >= deadline:
+                self._log("scope_lock_unavailable")
+                return False
+            await asyncio.sleep(0.25)
+        return True
+
     # -- journal helpers ----------------------------------------------
 
     def _journal(self, phase: str, **fields) -> None:
         journal.append(self._dirs["state"], self._worker_id,
                        {"phase": phase, **fields}, segment=self._segment)
+
+    def _journal_path(self) -> str:
+        """The live segment this worker appends to."""
+        return journal._path(self._dirs["state"], self._worker_id,
+                             self._segment)
 
     # -- journal growth bound ------------------------------------------
 
@@ -179,13 +196,7 @@ class DeliveryWorker:
         # while a restore is pending, its backup may be about to vanish
         # from backups/ and move the horizon forward — the journal is the
         # post-restore reconcile's evidence, so never prune then
-        try:
-            os.lstat(os.path.join(self._root, "restore_pending.json"))
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return 0
-        else:
+        if paths.restore_marker_present(self._root):
             return 0
         horizon = self._restore_horizon()
         if horizon is None:
@@ -213,8 +224,7 @@ class DeliveryWorker:
 
         return journal.compact(
             self._dirs["state"],
-            active=journal._path(self._dirs["state"], self._worker_id,
-                                 self._segment),
+            active=self._journal_path(),
             file_ok=owned, prunable=prunable)
 
     async def maintain_journal(self, *, rotate: bool = False) -> None:
@@ -223,10 +233,8 @@ class DeliveryWorker:
         which predate every restorable backup, are dropped; unknown
         outcomes, unfinished or unreported attempts and anything a claim
         or pending part may still read are kept."""
-        path = journal._path(self._dirs["state"], self._worker_id,
-                             self._segment)
         try:
-            size = os.path.getsize(path)
+            size = os.path.getsize(self._journal_path())
         except OSError:
             size = 0
         if size > JOURNAL_SEGMENT_BYTES:

@@ -727,9 +727,9 @@ def _thread_plan_ids(db, card, shown) -> list:
             continue
         if isinstance(cov, list):
             covered.update(m for m in cov if positive(m))
-    wanted = covered | {m for m in shown if positive(m)}
     if not covered - set(shown):
         return list(shown)
+    wanted = covered | {m for m in shown if positive(m)}
     # thread order, same query shape as the card face; ids outside
     # this card's thread/project never enter the plan
     return [r["message_id"] for r in db.execute(

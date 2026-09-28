@@ -49,6 +49,15 @@ def safe_name(command_id) -> str:
                     for c in str(command_id))[:120] or "unknown")
 
 
+def fsync_dir(d: str) -> None:
+    """Make a directory's entries (a new or renamed name) durable."""
+    dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def atomic_write(path: str, raw: bytes, tmp_prefix: str = ".atomic-",
                  mode: int | None = None, dir_fsync: bool = True) -> str:
     """tmp -> fsync -> [chmod] -> os.replace -> [dir fsync]: readers see
@@ -66,12 +75,7 @@ def atomic_write(path: str, raw: bytes, tmp_prefix: str = ".atomic-",
             os.chmod(tmp, mode)
         os.replace(tmp, path)
         if dir_fsync:
-            dfd = os.open(os.path.dirname(path),
-                          os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+            fsync_dir(os.path.dirname(path))
     except OSError:
         with suppress(OSError):
             os.unlink(tmp)
@@ -105,15 +109,21 @@ def read_flags(root: str) -> dict:
         return {}
     # A restore writes its durable marker before it can publish flags.
     # Previously granted cards and dependent parts must see that hold too.
+    if restore_marker_present(root):
+        data["restore_pending"] = True
+    return data
+
+
+def restore_marker_present(root: str) -> bool:
+    """True when ``restore_pending.json`` exists or cannot be ruled out
+    (fail closed: any lstat error other than absence counts as present)."""
     try:
         os.lstat(os.path.join(root, "restore_pending.json"))
     except FileNotFoundError:
-        pass
+        return False
     except OSError:
-        data["restore_pending"] = True
-    else:
-        data["restore_pending"] = True
-    return data
+        return True
+    return True
 
 
 def read_verified_attachment(path: str | None, part: dict) -> bytes | None:

@@ -362,8 +362,8 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
     return rows
 
 
-def _fmt_row(ledger, ev, att_map: dict, r, indent="",
-             skipped: dict | None = None) -> str:
+def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
+             skipped: dict) -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"])
     urg = _urgency(ledger, r["message_id"])
@@ -388,10 +388,8 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent="",
             nm = str(a["name"] or a["file_id"] or "file")
             if a["state"] != "downloaded":
                 nm += " (未取得)"
-            elif skipped is not None and a["attachment_id"] in skipped:
+            elif a["attachment_id"] in skipped:
                 nm += f" ({skipped[a['attachment_id']]})"
-            elif skipped is None and (a["bytes"] or 0) > _MAX_FILE_BYTES:
-                nm += " (25MB超·未送信)"
             marks.append(nm)
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
@@ -782,12 +780,7 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
             raise
         # a re-render is not a failed delivery — keep attempts intact so
         # repeated summary churn can never age the notice into a hold
-        now = time.time()
-        ledger.db.execute(
-            "UPDATE notify_outbox SET next_try=?,updated_at=? "
-            "WHERE event_id=?", (now + RERENDER_RETRY_S, now,
-                                 ev["event_id"]))
-        ledger.db.commit()
+        ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
         res["rerender"] = res.get("rerender", 0) + 1
         return False
     return True
