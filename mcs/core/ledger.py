@@ -468,15 +468,21 @@ class Ledger:
     def _backfill_v3(self):
         """Idempotently fill derived columns for pre-v3 rows."""
         rows = self.db.execute(
-            "SELECT message_id, posted_at, body_html FROM messages "
+            "SELECT message_id, posted_at, posted_at_ts, body_html,"
+            " body_text IS NULL AS no_text FROM messages "
             "WHERE posted_at_ts IS NULL OR posted_at_ts=0 OR body_text IS NULL").fetchall()
         for r in rows:
+            epoch = _posted_epoch(r["posted_at"])
+            if epoch is None and r["posted_at_ts"] is None \
+                    and not r["no_text"]:
+                # an unparseable posted_at stays NULL — rewriting it on
+                # every open only churns rows and the FTS trigger
+                continue
             self.db.execute(
                 "UPDATE messages SET posted_at_ts=CASE WHEN posted_at_ts IS NULL OR posted_at_ts=0 "
                 "THEN ? ELSE posted_at_ts END,"
                 " body_text=COALESCE(body_text,?) WHERE message_id=?",
-                (_posted_epoch(r["posted_at"]), html_to_text(r["body_html"]),
-                 r["message_id"]))
+                (epoch, html_to_text(r["body_html"]), r["message_id"]))
         if self._fts:
             self.db.execute("""
               INSERT INTO messages_fts(rowid, body_text, sender_name)
@@ -1025,8 +1031,13 @@ class Ledger:
                         "AND message_id=? AND state != 'done'",
                         (now, project_id, m.message_id))
                 else:
+                    # never revive a failed sibling: two replies the
+                    # thread API keeps returning as snippets would
+                    # otherwise reset each other's attempts forever and
+                    # pending_reply_jobs could never reach 0
                     self._job_add_tx("reply", project_id, m.message_id,
-                                     parent_id=m.parent_id)
+                                     parent_id=m.parent_id,
+                                     revive_failed=False)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
             notify_ids = (self._unnotified(
@@ -1186,14 +1197,20 @@ class Ledger:
 
     def _job_add_tx(self, kind: str, project_id: int, message_id: int = 0,
                     parent_id: int | None = None, payload: dict | None = None,
-                    next_try: float = 0, reset_pending: bool = False):
+                    next_try: float = 0, reset_pending: bool = False,
+                    revive_failed: bool = True):
         """job_add's INSERT ... ON CONFLICT without the commit — for callers
         holding `with self.db` (e.g. the archive-transition reservation).
         reset_pending=True also replaces a pending row's payload/cursor —
         reserved for transition events where the queued walk no longer
-        covers what the new transition demands (Oracle F02)."""
+        covers what the new transition demands (Oracle F02).
+        revive_failed=False leaves a burnt-out (failed) row alone."""
         now = time.time()
-        where = "" if reset_pending else "WHERE fetch_jobs.state != 'pending'"
+        kept = [] if reset_pending else ["'pending'"]
+        if not revive_failed:
+            kept.append("'failed'")
+        where = (f"WHERE fetch_jobs.state NOT IN ({','.join(kept)})"
+                 if kept else "")
         return self.db.execute(f"""
           INSERT INTO fetch_jobs(kind,project_id,message_id,
             parent_id,payload,state,next_try,created_at,updated_at)
