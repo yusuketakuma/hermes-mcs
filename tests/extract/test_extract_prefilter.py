@@ -215,3 +215,43 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
     meta = json.loads(_artifacts(db, 1)[0]["meta"])
     assert meta["prefilter"] == "no_signal"
     db.close()
+
+
+# U05-F01: bodies the validator's own event cues recognise (death,
+# fall, visit/exam wording) were settled as routine without an LLM
+# read. Fully synthetic sentences.
+@pytest.mark.parametrize("body", [
+    "昨日亡くなりました。",
+    "夜中に亡くなられました",
+    "ベッドから落ちました",
+    "廊下で倒れていました",
+    "外来に行ってきました",
+    "家に来てくださいました",
+])
+def test_event_cue_bodies_never_low_signal(body):
+    import extract
+    hints = extract.extract_message(body, "2026-09-20T10:00:00+09:00")
+    assert not extract_llm._low_signal(body, hints)
+
+
+def test_every_event_cue_match_is_not_low_signal():
+    # invariant: the prefilter is a superset of the validator's cues
+    for kind, cue in extract_llm._EVENT_CUES.items():
+        for token in cue.pattern.replace("(?:", "").replace(")", "") \
+                .split("|"):
+            body = f"本日{token}の件"
+            if cue.search(body):
+                assert not extract_llm._low_signal(body, {"v": 1}), \
+                    (kind, token)
+
+
+def test_eol_body_reaches_llm_not_prefilter(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="昨日亡くなりました。")])
+    calls = []
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **_: calls.append(body) or {"summary": "ok"})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res["skipped"] == 0 and calls == ["昨日亡くなりました。"]
+    db.close()
