@@ -20,6 +20,7 @@ import mcs_stats
 import mcs_signals
 import mcs_view
 import read_model
+from export_schema import project_record
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -232,7 +233,8 @@ def _records_jsonl(view, sig_res: dict, stats_results: dict,
     def rec(type_, **kw):
         kw.update({"type": type_, "contract": read_model.CONTRACT,
                    "snapshot_generation_id": gen})
-        lines.append(json.dumps(kw, ensure_ascii=False, allow_nan=False))
+        lines.append(json.dumps(project_record(kw), ensure_ascii=False,
+                                allow_nan=False))
 
     rec("meta", snapshot=dict(view.meta))
     rec("coverage", coverage=model["coverage"])
@@ -261,13 +263,15 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
     is not ours to delete."""
     cutoff = now - EXPORT_RETENTION_DAYS * 86400
     expired = []
-    for sub in (out_dir / "stats", out_dir / "signals", out_dir):
-        if not sub.is_dir():
+    for sub, pattern in (
+            (out_dir / "stats", r"(\d{4}-\d{2}-\d{2})\.md"),
+            (out_dir / "signals", r"(\d{4}-\d{2}-\d{2})\.md"),
+            (out_dir, r"export-(\d{4}-\d{2}-\d{2})\.jsonl")):
+        if not sub.is_dir() or (sub != out_dir and sub.is_symlink()):
             continue
         for f in sub.iterdir():
-            m = re.fullmatch(r"(?:export-)?(\d{4}-\d{2}-\d{2})"
-                             r"\.(?:md|jsonl)", f.name)
-            if not m:
+            m = re.fullmatch(pattern, f.name)
+            if not m or f.is_symlink() or not f.is_file():
                 continue
             try:
                 day = time.mktime(time.strptime(m.group(1), "%Y-%m-%d"))
@@ -275,11 +279,7 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
                 continue
             if day >= cutoff:
                 continue
-            f_res = f.resolve()
-            if not f_res.is_relative_to(out_dir.resolve()) \
-                    or not f_res.is_file():
-                continue
-            f_res.unlink()
+            f.unlink()
             expired.append(str(f.relative_to(out_dir)))
     return expired
 

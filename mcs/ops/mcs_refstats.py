@@ -102,19 +102,27 @@ def _load_view(snapshot):
     return mcs_view.View(snapshot)
 
 
-def _receipt_applied(db, command_id) -> bool:
-    """Cross-check that an artifact's command_id has an 'applied'
-    receipt — an out-of-band artifact row alone is not an approval."""
+def _receipt_applied(db, approval: dict, artifact_id: int) -> bool:
+    """Bind an approval artifact and its exact file bytes to the committed receipt."""
+    command_id = approval.get("command_id")
+    if not isinstance(command_id, str):
+        return False
     try:
         row = db.execute(
-            "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+            "SELECT receipt_json FROM command_receipts WHERE command_id=? AND outcome='applied'",
             (command_id,)).fetchone()
     except Exception:
         return False
     if row is None:
         return False
     try:
-        return json.loads(row["receipt_json"]).get("outcome") == "applied"
+        receipt = json.loads(row["receipt_json"])
+        return (isinstance(receipt, dict) and receipt.get("outcome") == "applied"
+                and receipt.get("command_id") == command_id
+                and type(receipt.get("refstat_artifact_id")) is int
+                and receipt["refstat_artifact_id"] == artifact_id
+                and receipt.get("name") == approval.get("name")
+                and receipt.get("file_hash") == approval.get("file_hash"))
     except (json.JSONDecodeError, TypeError, AttributeError):
         return False
 
@@ -124,13 +132,14 @@ def _approvals_in_db(db, name: str):
     against its command receipt."""
     out = []
     for r in db.execute(
-            "SELECT content FROM artifacts WHERE kind=? "
+            "SELECT artifact_id,content FROM artifacts WHERE kind=? "
             "ORDER BY artifact_id DESC", (APPROVAL_KIND,)):
         try:
             c = json.loads(r["content"] or "{}")
         except (json.JSONDecodeError, TypeError):
             continue
-        if c.get("name") == name and _receipt_applied(db, c.get("command_id")):
+        if isinstance(c, dict) and c.get("name") == name \
+                and _receipt_applied(db, c, r["artifact_id"]):
             out.append(c)
     return out
 

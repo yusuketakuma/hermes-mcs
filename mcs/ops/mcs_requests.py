@@ -58,7 +58,11 @@ def parse_command(raw):
 
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
-    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+    try:
+        command = json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+    except RecursionError:
+        raise ValueError("command_too_deep") from None
+    return command
 
 
 def read_command(path):
@@ -190,7 +194,18 @@ def apply_command(ledger, req):
     if not isinstance(req, dict) or not valid_uuid(req.get("command_id")):
         raise ValueError("bad_command_id")
     digest = payload_hash(req)
-    if req.get("cmd") == "ops.update_apply":
+    db = ledger.db
+    # requests/command_receipts landed in schema v5; Ledger already rejects
+    # schemas newer than this code, so a floor is the compatibility check.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 5:
+        raise RuntimeError("request_schema_not_ready")
+    if req.get("cmd") == "ops.update_apply" and validate(req) is None:
+        old = db.execute("SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?",
+                         (req["command_id"],)).fetchone()
+        if old:
+            if old["payload_hash"] != digest:
+                return {"outcome": "rejected", "error": "command_id_conflict"}
+            return json.loads(old["receipt_json"])
         # Network-bound sha resolution happens OUTSIDE the write
         # transaction — an ls-remote inside BEGIN IMMEDIATE would hold
         # the DB writer lock for the network round-trip (F-tx). The
@@ -198,12 +213,6 @@ def apply_command(ledger, req):
         # replays its original receipt even if the tag re-pointed.
         from mcs_operations import prepare_update_pins
         req = prepare_update_pins(req)
-    db = ledger.db
-    # requests/command_receipts landed in schema v5; newer versions still
-    # carry them, and Ledger.__init__ already refuses schemas NEWER than
-    # the code — a floor check is the right contract here
-    if db.execute("PRAGMA user_version").fetchone()[0] < 5:
-        raise RuntimeError("request_schema_not_ready")
     # SQLite exits first, so a failed COMMIT still unwinds file promotions.
     with ExitStack() as filesystem_changes, db:
         db.execute("BEGIN IMMEDIATE")

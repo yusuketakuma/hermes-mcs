@@ -1580,3 +1580,57 @@ def test_held_single_signal_key_salvaged(led):
     assert len(rows) == 2
     new = json.loads(rows[1]["payload"])
     assert new["signal_key"] == pl["signal_key"]
+
+
+def test_malformed_extraction_members_do_not_disable_detectors(led):
+    _msg(led.db, 1, ts=NOW - 10 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 meds=["broken", {"name": "合成薬", "action": "start"}],
+                 requests=["broken", _req_item("薬剤師", "残薬確認")],
+                 symptoms=3)
+    _msg(led.db, 2, pid=2, ts=NOW - 10 * DAY)
+    _extract_doc(led.db, 2, "h1", meds=3)
+    _extract_v1(led.db, 2, "h1", 3)
+    res = _ev(led)
+    assert res["errors"] == []
+    types = {s["type"] for s in mcs_signals.current_open(led.db)["items"]}
+    assert {"med_change_no_followup", "pharmacist_request_unanswered"} <= types
+
+
+@pytest.mark.parametrize("invalid", ["foreign_patient", "bad_date", "bad_body"])
+def test_latest_invalid_signal_never_revives_previous_open(led, invalid):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    key = "request_overdue:1:1"
+    row = led.db.execute("SELECT content FROM artifacts WHERE kind='signal_v1'").fetchone()
+    content = json.loads(row[0])
+    if invalid == "foreign_patient":
+        content["project_id"] = 2
+    elif invalid == "bad_date":
+        content["detected_at"] = "broken"
+    else:
+        content = "broken"
+    led.artifact_add("signal_v1", json.dumps(content), project_id=1,
+                     meta={"key": key})
+    assert mcs_signals.current_open(led.db, project_id=1)["items"] == []
+    assert mcs_signals.open_signal_rows(led.db, [key]) == []
+    before = led.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+    assert _ev(led)["opened"] == 0
+    assert led.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == before
+
+
+def test_nonstring_signal_key_does_not_crash_evaluation(led):
+    led.artifact_add("signal_v1", json.dumps({"state": "open"}),
+                     project_id=1, meta={"key": ["broken"]})
+    _req(led.db, "open", due="2026-09-10")
+    assert _ev(led)["opened"] == 1
+    assert mcs_signals.current_open(led.db)["total"] == 1
+
+
+def test_malformed_pending_digest_does_not_block_new_signal(led):
+    led.outbox_add_tx("signal", None,
+                      {"digest": True, "signal_keys": 7}, next_try=NOW + DAY)
+    _req(led.db, "open", due="2026-09-10")
+    result = _ev(led, cfg={"signals": {"notify": True}})
+    assert result["notify_enqueued"] == 1
+    assert _outbox_payloads(led)[-1]["signal_keys"] == ["request_overdue:1:1"]

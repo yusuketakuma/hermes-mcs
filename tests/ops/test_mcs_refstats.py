@@ -358,6 +358,38 @@ def test_verify_flags_file_without_artifact(tmp_path):
     assert _verify(tmp_path, snapshot=snap) == 2  # diffs + hash change
 
 
+def test_verify_cannot_borrow_approval_receipt_for_replaced_bytes(tmp_path, capsys):
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        _capture(tmp_path)
+        req = _approve_req("base", _pending_hash(tmp_path))
+        requests.apply_command(db, req)
+        approved = Path(mcs_refstats._ref_path(tmp_path, "base", "approved"))
+        approved.write_bytes(approved.read_bytes() + b"\n")
+        borrowed = {"name": "base", "file_hash": mcs_refstats.file_sha256(approved),
+                    "command_id": req["command_id"], "actor": "unapproved"}
+        db.artifact_add("refstat_approval_v1", json.dumps(borrowed))
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    assert _verify(tmp_path, snapshot=snap) == 2
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["status"] == "unverified"
+
+
+def test_corrupt_approval_row_does_not_hide_valid_approval(tmp_path):
+    db = _db(tmp_path)
+    try:
+        db.save_messages([_msg()])
+        _capture(tmp_path)
+        requests.apply_command(db, _approve_req("base", _pending_hash(tmp_path)))
+        db.artifact_add("refstat_approval_v1", "[]")
+        snap = _snapshot(tmp_path)
+    finally:
+        db.close()
+    assert _verify(tmp_path, snapshot=snap) == 0
+
+
 def test_verify_unapproved_name_fails(tmp_path, capsys):
     db = _db(tmp_path)
     db.save_messages([_msg()])

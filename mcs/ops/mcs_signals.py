@@ -28,7 +28,7 @@ import time
 from datetime import datetime
 
 from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S, JST,
-                         MED_NOT_CAPABILITY_SQL, MED_PATIENT_CURRENT_SQL,
+                         JSON_OBJECT_SQL, MED_NOT_CAPABILITY_SQL, MED_PATIENT_CURRENT_SQL,
                          TRANSITION_EVENTS_SQL, current_fact_pred,
                          iter_period_ends, med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
@@ -272,7 +272,7 @@ def _med_followup(db, now, th, sig_cfg):
         f"""WITH med_msgs AS (
                 SELECT m.project_id AS pid, m.message_id AS mid,
                        m.posted_at_ts AS ts,
-                       TRIM(json_extract(je.value,'$.name')) AS med
+                       TRIM(json_extract({JSON_OBJECT_SQL},'$.name')) AS med
                 FROM artifacts a
                 JOIN messages m ON m.message_id=a.message_id
                 JOIN patients p ON p.project_id=m.project_id
@@ -283,10 +283,10 @@ def _med_followup(db, now, th, sig_cfg):
                   AND m.posted_at_ts >= ?
                   AND COALESCE(p.is_archived,0)=0
                   {self_pred}
-                  AND json_extract(je.value,'$.action')
+                  AND json_extract({JSON_OBJECT_SQL},'$.action')
                       IN ({CHANGE_ACTIONS_SQL})
-                  AND json_type(je.value,'$.name')='text'
-                  AND TRIM(json_extract(je.value,'$.name'))!=''
+                  AND json_type({JSON_OBJECT_SQL},'$.name')='text'
+                  AND TRIM(json_extract({JSON_OBJECT_SQL},'$.name'))!=''
                   -- a negated / other-person / historical-report med
                   -- mention is not a change needing follow-up
                   AND {MED_PATIENT_CURRENT_SQL}
@@ -462,9 +462,9 @@ def _transition_reconciliation(db, now, th, sig_cfg):
 # 確認」), so it is restricted to role/facility words. Config
 # request_targets adds exact spellings on top; _rx_request_visibility
 # must mirror this negatively.
-PHARM_TARGET_SQL = ("json_extract(je.value,'$.to') LIKE '%薬剤師%' "
-                    "OR json_extract(je.value,'$.to') LIKE '%薬局%' "
-                    "OR json_extract(je.value,'$.to') LIKE '%調剤%'")
+PHARM_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬剤師%' "
+                    f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬局%' "
+                    f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%調剤%'")
 
 
 def _pharmacist_request(db, now, th, sig_cfg):
@@ -476,11 +476,11 @@ def _pharmacist_request(db, now, th, sig_cfg):
     orgs, profs, targets = _self_sets(sig_cfg, db)
     # request_targets adds exact spellings like 「〇〇薬局さま」.
     # Empty/不明 targets never count as pharmacist-addressed.
-    tgt_pred = (f" OR json_extract(je.value,'$.to') IN "
+    tgt_pred = (f" OR json_extract({JSON_OBJECT_SQL},'$.to') IN "
                 f"({','.join('?' * len(targets))})") if targets else ""
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
-                   json_extract(je.value,'$.action') AS act
+                   json_extract({JSON_OBJECT_SQL},'$.action') AS act
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
@@ -491,7 +491,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
               AND m.posted_at_ts >= ?
               AND m.posted_at_ts <= ?
               AND COALESCE(p.is_archived,0)=0
-              AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
+              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.unverified'),0)!=1
               AND ({PHARM_TARGET_SQL}
                    {tgt_pred})
             ORDER BY m.project_id, m.message_id""",
@@ -529,8 +529,8 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     extra = "".join(",?" for _ in targets)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
-                   json_extract(je.value,'$.to') AS rto,
-                   json_extract(je.value,'$.action') AS act
+                   json_extract({JSON_OBJECT_SQL},'$.to') AS rto,
+                   json_extract({JSON_OBJECT_SQL},'$.action') AS act
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
@@ -540,15 +540,15 @@ def _rx_request_visibility(db, now, th, sig_cfg):
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
-              AND COALESCE(json_extract(je.value,'$.unverified'),0)!=1
+              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.unverified'),0)!=1
               AND NOT ({PHARM_TARGET_SQL})
-              AND COALESCE(json_extract(je.value,'$.to'),'')
+              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.to'),'')
                   NOT IN ('','不明'{extra})
-              AND (json_extract(je.value,'$.action') LIKE '%処方%'
-                   OR json_extract(je.value,'$.action') LIKE '%薬%'
-                   OR json_extract(je.value,'$.action') LIKE '%内服%'
-                   OR json_extract(je.value,'$.action') LIKE '%残薬%'
-                   OR json_extract(je.value,'$.action') LIKE '%一包化%')
+              AND (json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%処方%'
+                   OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%薬%'
+                   OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%内服%'
+                   OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%残薬%'
+                   OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%一包化%')
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S, *targets)).fetchall()
     groups = {}
@@ -620,7 +620,7 @@ def _adherence_concern(db, now, th, sig_cfg):
     groups = {}
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
-                   TRIM(json_extract(je.value,'$.name')) AS med
+                   TRIM(json_extract({JSON_OBJECT_SQL},'$.name')) AS med
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
@@ -631,13 +631,13 @@ def _adherence_concern(db, now, th, sig_cfg):
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
               {self_pred}
-              AND json_type(je.value,'$.name')='text'
-              AND TRIM(json_extract(je.value,'$.name'))!=''
-              AND COALESCE(json_extract(je.value,'$.subject'),
+              AND json_type({JSON_OBJECT_SQL},'$.name')='text'
+              AND TRIM(json_extract({JSON_OBJECT_SQL},'$.name'))!=''
+              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.subject'),
                            'patient')='patient'
-              AND COALESCE(json_extract(je.value,'$.status'),
+              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.status'),
                            'current')!='past'
-              AND (json_extract(je.value,'$.negated') IS 1
+              AND (json_extract({JSON_OBJECT_SQL},'$.negated') IS 1
                    OR NOT ({MED_NOT_CAPABILITY_SQL}))
             ORDER BY m.project_id, m.message_id""",
         (horizon, *self_params)).fetchall()
@@ -751,7 +751,11 @@ def _symptom_after_med(db, now, th, sig_cfg):
             continue
         if not isinstance(content, dict):
             continue
-        meds = [m2["name"].strip() for m2 in content.get("meds") or []
+        med_items = content.get("meds")
+        symptom_items = content.get("symptoms")
+        if not isinstance(med_items, list) or not isinstance(symptom_items, list):
+            continue
+        meds = [m2["name"].strip() for m2 in med_items
                 if isinstance(m2, dict)
                 and m2.get("action") in CHANGE_ACTIONS
                 and med_is_patient_current(m2)
@@ -759,7 +763,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
                 and isinstance(m2.get("name"), str) and m2["name"].strip()]
         if not meds:
             continue
-        symps = [s["text"].strip() for s in content.get("symptoms") or []
+        symps = [s["text"].strip() for s in symptom_items
                  if isinstance(s, dict) and not s.get("negated")
                  and s.get("status") in ("new", "ongoing")
                  and s.get("subject", "patient") in ("patient", None)
@@ -804,6 +808,43 @@ def _insert(db, key, sig):
          json.dumps({"key": key, "type": sig["type"]}), time.time()))
 
 
+def _signal_content(content_s, stored_pid):
+    """Validate a stored lifecycle row before reading or extending it."""
+    try:
+        content = json.loads(content_s)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(content, dict):
+        return None
+    pid = content.get("project_id")
+    detected = content.get("detected_at", 0)
+    if (type(pid) is not int or not 0 < pid <= 2**63 - 1
+            or (stored_pid is not None and stored_pid != pid)
+            or content.get("state") not in ("open", "resolved", "dismissed")
+            or not isinstance(content.get("type"), str)
+            or not isinstance(content.get("evidence"), dict)
+            or type(detected) not in (int, float) or not 0 <= detected < 1e12):
+        return None
+    return content
+
+
+def _latest_signal_states(db):
+    # Keep a tombstone for an unreadable latest row. Falling back to an
+    # older open row could revive a dismissed signal or duplicate a notice.
+    latest = {}
+    for pid, content_s, meta_s in db.execute(
+            "SELECT project_id, content, meta FROM artifacts "
+            "WHERE kind=? ORDER BY artifact_id", (ARTIFACT_KIND,)):
+        try:
+            meta = json.loads(meta_s)
+        except (ValueError, TypeError, RecursionError):
+            continue
+        key = meta.get("key") if isinstance(meta, dict) else None
+        if isinstance(key, str) and key:
+            latest[key] = _signal_content(content_s, pid)
+    return latest
+
+
 def evaluate(ledger, cfg: dict, now: float | None = None,
              deadline: float | None = None) -> dict:
     """Recompute candidates; append lifecycle transitions; enqueue
@@ -830,28 +871,16 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
         current.update(found)
         ran_types.add(stype)
 
-    # latest parseable state row per key — artifacts are append-only,
-    # so artifact_id order is the lifecycle order
-    existing = {}
-    for _aid, content_s, meta_s in ledger.db.execute(
-            "SELECT artifact_id, content, meta FROM artifacts "
-            "WHERE kind=? ORDER BY artifact_id",
-            (ARTIFACT_KIND,)).fetchall():
-        try:
-            meta = json.loads(meta_s or "{}")
-            content = json.loads(content_s or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue             # opaque row: skipped, not fatal
-        if (isinstance(meta, dict) and meta.get("key")
-                and isinstance(content, dict)
-                and content.get("state") in ("open", "resolved",
-                                             "dismissed")):
-            existing[meta["key"]] = content
+    existing = _latest_signal_states(ledger.db)
+    if any(value is None for value in existing.values()):
+        errors.append("signal_state_corrupt")
 
     opened = superseded = resolved = enqueued = dig_merged = 0
     newly = []
     with ledger.db:
         for key, sig in current.items():
+            if key in existing and existing[key] is None:
+                continue  # unknown latest state: never reopen/notify from history
             old = existing.get(key)
             if old is None or old["state"] == "resolved" or (
                     old["state"] == "dismissed"
@@ -881,7 +910,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             # an unfinished or crashed detector must never turn
             # "not inspected" into a recorded "resolved" (the ledger
             # history is a review record, not a guess)
-            if (key not in current and old["state"] == "open"
+            if (old is not None and key not in current and old["state"] == "open"
                     and old.get("type") in ran_types):
                 row = dict(old, state="resolved", resolved_at=now)
                 row.pop("reopened_at", None)
@@ -1032,17 +1061,15 @@ def open_signal_rows(db, keys):
     payload's."""
     out = []
     for k in keys:
+        if not isinstance(k, str) or not k:
+            continue
         row = db.execute(
-            """SELECT content FROM artifacts
-               WHERE kind='signal_v1' AND json_valid(meta)
-                 AND json_valid(content)
-                 AND json_extract(meta,'$.key')=?
+            """SELECT project_id, content FROM artifacts
+               WHERE kind='signal_v1'
+                 AND CASE WHEN json_valid(meta) THEN
+                     json_extract(meta,'$.key')=? ELSE 0 END
                ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
-        try:
-            s = json.loads(row["content"]) if row and row["content"] \
-                else {}
-        except (json.JSONDecodeError, TypeError):
-            s = {}
+        s = _signal_content(row["content"], row["project_id"]) if row else None
         if isinstance(s, dict) and s.get("state") == "open":
             out.append((k, s))
     return out
@@ -1105,8 +1132,10 @@ def _digest_add(ledger, key, now, th, interval_h):
         """SELECT event_id, payload FROM notify_outbox
            WHERE kind='signal' AND state IN ('pending','failed')
              AND next_try IS NOT NULL
-             AND json_valid(payload)
-             AND json_extract(payload,'$.digest')=1
+             AND CASE WHEN json_valid(payload) THEN
+                 json_extract(payload,'$.digest')=1
+                 AND json_type(payload,'$.signal_keys')='array'
+                 ELSE 0 END
              AND NOT EXISTS(SELECT 1 FROM notification_intent_batches b
                             WHERE b.event_id=notify_outbox.event_id)
            ORDER BY event_id DESC LIMIT 1""").fetchone()
@@ -1145,7 +1174,7 @@ def _notify_opened(ledger, items, now, th, sig_cfg):
     sc = sig_cfg if isinstance(sig_cfg, dict) else {}
     digest_on = sc.get("digest", True) is not False
     ih = sc.get("digest_interval_h")
-    interval_h = (ih if type(ih) in (int, float) and ih > 0
+    interval_h = (ih if type(ih) in (int, float) and 0 < ih <= 1e9
                   else DIGEST_INTERVAL_H)
     overrides = sc.get("tiers") if isinstance(sc.get("tiers"), dict) else {}
     imm, dig = [], []
@@ -1247,28 +1276,16 @@ def current_open(db, project_id=None, limit=50):
     """Read-side listing used by mcs_view — open signals with evidence
     ids. Runs on the snapshot connection; no state is touched. The
     latest row per meta.key is the signal's current state."""
-    params = [ARTIFACT_KIND]
-    sql = ("SELECT artifact_id, project_id, content, meta "
-           "FROM artifacts WHERE kind=? AND json_valid(content) "
-           "AND json_valid(meta)")
-    if project_id is not None:
-        sql += " AND project_id=?"
-        params.append(project_id)
-    sql += " ORDER BY artifact_id"
-    latest = {}
-    for _aid, _pid, content_s, meta_s in db.execute(sql, params):
-        meta = json.loads(meta_s)
-        content = json.loads(content_s)
-        if (isinstance(meta, dict) and isinstance(content, dict)
-                and meta.get("key")):
-            latest[meta["key"]] = content
+    latest = _latest_signal_states(db)
     items = [{"key": k, "type": c.get("type"),
               "project_id": c.get("project_id"),
               "detected_at": c.get("detected_at"),
               "evidence": c.get("evidence"),
               "context": c.get("context"),
               "note": c.get("note")}
-             for k, c in latest.items() if c.get("state") == "open"]
+             for k, c in latest.items()
+             if c is not None and c["state"] == "open"
+             and (project_id is None or c["project_id"] == project_id)]
     items.sort(key=lambda i: -(i["detected_at"] or 0))
     last_run = db.execute(
         "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"

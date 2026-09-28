@@ -146,6 +146,38 @@ def test_status_evidence_scope_and_all_pages(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("limit", [True, 0, 201, 1.5, "10"])
+def test_loop_view_rejects_invalid_limits(tmp_path, limit):
+    db = _source(tmp_path)
+    view = _snapshot(db, tmp_path)
+    try:
+        with pytest.raises(ValueError, match="bad_limit"):
+            view.read("loops", project=1, limit=limit)
+    finally:
+        view.close()
+        db.close()
+
+
+def test_loop_view_retains_corrupt_candidate_as_non_adoptable_history(tmp_path):
+    db = _source(tmp_path)
+    db.artifact_add("loop_candidate", json.dumps({
+        "origin": ["invalid"], "history": 7}), project_id=1, message_id=1)
+    db.artifact_add("loop_event", json.dumps({
+        "loop_origin_id": 1, "trigger_message_id": [], "relation": "completion_report"}),
+        project_id=1, message_id=1)
+    view = _snapshot(db, tmp_path)
+    try:
+        item = view.read("loops", project=1)["items"][0]
+        assert item["current"] is False and item["adoption_eligible"] is False
+        assert item["history"] == []
+        assert item["relation_events"][0]["stale"] is True
+        with pytest.raises(ValueError, match="bad_limit"):
+            view.signals({"limit": float("inf")})
+    finally:
+        view.close()
+        db.close()
+
+
 def test_unknown_time_and_real_epoch_zero_survive_reopen(tmp_path):
     db = _source(tmp_path)
     db.save_messages([Message(6, 1, None, 1, "sender", "user", "", "",
@@ -308,10 +340,13 @@ def test_inbox_rejections_faults_and_commit_before_unlink(tmp_path, monkeypatch,
     with pytest.raises(ValueError, match="duplicate_key"):
         requests.parse_command(b'{"cmd":"import","cmd":"request.create"}')
     real_sync = os.fsync
-    monkeypatch.setattr(requests.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("synthetic")))
-    with pytest.raises(OSError, match="synthetic"):
-        requests.enqueue(create, inbox)
+    with monkeypatch.context() as fault:
+        fault.setattr(requests.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("synthetic")))
+        with pytest.raises(OSError, match="synthetic"):
+            requests.enqueue(create, inbox)
     assert not list(inbox.glob("*.json"))
+    view = _snapshot(db, tmp_path)
+    view.close()
     sync_calls = 0
 
     def fail_directory_sync(fd):
@@ -322,8 +357,6 @@ def test_inbox_rejections_faults_and_commit_before_unlink(tmp_path, monkeypatch,
         real_sync(fd)
 
     monkeypatch.setattr(requests.os, "fsync", fail_directory_sync)
-    view = _snapshot(db, tmp_path)
-    view.close()
     payload = {k: v for k, v in create.items() if k not in ("cmd", "version", "human_confirmed", "project_id")}
     monkeypatch.setattr(sys, "stdin", SimpleNamespace(buffer=io.BytesIO(requests.canonical(payload))))
     assert mcs_view.main(["--snapshot", str(tmp_path / "snapshots/ledger-snapshot.db"),

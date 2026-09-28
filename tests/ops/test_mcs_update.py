@@ -93,6 +93,32 @@ def test_state_roundtrip_and_corrupt(updater, tmp_path):
     assert updater.load_state().get("_corrupt") is True
 
 
+@pytest.mark.parametrize("field,value", [
+    ("v", True), ("stages", {}), ("stages", [None]),
+    ("stages", [{"stage": "merge", "at": float("nan")}]),
+    ("applying", []), ("applying", {"at": float("inf")}),
+    ("applied", ["invalid"]), ("executed", []), ("attempts", []),
+])
+def test_corrupt_journal_shapes_are_rejected_by_both_readers(
+        updater, tmp_path, monkeypatch, field, value):
+    from test_mcs_recover import _load
+    recovery = _load()
+    monkeypatch.setattr(recovery, "STATE_PATH", updater.STATE_PATH)
+    state = updater._default_state()
+    state[field] = value
+    updater.save_state(state)
+    assert updater.load_state() == {"_corrupt": True}
+    assert recovery._load_state() == {"_corrupt": True}
+
+
+def test_restore_does_not_replace_unreadable_consent_marker(updater, tmp_path):
+    marker = tmp_path / "data" / "restore_pending.json"
+    marker.write_text("{broken")
+    with pytest.raises(updater.UpdateError, match="restore_marker_unreadable"):
+        updater._restore_db(str(tmp_path / "backup.db"))
+    assert marker.read_text() == "{broken"
+
+
 def test_update_lock_nonblocking(updater):
     fd = updater.acquire_update_lock()
     assert fd is not None
@@ -191,6 +217,31 @@ def test_detect_latest_prerelease_excluded(updater, monkeypatch):
     # opt-in picks the prerelease — and peels it to the commit sha
     assert tag == "v1.3.0-rc1"
     assert sha == "c" * 40
+
+
+def test_prerelease_numeric_components_follow_semver_order():
+    names = ["v1.2.0-rc.2", "v1.2.0-rc.10", "v1.2.0"]
+    assert sorted(reversed(names), key=mcs_update._ver_key) == names
+    assert mcs_update._ver_key(["invalid"]) is None
+
+
+def test_malformed_approval_cannot_break_queue_or_veto_valid_apply(updater, tmp_path):
+    con = _receipts_db(updater.LEDGER)
+    receipts = [
+        ("valid", {"cmd": "ops.update_apply", "scheduled": True,
+                   "tag": "v1.2.0", "target_sha": "a" * 40}),
+        ("bad", {"cmd": "ops.update_apply", "scheduled": True,
+                 "tag": ["invalid"], "target_sha": "a" * 40}),
+        ("unscheduled", {"cmd": "ops.update_rollback", "scheduled": False}),
+    ]
+    for timestamp, (cid, receipt) in enumerate(receipts):
+        con.execute("INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+                    (cid, "h" * 64, json.dumps(receipt), timestamp))
+    con.commit()
+    con.close()
+    candidates, consumed = updater.scan_pending_approvals(updater._default_state())
+    assert [candidate["command_id"] for candidate in candidates] == ["valid"]
+    assert consumed == []
 
 
 def test_defuse_mentions():
@@ -768,7 +819,9 @@ def test_restore_db_io_error_is_update_error(updater, tmp_path,
         con.close()
     monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
     _seed_consent(live, back)
-    os.mkdir(live + ".restore-tmp")        # blocks the tmp write
+    def fail_copy(*args):
+        raise OSError("synthetic copy failure")
+    monkeypatch.setattr(mcs_update.shutil, "copyfileobj", fail_copy)
     with pytest.raises(mcs_update.UpdateError):
         mcs_update._restore_db(back)
     con = sqlite3.connect("file:" + live + "?mode=ro", uri=True)
@@ -1036,3 +1089,49 @@ def test_loss_report_binds_live_state(updater, tmp_path, monkeypatch):
     r3 = mcs_update._restore_loss_report(back)
     assert r3["report_id"] != r1["report_id"]
     assert r3["intervening_messages"] == 4
+
+
+def test_restore_consent_expires_when_existing_message_changes(
+        updater, tmp_path, monkeypatch):
+    _repo, live, back, _before, _after, _restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    approved = _seed_consent(live, back)
+    with sqlite3.connect(live) as con:
+        con.execute("UPDATE messages SET body_html='changed synthetic text'")
+    current = updater._restore_loss_report(back)
+    assert current["stored_since_backup"] == approved["stored_since_backup"]
+    assert current["report_id"] != approved["report_id"]
+    assert updater._restore_consent(current) is None
+
+
+@pytest.mark.parametrize("independent", [False, True])
+def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, independent):
+    from test_mcs_recover import _load
+    _repo, live, back, _before, _after, _restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    recovery = _load() if independent else updater
+    monkeypatch.setattr(recovery, "LEDGER", live)
+    monkeypatch.setattr(recovery, "DATA", updater.DATA)
+    writer = sqlite3.connect(live)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("UPDATE messages SET body_html='durable synthetic update'")
+        writer.commit()
+        _seed_consent(live, back)
+        wal = Path(live + "-wal")
+        before = wal.read_bytes()
+
+        def fail_copy(*args):
+            raise OSError("synthetic copy failure")
+
+        monkeypatch.setattr(recovery.shutil, "copyfileobj", fail_copy)
+        if independent:
+            assert recovery._restore_db(back).startswith("restore_failed:")
+        else:
+            with pytest.raises(updater.UpdateError, match="restore_failed"):
+                recovery._restore_db(back)
+        assert wal.read_bytes() == before
+        assert writer.execute("SELECT body_html FROM messages LIMIT 1").fetchone()[0] == (
+            "durable synthetic update")
+    finally:
+        writer.close()

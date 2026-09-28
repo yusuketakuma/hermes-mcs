@@ -266,7 +266,38 @@ def test_update_apply_resolves_sha_outside_tx(tmp_path, monkeypatch):
     assert receipt["target_sha"] == "b" * 40
     assert receipt["base_sha"] == "c" * 40
     assert calls == ["v1.2.3"]               # resolved once, pre-tx
+    assert mcs_requests.apply_command(db, req) == receipt
+    assert calls == ["v1.2.3"]               # replay never resolves the tag again
     db.close()
+
+
+def test_unconfirmed_update_never_resolves_remote_pins(tmp_path, monkeypatch):
+    mcs_update = _update_env(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda tag: calls.append(tag) or "b" * 40)
+    monkeypatch.setattr(mcs_update, "current_version", lambda: ("v1.0.0", "c" * 40))
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        receipt = mcs_requests.apply_command(db, _update_command(
+            "ops.update_apply", tag="v1.2.3", human_confirmed=False))
+        assert receipt["error"] == "human_confirmation_required"
+        assert calls == []
+    finally:
+        db.close()
+
+
+def test_signal_dismiss_rejects_corrupt_evidence_with_receipt(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.artifact_add("signal_v1", json.dumps({"state": "open", "evidence": []}),
+                        project_id=1, meta={"key": "synthetic-signal"})
+        receipt = mcs_requests.apply_command(db, _command(
+            "ops.signal_dismiss", signal_key="synthetic-signal", reason="reviewed"))
+        assert receipt["outcome"] == "rejected"
+        assert receipt["error"] == "signal_corrupt"
+        assert len(db.artifacts("signal_v1", project_id=1)) == 1
+    finally:
+        db.close()
 
 
 def test_update_apply_unresolvable_tag_rejected(tmp_path, monkeypatch):
@@ -381,6 +412,8 @@ def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
         backup_schema=7, reason="ok"), str(cmd_dir))
     mcs_requests.enqueue(_command("ops.pause", feature="semantic"),
                          str(cmd_dir))
+    legacy = cmd_dir / "legacy-import.json"
+    legacy.write_text(json.dumps({"cmd": "import", "project_id": 99}))
     import mcs_update
     spawned = []
     monkeypatch.setattr(mcs_update, "spawn_detached",
@@ -390,5 +423,7 @@ def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
     assert result["command_commands"] == 1       # only the consent op
     assert spawned == [1]                        # updater re-launched
     left = [p.name for p in cmd_dir.glob("*.json")]
-    assert len(left) == 1                        # pause stayed queued
+    assert len(left) == 2                        # pause and import stayed queued
+    assert legacy.exists()
+    assert db.db.execute("SELECT 1 FROM patients WHERE project_id=99").fetchone() is None
     db.close()
