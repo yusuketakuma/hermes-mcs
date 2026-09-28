@@ -83,9 +83,12 @@ below). For a record naming its `semantic_summary` artifact in
 
 - `verified`: the `fact_id`s marked `verified` in the newest
   `semantic_facts_v2` document of the summary's generation (message +
-  source fingerprint), only when the newest evaluated
-  `semantic_facts_audit` for the summary's policy fingerprint and that
-  document's hash is PASS and the document's coverage is complete.
+  source fingerprint), only when the newest `semantic_facts_audit` for
+  the summary's policy fingerprint is an evaluated PASS on that
+  document's hash and the document's coverage is complete. This is the
+  drain's own reuse rule (`semantic_v4.fact_audit_verdict`, shared with
+  the re-projection gate): a newer unevaluated audit or one bound to
+  another document hash leaves `verified` out, never an older PASS.
 - `rendered`: the IDs bound (`、ID:<id>、証拠:`) in the summary's stored
   `mandatory_pages`, only when `verify_mandatory_pages` reports them
   complete.

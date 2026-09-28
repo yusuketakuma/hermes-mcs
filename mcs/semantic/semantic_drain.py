@@ -287,9 +287,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             # stored evaluated:false row (mid-audit outage) must be
             # re-run, otherwise a transient failure pins the generation
             # on a failed verdict forever and manual retry cannot clear it
-            if prev_fa is not None \
-                    and prev_fa["meta"].get("doc_hash") == doc_hash \
-                    and prev_fa["content"].get("evaluated"):
+            if v4.fact_audit_verdict(prev_fa, doc_hash) is not None:
                 fact_audit = prev_fa["content"]
             else:
                 if time.monotonic() > deadline - 5:

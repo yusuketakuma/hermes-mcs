@@ -5,15 +5,17 @@ another stage (``semantic_evaluation`` scores an absent list as a
 missing observation, so an unprovable stage is left out):
 
 - verified: fact IDs of the current ``semantic_facts_v2`` document of the
-  summary's generation (message, source fingerprint) whose newest
-  evaluated fact audit for the summary's policy and that document hash
-  is PASS, with complete coverage. Only facts marked ``verified`` count.
+  summary's generation (message, source fingerprint) when the newest fact
+  audit for the summary's policy is a completed PASS on that document's
+  hash (``semantic_v4.fact_audit_verdict``, the drain's own reuse rule),
+  with complete coverage. Only facts marked ``verified`` count.
 - rendered: fact IDs bound (``、ID:<id>、証拠:``) in the summary artifact's
   stored ``mandatory_pages``, only when ``verify_mandatory_pages`` finds
   the pages complete.
 - delivered: rendered facts whose page line reached the channel in the
   generation's ``semantic_notice`` outbox intent. The frozen notice text
-  is re-chunked with the send path's own chunker; a fact counts only when
+  is re-chunked with the send path's own chunker, which also returns each
+  part's body (``semantic_chunk_parts``); a fact counts only when
   every chunk its line spans is inside the accepted-chunk receipt
   (``progress.next``; an ``accepted`` row must record every chunk). No
   matching intent, or an unparseable/contradictory receipt, leaves the
@@ -50,37 +52,26 @@ def _json_object(raw) -> dict | None:
 
 
 def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
-    """Current v2 doc (newest for the generation, as the drain selects
-    it) bound to a PASS fact audit for this policy and doc hash."""
-    from semantic_v4 import _doc_hash
-    doc = None
-    for row in db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
-            "ORDER BY artifact_id DESC", (KIND_FACTS_V2, mid)):
-        meta = _json_object(row["meta"])
-        if meta is not None and meta.get("fingerprint") == fp:
-            doc = _json_object(row["content"])
-            break
-    if doc is None:
+    """Current v2 doc (newest for the generation) bound to a PASS fact
+    audit — selected and judged exactly as the drain and the
+    re-projection gate do (``semantic_store._current`` +
+    ``semantic_v4.fact_audit_verdict``), so ``verified`` is observed only
+    when the publication gate would accept the document as it stands."""
+    from types import SimpleNamespace
+
+    from semantic_store import _current
+    from semantic_v4 import _doc_hash, fact_audit_verdict
+    ledger = SimpleNamespace(db=db)       # _current reads only .db
+    current = _current(ledger, KIND_FACTS_V2, mid, fp)
+    if current is None:
         return None, "facts_doc_missing"
+    doc = current["content"]
     try:
         doc_hash = _doc_hash(doc)
     except (KeyError, TypeError, ValueError):
         return None, "facts_doc_invalid"
-    status = None
-    for row in db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
-            "ORDER BY artifact_id DESC", (KIND_FACT_AUDIT, mid)):
-        meta = _json_object(row["meta"])
-        content = _json_object(row["content"])
-        if (meta is None or content is None or meta.get("fingerprint") != fp
-                or meta.get("policy_fingerprint") != policy
-                or meta.get("doc_hash") != doc_hash
-                or content.get("evaluated") is not True):
-            continue
-        status = ("PASS" if content.get("status") == "PASS"
-                  and meta.get("audit_status") == "PASS" else "not_pass")
-        break
+    status = fact_audit_verdict(
+        _current(ledger, KIND_FACT_AUDIT, mid, fp, policy), doc_hash)
     if status is None:
         return None, "fact_audit_missing"
     if status != "PASS":
@@ -126,22 +117,6 @@ def _rendered(summary: dict) -> tuple[list | None, dict, str]:
     return ids, lines, "pages_complete"
 
 
-def _chunk_bodies(chunks: list[str]) -> list[str] | None:
-    """Body slice of each semantic_chunks part (header/marker/footer
-    stripped); None when a part does not have the chunker's shape."""
-    bodies = []
-    for index, part in enumerate(chunks, 1):
-        lines = part.split("\n")
-        marker = f"part {index}/{len(chunks)}"
-        if marker not in lines or len(lines) < 3 or lines[-2] != "▶ MCSで確認":
-            return None
-        start = lines.index(marker) + 1
-        if start > len(lines) - 2:
-            return None
-        bodies.append("\n".join(lines[start:-2]))
-    return bodies
-
-
 def _accepted_prefix(row, count: int) -> tuple[int | None, str | None]:
     """Chunks proven accepted by the outbox receipt; None = unprovable."""
     raw = row["progress"]
@@ -163,7 +138,9 @@ def _accepted_prefix(row, count: int) -> tuple[int | None, str | None]:
 def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
                rendered: list | None, lines: dict,
                cfg: dict[str, str] | None = None) -> tuple[list | None, str]:
-    from notify_flush import _delivery_fingerprint, _semantic_chunks, _target
+    import notify_flush
+    from notify_flush import _delivery_fingerprint, _target
+    from semantic_send_gate import semantic_chunk_parts
     if rendered is None:
         # nothing observed as rendered: a delivered fact ID could only be
         # read from the notice text itself, which is not the rendered stage
@@ -189,11 +166,10 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
     delivered = set()
     for row, text in rows:
         try:
-            chunks = _semantic_chunks(text)
+            # the send path's chunker at its current width
+            # (notify_flush._semantic_chunks), with each part's body
+            chunks, bodies = semantic_chunk_parts(text, notify_flush._MAX_LEN)
         except ValueError:
-            return None, "notice_unchunkable"
-        bodies = _chunk_bodies(chunks)
-        if bodies is None:
             return None, "notice_unchunkable"
         prefix, fingerprint = _accepted_prefix(row, len(chunks))
         if prefix is None:
