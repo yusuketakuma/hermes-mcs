@@ -765,6 +765,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
             continue
         symps = [s["text"].strip() for s in symptom_items
                  if isinstance(s, dict) and not s.get("negated")
+                 and not s.get("unverified")
                  and s.get("status") in ("new", "ongoing")
                  and s.get("subject", "patient") in ("patient", None)
                  and isinstance(s.get("text"), str) and s["text"].strip()]
