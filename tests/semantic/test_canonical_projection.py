@@ -719,14 +719,17 @@ def test_reproject_never_resurrects_or_guesses(tmp_path):
             "UPDATE messages SET body_state='deleted' WHERE message_id=2")
         db.db.commit()
         assert v4.reproject_stale(db, scfg)["reprojected"] == 0
-        # non-canonical / off configs never write
+        # mode off never writes; rows left from a canonical period are
+        # still brought forward after a switch back to legacy
         db.db.execute(
             "UPDATE messages SET body_state='full' WHERE message_id=2")
         db.db.commit()
         assert v4.reproject_stale(
-            db, dict(scfg, fact_source="shadow"))["reprojected"] == 0
-        assert v4.reproject_stale(
             db, dict(scfg, mode="off"))["reprojected"] == 0
+        assert v4.reproject_stale(
+            db, dict(scfg, fact_source="legacy"))["reprojected"] == 2
+        assert v4.reproject_stale(
+            db, dict(scfg, fact_source="shadow"))["reprojected"] == 0
     finally:
         db.close()
 
