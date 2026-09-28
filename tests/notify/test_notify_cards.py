@@ -1993,6 +1993,110 @@ def test_resolve_delivered_conflict_rejects_another_message(led, tmp_path):
     assert _card(led)['message_id'] == 'original-message'
 
 
+# ---------- card_resolve vs the delivery journal ----------
+
+def _journal(tmp_path, *rows, raw=b""):
+    state = tmp_path / "data" / "discord_state"
+    state.mkdir(parents=True, exist_ok=True)
+    body = b"".join(json.dumps(r).encode() + b"\n" for r in rows) + raw
+    (state / "journal-w1.jsonl").write_bytes(body)
+
+
+def _rejected_no_reissue(led, r, error):
+    assert r["outcome"] == "rejected" and r["error"] == error
+    stored = json.loads(led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (r["command_id"],)).fetchone()["receipt_json"])
+    assert stored["error"] == error
+    assert led.db.execute(
+        "SELECT state FROM notification_delivery_attempts"
+    ).fetchone()["state"] == "granted"
+    assert _latest_render(led)["render_rev"] == 1   # nothing reissued
+
+
+def test_card_resolve_not_sent_rejected_when_journal_started(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    _journal(tmp_path, {"attempt_id": aid, "phase": "started",
+                        "delivery_id": render["delivery_id"]})
+    _rejected_no_reissue(led, _resolve(led, render, aid),
+                         "journal_contradicts_proof")
+
+
+def test_card_resolve_not_sent_rejected_when_journal_delivered(
+        led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    _journal(tmp_path,
+             {"attempt_id": aid, "phase": "started",
+              "delivery_id": render["delivery_id"]},
+             {"attempt_id": aid, "phase": "result", "result": "delivered",
+              "message_id": "m-7", "delivery_id": render["delivery_id"]})
+    # even a remote_absent attestation cannot outrank a journaled send
+    r = _resolve(led, render, aid, evidence={
+        "method": "channel_lookup", "worker_stopped": True,
+        "proof": "remote_absent", "ref": "channel:ch1"})
+    _rejected_no_reissue(led, r, "journal_contradicts_proof")
+
+
+def test_card_resolve_not_sent_rejected_when_journal_tainted(
+        led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    # a corrupt middle line could be this attempt's 'started' row
+    _journal(tmp_path, {"attempt_id": "other", "phase": "claimed"},
+             raw=b"{corrupt\n")
+    _rejected_no_reissue(led, _resolve(led, render, aid),
+                         "journal_contradicts_proof")
+
+
+def test_card_resolve_delivered_must_match_journal_message(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    _journal(tmp_path,
+             {"attempt_id": aid, "phase": "result", "result": "delivered",
+              "message_id": "m-7", "delivery_id": render["delivery_id"]})
+    req = {"version": 1, "cmd": "ops.card_resolve", "command_id": _uuid(60),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "checked channel",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **SCOPE, "message_id": "m-other",
+           "evidence": {"method": "channel_lookup", "ref": "synthetic"}}
+    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    _rejected_no_reissue(led, r, "message_id_mismatch")
+    r = notify_transport.apply_card_resolve(
+        led, dict(req, command_id=_uuid(61), message_id="m-7"), CFG,
+        now=NOW)
+    assert r["outcome"] == "applied"
+    assert _card(led)["message_id"] == "m-7"
+
+
+def test_begin_denies_source_changed_and_sweep_reissues(led, tmp_path):
+    _patient(led)
+    _msg(led, 100)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    render = _latest_render(led)
+    led.db.execute("UPDATE messages SET content_hash=? "
+                   "WHERE message_id=100", ("b" * 64,))
+    led.db.commit()
+    r = _begin(led, render)
+    assert r["granted"] is False and r["error"] == "denied_source_changed"
+    # transient, not final: the spec stays until the sweep supersedes it
+    assert (tmp_path / "data" / "discord_render"
+            / (render["delivery_id"] + ".json")).exists()
+    notify_cards.sweep(led, CFG)
+    assert led.db.execute(
+        "SELECT state FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],)).fetchone()["state"] == "cancelled"
+    nxt = _latest_render(led)
+    assert nxt["render_rev"] == 2 and nxt["state"] == "queued"
+    assert _begin(led, nxt, n=2)["granted"]
+
+
 def test_success_resets_consecutive_resend_budget(led, tmp_path):
     _deliverable(led, tmp_path)
     for i in range(1, notify_cards.MAX_RESEND):

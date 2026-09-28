@@ -731,6 +731,53 @@ def test_restore_after_send_holds_until_reconcile(world):
     assert len(channel.sent) == 1          # still exactly one send
 
 
+def test_unmarked_restore_after_tombstone_expiry_never_resends(world):
+    """A DB restored without the restore_pending marker, after the dead
+    tombstone expired: the runner sees a queued render and would grant
+    it again — the worker's journal alone fences the re-claim."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    channel = bot.channels[42]
+    backup = sqlite3.connect(":memory:")
+    world.led.db.backup(backup)                 # pre-grant snapshot
+    asyncio.run(_deliver(world, worker))
+    assert len(channel.sent) == 1
+    render, _ = world.spec()
+    delivery_id = render["delivery_id"]
+    spec_path = world.data / "discord_render" / (delivery_id + ".json")
+    raw = spec_path.read_bytes()
+
+    # the terminal spec is gc'd and the tombstone outlives DEAD_TTL_S
+    spec_path.unlink()
+    reg._data["dead"][delivery_id] = \
+        time.time() - registry.DEAD_TTL_S - 1
+    reg.expire()
+    reg.save(immediate=True)
+    assert not reg.is_dead(delivery_id)
+
+    # rewind with no marker; the queued render's spec is live again
+    backup.backup(world.led.db)
+    backup.close()
+    assert notify_cards.restore_pending(str(world.data)) is None
+    spec_path.write_bytes(raw)
+
+    worker2, reg2, _ = world.mkworker(bot=bot)
+
+    async def run():
+        for _ in range(2):
+            await worker2.tick()
+            world.drain()
+    asyncio.run(run())
+    assert len(channel.sent) == 1               # never a second post
+    assert reg2.is_dead(delivery_id) and not reg2.claims()
+    assert ("restore_suspect", {"delivery_id": delivery_id}) in world.logs
+    assert spec_path.exists()                   # left for reconcile
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notification_delivery_attempts"
+    ).fetchone()[0] == 0
+
+
 def test_delivery_denied_revoked_card(world):
     """Revoke between dispatch and claim -> the runner denies, the
     worker never touches Discord."""
