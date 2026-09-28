@@ -1733,6 +1733,16 @@ class Ledger:
             "WHERE event_id=?", (time.time(), event_id))
         self.db.commit()
 
+    def outbox_defer(self, event_id: int, delay: float, commit: bool = True):
+        """Push a still-pending event's next pickup out by ``delay``
+        seconds — no attempt consumed, state unchanged."""
+        now = time.time()
+        self.db.execute(
+            "UPDATE notify_outbox SET next_try=?,updated_at=? "
+            "WHERE event_id=?", (now + delay, now, event_id))
+        if commit:
+            self.db.commit()
+
     def outbox_suppress(self, event_id: int):
         """Terminal drop for events that must never reach Discord —
         e.g. queued before the patient was archived (Oracle F2). Unlike
