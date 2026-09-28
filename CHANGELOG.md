@@ -1,5 +1,129 @@
 # Changelog
 
+## [1.0.5] — 2026-09-28
+
+抽出パイプラインの精度改善（本文中の裏付けを必須化したイベント
+抽出、不足抽出への1回限りの修復、ルール検出のフィールド単位
+統合）と、`mcs/extract/` の推論エンジン世代別フォルダ化
+（v1〜v4）。運用面では `check` が plist の存在だけでなく
+launchd の実稼働とキュー健全性を診断し、通知カードは抽出
+artifact の後着を検知して自動で再描画する（v1.0.4 から
+12 コミット・39 ファイル）。`hermes_plugin/` に変更はないため
+gateway 再起動は不要。drainer のパス更新のため `mcs_setup.py
+services` の reconcile が必要。
+
+### 動作が変わるもの
+
+- **`mcs/extract/` を推論エンジン世代でフォルダ分割** —
+  `v1/extract.py`（ルール抽出エンジン）、`v4/extract_llm.py`・
+  `extract_bench.py`（現行 LLM 抽出レーンとベンチ）。v2/v3 は
+  in-place 置換で退役済みのため git 履歴を指す README のみを配置
+  （バージョン付き artifact は従来どおり読める）。`rollup.py` は
+  v1+v4 を横断するため `extract/` 直下に維持。`_mcs_path` が
+  ネストしたモジュールディレクトリを再帰登録するため
+  `import extract_llm` 等の flat import は不変。drainer plist・
+  夜間 catchup wrapper・各種ドキュメントを新パスに追随
+- **離散イベント抽出に本文中の裏付けを要求** — eol・転倒・
+  入院・退院・移乗・検査・訪問の各イベントは対象本文に
+  手がかり表現がある場合のみ採用し、根拠のないイベントは破棄
+  して修復パスへ回す。口語表現（倒れ/移り/処置/伺い 等）も
+  手がかり語彙に追加。実測で events は QC の NO_MATCH 最大
+  分類（約7割）だった
+- **不足抽出に1回限りの修復を付与** — 300字以上の単一チャンク
+  本文で実フィールド ≤2 しか出ない artifact は内容形状から
+  thin を再判定して一度だけ再抽出する（`meta.thin` 未記録の
+  過去 artifact も backfill なしで対象になる。prefilter 由来の
+  記録は除外）。再抽出でも thin/失敗なら `meta.thin_retried`
+  を付けてループさせず settle。複数チャンク本文は nudge 免除
+  だが thin 記録は残す
+- **ルール(v1)検出を LLM 出力へフィールド単位で統合** — LLM の
+  部分的なイベント一覧が v1 限定の検出（medication・
+  adherence・media_ref、約400件の eol）を、部分的な vitals
+  dict が v1 限定の計測値（約520件）を隠していた。イベントは
+  union、vitals はキー単位で LLM 優先のマージに変更。フィールド
+  ごとの優先規則をモジュール docstring に契約として記録し
+  `notify_flush`・カード描画とのドリフトを防ぐ
+- **QC 監査の質問順を実測 NO_MATCH 順に** — events→vitals→
+  meds→symptoms→labs。従来は共有質問予算が meds/symptoms で
+  尽き、最大の NO_MATCH 源だった events・vitals に到達し
+  なかった
+- **urgency 判定の根拠を prompt で明示** — 「緊急」「至急」の
+  文言がなくても臨床トリガーがあれば high とし、過去形の
+  報告は routine に留める
+
+### 修正した問題
+
+- **抽出 artifact の後着でカードが薄い表示のまま残る問題** —
+  スレッドカードの `_source_fp` が message 行だけを fingerprint
+  していたため、描画から数分〜数時間後に extract_llm artifact
+  が到着しても世代がずれず v1-only の表示のままだった。
+  `structured_view.fact_ready_ids` が `latest_fact_artifact` と
+  同一の現行 fact 判定をバッチ共有し、fingerprint にメッセージ
+  単位の readiness を持たせて、artifact 到着時に
+  `source_generation` を更新する
+- **ルール抽出の語彙不足** — 実運用の口語表現（「お熱があって」
+  「意識がない」「お亡くなり」）を症状・eol 手がかりに追加
+  （意識系は decline に限定した精密マッチ）。RULE_VERSION bump
+  により通常の stale 経路で再抽出される
+- **`check` の恒久警告を解消** — `hermes_plugin/**/__pycache__`
+  は gateway が plugin 読込のたびに再生成するため stale-gateway
+  警告が絶対に消えない問題を、source ファイルの mtime のみを
+  比較する方式に修正。`health` config ブロックは
+  `health_watch.py` が消費する正規設定なのに「unknown config
+  key」警告が出続けていたため、読み取り契約に沿う
+  validator（tick_interval_s は (0,86400] の有限数、
+  max_missed_runs は int [0,100]、night_thinning は bool）を追加
+- **backlog 警告の誤報を整理** — 意図的に遅い backfill（Jev
+  日次予算＋レーン公平性）で pending>1d 警告が常時発火して
+  いた。24時間完了ゼロ＋滞留あり＝真の stall と、3日超の
+  滞留拡大＝lag に区別。shadow モードで
+  `canonical_projection` が無いのは正当なので、fact_source が
+  canonical の時だけ error 相当のシグナルにした
+- **修復・監査の正確性** — thin 再抽出は pin された artifact を
+  message/project/hash scope で再検証し、保持した臨床主張が
+  後退しない修復のみ採用。QC 監査は vital-keyed ドメインを
+  実測順に処理し、表示層は選択済み LLM 結果を優先して他対象・
+  他時刻のルール値を混ぜない
+
+### 新しい運用機能
+
+- **`check` が launchd の実稼働を検査** — plist の存在確認だけ
+  では 2026-09-28 の障害を数日間検出できなかったため、
+  `launchctl print gui/UID/LABEL` で installed-but-unloaded を
+  error に（headless 等で GUI domain に届かない場合は
+  warning）。台帳を read-only で読み、extract_qc/semantic ジョブ
+  の1日超滞留・extract_llm backlog>500・semantic 有効で
+  canonical_projection ゼロ（publish 未実行）も警告する
+- **`semantic --status` に canonical_readiness** —
+  `fact_source=canonical` 昇格の判断材料（v2 shadow の保有量・
+  完了 coverage・audit/publish 通過数）を read-only・モデル
+  呼出しなしで表示し、昇格可否を質問前に確認できる
+- **ベンチコーパス拡充と計測の精密化** — 否定・口語訪問・家族・
+  複数計測ケースを追加。フィールド単位採点・ケース別の
+  call/repair 回数・p50/p95 時間・コーパス hash を記録し、
+  異なるコーパス間の素朴な比較は拒否する
+
+### 内部構造・開発者向け
+
+- **README のモック刷新** — Discord カード・Discord カード+
+  コンパニオンスレッド・Slack カード・Slack スレッドパネルの
+  4種に番号凡例・送信者行・構造化フィールド・操作ボタン・
+  配送状態・確認後状態を記した完全合成の mock を冒頭に配置
+
+### アップグレード時の注意
+
+- **drainer の実行パスが `mcs/extract/v4/extract_llm.py` に
+  移動** — `mcs_setup.py services` の reconcile で plist を
+  再描画・再起動する。旧パスを参照する実行経路・cron
+  wrapper・ドキュメントは残っていない
+- **`hermes_plugin/` は無変更** — `hermes gateway restart` は
+  不要
+- **config の `health` ブロックが正式な検証対象に** — 不正値は
+  `check` で error になる（従来は未知キー警告のみ）
+- **抽出 schema/artifact kind は不変** — `extract_llm` kind・
+  `extract_version=4` を維持し、既存の台帳行・QC・v4
+  publication 経路への影響はない
+
 ## [1.0.4] — 2026-09-28
 
 追跡ファイル284件の全リポジトリレビュー（dev-records
