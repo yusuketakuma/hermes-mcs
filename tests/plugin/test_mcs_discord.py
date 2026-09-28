@@ -1054,10 +1054,17 @@ def test_404_on_update_marks_not_sent(world):
 
     asyncio.run(run())
     card = world.card()
-    assert card["delivery_state"] in ("delivered", "message_deleted",
-                                      "pending")
-    # a fresh send happened — the dead message was not edited forever
-    assert len(bot.channels[42].sent) >= 2
+    # the 404 settled not_sent -> message_deleted -> one fresh create,
+    # which is delivered and rebinds the card to the new message
+    assert card["delivery_state"] == "delivered"
+    sent = bot.channels[42].sent
+    assert len(sent) == 2
+    assert str(card["message_id"]) == str(sent[1].id)
+    rec = journal.scan(str(world.data / "discord_state"))
+    results = [r["result"] for rows in rec.values() for r in rows
+               if r.get("phase") == "result" and not r.get("part_id")]
+    assert results.count("not_sent") == 1
+    assert not any(r == "unknown" for r in results)
 
 
 # ---------- interactions ---------------------------------------------------
@@ -1270,11 +1277,24 @@ def test_modal_wrong_actor_and_origin(world):
                           message_id=msg.id)
     asyncio.run(act.on_interaction(bad))
     assert "本人" in bad.response.message["content"]
-    # a different channel cannot submit either — origin is re-pinned
+    queued = sorted((world.data / "cmd_int").glob("*.json"))
+    # a channel outside the allowlist is refused by authorization
     bad2 = FakeInteraction(f"mcs:m:{modal_id}", channel_id=99,
                            message_id=msg.id)
     asyncio.run(act.on_interaction(bad2))
-    assert bad2.response.message["ephemeral"] is True
+    assert bad2.response.message == {"content": "権限がありません。",
+                                     "ephemeral": True}
+    # an allowed channel but a different card message trips the
+    # strict_message origin pin — the submit must come from the card
+    # the form was opened on
+    bad3 = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id + 1)
+    asyncio.run(act.on_interaction(bad3))
+    assert bad3.response.message == {
+        "content": "フォームを開いたカードと送信元が一致しません。",
+        "ephemeral": True}
+    assert bad3.response.deferred is None
+    assert sorted((world.data / "cmd_int").glob("*.json")) == queued
+    assert reg.modal(modal_id) is not None
 
 
 def test_dismiss_flow_pins_artifact(world):
