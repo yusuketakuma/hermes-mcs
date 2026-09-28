@@ -1433,10 +1433,16 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
         # and view responses are checked against live state on every click.
         receipt = _apply_notification_tx(db, req, cfg, now, specs, replay=stored)
         if old is None:
+            # 📄 is view-only and every click recomputes the text live
+            # (replay skips "body"), so the durable audit row keeps the
+            # outcome but never a copy of the source text — a copy would
+            # outlive the source's deletion. The caller's result still
+            # carries the body for this one delivery.
+            kept = {k: v for k, v in receipt.items() if k != "body"}
             db.execute(
                 "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                 (command_id, digest, receipt.get("project_id"),
-                 None, receipt["outcome"], canonical(receipt).decode(), now))
+                 None, receipt["outcome"], canonical(kept).decode(), now))
         mark_snapshot_dirty(db)
     if specs:
         root = data_root(ledger)
