@@ -56,11 +56,14 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     job waiting on a durable resource outage re-walks S0–S2 every drain
     without consuming attempts, and must not append rows forever."""
     receipt = {"stage": stage, "status": status, **detail}
+    # CASE fixes evaluation order: json_extract on a malformed meta row
+    # raises, so such rows are skipped (fail-open) rather than failing.
     prev = ledger.db.execute(
         "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
-        "AND json_extract(meta,'$.stage')=? "
+        "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
+        "THEN json_extract(meta,'$.stage')=? "
         "AND json_extract(meta,'$.fingerprint')=? "
-        "AND json_extract(meta,'$.policy_fingerprint')=? "
+        "AND json_extract(meta,'$.policy_fingerprint')=? END "
         "ORDER BY artifact_id DESC LIMIT 1",
         (KIND_V4_STAGE, mid, stage, fp, policy)).fetchone()
     if prev is not None:
