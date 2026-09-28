@@ -298,22 +298,27 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     jev_client, v2_doc, member["body_original"],
                     deadline - 5,
                     match_threshold=scfg["match_threshold"])
-                ledger.artifact_add(
-                    KIND_FACT_AUDIT,
-                    json.dumps(
-                        {"status": fact_audit["status"],
-                         "evaluated": fact_audit["evaluated"],
-                         "findings": fact_audit["findings"],
-                         "fact_verdicts":
-                             fact_audit["fact_verdicts"]},
-                        ensure_ascii=False, allow_nan=False),
-                    project_id=pid, message_id=mid,
-                    model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp,
-                          "policy_fingerprint": policy,
-                          "schema": SCHEMA_VERSION,
-                          "doc_hash": doc_hash,
-                          "audit_status": fact_audit["status"]})
+                stored = {"status": fact_audit["status"],
+                          "evaluated": fact_audit["evaluated"],
+                          "findings": fact_audit["findings"],
+                          "fact_verdicts": fact_audit["fact_verdicts"]}
+                # an unevaluated re-run identical to the stored row (a
+                # durable resource wait) adds no information — record
+                # an outcome once, not once per drain (FIX-SD1)
+                if not (prev_fa is not None
+                        and prev_fa["meta"].get("doc_hash") == doc_hash
+                        and prev_fa["content"] == stored):
+                    ledger.artifact_add(
+                        KIND_FACT_AUDIT,
+                        json.dumps(stored, ensure_ascii=False,
+                                   allow_nan=False),
+                        project_id=pid, message_id=mid,
+                        model=jev.JEV_MODEL,
+                        meta={"fingerprint": fp,
+                              "policy_fingerprint": policy,
+                              "schema": SCHEMA_VERSION,
+                              "doc_hash": doc_hash,
+                              "audit_status": fact_audit["status"]})
             v4.record_stage(
                 ledger, pid, mid, fp, policy,
                 "s4_reaudit" if _attempt else "s2_fact_audit",

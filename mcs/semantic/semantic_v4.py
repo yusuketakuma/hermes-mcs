@@ -49,7 +49,29 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     a receipt write error must never abort the pipeline itself.
     ``tx=True`` inside a caller-held ``with ledger.db`` block (the
     non-tx variant commits immediately and would break the atomic
-    publication boundary)."""
+    publication boundary).
+
+    A receipt identical (apart from ``ts``) to the latest one for the
+    same generation and stage adds no information and is skipped — a
+    job waiting on a durable resource outage re-walks S0–S2 every drain
+    without consuming attempts, and must not append rows forever."""
+    receipt = {"stage": stage, "status": status, **detail}
+    prev = ledger.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
+        "AND json_extract(meta,'$.stage')=? "
+        "AND json_extract(meta,'$.fingerprint')=? "
+        "AND json_extract(meta,'$.policy_fingerprint')=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        (KIND_V4_STAGE, mid, stage, fp, policy)).fetchone()
+    if prev is not None:
+        try:
+            last = json.loads(prev["content"])
+        except (json.JSONDecodeError, TypeError):
+            last = None
+        if isinstance(last, dict):
+            last.pop("ts", None)
+            if last == receipt:
+                return
     add = ledger.artifact_add_tx if tx else ledger.artifact_add
     add(
         KIND_V4_STAGE,
