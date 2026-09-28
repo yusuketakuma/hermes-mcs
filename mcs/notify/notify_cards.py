@@ -1913,10 +1913,12 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
 
 def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     """Delete expired action tokens and strip PHI-bearing spec_json from
-    renders that are fully settled (cancelled/not_sent, a delivered
-    successor, no unsettled attempt, no references). Rows, hashes and
-    correlations stay for audit. Bounded per call — the rest waits for
-    the next tick."""
+    superseded renders (cancelled/not_sent with a delivered successor,
+    no unsettled attempt on the card, no pending intent binding). Rows,
+    hashes and correlations stay for audit. Delivered renders keep
+    their spec_json (containers and thread_body_parts) — nothing clears
+    it on settle. Bounded per call — the rest waits for the next
+    tick."""
     db = _db(ledger)
     now = time.time() if now is None else now
     with db:
@@ -1951,9 +1953,9 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         # spec files for terminal renders can go — a begin against them
         # would be denied anyway; unknown stays for investigation. A
         # render whose durable parts are still pending keeps its spec:
-        # it is the only copy a restart-resume can replay (spec_json
-        # is cleared on settle), so removing it would strand parts
-        # the journal could still finish.
+        # the worker never reads the DB, so the file is the only copy
+        # its restart-resume can replay — removing it would strand
+        # parts the journal could still finish.
         removed = 0
         root = data_root(ledger)
         dirs = notify_dirs(root)
