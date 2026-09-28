@@ -61,11 +61,13 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 5
+RULE_VERSION = 6
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
-_PLANNED_BEFORE = re.compile(r"次回|予定|明日|明後日|今度|来週")
+_PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後日|今度|来週")
+# 予定通りなら (conditional) right before the date, beyond the 6-char window
+_PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
 _PLANNED_AFTER = re.compile(r"[　\s]*(?:の|を)?[　\s]*(?:予定|します|いたします|致します)")
 _VITAL_PATTERNS = {
     "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:\.\d)?)\s*[℃度]?",
@@ -183,6 +185,7 @@ def extract_message(body: str, posted_at: str) -> dict:
         pre = re.split(r"[。．\n!！?？]",
                        body[max(0, m.start() - 6):m.start()])[-1]
         if _PLANNED_BEFORE.search(pre) \
+                or _PLANNED_IF.search(body, 0, m.start()) \
                 or _PLANNED_AFTER.match(body, m.end()):
             continue
         d = _ymd(int(m.group(2)), int(m.group(3)),
