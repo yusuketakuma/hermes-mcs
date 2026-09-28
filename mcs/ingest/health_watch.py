@@ -9,7 +9,9 @@ are detectable even when every run "succeeded".
 
 Freshness deadline comes from config (health.tick_interval_s, default
 300 — the deployed 5-minute tick — and health.max_missed_runs, default
-2): deadline = tick * (missed + 1). No hardcoded 'healthy'.
+2). The deployed check skips most 5-minute ticks overnight, so the
+default watcher counts the actual scheduled ticks and allows one run
+deadline for the last due tick. No hardcoded 'healthy'.
 
 Output contract: alert content is status codes/counters only — never
 patient data. stdout carries one alert line on alert transitions
@@ -18,6 +20,7 @@ machine-readable status, published atomically.
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -35,10 +38,21 @@ STATUS_REL = os.path.join("data", "health_watch_status.json")
 
 DEFAULT_TICK_S = 300        # deployed cron cadence: */5 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
+RUN_GRACE_S = 480           # run_check's whole-run deadline
+NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5, 6}
 REALERT_S = 3600            # unchanged bad state re-alerts hourly
 
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
                   "failed": "failed"}
+
+
+def _finite_number(value) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def freshness_deadline(cfg: dict) -> int:
@@ -49,14 +63,50 @@ def freshness_deadline(cfg: dict) -> int:
     h = h if isinstance(h, dict) else {}
     tick = h.get("tick_interval_s", DEFAULT_TICK_S)
     missed = h.get("max_missed_runs", DEFAULT_MAX_MISSED)
-    if not (isinstance(tick, int | float) and tick > 0):
+    if not (_finite_number(tick) and tick > 0):
         tick = DEFAULT_TICK_S
-    if not (isinstance(missed, int | float) and missed >= 0):
+    if not (_finite_number(missed) and missed >= 0):
         missed = DEFAULT_MAX_MISSED
-    return int(tick * (int(missed) + 1))
+    deadline = tick * (int(missed) + 1)
+    return max(1, int(deadline)) if _finite_number(deadline) \
+        else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
 
 
-def classify_health(path: str, now: float, deadline_s: int) -> dict:
+def _scheduled_deadline(health_at: float, cfg: dict,
+                        fallback: int) -> float:
+    """Deadline from the deployed day/night check schedule.
+
+    Other tick settings use their configured uniform interval. A run
+    may finish up to RUN_GRACE_S after its scheduled start, so the
+    third missed tick is only stale after that finish window.
+    """
+    h = cfg.get("health") if isinstance(cfg, dict) else None
+    h = h if isinstance(h, dict) else {}
+    tick = h.get("tick_interval_s", DEFAULT_TICK_S)
+    missed = h.get("max_missed_runs", DEFAULT_MAX_MISSED)
+    if not (_finite_number(tick) and tick > 0):
+        tick = DEFAULT_TICK_S
+    if not (_finite_number(missed) and missed >= 0):
+        missed = DEFAULT_MAX_MISSED
+    if tick != DEFAULT_TICK_S or h.get("night_thinning") is False \
+            or type(missed) is not int or not 0 <= missed <= 100:
+        return fallback
+    due = 0
+    slot = (int(health_at) // DEFAULT_TICK_S + 1) * DEFAULT_TICK_S
+    try:
+        while due <= missed:
+            local = time.localtime(slot)
+            if local.tm_hour not in NIGHT_HOURS \
+                    or local.tm_min in (0, 20, 40):
+                due += 1
+            slot += DEFAULT_TICK_S
+    except (OverflowError, OSError, ValueError):
+        return fallback
+    return slot - DEFAULT_TICK_S + RUN_GRACE_S - health_at
+
+
+def classify_health(path: str, now: float, deadline_s: int,
+                    cfg: dict | None = None) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
     try:
@@ -68,16 +118,19 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         h = json.loads(raw)
     except json.JSONDecodeError:
         return {"status": "corrupt"}
-    if not isinstance(h, dict) \
-            or not isinstance(h.get("at"), int | float):
+    if not isinstance(h, dict) or not _finite_number(h.get("at")):
         return {"status": "corrupt"}
     overall = h.get("overall")
-    if overall not in OVERALL_STATUS:
+    if not isinstance(overall, str) or overall not in OVERALL_STATUS:
         return {"status": "corrupt"}
+    if h["at"] > now + RUN_GRACE_S:
+        return {"status": "corrupt"}
+    if cfg is not None:
+        deadline_s = _scheduled_deadline(h["at"], cfg, deadline_s)
     age = now - h["at"]
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
               "overall": overall, "run_status": h.get("run_status"),
-              "run_id": h.get("run_id")}
+              "run_id": h.get("run_id"), "deadline_s": deadline_s}
     if age > deadline_s:
         report["status"] = "stale"
         return report
@@ -108,20 +161,25 @@ def evaluate(home: str = HOME, now: float | None = None,
     state_path = os.path.join(home, STATE_REL)
     status_path = os.path.join(home, STATUS_REL)
 
-    obs = classify_health(health_path, now, deadline)
+    obs = classify_health(health_path, now, deadline, cfg)
     state = _load_state(state_path)
-    last = state.get("last") or {}
+    last = state.get("last")
+    last = last if isinstance(last, dict) else {}
     key = (obs["status"], obs.get("health_at"))
     last_key = (last.get("status"), last.get("health_at"))
     prior_known = bool(last)
     transition = key != last_key
+    alerted_at = state.get("alerted_at")
+    invalid_alert_at = not _finite_number(alerted_at) \
+        or alerted_at > now
     realert = (obs["status"] != "ok"
-               and now - (state.get("alerted_at") or 0) >= REALERT_S)
+               and (invalid_alert_at
+                    or now - alerted_at >= REALERT_S))
     alert = transition if prior_known else obs["status"] != "ok"
     alert = alert or realert
 
     report = dict(obs)
-    report.update({"deadline_s": deadline, "alert": alert,
+    report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "watched_at": now})
     state["last"] = {"status": obs["status"],
                      "health_at": obs.get("health_at")}

@@ -32,6 +32,7 @@ parse records status='unknown', never 'confirmed'.
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -88,6 +89,7 @@ def _health(ledger, result: dict, status: str,
     `run_id` binds this evidence to the source run that produced it."""
     import extract_llm
     import notify_cards
+    from mcs_queries import current_extract_pred
     now = time.time()
     notify_res = result.get("notify") or {}
     notify_state = ("incomplete"
@@ -123,9 +125,7 @@ def _health(ledger, result: dict, status: str,
       SELECT COUNT(*) FROM messages m WHERE {eligible_where}
         AND EXISTS(SELECT 1 FROM artifacts a
           WHERE a.kind='extract_llm' AND a.message_id=m.message_id
-            AND json_valid(a.meta)
-            AND json_extract(a.meta,'$.error') IS NOT 1
-            AND json_extract(a.meta,'$.hash')=m.content_hash
+            {current_extract_pred('a', 'm')}
             AND json_extract(a.meta,'$.extract_version')=?)
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     collection = ("incomplete"
@@ -231,7 +231,7 @@ def _attempt_relogin(adapter, ledger, result, where: str,
                                    chrome_bin=CHROME_BIN)
     except Exception as exc:
         state = "failed"
-        attempt["detail"] = repr(exc)
+        attempt["detail"] = type(exc).__name__
     attempt["state"] = state
     if state == "ok":
         _alert_session_recovered(ledger, result.get("run_id"),
@@ -607,9 +607,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
     try:
         import extract_llm
         # T18: under the v4 engine (fact_source=canonical) the legacy
-        # v3 extractor admits NOTHING new — its only remaining work is
-        # the explicit, finite conversion manifests declared through
-        # semantic_v4. Outside canonical mode admission is unchanged.
+        # v3 extractor admits NOTHING new. Conversion manifests schedule
+        # v4 jobs; they never reopen v3. Outside canonical mode admission
+        # is unchanged.
         admitted = None
         try:
             import semantic_policy
@@ -767,11 +767,11 @@ def _commands_only(lock_fd, deadline) -> int:
                 result["errors"].append(f"cmd_sweep:{type(e).__name__}")
         notify_cmds.drain_int_commands(
             ledger, result, cfg, root,
-            deadline=time.monotonic() + min(120, max(
-                5, deadline - time.monotonic() - 10)))
+            deadline=min(deadline, time.monotonic() + min(120, max(
+                5, deadline - time.monotonic() - 10))))
         # a second drain: commands queued by the first pass's receipts
         notify_cmds.drain_int_commands(
-            ledger, result, cfg, root, deadline=time.monotonic() + 30)
+            ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30))
         notify_cards.publish_flags(cfg, root)
         notify_cards.gc(ledger, cfg)
         if notify_cards.snapshot_dirty(ledger):
@@ -932,11 +932,16 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
 def _notify_max_age_s(cfg, result):
     """Validated notify_max_age_h config as seconds, or None."""
     mah = cfg.get("notify_max_age_h")
-    if mah is not None and not (type(mah) in (int, float)
-                                and mah > 0):
+    if mah is None:
+        return None
+    try:
+        seconds = float(mah) * 3600 if type(mah) in (int, float) else 0
+    except (ValueError, OverflowError):
+        seconds = 0
+    if not math.isfinite(seconds) or seconds <= 0:
         result["errors"].append("config: notify_max_age_h_invalid")
         return None
-    return mah * 3600 if type(mah) in (int, float) and mah > 0 else None
+    return seconds
 
 
 def _deliver(ledger, args, cfg, result, deadline):
@@ -1105,16 +1110,17 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
     started = time.time()
-    run_id = ledger.begin_run(
-        None, kind="deep" if args.jobs_only else "tick")
+    run_id = None
     result = {"run_id": run_id, "ok": False, "projects": 0, "messages": 0,
               "new_messages": 0, "backfilled": 0, "incomplete": [],
               "marked_read": [], "notify": {}, "errors": []}
-    cfg = _config()
-    sem_on = _semantic_enabled(ledger, cfg, result)
-    notify_max_age_s = _notify_max_age_s(cfg, result)
-
     try:
+        run_id = ledger.begin_run(
+            None, kind="deep" if args.jobs_only else "tick")
+        result["run_id"] = run_id
+        cfg = _config()
+        sem_on = _semantic_enabled(ledger, cfg, result)
+        notify_max_age_s = _notify_max_age_s(cfg, result)
         _stage_fetch(adapter, ledger, args, cfg, result, deadline,
                      run_id, sem_on, notify_max_age_s)
         _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,

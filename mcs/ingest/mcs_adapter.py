@@ -12,9 +12,9 @@ Verified contract (live session, 2026-09):
   threads : GET /api/v2t/projects/{pid}/messages/{mid}/messages  (full reply bodies)
   latest  : GET /api/v2t/projects/{id}/messages/latest -> {is_self_only,message{id}}
   files   : GET {files[].url}  (anonymous 200 — no auth/cookie needed)
-  mark    : POST /api/v2t/projects/{id}/mark_as_read  form: timestamp={ts}
-            -> 200 {"project":{"is_unread":false}}   (timestamp OPTIONAL server-side:
-            adapter MUST always send it — omitted means "read everything now")
+  mark    : GET /api/v2t/projects/{id}/messages?unread=1&timestamp={ts}
+            without keep_read_status, followed by project-detail confirmation.
+            The adapter requires the collection snapshot timestamp.
   session : ~30min sliding expiry observed via file_access_token cookie rolling;
             whether Bearer itself slides the same way is UNPROVEN (see C03).
 
@@ -34,6 +34,7 @@ import json
 from datetime import datetime
 import os
 import socket
+import tempfile
 import time
 import urllib.request
 import urllib.error
@@ -41,7 +42,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from contextlib import suppress
 
-from mcs_util import env_value, load_config, no_proxy_opener
+from mcs_util import atomic_write, env_value, load_config, no_proxy_opener
 from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
@@ -230,6 +231,8 @@ class _WSConn:
     def close(self):
         with suppress(OSError):
             self._sock.close()
+
+
 def _ws_eval(ws_url: str, expression: str, timeout: float = 15):
     """Runtime.evaluate over the minimal ws client; returns the
     result.value, or raises BootstrapError/MCSError — never a bare
@@ -260,7 +263,8 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
             u = urllib.parse.urlparse(newurl)
             ok = (u.scheme == "https"
                   and u.hostname in _ALLOWED_DOWNLOAD_HOSTS
-                  and _allowed_port(u))
+                  and _allowed_port(u)
+                  and u.username is None and u.password is None and not u.fragment)
         except ValueError:
             ok = False  # malformed redirect target — refuse, never follow
         if not ok:
@@ -279,9 +283,9 @@ def _assert_allowed_url(url: str):
         # escape as a bare ValueError
         raise MCSError("url_not_allowed", "unparseable") from None
     if (u.scheme != "https" or host not in _ALLOWED_DOWNLOAD_HOSTS
-            or not ok_port):
-        raise MCSError("url_not_allowed",
-                       f"scheme={u.scheme} host={host}")
+            or not ok_port or u.username is not None or u.password is not None
+            or u.fragment):
+        raise MCSError("url_not_allowed", "download origin invalid")
 
 
 @dataclass
@@ -303,7 +307,7 @@ class Message:
     organization: str
     posted_at: str
     body_html: str
-    body_state: str            # unknown | snippet | full
+    body_state: str            # unknown | snippet | full | deleted
     is_unread: bool
     reply_count: int
     replies: list[Message] = field(default_factory=list)
@@ -381,7 +385,7 @@ def _organization(u: dict | None) -> str:
 
 
 def _valid_id(v) -> bool:
-    return type(v) is int and v > 0
+    return type(v) is int and 0 < v < 2**63
 
 
 def _has_next(pag: dict, label: str) -> bool:
@@ -550,7 +554,7 @@ class MCSAdapter:
             tok = raw.get("token") if isinstance(raw, dict) else None
             if type(tok) is str and 8 <= len(tok) <= 128:
                 return tok
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, RecursionError):
             pass
         return None
 
@@ -559,14 +563,12 @@ class MCSAdapter:
             return
         with suppress(OSError):
             d = os.path.dirname(self._token_cache)
-            os.makedirs(d, exist_ok=True)
-            os.chmod(d, 0o700)
-            tmp = self._token_cache + ".tmp"
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                json.dump({"token": token, "fetched_at": time.time()}, f)
-            os.replace(tmp, self._token_cache)
-            os.chmod(self._token_cache, 0o600)
+            if d:
+                os.makedirs(d, mode=0o700, exist_ok=True)
+                os.chmod(d, 0o700)
+            atomic_write(self._token_cache, lambda f: json.dump(
+                {"token": token, "fetched_at": time.time()}, f), mode=0o600)
+
     def _token_via_cdp(self) -> str:
         targets = self._cdp_json("/json/list")
         page = next((t for t in targets if t.get("type") == "page"
@@ -1293,7 +1295,9 @@ class MCSAdapter:
                         u = urllib.parse.urlparse(loc)
                         ok = (u.scheme == "https"
                               and u.hostname in _ALLOWED_REDIRECT_HOSTS
-                              and _allowed_port(u))
+                              and _allowed_port(u)
+                              and u.username is None and u.password is None
+                              and not u.fragment)
                     except ValueError:
                         ok = False  # malformed Location — never follow
                     if ok:
@@ -1312,7 +1316,12 @@ class MCSAdapter:
         _assert_allowed_url(url)
         if not self._token:
             raise MCSError("no_token")
-        tmp = dest + ".part"
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=".download-", suffix=".part",
+                                       dir=os.path.dirname(dest) or ".")
+            os.close(fd)
+        except OSError:
+            raise MCSError("download_failed", retryable=True) from None
         try:
             result = self._io("download", 60, url=url, token=self._token,
                               partial=tmp)
@@ -1342,6 +1351,8 @@ class MCSAdapter:
                         raise MCSError("download_too_large")
                     h.update(chunk)
                     f.write(chunk)
+                f.flush()
+                os.fsync(f.fileno())
             self._remaining_timeout(60)
             if total == 0:
                 raise MCSError("download_empty")

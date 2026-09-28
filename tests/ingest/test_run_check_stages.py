@@ -618,6 +618,53 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("content,project,extra", [
+    ("{}", 2, {}), ("{}", 1, {"error": "failed"}),
+    ("[]", 1, {}), ("invalid", 1, {}),
+])
+def test_health_coverage_requires_usable_scoped_extraction(tmp_path, content, project, extra):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message()])
+        source_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+        db.artifact_add("extract_llm", content, project_id=project, message_id=1,
+                        meta={"hash": source_hash, "extract_version": extract_llm.EXTRACT_VERSION,
+                              **extra})
+        health = run_check._health(db, {"errors": []}, "ok")
+        assert health["extract_v2_coverage"]["current"] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("hours", [float("inf"), 10**400, 1e308],
+                         ids=["infinite", "huge_integer", "conversion_overflow"])
+def test_notify_age_rejects_nonfinite_seconds(hours):
+    result = {"errors": []}
+    assert run_check._notify_max_age_s({"notify_max_age_h": hours}, result) is None
+    assert result["errors"] == ["config: notify_max_age_h_invalid"]
+
+
+def test_begin_run_failure_closes_writer_and_reports_safe_error(tmp_path, monkeypatch, capsys):
+    data = tmp_path / "data"
+    for name, value in {"HOME": tmp_path, "DB": data / "ledger.db",
+                        "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
+                        "HEALTH_FILE": data / "health.json"}.items():
+        monkeypatch.setattr(run_check, name, str(value))
+
+    def fail_begin(*args, **kwargs):
+        raise RuntimeError("SYNTHETIC_PRIVATE_CANARY")
+
+    monkeypatch.setattr(run_check.Ledger, "begin_run", fail_begin)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+    assert run_check.main() == 1
+    output = capsys.readouterr().out
+    assert "SYNTHETIC_PRIVATE_CANARY" not in output
+    assert "crash: RuntimeError" in output
+    descriptor = run_check.acquire_run_lock(run_check.LOCKFILE)
+    assert descriptor is not None
+    os.close(descriptor)
+
+
 def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     """A health.json write failure must not roll back committed ingest
     work nor mark the stored run failed — it raises a separate
@@ -1158,14 +1205,12 @@ def test_session_recovered_alert_not_throttled(tmp_path):
     db.close()
 
 
-def test_attempt_relogin_journals_exception_detail(tmp_path):
-    """An auto_login that raises (not just returns a failure state) is
-    journaled with the exception repr so a broken login path is
-    diagnosable from the run log alone."""
+def test_attempt_relogin_journals_exception_type_without_private_detail(tmp_path):
+    """Login failure records its type without copying credential-bearing exception text."""
     db = _ledger(tmp_path)
 
     def boom(**kw):
-        raise RuntimeError("cdp_gone")
+        raise RuntimeError("SYNTHETIC_PRIVATE_CANARY")
 
     adapter = SimpleNamespace(auto_login=boom)
     result = {"errors": [], "run_id": 1}
@@ -1174,7 +1219,8 @@ def test_attempt_relogin_journals_exception_detail(tmp_path):
         mcs_adapter.SessionExpired(status=403))
     assert state == "failed"
     assert result["relogin_attempts"][-1]["detail"] == \
-        "RuntimeError('cdp_gone')"
+        "RuntimeError"
+    assert "SYNTHETIC_PRIVATE_CANARY" not in json.dumps(result)
     db.close()
 
 

@@ -12,6 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+MAX_JSON_BYTES = 8 * 1024 * 1024
+
 
 class WorkerError(Exception):
     def __init__(self, kind: str, status=None, retryable=False):
@@ -83,7 +85,7 @@ def bounded_call(payload: dict, *, timeout: float, deadline=None) -> dict:
         if kind not in {"http_error", "network_error", "download_failed",
                         "download_empty", "download_too_large", "no_token",
                         "url_not_allowed", "bootstrap_error",
-                        "deadline_exceeded"}:
+                        "deadline_exceeded", "response_too_large"}:
             raise ValueError
         status = result.get("status")
         if status is not None and (type(status) is not int or not 100 <= status <= 599):
@@ -134,8 +136,11 @@ def _execute(envelope: dict) -> dict:
             finally:
                 error.close()
         with response:
+            body = response.read(MAX_JSON_BYTES + 1)
+            if len(body) > MAX_JSON_BYTES:
+                raise WorkerError("response_too_large")
             return {"status": response.status, "headers": dict(response.headers),
-                    "body": base64.b64encode(response.read()).decode("ascii")}
+                    "body": base64.b64encode(body).decode("ascii")}
     if operation == "download":
         adapter = adapter_module.MCSAdapter()
         adapter._token = envelope.get("token")
@@ -149,7 +154,10 @@ def _execute(envelope: dict) -> dict:
             raise WorkerError("url_not_allowed")
         request = urllib.request.Request(url, method=method)
         with no_proxy_opener(NoRedirect).open(request, timeout=timeout) as response:
-            return {"value": json.load(response)}
+            body = response.read(MAX_JSON_BYTES + 1)
+            if len(body) > MAX_JSON_BYTES:
+                raise WorkerError("response_too_large")
+            return {"value": json.loads(body)}
     if operation == "cdp_eval":
         _loopback_url(envelope["url"], "ws")
         return {"value": adapter_module._ws_eval(
