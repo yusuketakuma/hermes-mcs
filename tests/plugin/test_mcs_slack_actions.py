@@ -297,3 +297,48 @@ def test_dismiss_cancel_never_writes_human_command(tmp_path):
         await actions._confirm(ack, body, cancel)
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
     asyncio.run(scenario())
+
+
+def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
+    """取消 racing an in-flight 確定 must not claim the command was
+    cancelled — the command file is being queued."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="dismiss")
+        body, action = click()
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        modal_id = app.client.views[0]["view"]["private_metadata"]
+        view_body, view = submitted(modal_id, reason="合成却下理由")
+        await actions._modal(ack, view_body, view)
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", modal=True,
+               params={"signal_key": "synthetic-key"})
+        await actions.sweep_followups()
+        buttons = app.client.messages[-1]["blocks"][1]["elements"]
+        confirm_action, cancel_action = buttons
+        confirm_id = confirm_action["action_id"].split(":")[2]
+
+        gate = asyncio.Event()
+        real = actions._publish
+
+        async def slow_publish(envelope):
+            await gate.wait()
+            await real(envelope)
+        actions._publish = slow_publish
+        first = asyncio.create_task(actions._confirm(ack, body, confirm_action))
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if reg.confirm(confirm_id).get("in_flight"):
+                break
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, cancel_action)
+        await actions._confirm(ack, body, confirm_action)
+        replies = [m["text"] for m in app.client.messages[before:]]
+        gate.set()
+        await first
+        assert replies and all("処理中" in t for t in replies)
+        assert not any("取り消し" in m["text"] for m in app.client.messages)
+        assert "受け付けました" in app.client.messages[-1]["text"]
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
+        assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())

@@ -1540,6 +1540,79 @@ def test_confirm_cancel_drops_pending(world):
     assert "期限切れ" in late.response.message["content"]
 
 
+def test_cancel_during_confirm_publish_never_reports_cancelled(
+        world, monkeypatch):
+    """A 取消 (or a second 確定) arriving while the first 確定 is still
+    writing the command file must not answer 取り消しました — the
+    command is queued, so the cancel reports in-progress instead."""
+    import threading
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    gate = threading.Event()
+    real = envelopes.publish_command
+
+    def slow_publish(d, env):
+        assert gate.wait(5)
+        return real(d, env)
+    monkeypatch.setattr(envelopes, "publish_command", slow_publish)
+
+    ok = FakeInteraction(cid, message_id=msg.id)
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    again = FakeInteraction(cid, message_id=msg.id)
+
+    async def race():
+        first = asyncio.create_task(act.on_interaction(ok))
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if ok.response.is_done():
+                break
+        await act.on_interaction(cancel)
+        await act.on_interaction(again)
+        gate.set()
+        await first
+    monkeypatch.setattr(actions_mod, "HUMAN_WAIT_S", 0.05)
+    asyncio.run(race())
+
+    assert "取り消し" not in cancel.response.message["content"]
+    assert "処理中" in cancel.response.message["content"]
+    assert "処理中" in again.response.message["content"]
+    assert "受け付けました" in ok.followup.sent[0]["content"]
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == 1
+    assert reg.confirm(cid[len("mcs:c:"):]) is None
+
+
+def test_confirm_publish_failure_releases_in_flight(world, monkeypatch):
+    """A failed command write keeps the confirm usable (and cancellable)."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    def fail(d, env):
+        raise OSError("disk full")
+    monkeypatch.setattr(envelopes, "publish_command", fail)
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(ok))
+    assert "送信に失敗" in ok.followup.sent[-1]["content"]
+    assert not reg.confirm(cid[len("mcs:c:"):]).get("in_flight")
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(cancel))
+    assert "取り消し" in cancel.response.message["content"]
+
+
 def test_send_modal_failure_releases_modal(world):
     """send_modal past the ~3s window raises — the modal entry must be
     dropped (a dead modal_id is not claimable state) and the click gets

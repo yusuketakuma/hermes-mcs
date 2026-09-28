@@ -348,6 +348,11 @@ class Actions:
                 or not self._pinned(pending["token"],
                                     {**origin, "actor": actor}, actor):
             return
+        if pending.get("in_flight"):
+            # a 確定 is queueing this command — never report a cancel
+            await self._say(origin["channel_id"], user,
+                            "この確認は処理中です。結果をお待ちください。")
+            return
         if cancel:
             self._reg.drop_confirm(confirm_id)
             await self._say(origin["channel_id"], user, "取り消しました。")
@@ -356,9 +361,12 @@ class Actions:
         if not projects.project_allowed(self._settings,
                                         payload["project_id"]):
             return
+        # taken before the first await: a racing cancel now sees in_flight
+        self._reg.begin_confirm(confirm_id)
         try:
             await self._publish(payload)
         except (OSError, ValueError):
+            self._reg.end_confirm(confirm_id)
             await self._say(origin["channel_id"], user, "送信に失敗しました。")
             return
         self._reg.drop_confirm(confirm_id)

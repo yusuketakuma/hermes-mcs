@@ -258,6 +258,25 @@ class Registry:
                                               None) is not None:
             self.save(immediate=True)
 
+    # 確定 awaits the durable command write; a 取消 (or a second 確定)
+    # landing inside that await must see the confirm as taken, never
+    # report 取り消しました for a command that is being queued. First
+    # caller wins; the marker is persisted so a crash mid-publish leaves
+    # the confirm unusable (the command may already be queued) until TTL.
+    def begin_confirm(self, confirm_id: str) -> bool:
+        rec = self.confirm(confirm_id)
+        if rec is None or rec.get("in_flight"):
+            return False
+        rec["in_flight"] = True
+        self.save(immediate=True)
+        return True
+
+    def end_confirm(self, confirm_id: str) -> None:
+        """Publish failed before the command was queued — the user may retry."""
+        rec = self._data["pending_confirms"].get(confirm_id)
+        if rec is not None and rec.pop("in_flight", None) is not None:
+            self.save(immediate=True)
+
     # -- followups --------------------------------------------------
 
     def put_followup(self, command_id: str, record: dict) -> None:

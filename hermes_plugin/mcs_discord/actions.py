@@ -556,6 +556,12 @@ class Actions:
                 interaction,
                 "確認を開始した場所と送信元が一致しません。")
             return
+        if pending.get("in_flight"):
+            # a 確定 is queueing this command right now — neither a
+            # cancel nor a second confirm may claim a different outcome
+            await self._ephemeral(
+                interaction, "この確認は処理中です。結果をお待ちください。")
+            return
         if suffix == "cancel":
             self._reg.drop_confirm(confirm_id)
             self._result_log(interaction,
@@ -563,13 +569,20 @@ class Actions:
                              {"outcome": "cancelled"})
             await self._ephemeral(interaction, "取り消しました。")
             return
-        await interaction.response.defer(ephemeral=True)
+        # taken before the first await: a racing cancel now sees in_flight
+        self._reg.begin_confirm(confirm_id)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except BaseException:
+            self._reg.end_confirm(confirm_id)    # nothing was queued
+            raise
         payload = pending["payload"]
         try:
             await asyncio.to_thread(envelopes.publish_command,
                                     self._dirs["cmd_int"], payload)
         except OSError:
             # keep the confirm live — the user may retry
+            self._reg.end_confirm(confirm_id)
             await self._followup(
                 interaction,
                 "送信に失敗しました。もう一度確定してください。")
