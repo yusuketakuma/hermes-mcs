@@ -1,0 +1,1995 @@
+{
+  "date": "2026-09-27",
+  "purpose": "Completed full-repository review and local refactor evidence; reviewed hashes bind judgments to the final local files. Review coverage is not a proof of exhaustive correctness.",
+  "baseline_head": "e3d79e43667d292791ead6f9f6f858525d43de4c",
+  "prior_review": "docs/dev-records/coverage-20260925.json",
+  "tracked_at_baseline": 284,
+  "counts": {
+    "fresh_review_completed": 186,
+    "prior_review_hash_match": 98,
+    "fresh_review_pending": 0
+  },
+  "scope_boundary": "Tracked repository files only; ignored operational data, credentials, local databases, and installed caches excluded.",
+  "reviewed_now": {
+    "mcs/core/llm_admission.py": "Reviewed source, callers, and tests; fixed cross-connection admission race, live-epoch join, and RT slot promotion.",
+    "tests/core/test_llm_admission.py": "Prior full review reused; subsequent diffs reviewed. Probe timeout/refusal and chat interruption permit tests added; 272 core and extraction tests passed.",
+    "mcs/ingest/health_watch.py": "Reviewed producer, schedule wrapper, and watcher; fixed malformed input handling and day/night freshness.",
+    "tests/ingest/test_health_watch.py": "Reviewed full watcher suite; added invalid-state and schedule-transition regressions.",
+    "mcs/views/read_model.py": "Reviewed read surface and callers; fixed patient-scoped attachment and coverage leakage. Additional full projection-to-read checks repaired missing canonical relation type, unusable engine/project/error rows, and deleted-source fact disclosure.",
+    "tests/views/test_read_model.py": "Reviewed full read-model suite; added two-patient scoped disclosure regression. Added actual projection-to-read and invalid engine/project/error regressions (4 failing before repair).",
+    "AGENTS.md": "Updated structure and verification instructions; managed block preserved.",
+    ".github/workflows/ci.yml": "Reviewed all jobs, scoped token permissions, pinned Hermes lane and isolated runner; no change.",
+    "pyproject.toml": "Reviewed lint/test configuration; no change.",
+    "Makefile": "Reviewed targets against CI and isolated runner; no functional change.",
+    "scripts/run_tests.sh": "Reviewed interpreter selection, isolated HOME/env and cleanup; existing behavior retained.",
+    "hermes_plugin/plugin.yaml": "Reviewed Discord/Slack scope fields; no current edit.",
+    "deployment/cco-terminal.candidate.yaml": "Reviewed candidate isolation and proposals-only mount; not applied.",
+    "deployment/cco-approval-scope.json": "Historical approval/evidence retained; does not authorize current deployment.",
+    "mcs/ops/brain_export.py": "Full body/callers reviewed. Shared aggregate projection excludes raw labels and arbitrary evidence; retention now matches only generated per-directory names and does not follow symlinks. Synthetic leak and foreign-file deletion reproduced before repair.",
+    "mcs/ops/ext_contract.py": "Full body/contract/callers reviewed. Mandatory current authorization, finite typed limits, nested allowlist, patient-scope filtering, generation/hash validation, safe ids, durable locked pre-send/pre-delete intents, matched receipts and immutable withdrawal states. Existing /1 envelope identity retained; intent separately bound in journal.",
+    "mcs/views/mcs_stats.py": "Full body reviewed. Fixed empty/malformed due dates disabling the whole aging stat and corrupting oldest-date output; nonfinite limit produces a validation error.",
+    "tests/ops/test_brain_export.py": "Full synthetic suite reviewed; aggregate projection and foreign-date/symlink retention regressions added.",
+    "tests/ops/test_ext_contract.py": "Full synthetic suite reviewed; auth, scopes, ambiguity, corrupt journal/payload/receipt, deletion, identity and concurrent sender regressions added. Existing callers now supply required auth_path; fixed clock keeps expiry/staleness checks deterministic.",
+    "tests/views/test_mcs_stats.py": "Full suite reviewed. Added malformed due-date isolation and nonfinite-limit validation regressions.",
+    "docs/external-export-contract.md": "Full contract reviewed and reconciled with aggregate projection, current authorization and durable delivery/deletion behavior; /1 id compatibility retained.",
+    "README.md": "Full text reviewed. Corrected timestamp/attachment storage claims against code, removed stale stat count and unconditional Keychain auto-lock disabling advice, documented aggregate JSONL boundary. Live operational performance/model configuration not certified.",
+    "SECURITY.md": "Full text reviewed. Existing PHI, live transport, confirmation, update trust and backup limitations remain applicable; no edit required.",
+    "scripts/update_readme.py": "Full body reviewed. Generator resolves current module trees, preserves existing blocks on generation failure and checks drift; no edit required.",
+    "ci/gates.py": "Full body reviewed. Static dependency, platform, sandbox, snapshot, lock, delivery destination, install pin and evidence gates retained; these are conservative heuristics, not a proof of all control flow.",
+    "ci/mine_gates.py": "Full body reviewed. Recursive incident extraction, manifest and referenced check validation retained; no edit required.",
+    "mcs/semantic/semantic_v4.py": "Full body reviewed. Shared v4 selection predicate; strict cohort metadata and fixed dependency fingerprints; atomic lifetime scheduling reservations; v3 remains closed. Unsafe physical cleanup removed pending the separate verified manifest required by spec. Cohort model dispatch held explicitly because current adapters do not enforce total token caps.",
+    "mcs/core/mcs_queries.py": "Shared current extraction predicate now rejects explicit cross-project rows, deleted source and non-object/corrupt JSON; legacy NULL project remains scoped by global message id. Views/signals/QC 215 tests passed.",
+    "mcs/semantic/semantic_runtime.py": "Full body reviewed. Durable job identity/CAS, runtime policy/source guards, bounded retry/circuit state, and pre-request usage receipts retained; no current edit.",
+    "docs/lifecycle-spec.md": "Full document reviewed. Historical lifecycle options remain labelled as design proposals. Current day/night watcher behavior documented. No production cleanup or schedules changed.",
+    "tests/semantic/test_semantic_v4.py": "Full synthetic suite reviewed; reproduced and repaired lifetime ceiling, v3 admission, invalid metadata, v4 selection and unverified cleanup failures. Added rollback/reopen and dependency-closure checks; 20 tests pass.",
+    "mcs/semantic/semantic_store.py": "Full body reviewed. Current artifact payloads must be objects. Malformed or negative/coerced daily usage now fails closed explicitly, never refunds spending allowance. Bundle scope and projection invalidation retained.",
+    "mcs/semantic/semantic_jev.py": "Full body reviewed. Fixed integer overflow escaping strict scalar response validation. Endpoint/model allowlists, no-redirect/no-proxy transport, request hooks, finite retry boundaries and synthetic-only opt-in smoke retained. Actual remote API not called.",
+    "mcs/semantic/semantic_policy.py": "Full body reviewed. Bounded numeric validation rejects huge integers without overflow; rollout defaults, explicit scope and evidence gates unchanged.",
+    "tests/semantic/test_semantic_store.py": "Full body reviewed. Added malformed payload/usage regressions (11 cases) that failed before repair and pass after.",
+    "tests/semantic/test_semantic_runtime.py": "Full body reviewed. Existing generation/CAS, config recheck, unknown-request reservation, bounded retries, offline usage and restart tests retained.",
+    "tests/semantic/test_semantic_jev_contract.py": "Full body reviewed. Existing strict wire/metering tests retained and huge probability regression added; 8 tests pass.",
+    "mcs/semantic/semantic_projection.py": "Full body reviewed. Fixed lost validation_status in canonical carrier; category preservation and typed legacy projections retained. Documentation now matches canonical carrier behavior.",
+    "tests/semantic/test_canonical_projection.py": "Full body reviewed. Existing generation selection, subject/workflow gates, all-category carriers, evidence ids and policy/source invalidation coverage retained.",
+    "mcs/semantic/semantic.py": "Full body reviewed. Status presents invalid usage as unknown with an explicit reason; default shadow versus explicit canonical source semantics clarified. CLI scope, lock and offline boundaries retained.",
+    "mcs/semantic/semantic_assessment.py": "Full body reviewed. Strict confidence range check no longer overflows on huge integers; per-fact evidence binding, cached dimensions, and runtime-guard propagation retained.",
+    "mcs/semantic/semantic_observe.py": "Full body reviewed. Reused strict spending counter; malformed state safely reports unknown. Independent phase totals preserve missing measurements and unreported token use as unknown; finite nonnegative metric validation. Read-only URI now encodes path data.",
+    "tests/semantic/test_semantic_assessment.py": "Full body reviewed. Added invalid-confidence rejection with no persisted assessment; existing per-event cache/audit behavior retained.",
+    "tests/semantic/test_semantic_fairness.py": "Full body reviewed. Added partial-measurement and corrupt-record/read-only regressions; persistent scheduling fairness tests retained.",
+    "mcs/semantic/semantic_drain.py": "Full body reviewed. Added pre-work cohort hold, robust plan metadata, unused-arrival capacity for bounded backfill and exact due-job count. Standalone CLI validates bounds before opening DB, initializes writer only after acquiring run lock, reloads config each batch and respects remaining sleep budget. Nine scheduling/CLI failures reproduced before repair.",
+    "tests/semantic/test_canonical_drain.py": "Full body reviewed. Synthetic per-target canonical extraction, incomplete coverage, evaluated audit reuse, all-fact pagination and visible incomplete rendering tests retained.",
+    "tests/semantic/test_semantic_observe.py": "Full body reviewed. Updated former partial-usage assertion to require explicit unknown total with corrupt records; current quality, policy/source generations, read-only and invalid-job checks retained.",
+    "mcs/semantic/semantic_audit.py": "Full body reviewed. Runtime stop/stale/budget exceptions propagate from fact audit. Strict finite probability/threshold checks prevent unsupported PASS and reject invalid inputs before evaluator calls. Thirteen regressions reproduced.",
+    "mcs/semantic/semantic_facts.py": "Full body reviewed. JSON reference arrays validated before coercion; huge confidence yields ContractError; exact evidence quotes preserve whitespace. Twenty malformed-contract failures reproduced before repair; identity interfaces preserved.",
+    "tests/semantic/test_semantic_facts_audit.py": "Full body reviewed. Added invalid probability, threshold/no-dispatch and worker-control propagation tests; only synthetic evaluation clients.",
+    "tests/semantic/test_semantic_fact_contract.py": "Full body reviewed. Added malformed JSON list and verbatim quote/huge-confidence regressions; current identity, scope, corpus and evidence-bound gate assertions retained.",
+    "mcs/semantic/semantic_qc.py": "Full body and QC suite reviewed. Raw vital names/values now stay in quoted context; fixed labels only in instructions. Coverage cap now counts vitals. 32 synthetic QC tests pass.",
+    "mcs/semantic/semantic_workflow.py": "Full synthetic mechanics harness reviewed. Duplicate target counting, malformed fact/reference/page inputs and numeric overflow now reject with WorkflowError; 7 regressions reproduced, 18 tests pass. Model timing remains explicitly synthetic.",
+    "mcs/semantic/semantic_quantities.py": "Full body reviewed. Conservative quantity/evidence matching, ambiguity holds and no unit conversion retained; no edit required.",
+    "tests/extract/test_extract_qc.py": "Full suite reviewed. Scope fixture corrected to explicitly match its project; existing NULL-project compatibility retained in shared query predicate. QC tests passed after update.",
+    "tests/semantic/test_semantic_workflow.py": "Full body reviewed; malformed input, duplicate target and overflowing model regressions added and passed.",
+    "tests/semantic/test_mcs_semantic.py": "Prior full review reused at matching baseline hash; current diff adds a huge integer to invalid configuration coverage. The complete semantic suite passed after this change.",
+    "mcs/core/mcs_util.py": "Full body reviewed. Atomic writes accept bare filenames; corrupt circuit counters and huge streaks are bounded; nonfinite disk guard settings retain default; whitespace evidence and invalid chunk sizes safely rejected. Shared atomic writer reused by evaluation outputs.",
+    "mcs/semantic/semantic_bench.py": "Full body reviewed. Private corpus/result writes now atomic and do not follow destination symlinks; calibration rejects malformed records and invalid probabilities. No live corpus or external/model command executed.",
+    "mcs/semantic/semantic_blind.py": "Full body reviewed. Private fresh output directories, frozen worksheet/candidate identities, snapshot scope checks and explicit model selection retained; no edit required.",
+    "mcs/semantic/semantic_render.py": "Full body reviewed. Mandatory page identity uses delimited fields rather than substring matches; duplicate detection linear. Malformed arrival/attempt identities cannot authorize notices or crash origin scans.",
+    "mcs/semantic/semantic_evaluation.py": "Full body reviewed. Strict finite telemetry and evidence reference validation, both threshold maps checked, failed extractions remain in recall denominators, unused evidence not counted as facts, incomplete renders prevent shadow success and repaired facts feed subsequent relations. Reports use shared atomic writer.",
+    "tests/semantic/test_semantic_mandatory_render.py": "Full suite reviewed; exact page identity regression reproduced and passed.",
+    "tests/semantic/test_semantic_degraded_coverage.py": "Full suite reviewed; malformed JSON shape, nested ids and boolean message id cannot authorize notices.",
+    "tests/semantic/test_semantic_bench.py": "Full suite reviewed; synthetic private write and corrupt calibration regressions passed.",
+    "tests/semantic/test_semantic_evaluation.py": "Full suite reviewed; telemetry overflow, invalid overlapping threshold and malformed evidence regressions reproduced and passed.",
+    "tests/semantic/test_jev_value.py": "Full suite reviewed; recall denominator, unused evidence, incomplete rendering and repaired fact propagation regressions reproduced and repaired.",
+    "tests/extract/test_extract_prefilter.py": "Full suite reviewed; deterministic marker, edited source, explicit admission, circuit and disk guards preserved and passed.",
+    "docs/semantic-evaluation.md": "Full text reviewed against current code. Baseline includes earlier thread context; dated planning table distinguished from current implementation and migration prerequisites. No runtime/clinical performance certification.",
+    "evaluation/annotation-guide.md": "Full text reviewed. Human-only labeling, frozen candidates, split/source/claim identity and receipt limitations retained.",
+    "evaluation/g6-criteria-v1.json": "All thresholds reviewed against evaluation contract. No threshold changed; human 200 held-out requirement retained.",
+    "mcs/semantic/semantic_extraction.py": "Full body reviewed. Shared owning-chunk unique quote resolution; corrupt/old unsafe cached evidence rejected; latest manifest matches selected chunk layout; trusted provenance supplied by code, never model fields. Repairs require same source/revision/atom layout and discard late responses. Atom positions indexed once. 11 defects reproduced; focused 54 then full semantic 534 passed including four additional preflight confidence cases.",
+    "tests/semantic/test_semantic_atomization.py": "Full suite reviewed; cross-chunk evidence borrowing and same-chunk ambiguity regressions reproduced and repaired.",
+    "tests/semantic/test_semantic_facts_v2.py": "Full suite reviewed; repeated FakeLedger consolidated. Synthetic cache corruption/layout, forged provenance, ambiguous evidence and invalid preflight confidence coverage added.",
+    "tests/semantic/test_semantic_repair.py": "Full suite reviewed; different source must prevent dispatch and overdue response must preserve prior document. Both reproduced and repaired.",
+    "mcs/views/summary_review.py": "Full body reviewed against adoption and blind-evaluation callers. Explicit source/project/revision/policy identity, assist/PASS/paused eligibility and separate human adoption remain intact; no edit required.",
+    "tests/extract/test_extraction_review.py": "Full synthetic suite reviewed; subject isolation, claim/recovery, interpreter context, dates and batch ambiguity coverage retained.",
+    "tests/views/test_semantic_view.py": "Full suite reviewed; invalidated or error metadata cannot be revived by matching fingerprints. Both regressions reproduced and repaired.",
+    "mcs/views/structured_view.py": "Full body reviewed. Reuses shared extraction predicate and ignores canonical facts lacking a valid fact id. Synthetic cross-project, error and legacy NULL regressions pass.",
+    "mcs/views/mcs_view.py": "Full body reviewed. Notification receipt identity/scope must be present and typed, including Slack team scope; validated plugin frozenset project context retained. Invalidated/error artifacts remain history. Loop metadata and limits fail safely. Attachment state concern disproved against actual downloaded writer state.",
+    "mcs/ops/mcs_requests.py": "Full body reviewed. Deep JSON produces controlled parse errors; typed command validation and durable update receipt replay precede remote pin resolution, with transactional replay recheck preserved. Legacy JSON parser shape contract retained; notification drain owns object-shape rejection.",
+    "mcs/ops/mcs_operations.py": "Full body reviewed. Existing human gates, stable generations and rollback through receipt COMMIT retained. Corrupt signal evidence now rejected with a receipt. No real operation executed.",
+    "mcs/ops/request_loops.py": "Full body reviewed against view and request callers. Source/project/revision/thread/evidence/policy and human match confirmation gates retained; no change required.",
+    "tests/views/test_structured_view.py": "Full suite reviewed; current extraction scope, malformed fact id and legacy NULL compatibility covered.",
+    "tests/views/test_qc_view.py": "Full suite reviewed; current generation, pending/eligible and prior annotation display contracts retained.",
+    "tests/views/test_summary_review.py": "Full suite reviewed; adoption lifecycle, paused/non-PASS rejection and changing context tests retained.",
+    "tests/views/test_notification_receipt_scope.py": "Full suite reviewed; malformed/missing receipt identity cannot release private detail; 9 failing boundary cases reproduced and repaired.",
+    "tests/ops/test_mcs_features.py": "Full suite reviewed; SQLite snapshot/cursor, human command, queue durability and source revisions retained; malformed loop and bad limit regressions added.",
+    "tests/ops/test_mcs_operations.py": "Full suite reviewed; update replay and unconfirmed update must not perform remote lookups; corrupt evidence rejected with receipt. All new regressions reproduced before repairs.",
+    "mcs/notify/notify_cmds.py": "Full body reviewed. Non-object commands are quarantined before dependency sorting. Identifier regexes require full string match. Module description corrected to actual begin/receipt/interaction order. No live queue read or written.",
+    "mcs/ops/mcs_refstats.py": "Full body reviewed. Approval must match committed receipt artifact id/name/file hash and command identity, not merely borrow an applied command id. Malformed approval rows skipped. Two regressions reproduced; 27 tests pass.",
+    "mcs/core/bounded_http.py": "Full body reviewed against local_llm and Jev callers. Endpoint allowlists, no proxy/redirect, stdin credential transfer, response byte cap and child kill/reap retained. No edit required.",
+    "mcs/core/local_llm.py": "Full body reviewed. Probe transport failures now distinguish proven connection refusal from uncertain backend work; interrupted admitted chats remain unknown. No premature permit release on plain-mode fallback. Synthetic core suite passed; no model calls. Numeric timing overflow and excessively long slot overrides now fail safely; 36 related tests passed.",
+    "mcs/core/maintenance.py": "Full body reviewed. Malformed update-state shapes cannot remove recovery backups; unsettled attachment parts retain their payloads even after card acceptance. 9 admission/backup and 3 attachment-retention regressions reproduced and fixed. Existing rotation and retention semantics preserved.",
+    "mcs/ingest/job_ops.py": "Full body reviewed. Restore consent hold covers legacy imports as well as operation commands; persisted-id range checked before SQL. Cursor, partial progress, tombstone and snapshot gates preserved. 168 affected command/drain tests passed. Additional restore guard changes reviewed: marker immediately blocks dependent parts before flags republish; unreadable command guard keeps writes queued.",
+    "mcs/ingest/mcs_worker.py": "Full body reviewed. API and CDP JSON reads now capped at 8 MiB before serializing into parent IPC; oversize has a stable log-safe worker error. Process deadline/no-proxy/no-redirect contract preserved.",
+    "mcs/ingest/mcs_adapter.py": "Full body reviewed. Token writes use shared private atomic writer; downloads use exclusive private staging and fsync before publication. Signed URL origin rejects userinfo/fragments; message ids bounded to SQLite range. Initial mark-read description aligned to actual guarded GET. Five regressions reproduced, affected tests running.",
+    "tests/ops/test_mcs_refstats.py": "Full suite reviewed. Borrowed receipt and corrupt approval regressions added; 27 tests pass including rollback through commit.",
+    "tests/core/test_local_llm.py": "Full suite reviewed; synthetic HTTP/slot/format and integrity behavior retained. Added timing overflow and excessively long slot regressions; 36 related tests passed.",
+    "tests/extract/test_slot_routing.py": "Full suite reviewed and passed; explicit slot, env and admission precedence retained.",
+    "tests/notify/test_card_attachment_followups.py": "Full suite reviewed. Pending/unknown/held attachment parts must preserve file after head delivery; once settled ordinary retention applies. All 6 tests pass.",
+    "tests/ingest/test_adapter_wire.py": "Full suite reviewed. Private token/download staging, bounded API/CDP payload and oversized ids regressions reproduced. Existing deadline kill/reap, proxy/redirect and partial-history tests retained.",
+    "tests/core/test_core_misc.py": "Prior full review reused at baseline; current additions reviewed. Malformed update-state forms all preserve backup files. 59 core/attachment tests pass.",
+    "conftest.py": "Full body reviewed; optional Hermes integration collection matches documented availability boundary; no change.",
+    "mcs/ingest/run_check.py": "Full body and stage suite reviewed. Extraction health uses shared current predicate; relogin logs exception type only; notification ages reject overflow; command drain deadlines respect enclosing budget; initialization failure closes DB and run lock. 80 stage/watch/QC tests passed.",
+    "tests/ingest/test_run_check_stages.py": "Full suite reviewed; nine health, malformed age, initialization cleanup and exception privacy regressions reproduced and repaired. 80 affected tests passed.",
+    "tests/conftest.py": "Full body reviewed; guarded both public MCS subprocess entry points because socket guards do not inherit into child interpreters. Only explicitly replaced synthetic worker commands may spawn. 260 ingest/CI tests passed.",
+    "tests/meta/test_ci_scripts.py": "Full suite reviewed; eight safely zero-deadline regressions demonstrate production MCS/CDP worker guard; existing isolation and CI gate coverage retained. 260 affected tests passed.",
+    "hermes_plugin/mcs_delivery/paths.py": "Full body reviewed. Shared bounded attachment read verifies and returns the exact sealed bytes; 47 attachment/Slack tests passed after repair. Existing atomic publication and private-directory convention retained. Additional restore guard changes reviewed: marker immediately blocks dependent parts before flags republish; unreadable command guard keeps writes queued.",
+    "hermes_plugin/mcs_delivery/envelopes.py": "Full body reviewed; stable actor/token command identity, scope echo, canonical size-bounded publication and per-part attempt identity retained; no edit.",
+    "hermes_plugin/mcs_delivery/registry.py": "Full body reviewed. Corrupt registry data raises without resetting/overwriting durable claims. Nonfinite/malformed expiry can no longer preserve human confirmations/followups; save dirty state clears only after successful publication. 17 regressions reproduced, 145 interaction/delivery tests passed.",
+    "hermes_plugin/mcs_delivery/spec.py": "Full body reviewed. Strict ID fullmatches, style/context shapes and body-part sequence bind hashes to actual dispatched chunk. Missing sealed payload fields now yield a stable error. Six validation regressions reproduced and repaired.",
+    "hermes_plugin/mcs_delivery/text.py": "Full body reviewed; bounded source-title headings, ephemeral chunk budgets and uncapped durable planning retained; no edit.",
+    "hermes_plugin/mcs_delivery/worker.py": "Full body reviewed. Flags checked before every primary/part send; malformed or absent enable flag holds sending. Receipt publication failure no longer marks dependent parts done; orphan settlement never sends dependent parts. Proven sends remain deduplicated by journal. Regression tests cover stop/resume and failed receipt replay.",
+    "hermes_plugin/mcs_discord/tasks.py": "Full body reviewed; scoped lifetime lock, supervised cancellation, closed-bot takeover and listener cleanup retained; no edit.",
+    "hermes_plugin/mcs_discord/cards.py": "Full body reviewed. SDK file helper accepts the verified in-memory file stream while keeping path compatibility; lazy SDK import retained.",
+    "hermes_plugin/mcs_discord/delivery.py": "Full body reviewed; replaced check-then-reopen attachment path with shared exact-byte read and in-memory upload. Synthetic file replacement race reproduced and fixed.",
+    "hermes_plugin/mcs_slack/delivery.py": "Full body reviewed. Shared bounded read/upload bytes; file delivery proof now requires exact remote hash, not same name/size alone. Same-author unverified file regression reproduced and repaired; bound native client and single-attempt policy retained.",
+    "hermes_plugin/mcs_slack/actions.py": "Full body reviewed; native scope, per-project checks, original-user followups, durable preview/confirm and runner-authoritative token checks retained. No current edit.",
+    "tests/plugin/test_mcs_discord.py": "Full suite and subsequent diffs reviewed. Stops, scoped delayed replies, digest projects, exact spec shape and registry expiry regressions retained. Fixture now publishes the real runner flags. 102 tests passed after action fixes; two amended confirmation regressions passed separately.",
+    "tests/plugin/test_mcs_discord_delivery.py": "Full suite reviewed. Added stop/resume, failed receipt resumption and attachment replacement race regressions. SDK shim now fixture-scoped, fixing collection-order interference with real SDK tests. 47 affected tests passed (SDK module unavailable/skipped). Additional restore guard changes reviewed: marker immediately blocks dependent parts before flags republish; unreadable command guard keeps writes queued.",
+    "tests/plugin/test_discord_sdk_real.py": "Full suite reviewed; real SDK serialization/file checks retained unchanged. Default environment has no discord.py; this optional module skips, and real SDK lane remains unverified.",
+    "hermes_plugin/__init__.py": "Full body reviewed. Native command context, project/user/chat boundaries, snapshot pinning and preview/confirm revalidation retained; no edit needed. Notification receipts now use the strengthened shared view boundary.",
+    "hermes_plugin/mcs_discord/actions.py": "Full body reviewed. Digest actions authorize every project; empty allowlists deny. Delayed replies bind actor/projects/origin and recheck current access; old unscoped followups are withheld. Confirmation syntax and cancellation scope are rechecked. Six disclosure/authorization regressions reproduced; 102 Discord tests plus two changed confirmation tests passed.",
+    "tests/plugin/test_mcs_slack.py": "Full suite reviewed. Existing workspace isolation, native client retry policy, journal resume, full body and attachments checks retained. Added same-author file with missing remote hash; false delivered proof reproduced and fixed.",
+    "tests/plugin/test_mcs_slack_actions.py": "Full suite reviewed. Explicit same-user preview/confirm, current-access delayed reply checks, task transitions and project scope retained; no changes needed.",
+    "tests/plugin/test_mcs_slack_cards.py": "Full suite reviewed. Native card privacy, component budgets and strict workspace rendering tests retained; no changes needed.",
+    "tests/core/test_ledger_candidate_validation.py": "Full suite reviewed. Synthetic migration-candidate validation and no-write behavior retained; no changes needed.",
+    "tests/core/test_ledger_reply_recovery.py": "Full suite reviewed. Legacy NULL reply body state must reserve fetch work; no changes needed.",
+    "tests/ingest/test_thread_count_retry.py": "Full suite reviewed. Missing reply count persists bounded retry work until complete; no changes needed.",
+    "tests/semantic/test_semantic_llm_retry.py": "Full suite reviewed. Bounded retry persistence and synthetic loopback deadline/auth isolation retained; no changes needed.",
+    "mcs/notify/notify_cards.py": "Full source, callers and dispatch/action/part tests reviewed. Fixed unreadable restore/flags gates, combined body+attachment budget, display name limits, patient-scoped targets and source pins; reused checked signal evidence and anchor readers.",
+    "mcs/notify/notify_flush.py": "Full source reviewed. Message and attachment followups respect event patient scope; signal evidence uses common scoped reader. Existing chunk receipt, uncertain-send, directive defusing and file budgets retained.",
+    "mcs/notify/notify_reconcile.py": "Full source reviewed. Unreadable markers/journals and tainted part records retain restore hold; journal incompleteness remains explicit in durable report and prevents global release.",
+    "mcs/notify/notify_render.py": "Full source reviewed. Enforced patient scope on artifacts/evidence/manifests and source fingerprints; malformed UI and anchor state falls back safely. Shared evidence selection reused by text delivery and card actions.",
+    "mcs/notify/notify_transport.py": "Full source and receipts/operator recovery callers reviewed. Existing durable grant/settle/resolve and transport scope contracts retained.",
+    "tests/notify/test_notify_cards.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_flush.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_flush_paths.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_parts.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_reconcile.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_render.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "tests/notify/test_notify_slack.py": "Full test source reviewed. Synthetic fixtures only; affected notification suites passed. Added focused regressions where source behavior changed.",
+    "mcs/core/ledger.py": "Full source reviewed. Rejects cross-patient message identity/scope mismatches with transactional rollback; removes shadowed method; snapshot uses private unique temporary files with validated atomic durable publication.",
+    "mcs/extract/extract_bench.py": "Full source reviewed: one-to-one field matching, failed-case denominators, forbidden findings, offline corpus and reporting. No further change justified.",
+    "tests/extract/test_extract_bench.py": "Full synthetic scoring coverage reviewed; no change needed.",
+    "deployment/recovery/mcs_recover.py": "Full standalone source reviewed. Shares tested restore content binding and staged-copy/checkpoint contract with updater; rejects corrupt journals/markers, reports service failures, preserves consent holds and durable state.",
+    "tests/meta/test_mcs_recover.py": "Full source reviewed, with synthetic parity, modified-row consent, marker and service failure regressions.",
+    "mcs/ops/mcs_update.py": "Full source reviewed. Content-bound restore approval, private staged verified copy before live checkpoint, journal shape/reload validation, typed receipt selection, numeric prerelease ordering and bounded release notes.",
+    "tests/ops/test_mcs_update.py": "Full source reviewed. Synthetic regressions cover journal corruption, stale consent after row updates, failed-copy WAL preservation in both recovery paths, prereleases and malformed receipts.",
+    "mcs/ops/mcs_setup.py": "Full source reviewed. Finite bounded numeric settings, strict evidence gates, reversible credential replacement, exact secret roundtrip, context-specific template escaping, verified cron parsing and obsolete owned-agent cleanup.",
+    "tests/ops/test_mcs_setup.py": "Full source reviewed. Covers credential preservation and control characters, exact dotenv values, literal shell/XML paths, unverifiable cron output, schedule comparison and retirement from prior manifest.",
+    "install.sh": "Full source reviewed. Generated shim shell-quotes interpreter path; plist substitutions escape XML and sed metacharacters. No installer run on live environment.",
+    "tests/meta/test_install_sh.py": "Full synthetic PATH-stub installation suite reviewed; seven cases pass including literal shell/XML metacharacters and repeat installation.",
+    "deployment/scripts/mcs_check.sh": "Full wrapper reviewed; path substitutions now use shell-escaped literal context. Day/night scheduling and mark-read gate unchanged.",
+    "deployment/scripts/mcs_health.sh": "Full wrapper reviewed; generated Python/repository paths receive shell quoting.",
+    "deployment/launchagents/README.md": "Full document reviewed and aligned to six cron jobs including health watch. Replaced duplicated unsafe manual substitutions with canonical services generation.",
+    "integration/test_mcs_recovery_narrative.py": "Full synthetic narrative reviewed. SDK/updater overrides scoped to fixtures; DB writers close before restore. Six narrative tests pass after changes.",
+    "mcs/extract/rollup.py": "Full read: share patient/hash/deletion predicate, deterministic same-time ordering, skip malformed labs and rebuild invalid schedule metadata; synthetic regressions passed.",
+    "mcs/ops/mcs_signals.py": "Full read: guard JSON object operands, typed latest lifecycle state with corruption tombstone, skip corrupt digest merge and bounded interval; synthetic regressions passed.",
+    "mcs/extract/extract_llm.py": "Full read: preserve chunk labs, diastolic end-of-body, per-item validation, source-scoped revalidated checkpoints, atomic rule and v4 write fencing, latest QC and resident config reload; focused verification in progress.",
+    "tests/extract/test_extract_llm_v2.py": "Full read: existing validation/consumer/batch/retry/QC contracts checked; added synthetic missing regressions.",
+    "tests/extract/test_rollup_canonical.py": "Full read: added rule patient/deletion scope and malformed nested data/scheduling tests.",
+    "tests/extract/test_rollup_period.py": "Full read: synthetic current/future/expired medication-period and midnight rebuild contracts; no edit needed.",
+    "tests/ops/test_mcs_signals.py": "Full read: detector, lifecycle, human command, tier, digest and rescue tests; added malformed input and cross-patient state regressions.",
+    "integration/test_hermes_config.py": "Full read: real CLI with synthetic credential sent via stdin, temporary selected profile/home and argv secrecy assertions; no edit needed.",
+    "CHANGELOG.md": "Full dated release history reviewed against current code. Historical release claims retained; current refactor evidence is recorded separately.",
+    "ci/gates-coverage.json": "All incident mappings reviewed. Updated renamed Keychain preservation regression reference; mine_gates --check passes.",
+    "deployment/scripts/mcs_deep.sh": "Rechecked complete wrapper and final diff after single-pass shell quoting at renderer. ShellCheck and synthetic rendering tests pass.",
+    "deployment/scripts/mcs_llm_catchup.sh": "Rechecked complete wrapper and final diff after single-pass shell quoting, preserving quiesce guard and extraction lanes. ShellCheck and rendering tests pass.",
+    "deployment/scripts/mcs_update.sh": "Prior full review plus complete current wrapper/final diff checked after renderer quoting change; exec behavior preserved, ShellCheck passes.",
+    "docs/DEVELOPMENT.md": "Full reference reviewed. Regenerated module table, corrected schema/schedule/credential and signal-target descriptions against code.",
+    "docs/INSTALLATION.md": "Full installation guide reviewed. Corrected cron count, no-notify paths, pending-outbox semantics and credential guidance. Shell/XML rendering examples verified with synthetic special-character paths.",
+    "docs/SETUP_AGENT.md": "Full agent runbook reviewed. Existing authorization and answers are reused; secret values kept out of outputs. Notification-off routes explicitly exclude default notifying services.",
+    "docs/assets/discord-card-thread.svg": "Full synthetic SVG source reviewed; removed absolute delivery guarantee. XML and modified caption visually checked in local rendering.",
+    "docs/assets/runtime-topology.svg": "Full topology SVG reviewed against code. Corrected Jev scope and local snapshot description, added accessible title/description; changed labels checked in local rendering.",
+    "docs/auto-update-plan.md": "Full historical design/review record reviewed. Current content-bound consent, private candidate, WAL checkpoint and corrupt-journal holds documented; old design preserved as history.",
+    "docs/dev-records/coverage-20260925.json": "Parsed complete historical review manifest: 246 unique tracked rows with valid hashes and review metadata, 10 new-file records, 11 Hermes paths. Historical privacy-pending metadata retained; current resolution documented in current report.",
+    "docs/dev-records/phase-j-record.md": "Full historical record reviewed. Added explicit historical-scope notice; prior commands, operating claims and measurements are not current execution authorization or test evidence.",
+    "docs/dev-records/review-20260925.md": "Full prior review read. Added dated clarification that privacy documents have since been generalized and current pinned Hermes verification is separately recorded.",
+    "docs/dev-records/signal-priorities-20260924.md": "Full technical-only signal record reviewed; matches current advisory semantics, notification-age filtering and uncertain-send handling. No change needed.",
+    "docs/screenshots/discord-notify.svg": "Full source reviewed: explicitly wholly synthetic, self-contained static SVG; XML and absence of active/external content checked. No change needed.",
+    "integration/test_hermes_discord.py": "Full synthetic transport integration file reviewed; real pinned Hermes SDK lane passes under isolated MCS test runner.",
+    "integration/test_hermes_slack.py": "Full SDK integration file reviewed. Added explicit notification enable flag to synthetic thread-delivery fixture; pinned SDK test lane passes.",
+    "tests/ingest/test_job_drain.py": "Full drain regression file reviewed. Corrected synthetic IDs to respect globally unique message identity across patients; full ingest and final suites pass.",
+    "tests/semantic/test_fact_source.py": "Prior full review reused for unchanged body; reviewed new strict-boolean promotion regression and caller contract. Full suite passes."
+  },
+  "verification": {
+    "full_after_broker_and_watcher": "scripts/run_tests.sh: 1716 passed, 1 skipped; read_model fix followed this run",
+    "read_model_affected": "tests/views/, tests/ops/test_brain_export.py, test_ext_contract.py, integration/test_mcs_recovery_narrative.py: 102 passed",
+    "watcher_affected": "tests/ingest/test_health_watch.py, test_run_check_stages.py, tests/meta/test_deployment_scripts.py: passed",
+    "lint": "Final Ruff 0.6.9: mcs/ tests/ hermes_plugin/ integration/ deployment/recovery/mcs_recover.py passed.",
+    "gates": "Final ci/gates.py: 8/8; ci/mine_gates.py --check passed, including renamed Keychain regression reference.",
+    "generated_docs": "python3 scripts/update_readme.py and --check passed, generated blocks up to date.",
+    "full_after_export_stats": "1742 passed, 1 skipped in 89.54s. Final /1 identity preservation and intent binding were followed by affected export/integration checks.",
+    "export_stats_affected": "85 passed after /1 identity preservation; 39 passed after final intent comparison; 53 export/brain tests passed after allowing legitimate pruned attachments.",
+    "v4_affected": "75 passed across v4/runtime/canonical-drain/tick tests; two added rollback and source-closure cases then passed in the 20-test v4 suite.",
+    "semantic_affected": "449 semantic tests passed after store, Jev, policy and v4 changes; expanded overflow case then passed in 8-test wire-contract suite.",
+    "projection_read_model": "188 passed across views, canonical projection/v4 and export suites after carrier/read-model fixes.",
+    "telemetry_assessment": "38 focused tests passed. Later full semantic run found one old test expecting partial usage as total; expectation now asserts explicit unknown with error. Updated audit/observe/fairness run: 48 passed.",
+    "semantic_after_audit_contract": "494 semantic tests passed after audit/contract/drain changes. Later isolated workflow suite: 18 passed; QC suite: 32 passed.",
+    "evaluation_util_affected": "39 passed for shared utility/bench/render/prefilter repairs; 14 notice/bench/policy tests and 55 evaluator/quality tests passed before final repaired-fact propagation. Current combined suite result follows.",
+    "semantic_after_extraction": "534 semantic tests passed after extraction/cache/repair fixes; prior combined semantic/util/QC/prefilter run had 574 passing tests.",
+    "current_extraction_scope": "215 views/signals/QC passed; receipt compatibility followup passed 291 tests. Final full suite supersedes this checkpoint.",
+    "receipt_ops_views": "291 affected view/operation/card/plugin tests passed after frozenset compatibility correction.",
+    "refstats_binding": "27 synthetic reference statistics tests passed.",
+    "admission_core": "272 core/slot/extraction tests passed after permit-uncertainty repairs.",
+    "command_restore": "168 command/drain/card tests passed after legacy import restore-hold fix.",
+    "retention_parts": "59 core/attachment tests passed after durable attachment-part holds.",
+    "ingest_workers": "263 ingest/core tests passed after private temporary files and bounded worker responses; 260 ingest/CI tests passed after test process guard.",
+    "run_check": "80 stage/watch/QC tests passed.",
+    "delivery_worker": "145 synthetic interaction/delivery tests passed after stop/resume, spec and registry repairs; 47 attachment/Slack tests passed after exact-byte upload and metadata-proof fixes. SDK unavailable (one module skipped).",
+    "plugin_sweep": "166 synthetic plugin tests passed, one unavailable SDK module skipped, after send flags and attachment fixes. Subsequent action authorization fixes passed 102 Discord tests; two amended confirmation cases passed separately. Ruff all scopes passed before those two test-only edits.",
+    "notify_restore": "179 synthetic notification/recovery/updater/command tests passed; 13 newly added cases failed before repair. No real data operations.",
+    "notify_scope": "505 notification/plugin/signal tests passed, 1 SDK skip, after patient scope fixes. Subsequent shared evidence and fingerprint refinements: 122 affected tests passed (1 unrelated state test deselected, previously passing).",
+    "restore_parts": "36 delivery/render tests passed after direct restore-marker gating; a fresh part attempt was reproduced before the guard repair.",
+    "ledger_identity_snapshot_20260928": "373 core/ingest tests passed; five patient-scope failures and two snapshot temporary-file failures reproduced before repair.",
+    "setup_credentials_20260928": "132 setup/core utility/core miscellany tests passed; nonfinite settings and malformed credential serialisation failures reproduced before repair.",
+    "install_20260928": "7 PATH-stub installer tests passed, including shell/XML metacharacter paths; no live installation.",
+    "restore_narrative_20260928": "6 narrative tests passed; subsequent updater/recovery/narrative combined suite passed 98 tests.",
+    "lint_20260928": "Final Ruff and ShellCheck install.sh scripts/*.sh deployment/scripts/*.sh passed.",
+    "restore_setup": "98 passed in 13.13s: updater, independent recovery and integration recovery narrative; 132 setup/core util/misc passed, installer 7 passed.",
+    "rollup_signal_stats": "150 synthetic tests passed after 11 reproduced failures were fixed; Ruff affected sources/tests passed.",
+    "extract_final_20260928": "271 extraction/v4/fairness tests passed, followed by 3 new concurrent-publication/config-reload cases; included in final full suite.",
+    "full_final_20260928": "scripts/run_tests.sh -o addopts= -q --tb=short: 2083 passed, 1 skipped in 80.23s. Prior full run had 2082 passed, 1 failed, 1 skipped; failure was overly broad fsync fault injection, repaired without weakening assertions; affected 16 tests passed before final full run.",
+    "hermes_sdk_final_20260928": "CI pin fd50a275e2616118c48fe07e7e1c878782b15ccd, existing Hermes venv Python via MCS_TEST_PYTHON and isolated scripts/run_tests.sh: integration/test_hermes_discord.py, integration/test_hermes_slack.py, integration/test_hermes_config.py, tests/plugin/test_discord_sdk_real.py: 14 passed, 1 SDK audioop deprecation warning in 6.38s; synthetic transport only.",
+    "documentation_examples": "Two INSTALLATION Python rendering snippets executed in private temp HOME/repo with shell/XML metacharacter paths; plist parsed, three rendered bash scripts syntax checked, no-notify runner flags verified.",
+    "svg": "All three remaining SVGs parsed, no scripts/foreignObject/external hrefs; changed labels in two diagrams inspected with local Quick Look rendering.",
+    "final_diff": "Baseline HEAD unchanged; affected final diffs reviewed, git diff --check passed. Reviewed hashes match current tracked files; new source/test/report artifacts separately recorded."
+  },
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "58703664ce73533f1db7f3c61478528b10996a5073e07a5385cf9a724cf0f558",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "58703664ce73533f1db7f3c61478528b10996a5073e07a5385cf9a724cf0f558"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "2a4b88a2bb17e4a3885af00c6f89760b67e92428c69057a547ad18bc0163c1bd",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "2a4b88a2bb17e4a3885af00c6f89760b67e92428c69057a547ad18bc0163c1bd"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "d621722b06676a0099988f4e99e03d2dcd6290abf154960e85e60ce7ad06f16d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d621722b06676a0099988f4e99e03d2dcd6290abf154960e85e60ce7ad06f16d"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "2ae3e6a23f0c3cdc0c418f959c95227c85f6cc2f77db5082a99640e3001adee3",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2ae3e6a23f0c3cdc0c418f959c95227c85f6cc2f77db5082a99640e3001adee3"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "0c91ee41b4fdc2d7d1f304c3c51e47ae2898e4e805dccf2c7157cb928bac59e5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "0c91ee41b4fdc2d7d1f304c3c51e47ae2898e4e805dccf2c7157cb928bac59e5"
+    },
+    {
+      "path": "README.md",
+      "sha256": "17956abb4deb463080e80a825e51fe3f689f8d4df99650194751babfc0ba2178",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "17956abb4deb463080e80a825e51fe3f689f8d4df99650194751babfc0ba2178"
+    },
+    {
+      "path": "SECURITY.md",
+      "sha256": "3bb2f201c80c2318c89d8dbee024cecc880901661709ce9f5488e3ca402c36a9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3bb2f201c80c2318c89d8dbee024cecc880901661709ce9f5488e3ca402c36a9"
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "sha256": "14194039146a099b3178047775496f1cdf154ca68a74711ba70a0274b4ebbdd5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "75eaf531540d91f2de0bb91fda772a470c095e40852ac4c9e5f3519f6eb6789f"
+    },
+    {
+      "path": "ci/gates.py",
+      "sha256": "1ff05860a53501a84c3b64b9756090c89d6bc3b48c68bf86659918c2cda1e734",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "1ff05860a53501a84c3b64b9756090c89d6bc3b48c68bf86659918c2cda1e734"
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e"
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "e73f471452161898ba25a0bb4cc5f2787036bf4c53aa105d83f3f53a730891fc",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e73f471452161898ba25a0bb4cc5f2787036bf4c53aa105d83f3f53a730891fc"
+    },
+    {
+      "path": "deployment/README.md",
+      "sha256": "3ae7d90252a3fde2a147d5d61359947e971e96161d2e45ca7193e1e83f5baa14",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "3ae7d90252a3fde2a147d5d61359947e971e96161d2e45ca7193e1e83f5baa14"
+    },
+    {
+      "path": "deployment/cco-approval-scope.json",
+      "sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960"
+    },
+    {
+      "path": "deployment/cco-terminal-isolation.md",
+      "sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8"
+    },
+    {
+      "path": "deployment/cco-terminal.candidate.yaml",
+      "sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9"
+    },
+    {
+      "path": "deployment/launchagents/README.md",
+      "sha256": "f8ff267a9a2d6ede621d83e59475dc767161f45d43fd67ab4cb303be17cea7f4",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "51ac1124433852ae328fa4d097b6942a0aa5c9dac14638c3f2577526313ed45b"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer-rt.plist",
+      "sha256": "21f8beeac7950d85166f3fcb20a95094cf0b7fd755dcfb4f79c309656d936130",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "21f8beeac7950d85166f3fcb20a95094cf0b7fd755dcfb4f79c309656d936130"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
+      "sha256": "176bc3362dc5c67eb065edea77890af507eebb55bee2f5c485a1e10e85543ce1",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "176bc3362dc5c67eb065edea77890af507eebb55bee2f5c485a1e10e85543ce1"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
+      "sha256": "4b7dab5b22bdeaea8000a78bffe7fe1c9d93cd7f078757fa2dcb4ad5fca113dd",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "4b7dab5b22bdeaea8000a78bffe7fe1c9d93cd7f078757fa2dcb4ad5fca113dd"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-cmd.plist",
+      "sha256": "d5a1533dd5fcba92dff77715b382c100786b947410b743defd2d8606d3a2921f",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d5a1533dd5fcba92dff77715b382c100786b947410b743defd2d8606d3a2921f"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-int.plist",
+      "sha256": "004ab5baf7efbc520cc99ec4f680fc3c834c33526c7ae0e2f94bd6030d6d14c2",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "004ab5baf7efbc520cc99ec4f680fc3c834c33526c7ae0e2f94bd6030d6d14c2"
+    },
+    {
+      "path": "deployment/launchagents/org.mcs.recovery.plist",
+      "sha256": "082fbcac9c2bae407185c10653915d47c66eca3f2a7f7a5e535e9c470f326d79",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "082fbcac9c2bae407185c10653915d47c66eca3f2a7f7a5e535e9c470f326d79"
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "sha256": "6699c6e2dfac8adf90060fb8e4d196f4de53623b1204db9eb89e77e22a1d9f0a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "04f2192a7787e6c7744b465840f64f8d54818d37fc00850f1cad90d4c023217a"
+    },
+    {
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "sha256": "29a7ddfa226061643ed3adf31b3848394a6233070001b0b9221197e9c177725c",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "29a7ddfa226061643ed3adf31b3848394a6233070001b0b9221197e9c177725c"
+    },
+    {
+      "path": "deployment/scripts/mcs_check.sh",
+      "sha256": "6bb734f782a2192d0f5f73305f5f7be1875ec0260702848b8c8ef19771bf3c87",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4c0f02d79cb4bbffa064bd41b9d281045d10017b754e67b803829d6d2014d637"
+    },
+    {
+      "path": "deployment/scripts/mcs_deep.sh",
+      "sha256": "a82707d878e486797efd3aa8121f5e737858be83126acf910e3313c9623cfd7c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "54f7cfda58a3bd1b213f4203355bc331f51887dfb0781223a2c40874bbe62d60"
+    },
+    {
+      "path": "deployment/scripts/mcs_health.sh",
+      "sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8"
+    },
+    {
+      "path": "deployment/scripts/mcs_llm_catchup.sh",
+      "sha256": "490ac49343b80a7862eb66781aa186123222549034c2fce3a4e8ca96348c32d9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7ac8cddf22198d3c59e7ae3a82b87662ea5eaf1cb68323d61d34e711a14789af"
+    },
+    {
+      "path": "deployment/scripts/mcs_update.sh",
+      "sha256": "f5ab5b9a7d5e72e24c59bba4acba495c6daa5b87ab49964534846488a026187c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc"
+    },
+    {
+      "path": "docs/DEVELOPMENT.md",
+      "sha256": "edd18c01add6106980ec7769034b79da7942f7e1ff18c8fc5c17db72cd09321d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "f2d3a74811e374467f7eb4fe5a5ab888ee00d9129f74bc03b667e221eee1b0f4"
+    },
+    {
+      "path": "docs/INSTALLATION.md",
+      "sha256": "b4b10d62e4dcd59f77b909a969f336f6954e86628f3af1c1393de5f058990d36",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "dc654d13a820c2789459f48ae26c3b8a171e1eb7ba891c1ef7b0a0cb354f0bef"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "sha256": "59941603ce5ff79c5a1f6da55c6dc30d5c6833c22d3fb8db8ba634168dfd9b52",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "59941603ce5ff79c5a1f6da55c6dc30d5c6833c22d3fb8db8ba634168dfd9b52"
+    },
+    {
+      "path": "docs/SETUP_AGENT.md",
+      "sha256": "36d878d9a767af2a759824d115914289a91513c09129a9b4a30f9fe66710eeea",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "281339f4c4a7425bea44724ed1330a5e7ee8de2188b781085a0405879b46e2d7"
+    },
+    {
+      "path": "docs/acceptance-map.md",
+      "sha256": "ef7882bdf68deb3c379deef526547a16a2849f44f6d95ff01b7dac77ec26fb0a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "ef7882bdf68deb3c379deef526547a16a2849f44f6d95ff01b7dac77ec26fb0a"
+    },
+    {
+      "path": "docs/assets/analytics-overview.svg",
+      "sha256": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d"
+    },
+    {
+      "path": "docs/assets/discord-card-thread.svg",
+      "sha256": "1846c4481b90e22b0e6badc2afde271ba049a115a13141029dfac0a866326a6d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "176200eb3fdc40697ace5d63f4b81043bc56c8cf143f02bd864a886b140f95d6"
+    },
+    {
+      "path": "docs/assets/flow-journey.svg",
+      "sha256": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1"
+    },
+    {
+      "path": "docs/assets/flow-network.svg",
+      "sha256": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59"
+    },
+    {
+      "path": "docs/assets/flow-overview.svg",
+      "sha256": "badc4ab6b0cc43d2398bee46bbc9fae3d01bcbd98ddc318c0e6279fa414faf24",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "badc4ab6b0cc43d2398bee46bbc9fae3d01bcbd98ddc318c0e6279fa414faf24"
+    },
+    {
+      "path": "docs/assets/flow-pipeline.svg",
+      "sha256": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878"
+    },
+    {
+      "path": "docs/assets/flow-signals.svg",
+      "sha256": "aec71cf5c2fab92e53f7140057e0243a22c1c5f4993bb667b5150088b5f146c3",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "aec71cf5c2fab92e53f7140057e0243a22c1c5f4993bb667b5150088b5f146c3"
+    },
+    {
+      "path": "docs/assets/flow-timeline.svg",
+      "sha256": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f"
+    },
+    {
+      "path": "docs/assets/runtime-topology.svg",
+      "sha256": "d2ff8f31960a95ac061a53608c7641c38ad186883180b507f4d57ba240a4c725",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "548f5225cbb7143aa4e64948f30b3945061eff54af084b27f81a9758043fb798"
+    },
+    {
+      "path": "docs/auto-update-plan.md",
+      "sha256": "a8f1f151471ab92a9f6c7c2b260ef781d178bfc2d86b96bb96ecf004260fdec9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e3c35797dfc0dbbd647dee6a29883977a5883bc9f89e4bcddeb32a7cb4cfd21e"
+    },
+    {
+      "path": "docs/deployment-candidate.md",
+      "sha256": "0bb3171c69fad984379f0d844e6f00558a80c88be529e742a5191e1e06594ab1",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "0bb3171c69fad984379f0d844e6f00558a80c88be529e742a5191e1e06594ab1"
+    },
+    {
+      "path": "docs/dev-records/continuation-20260920.md",
+      "sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb"
+    },
+    {
+      "path": "docs/dev-records/continuation-20260923.md",
+      "sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd"
+    },
+    {
+      "path": "docs/dev-records/coverage-20260925.json",
+      "sha256": "546a85b58518c8b42f15498f9ee2a119bc68656eee91f48dab3869b7cfcc4ef7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "546a85b58518c8b42f15498f9ee2a119bc68656eee91f48dab3869b7cfcc4ef7"
+    },
+    {
+      "path": "docs/dev-records/g1-validation.json",
+      "sha256": "dc8cb89102e12b480828432937eae512190b3133a9a70c73ae1230eb1667776a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "dc8cb89102e12b480828432937eae512190b3133a9a70c73ae1230eb1667776a"
+    },
+    {
+      "path": "docs/dev-records/phase-j-record.md",
+      "sha256": "b5a112e60c81682924d598fb8b80a72d6ca6476672f9b897856e2f3f1538bf2f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "11928ff198532dda02212485b04fcaafef39e89ca21846461a2fcdc0f662a85f"
+    },
+    {
+      "path": "docs/dev-records/phase-r-record.md",
+      "sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e"
+    },
+    {
+      "path": "docs/dev-records/r00-baseline.md",
+      "sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a"
+    },
+    {
+      "path": "docs/dev-records/refactor-revalidation.md",
+      "sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572"
+    },
+    {
+      "path": "docs/dev-records/review-20260923.md",
+      "sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe"
+    },
+    {
+      "path": "docs/dev-records/review-20260925.md",
+      "sha256": "a2823c9f28ae3451f4aa6c20c4ba2e66e02a887e376b807853334258919d6a67",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ab17881b609fee67b947c8c37d88358ffbf5ae0f1527add2791ae592a87589a3"
+    },
+    {
+      "path": "docs/dev-records/signal-priorities-20260924.md",
+      "sha256": "0d0c1fb021f19b597bba5e554438d7430abfc74c95c5540d019e5c80d70cb1c8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "0d0c1fb021f19b597bba5e554438d7430abfc74c95c5540d019e5c80d70cb1c8"
+    },
+    {
+      "path": "docs/external-export-contract.md",
+      "sha256": "d30b3c5d323086eff184ac1669c2604f9befc6d0d0daa3fa0bff7378afe167a0",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d30b3c5d323086eff184ac1669c2604f9befc6d0d0daa3fa0bff7378afe167a0"
+    },
+    {
+      "path": "docs/lifecycle-spec.md",
+      "sha256": "ab77ba2190c52255815f3d3c3538c61304f77633cd226d0a7ee116b543fd29ac",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ab77ba2190c52255815f3d3c3538c61304f77633cd226d0a7ee116b543fd29ac"
+    },
+    {
+      "path": "docs/screenshots/discord-notify.svg",
+      "sha256": "1717d1fbabd7e8ac52e812f06c36324606667c7bdbcd181f0f57401858a475e8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "1717d1fbabd7e8ac52e812f06c36324606667c7bdbcd181f0f57401858a475e8"
+    },
+    {
+      "path": "docs/screenshots/signals-cli.svg",
+      "sha256": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d"
+    },
+    {
+      "path": "docs/screenshots/view-status.svg",
+      "sha256": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f"
+    },
+    {
+      "path": "docs/semantic-evaluation.md",
+      "sha256": "9f0ffac0651d3d58f6742f176674fa1b185aae180d6cd97efb1692992c3cce4a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "53bdae72cec4f50bfe43a3ca6f84b47b8397fb2dcaa84c993173e87e8d74c4a1"
+    },
+    {
+      "path": "docs/semantic-facts-v2-rollout.md",
+      "sha256": "4ea60ac723d3efaa437edad59e4c77518b01c6e50e16e2837fcb90888b320d17",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "4ea60ac723d3efaa437edad59e4c77518b01c6e50e16e2837fcb90888b320d17"
+    },
+    {
+      "path": "evaluation/README.md",
+      "sha256": "4c50ff886cbd66cf64234a52a4acb4d39e891d381b8d6405a51953e2a4bfded8",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "4c50ff886cbd66cf64234a52a4acb4d39e891d381b8d6405a51953e2a4bfded8"
+    },
+    {
+      "path": "evaluation/annotation-guide.md",
+      "sha256": "d26a01005d8a0ae48e31275df72560f4581a0e606928b0f84a5c00a06f42d405",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d26a01005d8a0ae48e31275df72560f4581a0e606928b0f84a5c00a06f42d405"
+    },
+    {
+      "path": "evaluation/extract_cases.json",
+      "sha256": "9776f8c23ca282f187368e5169c290e0ed6153d64a472f7b11a11c64799f90e7",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "9776f8c23ca282f187368e5169c290e0ed6153d64a472f7b11a11c64799f90e7"
+    },
+    {
+      "path": "evaluation/g6-criteria-v1.json",
+      "sha256": "ea7959300fe52110761ccf83eba4f4d9ed0c053e59ee46070ce0c4fea825177b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ea7959300fe52110761ccf83eba4f4d9ed0c053e59ee46070ce0c4fea825177b"
+    },
+    {
+      "path": "evaluation/rehearsal-comparison.jsonl",
+      "sha256": "32387930f2b164c1c887d244e53573b48bd61ba1b0bb7726db844d71d197d6eb",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "32387930f2b164c1c887d244e53573b48bd61ba1b0bb7726db844d71d197d6eb"
+    },
+    {
+      "path": "evaluation/semantic_completeness_cases.json",
+      "sha256": "6c9321d6d2bdfbce87d4bba3fcff9ffa9c0f6c767b2cf0eeba0ed9ed8bd4e488",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "6c9321d6d2bdfbce87d4bba3fcff9ffa9c0f6c767b2cf0eeba0ed9ed8bd4e488"
+    },
+    {
+      "path": "hermes_plugin/README.md",
+      "sha256": "6dea103feea5f59351054a50222d42352452d6cd3678a74aca2e05b77f6596d8",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "6dea103feea5f59351054a50222d42352452d6cd3678a74aca2e05b77f6596d8"
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "sha256": "17fb63f598965d01bb552e8c0ac1b829253ac62519d5206b355d5d1cc4d9a68d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "17fb63f598965d01bb552e8c0ac1b829253ac62519d5206b355d5d1cc4d9a68d"
+    },
+    {
+      "path": "hermes_plugin/card_workers.py",
+      "sha256": "a9f88d4b1674cbb409863d7b8bf76d139ec93e225cf8bafe13973e58a6940fa9",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "a9f88d4b1674cbb409863d7b8bf76d139ec93e225cf8bafe13973e58a6940fa9"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/envelopes.py",
+      "sha256": "c1d03c97d9257f68e8171d20eda1ea7a63893366a3b6c180cf91d2940912a9f1",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c1d03c97d9257f68e8171d20eda1ea7a63893366a3b6c180cf91d2940912a9f1"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/journal.py",
+      "sha256": "c6cf4df42cb344f3c34db89e2a8ac181e5731964d00bdb45f553d64e1d37bd2b",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "c6cf4df42cb344f3c34db89e2a8ac181e5731964d00bdb45f553d64e1d37bd2b"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/paths.py",
+      "sha256": "5f5ac2665eeba2f9131d28a3156b53e96f26105d69432e4be0bebecbea38b400",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "77838d68bcd1293e186a1e121d1fb5fd0b63af151fb898dc84afb48026b0e727"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/registry.py",
+      "sha256": "3e626d46d48addf3574c2fb3f5912f892f7a0d087cdf169be707935e964820ee",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "bfbad5cc7316b416609bcbff2d992b31e145086d4b58fffc98892226191174a2"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/spec.py",
+      "sha256": "7ee5f62827d12a5f48d1cc5fcc67d50038927107127256d0f02a22632d4fbf4a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "02e18ac5f87785b0271b87fc4e2add9181567c3eb475821275026ee23c3afde1"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/text.py",
+      "sha256": "4fbd116edef86f9bcd767466936bc15ad81847fdb3a1aed62e3e81352fb58322",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4fbd116edef86f9bcd767466936bc15ad81847fdb3a1aed62e3e81352fb58322"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/worker.py",
+      "sha256": "cffb832cf7ddef9b811a261673253360096a685ba12c3894e19df4ee57982089",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7b9d367e3e2573d01265604179997ba0872a8d7d26f4799e4d6a9ee9802306f0"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/__init__.py",
+      "sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/actions.py",
+      "sha256": "0d27d6ca29de75c431a5c9edbd01d1698d5b7ec781fd341bc06e4457d05cbc0d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "9a3c7ac77ea00a780a25e2dc5cc8d4f823b8cd223d9e889f7f1bc7c0d0c08a8e"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/cards.py",
+      "sha256": "b093d4480547caa33969da2d97d88238f575934c64e7e837d311cd8ac867ca3c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b44eaaccee17eae1b5bd75be0efd0652509b842de5ac62ec271d5dcee9f48e31"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/delivery.py",
+      "sha256": "40a76f267ba980cf24dd20f7a3449e51f319eda1d3734821490ff85b3ab8045f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6218cd753e089907c79e0d6f32bec1f2397e1cb4c46db26ab75325e13809e983"
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/tasks.py",
+      "sha256": "5db74da19a01d0d34bcaf83194846fd0cec877bd8438b2c44040f2465a624ee2",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "5db74da19a01d0d34bcaf83194846fd0cec877bd8438b2c44040f2465a624ee2"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/__init__.py",
+      "sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/actions.py",
+      "sha256": "b6617ca8cb7abbbf1752ec4ef9056854026080ded60eb093863f200e365a809e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b6617ca8cb7abbbf1752ec4ef9056854026080ded60eb093863f200e365a809e"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/cards.py",
+      "sha256": "798a6ce8189f7ad9065f358a60d66ca016a611931baa005a7197dcae64b1672d",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "798a6ce8189f7ad9065f358a60d66ca016a611931baa005a7197dcae64b1672d"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/delivery.py",
+      "sha256": "c3ce1b12778bd7877a7f033894394276e1338ba894912480c670ec4cbcbbc369",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "8bd0d376ff97e3e23287166e6d1b37312963c5fd5e806ae437aef1b88bf463de"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/paths.py",
+      "sha256": "775fe3bf72f53011e7edac535b024c89adbc2867e68fc5896833747602f81157",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "775fe3bf72f53011e7edac535b024c89adbc2867e68fc5896833747602f81157"
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/tasks.py",
+      "sha256": "690592605b80dd451ff229cbfe81c13ae36b636465a45cf1e3b7763ecbe38329",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "690592605b80dd451ff229cbfe81c13ae36b636465a45cf1e3b7763ecbe38329"
+    },
+    {
+      "path": "hermes_plugin/plugin.yaml",
+      "sha256": "647bf1c1330aecee23c6e261198be17ef1f833c1797055a097f1b006759bd5f7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "647bf1c1330aecee23c6e261198be17ef1f833c1797055a097f1b006759bd5f7"
+    },
+    {
+      "path": "hermes_plugin/projects.py",
+      "sha256": "81d949e559314b49753780ceea6b79fb7b62cc3f2bc425115e8c834119cad198",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "81d949e559314b49753780ceea6b79fb7b62cc3f2bc425115e8c834119cad198"
+    },
+    {
+      "path": "install.sh",
+      "sha256": "cdcbe5b5dc4c0b3101a750f00959ebd44cd3e33720d63ff8186cab052d308c2a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e77714693a924882078c4d41917ff81c018006ed77dfad4951d87f3a74b5f7e2"
+    },
+    {
+      "path": "integration/test_hermes_config.py",
+      "sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99"
+    },
+    {
+      "path": "integration/test_hermes_discord.py",
+      "sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138"
+    },
+    {
+      "path": "integration/test_hermes_slack.py",
+      "sha256": "ec17f1cd36622213667f80f0e5555fef86edfbb6e4ca0c190a3082626c7aca7b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d29fa733b4fc058a78f7740361919ab496775b4e255924f88c3f560d7b03d5f2"
+    },
+    {
+      "path": "integration/test_mcs_recovery_narrative.py",
+      "sha256": "86b86fd4e2384454be57d2ac6f476c20d9a670bf9b47159e5f71bb753df6661c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "feb3e9173a8c02a72d47d4f8db264da730f3f0ca4376d564ce4c163c36e7670f"
+    },
+    {
+      "path": "mcs/_mcs_path.py",
+      "sha256": "7421346f82c7eb4b85616e5d9e38ebe8e41201c9a7e68e60a6a7ba7b20bf509c",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "7421346f82c7eb4b85616e5d9e38ebe8e41201c9a7e68e60a6a7ba7b20bf509c"
+    },
+    {
+      "path": "mcs/core/bounded_http.py",
+      "sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "sha256": "c2019e7efd343fcbd31f6a296136a78ea287a2188253769326c94a2d0204108a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f"
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "sha256": "2f888f110d4be6b3df885408e6049a172a03cac83e20a0a71b41a8175067e91e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2f888f110d4be6b3df885408e6049a172a03cac83e20a0a71b41a8175067e91e"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "sha256": "b409177fc4da7b9e90425427e3d8b95f7d97d2e54a45a32049bccafc2875ad3e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6bb070c36f39a0ee0e8cee6e44c71ccf83465d4e1d9d9ddfb072b5601d4f9e87"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "sha256": "d01c102a9a8230eb29471627756c2b09a9bd3f87bf6d492e87e82d525dae6dae",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "eb34f96914d19b128c9b8883db74a8a01ff6c31ad0bf9bffde7a919b008d2633"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "sha256": "ab1b7602576da9a3fe60c4a7f742567fff1dac867acfdf7d8e85ce0e8557094e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "fe53335da6e8aa75a07f6162f4f555509670aab6a90b140d90142a9e27c4898c"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "sha256": "18b18440f9ec8eb2da0a4ab6e1a091d1f625a55c9ec39a431fe4060860b5d9e0",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "9a0a349067a6a28be6c3b9dac7bd83a16ae48844924b999a58a9c18200ddf746"
+    },
+    {
+      "path": "mcs/extract/extract.py",
+      "sha256": "10f9cb29a4c02df4f64a1fc3af5a061971459bfae5bc8313ddca6e394b96d509",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "10f9cb29a4c02df4f64a1fc3af5a061971459bfae5bc8313ddca6e394b96d509"
+    },
+    {
+      "path": "mcs/extract/extract_bench.py",
+      "sha256": "7be28b705126f05971a646126d112d70e034d24892e60cfd77900a10dfa9f8e9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7be28b705126f05971a646126d112d70e034d24892e60cfd77900a10dfa9f8e9"
+    },
+    {
+      "path": "mcs/extract/extract_llm.py",
+      "sha256": "82521f8a9697e264049fed5bf9973b319d3e7a181d1b5878c1a1ed1b446ef583",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7f5d700a8ec8f074725c525e6339ecbdc1fa1d1cea8e82dab5af532d92dd2362"
+    },
+    {
+      "path": "mcs/extract/rollup.py",
+      "sha256": "34bda3a4e55b74b29f05d07823739c18ea1a3391ca8890c3f2fe9ffa71d5b706",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "99b3e2f27660d06739ecda92ea446ec4163b35c2551a66cf65b3bcd66b7f0784"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "sha256": "68da196132e04caaa6d5e789ad8cd0b2379d8ab31edafeddeac2783409884883",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "68da196132e04caaa6d5e789ad8cd0b2379d8ab31edafeddeac2783409884883"
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "sha256": "1f805c493495edbff6f8182af0eaf1f9ee31f251c0d4181a3eb063837ed239e7",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "1f805c493495edbff6f8182af0eaf1f9ee31f251c0d4181a3eb063837ed239e7"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "sha256": "c1ee33f8fe2cf12ffc6a788f6685ecda746a263eda7f40e57306d5e73b57f3fa",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4390a72fff5864fb7a58007d4c573af2c4a0f6a26840d1e569e57e4d4f3c5533"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "sha256": "34da4862e6e692a779f51ebdb88670e3af6e0d5937fcbb3ac46d4b7c99017242",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "684d8d575a5d59172a4f792d48f27b4f0545269b4d84e62d843c919c390b7b41"
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "sha256": "5c15d5b93f37080f8e676ce12a0e45de3bcaafefed78b95f501f46c777cce59a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "05161a3b1d38c9737718d3f1719ffc1d34883ad5fbae6e63d4d74306f103fb9c"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "de2c5984cb8b9a1d47c9cc438408cfbd4747689695220d5a4327ac324881f881",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "5f973cf0568aa8f546575f3901e47ded1517d55d1899364e6666579db7bb730f"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "049c4390200774f18a5e4e0cb6053d40e163bdcc779f353cde7c956b7cb8e8a5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "0fe8cfd4da53f7f4d7ac71df5e648438b059343db1e5c14ef1dd5c30f58f8836"
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "sha256": "2bb2d82926904df56222947b64b6d7a055f64a581780771a50303740b1bcf071",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2b73584d992f456e0f8b95d13c2c6287dfbf135c282232fb78199f55992129bd"
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "sha256": "fa94a4da456d16ca35bf1a9338b9b2a9e0fa0c3585ab665c15a5e34b64027e32",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "62fb5b32c3fffdeee085f95cd46c7a533e4e7b888ae5cad30c085302526d8201"
+    },
+    {
+      "path": "mcs/notify/notify_reconcile.py",
+      "sha256": "1554d380b8405feb2da897af27f4b1864a6210e9ad7cd44704e1ca18e066963a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c4236c6425123eb90d1f8e4e9a7fffda2b32ebcc022a5365d0addf0f8adc8b25"
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "sha256": "738f4344dc46d24f826474ab755c425a6c140ebde05efccd4ba7d6ae736efd24",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4a8db9d7c1cf1e352b3eca899712ae262f19a908c5089b3489ff99dc6b079304"
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "sha256": "4cbab1e0da0205a6afe4fa67f75cffca8fd30a00dad35cc60d3c407724e5eb62",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4cbab1e0da0205a6afe4fa67f75cffca8fd30a00dad35cc60d3c407724e5eb62"
+    },
+    {
+      "path": "mcs/ops/brain_export.py",
+      "sha256": "6e09056d30f4039b26d6713c9c85d4a6ce06168fbef83071f5a28f0f52b370e4",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6e09056d30f4039b26d6713c9c85d4a6ce06168fbef83071f5a28f0f52b370e4"
+    },
+    {
+      "path": "mcs/ops/ext_contract.py",
+      "sha256": "c9f3438e967ed181c22bc5f2dc3c4c0b2ff1766112e3ba168b16dd6bb954f48e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c9f3438e967ed181c22bc5f2dc3c4c0b2ff1766112e3ba168b16dd6bb954f48e"
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "sha256": "7ef90a78d1024dee6657f9431e953afd9f3aef55569a403f26c3d12c08d45ae3",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d6403125c99b8f75dbde775579bcc60f057b22685c017ab7c4b6ec7291155b3e"
+    },
+    {
+      "path": "mcs/ops/mcs_refstats.py",
+      "sha256": "b478af06c0096e8055ae048d2a60c6972699337465effe7a596225a7f1b6e618",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "af70f45ee07014890d10028a2707462605d123d650104d7338f217de6483c386"
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "sha256": "3f68edd55e8cf4ec347f80b816df72077c94593e36bdb3a0140383835d212813",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7da09590e9177fdf9240e850cc0b0b8c765f79944ff8e4028c24938b5787252e"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256": "dce56d0d5365efaf3293677d6fc7ae137f4cebf023313a0d500ef8c58e9f8dbc",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3e230b00776f2b333a87cf55d01e3c7ca968a38f07a2ab3c7325b4a973178b81"
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "sha256": "59f7abad81b1fd8202e8f4c59e06e070a08542ef5859c0bd617aa12fcd02967f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b0cf0a8b2b9b30986a81f0e863c606a2f4cb5f4207b0a2a15cd1a5b753341954"
+    },
+    {
+      "path": "mcs/ops/mcs_update.py",
+      "sha256": "6b583ab2e14427292274d11b6356b4b6fbcc721d252583e74df26bc669ce34c5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e730f082c35da1f322a81adcb5a114873afab52eb5cf474339f9f5ff2886383c"
+    },
+    {
+      "path": "mcs/ops/request_loops.py",
+      "sha256": "9bd79e5dee8b06575dd1f8a2e5143832982efae178609cdd22f4cb1d130efee7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "9bd79e5dee8b06575dd1f8a2e5143832982efae178609cdd22f4cb1d130efee7"
+    },
+    {
+      "path": "mcs/semantic/semantic.py",
+      "sha256": "071ac29909dfbb7858c91bf58f3bce68689d4769cc572b046f46ad518b6c439d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "071ac29909dfbb7858c91bf58f3bce68689d4769cc572b046f46ad518b6c439d"
+    },
+    {
+      "path": "mcs/semantic/semantic_assessment.py",
+      "sha256": "3f73d0591a2fc204500bbcc2b1ec3d7bab80d25626082de2bfb052791de69da0",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3f73d0591a2fc204500bbcc2b1ec3d7bab80d25626082de2bfb052791de69da0"
+    },
+    {
+      "path": "mcs/semantic/semantic_audit.py",
+      "sha256": "c24047b9bbe899d001087845bfa7f84e652b4d7f295aabe954d666bd7829b31f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c24047b9bbe899d001087845bfa7f84e652b4d7f295aabe954d666bd7829b31f"
+    },
+    {
+      "path": "mcs/semantic/semantic_bench.py",
+      "sha256": "510aa2134e1b909abf7ba396ee060c8cd7616e80073a7336fea74de0b5da9817",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2983341111ecb9d4f267c665eb843b80318f074859f8f71e73e388bc847641f7"
+    },
+    {
+      "path": "mcs/semantic/semantic_blind.py",
+      "sha256": "687b3597c777dd1f3eebeda0ed54ee42e5d9715f0b4ea9a932fd66796f21b013",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "687b3597c777dd1f3eebeda0ed54ee42e5d9715f0b4ea9a932fd66796f21b013"
+    },
+    {
+      "path": "mcs/semantic/semantic_drain.py",
+      "sha256": "3a2fdf97d10052202043da4cb7bac9a63712b3d0b91d76d11e30c828e9437586",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3a2fdf97d10052202043da4cb7bac9a63712b3d0b91d76d11e30c828e9437586"
+    },
+    {
+      "path": "mcs/semantic/semantic_evaluation.py",
+      "sha256": "fb3ace7c063464006ae7928fcd0ebf2e8bc4b94f04ca667fba45aec7c1eb784a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6bb4ac49cf900b1460a0007c1fad56e525590792896691ec71b5d5c486304e56"
+    },
+    {
+      "path": "mcs/semantic/semantic_extraction.py",
+      "sha256": "fc6d22854e8e29fe9b8b5a9c481de5e19e9374fc4dd82c1d60c40097cac3021b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6d7fb3ec50719de129cea0b4b4fe9aea3fbb661555a1cbfb4ede129c912c2e57"
+    },
+    {
+      "path": "mcs/semantic/semantic_facts.py",
+      "sha256": "57a7c7d3db810bbbdb21420d5d1e50f340cfa8678f42bbc60078bdf762a9307b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "57a7c7d3db810bbbdb21420d5d1e50f340cfa8678f42bbc60078bdf762a9307b"
+    },
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "sha256": "2b9c35d194b6956830e1c93b100745054668f138925a08b640e467ba2aa31386",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2b9c35d194b6956830e1c93b100745054668f138925a08b640e467ba2aa31386"
+    },
+    {
+      "path": "mcs/semantic/semantic_llm.py",
+      "sha256": "580e151dfcf8ae235b1d0c6553a27d141e62d49afaef23a1b7e63d5653ea03cd",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "580e151dfcf8ae235b1d0c6553a27d141e62d49afaef23a1b7e63d5653ea03cd"
+    },
+    {
+      "path": "mcs/semantic/semantic_loops.py",
+      "sha256": "ce6308a3fc50682578a182b8240972264f5525ed8a88429d347945a179bc634c",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "ce6308a3fc50682578a182b8240972264f5525ed8a88429d347945a179bc634c"
+    },
+    {
+      "path": "mcs/semantic/semantic_metrics.py",
+      "sha256": "0e046f9bd01dad297371e41059766849ef6f902058861ef27ab23f07bfec2bf0",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "0e046f9bd01dad297371e41059766849ef6f902058861ef27ab23f07bfec2bf0"
+    },
+    {
+      "path": "mcs/semantic/semantic_observe.py",
+      "sha256": "c7e00c77e3bd1305b28a723adc2618e391ef8d2e7c7948a2e721e74bd5114487",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c7e00c77e3bd1305b28a723adc2618e391ef8d2e7c7948a2e721e74bd5114487"
+    },
+    {
+      "path": "mcs/semantic/semantic_policy.py",
+      "sha256": "1d3df6a30680c93c6b3458b0611cc8973d7343897fe64bea4ab887e0c310dffa",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "1d3df6a30680c93c6b3458b0611cc8973d7343897fe64bea4ab887e0c310dffa"
+    },
+    {
+      "path": "mcs/semantic/semantic_projection.py",
+      "sha256": "91536463eb52e0303b71e9812de0a78795a31e45baee6650fcfdeda4926f44ce",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "91536463eb52e0303b71e9812de0a78795a31e45baee6650fcfdeda4926f44ce"
+    },
+    {
+      "path": "mcs/semantic/semantic_qc.py",
+      "sha256": "b48d8aa2b9a3646a5841fd64ec5ad2b1ead8afdbfb4aed714a0a47cf4dd1c763",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e5f16c83c5ea94962e501e45936ff80eb1368c73b56d3543d549fc1cd6fabd0f"
+    },
+    {
+      "path": "mcs/semantic/semantic_quantities.py",
+      "sha256": "7b09490add94f83c5029346517b79b9f495a41be1ed50ed0e477723fe321b307",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7b09490add94f83c5029346517b79b9f495a41be1ed50ed0e477723fe321b307"
+    },
+    {
+      "path": "mcs/semantic/semantic_relations.py",
+      "sha256": "449f72c12f7fff805a4bb054f168094b5a8c68f873e26b1d40d536e901de2618",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "449f72c12f7fff805a4bb054f168094b5a8c68f873e26b1d40d536e901de2618"
+    },
+    {
+      "path": "mcs/semantic/semantic_render.py",
+      "sha256": "14e83526f3a7d0f7353ea5274264733728386d95a2f483e4b0dfb251cfe3a6ff",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6eb18808bff56e11e45459b5ac51e540ab5b3eb2787762b7bf6dcde908b83839"
+    },
+    {
+      "path": "mcs/semantic/semantic_runtime.py",
+      "sha256": "e3e1cc161a675eae8208f957c55f5dc74a611459477fa2153061307844322de7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e3e1cc161a675eae8208f957c55f5dc74a611459477fa2153061307844322de7"
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "sha256": "b6914be759fc85f4638bd9c381adf8849a4e1755ebdadfcd508db19cb228cc03",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "b6914be759fc85f4638bd9c381adf8849a4e1755ebdadfcd508db19cb228cc03"
+    },
+    {
+      "path": "mcs/semantic/semantic_store.py",
+      "sha256": "b4f96405c1e28ffcf61d249b24b8d6e72552a11ef1520988ca2d0f30f4465474",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b4f96405c1e28ffcf61d249b24b8d6e72552a11ef1520988ca2d0f30f4465474"
+    },
+    {
+      "path": "mcs/semantic/semantic_v4.py",
+      "sha256": "1d030b73e85fab383793744d1f8953c3c86488dde3ec470e3e53ffcbfecdc52c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "1d030b73e85fab383793744d1f8953c3c86488dde3ec470e3e53ffcbfecdc52c"
+    },
+    {
+      "path": "mcs/semantic/semantic_workflow.py",
+      "sha256": "993d098c43c3dee849538e15d8a64b64cfab193e8b9a2ffcabbb214465f1a059",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80"
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "sha256": "a9dca3c8326879588776bd6ee393ef126e1c37bb62d59629fbf1021d04fa9b60",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "a9dca3c8326879588776bd6ee393ef126e1c37bb62d59629fbf1021d04fa9b60"
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "sha256": "6b08d7ce3e408932f2a0cf0557a9148019d127d8496aec4cf1935e05cf5b0243",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "21923d1b1ef6ada6a22d1c2b74cd7a98d76ce1698322e0389f16ae2e1c0b7c45"
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "sha256": "391d631ae3b1fa2ed3e65aa4ed1c7ac79ce64601e4e171e0323caa72e9f557d8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "391d631ae3b1fa2ed3e65aa4ed1c7ac79ce64601e4e171e0323caa72e9f557d8"
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "sha256": "f945ea1303594980a689c0b6e24714ba3115597e546685bc36f5f73f934d2c80",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7ee6274b7e0ec07b76c907fed66b8966ea1a3967bffbc28ff434091fce1e6497"
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "sha256": "a2e0fc09e73db80016c1ee2167cd05b39994a3bffac39c8d9c51bbeb16735f18",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "a2e0fc09e73db80016c1ee2167cd05b39994a3bffac39c8d9c51bbeb16735f18"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "306592c367676b8b47d8ae04665e0ee35427fb4681a47d615c3284e3b0b9c362",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "306592c367676b8b47d8ae04665e0ee35427fb4681a47d615c3284e3b0b9c362"
+    },
+    {
+      "path": "scripts/keychain_to_env.py",
+      "sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "3855af02167d92920e49923e9ffb14a5467c54bf84071ae1d981ad772e884fd0",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3855af02167d92920e49923e9ffb14a5467c54bf84071ae1d981ad772e884fd0"
+    },
+    {
+      "path": "scripts/semantic_shadow_e2e.py",
+      "sha256": "31009cdd967455526b88f5e7f3fd89c1e1ec2600b61d76f42dd82a4316f2dc6e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "31009cdd967455526b88f5e7f3fd89c1e1ec2600b61d76f42dd82a4316f2dc6e"
+    },
+    {
+      "path": "scripts/update_readme.py",
+      "sha256": "07dcfbee4c43f08ed2d3f20d44bcb55cf02b4dd7006b94ea994c38f122c71e6c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "07dcfbee4c43f08ed2d3f20d44bcb55cf02b4dd7006b94ea994c38f122c71e6c"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "7285c259475136b579f1b3eb80931dd34e01a1382f99e277ccd21e217f3dbde6",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "3be90de4497d390bc237a7c7ebfcafe4f567c351c51cd54a4773db6b134b9073"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "sha256": "35601e655882e824f70ab5aab12b9e96506a87687746372448675b64230cdb6c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6ea94f0eed7beb499316eb36270fdfe3698dcb0d1ed710a64700336988afba97"
+    },
+    {
+      "path": "tests/core/test_ledger_candidate_validation.py",
+      "sha256": "83f6b270c8d5cfe14e81b123901bdbbd2b42169078adb54c8f755e9efd693b1d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "83f6b270c8d5cfe14e81b123901bdbbd2b42169078adb54c8f755e9efd693b1d"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "sha256": "003444eae2b47c106bae7d2e6b60711498c0601093858dc14b7527b0e84b0eb6",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "003444eae2b47c106bae7d2e6b60711498c0601093858dc14b7527b0e84b0eb6"
+    },
+    {
+      "path": "tests/core/test_ledger_reply_recovery.py",
+      "sha256": "237cbf0c512223ed1d03f927808f9f6a45ea44709b3a7b594d207228477cdf8a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "237cbf0c512223ed1d03f927808f9f6a45ea44709b3a7b594d207228477cdf8a"
+    },
+    {
+      "path": "tests/core/test_llm_admission.py",
+      "sha256": "4138ff6eb630b1fb1af4bcd448c025b7d7513d8c61a09170095f8d560633f2ac",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "00641408aaded2e868ce5495a7d9ff9a70a623d580dc54e9437b87fd09044f0d"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "sha256": "64a08631f18007ea397d2bf3f037439405eb86f2f42e50b53afc837519ee6ed9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d87b1b8a187bc7bbd63c0ace9cb9d297f0ec559902de3e2d10962cc4918b00cb"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "sha256": "605b00e29dec556706c976e8fd9e638f3be4420ae4ec4f83071f1a514553b29b",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "605b00e29dec556706c976e8fd9e638f3be4420ae4ec4f83071f1a514553b29b"
+    },
+    {
+      "path": "tests/extract/extract_testkit.py",
+      "sha256": "060eb57615824b1a6e834d854016ead768d898dc34d4f0db575ad608b8cf2db5",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "060eb57615824b1a6e834d854016ead768d898dc34d4f0db575ad608b8cf2db5"
+    },
+    {
+      "path": "tests/extract/test_extract_bench.py",
+      "sha256": "28119f17d302efa4f7518d0b980873e2ac8e401996a3846c17478214d69f8dcc",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "28119f17d302efa4f7518d0b980873e2ac8e401996a3846c17478214d69f8dcc"
+    },
+    {
+      "path": "tests/extract/test_extract_llm_v2.py",
+      "sha256": "df9aa883076e6632e14c90efaeb1bab178e1650b81cf041af80379257347dad8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "221635558b399d5b9c73d02230f24d51eba77a146de20059b9c5735f6865406f"
+    },
+    {
+      "path": "tests/extract/test_extract_prefilter.py",
+      "sha256": "ef1503b91ab80b2f2310bc391afcb5b05e9815e6879240fe0e73e769ed02fb5f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ef1503b91ab80b2f2310bc391afcb5b05e9815e6879240fe0e73e769ed02fb5f"
+    },
+    {
+      "path": "tests/extract/test_extract_qc.py",
+      "sha256": "c9aedfb6d0c0aa4d0189191add456985b594e2cef925ff84eab1f3e10dcbe232",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e9bc701a7ebd924b116140b4b8ea0a05a4fbb289d3fcabaf4dcd8f2b9a44658e"
+    },
+    {
+      "path": "tests/extract/test_extraction_review.py",
+      "sha256": "ea64b5153914989f58a3d4ceb65f86fe030dbbf21413e621b117fd355b963452",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ea64b5153914989f58a3d4ceb65f86fe030dbbf21413e621b117fd355b963452"
+    },
+    {
+      "path": "tests/extract/test_rollup_canonical.py",
+      "sha256": "f048476c88d6c474a7037a21902ffd9b61af0964e717ba6c3d6a023846101be0",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "712c3873992dc52c27830c33f4a0198e0a412c1dbe19e5006dd1e695a316e0fc"
+    },
+    {
+      "path": "tests/extract/test_rollup_period.py",
+      "sha256": "14938b88cfd272a3d0689b76e53b94e044d0f40c2c45c1a4c35f096f6dbec956",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "14938b88cfd272a3d0689b76e53b94e044d0f40c2c45c1a4c35f096f6dbec956"
+    },
+    {
+      "path": "tests/extract/test_slot_routing.py",
+      "sha256": "d1f08e351fa740c7e4af83592fc0e70f65c5076a7d62484825d82e4e485dbede",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "d1f08e351fa740c7e4af83592fc0e70f65c5076a7d62484825d82e4e485dbede"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "sha256": "a1dfd9c8e734d7dfb132adf45a5d3e2cab2299b9df2cf616c4371fcb5d1b9668",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "a1dfd9c8e734d7dfb132adf45a5d3e2cab2299b9df2cf616c4371fcb5d1b9668"
+    },
+    {
+      "path": "tests/ingest/test_adapter_wire.py",
+      "sha256": "d21b87913ce0f52981cc8cb7839d04c4ddcdcc89350ad3e4c5856060bc433ad8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7f497ffbe48052680869eee2a894d56c0fbd50cb886af932186e9820c3b30cd4"
+    },
+    {
+      "path": "tests/ingest/test_health_watch.py",
+      "sha256": "a5979a1b550e2eff837b676e0025116a7525a7fcf748620e9065a7e85ca230f1",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "a5979a1b550e2eff837b676e0025116a7525a7fcf748620e9065a7e85ca230f1"
+    },
+    {
+      "path": "tests/ingest/test_job_drain.py",
+      "sha256": "6497084762c2082e663ab40e5fe59c083d884d53931463b4aa7ecb6de5274b5c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "fb231086ec4401414b1812e0606be22c3ceb7c205444a2c3d30b61cd4270d13a"
+    },
+    {
+      "path": "tests/ingest/test_run_check_stages.py",
+      "sha256": "e76378e929ac403eedc08f582da09bf40690798e4339579710141bc140bc6761",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7ecb92efd2029a2c8d74d8e1ea1b3edb5f5bac718b5ebf43144b5e22f350cbf4"
+    },
+    {
+      "path": "tests/ingest/test_semantic_ingest_revisions.py",
+      "sha256": "850594bfcb785baa1bf4227a485711d6c5fe0e5d5027e8fe2684c55a5856a53a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "850594bfcb785baa1bf4227a485711d6c5fe0e5d5027e8fe2684c55a5856a53a"
+    },
+    {
+      "path": "tests/ingest/test_thread_count_retry.py",
+      "sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82"
+    },
+    {
+      "path": "tests/meta/test_ci_scripts.py",
+      "sha256": "e5aa1334aec762e373d06b8aac0f3c5cca071be1112fd735af21f5fc28ff7e75",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "235477c2a3c008effc48cd289fdc45e3ff4708403d9668101a2a5a8fe41bd570"
+    },
+    {
+      "path": "tests/meta/test_deployment_scripts.py",
+      "sha256": "34a4a55063801a790dad36df89c1f1f64d941612827bc15a1e6b5be0985f4b24",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "34a4a55063801a790dad36df89c1f1f64d941612827bc15a1e6b5be0985f4b24"
+    },
+    {
+      "path": "tests/meta/test_install_sh.py",
+      "sha256": "6671db981486fb5144a958de30dd754e0182353ffaaa33f1c44f1d850dd31dd5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "93a150a48e6ba900400ab71921c89def0868ba16a33bb2020ab15a3619de72b4"
+    },
+    {
+      "path": "tests/meta/test_mcs_recover.py",
+      "sha256": "c973b69bf749f971f5ca1ecf3f3d81a3f9b9d2ee16bd7408c4cd3d1e3afbef54",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e5cf3ea2d709088ca0b5f73f363a349850d11581727729414ce0cc23b4cdb11a"
+    },
+    {
+      "path": "tests/notify/test_card_attachment_followups.py",
+      "sha256": "c1b7e8c7842031d6d0cc0c649681bb996abe72c4f3acc8a5e7fa24ba6c68a8ef",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "dabdfbdc0e00c01415f78dfc502ef8442bc30c85eb4c90c7af991ceb0036bea4"
+    },
+    {
+      "path": "tests/notify/test_notify_cards.py",
+      "sha256": "cfb88f1e28bef7d3db1145012bf0e1e1e76bf14ac4458ed2a4f2a13a8b080559",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "43759f29263d23d572ac7043b60016f73dfdac5068a12bed2ba2199acda82421"
+    },
+    {
+      "path": "tests/notify/test_notify_flush.py",
+      "sha256": "ec7aa6d7e8e2d1d76f072b424bc2c00397ad558a19feaf1926ce2ca6ca5cc5b7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7a891338bf65e7779714179aaecafb18e85eda66ad27c7d02e5fd37d269d38c2"
+    },
+    {
+      "path": "tests/notify/test_notify_flush_paths.py",
+      "sha256": "2e0ec0c7ae7bc01e2fa3a0f4cff0e6757efbe78a31aca68f53d322895808b0e9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2e0ec0c7ae7bc01e2fa3a0f4cff0e6757efbe78a31aca68f53d322895808b0e9"
+    },
+    {
+      "path": "tests/notify/test_notify_parts.py",
+      "sha256": "558cef8f479ce965e6673c31c38135d554c6226d99c2910333b5361f4db5e49b",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "95619ab75c09c879454b16a674147118953e587ccad258f9814eabca2f944acb"
+    },
+    {
+      "path": "tests/notify/test_notify_reconcile.py",
+      "sha256": "34790d628dcb9a0ab678de9988e6139fd40182c956d5170e682798e7fb41064f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "f5253a4f59293436ecdc6eb7ecf3d1ee362161a81215ae49124c9906bf870a31"
+    },
+    {
+      "path": "tests/notify/test_notify_render.py",
+      "sha256": "29e8832a7e02a9dff77da5c1ea7a5c29bb68371b4d71e24e17cc607a92acfe0d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "4da6d03c57ca117f0fcccb821887647596aa8fb4592d6193ffd60a5fdb88e5bb"
+    },
+    {
+      "path": "tests/notify/test_notify_slack.py",
+      "sha256": "7c8be413bec8ce5686e11a1c4b4a0a26bbd7c56ca8283191ff6a3646e19fa421",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7c8be413bec8ce5686e11a1c4b4a0a26bbd7c56ca8283191ff6a3646e19fa421"
+    },
+    {
+      "path": "tests/notify/test_perf_cards.py",
+      "sha256": "c31478db6346b361896034e3c13b85fea242ae4a179557179be2c7a000ef07e5",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "c31478db6346b361896034e3c13b85fea242ae4a179557179be2c7a000ef07e5"
+    },
+    {
+      "path": "tests/ops/test_brain_export.py",
+      "sha256": "cdb7221edd9d6e41e8836ce001cdf6f176d2445234acb3af070029e760064e80",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "cdb7221edd9d6e41e8836ce001cdf6f176d2445234acb3af070029e760064e80"
+    },
+    {
+      "path": "tests/ops/test_ext_contract.py",
+      "sha256": "dab869d760fc4627d413848b5fef1c9f05f96443292b5672dc953e389aea7e1f",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "dab869d760fc4627d413848b5fef1c9f05f96443292b5672dc953e389aea7e1f"
+    },
+    {
+      "path": "tests/ops/test_mcs_features.py",
+      "sha256": "64431ea15786a74673c30a501769720dc01b560bc215c849820f60ef10920c02",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "15dd810f5ca530ad0c8884c2a6456a1d822485fb0699d69705df29e49b5dfdbf"
+    },
+    {
+      "path": "tests/ops/test_mcs_operation_cli.py",
+      "sha256": "9407bffa6d0c2a3dde5c266f2a22b59c595c6516ad82e2c3ff4ec26aaacb4bf5",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "9407bffa6d0c2a3dde5c266f2a22b59c595c6516ad82e2c3ff4ec26aaacb4bf5"
+    },
+    {
+      "path": "tests/ops/test_mcs_operations.py",
+      "sha256": "0930d3a4edeab4028a1c3bc0ba98a58624f5b664b786adf73e619c10dfc4068a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b1cc59ee17fc4884be32abeaf82197d8565591038e1c37c0f431588dc4c0829f"
+    },
+    {
+      "path": "tests/ops/test_mcs_refstats.py",
+      "sha256": "6070627c1887c6be658cc3d58ddfb903d36d1dc2adbe0e5139dd74bca3e10a30",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "541ec07e028ddd75394885a710739635096ec597b924e27d3f023a147895a1fb"
+    },
+    {
+      "path": "tests/ops/test_mcs_request_loops.py",
+      "sha256": "4b1f201475d79cfe4ddf211a61732c654ac090f9fdec28ae16c2b1090344bd9e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "4b1f201475d79cfe4ddf211a61732c654ac090f9fdec28ae16c2b1090344bd9e"
+    },
+    {
+      "path": "tests/ops/test_mcs_request_reason.py",
+      "sha256": "a269caa75205f6c90a661a1c0e165b475046d1606420b5cbe1d26f31bc88fee6",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "a269caa75205f6c90a661a1c0e165b475046d1606420b5cbe1d26f31bc88fee6"
+    },
+    {
+      "path": "tests/ops/test_mcs_setup.py",
+      "sha256": "35c64147127daff24f823a34daa1e5f3446a085f01fd84d871f1e5c2fa0e4f7c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "8e7193a7daa7f05b829d9ec25a505572bc80da1ad23a5d4adb3ad55bc3e4fbe8"
+    },
+    {
+      "path": "tests/ops/test_mcs_signals.py",
+      "sha256": "3072be96e18ca736db0d891bd272d8368be6343e1b7a18402a54870c74e28096",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2ce1d3f1fc594fb9cc82a867bf10a3e801cb014851405dc64b7378b74ddc1a01"
+    },
+    {
+      "path": "tests/ops/test_mcs_update.py",
+      "sha256": "ce9571a24212993d1890a7470609e0fc8b8b18292b40230f18ebe6bb703bac42",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e9f3b8a930118fa970ff0daa029a285fe920c6f361114931e132848b418ee9dd"
+    },
+    {
+      "path": "tests/ops/test_signal_notify_off.py",
+      "sha256": "2ff7b5edfd37cf563cddbc68020386514d0376a8698b2823751b9e77760f4fec",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "2ff7b5edfd37cf563cddbc68020386514d0376a8698b2823751b9e77760f4fec"
+    },
+    {
+      "path": "tests/plugin/test_discord_sdk_real.py",
+      "sha256": "ffd8264feccc609ef9d32d217ef4cbdc44ce5b0368f0c06f1d16e58592d0f153",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "ffd8264feccc609ef9d32d217ef4cbdc44ce5b0368f0c06f1d16e58592d0f153"
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_mcs.py",
+      "sha256": "54a06a5b9233166cd25ed7d9109767b0677fcd7e6323cdc2bc76c91886c9db8a",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "54a06a5b9233166cd25ed7d9109767b0677fcd7e6323cdc2bc76c91886c9db8a"
+    },
+    {
+      "path": "tests/plugin/test_mcs_discord.py",
+      "sha256": "6c892cdb2858378cf4ab4ab6392d9244734f53f0e17d8c9914c550305cc9bfa4",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "497106fa8d92958152c43f072a8f5fbcbe6ad50f01c6d99c8699178460a33044"
+    },
+    {
+      "path": "tests/plugin/test_mcs_discord_delivery.py",
+      "sha256": "ec3097eb43265134d573a6fcdf20d5c8e07f0ad8cc3bf29d2c2111fcc9788812",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "be4846b24caf6b98963c2bc26e12380e7758914f58987cebc851bfd20ebe3b06"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack.py",
+      "sha256": "4d31a13a96de075f0d91caa1122d2dd941988cc12073ba32cc8d6ddec2799f87",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "99f06c2ee5caddcadd14743ae870796c08ae1cc1d465f91d3ece145e59df0b14"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack_actions.py",
+      "sha256": "6b668f170ac12cdae5f9be4fc0cfb6cf18bf96bd02b723525c59e964de5d38f6",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6b668f170ac12cdae5f9be4fc0cfb6cf18bf96bd02b723525c59e964de5d38f6"
+    },
+    {
+      "path": "tests/plugin/test_mcs_slack_cards.py",
+      "sha256": "c58395d7914d07ddd06a92a2840106bf4dd629abfe68db2694f8962fb93ac471",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c58395d7914d07ddd06a92a2840106bf4dd629abfe68db2694f8962fb93ac471"
+    },
+    {
+      "path": "tests/plugin/test_update_ops.py",
+      "sha256": "d73efbdafee54a66b4698e9f8e2dc02899bbaf00209db2c9962e60003d8b6342",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d73efbdafee54a66b4698e9f8e2dc02899bbaf00209db2c9962e60003d8b6342"
+    },
+    {
+      "path": "tests/semantic/test_canonical_drain.py",
+      "sha256": "37502715059eeb17d07993d3e643a2c8fbbaa4ba3405fffdaa30cc003e5e357c",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "37502715059eeb17d07993d3e643a2c8fbbaa4ba3405fffdaa30cc003e5e357c"
+    },
+    {
+      "path": "tests/semantic/test_canonical_projection.py",
+      "sha256": "77cc68d87684bd3707069f8696f0d37cb42187b6015d2ce844565443b26e102d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "77cc68d87684bd3707069f8696f0d37cb42187b6015d2ce844565443b26e102d"
+    },
+    {
+      "path": "tests/semantic/test_fact_source.py",
+      "sha256": "23dacf2ddfc365ef8ef20f697407daf87b2e9ba131a720cf9c72ec814c06dcd5",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "01720954908444297459baa43e8233f327131bc22ff6d77d05db37b6e0e558d3"
+    },
+    {
+      "path": "tests/semantic/test_jev_value.py",
+      "sha256": "6d26e7652599ad69b5e5759fbcffb440a6b888b98ab84d66f545ec4938f0b1c3",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7c220fe58649c2041a5ebe1c7f489488076cd39a86351adb424475bd5eb64f75"
+    },
+    {
+      "path": "tests/semantic/test_mcs_semantic.py",
+      "sha256": "f24c759b08f838e5c4a61889980711d548abeeb8a4ef96263ed57f1b10353750",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6166ca76ec315d089d93916be8e0b279758ede332420355d3ba3dc28f7a6db8e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_acceptance_edges.py",
+      "sha256": "7675bc17a10429f276561c4318806b2acf5523d0173a8f5a89af17a0c0872fc5",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "7675bc17a10429f276561c4318806b2acf5523d0173a8f5a89af17a0c0872fc5"
+    },
+    {
+      "path": "tests/semantic/test_semantic_assessment.py",
+      "sha256": "342e3e855868172b92bcacd9e038410c3f409d62c05a51d7944076d74f5e81b9",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "342e3e855868172b92bcacd9e038410c3f409d62c05a51d7944076d74f5e81b9"
+    },
+    {
+      "path": "tests/semantic/test_semantic_atomization.py",
+      "sha256": "49b332f9e75b431496c223d239c0c72b5d5414bf5f0fb2ae01d562efea9e2153",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "278990c48c5ab5b6832092041bee845fdb4590b59bfd30f50beea95b34679015"
+    },
+    {
+      "path": "tests/semantic/test_semantic_attachment_context.py",
+      "sha256": "f98503189e7e24ed6573c46bd99674b02abe9dbf81cde10136fec3f97a9c2c33",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "f98503189e7e24ed6573c46bd99674b02abe9dbf81cde10136fec3f97a9c2c33"
+    },
+    {
+      "path": "tests/semantic/test_semantic_bench.py",
+      "sha256": "a4715b5f24ae354bda5fc9fd34d1c6fa99e285fca68709f538b6b0ce9c720802",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "b1243083370b47fc48ee1f2a6032b44c43b27d640f22834b39c46fbe7b781d1e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_blind.py",
+      "sha256": "e4290715af0115b335848a216e389ad7f37bc68ef078c9f872dc94f664b9c275",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "e4290715af0115b335848a216e389ad7f37bc68ef078c9f872dc94f664b9c275"
+    },
+    {
+      "path": "tests/semantic/test_semantic_budget_retry.py",
+      "sha256": "d325f53d460358a252fcd2fbbf392b4985158d0b80b4f9daa494dd1d4de2fb67",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d325f53d460358a252fcd2fbbf392b4985158d0b80b4f9daa494dd1d4de2fb67"
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit.py",
+      "sha256": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0"
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit_drain.py",
+      "sha256": "77c494714f22bddcdc0c946e05ce9610d611deb1c7255ac3598b2770ae220835",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "77c494714f22bddcdc0c946e05ce9610d611deb1c7255ac3598b2770ae220835"
+    },
+    {
+      "path": "tests/semantic/test_semantic_claim_quantity_guard.py",
+      "sha256": "d365a63c82dcd8d59b9c00572ab5b543206b7864c12c96cb073be2efebe200be",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d365a63c82dcd8d59b9c00572ab5b543206b7864c12c96cb073be2efebe200be"
+    },
+    {
+      "path": "tests/semantic/test_semantic_cli_contract.py",
+      "sha256": "2005f21a8c34d8c9072f92b9f3b695f826b5ec70a7cfb8d50cac8da7579fdc28",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "2005f21a8c34d8c9072f92b9f3b695f826b5ec70a7cfb8d50cac8da7579fdc28"
+    },
+    {
+      "path": "tests/semantic/test_semantic_degraded_coverage.py",
+      "sha256": "a015c58069a59bcb2e4214e9cd9a40d91590c41f3cad7a7f6fe5ab5946dce22a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "0e5a172c399682ce8b56d0cc4575533a1ed7674e1f82cb512750584d52a35049"
+    },
+    {
+      "path": "tests/semantic/test_semantic_delivery.py",
+      "sha256": "cb874f5b3d2e759ae06ccf5fea71818269286adf6bb7cbf3c7c34f03c1226b43",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "cb874f5b3d2e759ae06ccf5fea71818269286adf6bb7cbf3c7c34f03c1226b43"
+    },
+    {
+      "path": "tests/semantic/test_semantic_detail_deadline.py",
+      "sha256": "982232ea1e0b2b6885fa319fb3681e0b0e18d7f3adb3cf69fad02b20dca36952",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "982232ea1e0b2b6885fa319fb3681e0b0e18d7f3adb3cf69fad02b20dca36952"
+    },
+    {
+      "path": "tests/semantic/test_semantic_evaluation.py",
+      "sha256": "fe19607126fef73866199c37446eb71a7083c9cc4b7c45e921e52654fe463ea4",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "6c2d4335736c79f3070bd6c6a4aa6b07b41c0b5024c0cf19db9dc3d7e4e27ccc"
+    },
+    {
+      "path": "tests/semantic/test_semantic_extraction.py",
+      "sha256": "030793698e6834ccb6c3c9539fef43dc83e911f1e145f45c1efdf5e69f4e9030",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "030793698e6834ccb6c3c9539fef43dc83e911f1e145f45c1efdf5e69f4e9030"
+    },
+    {
+      "path": "tests/semantic/test_semantic_fact_contract.py",
+      "sha256": "81c6e9c94d8fbb717a2f0cec18fb8cd0cd12b09344cbbe98260e7d1990b8d280",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "81c6e9c94d8fbb717a2f0cec18fb8cd0cd12b09344cbbe98260e7d1990b8d280"
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_audit.py",
+      "sha256": "33e2ba70fd4bf1a3708a7228a38034d0b32f432e2a95cb5d1bebb24991e49dc3",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "33e2ba70fd4bf1a3708a7228a38034d0b32f432e2a95cb5d1bebb24991e49dc3"
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_v2.py",
+      "sha256": "7f5912d82304822d2c443d90b15010e38dfe50b5167fff8b2517ea655b7eb645",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e8521db3777f5e6412ea8d549c91e7649c446a4f9531b4ef8d8a1e9dd13f5c20"
+    },
+    {
+      "path": "tests/semantic/test_semantic_fairness.py",
+      "sha256": "e1f63ec39fef5b604724e575fd1f817679ce14d8bbec557778e80f5d0bd16b3a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e1f63ec39fef5b604724e575fd1f817679ce14d8bbec557778e80f5d0bd16b3a"
+    },
+    {
+      "path": "tests/semantic/test_semantic_feature_modes.py",
+      "sha256": "f51e997e48f09042e9939369be9e23337677ac81a6029a92b2ac22fbf7d9a38f",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "f51e997e48f09042e9939369be9e23337677ac81a6029a92b2ac22fbf7d9a38f"
+    },
+    {
+      "path": "tests/semantic/test_semantic_input_contract.py",
+      "sha256": "fad467f5c2cafada0b33a1d76f86d78770e4550d086d3282549100763aa89373",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "fad467f5c2cafada0b33a1d76f86d78770e4550d086d3282549100763aa89373"
+    },
+    {
+      "path": "tests/semantic/test_semantic_jev_contract.py",
+      "sha256": "0978755d70d09372b11b097ded8a27fefcc0a46dab82de5ace4f68e6b84bab71",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "0978755d70d09372b11b097ded8a27fefcc0a46dab82de5ace4f68e6b84bab71"
+    },
+    {
+      "path": "tests/semantic/test_semantic_llm_retry.py",
+      "sha256": "850a8b63bc3f7d076a453e0b8e33f26c5438fa90ff06c6fa0d0beb036bbc17cc",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "850a8b63bc3f7d076a453e0b8e33f26c5438fa90ff06c6fa0d0beb036bbc17cc"
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_generations.py",
+      "sha256": "d15493f90887240d7f8fdddc34117d70b094be0f676153344dce364f53b36303",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d15493f90887240d7f8fdddc34117d70b094be0f676153344dce364f53b36303"
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_view.py",
+      "sha256": "0577ab44c50dd2f25c6a4359c89d9efb4f84d7d37d327ba3865d24b8462b5ea7",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "0577ab44c50dd2f25c6a4359c89d9efb4f84d7d37d327ba3865d24b8462b5ea7"
+    },
+    {
+      "path": "tests/semantic/test_semantic_mandatory_render.py",
+      "sha256": "0a452e12d19f39577e6a9c372e97c550a1e462c5a2e615bdf3ac3cb3b6d75569",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "42a256e595324995a858f1ae061b58d9f38ec323f77056f03eb7015ca0805ba6"
+    },
+    {
+      "path": "tests/semantic/test_semantic_manual_retry.py",
+      "sha256": "d234bb4388ee158eb8684a879913e252abdf9ba7a0aaa303366dfcdaf4de7003",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "d234bb4388ee158eb8684a879913e252abdf9ba7a0aaa303366dfcdaf4de7003"
+    },
+    {
+      "path": "tests/semantic/test_semantic_notice_contract.py",
+      "sha256": "07ac2e011e1b652619a0b92e91a4e83f5ee7fa09f2a23aa975cd86ce05a4c2ea",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "07ac2e011e1b652619a0b92e91a4e83f5ee7fa09f2a23aa975cd86ce05a4c2ea"
+    },
+    {
+      "path": "tests/semantic/test_semantic_observe.py",
+      "sha256": "c432ee16c968b35972474dfc11624ae0585d129d95d5625690c51632e80b626a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "c432ee16c968b35972474dfc11624ae0585d129d95d5625690c51632e80b626a"
+    },
+    {
+      "path": "tests/semantic/test_semantic_pause.py",
+      "sha256": "2f0b96937a82488ea42a21780e086736bf3006d88a27fefe9410e9831cf1b8b7",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "2f0b96937a82488ea42a21780e086736bf3006d88a27fefe9410e9831cf1b8b7"
+    },
+    {
+      "path": "tests/semantic/test_semantic_policy_generation.py",
+      "sha256": "a51394c7d9744c79f1d361a228f397603825001afd31efd33482cb6ff34e7486",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "a51394c7d9744c79f1d361a228f397603825001afd31efd33482cb6ff34e7486"
+    },
+    {
+      "path": "tests/semantic/test_semantic_quantities.py",
+      "sha256": "13915a591b415a2cf6a3e0481cee92c256a7151e77cd41368c14d7f2aee78e9e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "13915a591b415a2cf6a3e0481cee92c256a7151e77cd41368c14d7f2aee78e9e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_relations.py",
+      "sha256": "74ccc843f2d2b91c344510082f723476c8f75a86c7242a4d877619e2d0f4a4c1",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "74ccc843f2d2b91c344510082f723476c8f75a86c7242a4d877619e2d0f4a4c1"
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair.py",
+      "sha256": "3acc1748a614fd8baa8b1c5d265b238bb743259e9aa21d4b9aab0667341188e6",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "951ba499090a513404628c4d25f8766684090287a37d7e18f5665ac418352499"
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair_recovery.py",
+      "sha256": "04a41fc6eae42f12ddec6374ea9ad5ee822b7f2de1c59e811a7798f62f05fbeb",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "04a41fc6eae42f12ddec6374ea9ad5ee822b7f2de1c59e811a7798f62f05fbeb"
+    },
+    {
+      "path": "tests/semantic/test_semantic_runtime.py",
+      "sha256": "54cc64a7a929b33152ace957852a63ce60967ecf7cd6eb02b9ce4234eefd79f7",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "54cc64a7a929b33152ace957852a63ce60967ecf7cd6eb02b9ce4234eefd79f7"
+    },
+    {
+      "path": "tests/semantic/test_semantic_scope_edges.py",
+      "sha256": "191775b3649c84d575dc5b827ff7fef2784da0cfd1902748cc8bbcf93b9abc25",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "191775b3649c84d575dc5b827ff7fef2784da0cfd1902748cc8bbcf93b9abc25"
+    },
+    {
+      "path": "tests/semantic/test_semantic_send_gate.py",
+      "sha256": "a8ec6dc65622145c47b47526c41a32e3abf940449205c9e078bd3bcf262a208e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "a8ec6dc65622145c47b47526c41a32e3abf940449205c9e078bd3bcf262a208e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_smoke.py",
+      "sha256": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e"
+    },
+    {
+      "path": "tests/semantic/test_semantic_store.py",
+      "sha256": "fc9535b7d0d455bd093cdefd4c116509d74e2df2827d928c0019ca5413a30e50",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "fc9535b7d0d455bd093cdefd4c116509d74e2df2827d928c0019ca5413a30e50"
+    },
+    {
+      "path": "tests/semantic/test_semantic_tick_budget.py",
+      "sha256": "e71c0a2f84f58e5c37f4757b4f3327d1c3b464466e81d1540f45dd56392b6f97",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "e71c0a2f84f58e5c37f4757b4f3327d1c3b464466e81d1540f45dd56392b6f97"
+    },
+    {
+      "path": "tests/semantic/test_semantic_transport.py",
+      "sha256": "e59e94ba601fe69acef8373b76b0b0a32e7d0d97a2f08c901bfa2d1351a93323",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "e59e94ba601fe69acef8373b76b0b0a32e7d0d97a2f08c901bfa2d1351a93323"
+    },
+    {
+      "path": "tests/semantic/test_semantic_v4.py",
+      "sha256": "40ad9fd0f2a3806689ae9384f25dce2068a632a79465d876a55d3293f1b5f034",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "40ad9fd0f2a3806689ae9384f25dce2068a632a79465d876a55d3293f1b5f034"
+    },
+    {
+      "path": "tests/semantic/test_semantic_view_generation.py",
+      "sha256": "27857310d23355ac35a3ffabaf665e96c6a5e283086adf84b27a722da67efd63",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "27857310d23355ac35a3ffabaf665e96c6a5e283086adf84b27a722da67efd63"
+    },
+    {
+      "path": "tests/semantic/test_semantic_workflow.py",
+      "sha256": "d7fc2ee723fe149844d276c0b3e27a1e6119238671b39ebe61e13670f99ac5c2",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "2bbec35732e5141569e0b5253addde3235914ff342edb95f80aaa2b940f6b20f"
+    },
+    {
+      "path": "tests/views/test_mcs_stats.py",
+      "sha256": "90b23bdba1d511f13107990ea5202badd07f7753218bfb50ffdefd97970936d8",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "90b23bdba1d511f13107990ea5202badd07f7753218bfb50ffdefd97970936d8"
+    },
+    {
+      "path": "tests/views/test_notification_receipt_scope.py",
+      "sha256": "2788fee2f04a0371a9b218c023867f82a9027de4ad1624b790c25585d90cb365",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "59bb9273a2f72409e75565d96e86089c68fcb9eac6df95cf0b07f43562caa968"
+    },
+    {
+      "path": "tests/views/test_qc_view.py",
+      "sha256": "9062f8224ed3a5a2348e9740ed3bd40da7e6fcb28449bbfff1ab660c00fba00e",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "9062f8224ed3a5a2348e9740ed3bd40da7e6fcb28449bbfff1ab660c00fba00e"
+    },
+    {
+      "path": "tests/views/test_read_model.py",
+      "sha256": "e69cc23d91c153de56283caf28632256a39a469f17154f2751ab6503cb20240a",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "e69cc23d91c153de56283caf28632256a39a469f17154f2751ab6503cb20240a"
+    },
+    {
+      "path": "tests/views/test_semantic_view.py",
+      "sha256": "48a1f38f6bf235659f409c455143e7817723be38c3bc14c78d96e4ef8f6b1ba2",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "a859e0703a8d2e817b7132079cbca7f4b0d243d21717a6bc54a527b69345e1da"
+    },
+    {
+      "path": "tests/views/test_staff_directory.py",
+      "sha256": "ddaddecb59af5f763abab13c594146764c1ca353d6693d09178dc7d317d8ac30",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "ddaddecb59af5f763abab13c594146764c1ca353d6693d09178dc7d317d8ac30"
+    },
+    {
+      "path": "tests/views/test_structured_view.py",
+      "sha256": "09c94397c497fbcbf49dabcf07df0d6579d7be76f8157db56c9f6d6241e7bcad",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "478aa2c4fee7830723c4e0804c061812f26414f2885557843c0d23f8ea1a16cd"
+    },
+    {
+      "path": "tests/views/test_summary_review.py",
+      "sha256": "7e6111079b23cc6170ed04bdbdf2abe3419dd7a78203b8bd910230b9852b579d",
+      "status": "fresh_review_completed",
+      "reviewed_sha256": "7e6111079b23cc6170ed04bdbdf2abe3419dd7a78203b8bd910230b9852b579d"
+    },
+    {
+      "path": "tests/views/test_summary_review_cli.py",
+      "sha256": "6bff030154052c9eb6ebf30caf9d806cace291ec0763f119b7273cea5f482650",
+      "status": "prior_review_hash_match",
+      "reviewed_sha256": "6bff030154052c9eb6ebf30caf9d806cace291ec0763f119b7273cea5f482650"
+    }
+  ],
+  "open_findings": [
+    {
+      "paths": [
+        "mcs/ops/brain_export.py",
+        "mcs/ops/ext_contract.py"
+      ],
+      "evidence": "JSONL stat values can include raw medication names and signal evidence can include raw surface text; export contract screens selected forbidden keys, not an exhaustive field schema.",
+      "status": "Repaired locally with synthetic regressions; no real connector or external send."
+    },
+    {
+      "paths": [
+        "mcs/semantic/semantic_v4.py"
+      ],
+      "evidence": "cohort item ceiling is reset per run and active_legacy_admissions ignores ceilings; retirement description promises outbox/delivery reference holds but code checks extract_qc references only.",
+      "status": "Safety defects repaired locally. Total token enforcement and separately verified physical cleanup are unavailable prerequisites, now explicit fail-closed holds. Normal new-message pipeline remains available."
+    }
+  ],
+  "additional_artifacts": [
+    "docs/dev-records/refactor-20260927-progress.json",
+    "mcs/ops/export_schema.py",
+    "tests/core/test_mcs_util.py",
+    "docs/dev-records/refactor-20260927.md"
+  ],
+  "instruction_phase": "Completed local canonical instruction/config review and edits before resuming repository implementation. 157/157 skill bodies judged (5 changed, 47 no change, 105 source-limited). Distribution sources absent; caches unchanged. Evidence: ~/.local/state/codex-maintenance/20260927/instruction-audit.json. YAML valid; quick_validate rejects retained legacy metadata in 2 skills; 3 pass. Hermes sync helper: 10 synthetic tests and Ruff passed; prompt synchronized without gateway restart.",
+  "new_file_reviews": {
+    "mcs/ops/export_schema.py": "Shared closed field/type schema for producer projection and sink validation; stdlib-only. Unknown fields are omitted visibly at production and rejected at the boundary. Reviewed and covered through full export contract tests.",
+    "tests/core/test_mcs_util.py": "Synthetic filesystem failure, circuit-state corruption, disk floor, whitespace evidence and invalid chunk-size regressions; fully reviewed.",
+    "docs/dev-records/refactor-20260927.md": "Final evidence report reviewed against actual test outputs, coverage counts, baseline state and instruction-source limitations.",
+    "docs/dev-records/refactor-20260927-progress.json": "Complete 284-file manifest validated for unique paths, completed judgments and current hashes; this self-describing evidence artifact is not self-hashed."
+  },
+  "completed_date": "2026-09-28",
+  "verification_note": "Earlier entries preserve chronological targeted evidence; *_final_20260928 and final lint/gates/docs entries supersede earlier pending/SDK-unavailable checkpoints.",
+  "directory_review": {
+    "mcs/": "Existing first-layer responsibility split and flat import bootstrapping retained; shared aggregate schema added under ops; replaced internal code and duplicate predicates removed where callers permit.",
+    "tests/": "Existing mirrored area layout retained; new utility regressions placed under core. Synthetic-only isolation and relevant SDK lane verified.",
+    "hermes_plugin/": "Transport-neutral and Discord/Slack boundaries retained; delivery scope/flags/journals hardened in existing modules.",
+    "deployment/ and scripts/": "Templates remain canonical, rendered operational copies untouched. Independent recovery and template renderers hardened.",
+    "docs/ and evaluation/": "Current references, static synthetic figures, dated records and synthetic evaluation assets retained in existing locations. Added report/coverage under dev-records.",
+    "root, ci/, .github/, integration/": "Entry points and required gate configuration preserved, incident mapping and synthetic integration fixtures updated."
+  },
+  "new_file_sha256": {
+    "mcs/ops/export_schema.py": "f7f7ae22d018cc6a7f663222aebcfa4047f105766dfa62fe469587ffc2b7a850",
+    "tests/core/test_mcs_util.py": "b984be4aeb1a02d3b5b4aa2accb727abbc03bd1bdc7875c58b094b201adcaa81",
+    "docs/dev-records/refactor-20260927.md": "1a6315c35c8ae099a375b97395f530659b2bedf84143ff6b8121fc0110d530e2"
+  }
+}

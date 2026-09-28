@@ -14,33 +14,19 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   after フィルタ無し。取り切れなかった id は `patients.probe_mid` に
   記録して再取得ループを抑止）
 - 全履歴アーカイブ・FTS5 全文検索・患者タイムライン
-- 構造化抽出: ルール `extract_v1`(即時・全投稿) + ローカルLLM `extract_llm`
-  (Qwen3.5-9B、外部送信なし) — スキーマ v3（薬剤 action/status/subject・
-  症状 status・evidence スパン）。v3 パスはルール解析をプロンプト
-  ヒントとして取り込み `extract_v1` artifact も同パスで保証する。
-  `--batch` で context 無し本文を複数集約呼出し(既定4)、検証 drop 時は
-  1回だけ修復再問、llama.cpp timings は artifact meta に集計。
-  vitals は本文ラベル照合で誤キーを自動修正(脈→bs 等)。Jev QC が
-  NO_MATCH/urgency 不一致を付した抽出は1回だけフィードバック再抽出
-  される(meta.qc_fix で終息)
-- 抽出項目の Jev QC 監査: `semantic.extract_qc:"annotate"` で `extract_qc`
-  artifact に注記のみ記録（監査結果は抽出を直接変更しない、drain ガード
-  共有）。NO_MATCH/urgency 不一致は extract_llm 側で1回限りの
-  フィードバック再抽出として処理される
-- 読み取り専用統計・レビュー候補シグナル6種・人承認の依頼管理
-- Hermes addon(`hermes_plugin/`): Discord `/mcs <json>` で閲覧・preview/confirm
+- 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`（外部送信なし）。
+  抽出スキーマ、QC、再抽出、v4 の公開条件は `mcs/extract/`・`mcs/semantic/` と
+  関連仕様を照合する。モデル名や既定値をこの要約から固定的に推定しない。
+- 読み取り専用統計・レビュー候補シグナル・人承認の依頼管理
+- Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送
 
 ## 構成
 
 - `mcs/` — 実行モジュール。**flat import維持のまま第一層サブディレクトリに分割**:
-  `core/`(ledger・mcs_util・mcs_queries・local_llm・llm_admission・maintenance・bounded_http) ·
-  `ingest/`(mcs_adapter・mcs_worker・job_ops・run_check・init_data) ·
-  `notify/`(notify_flush・notify_cards・notify_cmds・notify_render・notify_transport) ·
-  `extract/`(extract・extract_llm・extract_bench・rollup) ·
-  `semantic/`(semantic.py + semantic_* 群) ·
-  `views/`(読み取り面: mcs_view・mcs_stats・summary_review・structured_view) ·
-  `ops/`(書き込み系: mcs_requests・mcs_operations・mcs_signals・mcs_setup・
-  mcs_update・mcs_refstats・request_loops・brain_export)
+  `core/`(DB・共通処理・LLM admission) · `ingest/`(収集・health監視) ·
+  `notify/`(通知・配送整合) · `extract/`(抽出・評価) · `semantic/`(意味解析) ·
+  `views/`(読み取りモデル・統計) · `ops/`(依頼・運用・外部出力契約)
+  個別モジュールの一覧は `docs/DEVELOPMENT.md` の生成表を参照。
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
   sys.path に挿れて `import _mcs_path`（全サブディレクトリを import root
   として登録）する2行ブートストラップを持つ。`mcs/` 直下に import 可能な
@@ -52,25 +38,35 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   rehearsal結果）
 - `hermes_plugin/` — `mcs_discord/`(Discord worker) · `mcs_slack/`(Slack worker) ·
   `mcs_delivery/`(transport中立の配送基盤: paths・journal・registry・envelopes・spec・text・worker) ·
-  `card_workers.py`(worker 設定解決・factory) · `projects.py` · `integration/`(hermes E2E) · `deployment/` · `docs/`
+  `card_workers.py`(worker 設定解決・factory) · `projects.py`
+- `integration/` — Hermes 連携・複数領域の統合テスト
+- `deployment/` — 配備用スクリプト・設定候補（変更だけでは実機適用しない）
+- `docs/` — 仕様・開発資料・検証記録
 - `scripts/` — `run_tests.sh`、`update_readme.py`
 
 `hermes_plugin/` は長寿命の Hermes gateway が起動時に読込む。変更を
 有効化するには `hermes gateway restart` が必要 — 再起動なしでは
 runner が発行する新形式 spec を旧世代 worker が処理し、card は
 届くが companion thread の本文・添付が欠落する（2026-09 実例）。
+再起動は配備の明示範囲に含まれる場合に行い、未適用なら結果報告に残す。
 
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                # 全テスト（一時HOME・認証環境の隔離）
+scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
 ruff check mcs/ tests/ hermes_plugin/ integration/  # CIと同じ範囲
 python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
-python3 mcs/ops/mcs_setup.py check  # 実機の必須条件検証
+python3 scripts/update_readme.py --check
+python3 ci/gates.py
+python3 ci/mine_gates.py --check
 ```
 
 `make test|lint|readme|check` も利用可（uv があれば ephemeral 実行）。
 テスト対象を絞る場合も `scripts/run_tests.sh tests/<領域>/` を使う。
+`integration/` は必要な対象を同 runner に指定する。Hermes 実SDKとの統合は
+CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 成功とは区別する。
+`python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機向けの診断であり、
+合成 fixture によるテストの代わりに実行しない。
 
 ## 絶対ルール
 

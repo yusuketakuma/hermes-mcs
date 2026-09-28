@@ -114,6 +114,9 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
   要約・薬剤等の PHI を含む Markdown をローカルに書き出します。匿名化はしません。
   出力後の知識ストアへの同期や LLM への入力は別経路で、その送信先・権限は
   同期先の運用と設定で管理する必要があります。
+  機械向け `export.jsonl` は許可した集計項目・ID・状態へ限定し、省いた内容は
+  `content_omitted` で示します。外部配送の契約と認可条件は
+  [外部エクスポート仕様](docs/external-export-contract.md)を参照してください。
 
 <details>
 <summary>技術詳細（運用担当者向け）</summary>
@@ -318,7 +321,8 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
 
 **わかること**
 
-- すべての投稿に日時が記録されるため、以下を後から計算できる:
+- 投稿日時が確認できる記録を使い、以下を後から計算できる
+  （日時不明の記録は区別して扱う）:
   - 相談から回答までの時間
   - 症状報告から対応までの時間
   - 同じ問題が繰り返し起きる間隔
@@ -373,7 +377,7 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
 |---|---|
 | 投稿メタ情報 | 投稿日時・投稿者名・職種・所属組織・どの患者のチャットルームか |
 | 本文 | 全文。スレッドの親子関係（どの投稿への返信か）付き |
-| 添付ファイル | ファイル名・サイズ・hash・取得状態（原本への一時URLやサーバ内パスは残さない） |
+| 添付ファイル | ファイル名・サイズ・hash・取得状態。内部台帳には再取得用URLとローカル保存先も保持するため、閲覧権限を管理する |
 | 取得状態 | 本文を取得済みか・一部だけか、内容hash（編集されたかの検知用）、最初に見つけた日時・最後に更新を確認した日時 |
 
 #### B. 機械が自動で整理する項目（2レーン）
@@ -436,7 +440,7 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
 件名・担当者・期限・状態（未着手/対応中/完了/取消）・版・元記録へのリンク・
 操作記録（誰が・いつ・理由）。機械が勝手に登録・変更することはない。
 
-#### F. 集計統計（14種 — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)「統計（読み取り専用）」参照）
+#### F. 集計統計（一覧は [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)「統計（読み取り専用）」参照）
 
 投稿量・職種内訳・曜日×時間帯の分布・投稿の集中度・薬剤の月別言及・
 後続記録が確認できない件数・依頼の滞留・退院前後の薬変更の重なり 等。
@@ -606,9 +610,15 @@ Discord で `/mcs <json>` が使えるようになる。詳細: `hermes_plugin/R
 ./install.sh                            # 依存一式を冪等インストール:
                                         #   brew pkg / hermes / plugin /
                                         #   llama-server+model / launchd+cron
-python3 mcs/ops/mcs_setup.py init       # 対話ウィザード: 全設定を順に確認
+                                        #   一部導入済みなら --no-llm 等の
+                                        #   stage skip フラグあり(--help)
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init
+                                        # 対話ウィザード: 全設定を順に確認
                                         #   (config + Keychain + .env)
-python3 mcs/ops/mcs_setup.py check      # 必須条件の検証(exit 1 で失敗)
+                                        #   ※mcs_setup は Python ≥3.10 必須 —
+                                        #   /usr/bin/python3(3.9系)では不可
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check
+                                        # 必須条件の検証(exit 1 で失敗)
 ```
 
 `init` は対話実行すると全 config キーをセクション別に案内する
@@ -639,8 +649,8 @@ keychain がロック中で読めない」状態 — `security unlock-keychain` 
 GUI ログインで解除してから次回 run を待てばよい(エントリ再登録は不要)。
 `~/.mcs/.env` の `MCS_PASSWORD` はリブート直後のロック中にも効く
 フォールバック(`mcs_setup init` が Keychain と併記する; 平文のため
-FileVault/物理セキュリティ前提)。頻発する場合は自動ロックを無効化する:
-`security set-keychain-settings ~/Library/Keychains/login.keychain-db`。
+FileVault/物理セキュリティ前提)。頻発する場合はログイン状態と Keychain の
+読み取り可否を確認し、自動ロックを収集失敗の回避策として無条件に解除しない。
 `manual_required` はエントリ未登録かつ .env 未設定、またはフォーム非検出
 — `mcs_setup init` で再登録する。
 
