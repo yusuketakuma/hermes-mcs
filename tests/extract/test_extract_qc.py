@@ -604,5 +604,8 @@ def test_qc_coverage_cap_includes_vitals(tmp_path):
     assert coverage["total"] == 17
     assert coverage["checked"] == semantic_drain.QC_MAX_ITEMS
     assert coverage["unchecked"] == 1
-    assert coverage["by_field"]["vitals"]["unchecked"] == 1
+    # vitals audit before meds now (highest-NO_MATCH order) — the
+    # overflow lands on a med, every vital is still checked.
+    assert coverage["by_field"]["vitals"]["unchecked"] == 0
+    assert coverage["by_field"]["meds"]["unchecked"] == 1
     db.close()
