@@ -75,7 +75,7 @@ def _valid_cmd(req) -> tuple[bool, str]:
     if not isinstance(req, dict) or req.get("cmd") != "import":
         return False, "unknown_cmd"
     pid = req.get("project_id")
-    if type(pid) is not int or pid <= 0:
+    if not mcs_requests.positive(pid):
         return False, "bad_project_id"
     for k, lo, hi in (("days", 1, 365), ("pages", 1, 40)):
         if k not in req:
@@ -107,9 +107,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         consent_only = notify_cards.restore_awaiting_consent(
             os.path.dirname(cmd_dir)) is not None
     except Exception:
-        # an unreadable marker must not swallow commands — treat as no
-        # hold; the restore path itself stays fail-closed
-        consent_only = False
+        # Preserve queued writes when the restore guard cannot be read.
+        consent_only = True
     try:
         names = sorted(os.listdir(cmd_dir))
     except OSError:
@@ -124,15 +123,14 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # WatchPaths can fire while a producer is still writing. Never
             # consume a request until it is complete enough to validate.
             continue
+        if consent_only and (not isinstance(req, dict)
+                             or req.get("cmd") != "ops.restore_approve"):
+            # All writes, including legacy imports, stay queued while a
+            # restore can replace this database after human consent.
+            continue
         if isinstance(req, dict) and isinstance(req.get("cmd"), str) \
                 and (req["cmd"].startswith("request.")
                      or req["cmd"].startswith("ops.")):
-            if consent_only and req["cmd"] != "ops.restore_approve":
-                # A schema-bump DB replace is held for human consent:
-                # any other command's writes would be silently wiped by
-                # the pending swap, so every file stays queued until
-                # the consent lands and the restore completes.
-                continue
             try:
                 if not mcs_requests.valid_uuid(req.get("command_id")):
                     raise ValueError("bad_command_id")

@@ -858,7 +858,7 @@ def test_discovery_archived_off_skips_kartes(tmp_path):
     class HAdapter:
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             return mcs_adapter.MessageBatch(
-                messages=[_message(mid=1, project_id=pid)],
+                messages=[_message(mid=pid, project_id=pid)],
                 pages=1, reached=True)
 
         def fetch_thread(self, *a):

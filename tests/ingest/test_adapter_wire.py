@@ -325,6 +325,8 @@ def test_assert_allowed_url_bad_port_is_mcserror():
     stage_attachments' except MCSError and poisons the whole tick."""
     for bad in ("https://www.medical-care.net:bad/x",
                 "https://www.medical-care.net:99999/x",
+                "https://synthetic@www.medical-care.net/f",
+                "https://www.medical-care.net/f#fragment",
                 "https://[::1/x"):
         with pytest.raises(mcs_adapter.MCSError) as e:
             mcs_adapter._assert_allowed_url(bad)
@@ -505,6 +507,61 @@ def test_keychain_password_returns_secret(monkeypatch, tmp_path):
         lambda *a, **k: SimpleNamespace(returncode=0, stdout="pw123\n",
                                         stderr=""))
     assert a._keychain_password() == "pw123"
+
+
+def test_token_cache_never_overwrites_predictable_staging_link(tmp_path):
+    cache = tmp_path / "cache" / "token.json"
+    cache.parent.mkdir()
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_text("preserve")
+    Path(str(cache) + ".tmp").symlink_to(unrelated)
+    adapter = mcs_adapter.MCSAdapter(token_cache=str(cache))
+    adapter._write_cache("synthetic-token")
+    assert unrelated.read_text() == "preserve"
+    assert adapter._read_cache() == "synthetic-token"
+    assert cache.stat().st_mode & 0o777 == 0o600
+
+
+def test_download_uses_private_staging_without_touching_existing_part_link(tmp_path):
+    destination = tmp_path / "file"
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_text("preserve")
+    Path(str(destination) + ".part").symlink_to(unrelated)
+
+    def worker(payload, **kwargs):
+        Path(payload["partial"]).write_bytes(b"synthetic")
+        return {"bytes": 9, "sha256": hashlib.sha256(b"synthetic").hexdigest()}
+
+    adapter = mcs_adapter.MCSAdapter(worker=worker)
+    adapter._token = "synthetic-token"
+    adapter.download("https://www.medical-care.net/f", str(destination))
+    assert unrelated.read_text() == "preserve"
+    assert destination.read_bytes() == b"synthetic"
+    assert not destination.is_symlink()
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("operation", ["api", "cdp_json"])
+def test_worker_rejects_oversized_json_response(monkeypatch, operation):
+    import io
+    import mcs_worker
+    import mcs_util
+
+    class Response(io.BytesIO):
+        status = 200
+        headers = {}
+
+    response = Response(b'"' + b"x" * 64 + b'"')
+    monkeypatch.setattr(mcs_worker, "MAX_JSON_BYTES", 64)
+    monkeypatch.setattr(mcs_util, "no_proxy_opener",
+                        lambda *args: SimpleNamespace(open=lambda *a, **k: response))
+    with pytest.raises(mcs_worker.WorkerError) as error:
+        mcs_worker._execute({"operation": operation, "timeout": 1,
+                             "url": mcs_adapter.API + "/projects" if operation == "api"
+                             else "http://127.0.0.1:9333/json/list",
+                             "method": "GET", "headers": {}})
+    assert error.value.kind == "response_too_large"
+    assert response.closed
 
 
 def test_keychain_password_missing_returns_none(monkeypatch, tmp_path):
@@ -740,6 +797,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     assert len(processes) == 1 and processes[0].poll() is not None
     assert destination.read_bytes() == b"previous-complete-file"
     assert not Path(str(destination) + ".part").exists()
+    assert not list(tmp_path.glob(".download-*.part"))
 
 
 def test_adapter_worker_preserves_api_form_and_http_status(monkeypatch):
@@ -1020,6 +1078,7 @@ def test_fetch_latest_no_newer_message():
 @pytest.mark.parametrize("response", [
     {"message": {"id": "abc"}},
     {"message": {"id": 0}},
+    {"message": {"id": 2**63}},
     {"message": {"id": None}},
     {"message": "not-a-dict"},
     {"message": []},
