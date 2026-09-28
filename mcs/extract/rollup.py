@@ -37,6 +37,9 @@ HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
+# Bump when persisted rollup content changes shape: dirty_projects()
+# rebuilds every row stamped with another version (2: request flag).
+PERIOD_CHECK_VERSION = 2
 
 
 def _dicts(value) -> list[dict]:
@@ -142,8 +145,12 @@ def build_rollup(ledger, project_id: int) -> dict:
         requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
                          "at": m["posted_at"], "mid": m["message_id"]}
                         for rq in _dicts(v1.get("requests")))
+        # negated/speculative/ungrounded requests stay flagged for the
+        # readers; any flag other than a literal False fails closed
         requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
-                         "at": m["posted_at"], "mid": m["message_id"]}
+                         "at": m["posted_at"], "mid": m["message_id"],
+                         "unverified": rq.get("unverified", False)
+                         is not False}
                         for rq in _dicts(lm.get("requests")))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
@@ -332,7 +339,7 @@ def rebuild(ledger, project_id: int) -> int:
             (KIND, project_id, None,
              json.dumps(d, ensure_ascii=False), "rules-v1",
              json.dumps({"generated_at": d["generated_at"],
-                         "period_check_version": 1,
+                         "period_check_version": PERIOD_CHECK_VERSION,
                          "next_med_period_check":
                          d.get("_next_med_period_check")}), time.time()))
     return cur.lastrowid
@@ -370,7 +377,7 @@ def dirty_projects(ledger) -> list:
     return [x["project_id"] for x in rows
             if type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
-            or x["period_version"] != 1
+            or x["period_version"] != PERIOD_CHECK_VERSION
             or (x["next_check"] is not None and (
                 type(x["next_check"]) not in (int, float)
                 or not 0 <= x["next_check"] < 1e12

@@ -206,11 +206,18 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
         lines.append("\n## recent symptoms\n\n| symptom | last |\n| --- | --- |\n")
         lines.extend(f"| {_cell(s.get('symptom'))} | {s.get('last')} |\n"
                      for s in roll["recent_symptoms"])
-    if roll.get("recent_requests"):
-        lines.append("\n## open-looking requests\n\n| at | kind | ctx |\n| --- | --- | --- |\n")
-        for r in roll["recent_requests"]:
-            ctx = str(r.get("ctx") or "")[:80]
-            lines.append(f"| {r.get('at')} | {_cell(r.get('kind'))} | {_cell(ctx)} |\n")
+    # unverified requests never share the confirmed table; a missing flag
+    # (rule rows) reads as confirmed, any other non-False value fails closed
+    reqs, cands = [], []
+    for r in roll.get("recent_requests") or []:
+        (reqs if r.get("unverified", False) is False else cands).append(r)
+    for title, rows in (("open-looking requests", reqs),
+                        ("依頼候補（未確認）", cands)):
+        if rows:
+            lines.append(f"\n## {title}\n\n| at | kind | ctx |\n| --- | --- | --- |\n")
+            for r in rows:
+                ctx = str(r.get("ctx") or "")[:80]
+                lines.append(f"| {r.get('at')} | {_cell(r.get('kind'))} | {_cell(ctx)} |\n")
     if roll.get("next_planned"):
         lines.append(f"\n## next planned\n\n{roll['next_planned']}\n")
     if roll.get("top_senders"):
