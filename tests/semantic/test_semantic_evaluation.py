@@ -6,115 +6,7 @@ import pathlib
 import pytest
 
 import semantic_evaluation as evaluation
-
-
-MANIFEST = {
-    "version": "manifest-v1",
-    "bundle_version": "bundle-v1",
-    "candidate_version": "candidate-v1",
-    "label_version": "label-v1",
-}
-CRITERIA = {
-    "version": "criteria-v1",
-    "required_metrics": list(evaluation.METRICS),
-    "minimums": {
-        "important_fact_recall": 1.0,
-        "final_recall": 1.0,
-        "medication_recall": 1.0,
-        "negation_recall": 1.0,
-        "time_recall": 1.0,
-        "speaker_relation_recall": 1.0,
-        "loop_conformity": 1.0,
-        "loop_precision": 1.0,
-        "mandatory_fact_recall": 1.0,
-        "rendered_fact_recall": 1.0,
-        "delivered_fact_recall": 1.0,
-    },
-    "maximums": {
-        "critical_overclaim": 0.0,
-        "loop_false_resolution": 0.0,
-        "loop_unresolved_miss_rate": 0.0,
-        "defer_rate": 0.0,
-        "silent_drop": 0.0,
-    },
-    "required_splits": ["test"],
-    "min_human_labels": 1,
-}
-
-
-def _record(source="synthetic"):
-    return {
-        "case_id": "case-1",
-        "split": "test",
-        "account_id": "account-1",
-        "project_id": "project-1",
-        "thread_id": "thread-1",
-        "bundle": {
-            "version": "bundle-v1",
-            "messages": [{"message_id": "m0"}, {"message_id": "m1"}],
-            "attachments": [{
-                "attachment_id": "att-1", "message_id": "m1",
-                "path": "fixtures/attachment-1.bin",
-                "context_before": ["m0"],
-            }],
-            "body_original": "ORIGINAL-SECRET-MUST-NOT-LEAK",
-        },
-        "candidate": {
-            "version": "candidate-v1",
-            "facts": [
-                {"fact_id": "f1", "important": True,
-                 "medication": "drug-a", "negation": "affirmed",
-                 "time": "tomorrow", "speaker_relation": "doctor",
-                 "evidence_ids": ["ev-1"]},
-                {"fact_id": "f2", "important": True,
-                 "medication": "drug-b", "negation": "negated",
-                 "time": "today", "speaker_relation": "nurse",
-                 "evidence_ids": ["ev-2"]},
-            ],
-            "verified_fact_ids": ["f1", "f2"],
-            "rendered_fact_ids": ["f1", "f2"],
-            "delivered_fact_ids": ["f1", "f2"],
-            "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
-                           "type": "COMPLEMENTS"}],
-            "unresolved": [],
-            "claims": [
-                {"claim_id": "c1", "critical": False,
-                 "fact_refs": ["f1"], "attachment_refs": ["att-1"]},
-                {"claim_id": "c2", "critical": False,
-                 "fact_refs": ["f2"], "attachment_refs": []},
-            ],
-            "loops": [{"loop_id": "loop-1", "resolved": False}],
-            "status": "complete",
-            "latency_ms": 100,
-            "usage": {"requests": 2, "input_tokens": 10,
-                       "output_tokens": 5, "total_tokens": 15},
-        },
-        "label": {
-            "version": "label-v1",
-            "source": source,
-            **({"receipt": {"receipt_id": "rcpt-1",
-                            "labelled_at": "2026-09-21",
-                            "reviewer": "reviewer-1"}}
-               if source == "human" else {}),
-            "facts": [
-                {"fact_id": "f1", "important": True, "mandatory": True,
-                 "medication": "drug-a", "negation": "affirmed",
-                 "time": "tomorrow", "speaker_relation": "doctor"},
-                {"fact_id": "f2", "important": True,
-                 "medication": "drug-b", "negation": "negated",
-                 "time": "today", "speaker_relation": "nurse"},
-            ],
-            "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
-                           "type": "COMPLEMENTS"}],
-            "claims": [
-                {"claim_id": "c1", "critical": True, "supported": True,
-                 "final": True, "covered_gold_fact_ids": ["f1"]},
-                {"claim_id": "c2", "critical": False, "supported": True,
-                 "final": True, "covered_gold_fact_ids": ["f2"]},
-            ],
-            "loops": [{"loop_id": "loop-1", "resolved": False}],
-        },
-    }
+from semantic_testkit import CRITERIA, MANIFEST, _record
 
 
 def test_exact_fixture_scores_and_synthetic_labels_do_not_pass_g6():
@@ -572,7 +464,6 @@ def test_late_nonmandatory_fact_cannot_disappear_between_stages(stage):
     assert held_out["complete"] == 0 and held_out["missing"] == 1
     assert not report["gate"]["pass"]
     assert "fact_lifecycle_incomplete" in report["gate"]["reasons"]
-
 
 
 def test_lifecycle_ids_are_trimmed_like_fact_ids():

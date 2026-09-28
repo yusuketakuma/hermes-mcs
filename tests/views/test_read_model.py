@@ -9,7 +9,7 @@ import pytest
 
 import ledger as _ledger_mod
 import read_model
-from test_mcs_semantic import _ledger, _message, _patient
+from semantic_testkit import _ledger, _message, _patient
 
 SECRET = "SYNTHETIC_BODY_NEVER_IN_AGGREGATE_7x2"
 
@@ -128,10 +128,12 @@ def test_facts_and_relations_bind_evidence_ids(tmp_path):
 
 def test_actual_projection_preserves_validation_and_relation_type(tmp_path):
     from semantic_projection import project_v2_doc_legacy
-    from test_canonical_projection import _doc, _fact
+    from semantic_testkit import EV, v2_doc, v2_fact
     db = _db(tmp_path, (1,))
     try:
-        doc = _doc([_fact('f1'), _fact('f2')])
+        doc = v2_doc([v2_fact(fid, quantity='unknown', evidence_ids=['ev_1'],
+                              action='continue') for fid in ('f1', 'f2')],
+                     [EV])
         doc['relations'] = [{'left_fact_id': 'f1', 'right_fact_id': 'f2',
                              'type': 'COMPLEMENTS'}]
         _artifact(db, 'canonical_projection', 1, project_v2_doc_legacy(doc),

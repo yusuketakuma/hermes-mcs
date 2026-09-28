@@ -9,7 +9,7 @@ import mcs_requests
 import semantic
 import summary_review
 from ledger import Ledger
-from test_mcs_semantic import _message
+from semantic_testkit import _message
 
 
 def _command(cmd, project_id=1, **fields):

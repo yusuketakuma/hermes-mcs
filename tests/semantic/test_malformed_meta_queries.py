@@ -31,9 +31,9 @@ def _metas(db, ids):
 
 
 def test_reproject_and_run_due_skip_malformed_meta(tmp_path):
-    from test_canonical_drain import _canonical_cfg, _llm_v2
-    from test_canonical_projection import _drained_old_version
-    from test_semantic_v4 import _PassJev
+    from semantic_testkit import _canonical_cfg, _llm_v2
+    from semantic_testkit import _drained_old_version
+    from semantic_testkit import _PassJev
     db = _drained_old_version(tmp_path)
     try:
         scfg = semantic_config(_canonical_cfg())[0]
@@ -56,8 +56,8 @@ def test_reproject_and_run_due_skip_malformed_meta(tmp_path):
 
 @pytest.mark.parametrize("mode", ["enforce", "off"])
 def test_invalidate_projections_skips_malformed_meta(tmp_path, mode):
-    from test_canonical_drain import _canonical_cfg
-    from test_canonical_projection import _drained_old_version
+    from semantic_testkit import _canonical_cfg
+    from semantic_testkit import _drained_old_version
     db = _drained_old_version(tmp_path)
     try:
         scfg = dict(semantic_config(_canonical_cfg())[0], mode=mode)
@@ -72,7 +72,7 @@ def test_invalidate_projections_skips_malformed_meta(tmp_path, mode):
 
 def test_qc_seed_skips_malformed_meta(tmp_path):
     from extract_testkit import _hash, _ledger, _message
-    from test_extract_qc import _qc_job, _v2_artifact
+    from extract_testkit import _qc_job, _v2_artifact
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message()])
@@ -89,7 +89,7 @@ def test_qc_seed_skips_malformed_meta(tmp_path):
 
 
 def test_canonical_readiness_counts_malformed_audits_as_unknown(tmp_path):
-    from test_mcs_semantic import _cfg, _seeded
+    from semantic_testkit import _cfg, _seeded
     db = _seeded(tmp_path)
     try:
         db.artifact_add("semantic_facts_audit", "{}", project_id=1,

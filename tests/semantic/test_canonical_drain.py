@@ -14,72 +14,9 @@ import semantic_facts as sf
 from mcs_requests import payload_hash
 from semantic_policy import (KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS_V2,
                              KIND_SUMMARY)
-from test_mcs_semantic import (_FakeJev, _cfg, _ledger, _message,
-                               _patient)
-
-NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
-
-
-def _seeded_two(tmp_path):
-    """Parent + reply with DISTINCT bodies -> one job, targets {1,2}."""
-    db = _ledger(tmp_path)
-    p = _patient(db)
-    p.messages = [_message(1, body="アムロジピン5mgを継続します。")]
-    p.messages[0].replies = [
-        _message(2, parent=1, body="メトホルミン500mgが出ています。")]
-    db.save_patient(p, notify={"source": "unread"}, semantic=True)
-    return db
-
-
-def _canonical_cfg():
-    return _cfg("enforce", loop_mode="off",
-                fact_source="canonical",
-                fact_source_gate="g6-v1:test")
-
-
-def _med_fact(drug, quote, action):
-    return {"statement": quote, "kind": "medication_event",
-            "action": action, "subject_role": "patient",
-            "polarity": "affirmed", "workflow_status": "performed",
-            "importance": "T1", "evidence_quote": quote}
-
-
-def _llm_v2(prompt):
-    """Per-target v2 extraction + empty summary.  The prompt embeds the
-    member body, so the response is keyed by which drug it mentions."""
-    if "要約器" in prompt:
-        return json.dumps({"claims": [], "limitations": []},
-                          ensure_ascii=False)
-    if "アムロジピン" in prompt:
-        return json.dumps({
-            "facts": [_med_fact("アムロジピン", "アムロジピン5mgを継続",
-                                "continue")],
-            "category_presence": dict(NO_FACTS, medication="one")},
-            ensure_ascii=False)
-    if "メトホルミン" in prompt:
-        return json.dumps({
-            "facts": [_med_fact("メトホルミン", "メトホルミン500mgが出ています",
-                                "continue")],
-            "category_presence": dict(NO_FACTS, medication="one")},
-            ensure_ascii=False)
-    return json.dumps({"facts": [],
-                       "category_presence": dict(NO_FACTS)},
-                      ensure_ascii=False)
-
-
-def _preflight_jev():
-    """FakeJev answering 'present' for medication, 'absent' elsewhere —
-    preflight obligations close cleanly for the two-target corpus."""
-    choice_map = {f"has_{c}": "absent" for c in sf.MANDATORY_CATEGORIES}
-    choice_map["has_medication"] = "present"
-    return _FakeJev(choice_map=choice_map)
-
-
-def _drain(db, llm=None, jev=None):
-    return semantic.run_due(
-        db, _canonical_cfg(), {"errors": []},
-        time.monotonic() + 300,
-        jev_client=jev or _preflight_jev(), llm_fn=llm or _llm_v2)
+from semantic_testkit import (_canonical_cfg, _drain, _FakeJev, _ledger,
+                              _llm_v2, _med_fact, _message, NO_FACTS, _patient,
+                              _preflight_jev, _seeded_two)
 
 
 def _summary_doc(db, mid):

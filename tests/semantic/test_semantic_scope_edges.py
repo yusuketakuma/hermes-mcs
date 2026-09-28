@@ -6,7 +6,7 @@ import pytest
 
 import semantic
 import semantic_jev as jev
-from test_mcs_semantic import _message, _patient, _seeded, _cfg, _FakeJev, _llm
+from semantic_testkit import _message, _patient, _seeded, _cfg, _FakeJev, _llm
 
 
 def test_jev_question_ids_are_correlation_only():

@@ -7,7 +7,7 @@ import pytest
 from ledger import Ledger
 import semantic
 import semantic_observe
-from test_mcs_semantic import _cfg, _message
+from semantic_testkit import _cfg, _message
 
 
 def _pair(db, mid, cfg, status="PASS"):

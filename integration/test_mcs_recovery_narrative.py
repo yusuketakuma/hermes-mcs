@@ -61,13 +61,12 @@ import semantic_v4 as v4  # noqa: E402
 
 import test_mcs_discord as TD  # noqa: E402
 import test_mcs_slack as TS  # noqa: E402
-from test_canonical_drain import _canonical_cfg  # noqa: E402
-from test_mcs_semantic import _message, _patient  # noqa: E402
+from semantic_testkit import (_canonical_cfg, _message, _PassJev,  # noqa: E402
+                              _patient)
 from test_mcs_update import (_git, _make_repo, _mk_schema,  # noqa: E402
                              _seed_consent)
 from test_notify_slack import (SLACK, _dispatch, _intent,  # noqa: E402
                               _latest_render)
-from test_semantic_v4 import _PassJev  # noqa: E402
 
 NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
 NOW = 1_790_000_000.0
@@ -896,7 +895,7 @@ def test_failure_missing_consent_receipt_stays_held(tmp_path):
 def test_failure_eval_label_drop_means_diagnostic_not_pass(tmp_path):
     """Evaluation label dropped: Jev answers reject -> NEEDS_REVIEW
     diagnostic only, never a PASS v4 row."""
-    from test_semantic_v4 import _AuditFailJev
+    from semantic_testkit import _AuditFailJev
     tmp = Path(tmp_path)
     (tmp / "data").mkdir()
     led = _ledger.Ledger(str(tmp / "data" / "ledger.db"))

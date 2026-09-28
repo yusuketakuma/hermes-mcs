@@ -11,19 +11,18 @@ import pytest
 
 import semantic_facts as sf
 import semantic_relations as sr
+from semantic_testkit import v2_fact
 
 
 def _fact(fid, statement, *, kind="medication_event", subject="patient:1",
           action="unknown", polarity="affirmed", workflow="performed",
           event_time="unknown", evidence=()):
-    fact = {"fact_id": fid, "kind": kind, "subject": subject,
-            "actor": "sender:s1", "statement": statement,
-            "polarity": polarity, "epistemic": "asserted",
-            "workflow_status": workflow, "event_time": event_time,
-            "valid_time": "unknown",
-            "evidence_ids": list(evidence), "obligation_ids": [],
-            "importance": "T2", "provenance": "local_llm",
-            "validation_status": "verified" if evidence else "unverified"}
+    fact = v2_fact(fid, kind=kind, subject=subject, statement=statement,
+                   polarity=polarity, workflow_status=workflow,
+                   event_time=event_time, evidence_ids=list(evidence),
+                   importance="T2",
+                   validation_status="verified" if evidence
+                   else "unverified")
     if kind == "medication_event":
         fact["action"] = action
     return fact

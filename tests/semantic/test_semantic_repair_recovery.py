@@ -3,7 +3,7 @@ import json
 import time
 
 import semantic
-from test_mcs_semantic import _FakeJev, _cfg, _llm, _seeded
+from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
 def test_repair_attempt_is_reserved_before_model_call(tmp_path):

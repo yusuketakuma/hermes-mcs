@@ -4,66 +4,17 @@ Covers: summary counts (evaluated/unevaluated/verdicts/pending), the
 flagged list (non-MATCH items, urgency mismatch, unevaluated), and the
 per-message detail with staleness marking.
 """
-import json
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import pytest
 
-import extract_llm
-import ledger
-import mcs_adapter
-import mcs_view
 import semantic_qc
-from extract_testkit import _hash, _ledger
-
-
-def _message(mid, project_id=1):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=project_id, parent_id=None,
-        sender_id=1, sender_name="sender", sender_type="user",
-        profession="", organization="",
-        posted_at=datetime.now(timezone.utc).isoformat(),
-        body_html=f"本文{mid}", body_state="full", is_unread=False,
-        reply_count=0)
-
-
-def _v2(db, mid):
-    db.artifact_add(
-        "extract_llm", json.dumps({"meds": [], "urgency": "routine"}),
-        project_id=1, message_id=mid,
-        meta={"hash": _hash(db, mid),
-              "extract_version": extract_llm.EXTRACT_VERSION})
-
-
-def _qc(db, mid, content, chash=None):
-    source_id = db.db.execute(
-        "SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
-        "AND message_id=?", (mid,)).fetchone()[0]
-    db.artifact_add(
-        "extract_qc", json.dumps(content), project_id=1, message_id=mid,
-        model="jev", meta={"hash": chash or _hash(db, mid),
-                           "extract_version": extract_llm.EXTRACT_VERSION,
-                           "source_artifact_id": source_id,
-                           "qc": content.get("qc")})
-
-
-def _view(db, tmp_path):
-    snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
-                                   str(tmp_path / "snap"))
-    return mcs_view.View(snap)
-
-
-def _seeded(tmp_path):
-    db = _ledger(tmp_path)
-    db.save_messages([_message(i) for i in (1, 2, 3, 4)])
-    for i in (1, 2, 3, 4):
-        _v2(db, i)
-    return db
+from extract_testkit import _ledger
+from views_testkit import _message, _qc, _seeded, _v2, _view
 
 
 def test_summary_and_flagged_list(tmp_path):

@@ -9,43 +9,22 @@ import json
 import pytest
 
 import semantic_projection as projection
-import semantic_facts as sf
 import mcs_requests as requests
 from mcs_queries import current_fact_pred
-from test_mcs_semantic import _seeded
+from semantic_testkit import (EV, _drained_old_version, _kind_rows, _seeded,
+                              v2_doc, v2_fact)
 
 
 def _fact(fid, kind="medication_event", verified=True, **kw):
-    fact = {"fact_id": fid, "kind": kind, "subject": "patient:1",
-            "actor": "sender:s1", "statement": "アムロジピン継続",
-            "polarity": "affirmed", "epistemic": "asserted",
-            "workflow_status": "performed", "event_time": "unknown",
-            "valid_time": "unknown", "quantity": "unknown",
-            "evidence_ids": ["ev_1"], "obligation_ids": [],
-            "importance": "T1", "provenance": "local_llm",
+    base = {"kind": kind, "quantity": "unknown", "evidence_ids": ["ev_1"],
             "validation_status": "verified" if verified else "unverified"}
     if kind == "medication_event":
-        fact["action"] = "continue"
-    fact.update(kw)
-    return fact
-
-
-EV = {"evidence_id": "ev_1", "message_id": "m1", "revision": "r1",
-      "start": 0, "end": 9, "quote": "アムロジピン", "atom_id": "a1"}
+        base["action"] = "continue"
+    return v2_fact(fid, **{**base, **kw})
 
 
 def _doc(facts):
-    return {"version": sf.CONTRACT_VERSION,
-            "source": {"message_id": "m1", "revision": "r1",
-                       "content_hash": "h", "body_codepoints": 20,
-                       "content_quality": "full",
-                       "attachments_complete": True,
-                       "source_fingerprint": "sf_x"},
-            "atoms": [], "chunks": [], "obligations": [],
-            "evidence": [EV], "facts": list(facts), "relations": [],
-            "coverage": {"category_counts": {},
-                         "open_obligation_ids": [], "limitations": [],
-                         "status": "complete"}}
+    return v2_doc(facts, [EV])
 
 
 def test_projection_maps_verified_medication_fact():
@@ -449,7 +428,7 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
     import semantic
     import semantic_llm
     from semantic_store import invalidate_projections
-    from test_mcs_semantic import _cfg
+    from semantic_testkit import _cfg
     db = _seeded(tmp_path)
     try:
         scfg, _ = semantic.semantic_config(_cfg(
@@ -502,8 +481,8 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
     import semantic_v4 as v4
     from mcs_queries import current_projection_id, current_v4_id
     from semantic_policy import policy_fingerprint, semantic_config
-    from test_canonical_drain import _canonical_cfg, _llm_v2, _seeded_two
-    from test_semantic_v4 import _PassJev
+    from semantic_testkit import _canonical_cfg, _llm_v2, _seeded_two
+    from semantic_testkit import _PassJev
 
     def rows(kind):
         return db.db.execute(
@@ -565,41 +544,6 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         db.close()
 
 
-def _drained_old_version(tmp_path):
-    """Two canonical targets drained to PASS, then every projection/v4
-    row rewritten as if minted by the previous projection version with
-    older (sentinel) content."""
-    import time
-    import semantic
-    import semantic_v4 as v4
-    from test_canonical_drain import _canonical_cfg, _llm_v2, _seeded_two
-    from test_semantic_v4 import _PassJev
-    db = _seeded_two(tmp_path)
-    semantic.run_due(db, _canonical_cfg(), {"errors": []},
-                     time.monotonic() + 300, jev_client=_PassJev(),
-                     llm_fn=_llm_v2)
-    for kind in ("canonical_projection", v4.KIND_V4):
-        assert len(_kind_rows(db, kind)) == 2
-    db.db.execute(
-        "UPDATE artifacts SET content=?, meta=json_remove(meta,"
-        "'$.projection_version') WHERE kind IN (?,?)",
-        (json.dumps({"meds": [{"name": "OLD"}]}), "canonical_projection",
-         v4.KIND_V4))
-    db.artifact_add("patient_rollup", "{}", project_id=1)
-    db.db.commit()
-    return db
-
-
-def _kind_rows(db, kind, mid=None):
-    q = ("SELECT artifact_id,message_id,content,meta,model FROM artifacts "
-         "WHERE kind=?")
-    args = [kind]
-    if mid is not None:
-        q += " AND message_id=?"
-        args.append(mid)
-    return db.db.execute(q + " ORDER BY artifact_id", args).fetchall()
-
-
 def _current_ids(db, mid):
     from mcs_queries import current_projection_id, current_v4_id
     return db.db.execute(
@@ -611,7 +555,7 @@ def test_reproject_supersedes_old_version_rows_bounded_and_idempotent(
         tmp_path):
     import semantic_v4 as v4
     from semantic_policy import KIND_FACTS_V2, semantic_config
-    from test_canonical_drain import _canonical_cfg
+    from semantic_testkit import _canonical_cfg
     db = _drained_old_version(tmp_path)
     try:
         scfg = semantic_config(_canonical_cfg())[0]
@@ -668,7 +612,7 @@ def test_reproject_never_resurrects_or_guesses(tmp_path):
     import semantic_v4 as v4
     from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, \
         semantic_config
-    from test_canonical_drain import _canonical_cfg
+    from semantic_testkit import _canonical_cfg
     db = _drained_old_version(tmp_path)
     try:
         scfg = semantic_config(_canonical_cfg())[0]
@@ -738,7 +682,7 @@ def test_run_due_reprojects_old_version_rows(tmp_path):
     import time
     import semantic
     import semantic_v4 as v4
-    from test_canonical_drain import _canonical_cfg
+    from semantic_testkit import _canonical_cfg
 
     def no_llm(prompt):
         raise AssertionError("re-projection must not call the model")
@@ -766,8 +710,8 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
         tmp_path, monkeypatch, fact_source, change):
     import semantic
     import semantic_v4 as v4
-    from test_canonical_drain import _canonical_cfg
-    from test_semantic_v4 import _PassJev
+    from semantic_testkit import _canonical_cfg
+    from semantic_testkit import _PassJev
 
     db = _drained_old_version(tmp_path)
     try:
@@ -880,7 +824,7 @@ def test_invalidation_reads_model_config_once_per_active_scan(
         tmp_path, monkeypatch, mode, fact_source):
     import semantic
     from semantic_store import invalidate_projections
-    from test_canonical_drain import _canonical_cfg
+    from semantic_testkit import _canonical_cfg
 
     db = _seeded(tmp_path)
     try:

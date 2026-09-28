@@ -4,14 +4,8 @@ import time
 
 import semantic
 import semantic_loops
-from test_mcs_semantic import _FakeJev, _cfg, _llm, _message, _seeded
-
-
-def _pending_fact(member):
-    facts, complete, _ = semantic.extract_facts(_llm, member)
-    assert complete
-    facts[0]["kind"] = "pending_item"
-    return facts
+from semantic_testkit import (_cfg, _FakeJev, _message, _pending_fact,
+                              _seeded)
 
 
 def test_relation_rechecks_edited_trigger_and_excludes_other_thread(tmp_path):

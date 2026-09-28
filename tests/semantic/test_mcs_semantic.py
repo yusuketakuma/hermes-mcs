@@ -39,100 +39,14 @@ import mcs_adapter
 import mcs_view
 import semantic
 import semantic_jev as jev
-
-BODY = "明日からカロナール300mgを1日3回に変更します。確認お願いします。"
-
-
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
-
-
-def _message(mid=1, pid=1, parent=None, body=BODY, unread=True):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=pid, parent_id=parent,
-        sender_id=1, sender_name="sender", sender_type="user",
-        profession="", organization="",
-        posted_at="2026-09-19T00:00:00+09:00",
-        body_html=f"<p>{body}</p>", body_state="full",
-        is_unread=unread, reply_count=0)
-
-
-def _patient(db, pid=1):
-    p = SimpleNamespace(project_id=pid, project_type="medical",
-                        patient_name="テスト患者", disease="",
-                        station_name="", url="https://www.medical-care."
-                        "net/projects/medical/%d" % pid,
-                        fetch_state="complete", fetch_reason=None,
-                        messages=[])
-    db.save_patient(p)
-    return p
-
-
-def _cfg(mode="shadow", **kw):
-    return {"semantic": {"mode": mode,
-                         "summary_mode": kw.pop("summary_mode", mode),
-                         "loop_mode": kw.pop("loop_mode", mode),
-                         "threshold_mode": "calibrated",
-                         "calibration_version": "synthetic-test-v1",
-                         "daily_request_budget": kw.pop("budget", 50),
-                         "project_ids": kw.pop("project_ids", None),
-                         **kw}}
+from semantic_testkit import (BODY, _FakeJev, _cfg, _ledger, _llm, _message,
+                              _patient, _seeded)
 
 
 def _cfg_path(tmp_path, mode):
     p = tmp_path / "cfg.json"
     p.write_text(json.dumps(_cfg(mode)))
     return str(p)
-
-
-class _FakeJev:
-    """Deterministic evaluate(): noul=0.9, choice=first option (or the
-    `choice` override / per-qid `choice_map`)."""
-    def __init__(self, noul=0.9, choice_map=None, error=None, choice=None):
-        self.requests_made = 0
-        self.noul = noul
-        self.choice_map = choice_map or {}
-        self.error = error
-        self.choice = choice
-        self.calls = []
-
-    def evaluate(self, state, questions, deadline):
-        self.requests_made += 1
-        self.calls.append(sorted(questions))
-        if self.error:
-            raise self.error
-        out = {}
-        for qid, q in questions.items():
-            if q.get("type") == "choice":
-                opts = list(q.get("criteria") or {})
-                pick = self.choice or self.choice_map.get(
-                    qid, "planned" if qid == "status"
-                    else opts[0] if opts else None)
-                out[qid] = {"type": "choice", "choice": pick,
-                            "confidence": 0.9,
-                            "probabilities": {o: 1.0 / len(opts)
-                                             for o in opts}}
-            else:
-                out[qid] = {"type": "noul", "noul": self.noul}
-        return {"answers": out, "model": jev.JEV_MODEL}
-
-
-def _llm(prompt):
-    if "要約器" in prompt:
-        return json.dumps({"claims": [{
-            "section": "medication",
-            "text": "カロナールを300mg×3回に変更する記載がある",
-            "claim_kind": "reported_fact", "fact_refs": [0],
-            "status": "planned", "polarity": "affirmed"}],
-            "limitations": ["採血結果の記載なし"]})
-    if "事実候補抽出器" in prompt:
-        return json.dumps({"facts": [{
-            "statement": "用量変更の記載がある",
-            "kind": "medication_event",
-            "status": "planned", "polarity": "affirmed",
-            "time_text": "明日から", "quantity": "300mg",
-            "evidence_quote": "カロナール300mgを1日3回に変更"}]})
-    return None
 
 
 # ---------- Jev client contract ----------
@@ -295,16 +209,6 @@ def test_config_fail_closed():
 
 
 # ---------- bundle / fingerprint ----------
-
-def _seeded(tmp_path):
-    """Patient + unread parent + reply, saved through the notify path
-    with semantic=True — produces one pending kind='semantic' job."""
-    db = _ledger(tmp_path)
-    p = _patient(db)
-    p.messages = [_message(1)]
-    p.messages[0].replies = [_message(2, parent=1)]
-    db.save_patient(p, notify={"source": "unread"}, semantic=True)
-    return db
 
 
 def test_ingest_seeds_semantic_job(tmp_path):

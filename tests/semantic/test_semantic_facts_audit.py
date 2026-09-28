@@ -8,33 +8,12 @@ import semantic_audit as audit
 import pytest
 
 from semantic_runtime import RuntimeBudget, RuntimeOff, RuntimeStale
+from semantic_testkit import v2_doc, v2_fact
 
 
-def _doc(facts, evidence=()):
-    return {"version": "semantic-facts/v2",
-            "source": {"message_id": "m1", "revision": "r1",
-                       "content_hash": "h", "body_codepoints": 20,
-                       "content_quality": "full",
-                       "attachments_complete": True,
-                       "source_fingerprint": "sf_x"},
-            "atoms": [], "chunks": [], "obligations": [],
-            "evidence": list(evidence), "facts": facts,
-            "relations": [],
-            "coverage": {"category_counts": {},
-                         "open_obligation_ids": [], "limitations": [],
-                         "status": "complete"}}
-
-
-def _fact(fid, verified=True, evidence_ids=("ev_1",)):
-    return {"fact_id": fid, "kind": "medication_event",
-            "subject": "patient:1", "actor": "sender:s1",
-            "statement": "アムロジピン継続", "polarity": "affirmed",
-            "epistemic": "asserted", "workflow_status": "performed",
-            "event_time": "unknown", "valid_time": "unknown",
-            "evidence_ids": list(evidence_ids), "obligation_ids": [],
-            "importance": "T1", "provenance": "local_llm",
-            "validation_status": "verified" if verified else "unverified",
-            "action": "continue"}
+def _fact(fid, **kw):
+    return v2_fact(fid, **{"evidence_ids": ["ev_1"], "action": "continue",
+                           **kw})
 
 
 EV = {"evidence_id": "ev_1", "message_id": "m1", "revision": "r1",
@@ -66,7 +45,7 @@ class _Jev:
 
 
 def test_audit_passes_when_all_supported():
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     result = audit.audit_facts_v2(_Jev(), doc, "アムロジピンを継続。",
                                   deadline=10**9)
     assert result["evaluated"] and result["status"] == "PASS"
@@ -74,7 +53,7 @@ def test_audit_passes_when_all_supported():
 
 
 def test_audit_flags_contradicted_and_ambiguous_facts():
-    doc = _doc([_fact("fact_a"), _fact("fact_b")], [EV])
+    doc = v2_doc([_fact("fact_a"), _fact("fact_b")], [EV])
     jev = _Jev({"fact_a": "contradicts", "fact_b": "ambiguous"})
     result = audit.audit_facts_v2(jev, doc, "source", deadline=10**9)
     assert result["evaluated"] and result["status"] == "NEEDS_REVIEW"
@@ -83,7 +62,7 @@ def test_audit_flags_contradicted_and_ambiguous_facts():
 
 
 def test_unverified_fact_finding_without_jev_verdict():
-    doc = _doc([_fact("fact_a", verified=False, evidence_ids=[])], [])
+    doc = v2_doc([_fact("fact_a", validation_status="unverified", evidence_ids=[])], [])
     result = audit.audit_facts_v2(_Jev(), doc, "src", deadline=10**9)
     assert any(f["code"] == "unverified_facts"
                for f in result["findings"])
@@ -91,7 +70,7 @@ def test_unverified_fact_finding_without_jev_verdict():
 
 
 def test_no_jev_client_is_incomplete_not_pass():
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     result = audit.audit_facts_v2(None, doc, "src", deadline=10**9)
     assert result["status"] == "INCOMPLETE"
     assert not result["evaluated"]
@@ -100,7 +79,7 @@ def test_no_jev_client_is_incomplete_not_pass():
 
 
 def test_jev_failure_mid_audit_is_incomplete():
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     result = audit.audit_facts_v2(_Jev(fail=True), doc, "src",
                                   deadline=10**9)
     assert result["status"] == "INCOMPLETE"
@@ -108,7 +87,7 @@ def test_jev_failure_mid_audit_is_incomplete():
 
 
 def test_coverage_missing_is_needs_review():
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     jev = _Jev(coverage="missing")
     result = audit.audit_facts_v2(jev, doc, "src", deadline=10**9)
     assert result["evaluated"]
@@ -121,7 +100,7 @@ def test_open_obligations_block_pass_even_when_facts_supported():
     """U06-F01/F05: every remaining fact supported plus a clean coverage
     Choice is still NEEDS_REVIEW while the doc carries open
     obligations — never PASS over an incomplete canonical doc."""
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     doc["coverage"].update(open_obligation_ids=["obl_x"],
                            status="incomplete")
     result = audit.audit_facts_v2(_Jev(), doc, "アムロジピンを継続。",
@@ -142,7 +121,7 @@ def test_audit_target_carries_structured_fields():
                                      for c in state["context"]]
             return super().evaluate(state, questions, deadline)
 
-    doc = _doc([_fact("fact_a")], [EV])
+    doc = v2_doc([_fact("fact_a")], [EV])
     audit.audit_facts_v2(Spy(), doc, "アムロジピンを継続。",
                          deadline=10**9)
     assert "polarity:affirmed" in seen["target"]
@@ -162,7 +141,7 @@ def test_invalid_fact_confidence_never_passes(confidence):
             if 'fact_a' in result['answers']:
                 result['answers']['fact_a']['confidence'] = confidence
             return result
-    result = audit.audit_facts_v2(Invalid(), _doc([_fact('fact_a')], [EV]),
+    result = audit.audit_facts_v2(Invalid(), v2_doc([_fact('fact_a')], [EV]),
                                   'synthetic', deadline=10**9)
     assert not result['evaluated'] and result['status'] == 'INCOMPLETE'
 
@@ -173,7 +152,7 @@ def test_fact_audit_preserves_worker_control_signals(signal):
         def evaluate(self, state, questions, deadline):
             raise signal('synthetic boundary')
     with pytest.raises(signal):
-        audit.audit_facts_v2(Interrupted(), _doc([_fact('fact_a')], [EV]),
+        audit.audit_facts_v2(Interrupted(), v2_doc([_fact('fact_a')], [EV]),
                              'synthetic', deadline=10**9)
 
 
@@ -185,7 +164,7 @@ def test_invalid_threshold_is_rejected_before_evaluation(threshold):
     client.evaluate = lambda *args: calls.append(args)
     coverage = audit.evaluate_source_fact_coverage(
         client, 'synthetic', [], deadline=10**9, match_threshold=threshold)
-    facts = audit.audit_facts_v2(client, _doc([_fact('fact_a')], [EV]),
+    facts = audit.audit_facts_v2(client, v2_doc([_fact('fact_a')], [EV]),
                                 'synthetic', deadline=10**9,
                                 match_threshold=threshold)
     assert not coverage['evaluated'] and not facts['evaluated']
