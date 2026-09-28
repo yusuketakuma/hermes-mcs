@@ -266,3 +266,87 @@ def test_main_stays_silent_on_ok_to_ok(tmp_path, capsys):
     assert health_watch.main(["--home", str(tmp_path), "--now",
                               str(_local_time(27, 15, 1))]) == 0
     assert capsys.readouterr().out == ""           # ok->ok prints nothing
+
+
+def test_classify_evidence_at_follows_the_verdict(tmp_path):
+    stale_unread = _health_file(tmp_path, {"overall": "ok", "at": 5000,
+                                           "unread_at": 50})
+    r = health_watch.classify_health(str(stale_unread), now=5000.0,
+                                     deadline_s=900)
+    assert r["status"] == "stale"
+    assert r["evidence_at"] == 50 and r["health_at"] == 5000
+    # unread newer than at: staleness is the health write, not unread
+    stale_at = _health_file(tmp_path, {"overall": "ok", "at": 50,
+                                       "unread_at": 800})
+    r = health_watch.classify_health(str(stale_at), now=1000.0,
+                                     deadline_s=900)
+    assert r["status"] == "stale" and r["evidence_at"] == 50
+    fresh = _health_file(tmp_path, {"overall": "degraded", "at": 990,
+                                    "unread_at": 900})
+    r = health_watch.classify_health(str(fresh), now=1000.0, deadline_s=900)
+    assert r["status"] == "degraded" and r["evidence_at"] == 990
+
+
+def test_jobs_only_refresh_does_not_realert_stale_unread(tmp_path):
+    # fixed unread_at; health_at advances every 30 min like --jobs-only
+    unread_at = 50.0
+    t = 1000.0
+    _health_file(tmp_path, {"overall": "ok", "at": t,
+                            "unread_at": unread_at})
+    first = _eval(tmp_path, t)
+    assert first["status"] == "stale"
+    assert first["alert"] is True
+
+    _health_file(tmp_path, {"overall": "ok", "at": t + 1800,
+                            "unread_at": unread_at})
+    second = _eval(tmp_path, t + 1800)
+    assert second["status"] == "stale"
+    assert second["alert"] is False
+    saved = json.loads((tmp_path / "data" / "health_watch.json").read_text())
+    assert saved["last"]["evidence_at"] == unread_at
+    assert saved["last"]["health_at"] == t + 1800
+
+    _health_file(tmp_path, {"overall": "ok", "at": t + 3600,
+                            "unread_at": unread_at})
+    third = _eval(tmp_path, t + 3600)
+    assert third["status"] == "stale"
+    assert third["alert"] is True
+    assert first["evidence_at"] == unread_at
+    assert second["evidence_at"] == unread_at
+    assert third["evidence_at"] == unread_at
+
+
+def test_stale_unread_to_other_status_alerts_immediately(tmp_path):
+    t = 1000.0
+    _health_file(tmp_path, {"overall": "ok", "at": t, "unread_at": 50})
+    assert _eval(tmp_path, t)["alert"] is True
+    _health_file(tmp_path, {"overall": "failed", "at": t + 100,
+                            "unread_at": t + 100})
+    r = _eval(tmp_path, t + 110)
+    assert r["status"] == "failed"
+    assert r["alert"] is True
+
+
+def test_old_state_without_evidence_at_still_dedups(tmp_path):
+    _health_file(tmp_path, {"overall": "ok", "at": 50})
+    state = tmp_path / "data" / "health_watch.json"
+    state.write_text(json.dumps({
+        "last": {"status": "stale", "health_at": 50},
+        "alerted_at": 1000.0,
+    }))
+    r = _eval(tmp_path, 1100.0)
+    assert r["status"] == "stale"
+    assert r["alert"] is False
+
+
+def test_non_numeric_state_timestamps_do_not_stop_watcher(tmp_path):
+    _health_file(tmp_path, {"overall": "degraded", "at": 990})
+    state = tmp_path / "data" / "health_watch.json"
+    state.write_text(json.dumps({
+        "last": {"status": "degraded", "health_at": "900",
+                 "evidence_at": "nope"},
+        "alerted_at": "yesterday",
+    }))
+    r = _eval(tmp_path, 1000.0)
+    assert r["status"] == "degraded"
+    assert r["alert"] is True
