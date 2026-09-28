@@ -274,7 +274,8 @@ completedの各human_labels[A/B/C]には自由記述だけでなく評価器のl
 
 ```sh
 python3 mcs/semantic/semantic_blind.py --input audited-records-draft.jsonl \
-  --lifecycle-snapshot evaluation.db --output-dir new-lifecycle
+  --lifecycle-snapshot evaluation.db --config sent-config.json --output-dir new-lifecycle
+# --config は通知送信時のconfig.json。無いと部分配送の受領は証明できず delivered を付与しない
 # new-lifecycle/candidate-records.jsonl のcandidateをcomparison.jsonlのevaluation_candidateと
 # --evaluation-recordsの入力に使う
 python3 mcs/semantic/semantic_blind.py --input comparison.jsonl --output-dir new-packet

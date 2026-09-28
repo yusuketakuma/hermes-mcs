@@ -372,7 +372,12 @@ def main(argv=None) -> int:
     parser.add_argument("--lifecycle-snapshot",
                         help="read-only SQLite; attach observed verified/rendered/delivered "
                              "fact IDs to candidate-records naming artifact_ids.final_id")
+    parser.add_argument("--config",
+                        help="config.json the snapshot's notices were sent under; without it "
+                             "a partial delivery receipt is unprovable")
     args = parser.parse_args(argv)
+    if args.config and not args.lifecycle_snapshot:
+        parser.error("config only applies to lifecycle snapshot")
     merge_options = (args.evaluation_records, args.manifest, args.method)
     if any(merge_options) and (not all(merge_options) or not args.unblind_key):
         parser.error("label merge requires evaluation-records, manifest, method and unblind-key")
@@ -390,9 +395,13 @@ def main(argv=None) -> int:
             from extract_llm import llm_extract
             records = snapshot_records(args.snapshot, records, llm_extract)
         if args.lifecycle_snapshot:
+            from mcs_util import load_config
             from semantic_lifecycle import attach_lifecycle
+            # the send-time target comes only from the supplied config,
+            # never from this host's config file
+            cfg = load_config(args.config) if args.config else None
             files = (("candidate-records.jsonl",
-                      attach_lifecycle(args.lifecycle_snapshot, records)),)
+                      attach_lifecycle(args.lifecycle_snapshot, records, cfg)),)
         elif args.evaluation_records:
             from semantic_evaluation import load_json
             files = (("evaluation.jsonl", merge_labels(
