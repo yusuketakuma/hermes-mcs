@@ -206,7 +206,7 @@ def med_is_patient_current(med) -> bool:
     filters (med_change_no_followup / transition co-occurrence)."""
     return isinstance(med, dict) \
         and not med.get("negated") \
-        and not med.get("unverified") \
+        and not item_unverified(med) \
         and med.get("subject", "patient") == "patient" \
         and med.get("status", "current") != "past"
 
@@ -215,13 +215,18 @@ def med_is_patient_current(med) -> bool:
 # json_each(a.content,'$.meds') — the alias `je` is part of the
 # contract. `IS NOT 1` matches `not med.get("negated")` because
 # _validate admits only strict booleans (JSON true -> SQLite 1);
-# absent keys on pre-v2 rows read as NULL and pass.
+# absent keys on pre-v2 rows read as NULL and pass. ``unverified`` is
+# checked with ITEM_CONFIRMED_SQL instead, the fail-closed twin of
+# item_unverified.
 # Raw JSON strings from json_each are not JSON documents. Guard at the
 # operand so safety does not depend on SQLite predicate evaluation order.
 JSON_OBJECT_SQL = "CASE WHEN je.type='object' THEN je.value ELSE '{}' END"
+# SQL twin of ``not item_unverified(item)``: missing or JSON false only.
+ITEM_CONFIRMED_SQL = (f"COALESCE(json_type({JSON_OBJECT_SQL},'$.unverified'),"
+                      "'false')='false'")
 MED_PATIENT_CURRENT_SQL = (
     f"json_extract({JSON_OBJECT_SQL},'$.negated') IS NOT 1 "
-    f"AND json_extract({JSON_OBJECT_SQL},'$.unverified') IS NOT 1 "
+    f"AND {ITEM_CONFIRMED_SQL} "
     f"AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.subject'),"
     "'patient')='patient' "
     f"AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.status'),"
@@ -246,9 +251,10 @@ def med_capability_evidence(ev) -> bool:
                                        for p in MED_CAPABILITY_PATTERNS)
 
 
-def request_unverified(r: dict) -> bool:
-    """A request reads as confirmed only when its ``unverified`` flag is
-    missing or literally False — any other value fails closed."""
+def item_unverified(r: dict) -> bool:
+    """An extracted item (request/symptom/med) reads as confirmed only when
+    its ``unverified`` flag is missing (pre-flag and rule rows) or
+    literally False — any other value fails closed."""
     return r.get("unverified", False) is not False
 
 

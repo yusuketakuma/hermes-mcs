@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from ledger import Ledger
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
-                         med_is_patient_current, request_unverified)
+                         med_is_patient_current, item_unverified)
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -149,7 +149,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         # readers; any flag other than a literal False fails closed
         requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
                          "at": m["posted_at"], "mid": m["message_id"],
-                         "unverified": request_unverified(rq)}
+                         "unverified": item_unverified(rq)}
                         for rq in _dicts(lm.get("requests")))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
@@ -265,7 +265,7 @@ def _med_states(m, v1: dict, lm: dict, med_state: dict):
             continue
         if name in med_state:
             continue  # newest mention already decided this name
-        if x.get("unverified"):
+        if item_unverified(x):
             med_state[name] = ("unverified", x, m["posted_at"])
         elif x.get("action") == "stop" or x.get("negated") \
                 or x.get("status") == "past":
@@ -302,7 +302,8 @@ def _symptom_ts(m, v1: dict, lm: dict, ts,
         t = s.get("text")
         if not isinstance(t, str) or not t:
             continue
-        if s.get("subject") in ("family", "other") or s.get("unverified"):
+        if s.get("subject") in ("family", "other") \
+                or item_unverified(s):
             continue
         # LLM polarity: a negation newer than a positive mention
         # RESOLVES the symptom — it must cancel v1/rule positives,
