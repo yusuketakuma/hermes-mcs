@@ -40,6 +40,30 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
     return _content_dict(r)
 
 
+def fact_ready_ids(db, mids: list) -> set:
+    """mids that carry a CURRENT fact artifact (extract_llm /
+    canonical_projection / semantic_facts_v4) under the same
+    freshness/shadow predicate latest_fact_artifact applies — batched
+    so callers can fingerprint "structured block exists" without
+    one query per message."""
+    ids = [int(m) for m in mids if isinstance(m, int) or
+           (isinstance(m, str) and m.isdigit())]
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    return {r["message_id"] for r in db.execute(
+        "SELECT DISTINCT a.message_id FROM artifacts a "
+        "JOIN messages m ON m.message_id=a.message_id "
+        f"WHERE a.message_id IN ({marks}) "
+        "AND a.kind IN ('extract_llm','canonical_projection',"
+        "'semantic_facts_v4') "
+        "AND m.body_state IS NOT 'deleted' "
+        "AND CASE WHEN json_valid(a.content) THEN "
+        "json_type(a.content)='object' ELSE 0 END "
+        f"{current_fact_pred('a', 'm')}",
+        tuple(ids)).fetchall()}
+
+
 def latest_fact_artifact(db, mid: int) -> dict | None:
     """Newest usable fact artifact for a message — a hash-current
     ``canonical_projection`` shadows ``extract_llm`` (the same
