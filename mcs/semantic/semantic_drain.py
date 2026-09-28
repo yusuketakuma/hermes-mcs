@@ -874,11 +874,17 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
-                summary2 = summarize(
-                    llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                    feedback=[f.get("code", "") + " " +
-                              f.get("statement", f.get("claim", ""))
-                              for f in code_f + jev_f])
+                try:
+                    summary2 = summarize(
+                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                        feedback=[f.get("code", "") + " " +
+                                  f.get("statement", f.get("claim", ""))
+                                  for f in code_f + jev_f])
+                except runtime.LLMNotSent:
+                    # same outcome as an unavailable repair (the one-shot
+                    # reservation is already durable) — never let it
+                    # discard sibling targets audited in this pass
+                    summary2 = None
                 if summary2 is not None:
                     summary = summary2
                     summary["_facts"] = facts
