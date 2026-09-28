@@ -20,6 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+from contextlib import suppress
 
 import bounded_http
 
@@ -185,7 +186,9 @@ def admitted_chat(client_route: str, prompt: str, *,
                     break
                 time.sleep(0.05)
         except BaseException:
-            broker.cancel(pid)
+            # never let a failing cancel mask the original interruption
+            with suppress(Exception):
+                broker.cancel(pid)
             raise
         if state == "admitted":
             acq = {"admitted": True, "permit_id": pid,

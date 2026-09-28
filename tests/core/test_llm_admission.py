@@ -692,3 +692,22 @@ def test_setup_gate_blocks_broker_missing_mcs_routes(
         if live is not None:
             live.close()
     assert any("mcs.extract" in e for e in errors)
+
+
+def test_interrupted_rt_wait_is_not_masked_by_a_failing_cancel(
+        admitted_env, monkeypatch):
+    import local_llm
+    b = _live_broker(admitted_env)
+    bg = b.acquire("mcs.extract", "BACKLOG")
+    assert b.sent(bg["permit_id"])["sent"]
+
+    def interrupted(_pid):
+        raise KeyboardInterrupt()
+
+    def broken_cancel(_pid):
+        raise RuntimeError("synthetic cancel failure")
+
+    monkeypatch.setattr(b, "poll", interrupted)
+    monkeypatch.setattr(b, "cancel", broken_cancel)
+    with pytest.raises(KeyboardInterrupt):
+        local_llm.admitted_chat("gbrain.query", "p", wait_s=1)

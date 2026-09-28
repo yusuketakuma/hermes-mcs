@@ -203,14 +203,39 @@ LOCK_WAIT_S = 150
 LOCK_POLL_S = 0.2
 
 
+_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _code_stamp() -> int:
+    """Newest mtime of the mcs/ sources — changes when an update merges."""
+    newest = 0
+    for base, _dirs, files in os.walk(_MCS_ROOT):
+        for name in files:
+            if name.endswith(".py"):
+                with suppress(OSError):
+                    newest = max(newest, os.stat(
+                        os.path.join(base, name)).st_mtime_ns)
+    return newest
+
+
+_CODE_STAMP = _code_stamp()
+
+
 def _wait_run_lock(wait_s: float) -> int | None:
     """Poll the run lock until ``wait_s`` elapses — short polls so a
-    holder that releases between batches is won, not missed."""
+    holder that releases between batches is won, not missed. A lock won
+    right after an updater released it is given back: this process
+    loaded the OLD code before waiting, and running it (with modules
+    imported later from the new tree) would mix generations."""
     until = time.monotonic() + wait_s
     while time.monotonic() < until:
         time.sleep(LOCK_POLL_S)
         fd = acquire_run_lock(LOCKFILE)
         if fd is not None:
+            marker = os.path.join(HOME, "data", "update_in_progress.marker")
+            if os.path.exists(marker) or _code_stamp() != _CODE_STAMP:
+                os.close(fd)
+                return None
             return fd
     return None
 

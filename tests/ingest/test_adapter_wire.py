@@ -1130,3 +1130,12 @@ def test_403_with_failing_session_probe_stays_expiry(monkeypatch):
     assert error.value.status == 403
     # the probe itself never recurses into another probe
     assert len(calls) == 2
+
+
+def test_403_with_unreachable_session_probe_stays_expiry(monkeypatch):
+    """A probe that itself fails must not replace the 403's expiry
+    classification with its own network error."""
+    adapter, calls = _status_adapter(
+        monkeypatch, {"/users/self/count": 503, "/projects/2/messages": 403})
+    with pytest.raises(mcs_adapter.SessionExpired):
+        adapter._request("GET", "/projects/2/messages", retries=0)
