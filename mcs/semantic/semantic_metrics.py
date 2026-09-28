@@ -70,11 +70,15 @@ def current_quality(ledger, cfg: dict | None) -> dict:
         # Disabled coverage is not a processing backlog.
         out.update(complete=None, incomplete=None)
         return out
+    # the fingerprint binds the local model; resolve it from the
+    # supplied config, never from the host's config file
+    import semantic
+    local_model = semantic.llm_model(cfg)
     last_key, bundle, members = None, None, {}
     for row in rows:
         key = row["project_id"], row["root_id"]
         if key != last_key:
-            bundle = thread_bundle(ledger, *key)
+            bundle = thread_bundle(ledger, *key, local_model=local_model)
             members = ({m["message_id"]: m for m in bundle["members"]}
                        if bundle else {})
             last_key = key

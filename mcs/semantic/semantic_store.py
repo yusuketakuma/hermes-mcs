@@ -33,19 +33,25 @@ def _member(row) -> dict:
     }
 
 
-def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
+def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
+                       local_model: str | None = None) -> str:
     """Content+context revision fingerprint: any body edit, context
     change, model/registry/schema bump invalidates prior results
-    (INV-15). Canonical JSON — never a lossy string concat."""
+    (INV-15). Canonical JSON — never a lossy string concat.
+    ``local_model`` defaults to the host-configured local model; a
+    snapshot reader passes the one resolved from its supplied config
+    so it never opens host configuration implicitly."""
     import semantic
     import semantic_llm
+    if local_model is None:
+        local_model = semantic.llm_model()
     return payload_hash({
         # Target roles are selection metadata; artifacts are selected per
         # target ID. Everything used to interpret the source is versioned.
         "members": sorted(({k: v for k, v in m.items() if k != "role"}
                            for m in members), key=lambda x: x["message_id"]),
         "model": model,
-        "local_model": semantic.llm_model(),
+        "local_model": local_model,
         "prompts": [semantic._FACT_PROMPT, semantic._SUMMARY_PROMPT,
                     semantic._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
                     semantic_llm._FACT_V2_REPAIR_SUFFIX],
@@ -56,7 +62,8 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
 
 
 def thread_bundle(ledger, project_id: int, root_id: int,
-                  target_ids: list | None = None) -> dict | None:
+                  target_ids: list | None = None,
+                  local_model: str | None = None) -> dict | None:
     """One post + its same-thread stored replies — the atomic analysis
     unit (§12.3). A message whose row vanished makes the bundle
     unbuildable (None), never silently re-scoped (AT-019)."""
@@ -99,7 +106,7 @@ def thread_bundle(ledger, project_id: int, root_id: int,
     quality = "full" if not missing_replies and all(
         m["body_state"] in ("full", "deleted") for m in members) \
         else "partial"
-    fp = bundle_fingerprint(members)
+    fp = bundle_fingerprint(members, local_model=local_model)
     return {"bundle_id": f"bundle_{project_id}_{root_id}_{fp[:12]}",
             "account_scope": "mcs",
             "project_id": project_id, "root_id": root_id,
@@ -177,12 +184,18 @@ def invalidate_projections(ledger, scfg: dict) -> int:
         AND json_extract(a.meta,'$.invalidated') IS NOT 1
     """).fetchall()
     bundles, expired, projects = {}, [], set()
+    local_model = None
     for row in rows:
         meta = json.loads(row["meta"])
         key = (row["project_id"], row["parent_id"] or row["message_id"])
         if enabled and meta.get("policy_fingerprint") == policy:
             if key not in bundles:
-                bundle = thread_bundle(ledger, *key)
+                if local_model is None:
+                    # one config read per scan, not one per thread
+                    import semantic
+                    local_model = semantic.llm_model()
+                bundle = thread_bundle(ledger, *key,
+                                       local_model=local_model)
                 bundles[key] = bundle["source_fingerprint"] if bundle else None
             if bundles[key] is not None and meta.get("fingerprint") == bundles[key]:
                 continue

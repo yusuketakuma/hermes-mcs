@@ -116,6 +116,13 @@ def test_missing_or_disabled_config_is_not_reported_as_current_quality(tmp_path,
         assert quality["available"] is False and quality["reason"] == "summary_disabled"
         assert quality["complete"] is None and quality["incomplete"] is None
         assert quality["completion_rate"] is None
+        # U07-F06: an enabled supplied config is used as-is — bundling
+        # the threads must not fall back to the host config file
+        quality = semantic.status_report(db, _cfg())["current_quality"]
+        assert quality["available"] is True
+        assert quality["denominator"] == 1
+        quality = semantic_observe.observe(db_path, _cfg())["current_quality"]
+        assert quality["available"] is True
     finally:
         db.close()
 
