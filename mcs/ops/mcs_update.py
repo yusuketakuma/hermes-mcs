@@ -87,6 +87,19 @@ T_FETCH = 120
 T_MERGE = 60
 T_GIT = 30
 T_POST_MERGE = 600        # services + restart + postcheck can be slow
+# launchctl answers in well under 1s and the drainers install no SIGTERM
+# handler (bootout returns as soon as they die), so 10s is >10x headroom
+# for a loaded machine while bounding a wedged launchd. Budget inside
+# the post-merge child (T_POST_MERGE=600), every call hung:
+#   restart_agents: a label is only STARTED before RESTART_BUDGET_S, and
+#     one resident label costs at most bootout 10 + bootstrap 3x(10+1s)
+#     + print 10 + pid wait (15 + last 10) = 78s  =>  <= 120 + 78 = 198s
+#     (per-call bound alone: 2x78 + 2x(10+33+10) = 262s for 4 labels)
+#   + services 120 + postcheck (git 2x30 + keychain 2x60 + urlopen 2x3
+#     + print 2x10) = 326  =>  child worst ~524s < 600: the child is not
+#     killed mid-restart only for the parent's bail to redo the restart.
+T_LAUNCHCTL = 10
+RESTART_BUDGET_S = 120
 STALE_S = 1800            # no stage progress for this long => stale apply
 GIT_LOCK_MIN_AGE_S = 600  # younger .git/*.lock may belong to a live op
 RUN_LOCK_TRIES = 40       # 30s x 40 = 20min > RUN_DEADLINE_S (S21)
@@ -555,7 +568,8 @@ def _uid() -> int:
     return os.getuid()
 
 
-def _run(argv: list, timeout: int = T_GIT) -> subprocess.CompletedProcess:
+def _run(argv: list, timeout: int = T_LAUNCHCTL
+         ) -> subprocess.CompletedProcess:
     """subprocess.run that never raises — mcs_setup._run's contract,
     kept local so a rolled-back tree never mixes generations. A hung
     command yields returncode 124 (as timeout(1)), one that cannot start
@@ -599,16 +613,17 @@ def _write_marker() -> None:
 def _remove_marker() -> None:
     with suppress(OSError):
         os.unlink(MARKER_PATH)
-def _stray_drainer_pids() -> list[int]:
+
+
+def _stray_drainer_pids() -> list[int] | None:
     """Same-uid python processes running the drainer scripts — the
     pattern requires an interpreter argv0 so editors, test runners and
-    unrelated commands containing the filename never match (H7)."""
-    try:
-        r = subprocess.run(
-            ["pgrep", "-u", str(_uid()), "-f", _STRAY_RE],
-            capture_output=True, text=True, timeout=T_GIT)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    unrelated commands containing the filename never match (H7).
+    None = unverifiable (pgrep hung, missing, or exit >1 — 1 is "no
+    match"): quiesce must never read that as "no strays"."""
+    r = _run(["pgrep", "-u", str(_uid()), "-f", _STRAY_RE], timeout=T_GIT)
+    if r.returncode not in (0, 1):
+        return None
     return [int(p) for p in r.stdout.split()
             if p.isdigit() and int(p) != os.getpid()]
 
@@ -632,14 +647,20 @@ def quiesce() -> list[str]:
     # stray sweep: helpers may have spawned drainers outside launchd
     for i in range(4):
         pids = _stray_drainer_pids()
-        if not pids:
+        if not pids:                   # [] swept, None decided below
             break
         sig = 15 if i < 3 else 9       # TERM, then KILL on the last pass
         for pid in pids:
             with suppress(OSError):
                 os.kill(pid, sig)
         time.sleep(1)
-    if _stray_drainer_pids():
+    else:
+        pids = _stray_drainer_pids()
+    if pids is None:
+        # fail closed like drainer_stop_failed: callers restart what
+        # was stopped and never merge beside an unseen live drainer
+        raise UpdateError("stray_drainer_unverifiable")
+    if pids:
         raise UpdateError("stray_drainer_survived")
     return stopped
 
@@ -652,9 +673,15 @@ def _bootstrap_agent(label: str, plist: str) -> bool:
 
 def restart_agents() -> list[str]:
     """Re-bootstrap resident drainers and verify a NEW pid; watchers are
-    verified loaded only (R20). Returns list of verify failures."""
+    verified loaded only (R20). Returns list of verify failures. Labels
+    not yet started when RESTART_BUDGET_S runs out are reported as
+    restart_deadline:<label> (see the T_LAUNCHCTL budget)."""
     problems = []
+    deadline = time.time() + RESTART_BUDGET_S
     for label in RESIDENT_LABELS:
+        if time.time() >= deadline:
+            problems.append(f"restart_deadline:{label}")
+            continue
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
         if not _bootstrap_agent(label, plist):
@@ -670,6 +697,9 @@ def restart_agents() -> list[str]:
         if not pid:
             problems.append(f"drainer_not_running:{label}")
     for label in WATCHER_LABELS:
+        if time.time() >= deadline:
+            problems.append(f"restart_deadline:{label}")
+            continue
         r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
         if r.returncode != 0 and not _bootstrap_agent(
                 label, os.path.join(AGENTS_DIR, label + ".plist")):
@@ -1929,6 +1959,24 @@ def recover_interrupted(if_stale: bool = False) -> int:
         return escalate("unclassifiable repo state — "
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
+    except UpdateError as e:
+        # git itself failed (timeout / spawn / nonzero: HEAD, status,
+        # reset, merge --abort) — the tree is unmeasurable. The journal
+        # stays either way, so the next check / consent respawn retries.
+        if state.get("restore_consent"):
+            # Consent hold (the shape was validated before any git call):
+            # the tree is on prev_sha while the DB may still be the newer
+            # schema, and the hold requires drainers down + both markers
+            # up. Never unfreeze on an unknown state, never consume the
+            # receipt, and tell the human via the report only — an
+            # outbox notice would change notify_outbox, i.e. the loss
+            # report's content digest, voiding the consent it awaits.
+            _report("restore_consent_blocked",
+                    f"hold kept, retried next pass — {e}"[:300])
+            return 1
+        # Outside a hold: same as mcs_recover.py (git failure ->
+        # escalate) — drainers back up, marker gone, human told (H4).
+        return escalate(f"git unverifiable: {e}")
     finally:
         for fd in (run_fd, upd_fd):
             if fd is not None:
