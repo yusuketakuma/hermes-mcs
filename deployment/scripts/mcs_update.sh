@@ -9,4 +9,4 @@ set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 exec __PYTHON__ __REPO__/mcs/ops/mcs_update.py check \
-  >>"__DATA__/update.log" 2>&1
+  >>__DATA__/update.log 2>&1

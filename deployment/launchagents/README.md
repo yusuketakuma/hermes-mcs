@@ -1,6 +1,6 @@
 # スケジューリング構成
 
-収集ジョブは **hermes cron（標準スケジューラ）5件 + launchd 5件** の
+収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 5件** の
 ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
@@ -8,6 +8,7 @@
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
 | 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *`（スクリプト内で 22-06時は :00/:20/:40 のみ実行に間引き — 30分のセッション失効上限を下回るため） | hermes cron (`mcs_check.sh`) |
+| ヘルス監視 `health_watch.py` | `*/5 * * * *` | hermes cron (`mcs_health.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
 | semantic/QC 夜間drain（`MCS_LLM_SLOT=1`・slot 1 pin） | `30 22 * * *`（drain 最大55分 — cron script timeout 3600s 内に収束） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
@@ -24,9 +25,9 @@ wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO_
 
 ## セットアップ
 
-**自動化（推奨）**: `python3 mcs/ops/mcs_setup.py services` が下記の
+**自動化（推奨）**: `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services` が下記の
 手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 4件の
-bootstrap と hermes cron 5件の登録は既存分をスキップする。plist 本文・
+bootstrap と hermes cron 6件の登録は既存分をスキップする。plist 本文・
 cron スケジュールの差分は reconcile する（loaded でも内容が違えば
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 所有 agent/cron は削除）。実績は `data/service_manifest.json` に記録
@@ -40,40 +41,18 @@ gateway 死亡・新版破損でも動くことが目的のため services の�
 reconcile 対象外。手動実行は `python3 ~/.mcs-recovery/mcs_recover.py`
 （`--status` で状態診断）。
 
-手動で行う場合の手順:
+配置内容を確認してから適用する場合:
 
 ```bash
-REPO=$(cd ../.. && pwd)          # このリポジトリの checkout パス
-PY=$HOME/.hermes/hermes-agent/venv/bin/python
-DATA=$HOME/.mcs/data
-
-# 1. hermes cron スクリプト配置
-mkdir -p ~/.hermes/scripts
-for s in mcs_check mcs_deep mcs_llm_catchup llamacpp_restart_if_idle mcs_update; do
-  sed -e "s|__PYTHON__|$PY|g" -e "s|__REPO__|$REPO|g" -e "s|__DATA__|$DATA|g" \
-      "$REPO/deployment/scripts/$s.sh" > ~/.hermes/scripts/$s.sh
-  chmod +x ~/.hermes/scripts/$s.sh
-done
-
-# 2. hermes cron 登録（--no-agent: stdout空=成功時沈黙、alert行のみ通知）
-hermes cron create "*/5 * * * *" --name "MCS unread check" \
-  --script mcs_check.sh --no-agent --deliver local
-hermes cron create "7,37 * * * *" --name "MCS durable drain" \
-  --script mcs_deep.sh --no-agent --deliver local
-hermes cron create "30 22 * * *" --name "MCS LLM catchup" \
-  --script mcs_llm_catchup.sh --no-agent --deliver local
-hermes cron create "0 4 * * *"  --name "llamacpp daily restart" \
-  --script llamacpp_restart_if_idle.sh --no-agent --deliver local
-hermes cron create "10 5 * * *"  --name "MCS update check" \
-  --script mcs_update.sh --no-agent --deliver local
-
-# 3. launchd plist（services 管理の4件は同じ置換規則）
-for p in local.mcs-cmd local.mcs-int ai.mcs.extract-drainer ai.mcs.extract-drainer-rt; do
-  sed -e "s|__PYTHON__|$PY|g" -e "s|__REPO__|$REPO|g" -e "s|__DATA__|$DATA|g" \
-      "$REPO/deployment/launchagents/$p.plist" > ~/Library/LaunchAgents/$p.plist
-  launchctl load ~/Library/LaunchAgents/$p.plist
-done
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services --dry-run
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services
 ```
+
+（mcs_setup は Python ≥3.10 必須。`/usr/bin/python3` は 3.9 系で動かない —
+install.sh が作る venv インタプリタを使う）
+
+配置先パスは shell・XML ごとにエスケープしてテンプレートへ埋め込むため、
+空白や記号を含むパスでも上記の生成処理を使う。
 
 残る2件は install.sh 所有で置換規則も異なる（services の reconcile 対象外）:
 
@@ -82,7 +61,7 @@ done
   置換（install.sh stage 4。実機で hermes 管理の `ai.hermes.llamacpp`
   が既存なら導入自体を skip）
 
-手動で配置する場合は install.sh の sed コマンドをそのまま使う。
+この2件の配置は `install.sh` の該当 stage を使用する（XML エスケープを含む）。
 
 | プレースホルダ | 置換者 | 例 |
 |---|---|---|
@@ -114,7 +93,7 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   `MCS_LLM_SLOT=1` で `semantic_drain.py --drain` を走らせ、QC/semantic
   ジョブを深夜 window で slot 1 から消化する。`WINDOW_S=3300` は
   hermes cron の script timeout 既定 3600s 未満に収める上限 —
-  超過すると毎回 kill される（tests/ops/test_deployment_scripts.py
+  超過すると毎回 kill される（tests/meta/test_deployment_scripts.py
   で固定）。extract drainer 死亡時は shard 0/2 の gap-fill を
   background で併走する。run lock は ~2 分 iteration 毎の取得なので
   定期 tick を餓死させない。残 backlog は翌晩に持ち越し。

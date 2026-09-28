@@ -135,9 +135,9 @@ def _world(tmp_path, *, brew=True, git_head=None):
     return home, hermes_home, stub_root, env
 
 
-def _run(env, hermes_home):
+def _run(env, hermes_home, *flags):
     return subprocess.run(
-        ["sh", str(INSTALL), str(hermes_home)],
+        ["sh", str(INSTALL), *flags, str(hermes_home)],
         env=env, capture_output=True, text=True, timeout=60)
 
 
@@ -271,3 +271,56 @@ def test_llama_stage_when_models_endpoint_unanswered(tmp_path):
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 1
+
+
+def test_skip_flags_bypass_stages(tmp_path):
+    """--no-llm/--no-plugin/--no-recovery leave those stages untouched —
+    the partially-provisioned machine (own LLM, self-managed plugins,
+    no watchdog) still converges through the rest."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    r = _run(env, hermes_home, "--no-llm", "--no-plugin",
+             "--no-recovery")
+    assert r.returncode == 0, r.stderr
+    assert "stage skipped (--no-llm)" in r.stdout
+    assert not (hermes_home / "plugins" / "mcs-discord-commands").exists()
+    assert not (home / ".mcs-recovery").exists()
+    agents = home / "Library" / "LaunchAgents"
+    assert not (agents / "ai.mcs.llamaserver.plist").exists()
+    assert not (agents / "org.mcs.recovery.plist").exists()
+    # no model download was attempted; hermes stage still ran
+    assert not any(c.startswith("curl") and "-o" in c
+                   for c in _calls(stub_root))
+    assert any(c.startswith("git clone") for c in _calls(stub_root))
+
+
+def test_no_brew_and_no_services_flags(tmp_path):
+    """--no-brew runs without a brew stub; --no-services never invokes
+    mcs_setup."""
+    home, hermes_home, stub_root, env = _world(tmp_path, brew=False)
+    r = _run(env, hermes_home, "--no-brew", "--no-services")
+    assert r.returncode == 0, r.stderr
+    assert "stage skipped (--no-brew)" in r.stdout
+    assert not any(c.startswith("brew install") for c in _calls(stub_root))
+    assert not any("mcs_setup" in c for c in _calls(stub_root))
+
+
+def test_unknown_option_is_bounded_error(tmp_path):
+    home, hermes_home, _, env = _world(tmp_path)
+    r = _run(env, hermes_home, "--bogus")
+    assert r.returncode == 2
+    assert "unknown option" in r.stderr
+
+
+def test_install_paths_remain_literal_shell_and_xml_data(tmp_path):
+    import plistlib
+    unusual = tmp_path / "space & <tag> 'quote' $(printf SHOULD_NOT_RUN)"
+    home, hermes_home, stub_root, env = _world(unusual)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stderr
+    assert "SHOULD_NOT_RUN" not in result.stderr
+    agents = home / "Library" / "LaunchAgents"
+    llama = plistlib.loads((agents / "ai.mcs.llamaserver.plist").read_bytes())
+    watch = plistlib.loads((agents / "org.mcs.recovery.plist").read_bytes())
+    assert llama["WorkingDirectory"] == str(hermes_home)
+    assert watch["ProgramArguments"][1] == str(home / ".mcs-recovery" / "mcs_recover.py")
+    assert any(c.startswith("venv-hermes ") for c in _calls(stub_root))

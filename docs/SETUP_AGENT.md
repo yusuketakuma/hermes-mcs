@@ -7,18 +7,22 @@
 
 ## 0. エージェントへの実行契約（最初に読むこと）
 
+セットアップ実行が依頼された範囲で適用する。文書の閲覧・レビューだけでは、
+インストール、既読化、通知送信、サービス起動の承認は追加されない。
+現在の明示指示・既存承認・AGENTS.md を優先する。
+
 以下を厳守して実行すること:
 
 1. **フェーズを順に実行する。** 各ステップは【実行】→【検証】のペア。
    検証をスキップして次に進まない。
-2. **【ユーザー確認】は必ずユーザーに尋ねる。** 値を推測・捏造・
-   省略しない。ユーザーが答えられない場合はその旨を報告して
-   待機する。
+2. **【ユーザー確認】は未決事項だけを確認する。** 既存の回答・承認・
+   設定を再利用する。権限や対象が変わる不明点は確認し、それに依存しない
+   許可済み作業を続ける。秘密値や対象IDを捏造しない。
 3. **秘密情報は会話・コマンドライン・ログ・コミットに出さない。**
    §0-1 の秘密情報プロトコルに従う。
-4. **冪等。** 全手順は再実行可能。既存の設定・データ・プロセスを
-   消去・上書きする操作が必要に見えた場合は、必ず事前にユーザーの
-   明示承認を得る。
+4. **既存状態を保護する。** 再実行前に設定・登録・receipt を照合する。
+   既存承認の範囲で変更し、未承認の破壊操作・配備・外部送信だけ確認する。
+   同じ操作を承認済みなら聞き直さない。
 5. **失敗時。** 【失敗時】の対処を実行し、それでも解決しなければ
    原因を報告してユーザー判断を待つ。自己判断でスキップしない。
 6. **完了時。** §7 の完了報告フォーマットで結果を出力する。
@@ -30,8 +34,8 @@ TYPESAFE_API_KEY**。
 
 - **禁止:** ユーザーにチャットへ平文で貼らせること。自分で生成した
   値を入れること。argv（`ps` に残る）に直接渡すこと。
-- **方法 X（推奨 — エージェントが対話 tty を持つ場合）:**
-  自分のシェル内で `read -rs` で受け取り、同じシェルプロセス内で
+- **方法 X（ユーザーが直接入力できる安全な tty がある場合）:**
+  ユーザーの端末の bash 内で `read -rs` で受け取り、同じシェルプロセス内で
   `export` して使う。`init` の非対話実行が secrets を env で
   読む（`MCS_SETUP_PASSWORD`・`TYPESAFE_API_KEY`・`DISCORD_BOT_TOKEN`）。
 
@@ -121,11 +125,13 @@ curl -sf -m 3 http://127.0.0.1:8080/v1/models   # llama-server 応答
 
 - `discord` → 4-2
 - `slack` → 4-3
-- `off` → Phase 5（interactive=off のまま。カード・通知は無効）
+- `off` → Phase 6 の通知を送らない構成を使う。`interactive=off` は
+  テキスト配送を止めないため、全 runner に `--no-notify` が必要。
+  既存の Hermes 定期ジョブがある場合は、承認範囲内で停止・置換を確認する
 
 ### 4-2. Discord の場合
 
-次の値を1つずつユーザーに尋ねる。各値の取り方は
+未取得の値をまとめて確認する。各値の取り方は
 INSTALLATION.md 付録A を案内する（Developer Portal での手順を
 必要に応じて説明する）。
 
@@ -171,13 +177,15 @@ Slack は wizard 非対応のため、`init` 後に `hermes config set`
 【ユーザー確認】対話ウィザードか非対話かを選んでもらう:
 
 - **対話（推奨・初回）:** ユーザー自身の端末で
-  `python3 mcs/ops/mcs_setup.py init` を実行してもらう。全項目が
+  `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init`
+  を実行してもらう（`mcs_setup` は Python ≥3.10 必須 — install.sh が
+  用意した venv インタプリタ）。全項目が
   説明付きで順に出る。
 - **非対話:** エージェントが収集した値で実行（secrets は §0-1 経由）:
 
   ```bash
   MCS_SETUP_PASSWORD=<sec> TYPESAFE_API_KEY=<key> DISCORD_BOT_TOKEN=<tok> \
-  python3 mcs/ops/mcs_setup.py init --yes \
+  ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
       --login-id <ID> --notify-target discord:<channel_id> \
       --set 'notify.interactive="discord"' \
       --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
@@ -189,7 +197,13 @@ Slack は wizard 非対応のため、`init` 後に `hermes config set`
 【検証】`config`・`.env`・Keychain が書かれたこと:
 
 ```bash
-python3 -m json.tool ~/.mcs/config.json | head -5
+python3 - <<'PYSETUP'
+import json
+from pathlib import Path
+cfg = json.loads((Path.home() / ".mcs/config.json").read_text())
+assert isinstance(cfg, dict)
+print("config JSON object: ok")
+PYSETUP
 ls -l ~/.mcs/.env                    # 0600・中身は見せない
 security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 ```
@@ -199,13 +213,13 @@ security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 【実行】
 
 ```bash
-python3 mcs/ops/mcs_setup.py services
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services
 ```
 
 【検証】cron/launchd/gateway が登録されたこと:
 
 ```bash
-hermes cron list --all | grep -i mcs # 5件登録
+hermes cron list --all | grep -i mcs # 6件登録
 launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```
@@ -221,7 +235,7 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 
 ### 5-4. 必須条件の検証
 
-【実行】`python3 mcs/ops/mcs_setup.py check` — exit 0 を期待
+【実行】`~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check` — exit 0 を期待
 
 【失敗時】INSTALLATION.md §7 の対応表に従う。主なもの:
 
@@ -244,8 +258,9 @@ $PY mcs/views/mcs_view.py status
 【検証】`run_check` が exit 0 で終了し、`status` に患者・メッセージ
 数が出る。新着投稿があれば通知が届くことをユーザーに確認してもらう。
 
-【失敗時】`tail ~/.mcs/data/run.log` を見せる。`session_expired`
-なら `auto_login` の復旧を待つか §6 の Keychain 節を案内。
+【失敗時】`data/run.log` の必要部分をローカルで確認し、状態・件数・
+エラー分類だけを報告する。`session_expired`
+なら `auto_login` の復旧を待つか INSTALLATION.md §7 の Keychain 節を案内。
 
 ## Phase 6 — Path B: スタンドアロン
 
@@ -298,8 +313,10 @@ MCS_SETUP_PASSWORD=<sec> python3 mcs/ops/mcs_setup.py init --yes \
 （`mcs_check.sh` には `--no-notify` を付与。夜間間引きは
 スクリプト内に組込み済み）
 
-launchd agent は `python3 mcs/ops/mcs_setup.py services` で配置
-される（hermes cron 登録のみ skip される）。
+この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
+併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
+通知を送信し得る。既存ジョブの停止・置換が必要な場合は、その対象を確認し、
+許可済みの範囲で行う。
 
 ### 6-5. 検証
 

@@ -5,7 +5,7 @@
 set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-LOG="__DATA__/run.log"
+LOG=__DATA__/run.log
 PY=__PYTHON__
 
 "$PY" __REPO__/mcs/ingest/run_check.py --json --jobs-only >>"$LOG" 2>&1

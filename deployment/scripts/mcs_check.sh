@@ -7,7 +7,7 @@
 set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-LOG="__DATA__/run.log"
+LOG=__DATA__/run.log
 PY=__PYTHON__
 
 # Night thinning (2026-09, data-driven): the run log shows essentially
@@ -31,7 +31,7 @@ elif [ "$rc" -eq 0 ]; then
   # health.json. Surface the one state that risks silent data loss
   # (collection incomplete); capacity lag stays in health.json for
   # the monitor rather than alerting every tick.
-  "$PY" - "__DATA__/health.json" <<'PYEOF' || true
+  "$PY" - __DATA__/health.json <<'PYEOF' || true
 import json, sys
 try:
     h = json.load(open(sys.argv[1]))
