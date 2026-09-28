@@ -10,11 +10,10 @@ sealed manifest plans.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
+import io
 from collections import Counter
 
-from ..mcs_delivery import envelopes, registry, text, worker
+from ..mcs_delivery import envelopes, paths, registry, text, worker
 from . import cards
 
 # Discord delete of an already-gone message achieves the revoke goal.
@@ -23,25 +22,6 @@ REVOKE_GONE_STATUS = frozenset({404, 410})
 # Only an authorization-class answer judges the scope's thread
 # capability; other 4xx verdicts are per-message, never per-scope.
 CAPABILITY_REJECT = frozenset({401, 403})
-
-
-def _file_matches(path: str, part: dict) -> bool:
-    """The file on disk must still be the sealed payload — a changed
-    or missing file is a not_sent, never a substituted send."""
-    try:
-        st = os.stat(path)
-        if part.get("bytes") is not None and st.st_size != part["bytes"]:
-            return False
-        want = part.get("sha256")
-        if not want:
-            return False
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for blk in iter(lambda: f.read(1 << 20), b""):
-                h.update(blk)
-        return h.hexdigest() == want
-    except OSError:
-        return False
 
 
 class DeliveryWorker(worker.DeliveryWorker):
@@ -125,12 +105,14 @@ class DeliveryWorker(worker.DeliveryWorker):
                         "error_code": "missing_remote_id"}
             return {"result": "delivered", "remote_id": str(rid)}
         if part["kind"] == "attachment_part":
-            path = part.get("path")
-            if not path or not _file_matches(path, part):
+            blob = await asyncio.to_thread(
+                paths.read_verified_attachment, part.get("path"), part)
+            if blob is None:
                 return {"result": "not_sent",
                         "error_code": "attachment_mismatch"}
-            sent = await cards.send_attachment(
-                thread, path, part.get("name") or "file")
+            with io.BytesIO(blob) as source:
+                sent = await cards.send_attachment(
+                    thread, source, part.get("name") or "file")
             rid = getattr(sent, "id", None)
             if not rid:
                 return {"result": "unknown",

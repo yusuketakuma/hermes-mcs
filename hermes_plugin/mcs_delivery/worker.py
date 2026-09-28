@@ -409,6 +409,8 @@ class DeliveryWorker:
                 continue              # unknown — reconcile reports it
             if kind != "thread" and not ctx.get("thread_id"):
                 continue              # held — dependents need a thread
+            if not await self._send_allowed():
+                return                # retain unfinished parts for resume
             await self._attempt_part(claim, part, ctx)
         self._reg.put_parts_done(spec["delivery_id"])
 
@@ -424,11 +426,10 @@ class DeliveryWorker:
             return
         env = dict(env)
         env["command_id"] = str(uuid.uuid4())
-        try:
-            await asyncio.to_thread(
-                envelopes.publish_command, self._dirs["cmd_int"], env)
-        except OSError:
-            return                        # next resume retries
+        # A failed publication must leave parts_done unset so the next
+        # resume retries the receipt. The recorded send is never repeated.
+        await asyncio.to_thread(
+            envelopes.publish_command, self._dirs["cmd_int"], env)
         self._journal("receipt",
                       attempt_id=envelopes.part_attempt_id(
                           claim["spec"]["delivery_id"], part["part_id"]),
@@ -562,11 +563,19 @@ class DeliveryWorker:
         self._reg.claim(spec["delivery_id"], claim)
         # fall through — the send happens in the same tick
 
-    async def _step_claim(self, claim: dict) -> None:
+    async def _send_allowed(self) -> bool:
+        flags = await asyncio.to_thread(paths.read_flags, self._root)
+        return (not self._stopping and flags.get("interactive") is True
+                and flags.get("transport", "discord") == self.transport
+                and not flags.get("restore_pending"))
+
+    async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
         spec = claim["spec"]
         if claim["phase"] == "begin_sent":
             await self._step_begin(claim)
         if claim["phase"] == "granted":
+            if not await self._send_allowed():
+                return
             # fsync'd BEFORE the HTTP request — the single line that
             # separates provable-not-sent from honest-unknown on crash
             self._journal("started",
@@ -603,10 +612,13 @@ class DeliveryWorker:
                           delivery_id=spec["delivery_id"],
                           result=outcome["result"])
             claim["phase"] = "settled"
-            mid = outcome.get("message_id")
-            if outcome["result"] == "delivered" and mid:
-                await self._deliver_parts(claim, str(mid))
         if claim["phase"] == "settled":
+            outcome = claim.get("outcome") or {}
+            mid = outcome.get("message_id")
+            if allow_parts and outcome.get("result") == "delivered" and mid:
+                if not await self._send_allowed():
+                    return
+                await self._deliver_parts(claim, str(mid))
             await self._drop_claim(claim)
 
     async def _drop_claim(self, claim: dict, dead: bool = True) -> None:
@@ -714,7 +726,7 @@ class DeliveryWorker:
             if delivery_id in live_ids:
                 continue
             if claim["phase"] in ("started", "result", "settled"):
-                await self._step_claim(claim)
+                await self._step_claim(claim, allow_parts=False)
                 continue
             if claim["phase"] == "begin_sent":
                 result, code = "not_sent", "spec_withdrawn"
@@ -747,17 +759,9 @@ class DeliveryWorker:
         now = time.time()
         scanned = await asyncio.to_thread(self._scan_specs)
         # the runner-published flag is the cheap local kill switch —
-        # claiming during an interactive-off window only earns a
-        # non-final denial AND a dead tombstone that outlives the
-        # window, stranding the queued render. Skip new claims; in-
-        # flight claims still step (settlement is not a send).
-        flags = await asyncio.to_thread(paths.read_flags, self._root)
-        # restore_pending: a DB restore is unreconciled — claiming a
-        # spec now can only earn a denial; in-flight claims still step
-        # (settlement is not a send)
-        claimable = flags.get("interactive") is not False \
-            and flags.get("transport", "discord") == self.transport \
-            and not flags.get("restore_pending")
+        # Skip new claims while stopped. In-flight claims may settle,
+        # but every primary/part send rechecks the current flags too.
+        claimable = await self._send_allowed()
         live_ids = set()
         # batch registry saves across the whole pass — one flush per
         # tick instead of ~3 full-file rewrites per claim (RC20: the

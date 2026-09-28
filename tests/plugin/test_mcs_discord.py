@@ -320,6 +320,8 @@ def world(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     led = _ledger.Ledger(str(data / "ledger.db"))
+    notify_cards.ensure_dirs(str(data))
+    notify_cards.publish_flags(CFG, str(data))
     logs = []
 
     def _seed(mids=(100, 101), pid=1):
@@ -503,6 +505,30 @@ def test_registry_persistence_and_expiry(tmp_path):
     assert not registry.Registry(d).followups()
 
 
+@pytest.mark.parametrize("contents", ["{", "[]", "null", '{"claims":[]}',
+                                      '{"claims":{"delivery":[]}}'])
+def test_corrupt_registry_is_not_reset_or_overwritten(tmp_path, contents):
+    path = tmp_path / "registry.json"
+    path.write_text(contents)
+    with pytest.raises(ValueError, match="registry_corrupt"):
+        registry.Registry(str(tmp_path))
+    assert path.read_text() == contents
+
+
+@pytest.mark.parametrize(("table", "lookup"), [
+    ("pending_modals", "modal"), ("pending_confirms", "confirm"),
+    ("followups", "followup"),
+])
+@pytest.mark.parametrize("expires", [float("nan"), float("inf"), "later", None])
+def test_registry_malformed_expiry_never_authorizes(tmp_path, table, lookup, expires):
+    reg = registry.Registry(str(tmp_path))
+    reg._data[table]["synthetic"] = {"actor": "discord:1", "expires": expires}
+    assert getattr(reg, lookup)("synthetic") is None
+    reg._data[table]["synthetic"] = {"expires": expires}
+    reg.expire()
+    assert not reg._data[table]
+
+
 # ---------- spec validation / view build ---------------------------------
 
 def test_real_spec_validates_and_builds(world):
@@ -525,7 +551,15 @@ def test_real_spec_validates_and_builds(world):
 @pytest.mark.parametrize(("mutate", "error"), [
     (lambda s: s.update(schema="bogus"), "bad_schema"),
     (lambda s: s.update(op="explode"), "bad_op"),
+    (lambda s: s.update(delivery_id=s["delivery_id"] + "\n"), "bad_delivery_id"),
     (lambda s: s["delivery"].update(correlation="zz"), "bad_correlation"),
+    (lambda s: s["delivery"].update(correlation="ab" * 16 + "\n"), "bad_correlation"),
+    (lambda s: s["parts"]["action_rows"][0][0].update(token="ab" * 16 + "\n"),
+     "bad_button_token"),
+    (lambda s: s["parts"]["action_rows"][0][0].update(style=[]), "bad_button_style"),
+    (lambda s: s["parts"].update(context=[]), "bad_context"),
+    (lambda s: next(p for p in s["parts"]["manifest"] if p["kind"] == "body_part").update(
+        part_id="body:0000"), "bad_body_part_id"),
     (lambda s: s["parts"].update(action_rows=[[{"ui": "button",
         "token": "not-hex", "label": "x", "id": "ack"}]]),
      "bad_button_token"),
@@ -800,6 +834,32 @@ def test_kill_switch_skips_claim_then_recovers(world):
     assert len(bot.channels[42].sent) == 1
     assert world.card()["delivery_state"] == "delivered"
     assert not reg.claims()
+
+
+@pytest.mark.parametrize("held_flags", [
+    {"interactive": False}, {"interactive": True, "restore_pending": True},
+    {"interactive": True, "transport": "slack"},
+    {}, {"interactive": "true"},
+])
+def test_send_grant_waits_for_current_flags(world, held_flags):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    flags = world.data / "flags" / "notify.json"
+
+    async def run():
+        await worker.tick()
+        world.drain()  # Grant exists before the stop flag changes.
+        flags.write_text(json.dumps(held_flags))
+        await worker.tick()
+        assert not bot.channels[42].sent
+        assert reg.claims()
+        flags.write_text(json.dumps({"interactive": True}))
+        await worker.tick()
+        world.drain()
+        assert len(bot.channels[42].sent) == 1
+
+    asyncio.run(run())
 
 
 def test_interactive_off_denial_stays_claimable(world):
@@ -1326,6 +1386,52 @@ def test_action_denies_wrong_channel_and_project(world):
     assert not list((world.data / "cmd_int").glob("*.json"))
 
 
+def test_digest_action_checks_every_project_before_publication(world, monkeypatch):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    act = world.mkactions(reg, bot)
+    token = "aa" * 16
+    reg.put_tokens({token: {"action": "ack", "project_id": None,
+                           "context": {"signals": {
+                               "one": {"project_id": 1},
+                               "two": {"project_id": 2}}}}})
+    monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+    ix = FakeInteraction(f"mcs:a:{token}", message_id=9001)
+    asyncio.run(act.on_interaction(ix))
+    assert not list((world.data / "cmd_int").glob("*.json"))
+    assert "権限" in ix.response.message["content"]
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("allowed_user_ids", {"2002"}), ("project_ids", {2}),
+    ("application_id", "999"), ("channel_id", "999"), ("profile", "other"),
+    ("profile", "mcs"),
+])
+def test_delayed_discord_body_rechecks_current_access(world, monkeypatch, key, value):
+    world.seed()
+    cfg = {"notify": {**CFG["notify"], "card_thread": False}}
+    world.dispatch(cfg=cfg)
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    act = world.mkactions(reg, bot)
+    token = world.token(spec, "body")
+    ix = FakeInteraction(f"mcs:a:{token}", message_id=bot.channels[42].sent[0].id)
+    monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+    asyncio.run(act.on_interaction(ix))
+    assert reg.followups()
+    world.drain()
+    act._settings = {**SETTINGS, key: value}
+    asyncio.run(act.sweep_followups())
+    sent = sys.modules["discord"].Webhook.sent
+    if key == "profile" and value == "mcs":
+        assert len(sent) == 1 and "本文" in sent[0]["content"]
+    else:
+        assert not sent
+    assert not reg.followups()
+
+
 def test_ack_idempotent_per_actor(world):
     """RC13 — the same actor re-clicking is one acknowledgement
     (deterministic command_id replays the stored receipt); a second
@@ -1393,6 +1499,11 @@ def test_confirm_wrong_actor_and_replay(world):
     assert "本人" in bad.response.message["content"]
     assert reg.confirm(cid[len("mcs:c:"):]) is not None
 
+    malformed = FakeInteraction(cid + ":unexpected", message_id=msg.id)
+    asyncio.run(act.on_interaction(malformed))
+    assert reg.confirm(cid[len("mcs:c:"):]) is not None
+    assert not list((world.data / "cmd_int").glob("*.json"))
+
     ok = FakeInteraction(cid, message_id=msg.id)
     asyncio.run(world.interact(act, ok))
     assert world.led.db.execute(
@@ -1412,6 +1523,10 @@ def test_confirm_cancel_drops_pending(world):
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     cid = _drive_to_confirm(world, act, tok, msg)
+
+    foreign = FakeInteraction(cid + ":cancel", channel_id=99, message_id=msg.id)
+    asyncio.run(act.on_interaction(foreign))
+    assert reg.confirm(cid[len("mcs:c:"):]) is not None
 
     cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
     asyncio.run(act.on_interaction(cancel))

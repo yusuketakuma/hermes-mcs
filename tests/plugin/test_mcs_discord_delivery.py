@@ -25,7 +25,13 @@ class _FakeFile:
 
 
 _discord.File = _FakeFile
-sys.modules.setdefault("discord", _discord)
+
+
+@pytest.fixture(autouse=True)
+def synthetic_discord_sdk(monkeypatch):
+    # Collection must see the real package (or its absence), so an SDK
+    # serialization test never mistakes this shim for discord.py.
+    monkeypatch.setitem(sys.modules, "discord", _discord)
 
 
 class FakeHTTP(Exception):
@@ -190,6 +196,9 @@ def _state(tmp_path):
 def _mkworker(tmp_path, bot=None, wid="w1"):
     for name in ("discord_render", "cmd_int", "cmd_results", "flags"):
         (tmp_path / name).mkdir(exist_ok=True)
+    flags = tmp_path / "flags" / "notify.json"
+    if not flags.exists():
+        flags.write_text(json.dumps({"interactive": True}))
     paths.ensure_dirs(str(tmp_path))          # creates discord_state
     reg = Registry(str(_state(tmp_path)))
     bot = bot or FakeBot()
@@ -389,6 +398,63 @@ def test_timeout_after_acceptance_stays_unknown_no_resend(tmp_path):
     w2, _, _ = _mkworker(tmp_path, bot=bot, wid="w2")
     asyncio.run(w2._resume_parts(spec))
     assert [m.content for m in th.sent] == [chunks[0], chunks[2]]
+
+
+def test_part_receipt_publish_failure_remains_resumable(tmp_path, monkeypatch):
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(_chunks(2))
+    original = envelopes.publish_command
+
+    def fail_receipt(directory, env):
+        if env.get("op") == "part_receipt" and env.get("part_id") == "body:0001":
+            raise OSError("synthetic disk unavailable")
+        return original(directory, env)
+
+    monkeypatch.setattr(envelopes, "publish_command", fail_receipt)
+    with pytest.raises(OSError):
+        asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    _card_delivered(tmp_path)
+    try:
+        asyncio.run(w._resume_parts(spec))
+    except OSError:
+        pass
+    assert not reg.parts_done(DELIVERY_ID)
+    monkeypatch.setattr(envelopes, "publish_command", original)
+    asyncio.run(w._resume_parts(spec))
+    assert reg.parts_done(DELIVERY_ID)
+    assert [m.content for m in bot.channels[42].threads[0].sent] == _chunks(2)
+    assert any(e.get("part_id") == "body:0001" for e in _receipts(tmp_path / "cmd_int"))
+
+
+@pytest.mark.parametrize("stop_kind", ["kill_switch", "restore_marker"])
+def test_stop_between_parts_resumes_only_unsent_remainder(tmp_path, monkeypatch, stop_kind):
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(_chunks(2))
+    flags = tmp_path / "flags" / "notify.json"
+    attempt = w._attempt_part
+
+    async def stop_after_thread(claim, part, ctx):
+        await attempt(claim, part, ctx)
+        if part["kind"] == "thread":
+            if stop_kind == "restore_marker":
+                # The marker precedes the runner's next flag publication.
+                (tmp_path / "restore_pending.json").write_text("{}")
+            else:
+                flags.write_text(json.dumps({"interactive": False}))
+
+    monkeypatch.setattr(w, "_attempt_part", stop_after_thread)
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    thread = bot.channels[42].threads[0]
+    assert not thread.sent and not reg.parts_done(DELIVERY_ID)
+    _card_delivered(tmp_path)
+    asyncio.run(w._resume_parts(spec))
+    assert not thread.sent
+    flags.write_text(json.dumps({"interactive": True}))
+    if stop_kind == "restore_marker":
+        (tmp_path / "restore_pending.json").unlink()
+    asyncio.run(w._resume_parts(spec))
+    assert [m.content for m in thread.sent] == _chunks(2)
+    assert len(bot.channels[42].threads) == 1
 
 
 def test_thread_create_failure_holds_dependents_no_card_repost(tmp_path):
@@ -633,6 +699,31 @@ def test_attachment_part_hash_mismatch_not_sent(tmp_path):
     envs = [e for e in _receipts(tmp_path / "cmd_int")
             if e["op"] == "part_receipt" and e["part_id"] == "attach:0007"]
     assert envs and envs[0]["result"] == "not_sent"
+
+
+def test_attachment_upload_uses_the_bytes_that_were_verified(tmp_path, monkeypatch):
+    from pathlib import Path
+    from hermes_plugin.mcs_discord import cards
+    blob = b"sealed-synthetic"
+    path = tmp_path / "attachment.bin"
+    path.write_bytes(blob)
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec([])
+    spec["parts"]["manifest"].append({
+        "part_id": "attach:0001", "kind": "attachment_part", "index": 2,
+        "attachment_id": 1, "name": path.name, "path": str(path),
+        "sha256": hashlib.sha256(blob).hexdigest(), "bytes": len(blob)})
+    uploaded = []
+
+    async def send(target, source, name):
+        path.write_bytes(b"changed-on-disk!")
+        uploaded.append(source.read() if hasattr(source, "read")
+                        else Path(source).read_bytes())
+        return await target.send("synthetic-file")
+
+    monkeypatch.setattr(cards, "send_attachment", send)
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert uploaded == [blob]
 
 
 def test_unavailable_attachment_entry_never_attempted(tmp_path):
