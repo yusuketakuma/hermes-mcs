@@ -661,3 +661,70 @@ def test_known_cron_scripts_cover_setup_cron_jobs():
     rec = _load()
     desired = {script for _name, _sched, script in mcs_setup.CRON_JOBS}
     assert desired <= rec.KNOWN_CRON_SCRIPTS
+
+
+def test_reconcile_uses_install_interpreter_not_watchdog_python(
+        rec, tmp_path, monkeypatch):
+    """The watchdog runs under /usr/bin/python3 (3.9) but mcs_setup
+    needs >= 3.10 — services must run with the install-time venv."""
+    setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
+    setup.parent.mkdir(parents=True)
+    setup.write_text("# synthetic")
+    venv_py = tmp_path / "venv-python"
+    venv_py.write_text("#!/bin/sh\nexit 0\n")
+    venv_py.chmod(0o755)
+    monkeypatch.setattr(rec, "HERMES_PY", str(venv_py))
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    assert rec._reconcile_membership(None) == ["cron_list_unverifiable"]
+    assert [str(venv_py), str(setup), "services"] in calls
+
+
+def test_reconcile_without_capable_interpreter_is_unavailable(
+        rec, tmp_path, monkeypatch):
+    setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
+    setup.parent.mkdir(parents=True)
+    setup.write_text("# synthetic")
+    monkeypatch.setattr(rec, "HERMES_PY", str(tmp_path / "absent"))
+    monkeypatch.setattr(rec.sys, "version_info", (3, 9, 6))
+    assert "services_reconcile_unavailable" in \
+        rec._reconcile_membership(None)
+
+
+def test_recovery_repo_comes_from_install_sidecar(tmp_path, monkeypatch):
+    mod = _load()
+    monkeypatch.setattr(mod, "RECOVERY_DIR", str(tmp_path))
+    assert mod._installed_repo() == mod.HOME
+    (tmp_path / "repo_path").write_text("/opt/checkout/hermes-mcs\n")
+    assert mod._installed_repo() == "/opt/checkout/hermes-mcs"
+    (tmp_path / "repo_path").write_text("relative/path\n")
+    assert mod._installed_repo() == mod.HOME
+
+
+def test_git_does_not_walk_into_parent_repository(rec, tmp_path,
+                                                  monkeypatch):
+    (tmp_path / "p").mkdir()
+    parent = _make_repo(tmp_path / "p")
+    child = parent / "not-a-checkout"
+    child.mkdir()
+    monkeypatch.setattr(rec, "REPO", str(child))
+    monkeypatch.setattr(rec.subprocess, "run", subprocess.run)
+    r = rec._git(["rev-parse", "HEAD"])
+    assert r is not None and r.returncode != 0
+
+
+def test_hung_launchctl_is_reported_not_raised(rec, monkeypatch, tmp_path):
+    def hung(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs.get("timeout"))
+
+    monkeypatch.setattr(rec.subprocess, "run", hung)
+    monkeypatch.setattr(rec, "RESIDENT_LABELS", ("ai.mcs.extract-drainer",))
+    monkeypatch.setattr(rec.time, "sleep", lambda s: None)
+    clock = iter(range(0, 10_000, 20))
+    monkeypatch.setattr(rec.time, "time", lambda: next(clock))
+    assert rec._restart_drainers() == ["ai.mcs.extract-drainer"]

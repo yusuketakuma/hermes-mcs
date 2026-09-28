@@ -31,7 +31,27 @@ from pathlib import Path
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
-REPO = HOME
+RECOVERY_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _installed_repo():
+    """The checkout install.sh recorded next to this tool — install and
+    update support a clone anywhere, while data/ always lives in ~/.mcs.
+    Falls back to ~/.mcs for installs that predate the sidecar."""
+    try:
+        with open(os.path.join(RECOVERY_DIR, "repo_path"),
+                  encoding="utf-8") as f:
+            path = f.read().strip()
+    except OSError:
+        return HOME
+    return path if os.path.isabs(path) else HOME
+
+
+REPO = _installed_repo()
+# mcs_setup needs Python >= 3.10 while this watchdog runs under the
+# system /usr/bin/python3 — reconcile services with the install-time
+# interpreter (mcs_setup.HERMES_PY)
+HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
 STATE_PATH = os.path.join(DATA, "update_state.json")
 UPDATE_LOCK = os.path.join(DATA, "update.lock")
 RUN_LOCK = os.path.join(DATA, "run.lock")
@@ -57,9 +77,13 @@ T_GIT = 30
 
 def _git(args, timeout=T_GIT):
     try:
+        # never let git walk up into an unrelated parent repository
+        # when REPO itself is not a checkout
+        env = dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(
+            os.path.abspath(REPO)))
         return subprocess.run(["git", "-C", REPO, *args],
                               capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -163,11 +187,28 @@ def _try_lock(path):
         return None
 
 
+def _setup_python():
+    """Interpreter able to run mcs_setup (>= 3.10), or None."""
+    if os.access(HERMES_PY, os.X_OK):
+        return HERMES_PY
+    if sys.version_info >= (3, 10):
+        return sys.executable
+    return None
+
+
+def _launchctl(args, **kw):
+    """launchctl with a bounded wait — a hung launchctl is reported as a
+    failed call, never an uncaught crash mid-escalation."""
+    try:
+        return subprocess.run(["launchctl", *args], capture_output=True,
+                              timeout=T_GIT, **kw)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def _agent_pid(label):
-    r = subprocess.run(["launchctl", "print",
-                        f"gui/{os.getuid()}/{label}"],
-                       capture_output=True, text=True, timeout=T_GIT)
-    if r.returncode != 0:
+    r = _launchctl(["print", f"gui/{os.getuid()}/{label}"], text=True)
+    if r is None or r.returncode != 0:
         return None
     m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
     return int(m.group(1)) if m else None
@@ -177,13 +218,9 @@ def _restart_drainers():
     problems = []
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
-        subprocess.run(["launchctl", "bootout",
-                        f"gui/{os.getuid()}/{label}"],
-                       capture_output=True, timeout=T_GIT)
+        _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
         if os.path.exists(plist):
-            subprocess.run(["launchctl", "bootstrap",
-                            f"gui/{os.getuid()}", plist],
-                           capture_output=True, timeout=T_GIT)
+            _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
         deadline = time.time() + 15
         while time.time() < deadline:
             if _agent_pid(label):
@@ -240,9 +277,7 @@ def _reconcile_membership(snapshot):
             and label not in EXCLUDED_LABELS
         if owned and label not in desired_agents \
                 and label not in KNOWN_AGENT_LABELS:
-            subprocess.run(["launchctl", "bootout",
-                            f"gui/{os.getuid()}/{label}"],
-                           capture_output=True, timeout=T_GIT)
+            _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
             try:
                 os.unlink(path)
             except OSError:
@@ -279,9 +314,10 @@ def _reconcile_membership(snapshot):
         problems.append("cron_list_unverifiable")
     # converge content/membership with the restored tree's own services
     setup_py = os.path.join(REPO, "mcs", "ops", "mcs_setup.py")
-    if os.path.isfile(setup_py):
+    setup_python = _setup_python()
+    if os.path.isfile(setup_py) and setup_python:
         try:
-            result = subprocess.run([sys.executable, setup_py, "services"],
+            result = subprocess.run([setup_python, setup_py, "services"],
                                     capture_output=True, timeout=120)
             if result.returncode != 0:
                 problems.append("services_reconcile_failed")

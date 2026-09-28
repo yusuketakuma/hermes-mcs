@@ -290,6 +290,8 @@ if [ -f "$RECOVERY_DIR/mcs_recover.py" ]; then
 fi
 cp "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"
 chmod 755 "$RECOVERY_DIR/mcs_recover.py"
+# the tool runs outside the repo — record which checkout it recovers
+printf '%s\n' "$REPO" > "$RECOVERY_DIR/repo_path"
 ok "recovery tool: $RECOVERY_DIR/mcs_recover.py"
 
 if [ "$(uname -s)" = "Darwin" ]; then
