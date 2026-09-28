@@ -55,15 +55,16 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     same generation and stage adds no information and is skipped — a
     job waiting on a durable resource outage re-walks S0–S2 every drain
     without consuming attempts, and must not append rows forever."""
+    from mcs_queries import json_object_or_null
     receipt = {"stage": stage, "status": status, **detail}
-    # CASE fixes evaluation order: json_extract on a malformed meta row
-    # raises, so such rows are skipped (fail-open) rather than failing.
+    # json_extract on a malformed meta row raises; the guarded document
+    # is NULL for such rows, so they are skipped (fail-open).
+    meta_doc = json_object_or_null("meta")
     prev = ledger.db.execute(
         "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
-        "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
-        "THEN json_extract(meta,'$.stage')=? "
-        "AND json_extract(meta,'$.fingerprint')=? "
-        "AND json_extract(meta,'$.policy_fingerprint')=? END "
+        f"AND json_extract({meta_doc},'$.stage')=? "
+        f"AND json_extract({meta_doc},'$.fingerprint')=? "
+        f"AND json_extract({meta_doc},'$.policy_fingerprint')=? "
         "ORDER BY artifact_id DESC LIMIT 1",
         (KIND_V4_STAGE, mid, stage, fp, policy)).fetchone()
     if prev is not None:
@@ -132,13 +133,12 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     replayed PASS for the same audited document reuses the row — unless
     it was minted by another projection version, which a new row
     supersedes."""
-    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
+    from semantic_projection import (PROJECTION_VERSION,
+                                     project_v2_doc_legacy,
+                                     projection_current)
     doc_hash = _doc_hash(v2_doc)
     existing = current_v4(ledger, mid, member["revision"])
-    if existing is not None \
-            and existing["meta"].get("doc_hash") == doc_hash \
-            and existing["meta"].get("projection_version") \
-            == PROJECTION_VERSION:
+    if existing is not None and projection_current(existing["meta"], doc_hash):
         return existing["artifact_id"]
     import semantic
     content = project_v2_doc_legacy(v2_doc)
@@ -165,7 +165,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
 REPROJECT_LIMIT = 25
 
 
-def _reproject_doc(ledger, mid: int, meta: dict):
+def reproject_doc(ledger, mid: int, meta: dict):
     """The audited v2 document a current projection/v4 row was rendered
     from, or ``(None, reason)``. Selected exactly the way the drain
     selects it (the newest ``semantic_facts_v2`` row of the generation's
@@ -246,7 +246,7 @@ def reproject_stale(ledger, scfg: dict,
          PROJECTION_VERSION, limit)).fetchall()
     for row in rows:
         meta = json.loads(row["meta"])
-        doc, reason = _reproject_doc(ledger, row["message_id"], meta)
+        doc, reason = reproject_doc(ledger, row["message_id"], meta)
         with ledger.db:
             if doc is None:
                 ledger.db.execute(

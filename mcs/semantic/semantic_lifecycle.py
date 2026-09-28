@@ -38,10 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from semantic_evaluation import LIFECYCLE_STAGES, EvaluationError, _dict
-
-KIND_SUMMARY = "semantic_summary"
-KIND_FACTS_V2 = "semantic_facts_v2"
-KIND_FACT_AUDIT = "semantic_facts_audit"
+from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, KIND_SUMMARY
 
 
 def _json_object(raw) -> dict | None:
@@ -50,10 +47,6 @@ def _json_object(raw) -> dict | None:
     except (TypeError, ValueError):
         return None
     return value if isinstance(value, dict) else None
-
-
-def _binding(fid: str) -> str:
-    return f"、ID:{fid}、証拠:"
 
 
 def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
@@ -111,7 +104,7 @@ def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
 
 def _rendered(summary: dict) -> tuple[list | None, dict, str]:
     """IDs bound in the stored mandatory pages, plus fid -> page line."""
-    from semantic_render import verify_mandatory_pages
+    from semantic_render import fact_binding, verify_mandatory_pages
     pages, fact_ids = summary.get("mandatory_pages"), summary.get("mandatory_fact_ids")
     if not isinstance(pages, list) or not isinstance(fact_ids, list):
         return None, {}, "pages_absent"
@@ -125,7 +118,7 @@ def _rendered(summary: dict) -> tuple[list | None, dict, str]:
     for page in pages:
         page_lines = page["text"].split("\n")
         for fid in page["fact_ids"]:
-            bound = [line for line in page_lines if _binding(fid) in line]
+            bound = [line for line in page_lines if fact_binding(fid) in line]
             if len(bound) != 1:
                 return None, {}, "pages_invalid"
             ids.append(fid)

@@ -16,6 +16,12 @@ from __future__ import annotations
 # message never keeps serving an older projection's clinical semantics.
 PROJECTION_VERSION = 2
 
+
+def projection_current(meta: dict, doc_hash: str) -> bool:
+    """A projection row is reusable only for the same document and version."""
+    return (meta.get("doc_hash") == doc_hash
+            and meta.get("projection_version") == PROJECTION_VERSION)
+
 # ---------------------------------------------------------------------
 
 _V2_TO_V1_KIND = {
