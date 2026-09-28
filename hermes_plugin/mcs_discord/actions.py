@@ -580,7 +580,7 @@ class Actions:
         try:
             await asyncio.to_thread(envelopes.publish_command,
                                     self._dirs["cmd_int"], payload)
-        except OSError:
+        except (OSError, ValueError):
             # keep the confirm live — the user may retry
             self._reg.end_confirm(confirm_id)
             await self._followup(

@@ -1609,7 +1609,10 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     assert reg.confirm(cid[len("mcs:c:"):]) is None
 
 
-def test_confirm_publish_failure_releases_in_flight(world, monkeypatch):
+@pytest.mark.parametrize("error", [OSError("disk full"),
+                                   ValueError("command_too_large")])
+def test_confirm_publish_failure_releases_in_flight(world, monkeypatch,
+                                                    error):
     """A failed command write keeps the confirm usable (and cancellable)."""
     world.seed()
     world.dispatch()
@@ -1622,7 +1625,7 @@ def test_confirm_publish_failure_releases_in_flight(world, monkeypatch):
     cid = _drive_to_confirm(world, act, tok, msg)
 
     def fail(d, env):
-        raise OSError("disk full")
+        raise error
     monkeypatch.setattr(envelopes, "publish_command", fail)
     ok = FakeInteraction(cid, message_id=msg.id)
     asyncio.run(act.on_interaction(ok))

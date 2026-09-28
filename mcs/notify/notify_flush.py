@@ -780,8 +780,14 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
     except (_StaleSend, _DeferredSend):
         if in_progress:
             raise
-        ledger.outbox_mark(ev["event_id"], "failed",
-                           retry_in=RERENDER_RETRY_S)
+        # a re-render is not a failed delivery — keep attempts intact so
+        # repeated summary churn can never age the notice into a hold
+        now = time.time()
+        ledger.db.execute(
+            "UPDATE notify_outbox SET next_try=?,updated_at=? "
+            "WHERE event_id=?", (now + RERENDER_RETRY_S, now,
+                                 ev["event_id"]))
+        ledger.db.commit()
         res["rerender"] = res.get("rerender", 0) + 1
         return False
     return True

@@ -219,3 +219,27 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
         assert len(calls) >= 8
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("jev_spent, expected", [(0, "deferred"),
+                                                 (1, "deferred_backoff")])
+def test_not_sent_llm_defers_only_when_no_jev_was_spent(
+        monkeypatch, jev_spent, expected):
+    """A held/unreachable local LLM costs no attempt, but a pass that
+    already spent Jev requests backs off hourly so the job cannot
+    re-spend the shared Jev budget every minute while the LLM is down."""
+    import semantic_drain
+    import semantic_runtime
+
+    class Client:
+        requests_made = 0
+
+    client = Client()
+
+    def inner(*args, **kwargs):
+        client.requests_made += jev_spent
+        raise semantic_runtime.LLMNotSent("llm_unreachable")
+
+    monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
+    assert semantic_drain._process_job(
+        None, None, None, client, lambda *a, **k: None, None) == expected
