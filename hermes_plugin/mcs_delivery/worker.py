@@ -34,6 +34,9 @@ REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
 RETRY_IN_FLIGHT_S = 15.0       # denied_in_flight re-begin backoff
 MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
+JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
+RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
+                               # restorable backup are no longer restore evidence
 
 # HTTP statuses that prove the send was rejected outright — never
 # committed server-side. Timeouts/cancellations are unknown instead.
@@ -101,6 +104,7 @@ class DeliveryWorker:
         self._log = log
         self._lock_fd = None
         self._stopping = False
+        self._segment = 0
 
     # -- scope lock --------------------------------------------------
 
@@ -142,7 +146,78 @@ class DeliveryWorker:
 
     def _journal(self, phase: str, **fields) -> None:
         journal.append(self._dirs["state"], self._worker_id,
-                       {"phase": phase, **fields})
+                       {"phase": phase, **fields}, segment=self._segment)
+
+    # -- journal growth bound ------------------------------------------
+
+    def _restore_horizon(self) -> float | None:
+        """mtime of the oldest backup a restore could rewind to — journal
+        rows newer than that are the post-restore reconcile's only
+        witness. No readable backup set means no pruning at all."""
+        backups = os.path.join(self._root, "backups")
+        try:
+            names = [n for n in os.listdir(backups) if n.endswith(".db")]
+            if not names:
+                return None
+            return min(os.stat(os.path.join(backups, n)).st_mtime
+                       for n in names)
+        except OSError:
+            return None
+
+    def _compact_journal(self, claims: set, done: set) -> int:
+        horizon = self._restore_horizon()
+        if horizon is None:
+            return 0
+        cutoff = horizon - RESTORE_MARGIN_S
+        live = {os.path.basename(p)[:-5] for p in self._spec_files()}
+
+        def owned(rows):
+            envs = [r[k] for r in rows
+                    for k in ("begin_envelope", "receipt_envelope")
+                    if isinstance(r.get(k), dict)]
+            return bool(envs) and all(self._ours(e) for e in envs)
+
+        def prunable(aid, rows):
+            delivery_id = str(rows[-1].get("delivery_id"))
+            phases = {r.get("phase") for r in rows}
+            return (bool(phases & {"receipt", "denied"})
+                    and not any(r.get("result") == "unknown" for r in rows)
+                    and all(isinstance(r.get("ts"), (int, float))
+                            and r["ts"] < cutoff for r in rows)
+                    and all(str(r.get("delivery_id")) == delivery_id
+                            for r in rows)
+                    and delivery_id not in claims
+                    and (delivery_id in done or delivery_id not in live))
+
+        return journal.compact(
+            self._dirs["state"],
+            active=journal._path(self._dirs["state"], self._worker_id,
+                                 self._segment),
+            file_ok=owned, prunable=prunable)
+
+    async def maintain_journal(self, *, rotate: bool = False) -> None:
+        """Rotate the live segment once it is large, then compact closed
+        files. Settled attempts whose delivery needs no more parts, and
+        which predate every restorable backup, are dropped; unknown
+        outcomes, unfinished or unreported attempts and anything a claim
+        or pending part may still read are kept."""
+        path = journal._path(self._dirs["state"], self._worker_id,
+                             self._segment)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        if size > JOURNAL_SEGMENT_BYTES:
+            self._segment += 1
+            rotate = True
+        if not rotate:
+            return
+        claims = set(self._reg.claims())
+        done = self._reg.done_parts()
+        dropped = await asyncio.to_thread(
+            self._compact_journal, claims, done)
+        if dropped:
+            self._log("journal_compacted", rows=dropped)
 
     # -- startup reconcile --------------------------------------------
 
@@ -204,6 +279,8 @@ class DeliveryWorker:
             env = self._receipt_env(aid, rows, claim)
             if env is not None and self._ours(env):
                 await self._retire_reconciled(aid, env, claim)
+        # predecessors' files are closed now — bound their growth
+        await self.maintain_journal(rotate=True)
         return stats
 
     async def _retire_reconciled(self, aid, env, claim) -> None:
@@ -362,13 +439,19 @@ class DeliveryWorker:
         honestly unknown and is never resent."""
         manifest = (spec.get("parts") or {}).get("manifest")
         if not manifest or len(manifest) < 2:
+            # no dependent parts — done, so the tick stops rescanning
+            self._reg.put_parts_done(spec["delivery_id"])
             return
         if records is None:
             records = await asyncio.to_thread(
                 journal.scan, self._dirs["state"])
         mid = _card_message_id(records, spec["delivery_id"])
         if not mid:
-            return            # card unproven — nothing to attach to
+            # card unproven. A dead, unclaimed delivery_id never gets
+            # another card attempt, so no delivered result can appear
+            # later: parts can never attach — stop the per-tick rescan.
+            self._reg.put_parts_done(spec["delivery_id"])
+            return
         claim = {"attempt_id": "resume", "worker_id": self._worker_id,
                  "spec": spec,
                  "payload_hash": envelopes.payload_hash(spec),
@@ -767,7 +850,8 @@ class DeliveryWorker:
         # tick instead of ~3 full-file rewrites per claim (RC20: the
         # O(n^2) serialization was the delivery bottleneck at 1k cards)
         with self._reg.batch():
-            self._reg.expire()
+            self._reg.expire(keep={spec["delivery_id"]
+                                   for _, spec in scanned})
             resume = []
             for path, spec in scanned:
                 delivery_id = spec["delivery_id"]
@@ -794,6 +878,7 @@ class DeliveryWorker:
             if resume:
                 await self._resume_dead(resume)
             await self._settle_orphan_claims(live_ids)
+        await self.maintain_journal()
 
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'
