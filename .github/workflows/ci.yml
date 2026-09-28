@@ -121,6 +121,9 @@ jobs:
         run: |
           python -m venv hermes-agent/.venv
           hermes-agent/.venv/bin/python -m pip install -e './hermes-agent[dev,messaging]'
+      # -o addopts= : this repo's pyproject adds -q; doubled with -q the
+      # pytest summary line disappears and the hermes per-file runner
+      # reports "NO TESTS RAN" (exit 1) even when every test passed
       - name: discord and slack plugin integration
         working-directory: hermes-agent
         env:
@@ -131,3 +134,4 @@ jobs:
           ../hermes-mcs/integration/test_hermes_slack.py
           ../hermes-mcs/integration/test_hermes_config.py
           ../hermes-mcs/tests/plugin/test_discord_sdk_real.py -x -q
+          -o addopts=

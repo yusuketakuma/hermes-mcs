@@ -25,7 +25,6 @@ def _spec():
         "schema": "mcs-card-render/v1",
         "delivery_id": "12345678-1234-4234-8234-1234567890ab",
         "card_key": "signal:s-1",
-        "render_id": "r1",
         "kind": "signal",
         "render_rev": 1,
         "op": "create",
