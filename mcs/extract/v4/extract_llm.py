@@ -2097,6 +2097,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # for exactly one feedback re-extract — a meta.qc_fix artifact
     # (applied or declined) ends the loop. Thin artifacts re-pend once
     # under the same settle-or-replace contract (meta.thin_retried).
+    # next_try (claim lease and error backoff) is written from
+    # time.time(), so it is compared against the same Python clock —
+    # never SQLite's unixepoch(), which can disagree with it.
+    now = time.time()
     rows = ledger.db.execute(f"""
       SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
              m.parent_id, m.posted_at, m.posted_at_ts,
@@ -2116,7 +2120,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         WHERE claim.kind='extract_claim'
                           AND claim.project_id=m.project_id
                           AND claim.message_id=m.message_id
-                          AND claim.next_try > unixepoch())
+                          AND claim.next_try > ?)
         AND NOT EXISTS (SELECT 1 FROM artifacts bad
                         WHERE bad.kind=? AND bad.message_id=m.message_id
                           AND NOT json_valid(bad.meta))
@@ -2125,14 +2129,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
       GROUP BY m.message_id
       HAVING attempts < 5
          AND COALESCE(MAX(json_extract(e.meta,'$.next_try')),0)
-             <= unixepoch()
+             <= ?
       ORDER BY m.posted_at_ts {order}
       LIMIT ?
     """, (KIND, EXTRACT_VERSION, *adm_params,
+          now,
           KIND,
           shard[1] if shard else None,
           shard[1] if shard else 1,
           shard[0] if shard else 0,
+          now,
           limit or 20)).fetchall()
     if adm_post is not None:
         rows = [r for r in rows if r["message_id"] in adm_post]
