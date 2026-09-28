@@ -39,6 +39,11 @@ KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
 # rebuilds every row stamped with another version (2: request flag).
+# No bump for 623f1a6 (item_unverified on meds/symptoms): it only differs
+# from the old truthiness test on non-bool flags, and every producer
+# (extract_llm _Validator, semantic_projection) writes a bool or omits it.
+# v1.0.5 rows carry version 1, so 2 already rebuilds them under this code.
+# Rebuilds only rewrite artifacts; no notification reads patient_rollup.
 PERIOD_CHECK_VERSION = 2
 
 
