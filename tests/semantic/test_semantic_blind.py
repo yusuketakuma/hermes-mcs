@@ -228,3 +228,21 @@ def test_review_labels_merge_into_exact_candidate_and_keep_synthetic_provenance(
     record["candidate"]["claims"][0]["text"] = "unreviewed replacement"
     with pytest.raises(EvaluationError, match="evaluation_claims_mismatch"):
         blind.merge_labels([record], sheets, keys, "audited", MANIFEST)
+
+
+def test_candidate_on_a_subset_of_methods_is_refused():
+    """U06-F08: predictions appear only on choices whose output carries
+    an evaluation_candidate — a subset would reveal the method behind a
+    label, so prepare requires all three or none."""
+    from test_semantic_evaluation import _record
+    record = _record()
+    for i, claim in enumerate(record["candidate"]["claims"]):
+        claim["text"] = "statement " + str(i)
+    texts = [c["text"] for c in record["candidate"]["claims"]]
+    outputs = {method: {"bundle_fingerprint": "fixed", "text": "\n".join(texts),
+                        "claim_texts": texts} for method in blind.METHODS}
+    outputs[blind.METHODS[0]]["evaluation_candidate"] = copy.deepcopy(record["candidate"])
+    case = {key: record[key] for key in ("case_id", "account_id", "project_id", "split")}
+    case.update(bundle_fingerprint="fixed", source_text="synthetic source", outputs=outputs)
+    with pytest.raises(EvaluationError, match="evaluation_candidate_partial"):
+        blind.prepare([case])
