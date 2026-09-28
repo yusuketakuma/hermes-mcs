@@ -3,10 +3,10 @@
 The canonical document is the source of truth; downstream consumers
 still speak the legacy fact shape during migration.  The projection is
 one-way and explicitly lossy: fields that have no v2 analogue stay
-None rather than being invented, and categories with no legacy slot
-(allergy, adverse events, vitals, preferences, observations) are
-omitted rather than squeezed into wrong fields.  Only VERIFIED facts
-project — unverified work never surfaces.
+None rather than being invented. Categories with no legacy slot
+(allergy, adverse events, vitals, preferences, observations) remain
+in ``canonical_facts`` with their evidence and validation state.
+Only VERIFIED facts project — unverified work never surfaces.
 """
 from __future__ import annotations
 
@@ -269,6 +269,7 @@ def _carry_canonical(doc: dict, out: dict, evidence_by_id: dict) -> None:
                     quote = ev.get("quote")
         carried.append({
             "fact_id": fact["fact_id"],
+            "validation_status": fact["validation_status"],
             "kind": fact.get("kind"),
             "statement": fact.get("statement") or "",
             "subject": fact.get("subject"),

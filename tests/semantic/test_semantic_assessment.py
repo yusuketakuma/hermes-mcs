@@ -166,3 +166,16 @@ def test_confident_detail_disagreement_blocks_audit_without_rewriting_fact(tmp_p
         assert semantic.audit_status_for(result["findings"], [], True, False) == "NEEDS_REVIEW"
     finally:
         db.close()
+
+
+def test_invalid_confidence_is_unassessed_without_persisting_detail(tmp_path):
+    db = _ledger(tmp_path)
+    bundle, facts, _ = _bundle_and_facts()
+    try:
+        result = assessment.evaluate_medication_events(
+            db, bundle, 10, facts, _EventJev(confidence=10**1000),
+            SCFG, time.monotonic() + 30)
+        assert not result['complete'] and result['failure_reason'] == 'technical'
+        assert db.artifacts(assessment.KIND_ASSESS) == []
+    finally:
+        db.close()

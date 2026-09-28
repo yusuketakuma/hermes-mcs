@@ -34,7 +34,7 @@ DEFAULT_COST_MODEL = {
     "attachment_open_s": 6.0,    # open one attachment for its content
 }
 
-_FACTS_PER_PAGE = 20            # mirrors the rendered card page budget
+_FACTS_PER_PAGE = 20            # declared model; real pages use character budgets
 
 
 class WorkflowError(ValueError):
@@ -42,10 +42,22 @@ class WorkflowError(ValueError):
 
 
 def _num(value, field):
-    if isinstance(value, bool) or not isinstance(value, int | float) \
-            or not math.isfinite(float(value)) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise WorkflowError(f"cost_model_invalid:{field}")
-    return float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        raise WorkflowError(f"cost_model_invalid:{field}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise WorkflowError(f"cost_model_invalid:{field}")
+    return value
+
+
+def _total_seconds(events):
+    total = sum(event["model_s"] for event in events)
+    if not math.isfinite(total):
+        raise WorkflowError("cost_model_total_overflow")
+    return round(total, 3)
 
 
 def _cost_model(supplied) -> dict:
@@ -74,6 +86,8 @@ def _validate_case(case) -> dict:
     if not isinstance(targets, list) or not targets:
         raise WorkflowError("case_targets_empty")
     targets = [_id(t, "case_target") for t in targets]
+    if len(targets) != len(set(targets)):
+        raise WorkflowError("case_target_duplicate")
     messages = case.get("messages")
     if not isinstance(messages, list) or not messages:
         raise WorkflowError("case_messages_empty")
@@ -84,6 +98,8 @@ def _validate_case(case) -> dict:
         mids.append(_id(m.get("message_id"), "case_message_id"))
         if not isinstance(m.get("has_quote_for", []), list):
             raise WorkflowError("case_message_quotes_list_required")
+        for fid in m.get("has_quote_for", []):
+            _id(fid, "case_message_quote_id")
     if len(mids) != len(set(mids)):
         raise WorkflowError("case_message_id_duplicate")
     card = case.get("card")
@@ -92,12 +108,14 @@ def _validate_case(case) -> dict:
     fact_lines = card.get("fact_lines", [])
     if not isinstance(fact_lines, list):
         raise WorkflowError("case_fact_lines_list_required")
+    if any(not isinstance(line, dict) for line in fact_lines):
+        raise WorkflowError("case_fact_line_object_required")
     line_ids = [_id(line.get("fact_id"), "case_fact_line_id")
-                for line in fact_lines if isinstance(line, dict)]
+                for line in fact_lines]
     if len(line_ids) != len(set(line_ids)):
         raise WorkflowError("case_fact_line_id_duplicate")
     pages = card.get("pages", 1)
-    if not isinstance(pages, int) or pages < 1:
+    if isinstance(pages, bool) or not isinstance(pages, int) or pages < 1:
         raise WorkflowError("case_pages_invalid")
     attachments = case.get("attachments", [])
     if not isinstance(attachments, list):
@@ -108,6 +126,8 @@ def _validate_case(case) -> dict:
         _id(a.get("message_id"), "case_attachment_message_id")
         if not isinstance(a.get("needed_for", []), list):
             raise WorkflowError("case_attachment_needed_list_required")
+        for fid in a.get("needed_for", []):
+            _id(fid, "case_attachment_fact_id")
     return {"targets": targets, "messages": messages,
             "fact_lines": fact_lines, "pages": pages,
             "overview_lines": card.get("overview_lines", 0),
@@ -148,7 +168,7 @@ def _measure_card(case: dict, cost: dict) -> dict:
             events.append({"step": step, "unit": f"page_drill:{target}",
                            "model_s": cost["page_drill_s"]})
     return {"steps": step, "located": located, "events": events,
-            "model_s": round(sum(e["model_s"] for e in events), 3)}
+            "model_s": _total_seconds(events)}
 
 
 def _measure_source(case: dict, cost: dict) -> dict:
@@ -197,7 +217,7 @@ def _measure_source(case: dict, cost: dict) -> dict:
                            "unit": f"attachment:{attach_of[target]}",
                            "model_s": cost["attachment_open_s"]})
     return {"steps": step, "located": located, "events": events,
-            "model_s": round(sum(e["model_s"] for e in events), 3)}
+            "model_s": _total_seconds(events)}
 
 
 def measure_case(case: dict, *, cost_model=None) -> dict:

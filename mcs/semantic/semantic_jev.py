@@ -89,7 +89,10 @@ class JevError(Exception):
 def _finite(value) -> float | None:
     if type(value) is bool or not isinstance(value, int | float):
         return None
-    v = float(value)
+    try:
+        v = float(value)
+    except OverflowError:
+        return None
     return v if math.isfinite(v) else None
 
 

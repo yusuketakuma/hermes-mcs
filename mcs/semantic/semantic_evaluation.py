@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from semantic_facts import RELATION_TYPES
+from mcs_util import atomic_write
 
 
 SCHEMA_VERSION = "semantic-evaluation/v2"
@@ -68,14 +69,15 @@ def _list(value, field: str) -> list:
 
 
 def _finite_number(value, field: str, integer: bool = False) -> float | int:
-    if integer:
-        if type(value) is not int or value < 0:
-            raise EvaluationError(f"{field}_invalid")
-        return value
-    if isinstance(value, bool) or not isinstance(value, int | float) \
-            or not math.isfinite(float(value)) or value < 0:
+    if type(value) not in (int, float) or (integer and type(value) is not int):
         raise EvaluationError(f"{field}_invalid")
-    return float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        raise EvaluationError(f"{field}_invalid") from None
+    if not math.isfinite(number) or value < 0:
+        raise EvaluationError(f"{field}_invalid")
+    return value if integer else number
 
 
 def wilson_interval(successes: int, denominator: int,
@@ -118,6 +120,8 @@ def _error_metric(errors: int, denominator: int) -> dict:
 def _percentile(values: list[float], p: float) -> float | None:
     if not values:
         return None
+    for value in values:
+        _finite_number(value, "percentile_value")
     values = sorted(values)
     pos = (len(values) - 1) * p
     low = math.floor(pos)
@@ -190,9 +194,9 @@ def validate_criteria(criteria: dict) -> dict:
     if any(name not in METRICS for name in minimums) \
             or any(name not in METRICS for name in maximums):
         raise EvaluationError("criteria_metric_invalid")
-    for value in {**minimums, **maximums}.values():
+    for value in (*minimums.values(), *maximums.values()):
         if isinstance(value, bool) or not isinstance(value, int | float) \
-                or not math.isfinite(float(value)) or not 0 <= value <= 1:
+                or not 0 <= value <= 1:
             raise EvaluationError("criteria_threshold_invalid")
     splits = criteria.get("required_splits", ["test"])
     splits = _list(splits, "criteria_required_splits")
@@ -290,6 +294,8 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
     if len(claim_ids) != len(set(claim_ids)):
         raise EvaluationError("claim_id_duplicate")
     for row in facts + claims:
+        for ref in _list(row.get("evidence_ids", []), "candidate_evidence_ids"):
+            _id(ref, "candidate_evidence_id")
         if "fact_refs" in row and not isinstance(row["fact_refs"], list):
             raise EvaluationError("candidate_fact_refs_list_required")
         refs = row.get("attachment_refs", [])
@@ -647,10 +653,11 @@ def _scope_report(records: list[dict]) -> dict:
     usage_report = {"denominator": usage_cases,
                     "missing": len(records) - usage_cases}
     for key, values in usage.items():
+        total = _finite_number(sum(values), "usage_total_" + key, integer=True)
         usage_report[key] = {
             "denominator": len(values),
-            "total": sum(values),
-            "mean": sum(values) / len(values) if values else None,
+            "total": total,
+            "mean": total / len(values) if values else None,
             "p50": _percentile([float(v) for v in values], 0.50),
             "p95": _percentile([float(v) for v in values], 0.95),
         }
@@ -747,7 +754,8 @@ def _token_report(groups: list[dict]) -> dict:
         "unreported_requests": sum(g["unreported_requests"] for g in groups),
         "missing_jobs": sum(g["missing_jobs"] for g in groups),
         "tokens": {key: {
-            "observed_total": sum(g[key] for g in groups),
+            "observed_total": _finite_number(
+                sum(g[key] for g in groups), "token_total_" + key, integer=True),
             "complete_denominator": len(complete),
             "complete_p50": _percentile([g[key] for g in complete], .50),
             "complete_p95": _percentile([g[key] for g in complete], .95),
@@ -835,9 +843,11 @@ def evaluate_runs(records: list[dict]) -> dict:
             values["patient_jev_requests"].append(requests)
     metrics = {}
     for key, observations in values.items():
+        total = sum(observations)
         metrics[key] = {"denominator": len(observations),
                         "missing": None if key.startswith("patient_") else missing[key],
-                        "total": sum(observations) if observations else None,
+                        "total": _finite_number(total, key, integer=type(total) is int)
+                        if observations else None,
                         "p50": _percentile(observations, .50),
                         "p95": _percentile(observations, .95)}
     return {"runs": len(records), "metrics": metrics,
@@ -873,9 +883,9 @@ def load_json(path: str | Path) -> dict:
 
 
 def write_report(path: str | Path, report: dict) -> None:
-    Path(path).write_text(json.dumps(report, ensure_ascii=False,
-                                     allow_nan=False, sort_keys=True,
-                                     indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(report, ensure_ascii=False, allow_nan=False,
+                      sort_keys=True, indent=2) + "\n"
+    atomic_write(str(path), lambda handle: handle.write(text), mode=0o600)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -930,10 +940,11 @@ def _expected_matched(doc: dict, expected: list) -> int:
     """Expected facts whose evidence quote is covered by a doc evidence
     record or whose statement matches a doc fact verbatim — the honest
     recall numerator."""
+    facts = [f for f in doc.get("facts", []) if isinstance(f, dict)]
+    evidence_ids = {eid for fact in facts for eid in fact.get("evidence_ids", [])}
     quotes = {e.get("quote") for e in doc.get("evidence", [])
-              if isinstance(e, dict)}
-    statements = {f.get("statement") for f in doc.get("facts", [])
-                  if isinstance(f, dict)}
+              if isinstance(e, dict) and e.get("evidence_id") in evidence_ids}
+    statements = {f.get("statement") for f in facts}
     matched = 0
     for item in expected:
         quote = item.get("evidence_quote")
@@ -974,6 +985,10 @@ def evaluate_jev_incremental(cases: list, llm_fn, jev_client,
         for msg in messages:
             member = _eval_member(case, msg, cid)
             mid = f"{cid}:{member['message_id']}"
+            expected_here = [f for f in expected
+                             if f.get("message_id")
+                             in (None, member["message_id"])]
+            mandatory_total += len(expected_here)
             try:
                 result = semantic_extraction.extract_facts_v2(
                     llm_fn, member, deadline)
@@ -982,10 +997,6 @@ def evaluate_jev_incremental(cases: list, llm_fn, jev_client,
                 evaluated = False
                 continue
             doc = result["doc"]
-            expected_here = [f for f in expected
-                             if f.get("message_id")
-                             in (None, member["message_id"])]
-            mandatory_total += len(expected_here)
             mandatory_matched += _expected_matched(doc, expected_here)
             audit = semantic_audit.audit_facts_v2(
                 jev_client, doc, member["body_original"], deadline)
@@ -1062,6 +1073,7 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                   "repair": "skipped", "render": "ok"}
         case_doc_facts = 0
         all_audits_passed = True
+        all_renders_complete = True
         for msg in messages:
             member = _eval_member(case, msg, cid)
             try:
@@ -1072,13 +1084,11 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                 stages["extract"] = f"error:{type(error).__name__}"
                 break
             doc = result["doc"]
-            case_doc_facts += len(doc["facts"])
             if not result["extraction_complete"]:
                 stages["extract"] = "incomplete"
             try:
                 rels = semantic_relations.reconcile_facts(
                     active_facts, doc["facts"])
-                active_facts.extend(doc["facts"])
                 doc["relations"] = rels["relations"]
             except Exception as error:
                 stages["relations"] = f"error:{type(error).__name__}"
@@ -1102,6 +1112,11 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                                             else "failed")
                     if repair["repaired"]:
                         doc = repair["doc"]
+                        try:
+                            doc["relations"] = semantic_relations.reconcile_facts(
+                                active_facts, doc["facts"])["relations"]
+                        except Exception as error:
+                            stages["relations"] = f"error:{type(error).__name__}"
                         audit = semantic_audit.audit_facts_v2(
                             jev_client, doc, member["body_original"],
                             deadline)
@@ -1110,11 +1125,16 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
             # Preserve the first failing message's audit in a thread report.
             if stages["audit"] is None or stages["audit"].startswith("PASS"):
                 stages["audit"] = audit_status
+            active_facts.extend(doc["facts"])
+            case_doc_facts += len(doc["facts"])
             mandatory = semantic_render.mandatory_render(doc)
+            all_renders_complete &= mandatory["complete"]
             stages["render"] = (f"{len(mandatory['facts'])}facts/"
-                                f"{len(mandatory['limitations'])}lims")
+                                f"{len(mandatory['limitations'])}lims"
+                                if all_renders_complete else "incomplete")
         passed = stages["extract"] == "ok" \
             and stages["relations"] == "ok" and all_audits_passed \
+            and all_renders_complete \
             and isinstance(stages["audit"], str) \
             and stages["audit"].startswith("PASS")
         if passed:

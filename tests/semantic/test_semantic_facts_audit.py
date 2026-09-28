@@ -5,6 +5,9 @@ coverage reuses the shared coverage Choice.  Unevaluated work is
 INCOMPLETE, never a silent PASS.
 """
 import semantic_audit as audit
+import pytest
+
+from semantic_runtime import RuntimeBudget, RuntimeOff, RuntimeStale
 
 
 def _doc(facts, evidence=()):
@@ -132,3 +135,44 @@ def test_audit_target_carries_structured_fields():
     assert "action:continue" in seen["target"]
     assert "evidence_quote" in seen["ctx_roles"]
     assert "evidence_context" in seen["ctx_roles"]
+
+
+@pytest.mark.parametrize('confidence', [None, True, -0.1, 1.1,
+                                        float('nan'), float('inf'), 10**1000],
+                         ids=['missing', 'boolean', 'negative', 'over_one',
+                              'nan', 'infinity', 'huge_integer'])
+def test_invalid_fact_confidence_never_passes(confidence):
+    class Invalid(_Jev):
+        def evaluate(self, state, questions, deadline):
+            result = super().evaluate(state, questions, deadline)
+            if 'fact_a' in result['answers']:
+                result['answers']['fact_a']['confidence'] = confidence
+            return result
+    result = audit.audit_facts_v2(Invalid(), _doc([_fact('fact_a')], [EV]),
+                                  'synthetic', deadline=10**9)
+    assert not result['evaluated'] and result['status'] == 'INCOMPLETE'
+
+
+@pytest.mark.parametrize('signal', [RuntimeBudget, RuntimeOff, RuntimeStale])
+def test_fact_audit_preserves_worker_control_signals(signal):
+    class Interrupted(_Jev):
+        def evaluate(self, state, questions, deadline):
+            raise signal('synthetic boundary')
+    with pytest.raises(signal):
+        audit.audit_facts_v2(Interrupted(), _doc([_fact('fact_a')], [EV]),
+                             'synthetic', deadline=10**9)
+
+
+@pytest.mark.parametrize('threshold', [True, float('nan'), 10**1000],
+                         ids=['boolean', 'nan', 'huge_integer'])
+def test_invalid_threshold_is_rejected_before_evaluation(threshold):
+    calls = []
+    client = _Jev()
+    client.evaluate = lambda *args: calls.append(args)
+    coverage = audit.evaluate_source_fact_coverage(
+        client, 'synthetic', [], deadline=10**9, match_threshold=threshold)
+    facts = audit.audit_facts_v2(client, _doc([_fact('fact_a')], [EV]),
+                                'synthetic', deadline=10**9,
+                                match_threshold=threshold)
+    assert not coverage['evaluated'] and not facts['evaluated']
+    assert calls == []

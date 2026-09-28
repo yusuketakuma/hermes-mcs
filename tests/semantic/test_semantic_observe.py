@@ -135,7 +135,7 @@ def test_observation_excludes_partial_bodies_from_extract_backlog(tmp_path):
         db.close()
 
 
-def test_observation_skips_invalid_usage_json(tmp_path):
+def test_observation_reports_invalid_usage_as_unknown(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     try:
         now = time.time()
@@ -149,7 +149,8 @@ def test_observation_skips_invalid_usage_json(tmp_path):
                 (json.dumps({"jev_requests": 2}), now))
 
         snapshot = semantic_observe.observe(str(tmp_path / "ledger.db"))
-        assert snapshot["jev_requests_today"] == 2
+        assert snapshot["jev_requests_today"] is None
+        assert snapshot["jev_usage_error"] == "semantic_usage_invalid"
     finally:
         db.close()
 

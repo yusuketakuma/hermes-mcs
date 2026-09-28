@@ -232,3 +232,21 @@ def test_malformed_chunker_or_unresolved_dependency_fails_closed():
     }
     with pytest.raises(sf.ContractError):
         sf.validate_facts_doc(doc)
+
+
+def test_legacy_chunk_cannot_borrow_unique_quote_from_another_chunk():
+    body = "合成根拠A。後半の文章。"
+    result = extraction.extract_facts_resumable(
+        _llm_echo([{"statement": "合成所見", "kind": "other",
+                    "evidence_quote": "合成根拠A"}]), _member(body),
+        chunker=lambda source, _: [source[:6], source[6:]])
+    assert result["facts"][0]["_evidence"] is not None
+    assert result["facts"][1]["_evidence"] is None
+
+
+def test_repeated_quote_within_chunk_does_not_guess_an_occurrence():
+    body = "合成根拠A。合成根拠A。"
+    result = extraction.extract_facts_resumable(
+        _llm_echo([{"statement": "合成所見", "kind": "other",
+                    "evidence_quote": "合成根拠A"}]), _member(body))
+    assert result["facts"][0]["_evidence"] is None

@@ -1,5 +1,4 @@
-"""v4 engine boundary (T18): stage receipts, PASS-only publication,
-diagnostics and bounded retirement of legacy-generated payloads.
+"""v4 publication, stage receipts, and fail-closed legacy migration.
 
 The canonical chain in semantic_drain already walks S0–S7 (prep →
 extract_facts_v2 → local validation + audit_facts_v2 → one reserved
@@ -18,14 +17,16 @@ mints that single self-correcting pipeline as engine v4:
   delayed v3 writer can land but can never displace a published v4 row.
 - ``v4_diagnostic`` carries non-PASS findings (PENDING/NEEDS_REVIEW/
   STALE) — a separate kind no ordinary extraction reader selects.
-- ``v4_retire_cohort`` / ``v4_retire_item`` implement the finite,
-  restart-safe conversion manifests: fixed item lists, item/call
-  ceilings, expiry, and a persisted cursor that date changes and
-  restarts cannot replenish.
+- ``v4_retire_cohort`` / ``v4_retire_item`` persist fixed conversion
+  targets, scheduling reservations, and hold reasons. New inference
+  stays closed until the adapters can enforce the total token ceiling.
+  Physical cleanup additionally needs a separate verified recovery
+  manifest; a conversion receipt never authorizes payload deletion.
 """
 from __future__ import annotations
 
 import json
+import math
 import time
 
 ENGINE_VERSION = 4
@@ -74,7 +75,8 @@ def stage_ledger(ledger, mid: int, fp: str) -> list:
             content = json.loads(r["content"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if meta.get("fingerprint") == fp:
+        if isinstance(meta, dict) and isinstance(content, dict) \
+                and meta.get("fingerprint") == fp:
             out.append({"stage": meta.get("stage"), **content})
     return out
 
@@ -83,26 +85,18 @@ def current_v4(ledger, mid: int, content_hash: str):
     """Newest valid published v4 row bound to the CURRENT source hash
     — mirrors ``current_projection_pred`` (error-free, hash-current,
     not invalidated) for the v4 kind."""
-    for r in ledger.db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
-            "WHERE kind=? AND message_id=? ORDER BY artifact_id DESC",
-            (KIND_V4, mid)):
-        try:
-            meta = json.loads(r["meta"] or "{}")
-            content = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(meta, dict) or not isinstance(content, dict):
-            continue
-        if meta.get("error") in (True, 1) or content.get("_error"):
-            continue
-        if meta.get("invalidated"):
-            continue
-        if content_hash is not None and meta.get("hash") == content_hash:
-            return {"artifact_id": r["artifact_id"],
-                    "content": content, "meta": meta}
-        break
-    return None
+    from mcs_queries import current_v4_pred
+    row = ledger.db.execute(
+        "SELECT a.artifact_id,a.content,a.meta FROM artifacts a "
+        "JOIN messages m ON m.message_id=a.message_id "
+        "AND m.project_id=a.project_id WHERE a.kind=? "
+        "AND a.message_id=? AND m.content_hash=? AND "
+        + current_v4_pred("a", "m.content_hash")
+        + " ORDER BY a.artifact_id DESC LIMIT 1",
+        (KIND_V4, mid, content_hash)).fetchone()
+    return ({"artifact_id": row["artifact_id"],
+             "content": json.loads(row["content"]),
+             "meta": json.loads(row["meta"])} if row else None)
 
 
 def publish(ledger, pid: int, mid: int, fp: str, policy: str,
@@ -122,7 +116,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     ledger.artifact_add_tx(
         KIND_V4, json.dumps(content, ensure_ascii=False,
                             allow_nan=False),
-        project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+        project_id=pid, message_id=mid, model=semantic.llm_model(),
         meta={"fingerprint": fp, "policy_fingerprint": policy,
               "schema": 2, "hash": member["revision"],
               "extract_version": ENGINE_VERSION,
@@ -169,31 +163,91 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
 
 # ---------- finite conversion manifests (legacy retirement) ----------
 
+def _time_value(value) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _valid_cohort(doc) -> bool:
+    if not isinstance(doc, dict) or doc.get("contract") != "mcs-v4-cohort/1":
+        return False
+    name, items, caps = (doc.get(k) for k in ("cohort", "items", "ceilings"))
+    if not isinstance(name, str) or not name.strip() or len(name) > 128:
+        return False
+    if not isinstance(items, list) or not isinstance(caps, dict):
+        return False
+    if any(type(caps.get(k)) is not int or not 0 <= caps[k] <= 2**63 - 1
+           for k in ("items", "calls", "tokens", "retries")):
+        return False
+    if not _time_value(doc.get("expires_at")):
+        return False
+    if doc.get("retire_after_at") is not None \
+            and not _time_value(doc["retire_after_at"]):
+        return False
+    mids = set()
+    for item in items:
+        if (not isinstance(item, dict)
+                or type(item.get("message_id")) is not int
+                or item["message_id"] <= 0
+                or item["message_id"] in mids
+                or not isinstance(item.get("content_hash"), str)
+                or not item["content_hash"]):
+            return False
+        mids.add(item["message_id"])
+    return True
+
+
+def _begin(ledger):
+    # Read decisions and reservations share a write transaction. Refuse a
+    # caller-owned transaction instead of accidentally committing it.
+    if ledger.db.in_transaction:
+        raise ValueError("cohort_transaction_active")
+    ledger.db.execute("BEGIN IMMEDIATE")
+
+
 def declare_cohort(ledger, cohort: str, items: list[dict],
                    ceilings: dict, expires_at: float,
                    retire_after_at: float | None = None) -> dict:
-    """Persist a FIXED, FINITE retirement cohort. `items` binds each
-    entry to an exact source revision (message_id + content_hash at
-    declaration) — a cohort can never silently grow, and `expires_at`
-    bounds how long it stays admissible. Ceilings: items, calls,
-    tokens, retries."""
-    existing = _cohort(ledger, cohort)
-    if existing is not None:
-        return existing
+    """Persist fixed source/dependency generations and lifetime ceilings."""
+    if not isinstance(ceilings, dict) or not isinstance(items, list):
+        raise ValueError("cohort_invalid")
     doc = {"contract": "mcs-v4-cohort/1", "cohort": cohort,
            "items": items, "ceilings": {
-               "items": int(ceilings.get("items", len(items))),
-               "calls": int(ceilings.get("calls", len(items) * 4)),
-               "tokens": int(ceilings.get("tokens", 0)),
-               "retries": int(ceilings.get("retries", 1))},
-           "expires_at": expires_at,
-           "retire_after_at": retire_after_at,
+               "items": ceilings.get("items", len(items)),
+               "calls": ceilings.get("calls", len(items) * 4),
+               "tokens": ceilings.get("tokens", 0),
+               "retries": ceilings.get("retries", 1)},
+           "expires_at": expires_at, "retire_after_at": retire_after_at,
            "created_at": time.time()}
-    ledger.artifact_add(
-        KIND_V4_COHORT, json.dumps(doc, ensure_ascii=False,
-                                   allow_nan=False),
-        project_id=0, message_id=0,
-        meta={"cohort": cohort, "engine_version": ENGINE_VERSION})
+    if not _valid_cohort(doc):
+        raise ValueError("cohort_invalid")
+    _begin(ledger)
+    with ledger.db:
+        existing = _cohort(ledger, cohort)
+        if existing is not None:
+            if not _valid_cohort(existing):
+                raise ValueError("cohort_invalid")
+            return existing
+        from semantic_store import thread_bundle
+        fixed = []
+        for item in items:
+            mid = item["message_id"]
+            row = ledger.db.execute(
+                "SELECT project_id,content_hash FROM messages WHERE message_id=?",
+                (mid,)).fetchone()
+            if row is None or row["content_hash"] != item["content_hash"]:
+                raise ValueError("cohort_source_changed")
+            bundle = thread_bundle(ledger, row["project_id"], mid, [mid])
+            fixed.append({"message_id": mid, "project_id": row["project_id"],
+                          "content_hash": row["content_hash"],
+                          "source_fingerprint": bundle["source_fingerprint"]})
+        doc["items"] = fixed
+        ledger.artifact_add_tx(
+            KIND_V4_COHORT, json.dumps(doc, ensure_ascii=False, allow_nan=False),
+            project_id=0, message_id=0,
+            meta={"cohort": cohort, "engine_version": ENGINE_VERSION})
     return doc
 
 
@@ -211,9 +265,7 @@ def _cohort(ledger, cohort: str) -> dict | None:
 
 
 def cohort_items_done(ledger, cohort: str) -> dict:
-    """Persisted per-item receipts — the restart-safe cursor. An item
-    is done exactly once, on the day it is processed; a date change or
-    a process restart cannot grant it another slot."""
+    """Latest item receipts, including durable scheduling reservations."""
     done = {}
     for r in ledger.db.execute(
             "SELECT content FROM artifacts WHERE kind=? "
@@ -222,168 +274,151 @@ def cohort_items_done(ledger, cohort: str) -> dict:
             doc = json.loads(r["content"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(doc, dict) and doc.get("cohort") == cohort:
-            done[doc.get("message_id")] = doc
+        if isinstance(doc, dict) and doc.get("cohort") == cohort \
+                and type(doc.get("message_id")) is int:
+            done[doc["message_id"]] = doc
     return done
 
 
 def active_legacy_admissions(ledger, now: float | None = None) -> set:
-    """Message ids the legacy engine may still touch: union of items
-    in non-expired cohorts. Outside a manifest the default v3-engine
-    new-inference admission is ZERO (T18)."""
-    now = time.time() if now is None else now
-    ids = set()
-    for r in ledger.db.execute(
-            "SELECT content FROM artifacts WHERE kind=?",
-            (KIND_V4_COHORT,)):
-        try:
-            doc = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(doc, dict) or doc.get("cohort") is None:
-            continue
-        if (doc.get("expires_at") or 0) <= now:
-            continue
-        for it in doc.get("items") or []:
-            if isinstance(it, dict) and isinstance(
-                    it.get("message_id"), int):
-                ids.add(it["message_id"])
-    return ids
+    """Conversion cohorts schedule v4 work and never authorize v3 inference."""
+    return set()
+
+
+def _source_current(ledger, item: dict) -> bool:
+    from semantic_store import thread_bundle
+    row = ledger.db.execute(
+        "SELECT project_id,content_hash FROM messages WHERE message_id=?",
+        (item["message_id"],)).fetchone()
+    if (row is None or row["content_hash"] != item["content_hash"]
+            or row["project_id"] != item.get("project_id")):
+        return False
+    bundle = thread_bundle(ledger, row["project_id"], item["message_id"],
+                           [item["message_id"]])
+    return bundle is not None and bundle["source_fingerprint"] == \
+        item.get("source_fingerprint")
+
+
+def _item_receipt(ledger, cohort, mid, action, **detail):
+    ledger.artifact_add_tx(
+        KIND_V4_ITEM,
+        json.dumps({**detail, "cohort": cohort, "message_id": mid,
+                    "action": action}, ensure_ascii=False, allow_nan=False),
+        project_id=0, message_id=mid, meta={"cohort": cohort})
 
 
 def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
-    """Admit the next bounded slice of a conversion cohort as semantic
-    (v4) jobs — never extract_llm work, and never more than the
-    manifest's item ceiling minus items already receipted."""
+    """Reserve each conversion job once within the lifetime item ceiling."""
     now = time.time() if now is None else now
-    doc = _cohort(ledger, cohort)
-    if doc is None:
-        return {"cohort": cohort, "error": "cohort_unknown"}
-    if (doc.get("expires_at") or 0) <= now:
-        return {"cohort": cohort, "error": "cohort_expired",
-                "scheduled": 0, "remaining": 0}
-    done = cohort_items_done(ledger, cohort)
-    ceiling = doc["ceilings"]["items"]
-    scheduled = 0
-    pending = 0
-    from semantic_policy import JOB_KIND
-    for it in doc.get("items") or []:
-        mid = it.get("message_id")
-        if mid in done:
-            continue
-        row = ledger.db.execute(
-            "SELECT project_id,content_hash FROM messages "
-            "WHERE message_id=?", (mid,)).fetchone()
-        if row is None or (it.get("content_hash")
-                           and row["content_hash"] != it["content_hash"]):
-            # source moved or vanished under the declared fingerprint —
-            # receipt it as needs_review, never convert a shifted source
-            ledger.artifact_add(
-                KIND_V4_ITEM,
-                json.dumps({"cohort": cohort, "message_id": mid,
-                            "action": "needs_review",
-                            "reason": "source_changed"}),
-                project_id=0, message_id=mid,
-                meta={"cohort": cohort})
-            continue
-        if scheduled >= ceiling:
-            pending += 1
-            continue
-        existing = ledger.db.execute(
-            "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
-            "AND message_id=? AND state='pending'",
-            (JOB_KIND, row["project_id"], mid)).fetchone()
-        if existing is None:
-            ledger.job_add(JOB_KIND, row["project_id"], mid,
-                           payload={"targets": [mid],
-                                    "origin": {"source": "v4_cohort",
-                                               "cohort": cohort}})
+    if not _time_value(now):
+        raise ValueError("cohort_time_invalid")
+    _begin(ledger)
+    with ledger.db:
+        doc = _cohort(ledger, cohort)
+        if doc is None:
+            return {"cohort": cohort, "error": "cohort_unknown"}
+        if not _valid_cohort(doc):
+            return {"cohort": cohort, "error": "cohort_invalid"}
+        if doc["expires_at"] <= now:
+            return {"cohort": cohort, "error": "cohort_expired",
+                    "scheduled": 0, "remaining": 0}
+        done = cohort_items_done(ledger, cohort)
+        scheduled = pending = 0
+        from semantic_policy import JOB_KIND
+        for item in doc["items"]:
+            mid = item["message_id"]
+            if mid in done or len(done) >= doc["ceilings"]["items"]:
+                continue
+            if not _source_current(ledger, item):
+                _item_receipt(ledger, cohort, mid, "needs_review",
+                              reason="source_changed")
+                done[mid] = {"action": "needs_review"}
+                continue
+            existing = ledger.db.execute(
+                "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
+                "AND message_id=? AND state='pending'",
+                (JOB_KIND, item["project_id"], mid)).fetchone()
+            if existing is not None:
+                pending += 1
+                continue
+            ledger._job_add_tx(
+                JOB_KIND, item["project_id"], mid,
+                payload={"targets": [mid], "notification_free": True,
+                         "source_generation": item["source_fingerprint"],
+                         "origin": {"source": "v4_cohort", "cohort": cohort}})
+            _item_receipt(ledger, cohort, mid, "scheduled")
+            done[mid] = {"action": "scheduled"}
             scheduled += 1
-        else:
-            pending += 1
-    remaining = len([it for it in doc.get("items") or []
-                     if it.get("message_id") not in done])
+        remaining = sum(done.get(it["message_id"], {}).get("action")
+                        not in {"converted", "payload_retired", "needs_review"}
+                        for it in doc["items"])
     return {"cohort": cohort, "scheduled": scheduled,
             "pending_jobs": pending, "remaining": remaining,
-            "expired": False}
+            "admitted": len(done), "expired": False}
 
 
 def mark_item_done(ledger, cohort: str, mid: int, action: str,
                    **detail) -> None:
-    ledger.artifact_add(
-        KIND_V4_ITEM,
-        json.dumps({"cohort": cohort, "message_id": mid,
-                    "action": action, **detail}, ensure_ascii=False),
-        project_id=0, message_id=mid, meta={"cohort": cohort})
+    """Record a bounded conversion outcome without changing manifest scope."""
+    if action not in {"converted", "needs_review"}:
+        raise ValueError("cohort_action_invalid")
+    _begin(ledger)
+    with ledger.db:
+        doc = _cohort(ledger, cohort)
+        if not _valid_cohort(doc) or type(mid) is not int \
+                or not any(it["message_id"] == mid for it in doc["items"]):
+            raise ValueError("cohort_item_invalid")
+        _item_receipt(ledger, cohort, mid, action, **detail)
+
+
+def hold_unbounded_job(ledger, job) -> bool:
+    """Fail closed before model work when total token use cannot be bounded.
+
+    The current Jev request contract has no pre-dispatch token cap. Stored
+    numbers alone cannot enforce a lifetime token budget. Preserve the item
+    and explicit reason until a bounded adapter can satisfy that contract.
+    Ordinary semantic jobs are outside this migration-only gate.
+    """
+    from semantic_runtime import parse_payload
+    payload = parse_payload(job)
+    origin = payload.get("origin")
+    if not isinstance(origin, dict) or origin.get("source") != "v4_cohort":
+        return False
+    _begin(ledger)
+    with ledger.db:
+        from semantic_runtime import JobToken, RuntimeStale, job_matches
+        if not job_matches(ledger, JobToken.from_row(job)):
+            raise RuntimeStale("cohort_admission")
+        cohort = origin.get("cohort")
+        doc = _cohort(ledger, cohort)
+        if _valid_cohort(doc) and any(
+                it["message_id"] == job["message_id"] for it in doc["items"]):
+            prev = cohort_items_done(ledger, cohort).get(job["message_id"], {})
+            if prev.get("reason") != "token_budget_not_enforceable":
+                _item_receipt(ledger, cohort, job["message_id"],
+                              "needs_review", reason="token_budget_not_enforceable")
+    return True
 
 
 def retire_payloads(ledger, cohort: str, now: float | None = None) -> dict:
-    """Physically overwrite OLD LLM-GENERATED payloads for cohort items
-    — only after EVERY gate passes: the cohort's retire_after_at is in
-    the past, the item's conversion receipted, a current v4 PASS row
-    covers the source hash, no extract_qc audit and no outbox/delivery
-    row still references the artifact, and the source message is
-    intact (the verified recovery route). extract_v1 is rule-derived
-    and NEVER touched; tombstones keep artifact_id/meta lineage so
-    historical QC source ids stay resolvable."""
+    """Hold physical cleanup until a separate verified recovery manifest exists.
+
+    A conversion cohort names messages, not the exact generated artifact ids
+    that may be destroyed. The source row and a v4 PASS receipt also do not
+    prove that old QC/delivery references were migrated or recovery tested.
+    No current caller supplies that separate cleanup contract, so this entry
+    point preserves all payloads and reports the missing prerequisite.
+    """
     now = time.time() if now is None else now
+    if not _time_value(now):
+        raise ValueError("cohort_time_invalid")
     doc = _cohort(ledger, cohort)
     if doc is None:
         return {"cohort": cohort, "error": "cohort_unknown"}
-    if (doc.get("retire_after_at") or float("inf")) > now:
+    if not _valid_cohort(doc):
+        return {"cohort": cohort, "error": "cohort_invalid"}
+    if doc.get("retire_after_at") is None or doc["retire_after_at"] > now:
         return {"cohort": cohort, "retired": 0,
                 "held": "retire_after_at_not_reached"}
-    done = cohort_items_done(ledger, cohort)
-    retired, held = [], []
-    for it in doc.get("items") or []:
-        mid = it.get("message_id")
-        receipt = done.get(mid)
-        if receipt is None or receipt.get("action") not in (
-                "converted", "payload_retired"):
-            held.append({"message_id": mid,
-                         "reason": "conversion_not_receipted"})
-            continue
-        v4 = current_v4(ledger, mid, it.get("content_hash"))
-        if v4 is None:
-            held.append({"message_id": mid,
-                         "reason": "no_current_v4"})
-            continue
-        item_retired = []
-        for r in ledger.db.execute(
-                "SELECT artifact_id,content,meta FROM artifacts "
-                "WHERE message_id=? AND kind IN "
-                "('extract_llm','canonical_projection') "
-                "ORDER BY artifact_id", (mid,)):
-            try:
-                old_content = json.loads(r["content"] or "{}")
-            except (json.JSONDecodeError, TypeError):
-                old_content = {}
-            if isinstance(old_content, dict) \
-                    and old_content.get("_tombstone"):
-                continue
-            # a QC audit or a delivery row that still references this
-            # artifact id pins the payload — held, never deleted
-            ref = ledger.db.execute(
-                "SELECT 1 FROM artifacts q WHERE q.kind='extract_qc' "
-                "AND json_valid(q.meta) "
-                "AND json_extract(q.meta,'$.source_artifact_id')=? "
-                "LIMIT 1", (r["artifact_id"],)).fetchone()
-            if ref is not None:
-                held.append({"message_id": mid,
-                             "artifact_id": r["artifact_id"],
-                             "reason": "qc_reference"})
-                continue
-            tomb = {"_tombstone": True,
-                    "retired_artifact_id": r["artifact_id"],
-                    "retired_at": now, "cohort": cohort,
-                    "replaced_by": v4["artifact_id"]}
-            ledger.db.execute(
-                "UPDATE artifacts SET content=? WHERE artifact_id=?",
-                (json.dumps(tomb, ensure_ascii=False),
-                 r["artifact_id"]))
-            retired.append(r["artifact_id"])
-            item_retired.append(r["artifact_id"])
-        mark_item_done(ledger, cohort, mid, "payload_retired",
-                       retired_ids=item_retired)
-    ledger.db.commit()
-    return {"cohort": cohort, "retired": retired, "held": held}
+    return {"cohort": cohort, "retired": [],
+            "held": "cleanup_manifest_and_recovery_required"}

@@ -62,3 +62,31 @@ def test_current_artifact_skips_non_object_metadata(tmp_path, malformed_meta):
         assert semantic._current(db, semantic.KIND_SUMMARY, 1, 'changed') is None
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('payload', ['null', '[]', '1', '"invalid"'])
+def test_current_artifact_rejects_non_object_payload(tmp_path, payload):
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add(semantic.KIND_SUMMARY, payload, message_id=1,
+                        meta={'fingerprint': 'current'})
+        assert semantic._current(db, semantic.KIND_SUMMARY, 1, 'current') is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('metadata', [[], None, {}, {'jev_requests': -1},
+                                      {'jev_requests': True}, {'jev_requests': 1.5},
+                                      {'jev_requests': '2'}])
+def test_invalid_usage_cannot_refill_daily_budget(tmp_path, metadata):
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 5})
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
+                          "VALUES('semantic_usage','{}',?,strftime('%s','now'))",
+                          (json.dumps(metadata),))
+        with pytest.raises(ValueError, match='semantic_usage_invalid'):
+            semantic.jev_usage_today(db)
+    finally:
+        db.close()

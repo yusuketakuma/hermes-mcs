@@ -243,3 +243,30 @@ def test_repair_preserves_failed_chunk_obligation_status():
         if ob["obligation_id"] == failed_med[0]["obligation_id"]:
             assert ob["status"] == "failed"
     assert "failed" in {o["status"] for o in out["doc"]["obligations"]}
+
+
+def test_repair_refuses_different_source_before_dispatch():
+    doc, body = _doc()
+    calls = []
+    rejected = {doc["facts"][0]["fact_id"]: "synthetic"}
+    result = extraction.repair_facts_v2(
+        lambda prompt: calls.append(prompt), _member(body.replace("5mg", "9mg")),
+        doc, rejected)
+    assert not result["repaired"]
+    assert result["doc"] is doc
+    assert calls == []
+
+
+def test_repair_discards_answer_returned_after_deadline(monkeypatch):
+    doc, body = _doc()
+    now = [10.0]
+    monkeypatch.setattr(extraction.time, "monotonic", lambda: now[0])
+
+    def late(_prompt):
+        now[0] = 12.0
+        return _llm([])(_prompt)
+
+    result = extraction.repair_facts_v2(late, _member(body), doc,
+        {doc["facts"][0]["fact_id"]: "synthetic"}, deadline=11.0)
+    assert not result["repaired"]
+    assert result["doc"] is doc
