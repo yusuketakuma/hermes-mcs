@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Mapping
 
 PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
@@ -170,6 +171,109 @@ def scan(state_dir: str) -> dict[str, list[dict]]:
     for name in names:
         _scan_file(os.path.join(state_dir, name), out)
     return out
+
+
+def _parse_rows(data: bytes, out: dict) -> None:
+    # line-for-line what _scan_file keeps from the same bytes
+    for raw in data.split(b"\n"):
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        aid = row.get("attempt_id")
+        if isinstance(aid, str):
+            out.setdefault(aid, []).append(row)
+
+
+class _View(Mapping):
+    """scan()'s result, assembled lazily from per-file indexes: rows of
+    an attempt in sorted-file order, committed lines before the torn
+    tail — the same lists a full scan would return."""
+
+    def __init__(self, files: list) -> None:
+        self._files = files      # [(committed index, tail index)] sorted
+
+    def __getitem__(self, aid: str) -> list[dict]:
+        rows = [r for done, tail in self._files
+                for part in (done, tail) for r in part.get(aid, ())]
+        if not rows:
+            raise KeyError(aid)
+        return rows
+
+    def __iter__(self):
+        seen: dict[str, None] = {}
+        for done, tail in self._files:
+            for part in (done, tail):
+                seen.update(dict.fromkeys(part))
+        return iter(seen)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+class ScanCache:
+    """Incremental ``scan``: each refresh reads only the bytes appended
+    since the previous one, so a worker re-reading the journal once per
+    card pays O(new rows), not O(journal).
+
+    A file is re-read from the start when it is new, its inode changed
+    (compact's atomic rewrite), it shrank, or the last committed line no
+    longer sits where it was read (a same-name file recreated after an
+    unlink). Only newline-terminated lines are committed; the torn tail
+    is re-parsed on every refresh, exactly as a full scan would see it.
+    Any OSError drops the cache and returns a full ``scan``.
+    """
+
+    def __init__(self, state_dir: str) -> None:
+        self._dir = state_dir
+        # name -> [ino key, committed offset, last committed line,
+        #          committed index, tail index]
+        self._files: dict[str, list] = {}
+
+    def invalidate(self) -> None:
+        self._files = {}
+
+    def refresh(self) -> Mapping:
+        try:
+            return self._refresh()
+        except OSError:
+            self._files = {}
+            return scan(self._dir)
+
+    def _refresh(self) -> Mapping:
+        files: dict[str, list] = {}
+        for name in _names(self._dir):
+            try:
+                handle = open(os.path.join(self._dir, name), "rb")
+            except FileNotFoundError:
+                continue           # compacted away between list and open
+            with handle:
+                st = os.fstat(handle.fileno())
+                key = (st.st_dev, st.st_ino)
+                ent = self._files.get(name)
+                if ent is not None and (ent[0] != key
+                                        or st.st_size < ent[1]):
+                    ent = None
+                if ent is not None and ent[2]:
+                    handle.seek(ent[1] - len(ent[2]))
+                    if handle.read(len(ent[2])) != ent[2]:
+                        ent = None
+                if ent is None:
+                    ent = [key, 0, b"", {}, {}]
+                handle.seek(ent[1])
+                data = handle.read()
+            cut = data.rfind(b"\n") + 1
+            if cut:
+                _parse_rows(data[:cut], ent[3])
+                ent[1] += cut
+                ent[2] = data[data.rfind(b"\n", 0, cut - 1) + 1:cut]
+            ent[4] = {}
+            _parse_rows(data[cut:], ent[4])
+            files[name] = ent
+        self._files = files
+        return _View([(ent[3], ent[4]) for ent in files.values()])
 
 
 def unfinished(records: dict[str, list[dict]]) -> dict[str, dict]:

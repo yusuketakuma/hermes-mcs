@@ -109,6 +109,9 @@ class DeliveryWorker:
         self._lock_fd = None
         self._stopping = False
         self._segment = 0
+        # per-card part dedupe reads only what was appended since the
+        # last card — a full scan per card was O(n^2) over a burst
+        self._jview = journal.ScanCache(self._dirs["state"])
         self._rejected: dict[str, str] = {}   # delivery_id -> logged error
         # delivery_id -> no fresh claim before this time (signals off);
         # in-memory: a restart costs one extra denied begin, bounded
@@ -235,6 +238,7 @@ class DeliveryWorker:
         done = self._reg.done_parts()
         dropped = await asyncio.to_thread(
             self._compact_journal, claims, done)
+        self._jview.invalidate()   # rewritten files re-read from scratch
         if dropped:
             self._log("journal_compacted", rows=dropped)
 
@@ -460,7 +464,7 @@ class DeliveryWorker:
         ctx = {"card_message_id": message_id, "thread": None,
                "thread_id": spec["delivery"].get("thread_id"),
                "history": None, "consumed": set()}
-        records = await asyncio.to_thread(journal.scan, self._dirs["state"])
+        records = await asyncio.to_thread(self._jview.refresh)
         await self._drive_parts(claim, manifest, ctx, records)
 
     async def _resume_parts(self, spec: dict,
