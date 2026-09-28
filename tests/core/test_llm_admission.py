@@ -524,6 +524,60 @@ def test_admitted_chat_interruption_keeps_permit_unknown(admitted_env):
     assert broker.db.execute("SELECT state FROM permits").fetchone()[0] == "unknown"
 
 
+
+def test_admitted_chat_rt_deferral_releases_waiting_flag(admitted_env):
+    """An RT intent the caller does not wait out is retired — the
+    rt_waiting flag must not keep BACKLOG shut for the whole epoch."""
+    import local_llm
+    b = _live_broker(admitted_env)
+    bg = b.acquire("mcs.extract", "BACKLOG")
+    assert bg["admitted"] and b.sent(bg["permit_id"])["sent"]
+    resp = local_llm.admitted_chat("gbrain.query", "p", wait_s=0)
+    assert resp["admission"] == "waiting" and resp["text"] is None
+    b.terminal(bg["permit_id"], "done")
+    assert b.status()["rt_waiting"] == 0
+    assert b.acquire("mcs.extract", "BACKLOG")["admitted"]
+
+
+def test_admitted_chat_rt_wait_timeout_releases_waiting_flag(admitted_env):
+    import local_llm
+    b = _live_broker(admitted_env)
+    bg = b.acquire("mcs.extract", "BACKLOG")
+    assert bg["admitted"] and b.sent(bg["permit_id"])["sent"]
+    resp = local_llm.admitted_chat("gbrain.query", "p", wait_s=0.1)
+    assert resp["admission"] == "wait_waiting"
+    b.terminal(bg["permit_id"], "done")
+    assert b.status()["rt_waiting"] == 0
+    assert b.acquire("mcs.extract", "BACKLOG")["admitted"]
+
+
+def test_mark_unknown_on_waiting_rt_releases_waiting_flag(tmp_path):
+    b = adm.Broker(str(tmp_path / "adm.db"))
+    try:
+        assert b.open_epoch(lambda: True)
+        bg = b.acquire("mcs.extract", "BACKLOG")
+        assert b.sent(bg["permit_id"])["sent"]
+        rt = b.acquire("gbrain.query", "RT")
+        assert rt["reason"] == "waiting" and b.status()["rt_waiting"] == 1
+        b.mark_unknown(rt["permit_id"], "transport")
+        b.terminal(rt["permit_id"], "done")
+        assert b.status()["rt_waiting"] == 0
+    finally:
+        b.close()
+
+
+def test_admitted_chat_invalid_args_hold_no_permit(admitted_env):
+    """A request rejected before send never becomes an ``unknown``
+    permit occupying a slot."""
+    import local_llm
+    with pytest.raises(ValueError, match="local_endpoint_not_allowed"):
+        local_llm.admitted_chat("mcs.extract", "p",
+                                endpoint="https://example.invalid/v1")
+    with pytest.raises(ValueError, match="prompt_invalid"):
+        local_llm.admitted_chat("mcs.extract", "")
+    b = _live_broker(admitted_env)
+    assert b.db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
+
 # ---------- extract_llm wiring under admission ----------
 
 def test_llm_call_defers_on_admission_verdict(admitted_env, monkeypatch):

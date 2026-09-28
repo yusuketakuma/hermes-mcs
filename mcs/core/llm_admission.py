@@ -504,6 +504,12 @@ class Broker:
             self.db.execute(
                 "UPDATE permits SET state='unknown', outcome=?"
                 " WHERE permit_id=?", (reason or "unknown", permit_id))
+            if p["cls"] == "RT" and p["state"] == "waiting":
+                # leaving ``waiting`` — terminal() only decrements from
+                # that state, so the flag must be released here
+                self.db.execute(
+                    "UPDATE admission_meta SET rt_waiting="
+                    "rt_waiting-1 WHERE singleton=1")
             return {"ok": True, "state": "unknown"}
 
     # ---------- observability ----------
