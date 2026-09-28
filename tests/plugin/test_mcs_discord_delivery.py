@@ -1283,3 +1283,248 @@ def test_restart_reconcile_keeps_begin_sent_signal_claimable(
                 if e.get("op") == "transport_receipt"
                 and e.get("result") == "delivered"]
     assert [e["attempt_id"] for e in receipts] == [c["attempt_id"]]
+
+
+# ---------- incremental journal view for part dedupe ------------------------
+
+def _did(i):
+    return f"00000000-0000-4000-8000-{i:012x}"
+
+
+def _same_as_full_scan(view, state):
+    full = journal.scan(str(state))
+    assert list(view) == list(full)
+    assert {aid: view[aid] for aid in view} == full
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_scan_cache_equals_full_scan_under_random_journal_mutation(
+        tmp_path, seed):
+    """Appends, torn/corrupt lines, compact-style atomic rewrites,
+    unlink + same-name recreate and truncation — the cache, refreshed
+    at random points, always returns exactly what a full scan does."""
+    import os
+    import random
+    rnd = random.Random(seed)
+    cache = journal.ScanCache(str(tmp_path))
+    names = [f"journal-w{i}.jsonl" for i in range(3)]
+    aids = [f"a{i}" for i in range(6)]
+    for _ in range(80):
+        path = tmp_path / rnd.choice(names)
+        op = rnd.randrange(8)
+        if op <= 2:
+            journal.append(str(tmp_path), path.name[8:-6], {
+                "phase": rnd.choice(journal.PHASES),
+                "attempt_id": rnd.choice(aids), "n": rnd.random()})
+        elif op == 3:                     # torn tail, maybe parseable
+            with path.open("ab") as f:
+                f.write(rnd.choice([b'{"attempt_id":"a1"',
+                                    b'{"attempt_id":"a2","phase":"result"}',
+                                    b"\n", b"garbage\n", b"[1]\n"]))
+        elif op == 4 and path.exists():   # compact-style atomic rewrite
+            lines = path.read_bytes().split(b"\n")
+            keep = [ln for ln in lines if rnd.random() < 0.6]
+            paths.atomic_write(str(path), b"\n".join(keep),
+                               tmp_prefix=".journal-", mode=0o600)
+        elif op == 5 and path.exists():   # same name, new longer file
+            data = path.read_bytes()
+            path.unlink()
+            path.write_bytes(data[: len(data) // 2] + b"\n" + data)
+        elif op == 6 and path.exists():
+            with path.open("r+b") as f:
+                f.truncate(rnd.randrange(os.path.getsize(path) + 1))
+        elif op == 7 and path.exists():
+            path.unlink()
+        if rnd.random() < 0.5:
+            _same_as_full_scan(cache.refresh(), tmp_path)
+    _same_as_full_scan(cache.refresh(), tmp_path)
+
+
+def test_scan_cache_rereads_a_replaced_file_and_falls_back_on_oserror(
+        tmp_path):
+    """A same-length rewrite that keeps the last line in place is only
+    visible as a new inode; an unreadable file drops to a full scan."""
+    import os
+    cache = journal.ScanCache(str(tmp_path))
+    path = tmp_path / "journal-w0.jsonl"
+    path.write_bytes(b'{"attempt_id":"a1"}\n{"attempt_id":"zz"}\n')
+    _same_as_full_scan(cache.refresh(), tmp_path)
+    paths.atomic_write(str(path),
+                       b'{"attempt_id":"b2"}\n{"attempt_id":"zz"}\n'
+                       b'{"attempt_id":"c3"}\n', tmp_prefix=".journal-")
+    _same_as_full_scan(cache.refresh(), tmp_path)
+    other = tmp_path / "journal-w1.jsonl"
+    other.write_bytes(b'{"attempt_id":"d4"}\n')
+    os.chmod(other, 0)
+    try:
+        _same_as_full_scan(cache.refresh(), tmp_path)
+    finally:
+        os.chmod(other, 0o600)
+    _same_as_full_scan(cache.refresh(), tmp_path)
+
+
+def test_part_dedupe_view_matches_full_scan_through_crash_and_compaction(
+        tmp_path, monkeypatch):
+    """The records every _drive_parts decision reads, and a shadow cache
+    refreshed after every journal append, equal a fresh full scan —
+    across a mid-card crash, a started-only part, a restart, a torn and
+    tainted journal, compaction behind the cache's back and in-worker
+    compaction. Exactly-once holds: no part attempt is ever started
+    twice and the unknown part stays unsent."""
+    import time as _time
+    from hermes_plugin.mcs_delivery import worker as worker_mod
+    state = _state(tmp_path)
+    w, reg, bot = _mkworker(tmp_path)
+    shadow = journal.ScanCache(str(state))
+    seen = {"drive": 0, "append": 0}
+    starts = {}           # attempt_id -> started rows ever appended
+    real_append = journal.append
+
+    def append(*a, **kw):
+        out = real_append(*a, **kw)
+        _same_as_full_scan(shadow.refresh(), state)
+        seen["append"] += 1
+        if a[2]["phase"] == "started":
+            starts[a[2]["attempt_id"]] = \
+                starts.get(a[2]["attempt_id"], 0) + 1
+        return out
+
+    real_drive = DeliveryWorker._drive_parts
+
+    async def drive(self, claim, manifest, ctx, records):
+        _same_as_full_scan(records, state)
+        seen["drive"] += 1
+        return await real_drive(self, claim, manifest, ctx, records)
+
+    monkeypatch.setattr(journal, "append", append)
+    monkeypatch.setattr(DeliveryWorker, "_drive_parts", drive)
+    monkeypatch.setattr(worker_mod, "JOURNAL_SEGMENT_BYTES", 4096)
+    specs = {i: dict(_spec(_chunks(4)), delivery_id=_did(i))
+             for i in range(1, 7)}
+
+    def deliver(worker, i):
+        asyncio.run(worker._deliver_parts(_claim(specs[i]), "9001"))
+
+    def aid(i, part):
+        return envelopes.part_attempt_id(_did(i), part)
+
+    # a foreign closed file with settled rows compaction may prune, and a
+    # tainted one (corrupt middle line) it must leave alone
+    old = _time.time() - 5 * 86400
+    _settled(state, "w8", "c1" * 8, _did(90), old)
+    _settled(state, "w8", "c2" * 8, _did(91), old)
+    _settled(state, "w0", "c3" * 8, _did(92), old)
+    with (state / "journal-w0.jsonl").open("ab") as f:
+        f.write(b"garbage\n")
+    _settled(state, "w0", "c4" * 8, _did(93), old)
+
+    deliver(w, 1)
+    # crash between parts: body:0003 never begins
+    orig = w._attempt_part
+
+    async def crash(claim, part, ctx):
+        if part["part_id"] == "body:0003":
+            raise RuntimeError("simulated worker crash")
+        return await orig(claim, part, ctx)
+    w._attempt_part = crash
+    with pytest.raises(RuntimeError):
+        deliver(w, 2)
+    w._attempt_part = orig
+    # interruption past the wire: body:0002 started, no result
+    orig_perform = w._perform_part
+
+    async def cancel(claim, part, ctx):
+        if part["part_id"] == "body:0002":
+            raise asyncio.CancelledError
+        return await orig_perform(claim, part, ctx)
+    w._perform_part = cancel
+    with pytest.raises(asyncio.CancelledError):
+        deliver(w, 3)
+    w._perform_part = orig_perform
+    # torn but parseable tail row: the full scan counts it, so must we
+    with (state / "journal-w0.jsonl").open("ab") as f:
+        f.write(json.dumps({"phase": "result", "attempt_id":
+                            aid(2, "body:0004"), "delivery_id": _did(2),
+                            "part_id": "body:0004", "result": "delivered",
+                            "remote_id": "1"}).encode())
+    deliver(w, 4)
+    # compaction behind the cache's back (no invalidate): w8 rewritten
+    journal.compact(str(state), active="", file_ok=lambda rows: True,
+                    prunable=lambda a, rows: a == "c1" * 8)
+    deliver(w, 5)
+    with (state / "journal-w0.jsonl").open("ab") as f:
+        f.write(b"\n{torn")
+
+    # restart: a fresh worker resumes the interrupted cards
+    w2, _reg2, _ = _mkworker(tmp_path, bot=bot, wid="w2")
+    deliver(w2, 2)
+    deliver(w2, 3)
+    deliver(w2, 2)                  # repeated resume: nothing left to do
+    # in-worker rotation + compaction of every settled closed file (a
+    # parts_done delivery is never resumed again, so its rows may go)
+    _backup(tmp_path, _time.time() + 3 * 86400)
+    for i in (1, 2, 3, 4, 5):
+        reg.put_parts_done(_did(i))
+    asyncio.run(w.maintain_journal())
+    assert w._segment >= 1
+    deliver(w, 6)                   # the old worker's cache, stale state
+
+    assert seen["drive"] == 9 and seen["append"] > 50
+    _same_as_full_scan(w._jview.refresh(), state)
+    rows = journal.scan(str(state))
+    assert "c1" * 8 not in rows and "c3" * 8 in rows
+    assert "c2" * 8 not in rows              # in-worker compaction ran
+    assert starts and set(starts.values()) == {1}      # never twice
+    assert aid(2, "body:0004") not in starts     # proven by the tail row
+    unknown = rows[aid(3, "body:0002")]
+    assert {r["phase"] for r in unknown} == {"started"}  # never resent
+    for i in (2, 3):
+        assert aid(i, "body:0003") in starts          # resumed remainder
+
+
+def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
+                                                       monkeypatch):
+    """Per-card part dedupe costs O(new rows), not O(journal): no full
+    scan, and the bytes read over n cards stay within ~2x the journal."""
+    import builtins
+    state = _state(tmp_path)
+    w, _reg, _ = _mkworker(tmp_path)
+    scans, got = [], []
+    real_scan = journal.scan
+    monkeypatch.setattr(journal, "scan",
+                        lambda d: scans.append(d) or real_scan(d))
+
+    class Counted:
+        def __init__(self, handle):
+            self._h = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._h.close()
+
+        def __getattr__(self, name):
+            return getattr(self._h, name)
+
+        def read(self, *a):
+            data = self._h.read(*a)
+            got.append(len(data))
+            return data
+
+    def counted_open(path, mode="r", *a, **kw):
+        handle = builtins.open(path, mode, *a, **kw)
+        return Counted(handle) if mode == "rb" else handle
+
+    monkeypatch.setattr(journal, "open", counted_open, raising=False)
+    per_card = []
+    for i in range(1, 41):
+        got.clear()
+        asyncio.run(w._deliver_parts(
+            _claim(dict(_spec(_chunks(3)), delivery_id=_did(i))), "9001"))
+        per_card.append(sum(got))
+    size = sum(p.stat().st_size for p in state.glob("journal-*.jsonl"))
+    assert scans == []
+    assert sum(per_card) <= 2 * size
+    # constant per card: the 40th card reads no more than the 2nd did
+    assert per_card[-1] <= 2 * per_card[1]

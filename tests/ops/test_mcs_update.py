@@ -307,6 +307,8 @@ def test_stale_git_lock_cleanup(updater, tmp_path):
     mcs_update.REPO = str(repo)
     lock = repo / ".git" / "index.lock"
     lock.write_text("")
+    now = time.time()                        # the clock the code reads
+    os.utime(lock, (now, now))
     # a FRESH lock may belong to a live git process — kept (H3)
     assert updater._clean_stale_git_locks() == []
     assert lock.exists()
