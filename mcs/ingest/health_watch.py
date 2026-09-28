@@ -128,19 +128,23 @@ def classify_health(path: str, now: float, deadline_s: int,
     # unread collection time, when recorded — --jobs-only deep runs
     # refresh 'at' without collecting unread and must not mask a
     # stopped unread check (older files lack the field: use 'at')
-    evidence_at = h["at"]
-    if _finite_number(h.get("unread_at")):
-        evidence_at = min(evidence_at, h["unread_at"])
+    unread_at = h.get("unread_at")
+    binding = h["at"]
+    if _finite_number(unread_at):
+        binding = min(binding, h["unread_at"])
     if cfg is not None:
-        deadline_s = _scheduled_deadline(evidence_at, cfg, deadline_s)
-    age = now - evidence_at
+        deadline_s = _scheduled_deadline(binding, cfg, deadline_s)
+    age = now - binding
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
               "overall": overall, "run_status": h.get("run_status"),
               "run_id": h.get("run_id"), "deadline_s": deadline_s}
-    if age > deadline_s:
-        report["status"] = "stale"
-        return report
-    report["status"] = OVERALL_STATUS[overall]
+    report["status"] = ("stale" if age > deadline_s
+                        else OVERALL_STATUS[overall])
+    # dedup stamp: unread_at only when that age is what made it stale
+    report["evidence_at"] = h["at"]
+    if report["status"] == "stale" and _finite_number(unread_at) \
+            and h["unread_at"] <= h["at"]:
+        report["evidence_at"] = h["unread_at"]
     return report
 
 
@@ -153,17 +157,26 @@ def _load_state(path: str) -> dict:
         return {}
 
 
+def _dedup_stamp(record: dict):
+    """Verdict timestamp. Pre-evidence_at files key on health_at."""
+    if "evidence_at" in record:
+        return record.get("evidence_at")
+    return record.get("health_at")
+
+
 def evaluate(home: str = HOME, now: float | None = None,
              cfg: dict | None = None) -> dict:
     """Classify current evidence, apply alert dedup, persist state.
 
-    Dedup key is (status, health_at): an unchanged file never re-alerts.
-    ok->ok never alerts even when the file is fresh — a healthy
-    producer keeping cadence is not an event. Alerts fire on: first
-    non-ok observation, every transition INTO a non-ok status, one
-    bad->ok recovery, and an unchanged non-ok state re-alerted after
-    REALERT_S. 'ok' is only produced by a fresh in-deadline file —
-    recovery can never be assumed."""
+    Dedup key is (status, evidence_at): unread_at when a stale
+    verdict is the unread-collection age, otherwise health_at. An
+    unchanged verdict never re-alerts. ok->ok never alerts even when
+    the file is fresh — a healthy producer keeping cadence is not an
+    event. Alerts fire on: first non-ok observation, every transition
+    INTO a non-ok status, one bad->ok recovery, and an unchanged
+    non-ok state re-alerted after REALERT_S. 'ok' is only produced by
+    a fresh in-deadline file — recovery can never be assumed. State
+    files that predate evidence_at are read via health_at."""
     now = time.time() if now is None else now
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
@@ -175,8 +188,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     state = _load_state(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
-    key = (obs["status"], obs.get("health_at"))
-    last_key = (last.get("status"), last.get("health_at"))
+    key = (obs["status"], _dedup_stamp(obs))
+    last_key = (last.get("status"), _dedup_stamp(last))
     prior_known = bool(last)
     transition = key != last_key
     alerted_at = state.get("alerted_at")
@@ -199,7 +212,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "watched_at": now})
     state["last"] = {"status": obs["status"],
-                     "health_at": obs.get("health_at")}
+                     "health_at": obs.get("health_at"),
+                     "evidence_at": _dedup_stamp(obs)}
     if alert:
         state["alerted_at"] = now
     try:
