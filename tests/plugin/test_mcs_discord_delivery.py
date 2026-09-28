@@ -840,6 +840,9 @@ def test_dead_spec_with_unproven_card_is_not_rescanned_every_tick(
     real = journal.scan
     monkeypatch.setattr(journal, "scan",
                         lambda d: calls.append(d) or real(d))
+    real_refresh = journal.ScanCache.refresh
+    monkeypatch.setattr(journal.ScanCache, "refresh",
+                        lambda c: calls.append(c) or real_refresh(c))
 
     async def ticks():
         for _ in range(5):
@@ -1307,6 +1310,7 @@ def test_scan_cache_equals_full_scan_under_random_journal_mutation(
     import random
     rnd = random.Random(seed)
     cache = journal.ScanCache(str(tmp_path))
+    held = []                 # (view, full scan when it was taken)
     names = [f"journal-w{i}.jsonl" for i in range(3)]
     aids = [f"a{i}" for i in range(6)]
     for _ in range(80):
@@ -1336,8 +1340,14 @@ def test_scan_cache_equals_full_scan_under_random_journal_mutation(
         elif op == 7 and path.exists():
             path.unlink()
         if rnd.random() < 0.5:
-            _same_as_full_scan(cache.refresh(), tmp_path)
+            view = cache.refresh()
+            _same_as_full_scan(view, tmp_path)
+            held.append((view, journal.scan(str(tmp_path))))
     _same_as_full_scan(cache.refresh(), tmp_path)
+    # a view held across later refreshes stays the scan it was taken as
+    for view, full in held:
+        assert list(view) == list(full)
+        assert {aid: view[aid] for aid in view} == full
 
 
 def test_scan_cache_rereads_a_replaced_file_and_falls_back_on_oserror(
@@ -1482,17 +1492,99 @@ def test_part_dedupe_view_matches_full_scan_through_crash_and_compaction(
         assert aid(i, "body:0003") in starts          # resumed remainder
 
 
-def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
-                                                       monkeypatch):
-    """Per-card part dedupe costs O(new rows), not O(journal): no full
-    scan, and the bytes read over n cards stay within ~2x the journal."""
-    import builtins
+def test_tick_journal_reads_match_full_scan_across_rotation(
+        tmp_path, monkeypatch):
+    """_spent_deliveries, _started, _resume_dead and the _resume_parts
+    fallback read the incremental view; at each call it equals a fresh
+    full scan and they decide exactly as a full scan would — across a
+    peer's appends, a torn tail, compaction behind the cache's back,
+    in-worker rotation + compaction and a deleted segment."""
+    import time as _time
+    from hermes_plugin.mcs_delivery import worker as worker_mod
     state = _state(tmp_path)
-    w, _reg, _ = _mkworker(tmp_path)
-    scans, got = [], []
+    w, reg, _bot = _mkworker(tmp_path)
+    monkeypatch.setattr(worker_mod, "JOURNAL_SEGMENT_BYTES", 2048)
+    views = []
+    real_refresh = w._jview.refresh
+
+    def refresh():
+        view = real_refresh()
+        _same_as_full_scan(view, state)
+        views.append((view, journal.scan(str(state))))
+        return view
+    w._jview.refresh = refresh
+    scans = []
     real_scan = journal.scan
-    monkeypatch.setattr(journal, "scan",
-                        lambda d: scans.append(d) or real_scan(d))
+
+    def scan(d):
+        # only the worker's own full scans count, not this test's checks
+        if sys._getframe(1).f_code.co_filename == worker_mod.__file__:
+            scans.append(d)
+        return real_scan(d)
+    monkeypatch.setattr(journal, "scan", scan)
+
+    def full_spent():
+        return {str(r.get("delivery_id"))
+                for rows in real_scan(str(state)).values() for r in rows
+                if r.get("phase") in ("started", "result")
+                and not r.get("part_id")}
+
+    def full_started(aid):
+        return any(r.get("phase") == "started"
+                   for r in real_scan(str(state)).get(aid, []))
+
+    def check(i):
+        assert w._spent_deliveries() == full_spent()
+        for aid in ("ab" * 8, f"s{i}"):
+            assert w._started({"attempt_id": aid}) == full_started(aid)
+        spec = dict(_spec(_chunks(2)), delivery_id=_did(i))
+        journal.append(str(state), "w0", {
+            "phase": "result", "attempt_id": f"card{i}",
+            "delivery_id": _did(i), "result": "delivered",
+            "message_id": "9001"})
+        asyncio.run(w._resume_dead([spec]) if i % 2
+                    else w._resume_parts(spec))
+        assert reg.parts_done(_did(i))
+        assert set(_sent_parts(state, _did(i))) \
+            == {"thread", "body:0001", "body:0002"}
+
+    old = _time.time() - 5 * 86400
+    _settled(state, "w8", "c1" * 8, _did(90), old)
+    _settled(state, "w8", "c2" * 8, _did(91), old)
+    check(1)
+    journal.append(str(state), "w9", {"phase": "started",
+                                      "attempt_id": "s2",
+                                      "delivery_id": _did(80)})
+    with (state / "journal-w9.jsonl").open("ab") as f:
+        f.write(json.dumps({"phase": "started", "attempt_id": "s3",
+                            "delivery_id": _did(81)}).encode())
+    check(2)                  # torn but parseable tail counts
+    with (state / "journal-w9.jsonl").open("ab") as f:
+        f.write(b"\n")
+    journal.compact(str(state), active="", file_ok=lambda rows: True,
+                    prunable=lambda a, rows: a == "c1" * 8)
+    check(3)                  # compacted behind the cache's back
+    _backup(tmp_path, _time.time() + 3 * 86400)
+    for i in (1, 2, 3):
+        reg.put_parts_done(_did(i))
+    asyncio.run(w.maintain_journal())
+    assert w._segment >= 1
+    check(4)                  # rotated + compacted in-worker
+    (state / "journal-w9.jsonl").unlink()
+    check(5)
+    assert "c2" * 8 not in real_scan(str(state))
+    assert scans == [] and len(views) >= 15
+    # every view handed out is still the scan it was taken as — the
+    # resume loop holds one while its own sends append rows
+    for view, full in views:
+        assert {aid: view[aid] for aid in view} == full
+
+
+def _count_journal_reads(monkeypatch):
+    """Byte counts of every read the journal module makes — a full
+    scan's line iteration and ScanCache's reads alike."""
+    import builtins
+    got = []
 
     class Counted:
         def __init__(self, handle):
@@ -1507,6 +1599,11 @@ def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
         def __getattr__(self, name):
             return getattr(self._h, name)
 
+        def __iter__(self):
+            for line in self._h:
+                got.append(len(line))
+                yield line
+
         def read(self, *a):
             data = self._h.read(*a)
             got.append(len(data))
@@ -1517,6 +1614,20 @@ def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
         return Counted(handle) if mode == "rb" else handle
 
     monkeypatch.setattr(journal, "open", counted_open, raising=False)
+    return got
+
+
+def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
+                                                       monkeypatch):
+    """Per-card part dedupe costs O(new rows), not O(journal): no full
+    scan, and the bytes read over n cards stay within ~2x the journal."""
+    state = _state(tmp_path)
+    w, _reg, _ = _mkworker(tmp_path)
+    scans = []
+    real_scan = journal.scan
+    monkeypatch.setattr(journal, "scan",
+                        lambda d: scans.append(d) or real_scan(d))
+    got = _count_journal_reads(monkeypatch)
     per_card = []
     for i in range(1, 41):
         got.clear()
@@ -1528,3 +1639,43 @@ def test_part_dedupe_reads_only_appended_journal_bytes(tmp_path,
     assert sum(per_card) <= 2 * size
     # constant per card: the 40th card reads no more than the 2nd did
     assert per_card[-1] <= 2 * per_card[1]
+
+
+def test_tick_journal_reads_do_not_grow_with_the_journal(tmp_path,
+                                                         monkeypatch):
+    """A tick that claims a fresh spec (spent check), resumes a dead
+    spec's parts and settles a withdrawn granted claim (started check)
+    reads only the journal bytes appended since the last tick — not the
+    whole journal again, however large it has grown."""
+    import time as _time
+    state = _state(tmp_path)
+    w, reg, _ = _mkworker(tmp_path)
+    for i in range(300):            # a large settled history
+        _settled(state, "w8", f"h{i:07d}", _did(10_000 + i), _time.time())
+    size = sum(p.stat().st_size for p in state.glob("journal-*.jsonl"))
+    got = _count_journal_reads(monkeypatch)
+    per_tick = []
+    for i in range(1, 13):
+        _publish_spec(tmp_path, _sealed(dict(_spec(_chunks(1)),
+                                             delivery_id=_did(i))))
+        dead = dict(_spec(_chunks(1)), delivery_id=_did(500 + i))
+        _publish_spec(tmp_path, _sealed(dead))
+        reg.mark_dead(dead["delivery_id"])
+        journal.append(str(state), "w0", {
+            "phase": "result", "attempt_id": f"card{i}",
+            "delivery_id": dead["delivery_id"], "result": "delivered",
+            "message_id": "9001"})
+        gone = dict(_spec(_chunks(1)), delivery_id=_did(900 + i))
+        reg.claim(gone["delivery_id"], {
+            "attempt_id": f"g{i}", "worker_id": "w1", "spec": gone,
+            "payload_hash": envelopes.payload_hash(gone),
+            "spec_path": str(tmp_path / "gone.json"), "phase": "granted"})
+        got.clear()
+        asyncio.run(w.tick())
+        per_tick.append(sum(got))
+        assert reg.claimed(_did(i)) and reg.parts_done(dead["delivery_id"])
+        assert not reg.claimed(gone["delivery_id"])
+    # the first tick reads the history once; later ticks only new rows
+    assert per_tick[0] >= size
+    assert max(per_tick[1:]) < size / 10
+    assert per_tick[-1] <= 2 * per_tick[1]

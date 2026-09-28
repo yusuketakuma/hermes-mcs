@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from bisect import bisect_left
 from collections.abc import Mapping
 
 from .paths import atomic_write, fsync_dir
@@ -175,23 +176,32 @@ def _parse_rows(data: bytes, out: dict) -> None:
 class _View(Mapping):
     """scan()'s result, assembled lazily from per-file indexes: rows of
     an attempt in sorted-file order, committed lines before the torn
-    tail — the same lists a full scan would return."""
+    tail — the same lists a full scan would return. A snapshot: later
+    refreshes append to the shared per-file lists, so each file keeps
+    only the first ``n`` committed rows it had when the view was made."""
 
     def __init__(self, files: list) -> None:
-        self._files = files      # [(committed index, tail index)] sorted
+        # [(committed rows, aid -> ascending row indexes, n, tail index)]
+        self._files = files
 
     def __getitem__(self, aid: str) -> list[dict]:
-        rows = [r for done, tail in self._files
-                for part in (done, tail) for r in part.get(aid, ())]
+        rows = []
+        for done, index, n, tail in self._files:
+            idx = index.get(aid, ())
+            rows += [done[i] for i in idx[:bisect_left(idx, n)]]
+            rows += tail.get(aid, ())
         if not rows:
             raise KeyError(aid)
         return rows
 
     def __iter__(self):
         seen: dict[str, None] = {}
-        for done, tail in self._files:
-            for part in (done, tail):
-                seen.update(dict.fromkeys(part))
+        for _done, index, n, tail in self._files:
+            for aid, idx in index.items():
+                if idx[0] >= n:
+                    break        # first-seen order: the rest came later
+                seen[aid] = None
+            seen.update(dict.fromkeys(tail))
         return iter(seen)
 
     def __len__(self) -> int:
@@ -208,13 +218,15 @@ class ScanCache:
     longer sits where it was read (a same-name file recreated after an
     unlink). Only newline-terminated lines are committed; the torn tail
     is re-parsed on every refresh, exactly as a full scan would see it.
-    Any OSError drops the cache and returns a full ``scan``.
+    Any OSError drops the cache and returns a full ``scan``. Not
+    thread-safe: one refresh at a time; a returned view stays a valid
+    snapshot across later refreshes.
     """
 
     def __init__(self, state_dir: str) -> None:
         self._dir = state_dir
         # name -> [ino key, committed offset, last committed line,
-        #          committed index, tail index]
+        #          committed rows, aid -> row indexes, tail index]
         self._files: dict[str, list] = {}
 
     def invalidate(self) -> None:
@@ -246,19 +258,27 @@ class ScanCache:
                     if handle.read(len(ent[2])) != ent[2]:
                         ent = None
                 if ent is None:
-                    ent = [key, 0, b"", {}, {}]
+                    ent = [key, 0, b"", [], {}, {}]
                 handle.seek(ent[1])
                 data = handle.read()
             cut = data.rfind(b"\n") + 1
             if cut:
-                _parse_rows(data[:cut], ent[3])
+                new: dict = {}
+                _parse_rows(data[:cut], new)
+                done, index = ent[3], ent[4]
+                # row order within the file is only needed per attempt
+                for aid, rows in new.items():
+                    index.setdefault(aid, []).extend(
+                        range(len(done), len(done) + len(rows)))
+                    done += rows
                 ent[1] += cut
                 ent[2] = data[data.rfind(b"\n", 0, cut - 1) + 1:cut]
-            ent[4] = {}
-            _parse_rows(data[cut:], ent[4])
+            ent[5] = {}
+            _parse_rows(data[cut:], ent[5])
             files[name] = ent
         self._files = files
-        return _View([(ent[3], ent[4]) for ent in files.values()])
+        return _View([(ent[3], ent[4], len(ent[3]), ent[5])
+                      for ent in files.values()])
 
 
 def unfinished(records: dict[str, list[dict]]) -> dict[str, dict]:
