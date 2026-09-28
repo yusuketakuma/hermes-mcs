@@ -193,6 +193,34 @@ def test_dispatch_idempotent_reseal(led):
         "SELECT COUNT(*) c FROM notification_renders").fetchone()["c"] == 1
 
 
+@pytest.mark.parametrize("kind", ["thread", "signal_off"])
+def test_sealed_reentry_reseats_pending_intent(led, kind):
+    """U03-F01: a sealed intent still pending on re-entry (cards not yet
+    delivered, or signals switched off) is re-examined after RESEAT_S,
+    never left due on every flush."""
+    if kind == "thread":
+        _seed_thread(led)
+        ev = _intent(led)
+        cfg = CFG
+    else:
+        _patient(led, 1)
+        _signal_row(led, "sig-r", pid=1)
+        ev = _intent(led, kind="signal", pid=1,
+                     payload={"signal_keys": ["sig-r"], "project_id": 1,
+                              "type": "med_followup"})
+        cfg = {"notify": CFG["notify"], "signals": {"notify": False}}
+    _dispatch(led, ev)                        # sealed at NOW
+    later = NOW + notify_cards.RESEAT_S + 5
+    led.db.execute("UPDATE notify_outbox SET next_try=? WHERE event_id=?",
+                   (later - 1, ev["event_id"]))
+    led.db.commit()
+    _dispatch(led, ev, cfg=cfg, now=later)
+    row = led.db.execute("SELECT state,next_try FROM notify_outbox "
+                         "WHERE event_id=?", (ev["event_id"],)).fetchone()
+    assert row["state"] == "pending"
+    assert row["next_try"] == later + notify_cards.RESEAT_S
+
+
 def test_kill_switch_unsealed_reverts_sealed_stays(led):
     _seed_thread(led)
     ev1 = _intent(led)
