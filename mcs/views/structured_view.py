@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
-                         med_is_patient_current, request_unverified)
+                         med_is_patient_current, item_unverified)
 
 
 def _content_dict(r) -> dict | None:
@@ -214,7 +214,8 @@ def _symptom_line(llm: dict, v1: dict):
                     if isinstance(s, dict) and isinstance(s.get("text"), str)
                     and s["text"]]
     for s in llm_symptoms:
-        if s.get("subject") in ("family", "other") or s.get("unverified"):
+        if s.get("subject") in ("family", "other") \
+                or item_unverified(s):
             continue
         if s.get("negated") or s.get("status") in ("resolved", "past"):
             if s["text"] not in neg_seen:
@@ -307,7 +308,7 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 else ""
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
-            (cands if request_unverified(r) else reqs).append(
+            (cands if item_unverified(r) else reqs).append(
                 prefix + to + str(r.get("action") or "")[:30] + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:
