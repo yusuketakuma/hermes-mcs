@@ -149,6 +149,7 @@ def qc_v4_source_id(msg: str = "m") -> str:
 
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,
+                      content: bool = True,
                       error_check: bool = True) -> str:
     """AND-fragment for fact-extraction reads: v4 PASS outranks the
     canonical projection, which outranks a legacy ``extract_llm`` row;
@@ -157,7 +158,8 @@ def current_fact_pred(art: str = "a", msg: str = "m", *,
     generation. The caller's FROM clause must admit all three kinds —
     ``<art>.kind IN ('extract_llm','canonical_projection',
     'semantic_facts_v4')``."""
-    return (current_extract_pred(art, msg, error_check=error_check)
+    return (current_extract_pred(art, msg, content=content,
+                                 error_check=error_check)
             + f" AND CASE WHEN {art}.kind='{V4_PROJECTION_KIND}'"
               f" THEN {art}.artifact_id={current_v4_id(msg)}"
               f" WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"

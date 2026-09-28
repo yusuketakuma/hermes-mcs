@@ -22,8 +22,9 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 
-from mcs_queries import (CHANGE_ACTIONS, DAY_S, JST, MED_ACTIONS,
-                         current_extract_pred, current_fact_pred,
+from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
+                         MED_ACTIONS,
+                         current_fact_pred,
                          iter_period_ends,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
@@ -135,25 +136,25 @@ def st_data_quality(db, scope):
     body_states = db.execute(
         f"SELECT COALESCE(body_state,'null'), COUNT(*) FROM messages m"
         f" WHERE 1=1{w} GROUP BY 1", p).fetchall()
-    # parsed = a hash-current extract_llm artifact exists (any schema
-    # version — v1 rows stay readable until lazily replaced by v2)
+    # parsed = the message has a current extraction of any fact
+    # generation — the same current_fact_pred rule the fact stats read,
+    # so a v4-current message (no current extract_llm row by design)
+    # is not undercounted or reported stale
+    current = (f"SELECT 1 FROM artifacts a WHERE a.kind IN ({FACT_KINDS_SQL})"
+               f" AND a.message_id=m.message_id"
+               f" {current_fact_pred(content=False)}")
     parsed = db.execute(
         f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
-            AND EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind='extract_llm'
-                          AND a.message_id=m.message_id
-                          {current_extract_pred(content=False)})""",
+            AND EXISTS ({current})""",
         p).fetchone()[0]
     stale = db.execute(
         f"""SELECT COUNT(*) FROM messages m WHERE 1=1{w}
             AND EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind='extract_llm' AND a.message_id=m.message_id
+                        WHERE a.kind IN ({FACT_KINDS_SQL})
+                          AND a.message_id=m.message_id
                           AND json_valid(a.meta)
                           AND json_extract(a.meta,'$.hash')!=m.content_hash)
-            AND NOT EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind='extract_llm'
-                          AND a.message_id=m.message_id
-                          {current_extract_pred(content=False)})""",
+            AND NOT EXISTS ({current})""",
         p).fetchone()[0]
     timed = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE posted_at_ts NOT NULL{w}",

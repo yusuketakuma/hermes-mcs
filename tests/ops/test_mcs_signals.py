@@ -1165,6 +1165,28 @@ def test_symptom_after_med_change_same_post(led):
     assert "関連は人が原記録で判断" in items[0]["note"]
 
 
+
+def test_symptom_after_med_change_ignores_unverified_symptoms(led):
+    """An unverified symptom is not evidence of a patient symptom: it
+    alone never couples, and it is left out beside a verified one."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 meds=[{"name": "薬A", "action": "start"}],
+                 symptoms=[{"text": "浮腫", "status": "new",
+                            "negated": False, "unverified": True}])
+    _msg(led.db, 2, pid=2, ts=NOW - 1 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2",
+                 meds=[{"name": "薬B", "action": "stop"}],
+                 symptoms=[{"text": "倦怠感", "status": "new",
+                            "negated": False, "unverified": True},
+                           {"text": "発疹", "status": "new",
+                            "negated": False}])
+    _ev(led)
+    items = [s for s in mcs_signals.current_open(led.db)["items"]
+             if s["type"] == "symptom_after_med_change"]
+    assert [i["project_id"] for i in items] == [2]
+    assert items[0]["evidence"]["symptoms"] == ["発疹"]
+
 # --- adherence body phrases ---
 
 def test_adherence_body_phrases(led):

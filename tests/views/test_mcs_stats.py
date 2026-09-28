@@ -393,6 +393,21 @@ def test_stale_parsed_counts_only_messages_without_current_extraction(db):
     assert st["stale_parsed"] == 0
 
 
+
+def test_parsed_counts_v4_current_message_without_extract_llm(db):
+    """A v4-current message has no current extract_llm row by design;
+    data_quality must count it parsed like the fact stats read it."""
+    _msg(db, 1, chash="h2")
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])  # old rev
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+        "VALUES ('semantic_facts_v4',1,1,?,?)",
+        (json.dumps({"meds": []}),
+         json.dumps({"hash": "h2", "engine_version": 4})))
+    st = run(db, stat="data_quality")["data_quality"]
+    assert st["stages"]["parsed_current_revision"]["numerator"] == 1
+    assert st["stale_parsed"] == 0
+
 def test_request_is_not_overdue_on_its_due_date(db):
     db.execute("INSERT INTO requests(request_id,project_id,status,"
                "due_date,updated_at) VALUES (1,1,'open','2026-09-21',0)")
