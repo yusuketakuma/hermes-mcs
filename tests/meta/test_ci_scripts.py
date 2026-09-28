@@ -256,3 +256,26 @@ def test_suite_guard_denies_any_path_on_live_llm_authority():
                 "http://localhost:8080/v1/models"):
         with pytest.raises(RuntimeError, match="live LLM/Jev"):
             bounded_http.bounded_http_request(url, "GET", None, 1)
+
+
+# ---------- module table: first sentence, name prefix only ----------
+
+def test_update_readme_module_description_keeps_hyphenated_words(tmp_path):
+    ur = _load("update_readme_docline", "scripts/update_readme.py")
+    cases = {
+        "a.py": ('"""Durable medication-event detail assessment."""',
+                 "Durable medication-event detail assessment."),
+        "b.py": ('"""Auto-metrics benchmark for the pipeline."""',
+                 "Auto-metrics benchmark for the pipeline."),
+        "c.py": ('"""MCS self-update — detection, apply, rollback."""',
+                 "detection, apply, rollback."),
+        "d.py": ('"""Semantic audit gates: code-level checks and\n'
+                 'the status decision."""',
+                 "Semantic audit gates: code-level checks and the status "
+                 "decision."),
+    }
+    for name, (src, expected) in cases.items():
+        path = tmp_path / name
+        path.write_text(src + "\n")
+        assert ur._clean(ur._mod_docline(path), strip_prefix=True) \
+            == expected
