@@ -229,6 +229,7 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
     from semantic_policy import (KIND_FACTS_V2, KIND_FACT_AUDIT,
                                  KIND_FACT_PROJ, semantic_config)
     from semantic_v4 import KIND_V4
+    from mcs_queries import json_object_or_null
     out = {"scope": "history", "fact_source": None, "shadow_v2_docs": 0,
            "v2_coverage_complete": 0, "v2_needs_review": 0,
            "fact_audits": {}, "canonical_projection": 0,
@@ -255,8 +256,8 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
         if meta.get("needs_review"):
             out["v2_needs_review"] += 1
     for r in ledger.db.execute(
-            "SELECT CASE WHEN json_valid(meta) AND json_type(meta)='object' "
-            "THEN json_extract(meta,'$.audit_status') END s, COUNT(*) c "
+            f"SELECT json_extract({json_object_or_null('meta')},"
+            "'$.audit_status') s, COUNT(*) c "
             "FROM artifacts WHERE kind=? GROUP BY s",
             (KIND_FACT_AUDIT,)):
         out["fact_audits"][r["s"] or "unknown"] = r["c"]

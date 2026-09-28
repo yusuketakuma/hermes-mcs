@@ -33,6 +33,12 @@ def json_or_null(col: str) -> str:
     return f"CASE WHEN json_valid({col}) THEN {col} END"
 
 
+def json_object_or_null(col: str) -> str:
+    """Like json_or_null, but also NULL unless `col` is a JSON object."""
+    return (f"CASE WHEN json_valid({col}) AND json_type({col})='object' "
+            f"THEN {col} END")
+
+
 def current_extract_pred(art: str = "a", msg: str = "m", *,
                          content: bool = True,
                          error_check: bool = True) -> str:

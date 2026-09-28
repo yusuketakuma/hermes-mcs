@@ -152,10 +152,13 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
 
 
 def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
-                       findings: list) -> dict:
+                       findings: list | None = None) -> dict:
     """Terminal NEEDS_REVIEW for a canonical generation: a durable audit
     receipt carrying the (code-only) findings, then ``hard_fail`` so the
-    job stops for human review instead of deferring or publishing."""
+    job stops for human review instead of deferring or publishing.
+    Findings default to incomplete canonical coverage."""
+    if findings is None:
+        findings = [{"code": "canonical_coverage_incomplete"}]
     ledger.artifact_add(
         KIND_AUDIT,
         json.dumps({"status": "NEEDS_REVIEW", "findings": findings,
@@ -266,8 +269,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 and v2_doc["coverage"]["status"] != "complete":
             if coverage_retry or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
                 return _park_needs_review(
-                    ledger, pid, mid, fp, policy, v2_doc,
-                    [{"code": "canonical_coverage_incomplete"}])
+                    ledger, pid, mid, fp, policy, v2_doc)
             return {"outcome": "incomplete", "v2_doc": v2_doc}
     if fact_source == "canonical":
         fail_kind = "incomplete"
@@ -279,8 +281,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         # never promoted or silently dropped.
         audited = False
         for _attempt in range(2):
-            doc_hash = payload_hash(
-                {"f": v2_doc["facts"], "e": v2_doc["evidence"]})
+            doc_hash = v4._doc_hash(v2_doc)
             prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
             # C04: only a COMPLETED evaluation is a reusable audit — a
             # stored evaluated:false row (mid-audit outage) must be
@@ -339,8 +340,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     # defense in depth: never mint PASS over open
                     # obligations, whatever the audit said
                     return _park_needs_review(
-                        ledger, pid, mid, fp, policy, v2_doc,
-                        [{"code": "canonical_coverage_incomplete"}])
+                        ledger, pid, mid, fp, policy, v2_doc)
                 audited = True
                 break
             # NEEDS_REVIEW: one targeted repair dispatch per
@@ -416,8 +416,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     # spent, so the generation parks for review
                     if v2_doc["coverage"]["status"] != "complete":
                         return _park_needs_review(
-                            ledger, pid, mid, fp, policy, v2_doc,
-                            [{"code": "canonical_coverage_incomplete"}])
+                            ledger, pid, mid, fp, policy, v2_doc)
                     continue
             # an evaluated NEEDS_REVIEW with no repair left (no per-fact
             # finding to repair, repair already spent, or still failing
@@ -434,20 +433,19 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         # keeps working during migration — the artifact carries the
         # message hash so "current" predicates bind it like an
         # extract_llm row.
-        _v4_doc_hash = payload_hash({"f": v2_doc["facts"],
-                                     "e": v2_doc["evidence"]})
+        # audited is only set by a break right after doc_hash was taken
+        # for this v2_doc, so doc_hash is the audited document's hash
         from semantic_projection import (PROJECTION_VERSION,
-                                         project_v2_doc_legacy)
+                                         project_v2_doc_legacy,
+                                         projection_current)
         prev_proj = _current(ledger, KIND_FACT_PROJ, mid, fp, policy)
         # a row minted by an older projection version (or from another
         # audited document) is stale — supersede it with a fresh row
         if prev_proj is None \
-                or prev_proj["meta"].get("projection_version") \
-                != PROJECTION_VERSION \
-                or prev_proj["meta"].get("doc_hash") != _v4_doc_hash:
+                or not projection_current(prev_proj["meta"], doc_hash):
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s5_projection", "done",
-                            doc_hash=_v4_doc_hash)
+                            doc_hash=doc_hash)
             ledger.artifact_add(
                 KIND_FACT_PROJ,
                 json.dumps(project_v2_doc_legacy(v2_doc),
@@ -458,12 +456,12 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "hash": member["revision"],
-                      "doc_hash": _v4_doc_hash,
+                      "doc_hash": doc_hash,
                       "projection_version": PROJECTION_VERSION})
         else:
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s5_projection", "reused",
-                            doc_hash=_v4_doc_hash)
+                            doc_hash=doc_hash)
     else:
         prev_f = _current(ledger, KIND_FACTS, mid, fp)
         if prev_f is not None:
@@ -1105,6 +1103,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         llm_started = True
         return llm_fn(*args, **kwargs)
 
+    def jev_sent():
+        return (jev_client is not None
+                and jev_client.requests_made > requests_before)
+
     try:
         return _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
@@ -1120,13 +1122,9 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         # already made (e.g. the per-chunk preflight) are real spend:
         # back off hourly so a held LLM cannot re-spend the Jev budget
         # every minute
-        sent = (jev_client is not None
-                and jev_client.requests_made > requests_before)
-        return "deferred_backoff" if sent else "deferred"
+        return "deferred_backoff" if jev_sent() else "deferred"
     except runtime.RuntimeBudget:
-        sent = (jev_client is not None
-                and jev_client.requests_made > requests_before)
-        return "retry" if sent or llm_started else "deferred"
+        return "retry" if jev_sent() or llm_started else "deferred"
 
 
 class _TimedClient:
