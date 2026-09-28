@@ -48,7 +48,8 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 - `integration/` — Hermes 連携・複数領域の統合テスト
 - `deployment/` — 配備用スクリプト・設定候補（変更だけでは実機適用しない）
 - `docs/` — 仕様・開発資料・検証記録
-- `scripts/` — `run_tests.sh`、`update_readme.py`
+- `scripts/` — `run_tests.sh`、`update_readme.py`、`keychain_to_env.py`、
+  `semantic_shadow_e2e.py`
 
 `hermes_plugin/` は長寿命の Hermes gateway が起動時に読込む。変更を
 有効化するには `hermes gateway restart` が必要 — 再起動なしでは

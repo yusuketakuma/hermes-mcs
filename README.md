@@ -182,7 +182,7 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
   `mcs/core/local_llm.py` の `SLOT_1`/`SLOT_2`/`request_slot()` が
   規約の正本
 - パラメータ: `temperature: 0`・`enable_thinking: false` で決定的出力。
-  extract_llm は `max_tokens: 1400`・timeout 300s。長文は全文をチャンク
+  extract_llm は `max_tokens: 1600`・timeout 300s。長文は全文をチャンク
   分割して全区間を処理(先頭打ち切りなし)。サーバ対応を合成ペイロードで
   probe し `json_schema → json_object → plain` の順で出力形式を選択、
   拒否時は1段降格して再試行
@@ -195,7 +195,7 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
   vitals は検証時に本文中の数値へ最も近い測定名ラベルで照合され、
   別バイタルの記述(「脈は48」をbs等)は自動で正キーへ付け替え、
   本文に無い数値・一意に特定できないものは drop される。
-  残予算が呼出し完了見込み(実測 timings 由来の下限: 単発90s・修復
+  残予算が呼出し完了見込み(実測 timings 由来の下限: 単発75s・修復
   75s・バッチ 60+55s/item)を下回る場合は発火せず deferred — 途中
   kill される生成の浪費を避け、行は pending のまま次サイクルへ。
   バッチ自体が deferred の場合も各行は単発レーンへ回り、バッチ分に
@@ -692,7 +692,8 @@ $PY mcs/views/mcs_view.py signals                   # open なレビュー候補
   snapshot timestamp を必ず送信
 - **no-redirect / no-proxy** — Bearer は許可 origin 以外へ送らない。
   レスポンス本文はログに出さない
-- **定期実行は本文・氏名を出さない** — 明示的な `mcs_view` 閲覧のみ例外
+- **定期実行は本文・氏名を stdout/ログに出さない** — 通知先（Discord/Slack）へは
+  設定に従い本文・添付・患者名を送る。明示的な `mcs_view` 閲覧は例外
 
 
 ## 詳しい仕組み・運用リファレンス

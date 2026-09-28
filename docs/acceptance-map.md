@@ -98,7 +98,7 @@ G2/G6/G7を、この成功件数で代替しない。
 | RF-BASE / RF-CODE | 歴史的PASS記録あり、現候補へは流用不可 | phase-r-recordの46cffb0、refactor-revalidationの履歴順序。現候補はPhase J後の別tree |
 | RF-OPS | NOT_TESTED | 本番起動・権限配置・実機復旧・切替は未実施 |
 | G0 | PASS（Phase J基準・接続点照合） | RF-CODE対象46cffb0からの履歴順序、D01–D15接続点、変更分類をrefactor-revalidationで照合。g1-validationの全adapter hash再一致を確認。最新overlayはmcs-candidate-20260921-g0に固定。RF-CODEのRT全比較や実配備をこの判定に含めない |
-| G1 | PASS（ローカルコード・合成結合） | docs/g1-validation.jsonの対象hash。全保存入口seed後rollback、改訂/添付、OFF/shadow、tick優先順、pause中新着保持とDB再接続後resumeを確認。実機/電断/ACK範囲は別gate |
+| G1 | PASS（ローカルコード・合成結合） | docs/dev-records/g1-validation.jsonの対象hash。全保存入口seed後rollback、改訂/添付、OFF/shadow、tick優先順、pause中新着保持とDB再接続後resumeを確認。実機/電断/ACK範囲は別gate |
 | G2 | 部分PASS | 実POST1回で固定model・厳密応答契約成功、成功後GET1回。primitive/scope/transportは合成回帰。実配置egressと認証値混入全経路の最終照合は未完 |
 | G3 | 部分PASS | quote/revision/Unicode/数量/repair/coverageの合成回帰と286件成功。実文の否定・時制・関係保持精度は未評価 |
 | G4 | 部分PASS | Hermes native入力の合成E2E、人手preview/confirm、source hash/revision/receipt、Loopリンクrollback。実Discord受信・権限配置は未実施 |
