@@ -24,9 +24,10 @@ from ..mcs_delivery.spec import MAX_TEXT
 _VERIFIED_SDK = frozenset({"2.7.1"})
 _SDK_VERSION = re.compile(r"discord\.py (\S+)\)")
 _GUARD_MARK = "_mcs_single_post"
-# POSTs issued inside the current single_post() call; None outside it,
-# so Hermes' own sends (other tasks, default context) pass untouched
-_POSTS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+# HTTP status of each POST issued inside the current single_post() call
+# (None until/unless a response arrives); None outside it, so Hermes'
+# own sends (other tasks, default context) pass untouched
+_POSTS: contextvars.ContextVar[list[int | None] | None] = contextvars.ContextVar(
     "mcs_discord_single_post", default=None)
 
 # accent bar colour per card kind — the visible card edge; a missing
@@ -124,16 +125,38 @@ class DiscordRetrySuppressed(RuntimeError):
     first may have committed, so the outcome is unknown, not a resend."""
 
 
+class _StatusRecorder:
+    """Response context of a guarded POST: stores its HTTP status in
+    the call's POST log once the response arrives (None if it never
+    did — reset, timeout), so only a definitive 429 lets a retry through."""
+
+    def __init__(self, cm, posts, i):
+        self._cm, self._posts, self._i = cm, posts, i
+
+    async def __aenter__(self):
+        resp = await self._cm.__aenter__()
+        self._posts[self._i] = getattr(resp, "status", None)
+        return resp
+
+    async def __aexit__(self, *exc):
+        return await self._cm.__aexit__(*exc)
+
+
 def _guarded(request):
     @functools.wraps(request)
     def guarded(method, *args, **kwargs):
         posts = _POSTS.get()
-        if posts is not None and str(method).upper() == "POST":
-            if posts:
-                raise DiscordRetrySuppressed(
-                    "discord.py retry of a create POST suppressed")
-            posts.append(method)
-        return request(method, *args, **kwargs)
+        if posts is None or str(method).upper() != "POST":
+            return request(method, *args, **kwargs)
+        # a 429 is Discord refusing before acting — its re-POST cannot
+        # duplicate; after 5xx, a reset or anything else the previous
+        # POST may have committed
+        if posts and posts[-1] != 429:
+            raise DiscordRetrySuppressed(
+                "discord.py retry of a create POST suppressed")
+        posts.append(None)
+        return _StatusRecorder(request(method, *args, **kwargs), posts,
+                               len(posts) - 1)
     setattr(guarded, _GUARD_MARK, True)
     return guarded
 
@@ -155,9 +178,9 @@ def single_post_ready(bot) -> bool:
 
 
 async def single_post(bot, factory):
-    """Await ``factory()`` allowing exactly one POST onto the wire — the
-    SDK's in-call re-POST (5xx, 429, ECONNRESET) raises
-    DiscordRetrySuppressed before reaching the session instead."""
+    """Await ``factory()`` allowing exactly one committable POST onto the
+    wire — the SDK's in-call re-POST after a 429 goes out, after 5xx or
+    ECONNRESET it raises DiscordRetrySuppressed before the session."""
     if not single_post_ready(bot):
         raise RetryPolicyUnknown("discord.py retry policy unverified")
     token = _POSTS.set([])

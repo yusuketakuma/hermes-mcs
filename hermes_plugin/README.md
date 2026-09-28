@@ -194,8 +194,10 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   429・500/502/504/524・接続リセットで最大5回まで再送するため、作成系 POST
   （カード・スレッド作成・本文・添付）は単発に制限する: Hermes の bot が持つ
   aiohttp session の `request` を一度だけ包み、MCS 配送タスクの送信中（ContextVar）
-  に限り2回目の POST を wire に出す前に `DiscordRetrySuppressed` で止める。
-  初回が確定済みかもしれないので結果は `unknown`（自動再送しない）。Hermes 自身の
+  に限り、直前の POST 応答が 429 以外（5xx・接続リセット等）なら次の POST を
+  wire に出す前に `DiscordRetrySuppressed` で止める。初回が確定済みかもしれない
+  ので結果は `unknown`（自動再送しない）。429 は Discord が処理せず拒否した応答
+  なので SDK の backoff 後の再送はそのまま通す（重複しない）。Hermes 自身の
   送信は ContextVar 外なので従来どおり再試行される。この保護は検証済みの
   discord.py 2.7.1（client の user_agent で判定）と private session 属性に依存し、
   それ以外の版・属性欠落では作成系を送らず `not_sent`/`retry_policy_unknown` で

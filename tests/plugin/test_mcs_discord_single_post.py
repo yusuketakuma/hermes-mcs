@@ -43,6 +43,9 @@ class _Resp:
         self._wire, self._fault = wire, fault
 
     async def __aenter__(self):
+        if self._fault == 429:              # rate limited: never acted on
+            self.status, self.data = 429, {"retry_after": 0}
+            return self
         self._wire.committed += 1           # the server acted on it
         if isinstance(self._fault, OSError):
             raise self._fault               # ...but the answer was lost
@@ -83,10 +86,16 @@ class HTTPClient:
         self.user_agent = _ua(version)
         self.__session = session            # -> _HTTPClient__session
 
+    async def rate_limit_backoff(self):     # asyncio.sleep(retry_after)
+        pass
+
     async def request(self, method, url):
         for tries in range(5):
             try:
                 async with self.__session.request(method, url) as resp:
+                    if resp.status == 429:
+                        await self.rate_limit_backoff()
+                        continue
                     if resp.status in {500, 502, 504, 524}:
                         continue
                     return resp.data
@@ -327,3 +336,102 @@ def test_replaced_session_gets_guard_reinstalled_once():
     with pytest.raises(cards.DiscordRetrySuppressed):
         asyncio.run(cards.single_post(bot, post))
     assert len(fresh.posts()) == 1
+
+
+ECONNRESET = ConnectionResetError(54, "Connection reset by peer")
+
+
+@pytest.mark.parametrize("faults,posts", [
+    ([429], 2), ([429, 429], 3),
+], ids=["429_then_200", "429_429_200"])
+def test_card_create_retries_after_429(tmp_path, faults, posts):
+    # a 429 is a definitive non-commit — the SDK's re-POST is the only
+    # delivery, not a duplicate
+    bot = WireBot(faults=faults)
+    w, _ = _mk(tmp_path, bot)
+    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(_spec([])))))
+    assert out["result"] == "delivered"
+    assert len(bot.wire.posts()) == posts and bot.wire.committed == 1
+
+
+@pytest.mark.parametrize("faults,posts", [
+    ([500, None], 1), ([429, 500, None], 2), ([429, ECONNRESET, None], 2),
+], ids=["500_then_200", "429_500_200", "429_econnreset_200"])
+def test_card_create_retry_after_non_429_is_suppressed(tmp_path, faults,
+                                                       posts):
+    bot = WireBot(faults=faults)
+    w, _ = _mk(tmp_path, bot)
+    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(_spec([])))))
+    assert len(bot.wire.posts()) == posts
+    assert out == {"result": "unknown", "error_code": SUPPRESSED}
+
+
+def test_rate_limited_durable_parts_are_delivered(tmp_path):
+    bot = WireBot(faults=[429, None, 429, None, 429])
+    w, _ = _mk(tmp_path, bot)
+    asyncio.run(w._deliver_parts(_claim(_attachment_spec(tmp_path)), "9001"))
+    rows = _sent_parts(_state(tmp_path))
+    assert {k: r["result"] for k, r in rows.items()} == {
+        "thread": "delivered", "body:0001": "delivered",
+        "attach:0007": "delivered"}
+    assert len(bot.wire.posts()) == 6 and bot.wire.committed == 3
+
+
+def test_rate_limited_legacy_body_continues(tmp_path):
+    bot = WireBot(faults=[None, 429])
+    w, logs = _mk(tmp_path, bot)
+    asyncio.run(w._deliver_parts(_claim(_legacy_spec()), "9001"))
+    assert len(bot.wire.posts()) == 3          # thread + 429 + body
+    assert not [e for e, _ in logs if e == "thread_body_failed"]
+
+
+def test_foreign_429_does_not_open_guarded_retry():
+    # Hermes' own 429 in another task must not count as the guarded
+    # call's previous response
+    bot = WireBot(faults=[None, 429, None, None])
+    posted, hermes_done = asyncio.Event(), asyncio.Event()
+
+    async def guarded():
+        await bot.http.request("POST", "/channels/42/messages")
+        posted.set()
+        await hermes_done.wait()
+        await bot.http.request("POST", "/channels/42/messages")
+
+    async def hermes():
+        await posted.wait()
+        try:
+            return await bot.http.request("POST", "/channels/1/messages")
+        finally:
+            hermes_done.set()
+
+    async def run():
+        return await asyncio.gather(cards.single_post(bot, guarded),
+                                    hermes(), return_exceptions=True)
+
+    card, reply = asyncio.run(run())
+    assert isinstance(card, cards.DiscordRetrySuppressed)
+    assert reply == {"id": 5002}
+    assert bot.wire.posts() == [("POST", "/channels/42/messages")] + \
+        [("POST", "/channels/1/messages")] * 2
+
+
+def test_cancel_during_429_backoff_leaves_no_state():
+    bot = WireBot(faults=[429, 500, None, 429, None])
+
+    async def cancelled_backoff():
+        raise asyncio.CancelledError          # sleep(retry_after) cancelled
+
+    async def run():
+        bot.http.rate_limit_backoff = cancelled_backoff
+        with pytest.raises(asyncio.CancelledError):
+            await cards.single_post(
+                bot, lambda: bot.http.request("POST", "/x"))
+        assert cards._POSTS.get() is None
+        del bot.http.rate_limit_backoff
+        await bot.http.request("POST", "/y")    # unguarded: 500 retried
+        # a fresh call: its own 429 opens exactly its own retry
+        return await cards.single_post(
+            bot, lambda: bot.http.request("POST", "/z"))
+
+    assert asyncio.run(run()) == {"id": 5003}
+    assert [u for _, u in bot.wire.posts()] == ["/x", "/y", "/y", "/z", "/z"]
