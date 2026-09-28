@@ -1267,3 +1267,59 @@ def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
     assert mcs_update.rollback() == 0
     assert calls == [1]
     assert mcs_update.load_state()["applying"]["tag"] == "v1.0.6"
+
+
+class _FakeLaunchd:
+    """launchctl stub: bootstrap exit codes come from `outcomes`; a
+    successful bootstrap (or `late_load`) marks the label loaded."""
+
+    def __init__(self, outcomes, late_load=False):
+        self.outcomes = list(outcomes)
+        self.late_load = late_load
+        self.loaded = False
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb = argv[1]
+        self.calls.append(verb)
+        rc, out, err = 0, "", ""
+        if verb == "bootout":
+            self.loaded = False
+        elif verb == "bootstrap":
+            rc = self.outcomes.pop(0)
+            if rc == 0:
+                self.loaded = True
+            else:
+                err = "Bootstrap failed: 5: Input/output error"
+                out = "success"          # misleading output is ignored
+                if not self.outcomes and self.late_load:
+                    self.loaded = True
+        elif verb == "print":
+            rc = 0 if self.loaded else 113
+            out = "\tpid = 4242\n" if self.loaded else ""
+        return subprocess.CompletedProcess(argv, rc, out, err)
+
+
+@pytest.mark.parametrize("outcomes,late,problems,boots", [
+    ([5, 0], False, [], 2),
+    ([5, 5, 5], True, [], 3),
+    ([5, 5, 5], False, ["bootstrap_failed:ai.mcs.x"], 3),
+])
+def test_restart_agents_retries_transient_bootstrap(
+        tmp_path, monkeypatch, outcomes, late, problems, boots):
+    from types import SimpleNamespace
+    fake = _FakeLaunchd(outcomes, late_load=late)
+    sleeps = []
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_update, "time",
+                        SimpleNamespace(time=time.time, sleep=sleeps.append))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.x",))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_agent_pid",
+                        lambda label: 4242 if fake.loaded else None)
+    monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
+    assert mcs_update.restart_agents() == problems
+    assert fake.calls[0] == "bootout"
+    assert fake.calls.count("bootstrap") == boots
+    assert sleeps.count(1) == boots - (not problems and not late)

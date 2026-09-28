@@ -214,13 +214,27 @@ def _agent_pid(label):
     return int(m.group(1)) if m else None
 
 
+def _bootstrap_agent(label, plist):
+    """install.sh bootstrap_agent: launchd may still be tearing down a
+    just-booted-out job ("5: Input/output error") — retry briefly, then
+    accept a label that is loaded now."""
+    for _ in range(3):
+        r = _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
+        if r is not None and r.returncode == 0:
+            return True
+        time.sleep(1)
+    r = _launchctl(["print", f"gui/{os.getuid()}/{label}"])
+    return r is not None and r.returncode == 0
+
+
 def _restart_drainers():
     problems = []
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
-        if os.path.exists(plist):
-            _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
+        if os.path.exists(plist) and not _bootstrap_agent(label, plist):
+            problems.append(label)
+            continue
         deadline = time.time() + 15
         while time.time() < deadline:
             if _agent_pid(label):

@@ -625,6 +625,22 @@ def quiesce() -> list[str]:
     return stopped
 
 
+def _bootstrap_agent(label: str, plist: str) -> bool:
+    """install.sh bootstrap_agent: launchd may still be tearing down a
+    just-booted-out job ("5: Input/output error") — retry briefly, then
+    accept a label that is loaded now."""
+    for _ in range(3):
+        r = subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{_uid()}", plist],
+            capture_output=True, text=True, timeout=T_GIT)
+        if r.returncode == 0:
+            return True
+        time.sleep(1)
+    return subprocess.run(
+        ["launchctl", "print", f"gui/{_uid()}/{label}"],
+        capture_output=True, timeout=T_GIT).returncode == 0
+
+
 def restart_agents() -> list[str]:
     """Re-bootstrap resident drainers and verify a NEW pid; watchers are
     verified loaded only (R20). Returns list of verify failures."""
@@ -633,10 +649,7 @@ def restart_agents() -> list[str]:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{label}"],
                        capture_output=True, timeout=T_GIT)
-        r = subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{_uid()}", plist],
-            capture_output=True, text=True, timeout=T_GIT)
-        if r.returncode != 0:
+        if not _bootstrap_agent(label, plist):
             problems.append(f"bootstrap_failed:{label}")
             continue
         deadline = time.time() + 15
@@ -653,10 +666,8 @@ def restart_agents() -> list[str]:
             ["launchctl", "print", f"gui/{_uid()}/{label}"],
             capture_output=True, timeout=T_GIT)
         if r.returncode != 0:
-            subprocess.run(
-                ["launchctl", "bootstrap", f"gui/{_uid()}",
-                 os.path.join(AGENTS_DIR, label + ".plist")],
-                capture_output=True, timeout=T_GIT)
+            _bootstrap_agent(label,
+                             os.path.join(AGENTS_DIR, label + ".plist"))
             r = subprocess.run(
                 ["launchctl", "print", f"gui/{_uid()}/{label}"],
                 capture_output=True, timeout=T_GIT)
