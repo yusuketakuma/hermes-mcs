@@ -156,6 +156,118 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     return row[0] if row else None
 
 
+# Rows re-projected per tick — the pass is a pure function of stored
+# documents (no model call), but it still writes one artifact per row
+# and must never crowd the shared run lock's deadline.
+REPROJECT_LIMIT = 25
+
+
+def _reproject_doc(ledger, mid: int, meta: dict):
+    """The audited v2 document a current projection/v4 row was rendered
+    from, or ``(None, reason)``. Selected exactly the way the drain
+    selects it (the newest ``semantic_facts_v2`` row of the generation's
+    fingerprint) and accepted only when it is still the document the row
+    binds (``doc_hash``), its coverage is complete, and the stored fact
+    audit of that generation PASSed it."""
+    from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2
+    from semantic_store import _current
+    fp, policy = meta.get("fingerprint"), meta.get("policy_fingerprint")
+    doc_hash = meta.get("doc_hash")
+    if not (isinstance(fp, str) and isinstance(policy, str)
+            and isinstance(doc_hash, str)):
+        return None, "unbound_meta"
+    prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+    doc = prev_v2["content"] if prev_v2 else None
+    try:
+        ok = doc is not None and _doc_hash(doc) == doc_hash
+    except (KeyError, TypeError, ValueError):
+        ok = False
+    if not ok:
+        return None, "doc_unavailable"
+    if not isinstance(doc.get("coverage"), dict) \
+            or doc["coverage"].get("status") != "complete":
+        return None, "coverage_incomplete"
+    audit = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
+    if audit is None or audit["meta"].get("doc_hash") != doc_hash \
+            or not audit["content"].get("evaluated") \
+            or audit["content"].get("status") != "PASS":
+        return None, "audit_not_pass"
+    return doc, None
+
+
+def reproject_stale(ledger, scfg: dict,
+                    limit: int = REPROJECT_LIMIT) -> dict:
+    """Bounded deterministic re-projection (no model call): supersede
+    CURRENT ``canonical_projection`` / ``semantic_facts_v4`` rows whose
+    ``meta.projection_version`` is missing or older than
+    ``PROJECTION_VERSION`` with a row rendered by the current
+    ``project_v2_doc_legacy`` from the same stored audited document.
+
+    Only a row the read side would select right now is touched (the
+    shared ``current_projection_id``/``current_v4_id`` predicates:
+    hash-current, error-free, not invalidated, newest) on a message whose
+    body is not deleted, so invalidated, superseded and non-PASS
+    generations (which never have a v4 row) are never resurrected. The
+    new row copies the old binding meta verbatim — fingerprint, policy,
+    hash, doc_hash, engine/extract version — and only advances
+    ``projection_version`` (plus a ``reprojected_from`` lineage id);
+    readers pick it as the newest ``artifact_id`` and the drain's own
+    reuse checks accept it. A row whose document cannot be re-derived
+    safely is marked ``reproject_skipped`` (so it cannot starve the
+    bound) and keeps serving until its message is drained again. Run it
+    after ``invalidate_projections`` in the same tick."""
+    from mcs_queries import current_projection_id, current_v4_id
+    from semantic_policy import KIND_FACT_PROJ
+    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
+    out = {"reprojected": 0, "skipped": 0, "skip_reasons": {}}
+    if scfg.get("mode") == "off" \
+            or scfg.get("fact_source") != "canonical" or limit < 1:
+        return out
+    rows = ledger.db.execute(
+        "SELECT a.artifact_id,a.kind,a.project_id,a.message_id,a.model,"
+        "a.meta FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id AND m.project_id=a.project_id "
+        "WHERE a.kind IN (?,?) AND m.body_state IS NOT 'deleted' "
+        "AND a.artifact_id=CASE WHEN a.kind=? "
+        f"THEN {current_projection_id('m')} ELSE {current_v4_id('m')} END "
+        "AND COALESCE(json_extract(a.meta,'$.projection_version'),0)<? "
+        "AND COALESCE(json_extract(a.meta,'$.reproject_skipped'),0)<? "
+        "ORDER BY a.artifact_id LIMIT ?",
+        (KIND_FACT_PROJ, KIND_V4, KIND_FACT_PROJ, PROJECTION_VERSION,
+         PROJECTION_VERSION, limit)).fetchall()
+    for row in rows:
+        meta = json.loads(row["meta"])
+        doc, reason = _reproject_doc(ledger, row["message_id"], meta)
+        with ledger.db:
+            if doc is None:
+                ledger.db.execute(
+                    "UPDATE artifacts SET meta=json_set(meta,"
+                    "'$.reproject_skipped',?) WHERE artifact_id=?",
+                    (PROJECTION_VERSION, row["artifact_id"]))
+                out["skipped"] += 1
+                out["skip_reasons"][reason] = \
+                    out["skip_reasons"].get(reason, 0) + 1
+                continue
+            new_meta = dict(meta)
+            new_meta.pop("reproject_skipped", None)
+            new_meta["projection_version"] = PROJECTION_VERSION
+            new_meta["reprojected_from"] = row["artifact_id"]
+            ledger.artifact_add_tx(
+                row["kind"], json.dumps(project_v2_doc_legacy(doc),
+                                        ensure_ascii=False,
+                                        allow_nan=False),
+                project_id=row["project_id"],
+                message_id=row["message_id"], model=row["model"] or "",
+                meta=new_meta)
+            # same rollup contract as invalidate_projections: the
+            # patient's rollup is rebuilt from the new current row
+            ledger.db.execute(
+                "DELETE FROM artifacts WHERE kind='patient_rollup' "
+                "AND project_id=?", (row["project_id"],))
+        out["reprojected"] += 1
+    return out
+
+
 def _doc_hash(v2_doc: dict) -> str:
     from mcs_requests import payload_hash
     return payload_hash({"f": v2_doc["facts"], "e": v2_doc["evidence"]})
