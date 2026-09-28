@@ -370,6 +370,31 @@ def test_v2_error_row_respects_backoff(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize("skew", [-3 * 86400, 30 * 86400])
+def test_backoff_reads_python_clock_not_sqlite(tmp_path, monkeypatch, skew):
+    """next_try is written from time.time(); the pending scan must compare
+    it against the same clock even when SQLite's 'now' disagrees."""
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + skew)
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="backoff row"),
+                      _message(mid=2, body="fresh row")])
+    row = db.db.execute(
+        "SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._fail(db, row, 0)  # next_try = python now + 300
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: calls.append(body) or {"summary": "ok"})
+    for _ in range(2):  # a repeated drain must not leak the backoff row
+        extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert calls == ["fresh row"]
+    # once the Python clock passes the backoff, the row retries
+    monkeypatch.setattr(time, "time", lambda: real() + skew + 7200)
+    res = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res["done"] == 1 and calls == ["fresh row", "backoff row"]
+    db.close()
+
+
 # ---------- consumer filters ----------
 
 def _llm_artifact(db, mid, content, chash):
