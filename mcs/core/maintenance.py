@@ -111,14 +111,20 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
     try:
         with open(state_path, encoding="utf-8") as f:
             state = json.load(f)
-        records = list(state.get("applied") or [])
-        if state.get("applying"):
+        if not isinstance(state, dict) or not isinstance(state.get("applied"), list):
+            return 0
+        records = list(state["applied"])
+        if state.get("applying") is not None:
             records.append(state["applying"])
         for rec in records:
-            bp = rec.get("backup_path") if isinstance(rec, dict) else None
+            if not isinstance(rec, dict):
+                return 0
+            bp = rec.get("backup_path")
+            if bp is not None and (not isinstance(bp, str) or not bp.strip()):
+                return 0
             if isinstance(bp, str):
                 referenced.add(os.path.abspath(bp))
-    except (OSError, json.JSONDecodeError, TypeError):
+    except (OSError, ValueError, TypeError, RecursionError):
         # unreadable state => keep EVERYTHING (fail-safe, S17)
         return 0
     removed = 0
@@ -149,6 +155,8 @@ def rotate_log(paths=None):
                 shutil.copyfile(path, path + ".1")
                 with open(path, "w"):
                     pass
+
+
 def prune_attachments(db_path: str) -> int:
     """Delete downloaded attachment payloads older than 14 days —
     retention-bound the unbounded attachments/ dir (10GB in the first
@@ -174,6 +182,14 @@ def prune_attachments(db_path: str) -> int:
           SELECT json_extract(payload,'$.attachment_id') FROM notify_outbox
           WHERE kind='attachment_followup' AND state IN ('pending','failed')
             AND json_valid(payload)""")}
+        # An accepted card can still have unsent or uncertain companion
+        # files. Their durable part journal owns those payloads until settled.
+        keep_ids.update(r[0] for r in con.execute("""
+          SELECT p.attachment_id FROM notification_render_parts p
+          LEFT JOIN notification_renders r USING(delivery_id)
+          WHERE p.kind='attachment_part' AND p.state IN ('pending','unknown','held')
+            AND r.state IS NOT 'cancelled' AND p.attachment_id IS NOT NULL
+        """))
         rows = con.execute("""
           SELECT attachment_id, message_id, name, local_path
           FROM attachments

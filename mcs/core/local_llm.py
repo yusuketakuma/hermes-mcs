@@ -16,8 +16,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import time
 import urllib.error
+import urllib.parse
 
 import bounded_http
 
@@ -25,6 +27,40 @@ ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
 MODEL = "Qwen3.5-9B"
 MAX_TOKENS = 1400
 TIMEOUT = 90
+
+
+def resolve(cfg: dict | None) -> tuple[str, str]:
+    """(endpoint, model) — ``local_llm.url``/``local_llm.model`` keys in
+    config.json override the pinned defaults (a self-hosted
+    OpenAI-compatible server on another port, a different GGUF), while
+    absent or malformed values keep the built-in llama.cpp pin. The
+    loopback-only wire gate in ``chat``/``bounded_http`` still applies
+    to whatever the config points at."""
+    endpoint, model = ENDPOINT, MODEL
+    ll = (cfg or {}).get("local_llm")
+    if isinstance(ll, dict):
+        url = ll.get("url")
+        if isinstance(url, str) and url.strip():
+            endpoint = url.strip()
+        m = ll.get("model")
+        if isinstance(m, str) and m.strip():
+            model = m.strip()
+    return endpoint, model
+
+
+def probe_urls(endpoint: str) -> tuple[str, str]:
+    """(models, slots) probe URLs for an OpenAI-compatible endpoint —
+    derived from the endpoint's authority so a configured port is
+    honoured."""
+    try:
+        parts = urllib.parse.urlsplit(endpoint)
+    except ValueError:
+        parts = None
+    if parts and parts.netloc:
+        base = f"{parts.scheme}://{parts.netloc}"
+    else:  # malformed endpoint — degrade to a still-probeable default
+        base = ENDPOINT.split("/v1/", 1)[0]
+    return f"{base}/v1/models", f"{base}/slots"
 
 # Slot reservation on the shared -np 2 llama-server: every MCS
 # background call pins slot 1 so slot 2 stays free for interactive
@@ -63,7 +99,10 @@ def request_slot() -> int:
     if v is not None:
         digits = v.strip()
         if digits and digits.isascii() and digits.isdecimal():
-            slot = int(digits)
+            try:
+                slot = int(digits)
+            except ValueError:
+                return BACKGROUND_SLOT
             if 0 <= slot < SLOT_COUNT:
                 return slot
     return BACKGROUND_SLOT
@@ -168,8 +207,12 @@ def admitted_chat(client_route: str, prompt: str, *,
     # the caller's error_out still receives unreachable/transport so
     # its deferral policy survives the gate
     err_out = error_out if error_out is not None else {}
-    response = chat(prompt, deadline=deadline, extra_payload=extra,
-                    error_out=err_out, **kw)
+    try:
+        response = chat(prompt, deadline=deadline, extra_payload=extra,
+                        error_out=err_out, **kw)
+    except BaseException:
+        broker.mark_unknown(pid, "interrupted")
+        raise
     if response is None:
         if err_out.get("kind") == "unreachable":
             # connection refused — provably never reached the backend
@@ -208,19 +251,27 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     if not sent.get("sent"):
         broker.terminal(pid, "not_sent", proof=sent.get("reason"))
         return "plain"
+    err_out = kw.pop("error_out", None)
+    if err_out is None:
+        err_out = {}
     try:
         return probe_format(endpoint, model, schema,
-                            admission_token=sent["token"], **kw)
-    except Exception:
+                            admission_token=sent["token"], error_out=err_out, **kw)
+    except BaseException:
         broker.mark_unknown(pid, "probe_error")
         raise
     finally:
-        # a returned probe means every send reached a terminal HTTP
-        # answer; an exception already parked the permit as unknown —
-        # never overwrite that
+        # Plain mode can also mean an interrupted transport. It proves
+        # neither completion nor that the backend stopped decoding.
         p = broker._permit(pid)
         if p is not None and p["state"] == "sent":
-            broker.terminal(pid, "done", proof="probe_returned")
+            if err_out.get("kind") == "unreachable":
+                broker.terminal(pid, "not_sent", proof="unreachable")
+            elif err_out.get("kind"):
+                broker.mark_unknown(pid, "probe_transport")
+            else:
+                broker.terminal(pid, "done", proof="probe_returned")
+
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
                     deadline: float | None = None):
@@ -260,8 +311,8 @@ def _timings_dict(timings) -> dict | None:
     for key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms",
                 "cache_n"):
         value = timings.get(key)
-        if type(value) in (int, float) and math.isfinite(value) \
-                and value >= 0:
+        if (type(value) in (int, float)
+                and 0 <= value <= sys.float_info.max and math.isfinite(value)):
             out[key] = value
     return out or None
 
@@ -376,7 +427,8 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                  timeout: float = 10, verify=None,
                  deadline: float | None = None, request_fn=None,
                  slot: int | None = None,
-                 admission_token: str | None = None) -> str | None:
+                 admission_token: str | None = None,
+                 error_out: dict | None = None) -> str | None:
     """Detect the best ``response_format`` the server accepts.
 
     Ladder: json_schema (if *schema* given) -> json_object -> plain.
@@ -427,8 +479,10 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 'Reply with {"ok": true}', endpoint=endpoint, model=model,
                 max_tokens=20, timeout=remaining, deadline=operation_deadline,
                 response_format=rf, extra_payload=payload,
-                request_fn=request_fn)
+                request_fn=request_fn, error_out=error_out)
             if response is None:
+                if error_out is not None:
+                    error_out.setdefault("kind", "transport")
                 break
             if response["status"] != 200:
                 continue
@@ -440,6 +494,8 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                          or _json_obj(content) == {"probe": "schema"})):
                 return mode
         except (OSError, ValueError):
+            if error_out is not None:
+                error_out.setdefault("kind", "transport")
             break                   # transport dead — stop probing
     return "plain"
 
