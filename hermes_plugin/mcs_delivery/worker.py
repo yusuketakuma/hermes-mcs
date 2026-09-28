@@ -109,8 +109,10 @@ class DeliveryWorker:
         self._lock_fd = None
         self._stopping = False
         self._segment = 0
-        # per-card part dedupe reads only what was appended since the
-        # last card — a full scan per card was O(n^2) over a burst
+        # every per-tick journal read (part dedupe, resume, spent/started
+        # checks) reads only what was appended since the last one — a
+        # full scan per card was O(n^2) over a burst. Only this worker's
+        # single task refreshes it, never two threads at once.
         self._jview = journal.ScanCache(self._dirs["state"])
         self._rejected: dict[str, str] = {}   # delivery_id -> logged error
         # delivery_id -> no fresh claim before this time (signals off);
@@ -260,6 +262,8 @@ class DeliveryWorker:
           scope lock + dead worker prove the send never began)
         - post-HTTP attempts  -> unknown receipt; never resend
         """
+        # a full scan, not the cache: this runs once per start and the
+        # maintain_journal() below invalidates the cache anyway
         records = await asyncio.to_thread(journal.scan,
                                           self._dirs["state"])
         stats = {"receipt_republished": 0, "not_sent": 0, "unknown": 0}
@@ -486,8 +490,7 @@ class DeliveryWorker:
             self._reg.put_parts_done(spec["delivery_id"])
             return
         if records is None:
-            records = await asyncio.to_thread(
-                journal.scan, self._dirs["state"])
+            records = await asyncio.to_thread(self._jview.refresh)
         mid = _card_message_id(records, spec["delivery_id"])
         if not mid:
             # card unproven. A dead, unclaimed delivery_id never gets
@@ -842,8 +845,7 @@ class DeliveryWorker:
         """dead specs whose dependent parts never finished get their
         unjournaled remainder driven once per tick — journal phases
         dedupe everything already proven."""
-        records = await asyncio.to_thread(
-            journal.scan, self._dirs["state"])
+        records = await asyncio.to_thread(self._jview.refresh)
         for spec in resume:
             try:
                 await self._resume_parts(spec, records)
@@ -958,7 +960,7 @@ class DeliveryWorker:
         """delivery_ids whose card attempt the journal shows started or
         resulted — dependent-part rows excluded."""
         return {str(r.get("delivery_id"))
-                for rows in journal.scan(self._dirs["state"]).values()
+                for rows in self._jview.refresh().values()
                 for r in rows
                 if r.get("phase") in ("started", "result")
                 and not r.get("part_id")}
@@ -966,8 +968,7 @@ class DeliveryWorker:
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'
         is either written or imminent; anything else is unknown."""
-        records = journal.scan(self._dirs["state"])
-        rows = records.get(claim["attempt_id"], [])
+        rows = self._jview.refresh().get(claim["attempt_id"], [])
         return any(r.get("phase") == "started" for r in rows)
 
     def stop(self) -> None:
