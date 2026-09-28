@@ -1432,3 +1432,144 @@ def test_recover_escalates_when_services_reconcile_hangs(
     assert after["executed"]["cid-a"]["result"] == "escalated"
     assert "services_failed" in after["executed"]["cid-a"]["detail"]
     assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+# ------------------------------- git failure inside recover_interrupted
+# _head_sha/_tree_clean/reset/merge --abort raise UpdateError; recover
+# must decide instead of escaping with drainers down and the marker up.
+
+def _hang_git(monkeypatch):
+    real_run = subprocess.run
+
+    def run(argv, *a, **k):
+        if argv[0] == "git":
+            raise subprocess.TimeoutExpired(argv, k.get("timeout"))
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+
+
+def test_recover_git_failure_escalates_outside_consent_hold(
+        updater, tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    restarts, notices = [], []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda: restarts.append(1) or [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                         "prev_sha": "b" * 40, "command_id": "cid-a",
+                         "at": time.time()}
+    state["stages"] = [{"stage": "merge", "at": time.time()}]
+    updater.save_state(state)
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1
+    after = updater.load_state()
+    assert after["executed"]["cid-a"]["result"] == "escalated"
+    assert "git_timeout" in after["executed"]["cid-a"]["detail"]
+    assert after["applying"]["sha"] == "a" * 40   # journal kept: retry
+    assert restarts == [1]
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+    assert notices and "要手動対応" in notices[0]
+
+
+def test_recover_git_failure_keeps_consent_hold_then_converges(
+        updater, tmp_path, monkeypatch):
+    """Inside a restore-consent hold an unmeasurable tree keeps the
+    freeze (drainers down, both markers, receipt pending, no outbox
+    write that would void the loss report) and the next pass converges."""
+    import notify_cards
+    repo, live, back, _b, _a, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    notices = []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    real_run = subprocess.run
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1
+    assert restarts == [] and notices == []
+    assert Path(mcs_update.MARKER_PATH).exists()
+    assert notify_cards.restore_awaiting_consent(
+        str(tmp_path / "data")) is not None
+    state = updater.load_state()
+    assert state["restore_consent"] and state["applying"]["rollback"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    monkeypatch.setattr(mcs_update.subprocess, "run", real_run)
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+        == "rolled_back"
+    assert restarts == [1]
+
+
+# ------------------------------------------ stray check fails closed
+
+@pytest.mark.parametrize("outcome", [
+    subprocess.TimeoutExpired(["pgrep"], 30),
+    FileNotFoundError("pgrep"),
+    subprocess.CompletedProcess(["pgrep"], 3, "", "internal error")])
+def test_quiesce_fails_closed_when_stray_check_unverifiable(
+        updater, monkeypatch, outcome):
+    def run(argv, *a, **k):
+        assert argv[0] == "pgrep"
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    assert mcs_update._stray_drainer_pids() is None
+    with pytest.raises(mcs_update.UpdateError,
+                       match="stray_drainer_unverifiable"):
+        mcs_update.quiesce()
+
+
+def test_stray_check_no_match_is_clean(updater, monkeypatch):
+    monkeypatch.setattr(
+        mcs_update.subprocess, "run",
+        lambda argv, *a, **k: subprocess.CompletedProcess(argv, 1, "", ""))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    assert mcs_update._stray_drainer_pids() == []
+    assert mcs_update.quiesce() == []
+
+
+# ------------------------------------ bounded restart (T_POST_MERGE)
+
+def test_restart_agents_all_hung_stays_within_budget(
+        updater, tmp_path, monkeypatch):
+    """Every launchctl call hangs until its timeout: restart_agents must
+    finish far enough under T_POST_MERGE that the post-merge child (with
+    services 120s + postcheck) is not killed mid-restart, reporting the
+    labels it never reached."""
+    from types import SimpleNamespace
+    clock = [0.0]
+
+    def advance(s):
+        clock[0] += s
+
+    def run(argv, *a, **k):
+        advance(k["timeout"])
+        raise subprocess.TimeoutExpired(argv, k["timeout"])
+    fake_time = SimpleNamespace(time=lambda: clock[0],
+                                sleep=advance)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    monkeypatch.setattr(mcs_update, "time", fake_time)
+    monkeypatch.setattr(mcs_util, "time", fake_time)
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS",
+                        ("local.mcs-w", "local.mcs-v"))
+    problems = mcs_update.restart_agents()
+    # worst case: a label started just before the budget runs out costs
+    # 78s more; services 120 + postcheck 206 follow in the same child
+    assert clock[0] <= mcs_update.RESTART_BUDGET_S + 78
+    assert mcs_update.RESTART_BUDGET_S + 78 + 326 < mcs_update.T_POST_MERGE
+    assert problems == ["bootstrap_failed:ai.mcs.a",
+                        "bootstrap_failed:ai.mcs.b",
+                        "watcher_not_loaded:local.mcs-w",
+                        "restart_deadline:local.mcs-v"]
