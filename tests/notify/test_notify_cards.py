@@ -2007,6 +2007,26 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     assert 'body' not in third
 
 
+def test_multipage_intent_plans_every_covered_body(led):
+    """U03-F03: the card face opens on its last page, but the durable
+    thread plan must carry the body of every message the intent covers —
+    earlier pages included — in thread order."""
+    _patient(led, 1)
+    _msg(led, 100, 1, body="BODY-100")
+    for m in range(101, 114):
+        _msg(led, m, 1, parent=100, body=f"BODY-{m}")
+    _dispatch(led, _intent(led, payload={"message_ids": list(range(100, 114))}))
+    spec = json.loads(_latest_render(led)["spec_json"])
+    assert spec["parts"]["pages"] > 1
+    assert spec["parts"]["page"] == spec["parts"]["pages"] - 1
+    body = "".join(spec["parts"]["thread_body_parts"])
+    positions = [body.index(f"BODY-{m}") for m in range(100, 114)]
+    assert positions == sorted(positions)
+    body_parts = [p for p in spec["parts"]["manifest"]
+                  if p["kind"] == "body_part"]
+    assert len(body_parts) == len(spec["parts"]["thread_body_parts"])
+
+
 def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
     """U03-F02: the 📄 result carries the body for its one delivery, but
     the durable command receipt (and so the published snapshot) must

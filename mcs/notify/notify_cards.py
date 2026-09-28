@@ -709,6 +709,36 @@ def _plan_attachments(db, shown) -> list:
     return out
 
 
+def _thread_plan_ids(db, card, shown) -> list:
+    """Messages whose bodies a thread-bound render carries: the face's
+    shown page plus every message a still-pending intent announces on
+    this card. The face opens on the last page, so an intent spanning
+    several pages would otherwise never post its earlier bodies (the
+    in-thread card has no 📄 button to reach them)."""
+    if card["kind"] != "thread":
+        return list(shown)
+    covered = set()
+    for r in db.execute(
+            "SELECT coverage FROM notification_intent_cards "
+            "WHERE card_id=? AND state='pending'", (card["card_id"],)):
+        try:
+            cov = json.loads(r["coverage"] or "[]")
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if isinstance(cov, list):
+            covered.update(m for m in cov if positive(m))
+    wanted = covered | {m for m in shown if positive(m)}
+    if not covered - set(shown):
+        return list(shown)
+    # thread order, same query shape as the card face; ids outside
+    # this card's thread/project never enter the plan
+    return [r["message_id"] for r in db.execute(
+        "SELECT message_id FROM messages WHERE (message_id=? OR "
+        "parent_id=?) AND project_id=? ORDER BY posted_at_ts",
+        (card["root_message_id"], card["root_message_id"],
+         card["project_id"])) if r["message_id"] in wanted]
+
+
 def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
@@ -729,10 +759,11 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
                      "index": idx, "name": tname,
                      "sha256": _sha_text(tname)})
     idx += 1
-    man = {"shown": json.dumps(content["shown"], ensure_ascii=False)}
+    planned = _thread_plan_ids(db, card, content["shown"])
+    man = {"shown": json.dumps(planned, ensure_ascii=False)}
     body = _card_body_text(db, card, man, max_chars=None)[1]
     chunks = _split_body_chunks(body)      # lossless — no chunk dropped
-    attachments = _plan_attachments(db, content["shown"])
+    attachments = _plan_attachments(db, planned)
     if len(chunks) + len(attachments) > MAX_PARTS - 2:
         # One shared budget includes card, thread and an explicit omission
         # marker. Unplanned downloaded attachments retain the existing
