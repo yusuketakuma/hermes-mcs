@@ -1264,3 +1264,171 @@ def test_restart_agents_watcher_uses_verified_bootstrap(
     monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
     assert mcs_update.restart_agents() == problems
     assert fake.calls == ["print"] + ["bootstrap"] * len(outcomes) + ["print"]
+
+
+# ---------------------------------------- hung / missing launchctl (H4)
+# A launchctl that hangs past T_GIT (TimeoutExpired) or cannot start
+# (FileNotFoundError) for ONE label must be recorded as that label's
+# problem; the loop still reaches every other agent and the marker ends
+# where the spec requires — never an uncaught raise mid-restart.
+
+class _HungLaunchd:
+    """launchctl stub: `verb` for any argv mentioning `label` raises
+    `exc`; everything else behaves (bootstrap loads, print shows pid)."""
+
+    def __init__(self, label, verb, exc):
+        self.label, self.verb, self.exc = label, verb, exc
+        self.loaded = set()
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb, target = argv[1], argv[-1]
+        label = os.path.basename(target).removesuffix(".plist") \
+            if verb == "bootstrap" else target.rsplit("/", 1)[-1]
+        self.calls.append((verb, label))
+        if verb == self.verb and label == self.label:
+            raise self.exc
+        rc, out = 0, ""
+        if verb == "bootout":
+            self.loaded.discard(label)
+        elif verb == "bootstrap":
+            self.loaded.add(label)
+        elif verb == "print":
+            rc = 0 if label in self.loaded else 113
+            out = "\tpid = 4242\n" if rc == 0 else ""
+        return subprocess.CompletedProcess(argv, rc, out, "")
+
+
+_HANG_EXCS = [subprocess.TimeoutExpired(["launchctl"], 30),
+              FileNotFoundError("launchctl")]
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+@pytest.mark.parametrize("label,verb,problems", [
+    ("ai.mcs.a", "bootout", []),
+    ("ai.mcs.a", "bootstrap", ["bootstrap_failed:ai.mcs.a"]),
+    ("ai.mcs.a", "print", ["bootstrap_failed:ai.mcs.a"]),
+    ("local.mcs-w", "print", ["watcher_not_loaded:local.mcs-w"]),
+    ("local.mcs-w", "bootstrap", ["watcher_not_loaded:local.mcs-w"]),
+])
+def test_restart_agents_survives_hung_launchctl(
+        updater, tmp_path, monkeypatch, label, verb, problems, exc):
+    from types import SimpleNamespace
+    fake = _HungLaunchd(label, verb, exc)
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("local.mcs-w",))
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    assert mcs_update.restart_agents() == problems
+    # the loop went on past the wedged label to every later agent
+    assert ("bootstrap", "ai.mcs.b") in fake.calls
+    assert fake.calls[-1][1] == "local.mcs-w"
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_quiesce_never_takes_unverifiable_stop_as_stopped(
+        updater, monkeypatch, exc):
+    """A hung `print` cannot prove the drainer stopped — quiesce fails
+    closed (drainer_stop_failed) instead of merging under a live one;
+    a hung `bootout` alone is fine once `print` confirms the stop."""
+    from types import SimpleNamespace
+    clock = [1000.0]
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=lambda: clock[0],
+        sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(mcs_update.subprocess, "run",
+                        _HungLaunchd("ai.mcs.a", "bootout", exc))
+    assert mcs_update.quiesce() == ["ai.mcs.a", "ai.mcs.b"]
+    monkeypatch.setattr(mcs_update.subprocess, "run",
+                        _HungLaunchd("ai.mcs.b", "print", exc))
+    with pytest.raises(mcs_update.UpdateError,
+                       match="drainer_stop_failed: ai.mcs.b"):
+        mcs_update.quiesce()
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
+        updater, tmp_path, monkeypatch, exc):
+    """quiesce stops drainer a, then b's stop is unverifiable: rollback
+    must still restart a (H4), report b, consume the receipt and drop
+    the marker — not escape with a raw TimeoutExpired/OSError."""
+    from types import SimpleNamespace
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
+                        lambda **kw: os.open(mcs_update.RUN_LOCK,
+                                             os.O_WRONLY | os.O_CREAT))
+    real_run = subprocess.run
+    fake = _HungLaunchd("ai.mcs.b", "print", exc)
+    fake.loaded = {"ai.mcs.a", "ai.mcs.b"}
+    monkeypatch.setattr(
+        mcs_update.subprocess, "run",
+        lambda argv, *a, **k: (fake if argv[0] == "launchctl"
+                               else real_run)(argv, *a, **k))
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(mcs_update, "_rollback_tree",
+                        lambda e: pytest.fail("must not reset"))
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    state = updater._default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": "t" * 40,
+                         "prev_sha": _git(repo, "rev-parse", "HEAD")
+                         .stdout.strip(), "at": time.time()}]
+    updater.save_state(state)
+    assert updater.rollback("cid-rb") == 1
+    assert ("bootstrap", "ai.mcs.a") in fake.calls   # a brought back
+    assert "ai.mcs.a" in fake.loaded
+    detail = updater.load_state()["executed"]["cid-rb"]["detail"]
+    assert "drainer_stop_failed: ai.mcs.b" in detail
+    assert "bootstrap_failed:ai.mcs.b" in detail
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_recover_escalates_when_services_reconcile_hangs(
+        updater, tmp_path, monkeypatch, exc):
+    """head == target resume: a hung/missing `mcs_setup services` child
+    escalates (drainers back, marker gone, receipt consumed) instead of
+    escaping recover with drainers still quiesced."""
+    import sys
+    repo, _ = _make_repo(tmp_path)
+    mcs_update.REPO = str(repo)
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    real_run = subprocess.run
+
+    def run(argv, *a, **k):
+        if argv[0] == sys.executable:
+            raise exc
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": head,
+                         "prev_sha": "0" * 40, "command_id": "cid-a",
+                         "at": time.time() - 4000}
+    state["stages"] = [{"stage": "post_merge", "at": time.time() - 3000}]
+    updater.save_state(state)
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    assert updater.recover_interrupted() == 1
+    after = updater.load_state()
+    assert after["executed"]["cid-a"]["result"] == "escalated"
+    assert "services_failed" in after["executed"]["cid-a"]["detail"]
+    assert not os.path.exists(mcs_update.MARKER_PATH)
