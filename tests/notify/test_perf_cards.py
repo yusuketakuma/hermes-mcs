@@ -201,6 +201,7 @@ def _measure_pipeline(world, n):
     notify_cards.publish_flags(CFG, str(data))
     for f in (data / "discord_render").glob("*.json"):
         starts[f.stem] = time.time()    # publish observation point
+    cpu0 = time.process_time()
 
     async def run():
         # stage 2: claim + begin publish
@@ -225,13 +226,15 @@ def _measure_pipeline(world, n):
         return t_claim, t_grant, t_send, t_settle
 
     t_claim, t_grant, t_send, t_settle = asyncio.run(run())
+    cpu = time.process_time() - cpu0
     end = time.time()
     # per-card e2e: spec publish -> settle drain finished. In batch mode
     # all specs share the finish line; report the batch envelope.
     e2e = [end - starts[k] for k in starts]
     return {"dispatch": t_dispatch, "claim_begin": t_claim,
             "grant_drain": t_grant, "send": t_send,
-            "settle_drain": t_settle, "e2e": e2e}
+            "settle_drain": t_settle, "e2e": e2e,
+            "e2e_cpu": [cpu] * len(starts)}
 
 
 @pytest.mark.parametrize("n", [100, 1000])
@@ -267,7 +270,11 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
     for k in ("dispatch", "claim_begin", "grant_drain", "send",
               "settle_drain"):
         print(f"  {k:<44} {out[k]:>8.4f}s")
-    r = _report("card delivery e2e (batch envelope)", out["e2e"], 30)
+    assert len(out["e2e"]) == n     # every spec was observed published
+    r = _report("card delivery e2e (batch envelope, wall)",
+                out["e2e"], 30)
+    # CPU is diagnostic only: a latency budget must also see IO/wait
+    _report("card delivery e2e (batch envelope, CPU)", out["e2e_cpu"])
     led.close()
     # RC26: non-contended p95 for spec publish -> receipt commit
     assert r["p95"] <= 30.0
@@ -361,8 +368,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
         for i in range(n):
             _seed_patient(led, 1 + i)
             _seed_msg(led, 10_000 + i, 1 + i)
-    # bulk-seed delivered cards+renders in settled steady state —
-    # NULL fps baseline without drift, so sweep is a pure scan
+    # bulk-seed delivered cards+renders in settled steady state
     with led.db:
         for i in range(n):
             cur = led.db.execute(
@@ -385,7 +391,19 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
                 (f"d{i}", cur.lastrowid, "create", 1, 1,
                  "mcs", "1", "7", "42", "h" * 32, f"c{i}",
                  "delivered", NOW, NOW))
-    led.db.commit()
+    # settled = fingerprints already observed. A NULL baseline makes
+    # the first sweep re-issue every card (10k spec publishes), which
+    # is not the scan this stage measures.
+    with led.db:
+        for (cid,) in led.db.execute(
+                "SELECT card_id FROM notification_cards").fetchall():
+            content = notify_cards._card_content(
+                led.db, notify_cards._card_row(led.db, cid))
+            led.db.execute(
+                "UPDATE notification_cards SET source_fp=?,content_fp=?"
+                " WHERE card_id=?",
+                (content["source_fp"], notify_cards._content_fp(content),
+                 cid))
 
     res = {}
     t = time.perf_counter()
@@ -423,4 +441,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     print(f"  snapshot_publish{'':<30} {t_snap:>8.4f}s")
     print(f"  drain_batch(256){'':<29} {t_drain:>8.4f}s")
     led.close()
+    # a fast sweep proves nothing unless it scanned every card and
+    # found them settled
+    assert sweep_out == {"scanned": n, "updated": 0, "republished": 0}
     assert t_sweep < 30.0 and t_snap < 30.0
