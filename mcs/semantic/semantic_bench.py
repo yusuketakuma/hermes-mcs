@@ -59,10 +59,6 @@ def cmd_corpus(args) -> int:
         FROM messages m
         WHERE m.body_text IS NOT NULL AND LENGTH(m.body_text) >= 60
           AND LENGTH(m.body_text) <= 8000
-          AND EXISTS (SELECT 1 FROM messages c
-                      WHERE c.project_id=m.project_id
-                        AND COALESCE(c.parent_id,c.message_id)
-                            = COALESCE(m.parent_id,m.message_id))
         ORDER BY m.posted_at_ts DESC LIMIT ?
         """, (args.n * 3,)).fetchall()
     cases, seen_roots = [], set()
