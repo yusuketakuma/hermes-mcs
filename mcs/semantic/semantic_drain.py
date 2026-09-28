@@ -1309,6 +1309,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             and free_mb < mcs_util.disk_floor_mb():
         out["disk_free_mb"] = round(free_mb)
         return out
+    # Deterministic maintenance (no model, no Jev — not gated by the
+    # endpoint breaker or LLM admission): bring current projection/v4
+    # rows minted by an older projection version up to date, a bounded
+    # slice per tick, right after this tick's invalidation pass.
+    try:
+        out["reproject"] = v4.reproject_stale(ledger, scfg)
+    except Exception as e:
+        result["errors"].append(f"semantic_reproject: {type(e).__name__}")
     circuit_s = mcs_util.circuit_open_s(ledger)
     if circuit_s:
         out["circuit_open_s"] = round(circuit_s)

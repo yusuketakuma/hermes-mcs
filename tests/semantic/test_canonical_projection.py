@@ -563,3 +563,193 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         assert len(rows(v4.KIND_V4)) == 2
     finally:
         db.close()
+
+
+def _drained_old_version(tmp_path):
+    """Two canonical targets drained to PASS, then every projection/v4
+    row rewritten as if minted by the previous projection version with
+    older (sentinel) content."""
+    import time
+    import semantic
+    import semantic_v4 as v4
+    from test_canonical_drain import _canonical_cfg, _llm_v2, _seeded_two
+    from test_semantic_v4 import _PassJev
+    db = _seeded_two(tmp_path)
+    semantic.run_due(db, _canonical_cfg(), {"errors": []},
+                     time.monotonic() + 300, jev_client=_PassJev(),
+                     llm_fn=_llm_v2)
+    for kind in ("canonical_projection", v4.KIND_V4):
+        assert len(_kind_rows(db, kind)) == 2
+    db.db.execute(
+        "UPDATE artifacts SET content=?, meta=json_remove(meta,"
+        "'$.projection_version') WHERE kind IN (?,?)",
+        (json.dumps({"meds": [{"name": "OLD"}]}), "canonical_projection",
+         v4.KIND_V4))
+    db.artifact_add("patient_rollup", "{}", project_id=1)
+    db.db.commit()
+    return db
+
+
+def _kind_rows(db, kind, mid=None):
+    q = ("SELECT artifact_id,message_id,content,meta,model FROM artifacts "
+         "WHERE kind=?")
+    args = [kind]
+    if mid is not None:
+        q += " AND message_id=?"
+        args.append(mid)
+    return db.db.execute(q + " ORDER BY artifact_id", args).fetchall()
+
+
+def _current_ids(db, mid):
+    from mcs_queries import current_projection_id, current_v4_id
+    return db.db.execute(
+        f"SELECT {current_projection_id()}, {current_v4_id()} "
+        "FROM messages m WHERE m.message_id=?", (mid,)).fetchone()
+
+
+def test_reproject_supersedes_old_version_rows_bounded_and_idempotent(
+        tmp_path):
+    import semantic_v4 as v4
+    from semantic_policy import KIND_FACTS_V2, semantic_config
+    from test_canonical_drain import _canonical_cfg
+    db = _drained_old_version(tmp_path)
+    try:
+        scfg = semantic_config(_canonical_cfg())[0]
+        old = {r["artifact_id"]: r for kind in
+               ("canonical_projection", v4.KIND_V4)
+               for r in _kind_rows(db, kind)}
+        # the bound is respected: one row per call
+        assert v4.reproject_stale(db, scfg, limit=1)["reprojected"] == 1
+        out = v4.reproject_stale(db, scfg)
+        assert out == {"reprojected": 3, "skipped": 0, "skip_reasons": {}}
+        for mid in (1, 2):
+            doc = json.loads(_kind_rows(db, KIND_FACTS_V2, mid)[-1]
+                             ["content"])
+            expected = projection.project_v2_doc_legacy(doc)
+            assert expected != {"meds": [{"name": "OLD"}]}
+            for kind, cur in zip(("canonical_projection", v4.KIND_V4),
+                                 _current_ids(db, mid)):
+                rows = _kind_rows(db, kind, mid)
+                assert len(rows) == 2 and cur == rows[-1]["artifact_id"]
+                new_meta = json.loads(rows[-1]["meta"])
+                prev = old[rows[0]["artifact_id"]]
+                assert json.loads(rows[-1]["content"]) == expected
+                assert rows[-1]["model"] == prev["model"]
+                assert new_meta.pop("projection_version") \
+                    == projection.PROJECTION_VERSION
+                assert new_meta.pop("reprojected_from") \
+                    == rows[0]["artifact_id"]
+                # binding meta is carried verbatim
+                assert new_meta == json.loads(prev["meta"])
+            # every reader now sees the new semantics (v4 outranks)
+            read = db.db.execute(
+                "SELECT a.kind,a.content FROM artifacts a JOIN messages m "
+                "ON m.message_id=a.message_id WHERE m.message_id=? AND "
+                "a.kind IN ('extract_llm','canonical_projection',"
+                "'semantic_facts_v4')" + current_fact_pred(),
+                (mid,)).fetchall()
+            assert [(r["kind"], json.loads(r["content"])) for r in read] \
+                == [(v4.KIND_V4, expected)]
+        # the patient's rollup is rebuilt from the new rows
+        assert not db.artifacts("patient_rollup", project_id=1)
+        # second pass is a no-op: no rows written
+        total = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+        assert v4.reproject_stale(db, scfg)["reprojected"] == 0
+        assert db.db.execute(
+            "SELECT COUNT(*) FROM artifacts").fetchone()[0] == total
+    finally:
+        db.close()
+
+
+def test_reproject_never_resurrects_or_guesses(tmp_path):
+    """Invalidated, deleted-body and non-derivable rows are left alone;
+    the non-derivable ones are counted and marked so they cannot starve
+    the per-tick bound."""
+    import semantic_v4 as v4
+    from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, \
+        semantic_config
+    from test_canonical_drain import _canonical_cfg
+    db = _drained_old_version(tmp_path)
+    try:
+        scfg = semantic_config(_canonical_cfg())[0]
+        # message 1: rows invalidated (a later source/policy change)
+        db.db.execute(
+            "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',"
+            "json('true')) WHERE message_id=1 AND kind IN (?,?)",
+            ("canonical_projection", v4.KIND_V4))
+        # message 2: stored audit no longer PASS for the bound document
+        audit = _kind_rows(db, KIND_FACT_AUDIT, 2)[-1]
+        db.db.execute(
+            "UPDATE artifacts SET content=json_set(content,'$.status',"
+            "'NEEDS_REVIEW') WHERE artifact_id=?", (audit["artifact_id"],))
+        db.db.commit()
+        before = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+        out = v4.reproject_stale(db, scfg)
+        assert out == {"reprojected": 0, "skipped": 2,
+                       "skip_reasons": {"audit_not_pass": 2}}
+        assert db.db.execute(
+            "SELECT COUNT(*) FROM artifacts").fetchone()[0] == before
+        # marked rows are not re-selected; old rows keep serving
+        assert v4.reproject_stale(db, scfg)["skipped"] == 0
+        assert all(json.loads(r["content"]) == {"meds": [{"name": "OLD"}]}
+                   for kind in ("canonical_projection", v4.KIND_V4)
+                   for r in _kind_rows(db, kind))
+        # the audited doc itself replaced by another generation's doc
+        db.db.execute(
+            "UPDATE artifacts SET meta=json_remove(meta,"
+            "'$.reproject_skipped') WHERE message_id=2")
+        db.db.execute(
+            "UPDATE artifacts SET content=json_set(content,'$.status',"
+            "'PASS') WHERE artifact_id=?", (audit["artifact_id"],))
+        v2 = _kind_rows(db, KIND_FACTS_V2, 2)[-1]
+        doc = json.loads(v2["content"])
+        doc["facts"] = []
+        db.artifact_add(KIND_FACTS_V2, json.dumps(doc), project_id=1,
+                        message_id=2, meta=json.loads(v2["meta"]))
+        out = v4.reproject_stale(db, scfg)
+        assert out["skip_reasons"] == {"doc_unavailable": 2}
+        # a deleted body is never re-projected
+        db.db.execute(
+            "UPDATE artifacts SET meta=json_remove(meta,"
+            "'$.reproject_skipped') WHERE message_id=2")
+        db.db.execute(
+            "DELETE FROM artifacts WHERE artifact_id=(SELECT MAX("
+            "artifact_id) FROM artifacts WHERE kind=?)", (KIND_FACTS_V2,))
+        db.db.execute(
+            "UPDATE messages SET body_state='deleted' WHERE message_id=2")
+        db.db.commit()
+        assert v4.reproject_stale(db, scfg)["reprojected"] == 0
+        # non-canonical / off configs never write
+        db.db.execute(
+            "UPDATE messages SET body_state='full' WHERE message_id=2")
+        db.db.commit()
+        assert v4.reproject_stale(
+            db, dict(scfg, fact_source="shadow"))["reprojected"] == 0
+        assert v4.reproject_stale(
+            db, dict(scfg, mode="off"))["reprojected"] == 0
+    finally:
+        db.close()
+
+
+def test_run_due_reprojects_old_version_rows(tmp_path):
+    import time
+    import semantic
+    import semantic_v4 as v4
+    from test_canonical_drain import _canonical_cfg
+
+    def no_llm(prompt):
+        raise AssertionError("re-projection must not call the model")
+
+    db = _drained_old_version(tmp_path)
+    try:
+        result = {"errors": []}
+        out = semantic.run_due(db, _canonical_cfg(), result,
+                               time.monotonic() + 300, llm_fn=no_llm)
+        assert result["errors"] == []
+        assert out["reproject"]["reprojected"] == 4
+        for kind in ("canonical_projection", v4.KIND_V4):
+            assert all(json.loads(r["meta"]).get("projection_version")
+                       == projection.PROJECTION_VERSION
+                       for r in _kind_rows(db, kind)[-2:])
+    finally:
+        db.close()

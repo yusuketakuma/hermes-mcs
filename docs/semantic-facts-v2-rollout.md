@@ -100,8 +100,25 @@ Per target message, inside the shared drain queue:
    `meta.projection_version` (`semantic_projection.PROJECTION_VERSION`);
    `canonical_projection` and `semantic_facts_v4` rows are reused only
    when that version (and the audited `doc_hash`) match, otherwise the
-   message's next reprocessing writes a superseding row.  Existing rows
-   keep their old content until the message is reprocessed.
+   message's next reprocessing writes a superseding row.  Rows already
+   written by an older version are brought forward without waiting for
+   reprocessing: each semantic drain tick (after `invalidate_projections`,
+   before the endpoint breaker check — no model or Jev call, so LLM
+   admission does not apply) runs `semantic_v4.reproject_stale`, which
+   takes at most `REPROJECT_LIMIT` (25) CURRENT rows (the reader
+   predicates `current_projection_id`/`current_v4_id`, body not
+   deleted) whose `projection_version` is missing or older, re-renders
+   them with `project_v2_doc_legacy` from the stored audited document,
+   and appends a superseding row with the same binding meta (fingerprint,
+   policy, hash, doc_hash, engine/extract version, model) plus the new
+   `projection_version` and `reprojected_from`; the patient's rollup is
+   dropped for rebuild.  The document must be the generation's newest
+   `semantic_facts_v2` row with the bound `doc_hash`, complete coverage
+   and a stored PASS fact audit; otherwise the row is left serving, marked
+   `reproject_skipped` (counted by reason in the drain's `reproject`
+   result) and is updated only when the message is drained again.
+   Invalidated and superseded rows are never touched, and non-PASS
+   generations have no v4 row to resurrect.
 
 ## Artifacts
 
