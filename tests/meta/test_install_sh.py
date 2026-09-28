@@ -90,6 +90,11 @@ case "$1" in
     if [ -n "$STUB_FAIL_WATCHDOG" ] && [ "$label" = org.mcs.recovery ]; then
         exit 1
     fi
+    if [ -n "$STUB_FAIL_WATCHDOG_ONCE" ] && [ "$label" = org.mcs.recovery ] \
+            && [ ! -f "$STUB_STATE/watchdog-failed-once" ]; then
+        touch "$STUB_STATE/watchdog-failed-once"
+        echo "Bootstrap failed: 5: Input/output error" >&2; exit 5
+    fi
     touch "$STUB_STATE/loaded/$label"; exit 0 ;;
   bootout)
     label="${2##*/}"
@@ -394,3 +399,13 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert (rec / "mcs_recover.py").read_bytes() == (
         ROOT / "deployment" / "recovery" / "mcs_recover.py").read_bytes()
     assert not list(rec.glob("*.tmp"))
+
+
+def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
+    """launchd's transient EIO right after bootout is retried, not a
+    stopped install."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    r = _run({**env, "STUB_FAIL_WATCHDOG_ONCE": "1"}, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert STOPPED not in r.stderr
+    assert "recovery watchdog loaded" in r.stdout

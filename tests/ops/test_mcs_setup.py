@@ -1072,6 +1072,22 @@ def test_services_unparseable_script_identity_is_a_problem(
     assert not (tmp_path / "data" / "service_manifest.json").exists()
 
 
+
+def test_services_post_verify_tolerates_undecodable_schedule(
+        monkeypatch, tmp_path):
+    """Post-change verification uses the pre-check's tolerance: a job
+    whose displayed schedule does not parse is not drift, so a create
+    elsewhere still converges and the manifest is written."""
+    entries = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
+               for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+    entries[0]["schedule"] = "every 5m"
+    del entries[-1]                                  # forces one create
+    calls, args = _services_env(monkeypatch, tmp_path,
+                                cron_entries=entries)
+    assert mcs_setup.cmd_services(args) == 0
+    assert len(_cron_creates(calls)) == 1
+    assert (tmp_path / "data" / "service_manifest.json").exists()
+
 def test_services_installs_gateway_when_interactive(
         monkeypatch, tmp_path):
     """interactive=discord + unsupervised gateway -> install + start

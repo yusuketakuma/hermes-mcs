@@ -86,6 +86,17 @@ ok()   { echo "  ok: $*"; }
 skip() { echo "  skip: $*"; }
 warn() { echo "  warn: $*" >&2; }
 die()  { echo "error: $*" >&2; exit 1; }
+# launchd may still be tearing down a just-booted-out job ("5: Input/
+# output error") — retry briefly, and accept a label that is loaded now.
+bootstrap_agent() {  # <label> <plist>
+    _n=0
+    while [ "$_n" -lt 3 ]; do
+        launchctl bootstrap "gui/$(id -u)" "$2" && return 0
+        _n=$((_n + 1))
+        sleep 1
+    done
+    launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1
+}
 
 # Quote data for the generated shell shim and XML/sed replacements.
 shell_quote() {
@@ -276,7 +287,7 @@ else
         elif launchctl print "gui/$(id -u)/ai.mcs.llamaserver" >/dev/null 2>&1; then
             skip "ai.mcs.llamaserver already loaded"
         else
-            if launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"; then
+            if bootstrap_agent ai.mcs.llamaserver "$PLIST_DST"; then
                 ok "llama-server LaunchAgent started"
             else
                 die "launchctl bootstrap failed for ai.mcs.llamaserver — inspect $PLIST_DST, then re-run install.sh"
@@ -334,7 +345,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         "$REPO/deployment/launchagents/org.mcs.recovery.plist" \
         > "$WATCH_PLIST"
     launchctl bootout "gui/$(id -u)/org.mcs.recovery" 2>/dev/null || true
-    if launchctl bootstrap "gui/$(id -u)" "$WATCH_PLIST"; then
+    if bootstrap_agent org.mcs.recovery "$WATCH_PLIST"; then
         ok "recovery watchdog loaded (StartInterval 900)"
     else
         die "watchdog bootstrap failed — inspect $WATCH_PLIST (or load it: launchctl bootstrap gui/$(id -u) $WATCH_PLIST), then re-run install.sh"

@@ -1710,8 +1710,9 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                               or script in existing):
             # identity seen but its script is unparseable — neither
             # 'exists' (unverified) nor safe to create (duplicate)
-            note(f"cron '{name}': identity seen but script unverifiable "
-                 "— no create; inspect `hermes cron list --all`")
+            note(f"cron '{name}': a job with this name exists but its "
+                 f"script is not {script} or is unreadable — no create; "
+                 "inspect `hermes cron list --all` and remove or fix it")
             problems += 1
             continue
         if entry is None:
@@ -1767,12 +1768,18 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
     if mutated and not dry:
         # a zero exit is not proof — confirm the converged state, else
         # the manifest would record jobs that do not exist
+        # same tolerance as the pre-check: schedules are compared only
+        # when both sides parse — an undecodable display is not drift
+        def _converged(sched, script):
+            jobs = [e for e in after if e.get("script") == script]
+            if len(jobs) != 1:
+                return False
+            cur, want = (_norm_sched(jobs[0].get("schedule")),
+                         _norm_sched(sched))
+            return not (cur and want and cur != want)
         after = _cron_list(hermes)
-        if after is None or any(
-                sum(e.get("script") == script
-                    and _norm_sched(e.get("schedule")) == _norm_sched(sched)
-                    for e in after) != 1
-                for _, sched, script in CRON_JOBS):
+        if after is None or not all(_converged(sched, script)
+                                    for _, sched, script in CRON_JOBS):
             note("cron: post-change state unverifiable or not exactly one "
                  "job per script — re-run services")
             problems += 1
