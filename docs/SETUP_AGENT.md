@@ -167,8 +167,8 @@ INSTALLATION.md 付録B を案内し、次を収集:
 3. `slack_allowed_user_ids`（member ID カンマ区切り）
 4. `slack_profile`・`project_ids`
 
-Slack は wizard 非対応のため、`init` 後に `hermes config set`
-で手動設定する（5-3 参照）。
+Slack も `init` が設定ブロックとトークンを書き込む。`init` を使えない
+場合の手動設定手順は 5-3 を参照。
 
 ## Phase 5 — Path A: init・services・check
 
@@ -224,7 +224,7 @@ launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```
 
-### 5-3. Slack の場合の追加設定（4-3 のときのみ）
+### 5-3. Slack の手動設定（`init` を使わない場合のみ）
 
 ```bash
 hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_enabled true

@@ -187,9 +187,10 @@ def test_install_run_then_rerun_converges(tmp_path):
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 1
     # watchdog: bootout+bootstrap is a reload — still exactly one label
     assert len(list((stub_root / "state" / "loaded").iterdir())) == 2
-    # previous recovery generation retained, current refreshed
+    # a same-generation rerun has no previous generation to keep — it
+    # must not mint a .prev copy of the current tool
     prev = home / ".mcs-recovery" / "mcs_recover.py.prev"
-    assert prev.read_bytes() == first_gen
+    assert not prev.exists()
     assert recovery.read_bytes() == first_gen   # same repo generation
     # no second plugin dir/link objects appeared
     assert len(list((hermes_home / "plugins").iterdir())) == 1
@@ -327,3 +328,22 @@ def test_install_paths_remain_literal_shell_and_xml_data(tmp_path):
     assert llama["WorkingDirectory"] == str(hermes_home)
     assert watch["ProgramArguments"][1] == str(home / ".mcs-recovery" / "mcs_recover.py")
     assert any(c.startswith("venv-hermes ") for c in _calls(stub_root))
+
+
+def test_same_release_rerun_keeps_the_real_previous_generation(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    (rec / "mcs_recover.py").write_bytes(b"# old generation")
+    assert _run(env, hermes_home).returncode == 0
+    assert (rec / "mcs_recover.py.prev").read_bytes() == b"# old generation"
+    assert _run(env, hermes_home).returncode == 0
+    assert (rec / "mcs_recover.py.prev").read_bytes() == b"# old generation"
+
+
+def test_custom_hermes_home_refused_with_services(tmp_path):
+    home, _hermes_home, stub_root, env = _world(tmp_path)
+    custom = tmp_path / "elsewhere"
+    r = _run(env, custom)
+    assert r.returncode == 2 and "HERMES_HOME" in r.stderr
+    assert _run(env, custom, "--no-services").returncode == 0

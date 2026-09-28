@@ -53,6 +53,14 @@ while [ $# -gt 0 ]; do
     shift
 done
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+# mcs_setup services renders cron wrappers/plists against ~/.hermes (its
+# HERMES_PY and scripts dir are fixed there) — a custom HERMES_HOME would
+# install services pointing at an interpreter that does not exist
+if [ "$HERMES_HOME" != "$HOME/.hermes" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
+    echo "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage;" >&2
+    echo "use the default ~/.hermes, or pass --no-services and register services yourself" >&2
+    exit 2
+fi
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 HERMES_DIR="$HERMES_HOME/hermes-agent"
@@ -102,7 +110,9 @@ for pkg in git python@3.13 uv llama.cpp; do
         brew install "$pkg"
     fi
 done
-if brew list --cask --versions google-chrome >/dev/null 2>&1 \
+if [ "$(uname -s)" != "Darwin" ]; then
+    skip "google-chrome cask: not macOS — install Chrome/Chromium yourself"
+elif brew list --cask --versions google-chrome >/dev/null 2>&1 \
         || [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
     skip "google-chrome already installed"
 else
@@ -220,6 +230,8 @@ fi  # SKIP_PLUGIN
 say "4/6 local LLM (llama-server :8080)"
 if [ "$SKIP_LLM" -eq 1 ]; then
     skip "stage skipped (--no-llm) — keep your own OpenAI-compatible server answering on 127.0.0.1:8080"
+elif [ "$(uname -s)" != "Darwin" ]; then
+    skip "not macOS — the llama-server LaunchAgent is macOS-only; serve an OpenAI-compatible endpoint on 127.0.0.1:8080 yourself"
 elif curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1; then
     skip "an OpenAI-compatible server is already answering on :8080 — leaving it in place"
 elif [ -f "$HOME/Library/LaunchAgents/ai.hermes.llamacpp.plist" ]; then
@@ -251,7 +263,10 @@ else
             -e "s|__MODEL__|$(xml_sed "$MODEL_FILE")|g" \
             -e "s|__HERMES_HOME__|$(xml_sed "$HERMES_HOME")|g" \
             "$PLIST_SRC" > "$PLIST_DST"
-        if launchctl print "gui/$(id -u)/ai.mcs.llamaserver" >/dev/null 2>&1; then
+        if [ ! -f "$MODEL_FILE" ]; then
+            # KeepAlive with no model would crash-loop llama-server
+            warn "model missing — ai.mcs.llamaserver not loaded; re-run after fetching the model"
+        elif launchctl print "gui/$(id -u)/ai.mcs.llamaserver" >/dev/null 2>&1; then
             skip "ai.mcs.llamaserver already loaded"
         else
             if launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"; then
@@ -285,7 +300,10 @@ RECOVERY_DIR="$HOME/.mcs-recovery"
 mkdir -p "$RECOVERY_DIR"
 # preserve the prior generation — on a bad update it may be the only
 # thing that can still run
-if [ -f "$RECOVERY_DIR/mcs_recover.py" ]; then
+# (only when the generation actually changes — a same-release re-run
+# must not overwrite the real previous generation with the current one)
+if [ -f "$RECOVERY_DIR/mcs_recover.py" ] && ! cmp -s \
+        "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"; then
     cp -p "$RECOVERY_DIR/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py.prev"
 fi
 cp "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"

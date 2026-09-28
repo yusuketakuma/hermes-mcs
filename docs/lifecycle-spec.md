@@ -99,7 +99,7 @@ Keychain 'mcs-adapter'               MCS パスワード
 
 `services`（冪等）: `deployment/scripts/*.sh` レンダリング →
 launchd 4件 bootstrap（差分は bootout+bootstrap 案内）→ cron を
-script 名で dedup 登録（現行4件 + 📋`mcs_update`）→
+script 名で dedup 登録（現行5件 + 📋`mcs_update`）→
 `interactive=discord` なら gateway を `status`→未 supervised なら
 `install`+`start`。📋manifest 記録・reconcile・atomic render は
 更新仕様で追加。

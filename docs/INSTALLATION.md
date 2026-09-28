@@ -48,7 +48,8 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
 ./install.sh            # 冪等: 何度実行しても既存分は skip
-                        # 引数で HERMES_HOME を変えられる（既定 ~/.hermes）
+                        # 引数で HERMES_HOME を変えられる（既定 ~/.hermes）。
+                        # 既定以外は services 段階が非対応のため --no-services 併用が必須
 ```
 
 一部導入済みの環境ではステージ単位でスキップできる:
@@ -375,7 +376,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |
 | `job_budget_seconds` | num | 既定 | 内部処理の時間予算・秒 |
 | `signals.notify` | bool | `false` | 確認候補を通知に出す |
-| `signals.digest` | bool | `false` | 複数候補をダイジェストにまとめる |
+| `signals.digest` | bool | `true`（キー未設定時。ウィザード既定は `false`） | 複数候補をダイジェストにまとめる |
 | `signals.digest_interval_h` | num | 既定 | ダイジェスト間隔・時間 |
 | `signals.self_organizations` | list[str] | 自動検出 | 自施設名（MCS プロフィールから自動検出を上書き） |
 | `signals.self_professions` | list[str] | 自動検出 | 自職種（同上） |
@@ -390,7 +391,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
-| `health.max_missed_runs` | int | `4` | 欠測許容回数。昼5分・夜20分の予定と完了猶予から判定 |
+| `health.max_missed_runs` | int | `2` | 欠測許容回数。昼5分・夜20分の予定と完了猶予から判定 |
 
 ## 5. 秘密情報の配置
 
