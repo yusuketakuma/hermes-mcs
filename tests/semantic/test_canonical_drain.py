@@ -458,3 +458,48 @@ def test_budget_exhausted_at_promote_is_a_counted_retry(tmp_path,
         assert job["state"] == "pending" and job["attempts"] == 1
     finally:
         db.close()
+
+
+def test_resource_wait_does_not_grow_artifacts(tmp_path):
+    """U06-F04: a canonical job waiting on a resource-class Jev failure
+    (budget_exceeded) re-walks S0-S2 every drain without consuming an
+    attempt — identical stage receipts and unevaluated fact audits must
+    not be appended once per drain."""
+    import semantic_jev as jevmod
+
+    class _AuditBudgetJev(_FakeJev):
+        def __init__(self):
+            choice_map = {f"has_{c}": "absent"
+                          for c in sf.MANDATORY_CATEGORIES}
+            choice_map["has_medication"] = "present"
+            super().__init__(choice_map=choice_map)
+
+        def evaluate(self, state, questions, deadline):
+            # preflight (has_*) and assessment (P*) answer; the fact
+            # audit hits a durable budget hold
+            if not all(str(q).startswith(("has_", "P")) for q in questions):
+                self.requests_made += 1
+                raise jevmod.JevError("budget_exceeded", retryable=False)
+            return super().evaluate(state, questions, deadline)
+
+    db = _seed_one(tmp_path)
+    try:
+        counts = []
+        for _ in range(4):
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                          "WHERE kind='semantic'")
+            db.db.commit()
+            out = _drain(db, jev=_AuditBudgetJev())
+            assert out["deferred"] == 1
+            # per-drain run metrics and per-request usage reservations
+            # are legitimate accounting; everything else is outcome
+            counts.append(dict(db.db.execute(
+                "SELECT kind, COUNT(*) FROM artifacts WHERE kind NOT IN "
+                "('semantic_drain_run','semantic_usage') GROUP BY kind"
+            ).fetchall()))
+        assert _job(db)["attempts"] == 0
+        assert counts[1]["v4_stage"] >= counts[0]["v4_stage"]
+        assert counts[1] == counts[2] == counts[3], counts
+        assert counts[-1]["semantic_facts_audit"] == 1
+    finally:
+        db.close()
