@@ -10,7 +10,6 @@ fact/dimension.
 from __future__ import annotations
 
 import json
-import math
 import time
 
 
@@ -27,8 +26,7 @@ def _result(details: dict, findings: list, complete: bool,
 def _finite_confidence(value) -> float | None:
     if type(value) is bool or not isinstance(value, int | float):
         return None
-    value = float(value)
-    return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+    return float(value) if 0.0 <= value <= 1.0 else None
 
 
 def _policy_fingerprint(scfg: dict) -> str | None:

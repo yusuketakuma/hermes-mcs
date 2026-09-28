@@ -7,6 +7,7 @@ verdicts keep the document incomplete — never a silent pass.
 """
 import json
 
+import pytest
 
 import semantic_extraction as extraction
 import semantic_facts as sf
@@ -32,6 +33,19 @@ def _llm(facts, presence=None):
              "category_presence": dict(NO_FACTS, **(presence or {}))},
             ensure_ascii=False)
     return call
+
+
+class _FakeLedger:
+    def __init__(self):
+        self.rows = []
+
+    def artifacts(self, kind, project_id=None, message_id=None):
+        return [r for r in self.rows if r["kind"] == kind]
+
+    def artifact_add(self, kind, content, project_id=None,
+                     message_id=None, model=None, meta=None):
+        self.rows.append({"kind": kind, "content": content,
+                          "meta": json.dumps(meta or {})})
 
 
 def _obligations(doc, status=None):
@@ -186,19 +200,7 @@ def test_out_of_chunk_quote_not_borrowed():
 def test_durable_prefix_reuse_v2():
     body = "一段落目です。" + "あ" * 50 + "\n" + "二段落目です。" + "い" * 50
 
-    class FakeLedger:
-        def __init__(self):
-            self.rows = []
-
-        def artifacts(self, kind, project_id=None, message_id=None):
-            return [r for r in self.rows if r["kind"] == kind]
-
-        def artifact_add(self, kind, content, project_id=None,
-                         message_id=None, model=None, meta=None):
-            self.rows.append({"kind": kind, "content": content,
-                              "meta": json.dumps(meta or {})})
-
-    ledger = FakeLedger()
+    ledger = _FakeLedger()
     member = _member(body)
     calls = []
 
@@ -242,19 +244,7 @@ def test_v2_cache_reuses_evidence_bearing_chunks():
     # cache and re-extracted on each restart.
     body = "アムロジピン5mgを継続します。"
 
-    class FakeLedger:
-        def __init__(self):
-            self.rows = []
-
-        def artifacts(self, kind, project_id=None, message_id=None):
-            return [r for r in self.rows if r["kind"] == kind]
-
-        def artifact_add(self, kind, content, project_id=None,
-                         message_id=None, model=None, meta=None):
-            self.rows.append({"kind": kind, "content": content,
-                              "meta": json.dumps(meta or {})})
-
-    ledger = FakeLedger()
+    ledger = _FakeLedger()
     fact = {"statement": "アムロジピン5mg継続", "kind": "medication_event",
             "action": "continue", "subject_role": "patient",
             "evidence_quote": "アムロジピン5mgを継続"}
@@ -488,19 +478,7 @@ def test_no_jev_client_means_no_jev_pre_obligations():
 def test_preflight_verdicts_cached_with_chunk():
     body = "一段落目です。" + "あ" * 50
 
-    class FakeLedger:
-        def __init__(self):
-            self.rows = []
-
-        def artifacts(self, kind, project_id=None, message_id=None):
-            return [r for r in self.rows if r["kind"] == kind]
-
-        def artifact_add(self, kind, content, project_id=None,
-                         message_id=None, model=None, meta=None):
-            self.rows.append({"kind": kind, "content": content,
-                              "meta": json.dumps(meta or {})})
-
-    ledger = FakeLedger()
+    ledger = _FakeLedger()
     member = _member(body)
     jev = _FakeJev()
     extraction.extract_facts_v2(
@@ -531,3 +509,67 @@ def test_deadline_between_chunks_leaves_pending():
     assert first["failure_reason"] == "deadline"
     assert first["pending_chunks"]
     sf.validate_facts_doc(first["doc"])
+
+
+@pytest.mark.parametrize("provenance", ["extract_v1", [], True])
+def test_model_cannot_supply_trusted_provenance(provenance):
+    result = extraction.extract_facts_v2(_llm([{
+        "statement": "合成所見", "kind": "other_observation",
+        "evidence_quote": "合成観察文", "_provenance": provenance}],
+        {"other_observation": "one"}), _member("合成観察文です。"))
+    fact = next(f for f in result["facts"] if f["statement"] == "合成所見")
+    assert fact["provenance"] == "local_llm"
+
+
+def test_ambiguous_chunk_quote_keeps_canonical_fact_unverified():
+    result = extraction.extract_facts_v2(_llm([{
+        "statement": "合成所見", "kind": "other_observation",
+        "evidence_quote": "合成観察文"}], {"other_observation": "one"}),
+        _member("合成観察文。合成観察文。"))
+    fact = next(f for f in result["facts"] if f["statement"] == "合成所見")
+    assert fact["validation_status"] == "unverified"
+    assert not result["complete"]
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("meta", []), ("content", []),
+    ("meta", {"chunk_index": float("inf")}),
+])
+def test_malformed_cache_rows_are_ignored_and_reextracted(field, bad):
+    ledger = _FakeLedger()
+    member = _member("合成観察文です。")
+    extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
+    for row in ledger.rows:
+        if row["kind"] == extraction.KIND_CHUNK_V2:
+            row[field] = json.dumps(bad)
+    result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
+    assert result["complete"]
+    assert result["reused_chunks"] == []
+
+
+def test_new_chunk_layout_is_persisted_for_same_source():
+    ledger = _FakeLedger()
+    member = _member("合成観察文です。" * 10)
+    for size in (40, 30, 40):
+        result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger, chunk_size=size)
+        manifest = json.loads(ledger.artifacts(extraction.KIND_MANIFEST)[-1]["content"])
+        assert manifest["atoms"] == result["manifest"]["atoms"]
+        assert [c["end"] for c in manifest["chunks"]] == [
+            c["end"] for c in result["manifest"]["chunks"]]
+
+
+@pytest.mark.parametrize("confidence", [None, True, float("nan"), 10**1000],
+                         ids=["missing", "boolean", "nan", "overflow"])
+def test_invalid_preflight_confidence_cannot_close_absence(confidence):
+    class InvalidJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            out = super().evaluate(state, questions, deadline)
+            for answer in out["answers"].values():
+                answer["confidence"] = confidence
+            return out
+
+    result = extraction.extract_facts_v2(
+        _llm([]), _member("合成観察文です。"), jev_client=InvalidJev())
+    assert not result["complete"]
+    assert all(ob["status"] == "ambiguous" for ob in result["doc"]["obligations"]
+               if ob["source"] == "jev_pre")

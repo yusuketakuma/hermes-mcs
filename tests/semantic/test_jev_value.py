@@ -212,3 +212,73 @@ def test_shadow_e2e_honors_chunk_budget():
 
     seval.run_shadow_e2e([{"id": "chunked", "body": body}], llm, _Jev(), chunk_size=30)
     assert len(prompts) > 1
+
+
+def test_failed_extraction_keeps_expected_facts_in_recall_denominator(monkeypatch):
+    import semantic_extraction
+
+    def fail(*args, **kwargs):
+        raise ValueError("synthetic failure")
+
+    monkeypatch.setattr(semantic_extraction, "extract_facts_v2", fail)
+    report = seval.evaluate_jev_incremental(CASES, _llm([]), _Jev())
+    assert report["extraction"]["mandatory_expected"] == 1
+    assert report["extraction"]["mandatory_matched"] == 0
+    assert report["extraction"]["mandatory_recall"] == 0.0
+    assert not report["gate"]["pass"]
+
+
+def test_unused_evidence_cannot_claim_extracted_fact_recall():
+    doc = {"facts": [], "evidence": [{"evidence_id": "e1", "quote": BODY}]}
+    assert seval._expected_matched(doc, [{"evidence_quote": BODY}]) == 0
+
+
+def test_incomplete_render_cannot_pass_shadow_report(monkeypatch):
+    import semantic_render
+
+    original = semantic_render.mandatory_render
+
+    def tiny_page(doc):
+        return original(doc, page_budget=1)
+
+    monkeypatch.setattr(semantic_render, "mandatory_render", tiny_page)
+    report = seval.run_shadow_e2e(CASES,
+        _llm(GOOD_FACTS, presence={"medication": "one"}), _Jev())
+    assert report["complete"] == 0
+    assert not report["per_case"][0]["passed"]
+    assert "incomplete" in report["per_case"][0]["stages"]["render"]
+
+
+def test_shadow_relations_use_repaired_facts_for_following_message(monkeypatch):
+    import semantic_audit
+    import semantic_extraction
+    import semantic_relations
+    from test_semantic_mandatory_render import _doc, _fact
+
+    def extract(_llm, member, *args, **kwargs):
+        return {"doc": _doc(facts=[_fact(f"message-{member['message_id']}")]),
+                "extraction_complete": True}
+
+    def audit(_client, doc, *args):
+        rejected = [f for f in doc["facts"] if f["statement"] == "message-1"]
+        return {"evaluated": True, "status": "NEEDS_REVIEW" if rejected else "PASS",
+                "findings": [{"fact": f["fact_id"], "code": "fact_not_supported"}
+                             for f in rejected]}
+
+    def repair(*args, **kwargs):
+        return {"repaired": True, "doc": _doc(facts=[_fact("repaired")])}
+
+    histories = []
+
+    def relations(active, new):
+        histories.append([f["statement"] for f in active])
+        return {"relations": []}
+
+    monkeypatch.setattr(semantic_extraction, "extract_facts_v2", extract)
+    monkeypatch.setattr(semantic_extraction, "repair_facts_v2", repair)
+    monkeypatch.setattr(semantic_audit, "audit_facts_v2", audit)
+    monkeypatch.setattr(semantic_relations, "reconcile_facts", relations)
+    report = seval.run_shadow_e2e([{"id": "thread", "messages": [
+        {"message_id": 1, "body": BODY}, {"message_id": 2, "body": BODY}]}], None, None)
+    assert report["complete"] == 1
+    assert histories[-1] == ["repaired"]

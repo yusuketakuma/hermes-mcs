@@ -15,7 +15,9 @@ Gates to watch (phase-j-record §7):
 - failed job count staying at 0
 """
 import json
+import math
 import os
+from pathlib import Path
 import sqlite3
 import sys
 import time
@@ -35,7 +37,7 @@ DB = os.path.join(HOME, "data", "ledger.db")
 
 
 def observe(db_path: str = DB, cfg: dict | None = None) -> dict:
-    c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    c = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
     try:
         return _observe(c, cfg)
@@ -73,13 +75,11 @@ def _observe(c, cfg) -> dict:
         " AND json_extract(a.meta,'$.hash')=m.content_hash "
         " AND json_extract(a.meta,'$.extract_version')=?)",
         (EXTRACT_VERSION,))[0][0]
-    from semantic_store import _jst_day_start
-    jst_start = _jst_day_start(time.time())
-    jev_today = q(
-        "SELECT COALESCE(SUM(CASE WHEN json_valid(meta) THEN "
-        "json_extract(meta,'$.jev_requests') ELSE 0 END),0) "
-        "FROM artifacts WHERE kind='semantic_usage' AND created_at >= ?",
-        (jst_start,))[0][0]
+    from semantic_store import jev_usage_today
+    try:
+        usage = {"jev_requests_today": jev_usage_today(ledger)}
+    except ValueError:
+        usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
     # ---- T14: queue ages, cohort split, scheduler, recent rates ----
     queue_ages, cohorts, scheduler = _queue_stats(c)
     recent = _recent_runs(c)
@@ -92,7 +92,7 @@ def _observe(c, cfg) -> dict:
         "audit_statuses_scope": "history",
         "history": history,
         "current_quality": current_quality(ledger, cfg),
-        "jev_requests_today": int(jev_today),
+        **usage,
         "jev_daily_budget": _daily_budget(cfg),
         "extract_llm_left": extract_left,
         "queue_ages_s": queue_ages,
@@ -149,6 +149,8 @@ def _queue_stats(c):
             sched = json.loads(sched_row[0][0] or "{}")
         except (json.JSONDecodeError, TypeError):
             sched = {}
+    if not isinstance(sched, dict):
+        sched = {}
     scheduler = {
         "arrival_selected": sched.get("arrival_selected"),
         "backfill_selected": sched.get("backfill_selected"),
@@ -157,17 +159,32 @@ def _queue_stats(c):
     return queue_ages, cohorts, scheduler
 
 
+def _nonnegative(value, *, integer=False) -> bool:
+    if type(value) not in ((int,) if integer else (int, float)):
+        return False
+    try:
+        return value >= 0 and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _complete_total(values, *, reducer=sum, integer=False):
+    """A total needs every observation; missing phases stay unknown."""
+    if not values or not all(_nonnegative(v, integer=integer) for v in values):
+        return None
+    result = reducer(values)
+    return result if _nonnegative(result, integer=integer) else None
+
+
 def _recent_runs(c) -> dict:
-    """Aggregates over the last 100 semantic_drain_run artifacts."""
-    drain_rows = c.execute(
+    """Aggregate measured phases over the last 100 semantic drain runs."""
+    rows = c.execute(
         "SELECT content FROM artifacts WHERE kind='semantic_drain_run' "
         "ORDER BY artifact_id DESC LIMIT 100").fetchall()
-    recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0,
-              "llm_s": None, "jev_s": None, "post_s": None,
-              "queue_wait_s_max": None, "usage_tokens": None}
-    llm_s = jev_s = post_s = qw_max = tokens = 0.0
-    have_phase = have_usage = False
-    for (content,) in drain_rows:
+    recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0}
+    phases = {key: [] for key in ("llm_s", "jev_s", "post_s", "queue_wait_s")}
+    tokens = []
+    for (content,) in rows:
         try:
             run = json.loads(content)
         except (json.JSONDecodeError, TypeError):
@@ -177,92 +194,60 @@ def _recent_runs(c) -> dict:
         recent["runs"] += 1
         for key in ("done", "deferred", "failed"):
             value = run.get(key)
-            if type(value) is int:
+            if _nonnegative(value, integer=True):
                 recent[key] += value
-        for metric in run.get("job_metrics") or []:
-            if not isinstance(metric, dict):
-                continue
-            for key, acc in (("llm_s", "llm"), ("jev_s", "jev"),
-                             ("post_s", "post")):
-                value = metric.get(key)
-                if type(value) in (int, float):
-                    if acc == "llm":
-                        llm_s += value
-                    elif acc == "jev":
-                        jev_s += value
-                    else:
-                        post_s += value
-                    have_phase = True
-            value = metric.get("queue_wait_s")
-            if type(value) in (int, float):
-                qw_max = max(qw_max, value)
-                have_phase = True
+        metrics = run.get("job_metrics")
+        if not isinstance(metrics, list):
+            metrics = [None]
+        for metric in metrics:
+            metric = metric if isinstance(metric, dict) else {}
+            for key, values in phases.items():
+                values.append(metric.get(key))
             usage = metric.get("usage")
-            if isinstance(usage, dict):
-                for key in ("input_tokens", "output_tokens"):
-                    value = usage.get(key)
-                    if type(value) in (int, float):
-                        tokens += value
-                        have_usage = True
-    if have_phase:
-        recent.update({"llm_s": llm_s, "jev_s": jev_s,
-                       "post_s": post_s, "queue_wait_s_max": qw_max})
-    if have_usage:
-        recent["usage_tokens"] = tokens
+            usage = usage if isinstance(usage, dict) else {}
+            tokens.append(_complete_total(
+                [usage.get("input_tokens"), usage.get("output_tokens")],
+                integer=True) if type(usage.get("unreported_requests")) is int
+                and usage["unreported_requests"] == 0 else None)
+    recent.update({key: _complete_total(phases[key])
+                   for key in ("llm_s", "jev_s", "post_s")})
+    recent["queue_wait_s_max"] = _complete_total(phases["queue_wait_s"], reducer=max)
+    recent["usage_tokens"] = _complete_total(tokens, integer=True)
     return recent
 
 
 def _extract_recent(c) -> dict:
-    """Aggregates over the last 200 extract_llm integrity metas."""
-    integrity_rows = c.execute(
+    """Aggregate independently measured extraction metrics over 200 rows."""
+    rows = c.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_llm' "
         "ORDER BY artifact_id DESC LIMIT 200").fetchall()
-    extract_recent = {"artifacts": 0, "calls": None,
-                      "prompt_ms": None, "predicted_ms": None,
-                      "tokens": None}
-    calls = pms = dms = toks = 0
-    have_calls = have_ms = have_toks = False
-    for (meta,) in integrity_rows:
+    recent = {"artifacts": 0}
+    values = {key: [] for key in ("calls", "prompt_ms", "predicted_ms", "tokens")}
+    for (raw,) in rows:
         try:
-            integrity = (json.loads(meta) or {}).get("integrity")
+            meta = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             continue
+        integrity = meta.get("integrity") if isinstance(meta, dict) else None
         if not isinstance(integrity, dict):
             continue
-        extract_recent["artifacts"] += 1
-        if type(integrity.get("calls")) is int:
-            calls += integrity["calls"]
-            have_calls = True
+        recent["artifacts"] += 1
+        values["calls"].append(integrity.get("calls"))
         timings = integrity.get("timings")
-        if isinstance(timings, dict):
-            for key, acc in (("prompt_ms", "p"), ("predicted_ms", "d")):
-                value = timings.get(key)
-                if type(value) in (int, float):
-                    if acc == "p":
-                        pms += value
-                    else:
-                        dms += value
-                    have_ms = True
+        timings = timings if isinstance(timings, dict) else {}
+        for key in ("prompt_ms", "predicted_ms"):
+            values[key].append(timings.get(key))
         usage = integrity.get("usage")
-        if isinstance(usage, dict) \
-                and type(usage.get("total_tokens")) is int:
-            toks += usage["total_tokens"]
-            have_toks = True
-    if have_calls:
-        extract_recent["calls"] = calls
-    if have_ms:
-        extract_recent.update({"prompt_ms": pms, "predicted_ms": dms})
-    if have_toks:
-        extract_recent["tokens"] = toks
-    return extract_recent
+        values["tokens"].append(usage.get("total_tokens")
+                                if isinstance(usage, dict) else None)
+    recent.update({key: _complete_total(observations, integer=key in ("calls", "tokens"))
+                   for key, observations in values.items()})
+    return recent
 
 
 def _daily_budget(cfg) -> int:
-    try:
-        return int((cfg or {}).get("semantic", {})
-                   .get("daily_request_budget", 0))
-    except (TypeError, ValueError):
-        return 0
+    from semantic_policy import semantic_config
+    return semantic_config(cfg if isinstance(cfg, dict) else {})[0]["daily_request_budget"]
 
 
 def main() -> int:

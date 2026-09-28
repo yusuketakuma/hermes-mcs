@@ -180,6 +180,17 @@ def test_fact_source_canonical_rejects_synthetic(tmp_path, monkeypatch):
         _Args("canonical", str(ev))) == 1
 
 
+def test_fact_source_rejects_truthy_nonboolean_gate(tmp_path, monkeypatch):
+    conf = _cmd_cfg(tmp_path, monkeypatch, {"mcs_login_id": "x",
+                                            "notify_target": "local"})
+    before = conf.read_bytes()
+    evidence = tmp_path / "report.json"
+    for report in (_report(pass_="false"), _report(g6="false"), _report(human=True)):
+        evidence.write_text(json.dumps(report))
+        assert mcs_setup.cmd_fact_source(_Args("canonical", str(evidence))) == 1
+        assert conf.read_bytes() == before
+
+
 def test_fact_source_canonical_pins_gate(tmp_path, monkeypatch):
     conf = _cmd_cfg(tmp_path, monkeypatch, {"mcs_login_id": "x",
                                             "notify_target": "slack"})

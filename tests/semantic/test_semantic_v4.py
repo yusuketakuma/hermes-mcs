@@ -8,6 +8,8 @@ the finite retirement manifest.
 import json
 import time
 
+import pytest
+
 import extract_llm
 import semantic
 import semantic_jev as jev
@@ -296,14 +298,14 @@ def test_extract_admission_defaults_to_zero_under_v4(tmp_path, monkeypatch):
         res = extract_llm.run_pending(db, limit=5, budget_s=5,
                                       admitted_ids=set())
         assert res["done"] == 0 and res["failed"] == 0
-        # manifest-declared ids DO get admitted
+        # Conversion manifests belong to v4; they never reopen v3.
         v4.declare_cohort(
             db, "c1", [{"message_id": 1,
                         "content_hash": db.db.execute(
                             "SELECT content_hash FROM messages "
                             "WHERE message_id=1").fetchone()[0]}],
             {"items": 1}, NOW + 3600)
-        assert v4.active_legacy_admissions(db, NOW) == {1}
+        assert v4.active_legacy_admissions(db, NOW) == set()
         # an expired cohort admits nothing again
         assert v4.active_legacy_admissions(db, NOW + 7200) == set()
     finally:
@@ -329,18 +331,24 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         # item receipts bound the cursor — re-running doesn't re-seed
         v4.mark_item_done(db, "c2", 1, "converted")
         res2 = v4.run_cohort(db, "c2", now=NOW)
-        assert res2["scheduled"] <= 2
+        assert res2["scheduled"] == 0
         jobs = db.db.execute(
             "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'"
         ).fetchone()[0]
-        assert jobs <= 3
+        assert jobs == 2
+        # A terminal job cannot be revived by rerunning the cohort.
+        db.db.execute("UPDATE fetch_jobs SET state='failed'")
+        db.db.commit()
+        assert v4.run_cohort(db, "c2", now=NOW)["scheduled"] == 0
+        assert {r[0] for r in db.db.execute(
+            "SELECT state FROM fetch_jobs")} == {"failed"}
         assert v4.run_cohort(db, "c2", now=NOW + 7200)["error"] == \
             "cohort_expired"
     finally:
         db.close()
 
 
-def test_retire_payloads_tombstones_only_after_all_gates(tmp_path):
+def test_retire_payloads_requires_separate_verified_cleanup(tmp_path):
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body="synthetic"),
@@ -367,9 +375,14 @@ def test_retire_payloads_tombstones_only_after_all_gates(tmp_path):
         # too early → held
         res = v4.retire_payloads(db, "c3", now=NOW + 50)
         assert res["retired"] == 0
+        before = [tuple(r) for r in db.db.execute(
+            "SELECT * FROM artifacts ORDER BY artifact_id")]
         res = v4.retire_payloads(db, "c3", now=NOW + 200)
-        assert res["held"]
-        # m1's extract_llm + canonical_projection are tombstoned
+        assert res["retired"] == []
+        assert res["held"] == "cleanup_manifest_and_recovery_required"
+        assert before == [tuple(r) for r in db.db.execute(
+            "SELECT * FROM artifacts ORDER BY artifact_id")]
+        # A conversion receipt alone never authorizes payload destruction.
         tombs = db.db.execute(
             "SELECT artifact_id FROM artifacts WHERE message_id=1 "
             "AND kind IN ('extract_llm','canonical_projection')").fetchall()
@@ -378,8 +391,8 @@ def test_retire_payloads_tombstones_only_after_all_gates(tmp_path):
             c = json.loads(db.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?",
                 (aid,)).fetchone()[0])
-            assert c["_tombstone"] and c["retired_artifact_id"] == aid
-        # m2's QC-referenced extract_llm is held, its projection retired
+            assert "_tombstone" not in c
+        # The QC-referenced source is also intact.
         m2_ext = json.loads(db.db.execute(
             "SELECT content FROM artifacts WHERE artifact_id=?",
             (src,)).fetchone()[0])
@@ -393,6 +406,132 @@ def test_retire_payloads_tombstones_only_after_all_gates(tmp_path):
         assert db.db.execute(
             "SELECT body_text FROM messages WHERE message_id=1"
         ).fetchone()[0] == "synthetic"
+    finally:
+        db.close()
+
+
+def test_v4_readers_skip_invalid_shapes_and_use_shared_generation_rule(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic")], project_id=1)
+    try:
+        h = _seed_legacy_and_v4(db)
+        expected = v4.current_v4(db, 1, h)["artifact_id"]
+        # A later unrelated or mislabelled generation cannot shadow it.
+        for meta in ({"hash": "other", "engine_version": 4},
+                     {"hash": h, "engine_version": 3}):
+            db.artifact_add(v4.KIND_V4, "{}", project_id=1,
+                            message_id=1, meta=meta)
+        assert v4.current_v4(db, 1, h)["artifact_id"] == expected
+        for content, meta in (("[]", {"fingerprint": "fp"}),
+                              ("{}", []), ("null", None)):
+            db.artifact_add(v4.KIND_V4_STAGE, content, message_id=1,
+                            meta=meta)
+        assert v4.stage_ledger(db, 1, "fp") == []
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("ceilings,expiry", [
+    ({"items": True}, NOW + 3600),
+    ({"items": -1}, NOW + 3600),
+    ({"calls": 1.5}, NOW + 3600),
+    ({"tokens": -1}, NOW + 3600),
+    ({}, float("nan")), ({}, float("inf")), ({}, True),
+])
+def test_cohort_rejects_invalid_budgets_without_persistence(tmp_path,
+                                                          ceilings, expiry):
+    db = _ledger(tmp_path)
+    try:
+        with pytest.raises(ValueError):
+            v4.declare_cohort(db, "invalid", [], ceilings, expiry)
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
+    from semantic_policy import semantic_config
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic")], project_id=1)
+    try:
+        h = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
+        v4.declare_cohort(db, "bounded", [{"message_id": 1, "content_hash": h}],
+                         {"calls": 4, "tokens": 1000}, NOW + 3600)
+        v4.run_cohort(db, "bounded", now=NOW)
+        job = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        cfg = semantic_config({"semantic": {"mode": "shadow",
+                                             "project_ids": [1]}})[0]
+        calls = []
+        result = semantic._process_job(
+            db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
+            time.monotonic() + 60)
+        assert result == "failed"
+        assert calls == []
+        assert v4.cohort_items_done(db, "bounded")[1]["reason"] == \
+            "token_budget_not_enforceable"
+        count = len(_rows(db, v4.KIND_V4_ITEM, 1))
+        assert semantic._process_job(
+            db, cfg, job, _PassJev(), lambda prompt: calls.append(prompt),
+            time.monotonic() + 60) == "failed"
+        assert len(_rows(db, v4.KIND_V4_ITEM, 1)) == count
+    finally:
+        db.close()
+
+
+def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
+                                                                 monkeypatch):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(i, body=f"synthetic {i}") for i in (1, 2)],
+                     project_id=1)
+    items = [dict(r) for r in db.db.execute(
+        "SELECT message_id,content_hash FROM messages ORDER BY message_id")]
+    v4.declare_cohort(db, "atomic", items, {"items": 1}, NOW + 3600)
+    original = db.artifact_add_tx
+
+    def fail_receipt(kind, *args, **kwargs):
+        if kind == v4.KIND_V4_ITEM:
+            raise OSError("synthetic write failure")
+        return original(kind, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(db, "artifact_add_tx", fail_receipt)
+            with pytest.raises(OSError):
+                v4.run_cohort(db, "atomic", NOW)
+        assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+        assert v4.cohort_items_done(db, "atomic") == {}
+        assert v4.run_cohort(db, "atomic", NOW)["scheduled"] == 1
+    finally:
+        db.close()
+    db = _ledger(tmp_path)
+    try:
+        assert v4.run_cohort(db, "atomic", NOW + 100)["scheduled"] == 0
+        assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_cohort_binds_dependency_closure_and_rejects_duplicate_targets(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic root")], project_id=1)
+    item = dict(db.db.execute("SELECT message_id,content_hash FROM messages").fetchone())
+    try:
+        with pytest.raises(ValueError):
+            v4.declare_cohort(db, "duplicate", [item, item], {}, NOW + 3600)
+        v4.declare_cohort(db, "context", [item], {}, NOW + 3600)
+        # The target body is unchanged, but its dependency closure moved.
+        db.save_messages([_message(2, parent=1, body="synthetic reply")], project_id=1)
+        result = v4.run_cohort(db, "context", NOW)
+        assert result["scheduled"] == 0 and result["remaining"] == 0
+        assert v4.cohort_items_done(db, "context")[1]["reason"] == "source_changed"
+        before = [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
+        with pytest.raises(ValueError):
+            v4.retire_payloads(db, "context", float("nan"))
+        assert before == [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
     finally:
         db.close()
 

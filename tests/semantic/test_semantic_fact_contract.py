@@ -109,6 +109,36 @@ def test_enum_validation_rejects_invalid_values_with_stable_reasons():
                                 "status": "open"})
 
 
+@pytest.mark.parametrize('value', ['a', None, {'a': True}])
+@pytest.mark.parametrize('validator,document,field', [
+    (sf.validate_atom, _doc()['atoms'][0], 'dependency_atom_ids'),
+    (sf.validate_chunk, _doc()['chunks'][0], 'context_atom_ids'),
+    (sf.validate_fact, _fact(), 'evidence_ids'),
+    (sf.validate_obligation, {'obligation_id': 'o', 'owner_id': 'a',
+        'category': 'medication', 'source': 'deterministic', 'status': 'open'}, 'fact_ids'),
+    (sf.validate_relation, {'relation_id': 'r', 'left_fact_id': 'a',
+        'right_fact_id': 'b', 'type': 'COMPLEMENTS'}, 'evidence_ids'),
+    (sf.validate_coverage, _doc()['coverage'], 'open_obligation_ids'),
+])
+def test_reference_arrays_are_not_coerced_from_other_json_types(validator,
+                                                               document, field, value):
+    with pytest.raises(sf.ContractError, match='list_required'):
+        validator({**document, field: value})
+
+
+def test_evidence_validation_preserves_verbatim_whitespace():
+    quote = '  合成の引用  '
+    record = {'evidence_id': 'e', 'message_id': 'm1', 'revision': 'r1',
+              'start': 0, 'end': len(quote), 'quote': quote, 'atom_id': 'a'}
+    assert sf.validate_evidence(record)['quote'] == quote
+
+
+def test_huge_confidence_has_contract_error():
+    with pytest.raises(sf.ContractError, match='confidence_invalid'):
+        sf.validate_relation({'relation_id': 'r', 'left_fact_id': 'a',
+            'right_fact_id': 'b', 'type': 'COMPLEMENTS', 'confidence': 10**1000})
+
+
 def test_importance_is_ordering_metadata_only():
     assert [sf.importance_rank(t) for t in ("T0", "T1", "T2", "T3")] \
         == [0, 1, 2, 3]

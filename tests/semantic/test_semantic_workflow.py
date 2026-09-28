@@ -122,3 +122,32 @@ def test_no_source_text_in_report():
     blob = __import__("json").dumps(report, ensure_ascii=False)
     for marker in ("body", "prompt", "text"):
         assert f'"{marker}":' not in blob.replace('"body_text"', "")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("targets", ["f1", "f1"]),
+    ("fact_lines", [None]),
+    ("pages", True),
+    ("has_quote_for", [["f1"]]),
+    ("needed_for", [None]),
+])
+def test_malformed_case_rejected_before_measurement(field, value):
+    case = _case()
+    if field in ("fact_lines", "pages"):
+        case["card"][field] = value
+    elif field == "has_quote_for":
+        case["messages"][0][field] = value
+    elif field == "needed_for":
+        case["attachments"][0][field] = value
+    else:
+        case[field] = value
+    with pytest.raises(workflow.WorkflowError):
+        workflow.measure_case(case)
+
+
+@pytest.mark.parametrize("value", [10**1000, 1e308],
+                         ids=["integer_overflow", "sum_overflow"])
+def test_unrepresentable_cost_or_total_rejected(value):
+    cost = {key: value for key in workflow.DEFAULT_COST_MODEL}
+    with pytest.raises(workflow.WorkflowError):
+        workflow.measure_case(_case(), cost_model=cost)

@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import LedgerReader
-from mcs_util import env_value
+from mcs_util import atomic_write, env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
 from semantic_llm import extract_facts, summarize
@@ -44,10 +44,8 @@ def _write_json_private(path: str, data) -> None:
     """Corpus/run outputs contain patient-derived text — write them with
     the same owner-only permissions semantic_blind uses for its outputs
     (S-4)."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.chmod(path, 0o600)  # tighten when the output file pre-existed
+    atomic_write(path, lambda f: json.dump(
+        data, f, ensure_ascii=False, allow_nan=False), mode=0o600)
 
 
 def cmd_corpus(args) -> int:
@@ -218,12 +216,17 @@ def cmd_calibrate(args) -> int:
     confs = []
     for (meta,) in rows:
         try:
-            ca = (json.loads(meta or "{}").get("claim_audit") or {})
+            parsed = json.loads(meta or "{}")
         except (TypeError, json.JSONDecodeError):
             continue
+        ca = parsed.get("claim_audit") if isinstance(parsed, dict) else None
+        if not isinstance(ca, dict):
+            continue
         for ans in ca.values():
+            if not isinstance(ans, dict):
+                continue
             c = ans.get("confidence")
-            if isinstance(c, int | float):
+            if type(c) in (int, float) and 0 <= c <= 1:
                 confs.append((c, ans.get("choice")))
     if not confs:
         print("no claim_audit data yet — accumulate audits first")

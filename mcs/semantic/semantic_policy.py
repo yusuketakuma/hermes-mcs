@@ -4,8 +4,6 @@ policy fingerprint. Leaf module — every other semantic_* module may
 import it; it imports none of them."""
 from __future__ import annotations
 
-import math
-
 from mcs_requests import payload_hash
 import semantic_jev as jev
 
@@ -135,8 +133,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
                         ("nomatch_threshold", 0.0, 1.0)):
         if key in block:
             v = block[key]
-            if type(v) not in (int, float) or not math.isfinite(v) \
-                    or not lo <= v <= hi:
+            if type(v) not in (int, float) or not lo <= v <= hi:
                 errors.append(f"config: semantic_{key}_invalid")
             else:
                 out[key] = float(v)

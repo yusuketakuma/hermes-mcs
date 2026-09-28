@@ -189,3 +189,13 @@ def test_mandatory_render_keeps_distinct_facts_with_identical_statements():
     assert len(set(out["facts"])) == 2
     assert all(fact["subject"] in "\n".join(out["facts"])
                for fact in (patient, family))
+
+
+def test_page_id_requires_exact_identity_field():
+    out = render.mandatory_render(_doc(facts=[
+        {**_fact("synthetic"), "fact_id": "fid_1"}]))
+    out["pages"][0]["text"] = out["pages"][0]["text"].replace(
+        "ID:fid_1、", "ID:fid_10、")
+    result = render.verify_mandatory_pages(out)
+    assert not result["complete"]
+    assert result["unbound"] == [{"page": 0, "fact_id": "fid_1"}]

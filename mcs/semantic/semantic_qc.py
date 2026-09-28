@@ -136,12 +136,12 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
             qid = f"v{i}"
             ctx_items[qid] = json.dumps({"vitals": {k: val}},
                                         ensure_ascii=False)
-            jp = _VITAL_JP.get(k, k)
+            jp = _VITAL_JP.get(k, "未分類のバイタル")
             questions[qid] = jev.noul_question(
                 f"state.context の id={qid} のバイタル項目は、"
                 "対象の投稿本文に裏付けられているか",
-                f"本文に{jp}が{val}である旨の記述がある",
-                f"本文に{jp}が{val}である旨の記述がない")
+                f"本文に{jp}の項目としてstate.contextに示した値を裏付ける記述がある",
+                f"本文に{jp}の項目としてstate.contextに示した値を裏付ける記述がない")
             layout.append((qid, "vitals", k))
             n -= 1
     urg = ex.get("urgency")
@@ -307,7 +307,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                "coverage": {"checked": checked_items, "total": total_items,
                             "unchecked": total_items - checked_items,
                             "capped": sum(by_field[s]["total"] for s in
-                                ("meds", "symptoms", "events", "labs"))
+                                ("meds", "symptoms", "events", "labs", "vitals"))
                                 > QC_MAX_ITEMS,
                             "by_field": by_field}}
     if urgency is not None:

@@ -282,6 +282,7 @@ def test_config_fail_closed():
         {"semantic": {"mode": "enforce", "model": "jev-latest"}})
     assert scfg["mode"] == "off"    # non-fixed model -> refuses stage
     for field, value in (("match_threshold", float("nan")),
+                         ("job_budget_seconds", 10**1000),
                          ("job_budget_seconds", True),
                          ("daily_request_budget", -1),
                          ("match_threhsold", .8)):

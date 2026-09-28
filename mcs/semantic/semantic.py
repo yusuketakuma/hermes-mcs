@@ -6,8 +6,10 @@ Feature-gated by config.json "semantic" (default OFF):
 - off:     no job seeding, no drain, no external communication — pending
            state and raw data are preserved untouched (INV-22, AT-053)
 - shadow:  artifacts are recorded under semantic_*/loop_*/notify_plan
-           kinds only. Existing extract_v1/extract_llm/patient_rollup
-           selection, ACK policy, outbox, and requests are never touched
+           kinds. With the default legacy fact source, existing extraction
+           selection stays unchanged. The separately gated canonical fact
+           source publishes audited projections even in shadow mode.
+           ACK policy, outbox and formal requests stay unchanged
            (INV-16, AT-049/062)
 - assist:  same artifacts; humans read them via mcs_view `semantic` /
            `loops` snapshot views
@@ -45,6 +47,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+import local_llm
 from ledger import Ledger, LedgerReader
 from mcs_util import acquire_run_lock, load_config
 import semantic_jev as jev  # noqa: F401 — facade patch point for tests
@@ -109,8 +112,29 @@ HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 CONF_PATH = os.path.join(HOME, "config.json")
 
-LLM_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
-LLM_MODEL = "Qwen3.5-9B"
+# defaults — config.json local_llm.url/local_llm.model override them;
+# use llm_conf()/llm_model() at call time so a config change needs no
+# code edit (drain/v4 record llm_model() in artifact metadata). The
+# constants stay a test patch point: a patched constant wins over both.
+LLM_ENDPOINT = local_llm.ENDPOINT
+LLM_MODEL = local_llm.MODEL
+_LLM_EPIN, _LLM_MPIN = LLM_ENDPOINT, LLM_MODEL
+
+
+def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
+    """(endpoint, model) — local_llm.url/local_llm.model over the pinned
+    defaults; patched module constants take precedence (test seam)."""
+    ep, mdl = local_llm.resolve(
+        cfg if cfg is not None else load_config())
+    if LLM_ENDPOINT != _LLM_EPIN:
+        ep = LLM_ENDPOINT
+    if LLM_MODEL != _LLM_MPIN:
+        mdl = LLM_MODEL
+    return ep, mdl
+
+
+def llm_model(cfg: dict | None = None) -> str:
+    return llm_conf(cfg)[1]
 # 600s: the v2 fact document can emit ~2-4K tokens, and under dual-slot
 # load decode runs ~3-5 t/s — a single call was measured at 322s
 # (2026-09-27), so anything below ~450 still turns legitimate v2
@@ -135,19 +159,19 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     The model gets no tools and no send capability; worker-isolated
     request, no proxy, no redirect, bounded bytes (INV-13, §15.3).
     Returns raw text or None."""
-    import local_llm
+    endpoint, model = llm_conf()
     if local_llm.admission_enabled():
         # T20: route through the RT/BACKLOG admission boundary — the
         # registered route binds the class; the response shape carries
         # an `admission` verdict on denial/deferral (never model text)
         response = local_llm.admitted_chat(
             "mcs.semantic", prompt,
-            endpoint=LLM_ENDPOINT, model=LLM_MODEL, timeout=timeout,
+            endpoint=endpoint, model=model, timeout=timeout,
             max_tokens=max_tokens,
             request_fn=local_llm.bounded_request)
     else:
         response = local_llm.chat(
-            prompt, endpoint=LLM_ENDPOINT, model=LLM_MODEL,
+            prompt, endpoint=endpoint, model=model,
             timeout=timeout, max_tokens=max_tokens,
             extra_payload={"id_slot": local_llm.request_slot()},
             request_fn=local_llm.bounded_request)
@@ -202,6 +226,10 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     oldest = ledger.db.execute(
         "SELECT MIN(created_at) FROM fetch_jobs WHERE kind=? AND state='pending'",
         (JOB_KIND,)).fetchone()[0]
+    try:
+        usage = {"jev_requests_today": jev_usage_today(ledger)}
+    except ValueError:
+        usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
     return {"semantic_jobs": jobs, "audit_statuses": history["audit_statuses"],
             "audit_statuses_scope": "history", "history": history,
             "current_quality": current_quality(ledger, cfg),
@@ -209,7 +237,7 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
                                          if oldest is not None else None),
             "semantic_paused_projects": paused_projects,
             "loop_candidates": loops,
-            "jev_requests_today": jev_usage_today(ledger),
+            **usage,
             "jev_circuit_open": runtime.circuit_open(ledger)}
 
 

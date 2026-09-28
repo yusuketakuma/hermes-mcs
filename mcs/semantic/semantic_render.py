@@ -75,12 +75,12 @@ def verify_mandatory_pages(rendered: dict,
     fact_set = set(fact_ids)
     missing = [f for f in fact_ids if f not in declared_set]
     extra = [f for f in declared if f not in fact_set]
-    duplicated = sorted({f for f in declared if declared.count(f) > 1})
+    duplicated = sorted(f for f, count in Counter(declared).items() if count > 1)
     oversized = [p.get("index") for p in pages
                  if len(p.get("text") or "") > budget]
     unbound = [{"page": p.get("index"), "fact_id": fid}
                for p in pages for fid in p.get("fact_ids") or []
-               if f"ID:{fid}" not in (p.get("text") or "")]
+               if f"、ID:{fid}、証拠:" not in (p.get("text") or "")]
     return {"complete": not (missing or extra or duplicated
                              or oversized or unbound),
             "missing": missing, "extra": extra,
@@ -253,6 +253,19 @@ def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
     return False
 
 
+def _arrival_ids(raw) -> list[int]:
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    ids = payload.get("message_ids")
+    if not isinstance(ids, list) or any(type(mid) is not int or mid <= 0 for mid in ids):
+        return []
+    return ids
+
+
 def _notify_src_event(ledger, project_id: int,
                       message_ids: list) -> int | None:
     """The newest new_messages outbox intent covering any of these
@@ -287,17 +300,17 @@ def _notify_src_event(ledger, project_id: int,
             continue
         if (row["state"] in ("accepted", "in_flight")
                 or row["attempts"] > 0 or progress.get("sent")):
-            attempted.add((payload.get("src_event_id"), payload.get("target_message_id")))
+            identity = (payload.get("src_event_id"), payload.get("target_message_id"))
+            if any(type(value) is not int or value <= 0 for value in identity):
+                return None
+            attempted.add(identity)
     for r in ledger.db.execute(
             "SELECT event_id,payload FROM notify_outbox "
             "WHERE kind='new_messages' AND project_id=? "
             "AND state != 'suppressed' "
             "ORDER BY event_id DESC", (project_id,)):
-        try:
-            ids = json.loads(r["payload"]).get("message_ids") or []
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(ids, list):
+        ids = _arrival_ids(r["payload"])
+        if ids:
             covered = want.intersection(ids)
             if any((r["event_id"], mid) not in attempted for mid in covered):
                 return r["event_id"]
@@ -332,11 +345,8 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             continue
         if not isinstance(progress, dict) or progress.get("sent"):
             continue
-        try:
-            ids = json.loads(ev["payload"]).get("message_ids") or []
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(ids, list):
+        ids = _arrival_ids(ev["payload"])
+        if not ids:
             continue
         ids = ids[:500]      # a malformed fat payload must not wedge the scan
         pid = ev["project_id"]

@@ -12,6 +12,8 @@ All synthetic: stub LLM/Jev, temp SQLite. Covers:
 import json
 import time
 
+import pytest
+
 import semantic
 import semantic_drain
 from semantic_observe import observe
@@ -129,6 +131,63 @@ def test_no_backfill_means_arrivals_take_all_slots(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize('arrivals', [0, 1])
+def test_backfill_uses_slots_left_by_small_arrival_lane(tmp_path, arrivals):
+    db = _world(tmp_path, list(range(10, 16)))
+    try:
+        for mid in range(10, 16):
+            _job(db, mid, eligible=mid < 10 + arrivals)
+        out = _due(db, max_jobs=4)
+        assert out['lanes'] == {'arrival': arrivals, 'backfill': 4 - arrivals}
+        assert out['done'] == 4
+    finally:
+        db.close()
+
+
+def test_due_backlog_count_is_not_silently_capped_at_fifty(tmp_path):
+    db = _world(tmp_path, list(range(1, 66)))
+    try:
+        for mid in range(1, 66):
+            _job(db, mid)
+        out = _due(db, max_jobs=1)
+        assert out['done'] == 1 and out['left'] == 64
+    finally:
+        db.close()
+
+
+def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch):
+    import ledger
+    import mcs_util
+    clock = [0.0]
+    monkeypatch.setattr(semantic_drain.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '1'])
+    def no_lock():
+        clock[0] = 2.0
+        return None
+    monkeypatch.setattr(mcs_util, 'acquire_run_lock', no_lock)
+    def no_writer(*args, **kwargs):
+        raise AssertionError('writer opened without lock')
+    monkeypatch.setattr(ledger, 'Ledger', no_writer)
+    assert semantic_drain.main() == 0
+
+
+@pytest.mark.parametrize('arguments', [
+    ['--max-jobs', '0'], ['--max-jobs', '33'], ['--stop-after', 'nan'],
+    ['--stop-after', 'inf'], ['--stop-after', '-1'],
+])
+def test_drain_cli_rejects_invalid_bounds_before_db(tmp_path, monkeypatch, arguments):
+    import ledger
+    monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', *arguments])
+    def no_writer(*args, **kwargs):
+        raise AssertionError('writer opened for invalid arguments')
+    monkeypatch.setattr(ledger, 'Ledger', no_writer)
+    with pytest.raises(SystemExit) as error:
+        semantic_drain.main()
+    assert error.value.code == 2
+
+
 def test_job_metrics_phase_split_and_cohort(tmp_path):
     db = _world(tmp_path, [10])
     _job(db, 10, eligible=True)
@@ -213,3 +272,45 @@ def test_observe_unknowns_are_null_not_zero(tmp_path):
     assert recent["llm_s"] is None and recent["usage_tokens"] is None
     assert snap["extract_recent"]["artifacts"] == 0
     assert snap["extract_recent"]["calls"] is None
+
+
+def test_observe_partial_measurements_remain_unknown(tmp_path):
+    db = _world(tmp_path, [10])
+    try:
+        db.artifact_add('semantic_drain_run', json.dumps({
+            'done': 1, 'job_metrics': [{'llm_s': 2, 'usage': {
+                'input_tokens': 5, 'output_tokens': 0, 'unreported_requests': 1}}]}))
+        db.artifact_add('extract_llm', '{}', meta={'integrity': {
+            'calls': 1, 'timings': {'prompt_ms': 10}}})
+        snap = observe(str(tmp_path / 'ledger.db'), _cfg())
+        assert snap['recent_drain']['llm_s'] == 2
+        assert snap['recent_drain']['jev_s'] is None
+        assert snap['recent_drain']['post_s'] is None
+        assert snap['recent_drain']['queue_wait_s_max'] is None
+        assert snap['recent_drain']['usage_tokens'] is None
+        assert snap['extract_recent']['prompt_ms'] == 10
+        assert snap['extract_recent']['predicted_ms'] is None
+    finally:
+        db.close()
+
+
+def test_observe_corrupt_records_are_visible_without_read_writes(tmp_path):
+    db = _world(tmp_path, [10])
+    try:
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': -9})
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,meta) VALUES('extract_llm','[1]')")
+            db.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,payload) "
+                          "VALUES(?,0,0,'[]')", (semantic_drain.SCHED_KIND,))
+        before = db.db.total_changes
+        snap = observe(str(tmp_path / 'ledger.db'), {'semantic': []})
+        assert snap['jev_requests_today'] is None
+        assert snap['jev_usage_error'] == 'semantic_usage_invalid'
+        assert snap['scheduler']['arrival_selected'] is None
+        assert snap['jev_daily_budget'] == 0
+        report = semantic.status_report(db)
+        assert report['jev_requests_today'] is None
+        assert report['jev_usage_error'] == 'semantic_usage_invalid'
+        assert db.db.total_changes == before
+    finally:
+        db.close()

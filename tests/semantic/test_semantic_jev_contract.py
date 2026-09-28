@@ -72,6 +72,7 @@ def test_choice_probabilities_require_bounds_sum_and_maximum_choice():
     for probabilities in (
         {"yes": 1.1, "no": -0.1},
         {"yes": float("nan"), "no": 0.0},
+        {"yes": 10**1000, "no": 0.0},
         {"yes": 0.6, "no": 0.6},
         {"yes": 0.2, "no": 0.8},
         {"yes": 0.9, "other": 0.1},

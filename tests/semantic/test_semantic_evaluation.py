@@ -496,3 +496,34 @@ def test_unannotated_importance_cannot_shrink_recall_denominator(value):
         record["label"]["facts"][0]["important"] = value
     with pytest.raises(evaluation.EvaluationError, match="label_fact_importance_required"):
         evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+
+
+@pytest.mark.parametrize("field", ["latency_ms", "requests"])
+def test_unrepresentable_telemetry_is_validation_error(field):
+    record = _record()
+    target = record["candidate"] if field == "latency_ms" else record["candidate"]["usage"]
+    target[field] = 10**1000
+    with pytest.raises(evaluation.EvaluationError, match="invalid"):
+        evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+
+
+def test_invalid_minimum_is_not_hidden_by_same_metric_maximum():
+    criteria = copy.deepcopy(CRITERIA)
+    criteria["minimums"]["defer_rate"] = float("nan")
+    with pytest.raises(evaluation.EvaluationError, match="criteria_threshold_invalid"):
+        evaluation.validate_criteria(criteria)
+
+
+@pytest.mark.parametrize("evidence", ["ev-1", [None]])
+def test_malformed_evidence_cannot_count_as_closure(evidence):
+    record = _record("human")
+    record["candidate"]["facts"][0]["evidence_ids"] = evidence
+    with pytest.raises(evaluation.EvaluationError, match="evidence"):
+        evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+
+
+def test_run_duration_aggregation_rejects_overflow():
+    rows = [{"account_id": "a", "result": {"run_id": i, "elapsed_s": 1e308}}
+            for i in range(2)]
+    with pytest.raises(evaluation.EvaluationError, match="run_elapsed_s"):
+        evaluation.evaluate_runs(rows)

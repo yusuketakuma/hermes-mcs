@@ -14,6 +14,7 @@ import _mcs_path  # noqa: F401  registers every subdir as import root
 
 from functools import wraps
 import json
+import math
 import time
 
 from mcs_requests import payload_hash
@@ -91,7 +92,7 @@ def _plan_exists(ledger, message_id: int, fp: str,
             m = json.loads(r["meta"] or "{}")
         except (json.JSONDecodeError, TypeError):
             continue
-        if m.get("fingerprint") == fp \
+        if isinstance(m, dict) and m.get("fingerprint") == fp \
                 and m.get("audit_status") == status \
                 and (policy is None or m.get("policy_fingerprint") == policy):
             return True
@@ -125,7 +126,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
-        project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+        project_id=pid, message_id=mid, model=semantic.llm_model(),
         meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "stale": final_status == "STALE",
@@ -242,7 +243,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     json.dumps(v2_doc, ensure_ascii=False,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
-                    model=semantic.LLM_MODEL,
+                    model=semantic.llm_model(),
                     meta=meta)
         if fact_source == "canonical" and v2_doc is not None \
                 and v2_doc["coverage"]["status"] != "complete":
@@ -341,7 +342,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                 "rejected": rejected},
                                ensure_ascii=False),
                     project_id=pid, message_id=mid,
-                    model=semantic.LLM_MODEL,
+                    model=semantic.llm_model(),
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
@@ -365,7 +366,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                     repair["owner_chunk_ids"]},
                                ensure_ascii=False, allow_nan=False),
                     project_id=pid, message_id=mid,
-                    model=semantic.LLM_MODEL,
+                    model=semantic.llm_model(),
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
@@ -378,7 +379,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                         json.dumps(v2_doc, ensure_ascii=False,
                                    allow_nan=False),
                         project_id=pid, message_id=mid,
-                        model=semantic.LLM_MODEL,
+                        model=semantic.llm_model(),
                         meta={"fingerprint": fp,
                               "policy_fingerprint": policy,
                               "schema": SCHEMA_VERSION,
@@ -409,7 +410,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 json.dumps(project_v2_doc_legacy(v2_doc),
                            ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
-                model=semantic.LLM_MODEL,
+                model=semantic.llm_model(),
                 meta={"fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
@@ -439,7 +440,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                          f["_evidence"] for f in facts
                                          if f.get("_evidence")}},
                            ensure_ascii=False),
-                project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+                project_id=pid, message_id=mid, model=semantic.llm_model(),
                 meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                       "chunks_total": len(_chunks(
                           member["body_original"])),
@@ -535,6 +536,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                           "audit_status": "STALE",
                           "technical_status": "stale"})
             raise
+
+    guard("admission")
+    if v4.hold_unbounded_job(ledger, job):
+        return "failed"
 
     # The adapters below make every actual Jev/local-model boundary pass
     # through the same identity check.  A real Jev client additionally gets
@@ -773,7 +778,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                     [{"code": "summary_unavailable"}],
                                 "target_message_id": mid},
                                ensure_ascii=False),
-                    project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+                    project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "technical_status": "pending"})
             incomplete = True
@@ -788,7 +793,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("candidate_snapshot")
             ledger.artifact_add(
                 "semantic_candidate", json.dumps(summary, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+                project_id=pid, message_id=mid, model=semantic.llm_model(),
                 meta={"fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
@@ -819,7 +824,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 guard("repair_reservation")
                 ledger.artifact_add(
                     "semantic_repair", json.dumps({"target_message_id": mid}),
-                    project_id=pid, message_id=mid, model=semantic.LLM_MODEL,
+                    project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
                 summary2 = summarize(
@@ -1169,6 +1174,10 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
                 share = 1 if turn_next == "backfill" else 0
             else:
                 share = max_jobs - 1
+        # Unused arrival capacity can serve due backfill within the same
+        # max_jobs/deadline/request budget. Preserve contested-slot turns.
+        if arrivals_due < max_jobs - share:
+            share = min(backlog_due, max_jobs - arrivals_due)
     order = "CASE WHEN kind=? THEN 0 ELSE 1 END, job_id"
     arrivals = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
@@ -1449,8 +1458,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception:
             out["degraded_notices"] = 0
             result["errors"].append("semantic: degraded_scan_failed")
-    out["left"] = sum(len(ledger.job_due(limit=50, kind=k))
-                      for k in kinds)
+    kind_ph = ",".join("?" * len(kinds))
+    out["left"] = ledger.db.execute(
+        f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
+        "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
     out["elapsed_s"] = time.perf_counter() - drain_started
     if due:
         # persisted fairness accounting — survives restarts, feeds
@@ -1508,22 +1519,27 @@ def main() -> int:
     args = ap.parse_args()
     if not args.drain:
         ap.error("--drain required")
+    if not 1 <= args.max_jobs <= 32:
+        ap.error("max-jobs must be between 1 and 32")
+    if not math.isfinite(args.stop_after) or args.stop_after < 0:
+        ap.error("stop-after must be a finite nonnegative number")
     from ledger import Ledger
     from mcs_util import acquire_run_lock, CONF_PATH, HOME
-    led = Ledger(os.path.join(HOME, "data", "ledger.db"))
-    cfg = load_config()
-    stop = time.monotonic() + max(0.0, args.stop_after)
+    led = None
+    stop = time.monotonic() + args.stop_after
     totals = {"done": 0, "deferred": 0, "failed": 0, "batches": 0}
     try:
         while time.monotonic() < stop:
             lock_fd = acquire_run_lock()
             if lock_fd is None:
-                time.sleep(10)   # tick owns the lock — retry shortly
+                time.sleep(min(10, max(0.0, stop - time.monotonic())))
                 continue
             try:
+                if led is None:
+                    led = Ledger(os.path.join(HOME, "data", "ledger.db"))
                 result = {"errors": []}
                 out = run_due(
-                    led, cfg, result,
+                    led, load_config(), result,
                     deadline=min(stop, time.monotonic() + 120.0),
                     max_jobs=args.max_jobs, cfg_path=CONF_PATH)
             finally:
@@ -1541,11 +1557,12 @@ def main() -> int:
             if not out.get("done"):
                 # deferred/failed-only batches mean every claimable job
                 # is backed off — hot-looping re-claims the same rows.
-                time.sleep(10)
+                time.sleep(min(10, max(0.0, stop - time.monotonic())))
             else:
-                time.sleep(1)   # yield the lock between batches
+                time.sleep(min(1, max(0.0, stop - time.monotonic())))
     finally:
-        led.close()
+        if led is not None:
+            led.close()
     print(json.dumps(totals, ensure_ascii=False))
     return 0
 

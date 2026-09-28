@@ -15,7 +15,6 @@ evidence or the generation is explicitly non-PASS — no silent omission.
 from __future__ import annotations
 
 import hashlib
-import math
 import unicodedata
 
 from mcs_requests import payload_hash
@@ -273,7 +272,7 @@ def validate_atom(atom: dict) -> dict:
     end = _int_range(atom.get("end"), "atom_end")
     if end <= start:
         _fail("atom_range_empty")
-    deps = _str_list(list(atom.get("dependency_atom_ids", [])),
+    deps = _str_list(atom.get("dependency_atom_ids", []),
                      "atom_dependency_atom_ids")
     out = {
         "atom_id": _id_value(atom.get("atom_id"), "atom_id"),
@@ -281,7 +280,7 @@ def validate_atom(atom: dict) -> dict:
         "start": start, "end": end,
         "text_hash": _id_value(atom.get("text_hash"), "atom_text_hash"),
         "section_path": _str_list(
-            list(atom.get("section_path", [])), "atom_section_path"),
+            atom.get("section_path", []), "atom_section_path"),
         "dependency_atom_ids": deps,
         "importance": _enum(atom.get("importance", "unknown"),
                             "atom_importance", IMPORTANCE_TIERS),
@@ -294,7 +293,7 @@ def validate_atom(atom: dict) -> dict:
 def validate_chunk(chunk: dict) -> dict:
     if not isinstance(chunk, dict):
         _fail("chunk_object_required")
-    core = _str_list(list(chunk.get("core_atom_ids", [])),
+    core = _str_list(chunk.get("core_atom_ids", []),
                      "chunk_core_atom_ids")
     if not core:
         _fail("chunk_core_empty")
@@ -302,10 +301,10 @@ def validate_chunk(chunk: dict) -> dict:
         "chunk_id": _id_value(chunk.get("chunk_id"), "chunk_id"),
         "core_atom_ids": core,
         "context_atom_ids": _str_list(
-            list(chunk.get("context_atom_ids", [])),
+            chunk.get("context_atom_ids", []),
             "chunk_context_atom_ids"),
         "dependency_atom_ids": _str_list(
-            list(chunk.get("dependency_atom_ids", [])),
+            chunk.get("dependency_atom_ids", []),
             "chunk_dependency_atom_ids"),
         "status": _id_value(chunk.get("status", "pending"),
                             "chunk_status"),
@@ -328,17 +327,14 @@ def validate_obligation(obligation: dict) -> dict:
                             "obligation_importance", IMPORTANCE_TIERS),
         "status": _enum(obligation.get("status"), "obligation_status",
                         OBLIGATION_STATUSES),
-        "fact_ids": _str_list(list(obligation.get("fact_ids", [])),
+        "fact_ids": _str_list(obligation.get("fact_ids", []),
                               "obligation_fact_ids"),
     }
     if out["status"] == "covered" and not out["fact_ids"]:
         _fail("obligation_covered_without_fact")
     confidence = obligation.get("confidence")
     if confidence is not None:
-        if isinstance(confidence, bool) or not isinstance(
-                confidence, int | float) \
-                or not math.isfinite(float(confidence)) \
-                or not 0.0 <= float(confidence) <= 1.0:
+        if type(confidence) not in (int, float) or not 0.0 <= confidence <= 1.0:
             _fail("obligation_confidence_invalid")
         out["confidence"] = float(confidence)
     reason = obligation.get("reason")
@@ -350,6 +346,11 @@ def validate_obligation(obligation: dict) -> dict:
 def validate_evidence(evidence: dict) -> dict:
     if not isinstance(evidence, dict):
         _fail("evidence_object_required")
+    quote = evidence.get("quote")
+    if not isinstance(quote, str):
+        _fail("evidence_quote_invalid")
+    if not quote.strip():
+        _fail("evidence_quote_missing")
     start = _int_range(evidence.get("start"), "evidence_start")
     end = _int_range(evidence.get("end"), "evidence_end")
     if end <= start:
@@ -362,7 +363,7 @@ def validate_evidence(evidence: dict) -> dict:
         "revision": _id_value(evidence.get("revision"),
                               "evidence_revision"),
         "start": start, "end": end,
-        "quote": _id_value(evidence.get("quote"), "evidence_quote"),
+        "quote": quote,
         "atom_id": _id_value(evidence.get("atom_id"),
                              "evidence_atom_id"),
     }
@@ -388,9 +389,9 @@ def validate_fact(fact: dict) -> dict:
                                 "fact_event_time"),
         "valid_time": _id_value(fact.get("valid_time", UNKNOWN),
                                 "fact_valid_time"),
-        "evidence_ids": _str_list(list(fact.get("evidence_ids", [])),
+        "evidence_ids": _str_list(fact.get("evidence_ids", []),
                                   "fact_evidence_ids"),
-        "obligation_ids": _str_list(list(fact.get("obligation_ids", [])),
+        "obligation_ids": _str_list(fact.get("obligation_ids", []),
                                     "fact_obligation_ids"),
         "importance": _enum(fact.get("importance", "unknown"),
                             "fact_importance", IMPORTANCE_TIERS),
@@ -421,7 +422,7 @@ def validate_relation(relation: dict) -> dict:
                                    "relation_right"),
         "type": _enum(relation.get("type"), "relation_type",
                       RELATION_TYPES),
-        "evidence_ids": _str_list(list(relation.get("evidence_ids", [])),
+        "evidence_ids": _str_list(relation.get("evidence_ids", []),
                                   "relation_evidence_ids"),
         "status": _id_value(relation.get("status", "candidate"),
                             "relation_status"),
@@ -430,10 +431,7 @@ def validate_relation(relation: dict) -> dict:
         _fail("relation_self_loop")
     confidence = relation.get("confidence")
     if confidence is not None:
-        if isinstance(confidence, bool) or not isinstance(
-                confidence, int | float) \
-                or not math.isfinite(float(confidence)) \
-                or not 0.0 <= float(confidence) <= 1.0:
+        if type(confidence) not in (int, float) or not 0.0 <= confidence <= 1.0:
             _fail("relation_confidence_invalid")
         out["confidence"] = float(confidence)
     reason = relation.get("reason")
@@ -458,7 +456,7 @@ def validate_coverage(coverage: dict) -> dict:
     return {
         "category_counts": clean_counts,
         "open_obligation_ids": _str_list(
-            list(coverage.get("open_obligation_ids", [])),
+            coverage.get("open_obligation_ids", []),
             "coverage_open_obligation_ids"),
         "limitations": [_id_value(item, "coverage_limitation")
                         for item in limitations],

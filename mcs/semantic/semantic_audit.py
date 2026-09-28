@@ -6,11 +6,15 @@ audit logic can be exercised without the drain machinery."""
 from __future__ import annotations
 
 import json
-import math
 from contextlib import suppress
 
 import semantic_jev as jev
 from semantic_quantities import claim_quantity_findings
+
+
+def _probability(value) -> bool:
+    return type(value) in (int, float) and 0 <= value <= 1
+
 
 def audit_code(bundle: dict, facts: list, summary: dict) -> list:
     """Deterministic checks: reference integrity, span equality,
@@ -68,7 +72,7 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
     ambiguous). Returns (findings, evaluated) — evaluated=False means
     the check could not run, i.e. PENDING rather than a silent PASS."""
     findings = []
-    if jev_client is None:
+    if jev_client is None or not _probability(match_threshold):
         return [{"code": "support_unevaluated"}], False
     claims = [c for c in summary["claims"]
               if c["claim_kind"] != "limitation"]
@@ -136,6 +140,12 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
             return findings + [{"code": "support_unevaluated",
                                 "claim": c["claim_id"]}], False
         ans = out["answers"][c["claim_id"]]
+        if (not isinstance(ans, dict)
+                or not isinstance(ans.get("choice"), str)
+                or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
+                or not _probability(ans.get("confidence"))):
+            return findings + [{"code": "support_unevaluated",
+                                "claim": c["claim_id"]}], False
         # raw answers ride on the summary's private channel so the
         # drain can persist them into the audit artifact's meta —
         # accumulated confidences feed threshold calibration (§22).
@@ -182,6 +192,9 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
     if not isinstance(source_text, str) or not isinstance(facts, list):
         return _coverage_incomplete("source_fact_coverage_input_invalid",
                                     "invalid")
+    threshold = jev.MATCH_THRESHOLD if match_threshold is None else match_threshold
+    if not _probability(threshold):
+        return _coverage_incomplete("source_fact_coverage_input_invalid", "invalid")
     if jev_client is None:
         return _coverage_incomplete("source_fact_coverage_unevaluated",
                                     "resource")
@@ -210,10 +223,8 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
         answer = response.get("answers", {}).get(question_id)
         choice = answer.get("choice") if isinstance(answer, dict) else None
         confidence = answer.get("confidence") if isinstance(answer, dict) else None
-        if (choice not in COVERAGE_OPTIONS or type(confidence) not in (int, float)
-                or isinstance(confidence, bool)
-                or not math.isfinite(float(confidence))
-                or not 0.0 <= float(confidence) <= 1.0):
+        if (not isinstance(choice, str) or choice not in COVERAGE_OPTIONS
+                or not _probability(confidence)):
             return _coverage_incomplete("source_fact_coverage_unevaluated")
     except RuntimeGuardError:
         raise
@@ -225,12 +236,6 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
         return _coverage_incomplete("source_fact_coverage_unevaluated", reason)
 
     confidence = float(confidence)
-    threshold = jev.MATCH_THRESHOLD if match_threshold is None else match_threshold
-    if (type(threshold) not in (int, float) or isinstance(threshold, bool)
-            or not math.isfinite(float(threshold))
-            or not 0.0 <= float(threshold) <= 1.0):
-        return _coverage_incomplete("source_fact_coverage_input_invalid",
-                                    "invalid")
     if choice == "complete" and confidence >= float(threshold):
         return {"status": "PASS", "evaluated": True, "choice": choice,
                 "confidence": confidence, "failure_reason": None,
@@ -278,7 +283,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
     never a silent PASS.
     """
     findings = []
-    if not isinstance(doc, dict) or not isinstance(source_text, str):
+    if (not isinstance(doc, dict) or not isinstance(source_text, str)
+            or not _probability(match_threshold)):
         return {"status": "INCOMPLETE", "evaluated": False,
                 "findings": [{"code": "fact_audit_input_invalid"}],
                 "fact_verdicts": {}}
@@ -295,6 +301,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         return {"status": "INCOMPLETE", "evaluated": False,
                 "findings": findings, "fact_verdicts": {}}
 
+    from semantic_runtime import RuntimeGuardError
     verdicts = {}
     for fact in facts:
         if fact.get("validation_status") != "verified":
@@ -322,6 +329,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                  "context": ctx}
         try:
             out = jev_client.evaluate(state, {fid: question}, deadline)
+        except RuntimeGuardError:
+            raise
         except Exception as error:
             with suppress(Exception):
                 jev_client.last_error = error
@@ -329,18 +338,19 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                              "fact": fid})
             return {"status": "INCOMPLETE", "evaluated": False,
                     "findings": findings, "fact_verdicts": verdicts}
-        answer = out.get("answers", {}).get(fid)
+        answers = out.get("answers") if isinstance(out, dict) else None
+        answer = answers.get(fid) if isinstance(answers, dict) else None
         choice = answer.get("choice") if isinstance(answer, dict) else None
         confidence = answer.get("confidence") \
             if isinstance(answer, dict) else None
-        if choice not in FACT_SUPPORT_OPTIONS:
+        if (not isinstance(choice, str) or choice not in FACT_SUPPORT_OPTIONS
+                or not _probability(confidence)):
             findings.append({"code": "fact_audit_unevaluated",
                              "fact": fid})
             return {"status": "INCOMPLETE", "evaluated": False,
                     "findings": findings, "fact_verdicts": verdicts}
         verdicts[fid] = {"choice": choice, "confidence": confidence}
-        if isinstance(confidence, int | float) \
-                and confidence < match_threshold:
+        if confidence < match_threshold:
             findings.append({"code": "fact_low_confidence", "fact": fid})
         if choice in ("contradicts", "not_supported"):
             findings.append({"code": f"fact_{choice}", "fact": fid})

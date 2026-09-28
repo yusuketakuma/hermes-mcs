@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import math
 import time
-from contextlib import suppress
 
 from mcs_requests import payload_hash
 import semantic_jev as jev
@@ -46,7 +45,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
         "members": sorted(({k: v for k, v in m.items() if k != "role"}
                            for m in members), key=lambda x: x["message_id"]),
         "model": model,
-        "local_model": semantic.LLM_MODEL,
+        "local_model": semantic.llm_model(),
         "prompts": [semantic._FACT_PROMPT, semantic._SUMMARY_PROMPT,
                     semantic._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
                     semantic_llm._FACT_V2_REPAIR_SUFFIX],
@@ -158,6 +157,8 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
                 content = json.loads(r["content"])
             except (json.JSONDecodeError, TypeError):
                 return None
+            if not isinstance(content, dict):
+                return None
             return {"content": content, "meta": meta}
     return None
 
@@ -216,7 +217,13 @@ def jev_usage_today(ledger) -> int:
     for r in ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
             (KIND_USAGE, day)):
-        with suppress(json.JSONDecodeError, TypeError, ValueError):
-            total += int(json.loads(r["meta"] or "{}")
-                         .get("jev_requests", 0))
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            raise ValueError("semantic_usage_invalid") from None
+        count = meta.get("jev_requests") if isinstance(meta, dict) else None
+        if type(count) is not int or count < 0:
+            # Unknown/corrupt usage cannot replenish a spending budget.
+            raise ValueError("semantic_usage_invalid")
+        total += count
     return total

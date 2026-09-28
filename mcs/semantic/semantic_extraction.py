@@ -168,6 +168,7 @@ def build_manifest(source: str, source_fp: str,
         raise ValueError("chunk_size_invalid")
     atoms = _atomize(source, source_fp, chunk_size) if source else []
     by_id = {a["atom_id"]: a for a in atoms}
+    positions = {a["atom_id"]: index for index, a in enumerate(atoms)}
     chunks = []
     core = []
     size = 0
@@ -184,8 +185,8 @@ def build_manifest(source: str, source_fp: str,
     for index, core_ids in enumerate(chunks):
         first = by_id[core_ids[0]]
         last = by_id[core_ids[-1]]
-        first_i = atoms.index(first)
-        last_i = atoms.index(last)
+        first_i = positions[first["atom_id"]]
+        last_i = positions[last["atom_id"]]
         context = []
         if first_i > 0:
             context.append(atoms[first_i - 1]["atom_id"])
@@ -255,14 +256,6 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
                       manifest, body_len):
     if ledger is None:
         return
-    existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
-                                message_id=message_id)
-    for row in existing or []:
-        with suppress(TypeError, json.JSONDecodeError):
-            meta = json.loads(row["meta"] or "{}")
-            if meta.get("source_fingerprint") == source_fp \
-                    and meta.get("version") == MANIFEST_VERSION:
-                return
     doc = {
         "version": MANIFEST_VERSION,
         "source_fingerprint": source_fp,
@@ -271,8 +264,22 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
         "chunks": [{k: c[k] for k in
                     ("chunk_id", "core_atom_ids", "context_atom_ids",
                      "dependency_atom_ids", "status", "index", "start",
-                     "end", "hash")} for c in manifest["chunks"]],
+                    "end", "hash")} for c in manifest["chunks"]],
     }
+    existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
+                                message_id=message_id)
+    for row in reversed(existing or []):
+        try:
+            meta = json.loads(row["meta"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(meta, dict) \
+                and meta.get("source_fingerprint") == source_fp \
+                and meta.get("version") == MANIFEST_VERSION:
+            with suppress(TypeError, json.JSONDecodeError):
+                if json.loads(row["content"]) == doc:
+                    return
+            break
     ledger.artifact_add(
         KIND_MANIFEST,
         json.dumps(doc, ensure_ascii=False, allow_nan=False),
@@ -371,7 +378,9 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
     for row in rows:
         try:
             meta = json.loads(row["meta"] or "{}")
-            index = int(meta["chunk_index"])
+            if not isinstance(meta, dict) or type(meta.get("chunk_index")) is not int:
+                continue
+            index = meta["chunk_index"]
             spec = wanted[index]
             if (meta.get("schema") != schema
                     or meta.get("status") != "complete"
@@ -384,7 +393,8 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
                     or meta.get("end_codepoint") != spec["end"]):
                 continue
             content = json.loads(row["content"])
-            if (content.get("chunk_index") != index
+            if (not isinstance(content, dict)
+                    or content.get("chunk_index") != index
                     or content.get("start_codepoint") != spec["start"]
                     or content.get("end_codepoint") != spec["end"]
                     or not isinstance(content.get("facts"), list)
@@ -395,7 +405,9 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
                 continue
             for fact in content["facts"]:
                 evidence = fact.get("_evidence") if isinstance(fact, dict) else None
-                if evidence:
+                if evidence is not None:
+                    if not isinstance(evidence, dict):
+                        raise ValueError("cached_evidence_invalid")
                     # v1 rows use start/end_codepoint, v2 rows use
                     # start/end — accept either spelling or every
                     # evidence-bearing v2 chunk misses the cache and
@@ -407,8 +419,10 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
                     quote = evidence.get("quote")
                     if (type(start) is not int or type(end) is not int
                             or not isinstance(quote, str)
-                            or not 0 <= start < end <= len(source)
-                            or source[start:end] != quote):
+                            or not spec["start"] <= start < end <= spec["end"]
+                            or source[start:end] != quote
+                            or spec["text"].find(quote) != start - spec["start"]
+                            or spec["text"].rfind(quote) != start - spec["start"]):
                         raise ValueError("cached_evidence_invalid")
             if extra is not None and not extra(content):
                 continue
@@ -446,18 +460,9 @@ def _normalise_facts(items: list, member: dict, source: str,
         atom_ref = None
         if isinstance(quote, str):
             if piece is not None:
-                # Owning-chunk resolution first: a duplicate quote in
-                # another chunk cannot shadow this chunk's match.
-                local = piece.find(quote)
-                if local >= 0:
-                    span = (piece_start + local,
-                            piece_start + local + len(quote))
-                else:
-                    local_span = semantic._locate_quote(piece, quote)
-                    if local_span:
-                        span = (piece_start + local_span[0],
-                                piece_start + local_span[1])
-            if span is None:
+                span = _resolve_evidence(quote, piece, piece_start,
+                                         source, semantic)
+            else:
                 span = semantic._locate_quote(source, quote)
         if span:
             # _locate_quote may have matched after whitespace
@@ -578,7 +583,7 @@ def extract_facts_resumable(llm_fn, member: dict,
         specs = _manifest_specs(manifest)
     else:
         specs = _chunk_specs(source, chunk_size, chunker)
-    _persist_manifest(ledger, project_id, message_id, semantic.LLM_MODEL,
+    _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source)
@@ -622,7 +627,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "model"
             break
         # This is deliberately before the next loop iteration/model call.
-        _persist_chunk(ledger, project_id, message_id, semantic.LLM_MODEL,
+        _persist_chunk(ledger, project_id, message_id, semantic.llm_model(),
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
                        len(specs))
@@ -695,9 +700,6 @@ def _resolve_evidence(quote, piece, piece_start, source, semantic):
     not count — ownership prevents duplicate-quote shadowing."""
     if not isinstance(quote, str) or not quote:
         return None
-    local = piece.find(quote)
-    if local >= 0:
-        return (piece_start + local, piece_start + local + len(quote))
     local_span = semantic._locate_quote(piece, quote)
     if local_span:
         return (piece_start + local_span[0], piece_start + local_span[1])
@@ -706,7 +708,8 @@ def _resolve_evidence(quote, piece, piece_start, source, semantic):
 
 def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
                         *, spec: dict, manifest: dict,
-                        atom_owner: dict, obligations: dict) -> tuple[list, int]:
+                        atom_owner: dict, obligations: dict,
+                        provenance: str = "local_llm") -> tuple[list, int]:
     """Model items -> contract facts for one chunk.
 
     ``kind``/``statement`` are identity: malformed values drop the item
@@ -788,7 +791,7 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
             "importance": _enum_or_unknown(item.get("importance"),
                                            sf.IMPORTANCE_TIERS),
             "quantity": _str_or_unknown(item.get("quantity")),
-            "provenance": item.get("_provenance", "local_llm"),
+            "provenance": provenance,
             "validation_status": "verified" if evidence_ids
                                  else "unverified",
             "_chunk_id": owner,
@@ -819,8 +822,7 @@ def _v1_hint_items(source: str, posted_at: str) -> list:
         if isinstance(statement, str) and statement.strip():
             items.append({"kind": kind, "statement": statement.strip(),
                           "evidence_quote": quote
-                          if isinstance(quote, str) else None,
-                          "_provenance": "extract_v1"})
+                          if isinstance(quote, str) else None})
 
     for med in hints.get("medications") or []:
         if isinstance(med, dict):
@@ -854,7 +856,16 @@ def _v1_category_signals(source: str, posted_at: str) -> set:
 
 
 def _v2_chunk_ok(content: dict) -> bool:
-    return isinstance(content.get("category_presence"), dict)
+    if not isinstance(content.get("category_presence"), dict):
+        return False
+    try:
+        for fact in content["facts"]:
+            sf.validate_fact(fact)
+            if fact.get("provenance") != "local_llm":
+                return False
+    except sf.ContractError:
+        return False
+    return True
 
 
 _PREFLIGHT_CHOICES = ("present", "absent", "uncertain")
@@ -892,7 +903,9 @@ def jev_preflight(jev_client, chunk_text: str, deadline,
     for category in sf.MANDATORY_CATEGORIES:
         answer = answers.get(f"has_{category}")
         choice = answer.get("choice") if isinstance(answer, dict) else None
-        verdicts[category] = choice if choice in _PREFLIGHT_CHOICES \
+        confidence = answer.get("confidence") if isinstance(answer, dict) else None
+        valid_confidence = type(confidence) in (int, float) and 0 <= confidence <= 1
+        verdicts[category] = choice if valid_confidence and choice in _PREFLIGHT_CHOICES \
             else "uncertain"
     return verdicts
 
@@ -918,7 +931,7 @@ def extract_facts_v2(llm_fn, member: dict,
     posted_at = member.get("posted_at") or ""
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
-    _persist_manifest(ledger, project_id, message_id, semantic.LLM_MODEL,
+    _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
@@ -942,7 +955,7 @@ def extract_facts_v2(llm_fn, member: dict,
     failed = []
     failed_dropped = 0
     failure_reason = None
-    model = semantic.LLM_MODEL
+    model = semantic.llm_model()
 
     for spec in specs:
         index = spec["index"]
@@ -1034,7 +1047,7 @@ def extract_facts_v2(llm_fn, member: dict,
               if manifest["chunks"] else "chk_unknown",
               "text": source, "start": 0},
         manifest=manifest, atom_owner=atom_owner,
-        obligations=obligations)
+        obligations=obligations, provenance="extract_v1")
     seen = {}
     for fact in facts:
         seen[(fact["kind"], sf._normalize_name(fact["statement"]))] = fact
@@ -1290,14 +1303,19 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     import semantic_llm
 
     source = member.get("body_original")
-    if not isinstance(source, str):
+    source_meta = doc.get("source")
+    if (not isinstance(source, str) or not isinstance(source_meta, dict)
+            or source_meta.get("content_hash") != _sha256(source)
+            or source_meta.get("message_id") != str(member.get("message_id"))
+            or source_meta.get("revision") != str(member.get("revision", ""))):
         return {"doc": doc, "repaired": False,
                 "repaired_fact_ids": [], "owner_chunk_ids": []}
     source_fp = doc["source"]["source_fingerprint"]
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
     doc_chunk_ids = {c["chunk_id"] for c in doc.get("chunks", [])}
-    if {c["chunk_id"] for c in manifest["chunks"]} != doc_chunk_ids:
+    if ({c["chunk_id"] for c in manifest["chunks"]} != doc_chunk_ids
+            or manifest["atoms"] != doc.get("atoms")):
         # The stored doc does not match a fresh atomization of the
         # source — repair cannot locate owners safely.
         return {"doc": doc, "repaired": False,
@@ -1356,7 +1374,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         base = semantic_llm._FACT_V2_PROMPT % spec["text"]
         base = base.rsplit("JSON:", 1)[0]
         prompt = base + semantic_llm._FACT_V2_REPAIR_SUFFIX % feedback
-        parsed, _reason = _chunk_llm(llm_fn, prompt, None)
+        parsed, _reason = _chunk_llm(llm_fn, prompt, deadline)
         if parsed is None:
             continue
         items = parsed.get("facts")
