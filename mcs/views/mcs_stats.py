@@ -356,7 +356,7 @@ def _med_rows(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND json_array_length({json_or_null('a.content')},'$.meds')>0{w}
             ORDER BY a.artifact_id DESC""",
@@ -520,7 +520,7 @@ def st_med_change_followup(db, scope):
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND json_array_length({json_or_null('a.content')},'$.meds')>0
               AND m.posted_at_ts IS NOT NULL

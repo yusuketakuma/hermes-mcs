@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from ledger import Ledger
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
-                         med_is_patient_current)
+                         med_is_patient_current, request_unverified)
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -149,8 +149,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         # readers; any flag other than a literal False fails closed
         requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
                          "at": m["posted_at"], "mid": m["message_id"],
-                         "unverified": rq.get("unverified", False)
-                         is not False}
+                         "unverified": request_unverified(rq)}
                         for rq in _dicts(lm.get("requests")))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")

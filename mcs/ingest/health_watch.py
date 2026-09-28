@@ -129,9 +129,9 @@ def classify_health(path: str, now: float, deadline_s: int,
     # refresh 'at' without collecting unread and must not mask a
     # stopped unread check (older files lack the field: use 'at')
     unread_at = h.get("unread_at")
-    binding = h["at"]
-    if _finite_number(unread_at):
-        binding = min(binding, h["unread_at"])
+    # tie keeps unread_at (min returns its first minimal argument)
+    binding = (min(unread_at, h["at"]) if _finite_number(unread_at)
+               else h["at"])
     if cfg is not None:
         deadline_s = _scheduled_deadline(binding, cfg, deadline_s)
     age = now - binding
@@ -141,10 +141,8 @@ def classify_health(path: str, now: float, deadline_s: int,
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
     # dedup stamp: unread_at only when that age is what made it stale
-    report["evidence_at"] = h["at"]
-    if report["status"] == "stale" and _finite_number(unread_at) \
-            and h["unread_at"] <= h["at"]:
-        report["evidence_at"] = h["unread_at"]
+    report["evidence_at"] = (binding if report["status"] == "stale"
+                             else h["at"])
     return report
 
 

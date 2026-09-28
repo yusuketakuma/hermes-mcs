@@ -36,7 +36,8 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_queries import current_extract_pred, current_v4_id, json_or_null
+from mcs_queries import (current_extract_pred, current_qc_pred,
+                         current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
@@ -1649,7 +1650,6 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
     flagged unsupported items (NO_MATCH verdicts) or an urgency
     mismatch. The source pin lands on the NEWEST current extraction —
     a verdict on a superseded artifact never flags."""
-    from mcs_queries import qc_source_id, current_qc_pred
     src = qc_source_id(msg, version=EXTRACT_VERSION)
     return f"""SELECT {val} FROM artifacts a
         JOIN artifacts q ON q.message_id=a.message_id
@@ -1671,7 +1671,6 @@ def _qc_feedback(ledger, src_artifact_id):
     """Flagged QC audit for a current extraction -> {src, qc, notes}
     for a feedback re-extract, or None when nothing actionable remains
     (the artifact vanished, or the newest audit is clean)."""
-    from mcs_queries import current_qc_pred
     # Same audit row _qc_flagged_sql pinned: the newest CURRENT QC of
     # this extraction generation — never an older/stale audit.
     row = ledger.db.execute(

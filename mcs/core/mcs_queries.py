@@ -246,6 +246,12 @@ def med_capability_evidence(ev) -> bool:
                                        for p in MED_CAPABILITY_PATTERNS)
 
 
+def request_unverified(r: dict) -> bool:
+    """A request reads as confirmed only when its ``unverified`` flag is
+    missing or literally False — any other value fails closed."""
+    return r.get("unverified", False) is not False
+
+
 def iter_period_ends(content: str):
     """(period_dict, end_date) for each med_periods entry whose 'end'
     parses as YYYY-MM-DD. Undated or unparseable entries are skipped —
