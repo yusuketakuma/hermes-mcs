@@ -1,7 +1,55 @@
 # Changelog
 
-## Unreleased
+## [1.0.4] — 2026-09-28
 
+追跡ファイル284件の全リポジトリレビュー（dev-records
+`refactor-20260927`）にもとづく安定性・正確性の改善、部分導入済み
+環境への柔軟なインストール、Slack の設定ウィザード対応、ローカル
+LLM エンドポイントの設定可能化。通知・収集の既存設定はそのまま
+使える。`hermes_plugin/` の変更を反映するには `hermes gateway
+restart` が必要（`check` が起動中 gateway より plugin が新しい
+場合に警告するようになった）。
+
+### 動作が変わるもの
+
+- **`install.sh` がステージ単位でスキップ可能に** — `--no-brew`・
+  `--no-llm`・`--no-plugin`・`--no-services`・`--no-recovery` で
+  各段を省略でき、既にローカルLLM稼働中・Discord/Slack 導入済み・
+  依存を自前管理、といった部分導入環境で必要な段だけを実行
+  できる。フラグなしでも `:8080` の OpenAI 互換応答・既存
+  LaunchAgent・導入済み plugin/cron/checkout を検出して保持・
+  再利用する（`-h` でヘルプ）
+- **Slack を設定ウィザードの第一級 transport に** —
+  `notify.interactive=slack` が `init` で選択可能になり、
+  `notify.slack` scope（profile・application_id・team_id・
+  channel_id）を検証する。plugin 側には `slack_*` キーと
+  `slack_adapter_enabled` を書き込み、`SLACK_BOT_TOKEN`/
+  `SLACK_APP_TOKEN` を serving profile の `.env` へ格納する
+  （既存 token・allowlist は上書きしない。`*_TOKEN` は全て
+  stdin 経由で argv/`ps` に出さない）。Discord と同じ
+  `mcs-discord-commands` plugin が Slack のカードも処理する
+- **ローカルLLMの endpoint/model を config で指定可能に** —
+  `local_llm.url`・`local_llm.model`（既定は従来どおり
+  `http://127.0.0.1:8080/v1/chat/completions`・`Qwen3.5-9B`）。
+  url は loopback の http のみ受け付け、PHI が外部へ送られない
+  制約を維持する。extract/semantic の各呼出しは実行時に解決済み
+  endpoint/model を使い、artifact metadata にも解決済み model を
+  記録する。`check` は設定済み endpoint の `/v1/models`・`/slots`
+  を probe し、slot 不足は error、slots 非対応は warning に留める
+- **`init` 完了時に gateway を同期** — `interactive` 設定済みかつ
+  Hermes CLI があれば `hermes gateway install`/`start` を init 内で
+  実行し、初回導入（services→init の順）で gateway 未登録のまま
+  残らないようにした
+- **`install.sh` の python 解決を修正** — `brew install
+  python@3.13` は無印 `python3` を PATH に出さないため、新規
+  環境では `/usr/bin/python3`（3.9 系）に解決されサービス登録が
+  全て失敗し得た。Hermes venv python を優先し、フォールバックも
+  3.10 以上に限定。`mcs_setup.py` にバージョンガードを追加し、
+  案内文・ドキュメントのコマンド例を venv python に統一
+- **セットアップの外部コマンドに timeout** — `security`・
+  `launchctl`・`hermes cron` など `subprocess.run` 全14箇所を
+  共通 `_run()` 経由にし既定 timeout を設定。Keychain プロンプト
+  や launchd の応答なしで check/reconcile が無限に停止しなくなった
 - **セッション失効時の in-run 自動再ログイン** — `SessionExpired` が
   unread/backfill/self_probe/discovery/reply/history/trickle/reconcile
   の各ステージで発生した時点で `auto_login` を1回試行し、成功すれば
@@ -19,6 +67,77 @@
   `data/backups`・`data/snapshots` の各ディレクトリを
   0600/0700 に統一（従来は `data/` の 0700 に依存し、
   ファイル自体は umask 任せだった）
+
+### 修正した問題
+
+- **患者識別の不一致を各層で拒否** — 保存・集約・通知・閲覧で
+  患者の不一致を拒否し、receipt の操作主体・配送先 scope・現行
+  世代を確認。read model の患者 scope 付き attachment 取得と
+  coverage 漏洩を修正し、projection→read の欠落（canonical
+  relation type・engine/project/error 行・削除元 fact の開示）を
+  修復
+- **抽出の取り違えを修正** — 長文結合時の検査値欠落、本文末尾の
+  血圧の取り違え、破損 checkpoint、古い抽出による新世代上書きを
+  修正
+- **意味評価の分母と対応を修正** — 根拠 span・原文世代・修復後
+  fact の対応、未評価分を含む評価分母、監査と必須表示の整合
+- **保存・復元の境界を修正** — snapshot を非公開の固有一時ファイル
+  から公開し、復元承認を行内容 hash にも結び付け、WAL と中断
+  journal が不明な状態での継続を防止
+- **配送直前チェック** — 配送直前の停止・復元保留・患者 scope を
+  確認し、添付は検証した同じ bytes を配送。不確実な送信の自動
+  再試行を抑制
+- **実行管理の修正** — LLM 枠の所有権と世代、resident の設定
+  再読込、昼夜の収集予定に沿った health 判定を修正
+- **read model の N+1 を解消** — メッセージごとに発行していた
+  artifacts クエリを500件チャンクのバッチ `IN` クエリに集約
+- **`mcs_recover.py` の既知 cron 一覧を更新** — `mcs_health.sh` が
+  欠落しており、旧 manifest 経由の復旧時に正規 cron を stale と
+  誤認して削除し得た。一覧に追加し、CRON_JOBS との一致を assert
+  する回帰テストを追加
+- **導入・秘密情報** — shell/XML の引用、設定値の型・範囲検証、
+  秘密値の保存形式、Keychain 登録失敗時の既存値復元を改善
+
+### 新しい運用機能
+
+- **外部 export の共有 schema** — `mcs/ops/export_schema.py` を
+  新設し、producer と受け口で閉じた schema を共有。自由記述の
+  混入・未承認の送信・結果不明時の重複実行を防止
+- **`check` の診断強化** — 起動中 gateway より `hermes_plugin/`
+  が新しい場合に restart を促す stale-plugin 警告、非アクティブ側
+  transport の残留 scope 警告、Slack scope 検証、設定済み LLM
+  endpoint の probe を追加
+- **semantic LLM の出力上限・予算を拡大** — `llm_chat` の出力上限を
+  4096 token に、v2 抽出向けに呼出し回数上限と job budget を拡大
+- **Slack カードの出力を Discord と同一に** — transport-neutral の
+  delivery 基盤で両 transport が同一のカード・スレッド・添付経路を
+  共有
+- **extract レーンの prefilter と共通 drain ゲート** — extract/semantic
+  間で安定性ゲートを共通化し、v4 詳細フィールドを render に反映
+
+### 内部構造・開発者向け
+
+- **core/ingest/notify/extract/semantic/views/ops の7領域と
+  plugin/tests を全面リファクタ** — 長いパイプライン関数を名前付き
+  phase helper に分割し、領域ごとの契約テストを追加（flat import
+  契約は維持）。変更は dev-records `refactor-20260927` に記録
+- **CI のサプライチェーン強化** — `actions/checkout`・
+  `actions/setup-python` を commit SHA でピン（v7.0.1/v7.0.0）、
+  ruff 0.6.9→0.16.8・pytest 8.3.3→9.1.1・CI Python 3.13 に更新
+- **ドキュメント整備** — `docs/INSTALLATION.md`（addon/standalone
+  経路・部分導入フラグ）と `docs/SETUP_AGENT.md`（エージェント
+  実行用 runbook）を追加し、README を現行動作に同期
+
+### アップグレード時の注意
+
+- **`hermes_plugin/` を更新したら `hermes gateway restart` が必要**
+  — 再起動なしでは新形式 spec を旧 worker が処理し、カードのみ
+  届き本文・添付が欠落する。`check` がこの状態を警告する
+- **`mcs_setup.py services` を再実行すると cron/launchd を
+  reconcile する** — `mcs_health.sh` 等の差分があれば追加・更新
+  される（削除は stale 判定のみ）
+- **既存の token・allowlist・scope 設定は保持される** — init の
+  再実行・部分導入フラグともに既設定値を上書きしない
 
 ## [1.0.3] — 2026-09-26
 
