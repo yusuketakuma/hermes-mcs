@@ -173,6 +173,46 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     assert not any("keychain is locked" in e.lower() for e in errors)
 
 
+def test_check_environment_flags_installed_but_unloaded_agent(
+        monkeypatch, tmp_path):
+    """plist presence is not liveness — the 2026-09-28 outage had both
+    extract drainers installed but unloaded while `check` stayed green.
+    An installed-but-unloaded agent is an error; an unreachable GUI
+    domain (headless session) is a warning, never a false error."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
+    monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
+    monkeypatch.setattr(
+        mcs_setup.urllib.request, "urlopen",
+        lambda *a, **k: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(mcs_setup.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(
+                            returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(mcs_setup, "_run",
+                        lambda *a, **k: SimpleNamespace(returncode=0))
+
+    loaded = {"ai.mcs.extract-drainer"}
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda label: label in loaded)
+    errors, warnings = mcs_setup.check_environment(
+        {"notify_target": "slack"})
+    missing = [lb for lb in mcs_setup.AGENT_LABELS if lb not in loaded]
+    for label in missing:
+        assert any(label in e and "not loaded" in e for e in errors)
+
+    # GUI domain unreachable -> warn once, no per-agent errors
+    monkeypatch.setattr(mcs_setup, "_run",
+                        lambda *a, **k: SimpleNamespace(returncode=1))
+    monkeypatch.setattr(mcs_setup, "_agent_loaded", lambda label: False)
+    errors, warnings = mcs_setup.check_environment(
+        {"notify_target": "slack"})
+    assert not any("not loaded" in e for e in errors)
+    assert any("unreachable" in w for w in warnings)
+
+
 def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
     """FIX-SU1: the password must travel on `security -i` stdin and be
     verified by read-back — it must never appear in any child argv."""
