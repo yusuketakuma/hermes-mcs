@@ -283,3 +283,39 @@ def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):
         ).fetchone()[0] == 0
     finally:
         db.close()
+
+
+def test_not_sent_repair_is_an_unavailable_repair(tmp_path):
+    """LLMNotSent from the one-shot repair call ends like an unavailable
+    repair (NEEDS_REVIEW) — the sibling target audited earlier in the
+    pass is still committed, never discarded."""
+    import json
+    import semantic_runtime
+    from test_mcs_semantic import _FakeJev, _llm
+    db = _seeded(tmp_path)
+    calls = {"n": 0}
+
+    def llm(prompt):
+        if "事実候補抽出器" in prompt:
+            return _llm(prompt)
+        calls["n"] += 1
+        if calls["n"] == 2:        # target 2: claim with no evidence
+            return json.dumps({"claims": [{
+                "section": "medication", "text": "無根拠の断定",
+                "claim_kind": "reported_fact", "fact_refs": []}],
+                "limitations": []})
+        if calls["n"] == 3:        # its repair never leaves
+            raise semantic_runtime.LLMNotSent("llm_admission:held")
+        return _llm(prompt)
+
+    try:
+        semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                         time.monotonic() + 300, jev_client=_FakeJev(),
+                         llm_fn=llm)
+        audits = dict(db.db.execute(
+            "SELECT message_id, json_extract(meta,'$.audit_status') "
+            "FROM artifacts WHERE kind='semantic_audit'").fetchall())
+        assert audits.get(1) == "PASS"
+        assert audits.get(2) == "NEEDS_REVIEW"
+    finally:
+        db.close()
