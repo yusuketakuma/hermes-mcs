@@ -118,7 +118,11 @@ Per target message, inside the shared drain queue:
    `reproject_skipped` (counted by reason in the drain's `reproject`
    result) and is updated only when the message is drained again.
    Invalidated and superseded rows are never touched, and non-PASS
-   generations have no v4 row to resurrect.
+   generations have no v4 row to resurrect.  The pass runs whenever
+   `semantic.mode` is not `off`, whatever the current `fact_source`:
+   rows published during a canonical period stay readable after a
+   switch back to `shadow`/`legacy` and are re-derived from their own
+   bound fingerprint/policy/doc_hash.  With `mode: off` nothing runs.
 
 ## Artifacts
 

@@ -220,8 +220,11 @@ def reproject_stale(ledger, scfg: dict,
     from semantic_policy import KIND_FACT_PROJ
     from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
     out = {"reprojected": 0, "skipped": 0, "skip_reasons": {}}
-    if scfg.get("mode") == "off" \
-            or scfg.get("fact_source") != "canonical" or limit < 1:
+    # not gated on the current fact_source: rows published while the
+    # source was canonical stay readable (current_fact_pred) after a
+    # switch back to shadow/legacy, and each row is re-derived only from
+    # its own bound fingerprint/policy/doc_hash
+    if scfg.get("mode") == "off" or limit < 1:
         return out
     rows = ledger.db.execute(
         "SELECT a.artifact_id,a.kind,a.project_id,a.message_id,a.model,"
