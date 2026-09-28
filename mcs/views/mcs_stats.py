@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
                          MED_ACTIONS,
                          current_fact_pred,
-                         iter_period_ends,
+                         iter_period_ends, json_or_null,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
 DEFINITION_VERSION = "2026-09-21"
@@ -358,7 +358,7 @@ def _med_rows(db, scope):
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
-              AND json_array_length(a.content,'$.meds')>0{w}
+              AND json_array_length({json_or_null('a.content')},'$.meds')>0{w}
             ORDER BY a.artifact_id DESC""",
         p).fetchall()
     seen = set()
@@ -522,7 +522,7 @@ def st_med_change_followup(db, scope):
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
-              AND json_array_length(a.content,'$.meds')>0
+              AND json_array_length({json_or_null('a.content')},'$.meds')>0
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts <= ?{w}
             ORDER BY a.artifact_id DESC""",
@@ -652,7 +652,8 @@ def st_canonical_facts(db, scope):
             JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
-              AND json_array_length(a.content,'$.canonical_facts')>0{w}
+              AND json_array_length({json_or_null('a.content')},
+                                    '$.canonical_facts')>0{w}
             ORDER BY a.artifact_id DESC""", p).fetchall()
     total = evidenced = 0
     by_kind: dict = {}

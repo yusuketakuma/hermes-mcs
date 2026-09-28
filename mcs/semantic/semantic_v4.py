@@ -236,8 +236,11 @@ def reproject_stale(ledger, scfg: dict,
         "WHERE a.kind IN (?,?) AND m.body_state IS NOT 'deleted' "
         "AND a.artifact_id=CASE WHEN a.kind=? "
         f"THEN {current_projection_id('m')} ELSE {current_v4_id('m')} END "
-        "AND COALESCE(json_extract(a.meta,'$.projection_version'),0)<? "
-        "AND COALESCE(json_extract(a.meta,'$.reproject_skipped'),0)<? "
+        # CASE, not AND: the subquery term above is evaluated last, so a
+        # bare json_extract here would raise on a malformed meta row.
+        "AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' "
+        "THEN COALESCE(json_extract(a.meta,'$.projection_version'),0)<? "
+        "AND COALESCE(json_extract(a.meta,'$.reproject_skipped'),0)<? END "
         "ORDER BY a.artifact_id LIMIT ?",
         (KIND_FACT_PROJ, KIND_V4, KIND_FACT_PROJ, PROJECTION_VERSION,
          PROJECTION_VERSION, limit)).fetchall()
