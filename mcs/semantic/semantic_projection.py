@@ -10,6 +10,12 @@ Only VERIFIED facts project — unverified work never surfaces.
 """
 from __future__ import annotations
 
+# Bump whenever project_v2_doc_legacy's output changes for the same
+# canonical document: writers store it in the row meta and reuse an
+# existing projection only when the version matches, so a reprocessed
+# message never keeps serving an older projection's clinical semantics.
+PROJECTION_VERSION = 2
+
 # ---------------------------------------------------------------------
 
 _V2_TO_V1_KIND = {
@@ -17,7 +23,9 @@ _V2_TO_V1_KIND = {
     "medication_exposure": "medication_event",
     "allergy_intolerance": "observation",
     "adverse_drug_event": "observation",
-    "adherence_administration": "medication_event",
+    # Adherence/administration reports are observations about taking a
+    # drug, not a current prescription — never a legacy medication.
+    "adherence_administration": "observation",
     "symptom_state": "symptom",
     "vital_lab": "observation",
     "care_event": "schedule",
@@ -147,8 +155,9 @@ _CARE_EVENT_KEYWORDS = [
 def _v2_med_status(fact: dict) -> str:
     action = fact.get("action")
     workflow = fact.get("workflow_status")
-    if action in ("stop", "cancelled") \
-            and workflow in ("performed", "done", "reported"):
+    if workflow == "cancelled" \
+            or (action in ("stop", "cancelled")
+                and workflow in ("performed", "done", "reported")):
         return "past"
     if workflow in ("considering", "planned", "ordered", "pending",
                     "on_hold"):
@@ -164,6 +173,12 @@ def project_v2_doc_legacy(doc: dict) -> dict:
     evidence_by_id = {e["evidence_id"]: e
                       for e in doc.get("evidence", [])
                       if isinstance(e, dict) and e.get("evidence_id")}
+    # Endpoints of an open conflict are retained, never asserted: a
+    # CONTRADICTION/UNRESOLVED pair has no settled current state.
+    disputed = {rel.get(key) for rel in doc.get("relations", [])
+                if isinstance(rel, dict)
+                and rel.get("type") in ("CONTRADICTION", "UNRESOLVED")
+                for key in ("left_fact_id", "right_fact_id")}
 
     def quote_of(fact):
         for ref in fact.get("evidence_ids", []):
@@ -182,9 +197,15 @@ def project_v2_doc_legacy(doc: dict) -> dict:
         negated = fact.get("polarity") == "negated"
         uncertain = (fact.get("polarity") not in ("affirmed", "negated")
                      or fact.get("epistemic") not in ("asserted", "reported")
-                     or fact.get("workflow_status") in (None, "unknown"))
-        if kind in ("medication_event", "medication_exposure",
-                    "adherence_administration"):
+                     or fact.get("workflow_status") in (None, "unknown")
+                     or fact.get("fact_id") in disputed
+                     or not quote)
+        if kind in ("medication_event", "medication_exposure"):
+            if kind == "medication_event" and fact.get("action") in (
+                    None, "unknown", "hold", "consider"):
+                # no stated (or only a held/considered) action is not a
+                # confirmed current medication
+                uncertain = True
             name = _v2_drug_ref(fact.get("statement") or "")
             if not name:
                 name = "処方薬"
@@ -221,7 +242,8 @@ def project_v2_doc_legacy(doc: dict) -> dict:
             if fact.get("polarity") != "affirmed" \
                     or fact.get("epistemic") not in ("asserted", "reported") \
                     or _v2_llm_subject(fact.get("subject")) != "patient" \
-                    or fact.get("workflow_status") not in ("performed", "done"):
+                    or fact.get("workflow_status") not in ("performed", "done") \
+                    or fact.get("fact_id") in disputed or not quote:
                 continue
             statement = fact.get("statement") or ""
             for event, needles in _CARE_EVENT_KEYWORDS:
@@ -236,8 +258,8 @@ def project_v2_doc_legacy(doc: dict) -> dict:
                 else None
             out.setdefault("requests", []).append(
                 {"to": "不明", "from": None,
-                 "action": (fact.get("statement") or "")[:15],
-                 "due": due})
+                 "action": fact.get("statement") or "",
+                 "due": due, "unverified": uncertain or negated})
     _carry_canonical(doc, out, evidence_by_id)
     return out
 

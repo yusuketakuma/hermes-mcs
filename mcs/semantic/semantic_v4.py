@@ -126,13 +126,17 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     """Atomically mint the PASS-only v4 row (S8). MUST be called inside
     the caller's ``with ledger.db`` block so the read model switch and
     the status receipt commit together. Idempotent on doc_hash — a
-    replayed PASS for the same audited document reuses the row."""
+    replayed PASS for the same audited document reuses the row — unless
+    it was minted by another projection version, which a new row
+    supersedes."""
+    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
     doc_hash = _doc_hash(v2_doc)
     existing = current_v4(ledger, mid, member["revision"])
     if existing is not None \
-            and existing["meta"].get("doc_hash") == doc_hash:
+            and existing["meta"].get("doc_hash") == doc_hash \
+            and existing["meta"].get("projection_version") \
+            == PROJECTION_VERSION:
         return existing["artifact_id"]
-    from semantic_projection import project_v2_doc_legacy
     import semantic
     content = project_v2_doc_legacy(v2_doc)
     ledger.artifact_add_tx(
@@ -144,7 +148,8 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
               "extract_version": ENGINE_VERSION,
               "engine_version": ENGINE_VERSION,
               "fact_source": "canonical",
-              "doc_hash": doc_hash})
+              "doc_hash": doc_hash,
+              "projection_version": PROJECTION_VERSION})
     row = ledger.db.execute(
         "SELECT MAX(artifact_id) FROM artifacts WHERE kind=? "
         "AND message_id=?", (KIND_V4, mid)).fetchone()

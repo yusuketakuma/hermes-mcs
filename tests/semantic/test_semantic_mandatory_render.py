@@ -199,3 +199,32 @@ def test_page_id_requires_exact_identity_field():
     result = render.verify_mandatory_pages(out)
     assert not result["complete"]
     assert result["unbound"] == [{"page": 0, "fact_id": "fid_1"}]
+
+
+def test_mandatory_line_carries_stated_attributes():
+    """A reader must not see '739 mg' stripped or a negated fact
+    rendered as an assertion: stated attributes ride on the line (and
+    its page) while the exact ID/evidence binding stays intact."""
+    fact = {**_fact("バルプロ酸"), "fact_id": "fid_q",
+            "quantity": "739 mg", "polarity": "negated",
+            "epistemic": "reported", "workflow_status": "cancelled",
+            "action": "stop", "valid_time": "2026-09-01",
+            "actor": "sender:s2", "evidence_ids": ["ev_q"]}
+    out = render.mandatory_render(_doc(facts=[fact]))
+    line = out["facts"][0]
+    for text in ("量:739 mg", "極性:negated", "確度:reported",
+                 "状態:cancelled", "行為:stop", "有効時点:2026-09-01",
+                 "記録者:sender:s2"):
+        assert text in line and text in out["pages"][0]["text"], text
+    assert "、ID:fid_q、証拠:ev_q" in line
+    assert out["complete"] is True
+    assert render.verify_mandatory_pages(out)["complete"] is True
+
+
+def test_mandatory_line_omits_unknown_attributes():
+    fact = {**_fact("アムロジピン"), "fact_id": "fid_u",
+            "quantity": "unknown", "action": "unknown",
+            "actor": "unknown", "valid_time": "unknown"}
+    line = render.mandatory_render(_doc(facts=[fact]))["facts"][0]
+    for label in ("量:", "行為:", "記録者:", "有効時点:"):
+        assert label not in line, label

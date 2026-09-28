@@ -71,6 +71,7 @@ def _record(source="synthetic"):
                  "time": "today", "speaker_relation": "nurse",
                  "evidence_ids": ["ev-2"]},
             ],
+            "verified_fact_ids": ["f1", "f2"],
             "rendered_fact_ids": ["f1", "f2"],
             "delivered_fact_ids": ["f1", "f2"],
             "relations": [{"left_fact_id": "f1", "right_fact_id": "f2",
@@ -527,3 +528,81 @@ def test_run_duration_aggregation_rejects_overflow():
             for i in range(2)]
     with pytest.raises(evaluation.EvaluationError, match="run_elapsed_s"):
         evaluation.evaluate_runs(rows)
+
+
+def _lifecycle_record(count=41):
+    """Synthetic case with ``count`` facts; only f1 is mandatory, so a
+    late fact can only be caught by full-lifecycle scoring."""
+    record = _record("human")
+    candidate, label = record["candidate"], record["label"]
+    candidate["facts"] = [dict(candidate["facts"][0], fact_id=f"f{i}")
+                          for i in range(1, count + 1)]
+    label["facts"] = [dict(label["facts"][0], fact_id=f"f{i}",
+                           mandatory=i == 1)
+                      for i in range(1, count + 1)]
+    ids = [f["fact_id"] for f in candidate["facts"]]
+    for stage in evaluation.LIFECYCLE_STAGES:
+        candidate[f"{stage}_fact_ids"] = list(ids)
+    candidate["claims"] = [candidate["claims"][0]]
+    label["claims"] = [dict(label["claims"][0], covered_gold_fact_ids=ids)]
+    return record
+
+
+def test_complete_lifecycle_passes():
+    report = evaluation.evaluate_records([_lifecycle_record()], MANIFEST,
+                                         CRITERIA)
+    assert report["gate"]["pass"], report["gate"]["reasons"]
+    assert report["fact_lifecycle"] == {"complete": 1, "missing": 0,
+                                        "extra": 0,
+                                        "missing_observations": 0}
+
+
+@pytest.mark.parametrize("stage", evaluation.LIFECYCLE_STAGES)
+def test_late_nonmandatory_fact_cannot_disappear_between_stages(stage):
+    # Given a synthetic case whose late fact f41 is not mandatory.
+    record = _lifecycle_record()
+    record["candidate"][f"{stage}_fact_ids"].remove("f41")
+    # When scoring every lifecycle observation, not an overview.
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    # Then mandatory metrics stay perfect yet the gate still fails.
+    for name in ("mandatory_fact_recall", "rendered_fact_recall",
+                 "delivered_fact_recall"):
+        assert report["metrics"][name]["rate"] == 1.0
+    held_out = report["splits"]["test"]["fact_lifecycle"]
+    assert held_out["complete"] == 0 and held_out["missing"] == 1
+    assert not report["gate"]["pass"]
+    assert "fact_lifecycle_incomplete" in report["gate"]["reasons"]
+
+
+def test_extra_stage_fact_is_lifecycle_failure():
+    record = _lifecycle_record(2)
+    record["candidate"]["delivered_fact_ids"].append("f-ghost")
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    assert report["fact_lifecycle"]["extra"] == 1
+    assert "fact_lifecycle_incomplete" in report["gate"]["reasons"]
+
+
+@pytest.mark.parametrize("stage", evaluation.LIFECYCLE_STAGES)
+def test_missing_stage_observation_fails_closed(stage):
+    """Pre-v3 records without a stage list (e.g. no verified_fact_ids)
+    still score, but the absent observation is never imputed."""
+    record = _lifecycle_record(2)
+    record["candidate"].pop(f"{stage}_fact_ids")
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    lifecycle = report["fact_lifecycle"]
+    assert lifecycle["missing_observations"] == 1
+    assert lifecycle["complete"] == 0 and lifecycle["missing"] == 2
+    assert "fact_lifecycle_incomplete" in report["gate"]["reasons"]
+    assert report["metrics"]["important_fact_recall"]["rate"] == 1.0
+
+
+@pytest.mark.parametrize("value,code", [
+    ("f1", "candidate_verified_fact_ids_list_required"),
+    ([""], "candidate_verified_fact_id_invalid"),
+    (["f1", "f1"], "candidate_verified_fact_id_duplicate"),
+])
+def test_verified_fact_ids_validated_like_other_stages(value, code):
+    record = _record()
+    record["candidate"]["verified_fact_ids"] = value
+    with pytest.raises(evaluation.EvaluationError, match=code):
+        evaluation.evaluate_records([record], MANIFEST, CRITERIA)

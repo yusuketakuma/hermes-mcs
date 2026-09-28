@@ -33,6 +33,20 @@ _CATEGORY_LABEL = {
 
 MANDATORY_PAGE_BUDGET = 1900    # chars/page — the send-path chunk bound
 
+# Stored contract attributes a reader needs to interpret a line (dose,
+# negation, certainty, workflow state). Rendered verbatim — codes, not
+# paraphrase — and only when stated; "unknown" adds nothing.
+_LINE_ATTRS = (("quantity", "量"), ("polarity", "極性"),
+               ("epistemic", "確度"), ("workflow_status", "状態"),
+               ("action", "行為"), ("valid_time", "有効時点"),
+               ("actor", "記録者"))
+
+
+def _attr_desc(fact: dict) -> str:
+    return "".join(f"、{label}:{fact[key]}" for key, label in _LINE_ATTRS
+                   if isinstance(fact.get(key), str)
+                   and fact[key] not in ("", "unknown"))
+
 
 def _evidence_desc(fact: dict) -> str:
     ids = [e for e in (fact.get("evidence_ids") or []) if isinstance(e, str)]
@@ -95,7 +109,9 @@ def mandatory_render(doc: dict,
     be visible in the rendered output even when the model summary
     omits them.  Lines are code-generated from the stored contract —
     never model text invented here. No count cap: each rendered line
-    carries subject/time/ID/evidence identity, and the full list is
+    carries subject/time/ID/evidence identity plus every stated
+    quantity/polarity/epistemic/workflow/action/valid-time/actor
+    attribute, and the full list is
     split into source-bound pages within the platform char budget —
     'N omitted' is publication-incomplete, never a limitation."""
     facts = [f for f in doc.get("facts", [])
@@ -117,6 +133,7 @@ def mandatory_render(doc: dict,
         line = (f"{label}｜{text}"
                 f"（対象:{fact.get('subject') or '不明'}"
                 f"、時点:{fact.get('event_time') or '不明'}"
+                f"{_attr_desc(fact)}"
                 f"、ID:{fid}、証拠:{_evidence_desc(fact)}）")
         lines.append(line)
         fact_ids.append(fid)
