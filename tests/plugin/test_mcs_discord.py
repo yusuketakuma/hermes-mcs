@@ -37,6 +37,7 @@ from hermes_plugin.mcs_delivery import spec as spec_mod
 from hermes_plugin.mcs_delivery import worker as worker_mod
 from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
                                        delivery, tasks)
+from test_mcs_discord_delivery import FakeHTTPClient
 
 NOW = 1_790_000_000.0
 MISSING = object()  # discord.py's "argument not passed" sentinel
@@ -244,6 +245,7 @@ class FakeBot:
         self.channels[channel_id].bot = self
         self.user = BOT_USER
         self.listeners = []
+        self.http = FakeHTTPClient()     # verified-SDK shape for create POSTs
 
     def get_channel(self, cid):
         return self.channels.get(cid)

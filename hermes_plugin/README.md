@@ -190,12 +190,16 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
   クラッシュは `not_sent`、以降は `unknown` として記録し、worker は unknown を
   自動再送しない（operator の `card_resolve` で解決）。
-  **ただし1回の送信呼出しの内部で discord.py 自身が再試行する**:
-  discord.py 2.7 の HTTPClient は POST も含め 500/502/504/524 と接続リセットで
-  最大5回まで再送する。初回が Discord 側で確定したのに応答が失われた場合、
-  カード・本文・添付が重複投稿され得る（journal 上は1 attempt）。独自 REST client を
-  持たない方針のため現状は残存リスクとして扱う。Slack は retry handler を外した
-  単発 client で送るため、この経路の重複はない。
+  discord.py 2.7 の HTTPClient は1回の送信呼出しの内部で POST も含め
+  429・500/502/504/524・接続リセットで最大5回まで再送するため、作成系 POST
+  （カード・スレッド作成・本文・添付）は単発に制限する: Hermes の bot が持つ
+  aiohttp session の `request` を一度だけ包み、MCS 配送タスクの送信中（ContextVar）
+  に限り2回目の POST を wire に出す前に `DiscordRetrySuppressed` で止める。
+  初回が確定済みかもしれないので結果は `unknown`（自動再送しない）。Hermes 自身の
+  送信は ContextVar 外なので従来どおり再試行される。この保護は検証済みの
+  discord.py 2.7.1（client の user_agent で判定）と private session 属性に依存し、
+  それ以外の版・属性欠落では作成系を送らず `not_sent`/`retry_policy_unknown` で
+  止める（Slack の単発 client と同じ fail closed）。編集・削除・取得は対象外。
 - journal(`discord_state/journal-*.jsonl`、長寿命 worker は `journal-<id>~<n>.jsonl`
   へ segment 回転)と scope 別 registry(`registry-*.json`)は fsync 永続化。
   再起動時に未レポート結果の receipt 再送と未完 attempt の保守的決済を行う。
