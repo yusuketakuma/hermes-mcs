@@ -31,3 +31,13 @@ def test_readings_never_mix_subject_or_time(body, vitals, forbidden):
     llm = extract_llm._validate({'vitals': vitals}, body)
     rules = extract.extract_message(body, '2026-09-28')
     assert forbidden not in structured_view._vital_line(llm, rules)
+
+
+@pytest.mark.parametrize(('vitals', 'expected'), [
+    ({'sbp': 120}, 'BP 120/?'),
+    ({'dbp': 70}, 'BP ?/70'),
+    ({'sbp': 120, 'dbp': 70}, 'BP 120/70'),
+])
+def test_half_extracted_bp_never_renders_none(vitals, expected):
+    line = structured_view._vital_line({'vitals': vitals}, {})
+    assert expected in line and 'None' not in line

@@ -94,6 +94,12 @@ def _where(scope: dict, col: str = "m.posted_at_ts") -> tuple[str, list]:
     if scope["until"] is not None:
         sql += f" AND {col} < ?"
         params.append(scope["until"])
+    elif scope.get("as_of") is not None:
+        # as_of freezes the window even without --until (refstats pins
+        # it): nothing posted after it counts; undated rows keep their
+        # pre-existing treatment
+        sql += f" AND ({col} IS NULL OR {col} <= ?)"
+        params.append(scope["as_of"])
     if scope["project_id"] is not None:
         sql += " AND m.project_id = ?"
         params.append(scope["project_id"])
@@ -143,7 +149,11 @@ def st_data_quality(db, scope):
             AND EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='extract_llm' AND a.message_id=m.message_id
                           AND json_valid(a.meta)
-                          AND json_extract(a.meta,'$.hash')!=m.content_hash)""",
+                          AND json_extract(a.meta,'$.hash')!=m.content_hash)
+            AND NOT EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind='extract_llm'
+                          AND a.message_id=m.message_id
+                          {current_extract_pred(content=False)})""",
         p).fetchone()[0]
     timed = db.execute(
         f"SELECT COUNT(*) FROM messages m WHERE posted_at_ts NOT NULL{w}",
@@ -339,7 +349,8 @@ def _med_rows(db, scope):
     """(project_id, message_id, med_dict, posted_at_ts) for current-
     revision extract_llm artifacts in scope. artifacts has no
     UNIQUE(kind, message_id), so duplicate current-hash rows are
-    deduplicated per message_id here rather than double-counted."""
+    deduplicated per message_id here rather than double-counted — the
+    NEWEST row wins, as in every display reader (structured_view)."""
     w, p = _where(scope)
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
@@ -347,7 +358,7 @@ def _med_rows(db, scope):
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND json_array_length(a.content,'$.meds')>0{w}
-            ORDER BY a.artifact_id""",
+            ORDER BY a.artifact_id DESC""",
         p).fetchall()
     seen = set()
     for pid, mid, content, ts in rows:
@@ -512,7 +523,8 @@ def st_med_change_followup(db, scope):
               {current_fact_pred()}
               AND json_array_length(a.content,'$.meds')>0
               AND m.posted_at_ts IS NOT NULL
-              AND m.posted_at_ts <= ?{w}""",
+              AND m.posted_at_ts <= ?{w}
+            ORDER BY a.artifact_id DESC""",
         [cutoff, *p]).fetchall()
     seen, total, no_follow = set(), 0, []
     for pid, mid, ts, content in rows:
@@ -582,20 +594,25 @@ def st_open_loop_aging(db, scope):
     ).fetchall()
     buckets = {"not_yet_due": 0, "0-7d": 0, "8-30d": 0, "31-90d": 0,
                "over_90d": 0, "no_due": 0}
+    as_of_day = datetime.fromtimestamp(scope["as_of"], JST).date()
     items = []
     for rid, pid, status, due in rows:
         age_d = None
         unparseable = False
         if due is not None:
             try:
-                age_d = (scope["as_of"] - _parse_when(str(due))) / DAY_S
-            except (ValueError, TypeError, OverflowError):
+                # whole JST calendar days past the due date — a request
+                # is not overdue on its own due day
+                due_day = datetime.fromtimestamp(
+                    _parse_when(str(due)), JST).date()
+                age_d = (as_of_day - due_day).days
+            except (ValueError, TypeError, OverflowError, OSError):
                 unparseable = True
         if due is None:
             buckets["no_due"] += 1
         elif unparseable:
             buckets["no_due"] += 1  # counted but flagged, not hidden
-        elif age_d < 0:
+        elif age_d <= 0:
             buckets["not_yet_due"] += 1
         else:
             buckets["over_90d" if age_d > 90 else
@@ -604,8 +621,7 @@ def st_open_loop_aging(db, scope):
         items.append({"request_id": rid, "project_id": pid,
                       "status": status, "due_date": due,
                       "due_unparseable": unparseable or None,
-                      "days_since_due": round(age_d) if age_d is not None
-                      else None})
+                      "days_since_due": age_d})
     items.sort(key=lambda r: (r["days_since_due"] is None,
                               -(r["days_since_due"] or 0)))
     return _result("partial", scope, {
