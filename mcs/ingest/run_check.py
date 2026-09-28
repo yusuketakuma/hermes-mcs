@@ -81,6 +81,23 @@ def _config() -> dict:
 # SUBSYSTEMS did. Monitors must read this file — a partial run exits 0
 # by design (work happened), so exit-status-only monitoring hides it.
 
+def _unread_at(result: dict, status: str, now: float) -> float | None:
+    """When unread collection last completed. A --jobs-only deep run or
+    a failed tick does not collect unread, so it carries the previous
+    value forward — deep runs alone must never keep health 'fresh'
+    while the unread check has stopped."""
+    if not result.get("jobs_only") \
+            and status not in ("failed", "session_expired"):
+        return now
+    try:
+        with open(HEALTH_FILE, encoding="utf-8") as f:
+            prev = json.load(f).get("unread_at")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return prev if isinstance(prev, int | float) \
+        and not isinstance(prev, bool) and math.isfinite(prev) else None
+
+
 def _health(ledger, result: dict, status: str,
             run_id: int | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
@@ -140,6 +157,7 @@ def _health(ledger, result: dict, status: str,
         "overall": overall, "run_status": status,
         "run_id": run_id,
         "at": now,
+        "unread_at": _unread_at(result, status, now),
         "collection": collection,
         "incomplete_projects": result.get("incomplete") or [],
         "notify": {"state": notify_state,
@@ -181,6 +199,22 @@ def _write_health(ledger, result: dict, status: str,
             ledger.outbox_add("health_write_failed", None,
                               {"detail": type(e).__name__,
                                "run_id": run_id})
+LOCK_WAIT_S = 150
+LOCK_POLL_S = 0.2
+
+
+def _wait_run_lock(wait_s: float) -> int | None:
+    """Poll the run lock until ``wait_s`` elapses — short polls so a
+    holder that releases between batches is won, not missed."""
+    until = time.monotonic() + wait_s
+    while time.monotonic() < until:
+        time.sleep(LOCK_POLL_S)
+        fd = acquire_run_lock(LOCKFILE)
+        if fd is not None:
+            return fd
+    return None
+
+
 SESSION_ALERT_MIN_INTERVAL_S = 3600
 # a flapping session must not drive auto_login in a loop — each wrapped
 # stage allows one attempt, and this bounds the per-run total
@@ -1086,7 +1120,13 @@ def main() -> int:
     os.makedirs(ATTACH_DIR, mode=0o700, exist_ok=True)
     os.chmod(ATTACH_DIR, 0o700)
 
+    # a scheduled tick waits briefly for the lock: the nightly semantic
+    # drain releases it between batches, and a single lost night tick
+    # already spans 40 min — past the 30-min session expiry. The
+    # command watcher stays non-blocking (it runs every few seconds).
     lock_fd = acquire_run_lock(LOCKFILE)
+    if lock_fd is None and not args.commands_only:
+        lock_fd = _wait_run_lock(LOCK_WAIT_S)
     if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3

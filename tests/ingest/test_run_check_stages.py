@@ -1300,3 +1300,69 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         "SELECT status FROM runs ORDER BY run_id DESC LIMIT 1"
     ).fetchone()[0] == "ok"
     db.close()
+
+
+def _point_run_check_at(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    for name, value in {"HOME": tmp_path, "DB": data / "ledger.db",
+                        "ATTACH_DIR": data / "attachments",
+                        "LOCKFILE": data / "run.lock",
+                        "HEALTH_FILE": data / "health.json"}.items():
+        monkeypatch.setattr(run_check, name, str(value))
+    data.mkdir(exist_ok=True)
+    return data
+
+
+def test_tick_waits_for_a_run_lock_released_between_batches(
+        tmp_path, monkeypatch):
+    """The nightly drain releases run.lock between batches — a tick
+    must win it within its wait budget instead of exiting on one try."""
+    import threading
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    held = run_check.acquire_run_lock(str(data / "run.lock"))
+    threading.Timer(0.5, os.close, (held,)).start()
+    fd = run_check._wait_run_lock(5)
+    assert fd is not None
+    os.close(fd)
+
+
+@pytest.mark.parametrize("argv, waits", [
+    (["run_check", "--no-notify"], True),
+    (["run_check", "--commands-only"], False)])
+def test_lock_held_exit_waits_only_for_scheduled_runs(
+        tmp_path, monkeypatch, capsys, argv, waits):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    held = run_check.acquire_run_lock(str(data / "run.lock"))
+    waited = []
+    monkeypatch.setattr(run_check, "_wait_run_lock",
+                        lambda s: waited.append(s))
+    monkeypatch.setattr(sys, "argv", argv)
+    try:
+        assert run_check.main() == 3
+    finally:
+        os.close(held)
+    assert bool(waited) is waits
+    assert "lock_held" in capsys.readouterr().out
+
+
+def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
+    """A --jobs-only deep run refreshes `at` but not `unread_at`, so the
+    health watcher still sees a stopped unread check as stale."""
+    import health_watch
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "HEALTH_FILE",
+                        str(tmp_path / "health.json"))
+    run_check._write_health(db, {"errors": [], "notify": {}}, "ok")
+    first = json.loads((tmp_path / "health.json").read_text())
+    assert first["unread_at"] == first["at"]
+    run_check._write_health(
+        db, {"errors": [], "notify": {}, "jobs_only": True}, "ok")
+    deep = json.loads((tmp_path / "health.json").read_text())
+    assert deep["unread_at"] == first["unread_at"]
+    later = first["unread_at"] + 7200
+    deep["at"] = later - 60
+    (tmp_path / "health.json").write_text(json.dumps(deep))
+    report = health_watch.classify_health(
+        str(tmp_path / "health.json"), later, 1800)
+    assert report["status"] == "stale"
+    db.close()

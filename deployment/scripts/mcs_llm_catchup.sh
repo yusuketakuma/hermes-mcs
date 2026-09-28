@@ -7,8 +7,9 @@
 # via semantic_drain --drain, with calls pinned to slot 1
 # (MCS_LLM_SLOT=1) — safe inside this dead-of-night window; a rare RT
 # call shares the slot queue. The drain loop takes the run lock only
-# per ~2-min iteration, so a 15-min tick is never starved.
-# Window 22:30→03:30 keeps the queue quiet before the 04:00
+# per ~2-min iteration; a scheduled tick waits (bounded) for the lock
+# between iterations instead of giving up on the first try.
+# Starts 22:30 and runs WINDOW_S (55 min), well before the 04:00
 # idle-guarded llama restart. stdout stays silent on success
 # (watchdog convention); batch lines go to semantic_drain.log.
 set -u
@@ -28,8 +29,9 @@ LOG=__DATA__/semantic_drain.log
 # cron 配下で走るこのランチャは timeout 未満に収めないと毎回 kill される。
 WINDOW_S=3300
 
-# gap-fill: if the extract drainer died, cover shard 0/2 on slot 0 too
-if ! pgrep -f "extract_llm.py --all" >/dev/null 2>&1; then
+# gap-fill: if the shard-0 extract drainer died, cover shard 0/2 on
+# slot 0 too (match the shard — the RT drainer runs shard 1/2)
+if ! pgrep -f "extract_llm.py --all .*--shard 0/2" >/dev/null 2>&1; then
   "$PY" __REPO__/mcs/extract/v4/extract_llm.py --all --workers 1 \
     --shard 0/2 --slot 0 --stop-after "$WINDOW_S" \
     >>__DATA__/extract_drain.log 2>&1 &

@@ -3,8 +3,9 @@
 
 Responsibilities:
 - cmd/*.json ingest: validate -> record a durable fetch_job -> consume the
-  file. A request is never deleted before it is durably recorded, and a
-  malformed request is consumed but reported, never loops (Oracle B12).
+  file. A request is never deleted before it is durably recorded; a file
+  that does not parse yet (possibly mid-write) is left in place and
+  retried on the next drain, never consumed (Oracle B12).
 - fetch_jobs drains: 'reply' refetches (bodies the thread API missed) and
   'history' walks. History jobs carry their own page cursor so an
   unfinished deepen resumes where it stopped; a job only restarts at
@@ -100,7 +101,7 @@ def _valid_history_payload(pl) -> bool:
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
     """Consume queued bot requests into durable fetch_jobs FIRST. Files may
     arrive mid-write (producer writes non-atomically): a parse failure is
-    consumed but recorded, never loops."""
+    left in place for the next drain, never consumed."""
     consent_only = False
     try:
         import notify_cards

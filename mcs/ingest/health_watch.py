@@ -125,9 +125,15 @@ def classify_health(path: str, now: float, deadline_s: int,
         return {"status": "corrupt"}
     if h["at"] > now + RUN_GRACE_S:
         return {"status": "corrupt"}
+    # unread collection time, when recorded — --jobs-only deep runs
+    # refresh 'at' without collecting unread and must not mask a
+    # stopped unread check (older files lack the field: use 'at')
+    evidence_at = h["at"]
+    if _finite_number(h.get("unread_at")):
+        evidence_at = min(evidence_at, h["unread_at"])
     if cfg is not None:
-        deadline_s = _scheduled_deadline(h["at"], cfg, deadline_s)
-    age = now - h["at"]
+        deadline_s = _scheduled_deadline(evidence_at, cfg, deadline_s)
+    age = now - evidence_at
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
               "overall": overall, "run_status": h.get("run_status"),
               "run_id": h.get("run_id"), "deadline_s": deadline_s}
