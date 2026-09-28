@@ -169,6 +169,17 @@ class DeliveryWorker:
             return None
 
     def _compact_journal(self, claims: set, done: set) -> int:
+        # while a restore is pending, its backup may be about to vanish
+        # from backups/ and move the horizon forward — the journal is the
+        # post-restore reconcile's evidence, so never prune then
+        try:
+            os.lstat(os.path.join(self._root, "restore_pending.json"))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return 0
+        else:
+            return 0
         horizon = self._restore_horizon()
         if horizon is None:
             return 0

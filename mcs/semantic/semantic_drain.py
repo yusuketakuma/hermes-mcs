@@ -1062,6 +1062,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     return "done"
 
 
+NOT_SENT_BACKOFF_S = 3600
+
+
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  cfg_path: str | None = None,
                  config_generation: str | None = None,
@@ -1086,10 +1089,14 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
     except runtime.RuntimeOff:
         return "stale"
     except runtime.LLMNotSent:
-        # admission hold / refused connection: the request never left,
-        # so no attempt is consumed — the job waits like a resource
-        # outage, even when earlier calls of this job were dispatched
-        return "deferred"
+        # admission hold / refused connection: the LLM request never
+        # left, so no attempt is consumed — but Jev calls this pass
+        # already made (e.g. the per-chunk preflight) are real spend:
+        # back off hourly so a held LLM cannot re-spend the Jev budget
+        # every minute
+        sent = (jev_client is not None
+                and jev_client.requests_made > requests_before)
+        return "deferred_backoff" if sent else "deferred"
     except runtime.RuntimeBudget:
         sent = (jev_client is not None
                 and jev_client.requests_made > requests_before)
@@ -1487,6 +1494,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         elif status == "deferred":
             out["deferred"] += 1
             runtime.transition(ledger, token, "defer", retry_in=60)
+        elif status == "deferred_backoff":
+            out["deferred"] += 1
+            runtime.transition(ledger, token, "defer",
+                               retry_in=NOT_SENT_BACKOFF_S)
         elif status == "retry":
             runtime.transition(ledger, token, "retry", retry_in=300,
                                max_attempts=limit)

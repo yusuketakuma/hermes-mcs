@@ -928,6 +928,22 @@ def test_journal_compaction_drops_only_settled_pre_backup_attempts(tmp_path):
     assert journal.unreported(after).keys() == journal.unreported(before).keys()
 
 
+def test_journal_compaction_pauses_while_a_restore_is_pending(tmp_path):
+    """The journal is the post-restore reconcile's evidence; a pending
+    restore may retire its backup and move the horizon — never prune."""
+    import time as _time
+    w, _reg, _ = _mkworker(tmp_path)
+    state = _state(tmp_path)
+    now = _time.time()
+    _settled(state, "w0", "a1" * 8,
+             "00000000-0000-4000-8000-000000000001", now - 5 * 86400)
+    _backup(tmp_path, now - 86400)
+    from pathlib import Path
+    (Path(w._root) / "restore_pending.json").write_text("{}")
+    before = journal.scan(str(state))
+    asyncio.run(w.maintain_journal(rotate=True))
+    assert journal.scan(str(state)) == before
+
 def test_live_segment_rotates_and_closed_segment_is_compacted(
         tmp_path, monkeypatch):
     import time as _time

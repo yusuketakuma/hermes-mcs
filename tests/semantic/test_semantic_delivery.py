@@ -351,9 +351,10 @@ def test_raw_notice_is_rerendered_not_dropped_when_summary_gate_trips(
     monkeypatch.setattr(notify_flush, "_send", send)
     res = notify_flush.flush(db)
     row = db.db.execute(
-        "SELECT state, next_try FROM notify_outbox"
+        "SELECT state, next_try, attempts FROM notify_outbox"
         " WHERE kind='new_messages'").fetchone()
     assert not res.get("suppressed") and not res.get("parked")
+    assert row["attempts"] == 0       # a re-render is not a failure
     assert row["state"] in ("pending", "failed", "accepted")
     if row["state"] != "accepted":
         import time
