@@ -110,7 +110,7 @@ def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
 def test_qc_readers_ignore_malformed_rows_under_skewed_stats(
         tmp_path, raw, column):
     from extract_testkit import _hash, _ledger
-    from test_extract_llm_v2 import _seed_qc_flagged
+    from test_extract_llm import _seed_qc_flagged
     db = _ledger(tmp_path)
     try:
         _seed_qc_flagged(db)
