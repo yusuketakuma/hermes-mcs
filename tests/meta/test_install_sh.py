@@ -163,6 +163,9 @@ def test_install_run_then_rerun_converges(tmp_path):
     first_gen = recovery.read_bytes()
     assert first_gen == (ROOT / "deployment" / "recovery"
                          / "mcs_recover.py").read_bytes()
+    # the out-of-repo tool knows which checkout it recovers
+    assert (home / ".mcs-recovery" / "repo_path").read_text().strip() \
+        == str(ROOT)
     # plugin symlink landed inside the isolated hermes home
     link = hermes_home / "plugins" / "mcs-discord-commands"
     assert link.is_symlink()
