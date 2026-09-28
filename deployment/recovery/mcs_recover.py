@@ -215,13 +215,15 @@ def _agent_pid(label):
 
 
 def _bootstrap_agent(label, plist):
-    """install.sh bootstrap_agent: launchd may still be tearing down a
-    just-booted-out job ("5: Input/output error") — retry briefly, then
-    accept a label that is loaded now."""
+    """Standalone copy of mcs_util.launchd_bootstrap (this file runs
+    outside the repo under system python3 — keep the semantics in
+    sync): retry any failed bootstrap up to 3x (launchd may still be
+    tearing down a just-booted-out job, "5: Input/output error"); an
+    exit 0 is not proof — success is the label answering `print`."""
     for _ in range(3):
         r = _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
         if r is not None and r.returncode == 0:
-            return True
+            break
         time.sleep(1)
     r = _launchctl(["print", f"gui/{os.getuid()}/{label}"])
     return r is not None and r.returncode == 0

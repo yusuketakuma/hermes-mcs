@@ -87,11 +87,12 @@ skip() { echo "  skip: $*"; }
 warn() { echo "  warn: $*" >&2; }
 die()  { echo "error: $*" >&2; exit 1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
-# output error") — retry briefly, and accept a label that is loaded now.
+# output error") — retry briefly; success is the label being loaded, not
+# a zero exit (same semantics as mcs_util.launchd_bootstrap).
 bootstrap_agent() {  # <label> <plist>
     _n=0
     while [ "$_n" -lt 3 ]; do
-        launchctl bootstrap "gui/$(id -u)" "$2" && return 0
+        launchctl bootstrap "gui/$(id -u)" "$2" && break
         _n=$((_n + 1))
         sleep 1
     done

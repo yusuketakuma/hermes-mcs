@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import mcs_update
+import mcs_util
 
 
 # ---------------------------------------------------------------- helpers
@@ -1275,9 +1276,10 @@ class _FakeLaunchd:
     """launchctl stub: bootstrap exit codes come from `outcomes`; a
     successful bootstrap (or `late_load`) marks the label loaded."""
 
-    def __init__(self, outcomes, late_load=False):
+    def __init__(self, outcomes, late_load=False, loads=True):
         self.outcomes = list(outcomes)
         self.late_load = late_load
+        self.loads = loads
         self.loaded = False
         self.calls = []
 
@@ -1290,7 +1292,7 @@ class _FakeLaunchd:
         elif verb == "bootstrap":
             rc = self.outcomes.pop(0)
             if rc == 0:
-                self.loaded = True
+                self.loaded = self.loads
             else:
                 err = "Bootstrap failed: 5: Input/output error"
                 out = "success"          # misleading output is ignored
@@ -1302,18 +1304,20 @@ class _FakeLaunchd:
         return subprocess.CompletedProcess(argv, rc, out, err)
 
 
-@pytest.mark.parametrize("outcomes,late,problems,boots", [
-    ([5, 0], False, [], 2),
-    ([5, 5, 5], True, [], 3),
-    ([5, 5, 5], False, ["bootstrap_failed:ai.mcs.x"], 3),
+@pytest.mark.parametrize("outcomes,late,problems,boots,loads", [
+    ([5, 0], False, [], 2, True),
+    ([5, 5, 5], True, [], 3, True),
+    ([5, 5, 5], False, ["bootstrap_failed:ai.mcs.x"], 3, True),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ([0], False, ["bootstrap_failed:ai.mcs.x"], 1, False),
 ])
 def test_restart_agents_retries_transient_bootstrap(
-        tmp_path, monkeypatch, outcomes, late, problems, boots):
+        tmp_path, monkeypatch, outcomes, late, problems, boots, loads):
     from types import SimpleNamespace
-    fake = _FakeLaunchd(outcomes, late_load=late)
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
     sleeps = []
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_update, "time",
+    monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=sleeps.append))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.x",))
@@ -1324,4 +1328,27 @@ def test_restart_agents_retries_transient_bootstrap(
     assert mcs_update.restart_agents() == problems
     assert fake.calls[0] == "bootout"
     assert fake.calls.count("bootstrap") == boots
-    assert sleeps.count(1) == boots - (not problems and not late)
+    assert sleeps.count(1) == sum(rc != 0 for rc in outcomes)
+
+
+@pytest.mark.parametrize("outcomes,late,loads,problems", [
+    ([5, 0], False, True, []),
+    ([5, 5, 5], True, True, []),
+    ([5, 5, 5], False, True, ["watcher_not_loaded:ai.mcs.w"]),
+    ([0], False, False, ["watcher_not_loaded:ai.mcs.w"]),
+])
+def test_restart_agents_watcher_uses_verified_bootstrap(
+        tmp_path, monkeypatch, outcomes, late, loads, problems):
+    """An unloaded watcher goes through the shared verified bootstrap —
+    its result decides, not a second ad-hoc `print`."""
+    from types import SimpleNamespace
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("ai.mcs.w",))
+    monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
+    assert mcs_update.restart_agents() == problems
+    assert fake.calls == ["print"] + ["bootstrap"] * len(outcomes) + ["print"]
