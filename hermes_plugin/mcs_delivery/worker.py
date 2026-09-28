@@ -8,7 +8,10 @@ receipt is published. Crashes land between those records and are
 classified honestly on the next start — pre-HTTP grants settle as
 ``not_sent`` (journal integrity + the scope lock prove it), post-HTTP
 silences stay ``unknown`` for an operator to resolve, and an in-flight
-send is never retried by a new worker.
+send is never retried by a new worker. (A transport SDK may still retry
+inside one ``_perform`` call: discord.py re-POSTs on 5xx/ECONNRESET, so
+a lost response can duplicate a Discord post; Slack strips its retry
+handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
 ``_maybe_thread``; everything around them — claims, grants, journals,

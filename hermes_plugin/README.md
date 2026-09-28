@@ -1,4 +1,7 @@
-# MCS Discord コマンド
+# MCS Hermes plugin（Discord コマンド／Discord・Slack カード）
+
+plugin 名は互換のため `mcs-discord-commands` のまま。`/mcs` コマンドは Discord のみ、
+インタラクティブカード worker は Discord（`mcs_discord`）と Slack（`mcs_slack`）の両方を持つ。
 
 既存Hermesのnative Discord受信とallowlistを使う独立plugin。Hermes側には
 optional `command_context` とnative入力provenanceの対応が必要。
@@ -144,6 +147,22 @@ preview応答のpayload/origin/hashを確認し、`op:"control", phase:"confirm"
 controlはJSONをstdinから読み、既存requests CLIと同様にローカル操作者の明示確認を前提とする。
 Discord利用時はこのCLIのactor自己申告ではなく、上記native platform認証を使う。
 
+## システム全体の運用承認（update / rollback / restore）
+
+```text
+/mcs {"op":"control","phase":"preview","action":"update_apply","tag":"v1.0.6","target_sha":"<40桁>","base_sha":"<40桁>","reason":"リリースノートを確認し適用"}
+/mcs {"op":"control","phase":"preview","action":"update_rollback","reason":"適用後の不具合を確認し戻す"}
+/mcs {"op":"control","phase":"preview","action":"restore_approve","report_id":"<通知のreport_id>","backup_sha256":"<通知の値>","backup_schema":7,"reason":"喪失レポートを確認しDB置換を承認"}
+```
+
+`update_apply`／`update_rollback`／`restore_approve` は **install 全体**に効く操作で、
+`project_id` を持たない。認可は `allowed_user_ids` と `allowed_chat_ids` だけで、
+`project_ids` による project 制限は**かからない**（特定 project だけを許可した利用者でも
+承認できる）。confirm は他の control と同じ preview → 同一 payload/origin/hash の手順。
+`restore_approve` は喪失レポート（`report_id`）とbackupの sha256/schema に束縛され、
+別の承認では代用できない。適用・巻戻し・DB置換の実行と結果は runner 側の receipt と
+運用通知で確認する。
+
 ## インタラクティブカード（mcs_discord）
 
 `notify.interactive: discord` を有効にした runner が発行するカード render spec を、
@@ -169,11 +188,26 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
 
 - 配送は claim → `transport_begin` → runner の永続 grant → `started` fsync →
   Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
-  クラッシュは `not_sent`、以降は `unknown` として記録し、unknown は自動再送しない
-  （operator の `card_resolve` で解決）。
-- journal(`discord_state/journal-*.jsonl`)と scope 別 registry(`registry-*.json`)は
-  fsync 永続化。再起動時に未レポート結果の receipt 再送と未完 attempt の
-  保守的決済を行う。scope ごとの fcntl lock で同一配送先の sender は1つ。
+  クラッシュは `not_sent`、以降は `unknown` として記録し、worker は unknown を
+  自動再送しない（operator の `card_resolve` で解決）。
+  **ただし1回の送信呼出しの内部で discord.py 自身が再試行する**:
+  discord.py 2.7 の HTTPClient は POST も含め 500/502/504/524 と接続リセットで
+  最大5回まで再送する。初回が Discord 側で確定したのに応答が失われた場合、
+  カード・本文・添付が重複投稿され得る（journal 上は1 attempt）。独自 REST client を
+  持たない方針のため現状は残存リスクとして扱う。Slack は retry handler を外した
+  単発 client で送るため、この経路の重複はない。
+- journal(`discord_state/journal-*.jsonl`、長寿命 worker は `journal-<id>~<n>.jsonl`
+  へ segment 回転)と scope 別 registry(`registry-*.json`)は fsync 永続化。
+  再起動時に未レポート結果の receipt 再送と未完 attempt の保守的決済を行う。
+  閉じた journal は起動時と回転時に圧縮するが、落とすのは決済済み・unknown 以外・
+  claim も未送 part もない attempt で、かつ `data/backups/*.db` の最古 backup より
+  1日以上古い行だけ（restore 後の照合証拠を残すため。backup が無ければ圧縮しない。
+  `data/backups` 外の複製から restore する運用はこの保証の対象外）。
+  scope ごとの fcntl lock で同一配送先の sender は1つ。
+- runner と常駐 worker は別々に更新される。worker が知らない spec key
+  （新機能）を含む render は、カードだけ送って機能を落とすのではなく丸ごと保留し
+  `spec_rejected error=unsupported_*_key` を1回ログする。`hermes gateway restart`
+  で新しい worker を読み込むと配送される。
   旧 `registry.json` は保持し、配送 claim・未確定フォームは送信元 scope が
   一致する記録だけ引き継ぐ。scope 情報のない旧 token cache はクリック時に再生成し、
   旧 followup の結果は `/mcs` の receipt 照会で確認する。
@@ -198,7 +232,38 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   フォーム送信ごとの応答 ID。過去の結果ファイルを今回の承認や本文閲覧に使わない。
 - `依頼`/`却下` は runner が返す pin 済み params + render context から
   `request.create` / `ops.signal_dismiss` を組み立て、preview → 本人確認
-  → enqueue の順で、既存の human_confirmed ゲートを通す。
+  → enqueue の順で、既存の human_confirmed ゲートを通す。`確定` が command を
+  書込み中に押された `取消`／二度目の `確定` は「処理中」と答え、取り消したとは
+  報告しない（書込み失敗時は確認が再び有効になる）。
+
+## インタラクティブカード（mcs_slack）
+
+runner の transport が `slack` のとき、Hermes の Slack adapter が持つ native app と
+client を使って同じ durable worker（claim/grant/journal/receipt）で配送する。
+独自 token・独自接続は持たない。
+
+```yaml
+      settings:
+        data_root: /path/to/.mcs/data
+        slack_adapter_enabled: true
+        slack_team_id: "T..."
+        slack_application_id: "A..."
+        slack_channel_id: "C..."
+        slack_profile: mcs             # 省略時は Hermes profile
+        slack_allowed_user_ids: ["U..."]
+        project_ids: [1]
+```
+
+- runner の flags が `interactive: true` かつ `transport: slack` のときだけ起動する。
+  状態は `slack_render/`・`slack_state/`、command は Discord と共通の `cmd_int/`。
+- workspace は `auth.test` で team を確認してから送る。送信・ephemeral 返信は
+  retry handler を外した単発 client を使う。
+- Slack adapter が同一プロセス内で再接続し app を作り直した場合、新しい app に
+  結線された supervisor が旧 supervisor を止めて scope lock を引き継ぐ。
+- 更新 render で同じ添付を再送しないための突合せは、返信の file object の
+  name・size・sha256 一致を条件にしている。Slack の file object が sha256 を
+  返さない場合は突合せが成立せず、更新時に同じファイルが再 upload され得る
+  （安全側。実 API 応答での確認は未実施）。
 
 ## 合成入力での検証
 
