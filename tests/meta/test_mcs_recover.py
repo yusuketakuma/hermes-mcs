@@ -736,9 +736,10 @@ class _FakeLaunchd:
     """launchctl stub: bootstrap exit codes come from `outcomes`; a
     successful bootstrap (or `late_load`) marks the label loaded."""
 
-    def __init__(self, outcomes, late_load=False):
+    def __init__(self, outcomes, late_load=False, loads=True):
         self.outcomes = list(outcomes)
         self.late_load = late_load
+        self.loads = loads
         self.loaded = False
         self.calls = []
 
@@ -751,7 +752,7 @@ class _FakeLaunchd:
         elif verb == "bootstrap":
             rc = self.outcomes.pop(0)
             if rc == 0:
-                self.loaded = True
+                self.loaded = self.loads
             else:
                 err = "Bootstrap failed: 5: Input/output error"
                 out = "success"          # misleading output is ignored
@@ -767,11 +768,13 @@ class _FakeLaunchd:
     ([5, 0], False, [], 2),
     ([5, 5, 5], True, [], 3),
     ([5, 5, 5], False, ["ai.mcs.x"], 3),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ([0], False, ["ai.mcs.x"], 1),
 ])
 def test_restart_drainers_retries_transient_bootstrap(
         rec, tmp_path, monkeypatch, outcomes, late, problems, boots):
     from types import SimpleNamespace
-    fake = _FakeLaunchd(outcomes, late_load=late)
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=outcomes != [0])
     sleeps = []
     clock = iter(range(0, 10 ** 6, 5))
     monkeypatch.setattr(rec.subprocess, "run", fake)
@@ -784,4 +787,4 @@ def test_restart_drainers_retries_transient_bootstrap(
     assert rec._restart_drainers() == problems
     assert fake.calls[0] == "bootout"
     assert fake.calls.count("bootstrap") == boots
-    assert sleeps.count(1) == boots - (not problems and not late)
+    assert sleeps.count(1) == sum(rc != 0 for rc in outcomes)

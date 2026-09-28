@@ -1563,18 +1563,14 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
         note(f"agent {label}: bootstrap")
     if dry:
         return True
-    # launchd may still be tearing down the just-booted-out job ("5:
-    # Input/output error") — retry briefly, then accept a loaded label
-    # (install.sh bootstrap_agent)
-    for _ in range(3):
-        r = _run(["launchctl", "bootstrap", f"gui/{uid}", dst])
-        if r.returncode == 0:
-            return _agent_loaded(label)
-        time.sleep(1)
-    if _agent_loaded(label):
-        return True
-    note(f"  bootstrap failed: {r.stderr.strip()}")
-    return False
+    # imported here, not at module top: an older-generation mcs_update
+    # (mid update/rollback) lazily imports this module against its own
+    # already-loaded mcs_util, which may predate launchd_bootstrap
+    from mcs_util import launchd_bootstrap
+    err = launchd_bootstrap(label, dst, _run)
+    if err:
+        note(f"  bootstrap failed: {err}")
+    return err is None
 
 
 def _load_manifest() -> dict:

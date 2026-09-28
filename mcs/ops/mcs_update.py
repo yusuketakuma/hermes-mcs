@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 
 from mcs_util import (UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
-                      atomic_write, load_config)
+                      atomic_write, launchd_bootstrap, load_config)
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
@@ -626,19 +626,10 @@ def quiesce() -> list[str]:
 
 
 def _bootstrap_agent(label: str, plist: str) -> bool:
-    """install.sh bootstrap_agent: launchd may still be tearing down a
-    just-booted-out job ("5: Input/output error") — retry briefly, then
-    accept a label that is loaded now."""
-    for _ in range(3):
-        r = subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{_uid()}", plist],
-            capture_output=True, text=True, timeout=T_GIT)
-        if r.returncode == 0:
-            return True
-        time.sleep(1)
-    return subprocess.run(
-        ["launchctl", "print", f"gui/{_uid()}/{label}"],
-        capture_output=True, timeout=T_GIT).returncode == 0
+    """Verified bootstrap (mcs_util.launchd_bootstrap — imported at
+    process start, so a rolled-back tree never mixes generations)."""
+    return launchd_bootstrap(label, plist, lambda argv: subprocess.run(
+        argv, capture_output=True, text=True, timeout=T_GIT)) is None
 
 
 def restart_agents() -> list[str]:
@@ -665,14 +656,9 @@ def restart_agents() -> list[str]:
         r = subprocess.run(
             ["launchctl", "print", f"gui/{_uid()}/{label}"],
             capture_output=True, timeout=T_GIT)
-        if r.returncode != 0:
-            _bootstrap_agent(label,
-                             os.path.join(AGENTS_DIR, label + ".plist"))
-            r = subprocess.run(
-                ["launchctl", "print", f"gui/{_uid()}/{label}"],
-                capture_output=True, timeout=T_GIT)
-            if r.returncode != 0:
-                problems.append(f"watcher_not_loaded:{label}")
+        if r.returncode != 0 and not _bootstrap_agent(
+                label, os.path.join(AGENTS_DIR, label + ".plist")):
+            problems.append(f"watcher_not_loaded:{label}")
     _remove_marker()
     return problems
 

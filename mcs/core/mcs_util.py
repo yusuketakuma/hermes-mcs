@@ -5,7 +5,8 @@ of: config loading, HTML-to-text, the no-redirect HTTP guard, the
 single-writer run lock, shared path constants, and the text utilities
 (chunking / evidence-quote location) used by the extract and semantic
 layers, and the LLM-lane stability gates (circuit breaker / disk floor)
-shared by extract_llm and semantic_drain. Keep this module
+shared by extract_llm and semantic_drain, and the verified launchd
+bootstrap shared by mcs_setup and mcs_update. Keep this module
 dependency-free so every entry point
 (run_check, init_data, the extract CLIs, notify_flush, mcs_adapter)
 can import it without side effects.
@@ -18,6 +19,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import urllib.request
 from contextlib import suppress
 
@@ -344,3 +346,29 @@ def acquire_run_lock(path: str | None = None) -> int | None:
         os.close(fd)
         return None
     return fd
+
+
+def launchd_bootstrap(label: str, plist: str, run) -> str | None:
+    """Bootstrap a LaunchAgent and verify it is loaded — the canonical
+    success criterion for mcs_setup/mcs_update (mcs_recover.py and
+    install.sh keep standalone copies of the same semantics).
+
+    launchd may still be tearing down a just-booted-out job and answer
+    any nonzero code (typically "5: Input/output error") — any failure
+    is retried up to 3 times, 1s apart. An exit 0 is not proof: success
+    is only a `launchctl print` of the label answering 0 afterwards (a
+    late load after failed attempts also counts). `run(argv)` returns an
+    object with .returncode/.stderr (text). Returns None on success, else a
+    failure detail."""
+    uid = os.getuid()
+    err = ""
+    for _ in range(3):
+        r = run(["launchctl", "bootstrap", f"gui/{uid}", plist])
+        if r.returncode == 0:
+            err = ""
+            break
+        err = (r.stderr or "").strip()
+        time.sleep(1)
+    if run(["launchctl", "print", f"gui/{uid}/{label}"]).returncode == 0:
+        return None
+    return err or "bootstrap exited 0 but the label is not loaded"
