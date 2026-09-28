@@ -8,8 +8,9 @@ import notify_cards
 import notify_flush
 import notify_render
 from test_notify_cards import (
-    CFG, NOW, ORIGIN, _begin, _card, _dispatch, _intent, _latest_render,
-    _msg, _notif, _patient, _receipt, _signal_row, _token_for, led,
+    CFG, NOW, ORIGIN, _begin, _card, _dispatch, _extract, _intent,
+    _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
+    _signal_row, _token_for, led,
 )
 
 __all__ = ["led"]  # shared isolated-ledger fixture
@@ -39,6 +40,21 @@ def test_thread_manifest_cannot_read_another_patient(led):
     before = notify_render._source_fp(led.db, card)
     led.db.execute("UPDATE messages SET content_hash='foreign-edit' WHERE message_id=200")
     assert notify_render._source_fp(led.db, card) == before
+
+
+def test_late_extract_landing_bumps_thread_source_fp(led):
+    """extract_llm lands behind the card (drain queue); the source fp
+    must carry fact-readiness or a card rendered early would keep its
+    v1-only 構造化 block forever. A stale-hash extraction does not
+    count as ready — latest_fact_artifact would reject it too."""
+    _seed_thread(led)
+    card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
+    before = notify_render._source_fp(led.db, card)
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]},
+             kind="extract_llm", stale=True)
+    assert notify_render._source_fp(led.db, card) == before
+    _extract(led, 100, {"v": 1, "symptoms": ["疼痛"]}, kind="extract_llm")
+    assert notify_render._source_fp(led.db, card) != before
 
 
 def test_dispatch_does_not_follow_foreign_parent_or_event_member(led):
