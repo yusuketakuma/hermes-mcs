@@ -115,6 +115,7 @@ CONFIG_RULES = {
     "semantic":              (False, _dict),
     "update":                (False, _dict),
     "local_llm":             (False, _dict),
+    "health":                (False, _dict),
 }
 
 
@@ -202,6 +203,27 @@ def _validate_update(upd: dict) -> list[str]:
     return errors
 
 
+def _validate_health(h: dict) -> list[str]:
+    """Subkey checks for the health block consumed by health_watch:
+    tick_interval_s is the producer's check cadence, max_missed_runs
+    the missed-tick grace window before staleness is declared (the
+    schedule-based deadline requires an int in [0,100]), night_thinning
+    the optional day/night schedule switch."""
+    errors = []
+    if "tick_interval_s" in h:
+        v = h["tick_interval_s"]
+        if type(v) not in (int, float) or not 0 < v <= 86400:
+            errors.append("health.tick_interval_s: must be a finite "
+                          "number in (0,86400]")
+    if "max_missed_runs" in h:
+        err = _int_range(0, 100)(h["max_missed_runs"])
+        if err:
+            errors.append(f"health.max_missed_runs: {err}")
+    if "night_thinning" in h and type(h["night_thinning"]) is not bool:
+        errors.append("health.night_thinning: must be a boolean")
+    return errors
+
+
 def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     """(errors, warnings) for config.json — typesafe required
     conditions. Unknown keys warn (forward-compat) but never fail."""
@@ -261,6 +283,8 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
             errors.append(f"semantic: validator failed ({type(e).__name__})")
     if isinstance(cfg.get("update"), dict):
         errors.extend(_validate_update(cfg["update"]))
+    if isinstance(cfg.get("health"), dict):
+        errors.extend(_validate_health(cfg["health"]))
     return errors, warnings
 
 
