@@ -99,3 +99,21 @@ def test_denominators_and_leading_decimal_are_not_discarded():
     for text in ('300mg/錠', '.5mg'):
         assert not claim_quantity_findings(
             {'text': text, 'fact_refs': [0]}, [_fact(text)])
+
+
+def test_unit_must_end_at_a_boundary():
+    """U07-F03: 20Gy or 5gtt is not a gram amount — the recognised unit
+    must end at a letter boundary, so such tokens stay unrecognised and
+    a gram claim cannot be matched against them."""
+    assert not any(q.get("recognized") and q.get("unit") == "g"
+                   for q in extract_quantities("20Gy照射"))
+    assert not any(q.get("recognized") and q.get("unit") == "g"
+                   for q in extract_quantities("点眼5gtt"))
+    for claim_text, quote in (("20g投与", "20Gy照射"), ("5g", "点眼5gtt")):
+        claim = {"claim_id": "c", "text": claim_text, "fact_refs": [0]}
+        assert claim_quantity_findings(claim, [_fact(quote)]), claim_text
+    # ordinary units are unaffected
+    assert any(q.get("unit") == "mg" and q.get("value") == "300"
+               for q in extract_quantities("カロナール300mgを1日3回"))
+    assert any(q.get("unit") == "g/日" and q.get("value") == "1"
+               for q in extract_quantities("1g/日で開始"))

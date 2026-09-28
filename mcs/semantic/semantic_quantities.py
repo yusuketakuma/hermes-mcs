@@ -19,6 +19,8 @@ _AMOUNT_RE = re.compile(
     r"(?<![0-9A-Za-z_.,+\-−＋])"
     r"(?P<value>(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\s*"
     r"(?P<unit>(?:mg\s*/\s*mL|μg|µg|ug|mcg|mg|mL|g|%)(?:\s*/\s*(?:日|回|錠|包))?)"
+    # The unit must end here: 20Gy or 5gtt is not 20 g / 5 g.
+    r"(?![A-Za-zμµ])"
     # Do not truncate an unknown compound unit such as mg/kg to a bare mg.
     r"(?!\s*[／/]\s*[0-9]*[A-Za-zμµ一-龥々ヶ]+)",
     re.IGNORECASE,
@@ -40,7 +42,7 @@ _COUNT_RE = re.compile(
 )
 _DAY_AMOUNT_SCOPE_RE = re.compile(
     r"(?P<days>[0-9]+)\s*日\s*(?=[0-9]+(?:\.[0-9]+)?\s*"
-    r"(?:mg\s*/\s*mL|mg／mL|μg|µg|ug|mcg|mg|mL|g|%))",
+    r"(?:mg\s*/\s*mL|mg／mL|μg|µg|ug|mcg|mg|mL|g|%)(?![A-Za-zμµ]))",
     re.IGNORECASE,
 )
 
