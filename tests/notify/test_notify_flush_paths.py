@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import notify_flush
 import structured_view
 from ingest_testkit import _ledger, _message, _unread_patient
+from ledger import Ledger
 
 
 def test_attachment_collection_has_cumulative_real_size_limit(tmp_path, monkeypatch):
@@ -445,5 +447,84 @@ def test_null_posted_at_does_not_sink_text_notice(tmp_path, monkeypatch):
     try:
         text, _ = notify_flush._format_event(db, _event(db, [1, 2, 3, 4]))
         assert "新着 4 件" in text and "— ?" in text
+    finally:
+        db.close()
+
+
+_CARD_CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
+                       "discord": {"profile": "mcs", "application_id": "a",
+                                   "guild_id": "g", "channel_id": "c"}}}
+
+
+def _seed_card_patients(db, n):
+    for i in range(n):
+        db.db.execute(
+            "INSERT INTO patients(project_id,patient_name,is_archived)"
+            " VALUES(?,?,0)", (1 + i, f"合成患者{i}"))
+        db.db.execute(
+            "INSERT INTO messages(message_id,project_id,sender_name,"
+            "posted_at,posted_at_ts,body_text,content_hash,body_state)"
+            " VALUES(?,?,'職員','2026-09-24T08:00',1790000000,'本文',?,"
+            "'full')", (100 + i, 1 + i, f"{i:064x}"))
+    db.db.commit()
+
+
+def test_resealed_pending_intents_do_not_starve_text_events(tmp_path,
+                                                            monkeypatch):
+    """U03-F01: sealed intents whose cards stay undelivered past RESEAT_S
+    must be re-seated on re-entry, not stay due forever and fill every
+    outbox_due slot ahead of a later text event."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
+    monkeypatch.setattr(notify_flush, "_target", lambda *args: "synthetic")
+    monkeypatch.setattr(notify_flush, "_send_argv", lambda *args: ["hermes"])
+    monkeypatch.setattr(notify_flush, "_format_event",
+                        lambda *args: ("synthetic", []))
+    monkeypatch.setattr(notify_flush, "_semantic_render_state", lambda *args: ())
+    sent = []
+    monkeypatch.setattr(notify_flush, "_send",
+                        lambda *args, **kwargs: sent.append(1))
+    try:
+        _seed_card_patients(db, 10)
+        for i in range(10):
+            db.outbox_add("new_messages", 1 + i, {"message_ids": [100 + i]})
+        assert notify_flush.flush(db, limit=10).get("dispatched") == 10
+        # an hour on, the cards are still undelivered (worker down)
+        db.db.execute("UPDATE notify_outbox SET next_try=? "
+                      "WHERE route='interactive'", (time.time() - 1,))
+        db.db.commit()
+        eid = db.outbox_add("run_failed", None, {"run_id": 1})
+        notify_flush.flush(db, limit=10)       # re-entry re-seats them
+        notify_flush.flush(db, limit=10)
+        row = db.db.execute("SELECT state FROM notify_outbox "
+                            "WHERE event_id=?", (eid,)).fetchone()
+        assert row["state"] == "accepted" and sent
+        pending = db.db.execute(
+            "SELECT next_try FROM notify_outbox WHERE route='interactive'"
+        ).fetchall()
+        assert len(pending) == 10
+        assert all(r["next_try"] > time.time() for r in pending)
+    finally:
+        db.close()
+
+
+def test_invalid_interactive_payload_is_held_not_retried(tmp_path,
+                                                        monkeypatch):
+    """U03-F07: a non-dict frozen payload is quarantined by dispatch; the
+    flush must not re-arm it with an hourly retry forever."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
+    try:
+        _seed_card_patients(db, 1)
+        eid = db.outbox_add("new_messages", 1, {"message_ids": [100]})
+        db.db.execute("UPDATE notify_outbox SET payload='[]' "
+                      "WHERE event_id=?", (eid,))
+        db.db.commit()
+        assert notify_flush.flush(db)["failed"] == 1
+        row = db.db.execute("SELECT state,next_try FROM notify_outbox "
+                            "WHERE event_id=?", (eid,)).fetchone()
+        assert row["state"] == "failed" and row["next_try"] is None
     finally:
         db.close()

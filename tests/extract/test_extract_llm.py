@@ -1,9 +1,10 @@
-"""extract_llm v2 schema + lazy-replace migration tests.
+"""extract_llm tests (current v4 engine, mcs/extract/v4/extract_llm.py).
 
-Covers: strict validation of the new polarity/status/evidence fields,
-write-side version currency (v1 rows stay readable until a v2 row
-atomically replaces them), and the consumer filters that keep negated /
-other-person / historical mentions out of "current" surfaces.
+Covers: strict output validation (polarity/status/evidence fields),
+lazy replacement of older-version rows, backoff and claims, thread
+context, schema probing, chunked/batch/parallel extraction, and the
+consumer filters that keep negated / other-person / historical mentions
+out of "current" surfaces.
 """
 import json
 import sys

@@ -17,9 +17,9 @@ from hermes_plugin.mcs_delivery.registry import Registry
 from hermes_plugin.mcs_delivery import paths
 from hermes_plugin.mcs_discord import cards
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
-from test_mcs_discord_delivery import (BOT_USER, SETTINGS, FakeHTTP, _chunks,
-                                       _claim, _receipts, _sent_parts, _spec,
-                                       _state)
+from test_mcs_discord_delivery import (BOT_USER, SETTINGS, FakeHTTP,
+                                       FakeHTTPClient, _chunks, _claim,
+                                       _receipts, _sent_parts, _spec, _state)
 
 _discord = types.ModuleType("discord")          # send_attachment's File
 _discord.File = lambda path, filename=None: (path, filename)
@@ -31,11 +31,6 @@ SUPPRESSED = "discordretrysuppressed"           # worker.err_code of the guard
 def synthetic_discord_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, "discord", _discord)
     monkeypatch.setattr(cards, "build_view", lambda spec: "view")
-
-
-def _ua(version):
-    return (f"DiscordBot (https://github.com/Rapptz/discord.py {version})"
-            " Python/3.11 aiohttp/3.14.3")
 
 
 class _Resp:
@@ -82,8 +77,9 @@ class HTTPClient:
     """discord.py 2.7.1 HTTPClient.request retry loop, reduced to the
     branches that re-POST (http.py:646-786)."""
 
-    def __init__(self, session, version="2.7.1"):
-        self.user_agent = _ua(version)
+    user_agent = FakeHTTPClient.user_agent      # verified 2.7.1 shape
+
+    def __init__(self, session):
         self.__session = session            # -> _HTTPClient__session
 
     async def rate_limit_backoff(self):     # asyncio.sleep(retry_after)
@@ -146,9 +142,9 @@ class WireChannel:
 
 
 class WireBot:
-    def __init__(self, faults=(), version="2.7.1"):
+    def __init__(self, faults=()):
         self.wire = Wire(faults)
-        self.http = HTTPClient(self.wire, version)
+        self.http = HTTPClient(self.wire)
         self.user = BOT_USER
         self.channel = WireChannel(self)
         self.threads = {}
@@ -251,7 +247,8 @@ def _no_http(bot):
 
 
 @pytest.mark.parametrize("break_sdk", [
-    lambda bot: setattr(bot.http, "user_agent", _ua("2.7.2")),
+    lambda bot: setattr(bot.http, "user_agent",
+                        FakeHTTPClient.user_agent.replace("2.7.1", "2.7.2")),
     _no_session, _no_http,
 ], ids=["version_mismatch", "missing_private_session", "missing_http"])
 def test_unverified_retry_policy_fails_closed(tmp_path, break_sdk):
