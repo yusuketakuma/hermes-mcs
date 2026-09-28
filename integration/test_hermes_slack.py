@@ -213,7 +213,7 @@ def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, mo
         return {"data": data, "headers": {}, "status_code": 200}
 
     monkeypatch.setattr(async_base_client, "_request_with_session", fake_http)
-    client = AsyncWebClient(token="xoxb-synthetic")
+    client = AsyncWebClient(token="bot-synthetic")
     original_handlers = client.retry_handlers
     assert original_handlers
     native_adapter = object.__new__(SlackAdapter)
@@ -300,7 +300,7 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
         return {"data": data, "headers": {}, "status_code": 200}
 
     monkeypatch.setattr(async_base_client, "_request_with_session", fake_http)
-    client = AsyncWebClient(token="xoxb-synthetic")
+    client = AsyncWebClient(token="bot-synthetic")
     native_adapter = object.__new__(SlackAdapter)
     native_adapter._team_clients = {"T_SYNTHETIC": client}
     native_adapter._channel_team = {}

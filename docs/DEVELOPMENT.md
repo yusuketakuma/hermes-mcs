@@ -178,12 +178,12 @@ $PY mcs/ingest/init_data.py --project <id>       # 患者個別
 - `artifacts` テーブル: `artifact_add(kind, ...)` / `artifacts(kind, ...)` —
   LLM 要約・トリアージ・タグ・エクスポート等の派生データ格納用
 - `posted_at_ts` (epoch) で範囲クエリがインデックス済み
-- `extract.py` — ルールベース構造化 (kind='extract_v1'): events/visit_date/
+- `extract.py` (`extract/v1/`) — ルールベース構造化 (kind='extract_v1'): events/visit_date/
   next_planned/med_periods/medications/rx_actions/vitals/symptoms/
   adherence_flags/requests/actors/soap/urgency をJSON化。run_check が毎回
-  差分抽出 (`run_pending`) — 即時解析のスピードレーン。同じ出力は v3
-  パスのヒント入力にもなり、semantic 抽出の決定的ヒントにも使われる
-- `extract_llm.py` — ローカルLLM (Qwen3.5-9B @ llama.cpp :8080) による
+  差分抽出 (`run_pending`) — 即時解析のスピードレーン。同じ出力は v4
+  LLM パスのヒント入力にもなり、semantic 抽出の決定的ヒントにも使われる
+- `extract_llm.py` (`extract/v4/`) — ローカルLLM (Qwen3.5-9B @ llama.cpp :8080) による
   高度抽出 (kind='extract_llm'): 用量なし薬剤名・否定極性・依頼宛先・
   50字要約・要点points。ルール抽出結果を候補としてプロンプト注入し、
   同パスで extract_v1 artifact も保証（v1+v2 兼務）。schema検証済み

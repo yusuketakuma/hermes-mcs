@@ -1079,7 +1079,7 @@ def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):
     sets = _plugin_env(
         monkeypatch,
         existing={"SLACK_APP_TOKEN": "xapp-already"})
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-tok")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "bot-tok")
     cfg = {"notify": {"interactive": "slack", "slack": {
         "profile": "ops", "application_id": "A1",
         "team_id": "T1", "channel_id": "C1"}}}
@@ -1099,7 +1099,7 @@ def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):
     assert ("ops",
             f"{mcs_setup.PLUGIN_SETTINGS}.slack_allowed_user_ids",
             '["U1", "U2"]') in sets
-    assert ("ops", "SLACK_BOT_TOKEN", "xoxb-tok") in sets
+    assert ("ops", "SLACK_BOT_TOKEN", "bot-tok") in sets
     # already-configured token is left alone; discord-only scope keys
     # (guild_id / bare allowed_*_ids) are never written for slack
     assert all(k != "SLACK_APP_TOKEN" for _, k, _ in sets)
