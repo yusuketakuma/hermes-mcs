@@ -52,6 +52,12 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
         outputs = _dict(record.get("outputs"), "outputs")
         if set(outputs) != set(METHODS):
             raise EvaluationError("three_methods_required")
+        # predictions show only where a candidate is frozen — a subset
+        # would tell reviewers which label is which method family
+        carried = {"evaluation_candidate" in _dict(outputs[m], "output")
+                   for m in METHODS}
+        if len(carried) > 1:
+            raise EvaluationError("evaluation_candidate_partial")
         methods = list(METHODS)
         random.SystemRandom().shuffle(methods)
         review_id = uuid.uuid4().hex
