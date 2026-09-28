@@ -171,7 +171,7 @@ def reproject_doc(ledger, mid: int, meta: dict):
     selects it (the newest ``semantic_facts_v2`` row of the generation's
     fingerprint) and accepted only when it is still the document the row
     binds (``doc_hash``), its coverage is complete, and the stored fact
-    audit of that generation PASSed it."""
+    audit of that generation PASSed it (``fact_audit_verdict``)."""
     from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2
     from semantic_store import _current
     fp, policy = meta.get("fingerprint"), meta.get("policy_fingerprint")
@@ -190,10 +190,8 @@ def reproject_doc(ledger, mid: int, meta: dict):
     if not isinstance(doc.get("coverage"), dict) \
             or doc["coverage"].get("status") != "complete":
         return None, "coverage_incomplete"
-    audit = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
-    if audit is None or audit["meta"].get("doc_hash") != doc_hash \
-            or not audit["content"].get("evaluated") \
-            or audit["content"].get("status") != "PASS":
+    if fact_audit_verdict(_current(ledger, KIND_FACT_AUDIT, mid, fp, policy),
+                          doc_hash) != "PASS":
         return None, "audit_not_pass"
     return doc, None
 
@@ -280,6 +278,27 @@ def reproject_stale(ledger, scfg: dict,
 def _doc_hash(v2_doc: dict) -> str:
     from mcs_requests import payload_hash
     return payload_hash({"f": v2_doc["facts"], "e": v2_doc["evidence"]})
+
+
+def fact_audit_verdict(audit, doc_hash: str) -> str | None:
+    """Completed fact-audit status for the v2 document ``doc_hash``, or
+    None when it has none. ``audit`` is the generation's NEWEST
+    ``semantic_facts_audit`` row for the policy (``semantic_store.
+    _current(..., KIND_FACT_AUDIT, mid, fp, policy)``), exactly the row
+    the drain reuses (C04) — never an older one: a newer row bound to
+    another document or recording an unevaluated run (``evaluated``
+    not ``True``) means the document is not audited as it stands, and
+    the drain re-audits it rather than resurrecting an earlier verdict.
+    The drain never appends an audit after a completed one for the same
+    document, so in its own ledger the newest row is the only verdict.
+    ``content.status`` is the verdict the drain acted on
+    (``meta.audit_status`` is its denormalized copy for status reads).
+    Shared by the drain's reuse check, the re-projection gate and the
+    evaluation lifecycle's ``verified`` stage."""
+    if audit is None or audit["meta"].get("doc_hash") != doc_hash \
+            or audit["content"].get("evaluated") is not True:
+        return None
+    return audit["content"].get("status")
 
 
 def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
