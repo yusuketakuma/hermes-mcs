@@ -1448,12 +1448,27 @@ def test_tick_waits_for_a_run_lock_released_between_batches(
         tmp_path, monkeypatch):
     """The nightly drain releases run.lock between batches — a tick
     must win it within its wait budget instead of exiting on one try."""
-    import threading
-    data = _point_run_check_at(tmp_path, monkeypatch)
-    held = run_check.acquire_run_lock(str(data / "run.lock"))
-    threading.Timer(0.5, os.close, (held,)).start()
+    _point_run_check_at(tmp_path, monkeypatch)
+    fake_fd = os.open(str(tmp_path / "fake_lock"), os.O_CREAT | os.O_RDWR)
+    attempts = 0
+    clock = 0.0
+
+    def acquire_after_retries(path):
+        nonlocal attempts
+        attempts += 1
+        return None if attempts < 4 else fake_fd
+
+    def advance_clock(seconds):
+        nonlocal clock
+        clock += seconds
+
+    monkeypatch.setattr(run_check, "acquire_run_lock", acquire_after_retries)
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock)
+    monkeypatch.setattr(run_check.time, "sleep", advance_clock)
     fd = run_check._wait_run_lock(5)
     assert fd is not None
+    assert fd == fake_fd
+    assert attempts == 4
     os.close(fd)
 
 
