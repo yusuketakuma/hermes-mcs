@@ -41,6 +41,12 @@ class _Jev:
             if key == "source_fact_coverage":
                 answers[key] = {"choice": self.coverage,
                                 "confidence": 0.95}
+            elif key.startswith("has_"):
+                # category preflight: the synthetic corpus only mentions
+                # a medication, so its obligations close cleanly
+                answers[key] = {"choice": "present"
+                                if key == "has_medication" else "absent",
+                                "confidence": 0.95}
             else:
                 choice = self.verdicts.get(key, "supports")
                 answers[key] = {"choice": choice, "confidence": 0.95}
@@ -133,6 +139,18 @@ def test_shadow_e2e_runs_all_stages():
     assert case["stages"]["audit"] == "PASS"
     assert "facts" in case["stages"]["render"]
     assert report["complete"] == 1
+
+
+def test_shadow_e2e_incomplete_coverage_never_counts_as_passed():
+    """U06-F05: a doc whose coverage stays incomplete (ambiguous
+    category presence) must not count as a passed shadow case — the
+    evaluator is no more lenient than the drain gate."""
+    llm = _llm(GOOD_FACTS, presence={"medication": "ambiguous"})
+    report = seval.run_shadow_e2e([{"id": "c1", "body": BODY}], llm, _Jev())
+    case = report["per_case"][0]
+    assert report["complete"] == 0
+    assert not case["passed"]
+    assert case["stages"]["audit"] == "NEEDS_REVIEW"
 
 
 def test_shadow_e2e_repair_stage_visible():

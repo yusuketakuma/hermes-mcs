@@ -296,6 +296,13 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
     if unverified:
         findings.append({"code": "unverified_facts",
                          "count": len(unverified)})
+    coverage_doc = doc.get("coverage")
+    if not isinstance(coverage_doc, dict) \
+            or coverage_doc.get("status") != "complete":
+        # open obligations (e.g. reopened by a repair that dropped the
+        # facts covering them) are a deterministic blocker: the audited
+        # facts may all be supported, yet the doc is not complete
+        findings.append({"code": "canonical_coverage_incomplete"})
     if jev_client is None:
         findings.append({"code": "fact_audit_unevaluated"})
         return {"status": "INCOMPLETE", "evaluated": False,

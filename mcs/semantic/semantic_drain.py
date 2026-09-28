@@ -151,6 +151,23 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
               "claim_audit": r["summary"].get("_claim_audit") or {}})
 
 
+def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
+                       findings: list) -> dict:
+    """Terminal NEEDS_REVIEW for a canonical generation: a durable audit
+    receipt carrying the (code-only) findings, then ``hard_fail`` so the
+    job stops for human review instead of deferring or publishing."""
+    ledger.artifact_add(
+        KIND_AUDIT,
+        json.dumps({"status": "NEEDS_REVIEW", "findings": findings,
+                    "target_message_id": mid}, ensure_ascii=False),
+        project_id=pid, message_id=mid,
+        meta={"fingerprint": fp, "policy_fingerprint": policy,
+              "audit_status": "NEEDS_REVIEW",
+              "technical_status": "needs_review"})
+    return {"outcome": "hard_fail", "v2_doc": v2_doc,
+            "findings": findings}
+
+
 def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 jev_client, llm_fn, deadline):
     """Fact stage for one bundle member.
@@ -248,16 +265,9 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         if fact_source == "canonical" and v2_doc is not None \
                 and v2_doc["coverage"]["status"] != "complete":
             if coverage_retry or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
-                ledger.artifact_add(
-                    KIND_AUDIT,
-                    json.dumps({"status": "NEEDS_REVIEW", "findings": [
-                        {"code": "canonical_coverage_incomplete"}],
-                        "target_message_id": mid}),
-                    project_id=pid, message_id=mid,
-                    meta={"fingerprint": fp, "policy_fingerprint": policy,
-                          "audit_status": "NEEDS_REVIEW",
-                          "technical_status": "needs_review"})
-                return {"outcome": "hard_fail", "v2_doc": v2_doc}
+                return _park_needs_review(
+                    ledger, pid, mid, fp, policy, v2_doc,
+                    [{"code": "canonical_coverage_incomplete"}])
             return {"outcome": "incomplete", "v2_doc": v2_doc}
     if fact_source == "canonical":
         fail_kind = "incomplete"
@@ -320,6 +330,12 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     fail_kind = "retryable"
                 break
             if fact_audit["status"] == "PASS":
+                if v2_doc["coverage"]["status"] != "complete":
+                    # defense in depth: never mint PASS over open
+                    # obligations, whatever the audit said
+                    return _park_needs_review(
+                        ledger, pid, mid, fp, policy, v2_doc,
+                        [{"code": "canonical_coverage_incomplete"}])
                 audited = True
                 break
             # NEEDS_REVIEW: one targeted repair dispatch per
@@ -331,7 +347,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     and _current(ledger, KIND_FACT_REPAIR,
                                  mid, fp) is None:
                 if time.monotonic() > deadline - 5:
-                    break
+                    break      # repair still possible next pass
                 # S3 (T18): reserve the single repair dispatch BEFORE
                 # the model call — a crash leaves the 'started'
                 # receipt, which permanently consumes this generation's
@@ -388,8 +404,23 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                               "coverage_status":
                                   v2_doc["coverage"]["status"],
                               "facts": len(v2_doc["facts"])})
+                    # the repair drops every rejected fact and reopens
+                    # the obligations they covered — a repaired doc with
+                    # open obligations must never reach PASS (rollout
+                    # "Nothing degrades to PASS"); the one repair is
+                    # spent, so the generation parks for review
+                    if v2_doc["coverage"]["status"] != "complete":
+                        return _park_needs_review(
+                            ledger, pid, mid, fp, policy, v2_doc,
+                            [{"code": "canonical_coverage_incomplete"}])
                     continue
-            break
+            # an evaluated NEEDS_REVIEW with no repair left (no per-fact
+            # finding to repair, repair already spent, or still failing
+            # after it) is a clinical verdict, not a technical wait —
+            # park it for review instead of deferring forever
+            return _park_needs_review(
+                ledger, pid, mid, fp, policy, v2_doc,
+                fact_audit["findings"])
         if not audited:
             return {"outcome": fail_kind, "v2_doc": v2_doc}
         facts = project_v2_facts(v2_doc)
@@ -658,7 +689,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     ledger, pid, mid, fp, policy,
                     "NEEDS_REVIEW" if stage["outcome"] == "hard_fail"
                     else "PENDING",
-                    [{"code": f"fact_stage_{stage['outcome']}"}],
+                    [{"code": f"fact_stage_{stage['outcome']}"}]
+                    + list(stage.get("findings") or []),
                     doc_hash=(v4._doc_hash(doc) if doc else None))
             if stage["outcome"] == "retryable":
                 retryable_failure = True
