@@ -1634,3 +1634,42 @@ def test_stale_transport_scope_warns(monkeypatch):
                                "guild_id": "g", "channel_id": "c"}}})
     assert any("notify.discord" in w and "ignored" in w
                for w in warnings)
+
+
+@pytest.mark.parametrize("outcomes,late,ok,boots", [
+    ([5, 0], False, True, 2),
+    ([5, 5, 5], True, True, 3),
+    ([5, 5, 5], False, False, 3),
+])
+def test_agent_reconcile_retries_transient_bootstrap(
+        monkeypatch, outcomes, late, ok, boots):
+    import subprocess
+    from types import SimpleNamespace
+    state = {"loaded": True, "calls": [], "outcomes": list(outcomes)}
+
+    def fake_run(argv, **kwargs):
+        verb = argv[1]
+        state["calls"].append(verb)
+        rc = 0
+        if verb == "bootout":
+            state["loaded"] = False
+        elif verb == "bootstrap":
+            rc = state["outcomes"].pop(0)
+            if rc == 0 or (late and not state["outcomes"]):
+                state["loaded"] = True
+        elif verb == "print":
+            rc = 0 if state["loaded"] else 113
+        return subprocess.CompletedProcess(
+            argv, rc, "success", "" if rc == 0 else "5: Input/output error")
+
+    sleeps, notes = [], []
+    monkeypatch.setattr(mcs_setup, "_run", fake_run)
+    monkeypatch.setattr(mcs_setup, "time",
+                        SimpleNamespace(time=mcs_setup.time.time,
+                                        sleep=sleeps.append))
+    assert mcs_setup._agent_reconcile("ai.mcs.x", "/p.plist",
+                                      notes.append, False) is ok
+    assert state["calls"][:2] == ["print", "bootout"]
+    assert state["calls"].count("bootstrap") == boots
+    assert sleeps == [1] * (boots if not ok or late else boots - 1)
+    assert any("bootstrap failed" in n for n in notes) is (not ok)

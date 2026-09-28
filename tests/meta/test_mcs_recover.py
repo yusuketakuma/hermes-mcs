@@ -728,3 +728,58 @@ def test_hung_launchctl_is_reported_not_raised(rec, monkeypatch, tmp_path):
     clock = iter(range(0, 10_000, 20))
     monkeypatch.setattr(rec.time, "time", lambda: next(clock))
     assert rec._restart_drainers() == ["ai.mcs.extract-drainer"]
+
+
+class _FakeLaunchd:
+    """launchctl stub: bootstrap exit codes come from `outcomes`; a
+    successful bootstrap (or `late_load`) marks the label loaded."""
+
+    def __init__(self, outcomes, late_load=False):
+        self.outcomes = list(outcomes)
+        self.late_load = late_load
+        self.loaded = False
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb = argv[1]
+        self.calls.append(verb)
+        rc, out, err = 0, "", ""
+        if verb == "bootout":
+            self.loaded = False
+        elif verb == "bootstrap":
+            rc = self.outcomes.pop(0)
+            if rc == 0:
+                self.loaded = True
+            else:
+                err = "Bootstrap failed: 5: Input/output error"
+                out = "success"          # misleading output is ignored
+                if not self.outcomes and self.late_load:
+                    self.loaded = True
+        elif verb == "print":
+            rc = 0 if self.loaded else 113
+            out = "\tpid = 4242\n" if self.loaded else ""
+        return subprocess.CompletedProcess(argv, rc, out, err)
+
+
+@pytest.mark.parametrize("outcomes,late,problems,boots", [
+    ([5, 0], False, [], 2),
+    ([5, 5, 5], True, [], 3),
+    ([5, 5, 5], False, ["ai.mcs.x"], 3),
+])
+def test_restart_drainers_retries_transient_bootstrap(
+        rec, tmp_path, monkeypatch, outcomes, late, problems, boots):
+    from types import SimpleNamespace
+    fake = _FakeLaunchd(outcomes, late_load=late)
+    sleeps = []
+    clock = iter(range(0, 10 ** 6, 5))
+    monkeypatch.setattr(rec.subprocess, "run", fake)
+    monkeypatch.setattr(rec, "time", SimpleNamespace(
+        time=lambda: next(clock), sleep=sleeps.append))
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "ai.mcs.x.plist").write_text("<plist/>")
+    monkeypatch.setattr(rec, "RESIDENT_LABELS", ("ai.mcs.x",))
+    assert rec._restart_drainers() == problems
+    assert fake.calls[0] == "bootout"
+    assert fake.calls.count("bootstrap") == boots
+    assert sleeps.count(1) == boots - (not problems and not late)
