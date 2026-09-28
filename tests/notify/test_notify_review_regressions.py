@@ -1,7 +1,7 @@
 import json
 import notify_cards
 import notify_render
-from test_notify_cards import (led, _seed_thread, _extract, _dispatch, _intent, _card, _latest_render, _begin, _receipt, _notif, _token_for, CFG, NOW)
+from notify_testkit import (led, _seed_thread, _extract, _dispatch, _intent, _card, _latest_render, _begin, _receipt, _notif, _token_for, CFG, NOW)
 
 
 __all__ = ["led"]

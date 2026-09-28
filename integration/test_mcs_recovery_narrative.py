@@ -59,14 +59,14 @@ import semantic  # noqa: E402
 import semantic_facts as sf  # noqa: E402
 import semantic_v4 as v4  # noqa: E402
 
-import test_mcs_discord as TD  # noqa: E402
-import test_mcs_slack as TS  # noqa: E402
+import discord_testkit as TD  # noqa: E402
+import slack_testkit as TS  # noqa: E402
+from notify_testkit import _dispatch, _intent, _latest_render  # noqa: E402
+from ops_testkit import (_git, _make_repo, _mk_schema,  # noqa: E402
+                         _seed_consent)
 from semantic_testkit import (_canonical_cfg, _message, _PassJev,  # noqa: E402
                               _patient)
-from test_mcs_update import (_git, _make_repo, _mk_schema,  # noqa: E402
-                             _seed_consent)
-from test_notify_slack import (SLACK, _dispatch, _intent,  # noqa: E402
-                              _latest_render)
+from slack_testkit import SLACK  # noqa: E402
 
 NO_FACTS = {c: "none" for c in sf.MANDATORY_CATEGORIES}
 NOW = 1_790_000_000.0
@@ -496,9 +496,10 @@ def _run_narrative(tmp_path):
         # discord adapter claims its spec only when ITS transport is up
         notify_cards.publish_flags(TD.CFG, str(ddata))
         from hermes_plugin.mcs_delivery import registry as _reg_mod
+        from hermes_plugin.mcs_discord import delivery as _discord_delivery
         reg = _reg_mod.Registry(str(ddata / "discord_state"))
         bot = TD.FakeBot()
-        worker = TD.delivery.DeliveryWorker(
+        worker = _discord_delivery.DeliveryWorker(
             bot=bot, settings=TD.SETTINGS, root=str(ddata), reg=reg,
             worker_id=_reg_mod.new_worker_id(),
             log=lambda *_a, **_k: None)

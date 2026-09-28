@@ -13,6 +13,10 @@ import pytest
 from hermes_plugin.mcs_delivery import envelopes, journal, paths
 from hermes_plugin.mcs_delivery.registry import Registry, scope_key
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
+from discord_delivery_testkit import (
+    BOT_USER, DELIVERY_ID, SETTINGS, FakeHTTP, FakeHTTPClient, _chunks,
+    _claim, _receipts, _sent_parts, _spec, _state,
+)
 
 # cards.send_attachment lazy-imports the SDK inside the function —
 # a File shim is enough for the synthetic thread to record uploads
@@ -34,13 +38,6 @@ def synthetic_discord_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, "discord", _discord)
 
 
-class FakeHTTP(Exception):
-    def __init__(self, status):
-        super().__init__(f"http {status}")
-        self.status = status
-
-
-BOT_USER = types.SimpleNamespace(id=4242)
 FOREIGN_USER = types.SimpleNamespace(id=9999)
 
 
@@ -116,22 +113,6 @@ class FakeChannel:
         raise FakeHTTP(404)
 
 
-class _NoWireSession:
-    def request(self, *_a, **_kw):
-        raise AssertionError("fake channels never reach the session")
-
-
-class FakeHTTPClient:
-    """Verified-SDK shape the single-post guard checks before a create
-    POST; the fake channels above bypass the session entirely."""
-
-    user_agent = ("DiscordBot (https://github.com/Rapptz/discord.py 2.7.1)"
-                  " Python/3.11 aiohttp/3.14.3")
-
-    def __init__(self):
-        self._HTTPClient__session = _NoWireSession()
-
-
 class FakeBot:
     def __init__(self, channel_id=42):
         self.channels = {channel_id: FakeChannel(channel_id)}
@@ -153,63 +134,6 @@ class FakeBot:
         return ch
 
 
-SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
-            "guild_id": "7"}
-
-DELIVERY_ID = "00000000-0000-4000-8000-00000000d00d"
-
-
-def _chunks(n, size=1900):
-    return [f"chunk-{i} " + "x" * (size - 8) for i in range(n)]
-
-
-def _manifest(chunks, attachments=None, thread=True):
-    parts = [{"part_id": "card", "kind": "card", "index": 0}]
-    idx = 1
-    if thread:
-        parts.append({"part_id": "thread", "kind": "thread", "index": idx,
-                      "name": "テスト スレッド",
-                      "sha256": hashlib.sha256(
-                          "テスト スレッド".encode()).hexdigest()})
-        idx += 1
-    for i, c in enumerate(chunks):
-        parts.append({"part_id": f"body:{i + 1:04d}", "kind": "body_part",
-                      "index": idx, "sha256": hashlib.sha256(
-                          c.encode()).hexdigest(),
-                      "bytes": len(c.encode())})
-        idx += 1
-    for a in attachments or []:
-        parts.append(a)
-        idx += 1
-    return parts
-
-
-def _spec(chunks, manifest=None, op="create", thread_id=None):
-    manifest = _manifest(chunks) if manifest is None else manifest
-    delivery = {"route_epoch": 1, "correlation": "cd" * 16,
-                "profile": "mcs", "application_id": "1",
-                "channel_id": "42", "guild_id": "7",
-                "intent_event_ids": [1]}
-    if thread_id:
-        delivery["thread_id"] = thread_id
-    return {"schema": "mcs-card-render/v1",
-            "delivery_id": DELIVERY_ID,
-            "logical_intent_id": "v1|thread|1|100",
-            "card_key": "v1|thread|1|100", "kind": "thread", "op": op,
-            "render_rev": 1, "source_generation": 1,
-            "presentation_generation": 1, "ui_revision": 1,
-            "delivery": delivery,
-            "parts": {"containers": [{"type": "text", "text": "card"}],
-                      "footer": [], "action_rows": [],
-                      "thread_name": "テスト スレッド",
-                      "thread_body_parts": chunks,
-                      "manifest": manifest}}
-
-
-def _state(tmp_path):
-    return tmp_path / "discord_state"
-
-
 def _mkworker(tmp_path, bot=None, wid="w1"):
     for name in ("discord_render", "cmd_int", "cmd_results", "flags"):
         (tmp_path / name).mkdir(exist_ok=True)
@@ -228,32 +152,6 @@ def _mkworker(tmp_path, bot=None, wid="w1"):
                        reg=reg, worker_id=wid,
                        log=lambda *_a, **_k: None)
     return w, reg, bot
-
-
-def _claim(spec, message_id="9001"):
-    return {"attempt_id": "ab" * 8, "worker_id": "w1", "spec": spec,
-            "payload_hash": envelopes.payload_hash(spec),
-            "spec_path": "/tmp/x.json", "phase": "settled",
-            "message_id": message_id}
-
-
-def _sent_parts(state_dir, delivery_id=DELIVERY_ID):
-    """part_id -> journal 'result' rows across all worker journals."""
-    rec = journal.scan(str(state_dir))
-    out = {}
-    for rows in rec.values():
-        for r in rows:
-            if r.get("phase") == "result" \
-                    and r.get("delivery_id") == delivery_id \
-                    and r.get("part_id"):
-                out[r["part_id"]] = r
-    return out
-
-
-def _receipts(cmd_int):
-    from pathlib import Path
-    return [json.loads(p.read_text())
-            for p in sorted(Path(cmd_int).glob("*.json"))]
 
 
 def _journal_card_delivered(state_dir, message_id="9001"):

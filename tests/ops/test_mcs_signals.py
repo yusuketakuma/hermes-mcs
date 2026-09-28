@@ -9,9 +9,7 @@ import pytest
 
 import ledger as ledger_mod
 import mcs_signals
-
-NOW = 1789975073.0   # 2026-09-21 JST
-DAY = 86400
+from ops_testkit import DAY, NOW, _extract_v1, _msg
 
 
 @pytest.fixture
@@ -19,22 +17,6 @@ def led(tmp_path):
     lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
     yield lg
     lg.db.close()
-
-
-def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b",
-         prof="看護師", org="org", parent=None):
-    db.execute(
-        "INSERT INTO messages(message_id,project_id,parent_id,sender_id,"
-        "sender_name,sender_type,profession,organization,posted_at,"
-        "posted_at_ts,body_text,body_state,content_hash,reply_count,"
-        "is_unread,first_seen,updated_seen) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (mid, pid, parent, 1, "n", "staff", prof, org,
-         "2026-08-22T10:00:00+09:00", ts, body, "full", chash, 0, 0,
-         ts, ts))
-    db.execute(
-        "INSERT OR IGNORE INTO patients(project_id,is_archived,"
-        "created_at,last_seen) VALUES (?,0,?,?)", (pid, ts, ts))
 
 
 def _extract_llm(db, mid, chash, meds, events=None):
@@ -54,14 +36,6 @@ def _extract_doc(db, mid, chash, **fields):
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
         (mid, json.dumps(fields), json.dumps({"hash": chash})))
-
-
-def _extract_v1(db, mid, chash, periods):
-    db.execute(
-        "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES ('extract_v1',?,?,?)",
-        (mid, json.dumps({"med_periods": periods}),
-         json.dumps({"hash": chash})))
 
 
 def _req(db, status, due=None, src_mid=1, created=NOW):

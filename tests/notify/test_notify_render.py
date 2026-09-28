@@ -7,7 +7,7 @@ import pytest
 import notify_cards
 import notify_flush
 import notify_render
-from test_notify_cards import (
+from notify_testkit import (
     CFG, NOW, ORIGIN, _begin, _card, _dispatch, _extract, _intent,
     _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
     _signal_row, _token_for, led,

@@ -4,7 +4,7 @@ import pytest
 
 import ledger
 import notify_flush
-from test_notify_cards import (
+from notify_testkit import (
     CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
     _signal_row,
 )

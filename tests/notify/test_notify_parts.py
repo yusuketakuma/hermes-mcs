@@ -22,7 +22,7 @@ import ledger as _ledger
 import notify_cards
 import notify_render
 import notify_transport
-from test_notify_cards import (
+from notify_testkit import (
     CFG, NOW, SCOPE, _begin, _card, _dispatch, _intent, _latest_render,
     _msg, _receipt, _seed_thread, _uuid)
 
