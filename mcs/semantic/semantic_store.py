@@ -174,21 +174,51 @@ def invalidate_projections(ledger, scfg: dict) -> int:
     """Persist source/policy expiry for readers of the published snapshot."""
     from semantic_policy import policy_fingerprint
     policy = policy_fingerprint(scfg)
-    enabled = scfg.get("mode") != "off" and scfg.get("fact_source") == "canonical"
+    off = scfg.get("mode") == "off"
+    enabled = not off and scfg.get("fact_source") == "canonical"
     rows = ledger.db.execute("""
       SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
       WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
         AND json_valid(a.meta)
         AND json_type(a.meta)='object'
-        AND json_extract(a.meta,'$.invalidated') IS NOT 1
-    """).fetchall()
-    bundles, expired, projects = {}, [], set()
+        AND (COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
+             OR (? AND json_extract(a.meta,'$.invalidated')=1
+                 AND json_extract(a.meta,'$.invalidated_reason')='fact_source'))
+    """, (enabled or off,)).fetchall()
+    current_ids = set()
+    if enabled and any(json.loads(r["meta"]).get("invalidated") for r in rows):
+        from mcs_queries import current_projection_id, current_v4_id
+        # Evaluate the normal reader predicates against a prospective snapshot,
+        # without exposing any row before source/policy and PASS checks succeed.
+        current_ids = {r[0] for r in ledger.db.execute(f"""
+          WITH artifacts AS (
+            SELECT artifact_id,kind,project_id,message_id,content,
+                   CASE WHEN json_valid(meta) THEN
+                     CASE WHEN json_extract(meta,'$.invalidated')=1
+                           AND json_extract(meta,'$.invalidated_reason')='fact_source'
+                          THEN json_remove(meta,'$.invalidated')
+                          ELSE meta END
+                     ELSE meta END AS meta
+            FROM main.artifacts
+            WHERE kind IN ('canonical_projection','semantic_facts_v4')
+          )
+          SELECT a.artifact_id FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id AND m.project_id=a.project_id
+          WHERE m.body_state IS NOT 'deleted'
+            AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
+                THEN {current_projection_id()} ELSE {current_v4_id()} END
+        """)}
+    bundles, expired, revived, projects = {}, [], [], set()
     local_model = None
     for row in rows:
         meta = json.loads(row["meta"])
         key = (row["project_id"], row["parent_id"] or row["message_id"])
+        # OFF remains a permanent, config-read-free revocation. Unknown
+        # historical invalidations are excluded above and never acquire a reason.
+        reason = "off" if off else "fact_source" if not enabled else "policy"
         if enabled and meta.get("policy_fingerprint") == policy:
+            reason = "source"
             if key not in bundles:
                 if local_model is None:
                     # one config read per scan, not one per thread
@@ -198,14 +228,26 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                                        local_model=local_model)
                 bundles[key] = bundle["source_fingerprint"] if bundle else None
             if bundles[key] is not None and meta.get("fingerprint") == bundles[key]:
-                continue
-        expired.append((row["artifact_id"],))
+                if not meta.get("invalidated"):
+                    continue
+                if row["artifact_id"] in current_ids:
+                    from semantic_v4 import _reproject_doc
+                    doc, _ = _reproject_doc(ledger, row["message_id"], meta)
+                    if doc is not None:
+                        revived.append((row["artifact_id"],))
+                        projects.add(row["project_id"])
+                        continue
+        expired.append((reason, row["artifact_id"]))
         projects.add(row["project_id"])
-    if expired:
+    if expired or revived:
         with ledger.db:
             ledger.db.executemany(
-                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
+                "'$.invalidated_reason',?) "
                 "WHERE artifact_id=?", expired)
+            ledger.db.executemany(
+                "UPDATE artifacts SET meta=json_remove(meta,'$.invalidated',"
+                "'$.invalidated_reason') WHERE artifact_id=?", revived)
             ledger.db.executemany(
                 "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
                 [(pid,) for pid in projects])

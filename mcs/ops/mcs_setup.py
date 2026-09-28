@@ -1685,6 +1685,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
         return 1
     problems = 0
     mutated = False
+    created: list[str] = []
     # derive identities from the SAME verified list — a second
     # `cron list` call could fail transiently and return an
     # empty set that looks like 'no jobs' (fail-open, M1)
@@ -1728,6 +1729,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
                     continue
+                created.append(script)
             manifest["cron"].append(
                 {"name": name, "schedule": sched,
                  "script": script})
@@ -1766,10 +1768,14 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
     if mutated and not dry:
-        # a zero exit is not proof — confirm the converged state, else
-        # the manifest would record jobs that do not exist
-        # same tolerance as the pre-check: schedules are compared only
-        # when both sides parse — an undecodable display is not drift
+        # a zero exit is not proof — confirm desired jobs converged AND
+        # owned-but-undesired jobs are gone. A survivor keeps problems
+        # raised. No confirmed create: do not rewrite, so the previous
+        # file (which lists that script) stays. A create this run that
+        # `after` shows must be saved with the survivor, or the new job
+        # is unowned once it leaves the desired set. same tolerance as
+        # the pre-check: schedules are compared only when both sides
+        # parse — an undecodable display is not drift
         def _converged(sched, script):
             jobs = [e for e in after if e.get("script") == script]
             if len(jobs) != 1:
@@ -1783,6 +1789,42 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
             note("cron: post-change state unverifiable or not exactly one "
                  "job per script — re-run services")
             problems += 1
+        left: list[str] = []
+        for entry in after or []:
+            script = entry.get("script")
+            if isinstance(script, str) and script in owned_scripts \
+                    and script not in desired_scripts and script not in left:
+                left.append(script)
+        if left:
+            note("cron: undesired job still present after remove ("
+                 + ", ".join(left) + ")")
+            problems += 1
+        # any confirmed create stays owned whatever else failed (this
+        # stage or a later one) — else the job is orphaned once retired
+        if after is not None and created:
+            present = {e.get("script") for e in after}
+            confirmed = [s for s in created if s in present]
+            if confirmed:
+                manifest["cron"] = [
+                    c for c in manifest["cron"]
+                    if not (isinstance(c, dict)
+                            and c.get("script") in created
+                            and c.get("script") not in present)]
+                have = {c.get("script") for c in manifest["cron"]
+                        if isinstance(c, dict)}
+                for entry in after:
+                    script = entry.get("script")
+                    if (isinstance(script, str)
+                            and script in owned_scripts
+                            and script not in desired_scripts
+                            and script not in have):
+                        manifest["cron"].append({
+                            "name": entry.get("name"),
+                            "id": entry.get("id"),
+                            "schedule": entry.get("schedule"),
+                            "script": script})
+                        have.add(script)
+                manifest["_persist_cron_ownership"] = True
     return problems
 
 
@@ -1866,8 +1908,11 @@ def cmd_services(args) -> int:
         problems += _sync_gateway(cfg, hermes, note, dry)
 
     _record_llm_slots(manifest, note)
-    # manifest — the rollback snapshot's source of truth (R6)
-    if not dry and not problems:
+    # manifest — the rollback snapshot's source of truth (R6).
+    # A partial cron failure still persists verified creates plus
+    # surviving owned jobs; an unverified create does not set the flag.
+    persist_partial = bool(manifest.pop("_persist_cron_ownership", False))
+    if not dry and (not problems or persist_partial):
         try:
             _save_manifest(manifest)
             note(f"manifest: {MANIFEST_PATH}")

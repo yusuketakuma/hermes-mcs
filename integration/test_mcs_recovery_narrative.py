@@ -107,6 +107,7 @@ async def _td_thread_send(self, content=None, **kw):
 @pytest.fixture(autouse=True)
 def isolated_narrative_state(monkeypatch):
     """Keep SDK fakes and updater path stubs local to each test."""
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     monkeypatch.setitem(sys.modules, "discord", _td_mod)
     monkeypatch.setattr(TD.FakeThread, "__init__", _td_thread_init2)
     monkeypatch.setattr(TD.FakeThread, "send", _td_thread_send)

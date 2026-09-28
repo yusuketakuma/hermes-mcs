@@ -756,3 +756,160 @@ def test_run_due_reprojects_old_version_rows(tmp_path):
                        for r in _kind_rows(db, kind)[-2:])
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("fact_source", ["legacy", "shadow"])
+@pytest.mark.parametrize("change", [
+    "none", "context", "policy", "unknown", "superseded", "audit", "payload_error",
+])
+def test_run_due_switch_hides_then_revives_only_current_projections(
+        tmp_path, monkeypatch, fact_source, change):
+    import semantic
+    import semantic_v4 as v4
+    from test_canonical_drain import _canonical_cfg
+    from test_semantic_v4 import _PassJev
+
+    db = _drained_old_version(tmp_path)
+    try:
+        def read_current():
+            return [tuple(r) for r in db.db.execute(
+                "SELECT a.message_id,a.kind,a.artifact_id FROM artifacts a "
+                "JOIN messages m ON m.message_id=a.message_id "
+                "WHERE a.kind IN ('extract_llm','canonical_projection',"
+                "'semantic_facts_v4')" + current_fact_pred()
+                + " ORDER BY a.message_id")]
+
+        def no_processing(*args, **kwargs):
+            raise AssertionError("configuration switches must not reprocess")
+
+        def tick():
+            result = {"errors": []}
+            out = semantic.run_due(db, cfg, result, float("inf"),
+                                   llm_fn=no_processing, jev_client=_PassJev())
+            assert result["errors"] == []
+            assert out["done"] == out["failed"] == out["deferred"] == 0
+            return out
+
+        cfg = _canonical_cfg()
+        cfg["semantic"].update(mode="shadow", fact_source=fact_source)
+        kinds = ("canonical_projection", v4.KIND_V4)
+        old_ids = [r["artifact_id"] for kind in kinds
+                   for r in _kind_rows(db, kind, 1)]
+        for mid in (1, 2):
+            source_hash = db.db.execute(
+                "SELECT content_hash FROM messages WHERE message_id=?",
+                (mid,)).fetchone()[0]
+            db.artifact_add("extract_llm", "{}", project_id=1, message_id=mid,
+                            meta={"hash": source_hash})
+        if change == "unknown":
+            db.db.execute(
+                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',"
+                "json('true')) WHERE message_id=1 AND kind IN (?,?)", kinds)
+            db.db.commit()
+        elif change == "superseded":
+            for kind in kinds:
+                row = _kind_rows(db, kind, 1)[-1]
+                db.artifact_add(kind, row["content"], project_id=1, message_id=1,
+                                meta=json.loads(row["meta"]), model=row["model"])
+        monkeypatch.setattr(semantic, "_process_job", no_processing)
+        assert tick()["reproject"]["reprojected"] == 0
+        assert [(r[0], r[1]) for r in read_current()] == [
+            (1, "extract_llm"), (2, "extract_llm")]
+        hidden_count = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+        assert not db.artifacts("patient_rollup", project_id=1)
+
+        # Change the source/policy while canonical readers are disabled.
+        if change == "context":
+            db.db.execute(
+                "UPDATE messages SET body_text='changed synthetic context' "
+                "WHERE message_id=2")
+            db.db.commit()
+        elif change == "policy":
+            cfg["semantic"]["match_threshold"] = 0.99
+        elif change == "audit":
+            db.db.execute(
+                "UPDATE artifacts SET content=json_set(content,'$.status',"
+                "'NEEDS_REVIEW') WHERE message_id=1 "
+                "AND kind='semantic_facts_audit'")
+            db.db.commit()
+        elif change == "payload_error":
+            db.db.execute(
+                "UPDATE artifacts SET content=json_set(content,'$._error',"
+                "json('true')) WHERE message_id=1 AND kind IN (?,?)", kinds)
+            db.db.commit()
+        assert tick()["reproject"]["reprojected"] == 0
+        assert [(r[0], r[1]) for r in read_current()] == [
+            (1, "extract_llm"), (2, "extract_llm")]
+        if change != "policy":
+            assert db.db.execute(
+                "SELECT COUNT(*) FROM artifacts").fetchone()[0] == hidden_count
+
+        cfg["semantic"]["fact_source"] = "canonical"
+        out = tick()
+        revived_mids = ({1, 2} if change in ("none", "superseded") else
+                        set() if change in ("context", "policy") else {2})
+        current = read_current()
+        assert [(r[0], r[1]) for r in current] == [
+            (mid, v4.KIND_V4 if mid in revived_mids else "extract_llm")
+            for mid in (1, 2)]
+        assert out["reproject"]["reprojected"] == 2 * len(revived_mids)
+        for kind in kinds:
+            for row in _kind_rows(db, kind):
+                meta = json.loads(row["meta"])
+                rejected = row["message_id"] not in revived_mids or (
+                    change == "superseded" and row["artifact_id"] in old_ids)
+                assert bool(meta.get("invalidated")) == rejected
+                if not rejected:
+                    assert "invalidated_reason" not in meta
+                elif change == "unknown":
+                    assert "invalidated_reason" not in meta
+                else:
+                    assert meta["invalidated_reason"] == (
+                        "policy" if change == "policy" else "source")
+        after = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+        assert tick()["reproject"]["reprojected"] == 0
+        assert read_current() == current
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == after
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+@pytest.mark.parametrize("fact_source", ["canonical", "legacy", "shadow"])
+def test_invalidation_reads_model_config_once_per_active_scan(
+        tmp_path, monkeypatch, mode, fact_source):
+    import semantic
+    from semantic_store import invalidate_projections
+    from test_canonical_drain import _canonical_cfg
+
+    db = _seeded(tmp_path)
+    try:
+        scfg = semantic.semantic_config(_canonical_cfg())[0]
+        scfg.update(mode=mode, fact_source=fact_source)
+        # Two independent threads, with both published row kinds.
+        db.db.execute("UPDATE messages SET parent_id=NULL")
+        db.db.commit()
+        for mid in (1, 2):
+            bundle = semantic.thread_bundle(
+                db, 1, mid, local_model="synthetic-model")
+            source_hash = db.db.execute(
+                "SELECT content_hash FROM messages WHERE message_id=?",
+                (mid,)).fetchone()[0]
+            for kind in ("canonical_projection", "semantic_facts_v4"):
+                db.artifact_add(
+                    kind, "{}", project_id=1, message_id=mid,
+                    meta={"hash": source_hash,
+                          "fingerprint": bundle["source_fingerprint"],
+                          "policy_fingerprint": semantic.policy_fingerprint(scfg)})
+        reads = []
+
+        def model():
+            reads.append("read")
+            return "synthetic-model"
+
+        monkeypatch.setattr(semantic, "llm_model", model)
+        enabled = mode != "off" and fact_source == "canonical"
+        assert invalidate_projections(db, scfg) == (0 if enabled else 4)
+        assert len(reads) == (1 if enabled else 0)
+    finally:
+        db.close()

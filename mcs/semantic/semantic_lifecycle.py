@@ -149,27 +149,28 @@ def _chunk_bodies(chunks: list[str]) -> list[str] | None:
     return bodies
 
 
-def _accepted_prefix(row, count: int) -> int | None:
+def _accepted_prefix(row, count: int) -> tuple[int | None, str | None]:
     """Chunks proven accepted by the outbox receipt; None = unprovable."""
     raw = row["progress"]
     if not raw:
-        return None if row["state"] == "accepted" else 0
+        return (None, None) if row["state"] == "accepted" else (0, None)
     progress = _json_object(raw)
     if progress is None:
-        return None
+        return None, None
     nxt, sent = progress.get("next", 0), progress.get("sent", [])
     if (type(nxt) is not int or not 0 <= nxt <= count
             or not isinstance(sent, list) or len(sent) != nxt
             or sent != [str(i) for i in range(1, nxt + 1)]):
-        return None
+        return None, None
     if row["state"] == "accepted" and nxt != count:
-        return None
-    return nxt
+        return None, None
+    return nxt, progress.get("fingerprint")
 
 
 def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
-               rendered: list | None, lines: dict) -> tuple[list | None, str]:
-    from notify_flush import _semantic_chunks
+               rendered: list | None, lines: dict,
+               cfg: dict[str, str] | None = None) -> tuple[list | None, str]:
+    from notify_flush import _delivery_fingerprint, _semantic_chunks, _target
     if rendered is None:
         # nothing observed as rendered: a delivered fact ID could only be
         # read from the notice text itself, which is not the rendered stage
@@ -201,9 +202,16 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
         bodies = _chunk_bodies(chunks)
         if bodies is None:
             return None, "notice_unchunkable"
-        prefix = _accepted_prefix(row, len(chunks))
+        prefix, fingerprint = _accepted_prefix(row, len(chunks))
         if prefix is None:
             return None, "notice_receipt_unprovable"
+        partial = row["state"] != "accepted" or prefix < len(chunks)
+        if partial:
+            target = _target(cfg or {}, "semantic_notice")
+            if (not isinstance(fingerprint, str) or target is None
+                    or fingerprint != _delivery_fingerprint(
+                        target, chunks, [])):
+                return None, "notice_receipt_unprovable"
         joined = "".join(bodies)
         bounds, offset = [], 0
         for body in bodies:
@@ -222,7 +230,8 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
     return [fid for fid in rendered if fid in delivered], "notice_receipt"
 
 
-def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None) -> dict:
+def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None,
+                   cfg: dict[str, str] | None = None) -> dict:
     """Observed stage sets for one semantic_summary artifact.
 
     Returns ``{"fact_ids": {stage: [...]}, "observations": {stage: code}}``;
@@ -259,7 +268,8 @@ def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None) -> dict:
     verified, observations["verified"] = _verified(db, mid, fp, policy)
     rendered, lines, observations["rendered"] = _rendered(summary)
     delivered, observations["delivered"] = _delivered(
-        db, pid, mid, fp, policy, meta.get("target_revision"), rendered, lines)
+        db, pid, mid, fp, policy, meta.get("target_revision"), rendered, lines,
+        cfg)
     for stage, ids in zip(LIFECYCLE_STAGES, (verified, rendered, delivered),
                           strict=True):
         if ids is not None:
@@ -267,7 +277,8 @@ def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None) -> dict:
     return {"fact_ids": out, "observations": observations}
 
 
-def attach_lifecycle(path: str, records: list[dict]) -> list[dict]:
+def attach_lifecycle(path: str, records: list[dict],
+                     cfg: dict[str, str] | None = None) -> list[dict]:
     """Copy each candidate record with its observed stage sets attached.
 
     Records name the summary artifact via ``artifact_ids.final_id`` (the
@@ -289,7 +300,7 @@ def attach_lifecycle(path: str, records: list[dict]) -> list[dict]:
             if any(f"{stage}_fact_ids" in candidate for stage in LIFECYCLE_STAGES) \
                     or "fact_lifecycle_observations" in record:
                 raise EvaluationError("lifecycle_already_present")
-            result = fact_lifecycle(db, ids.get("final_id"), ids)
+            result = fact_lifecycle(db, ids.get("final_id"), ids, cfg)
             candidate = dict(candidate)
             for stage, fact_ids in result["fact_ids"].items():
                 candidate[f"{stage}_fact_ids"] = fact_ids

@@ -1058,6 +1058,169 @@ def test_services_noop_create_is_a_problem_not_a_manifest_entry(
     assert not (tmp_path / "data" / "service_manifest.json").exists()
 
 
+def _desired_cron_entries():
+    return [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
+            for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+
+
+def _stale_owned_cron():
+    return {"id": "000009", "name": "old", "schedule": "0 0 * * *",
+            "script": "mcs_old.sh"}
+
+
+def test_services_noop_remove_keeps_undesired_job(
+        monkeypatch, tmp_path):
+    """`cron remove` exiting 0 while the job remains is not converged.
+    The previous manifest must still name the script, or a later run
+    no longer knows to remove it."""
+    import json
+    stale = _stale_owned_cron()
+    calls, args = _services_env(
+        monkeypatch, tmp_path,
+        cron_entries=_desired_cron_entries() + [stale],
+        cron_applies=False)
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"].append(dict(stale))
+    path.write_text(json.dumps(previous))
+    assert mcs_setup.cmd_services(args) == 1
+    assert ["/x/hermes", "cron", "remove", stale["id"]] in calls
+    assert json.loads(path.read_text()) == previous
+    # stale manifest from this run: a later pass still tries to remove
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 1
+    assert ["/x/hermes", "cron", "remove", stale["id"]] in calls
+    assert json.loads(path.read_text()) == previous
+
+
+def test_services_removed_undesired_cron_leaves_manifest(
+        monkeypatch, tmp_path):
+    """A remove that actually drops the job converges: problems 0 and
+    the rewritten manifest no longer lists it."""
+    import json
+    stale = _stale_owned_cron()
+    calls, args = _services_env(
+        monkeypatch, tmp_path,
+        cron_entries=_desired_cron_entries() + [dict(stale)])
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"].append({"script": stale["script"]})
+    path.write_text(json.dumps(previous))
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["/x/hermes", "cron", "remove", stale["id"]] in calls
+    kept = json.loads(path.read_text())
+    scripts = [c.get("script") for c in kept["cron"]]
+    assert stale["script"] not in scripts
+    assert scripts == [s for _, _, s in mcs_setup.CRON_JOBS]
+
+
+def test_services_noop_remove_keeps_created_job_owned(
+        monkeypatch, tmp_path):
+    """A create that lands and a remove that does not must both stay
+    owned: problems > 0, and a later run that drops the new script from
+    the desired set still removes it."""
+    import json
+    from types import SimpleNamespace
+    stale = _stale_owned_cron()
+    present = _desired_cron_entries()
+    created = present.pop()
+    calls, args = _services_env(
+        monkeypatch, tmp_path, cron_entries=present + [stale])
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"].append(dict(stale))
+    path.write_text(json.dumps(previous))
+    inner = mcs_setup.subprocess.run
+    hold = {"remove": True}
+    removed: set[str] = set()
+    entries = mcs_setup._cron_list("/x/hermes")
+
+    def listing(_hermes):
+        # copy: the remove loop must see every pre-change job. Mutating
+        # the iterated list (the helper's slice-assign) skips the next one.
+        return [dict(e) for e in entries if e["id"] not in removed]
+
+    def fake_run(argv, **kw):
+        if argv[1:3] == ["cron", "remove"]:
+            calls.append(list(argv))
+            if not hold["remove"]:
+                removed.add(argv[3])
+            return SimpleNamespace(returncode=0,
+                                   stdout="Success: job removed.",
+                                   stderr="")
+        return inner(argv, **kw)
+    monkeypatch.setattr(mcs_setup, "_cron_list", listing)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
+    assert mcs_setup.cmd_services(args) == 1
+    scripts = [c.get("script") for c in
+               json.loads(path.read_text())["cron"]]
+    assert created["script"] in scripts
+    assert stale["script"] in scripts
+    new_id = next(e["id"] for e in mcs_setup._cron_list("/x/hermes")
+                  if e.get("script") == created["script"])
+    hold["remove"] = False
+    calls.clear()
+    monkeypatch.setattr(
+        mcs_setup, "CRON_JOBS",
+        [job for job in mcs_setup.CRON_JOBS
+         if job[2] != created["script"]])
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["/x/hermes", "cron", "remove", new_id] in calls
+    assert all(e.get("script") != created["script"]
+               for e in mcs_setup._cron_list("/x/hermes"))
+    retired = [c.get("script") for c in
+               json.loads(path.read_text())["cron"]]
+    assert created["script"] not in retired
+
+
+@pytest.mark.parametrize("failure", ["edit", "agent"])
+def test_services_failed_run_keeps_created_job_owned(
+        monkeypatch, tmp_path, failure):
+    """A create confirmed in `after` is owned even when another step
+    (desired-job edit, or a later stage) fails: problems > 0, a second
+    failing run keeps ownership, and retiring the job removes it."""
+    import json
+    from types import SimpleNamespace
+    entries = _desired_cron_entries()
+    created = entries.pop()
+    if failure == "edit":
+        entries[0]["schedule"] = "1 1 * * *"
+    calls, args = _services_env(monkeypatch, tmp_path, cron_entries=entries)
+    path, _ = _seed_manifest(tmp_path)
+    fail = {"on": True}
+    inner = mcs_setup.subprocess.run
+
+    def fake_run(argv, **kw):
+        if fail["on"] and argv[1:3] == ["cron", "edit"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=1, stdout="",
+                                   stderr="synthetic edit failed")
+        return inner(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
+    if failure == "agent":
+        monkeypatch.setattr(mcs_setup, "_agent_reconcile",
+                            lambda *a: not fail["on"])
+    assert mcs_setup.cmd_services(args) == 1
+    assert len(_cron_creates(calls)) == 1
+    first = json.loads(path.read_text())
+    assert created["script"] in [c.get("script") for c in first["cron"]]
+    # a second failing run creates nothing and keeps ownership stable
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 1
+    assert not _cron_creates(calls)
+    assert json.loads(path.read_text()) == first
+    new_id = next(e["id"] for e in mcs_setup._cron_list("/x/hermes")
+                  if e["script"] == created["script"])
+    fail["on"] = False
+    calls.clear()
+    monkeypatch.setattr(
+        mcs_setup, "CRON_JOBS",
+        [job for job in mcs_setup.CRON_JOBS if job[2] != created["script"]])
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["/x/hermes", "cron", "remove", new_id] in calls
+    assert all(e["script"] != created["script"]
+               for e in mcs_setup._cron_list("/x/hermes"))
+    assert created["script"] not in [
+        c.get("script") for c in json.loads(path.read_text())["cron"]]
+
+
 def test_services_unparseable_script_identity_is_a_problem(
         monkeypatch, tmp_path):
     """A job whose name matches but whose Script field is missing is

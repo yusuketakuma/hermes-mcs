@@ -35,6 +35,7 @@ from contextlib import suppress
 POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
 RETRY_IN_FLIGHT_S = 15.0       # denied_in_flight re-begin backoff
+SIGNAL_OFF_RETRY_S = 300.0     # denied_signal_notify_off re-claim backoff
 MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
@@ -109,6 +110,9 @@ class DeliveryWorker:
         self._stopping = False
         self._segment = 0
         self._rejected: dict[str, str] = {}   # delivery_id -> logged error
+        # delivery_id -> no fresh claim before this time (signals off);
+        # in-memory: a restart costs one extra denied begin, bounded
+        self._retry_after: dict[str, float] = {}
 
     # -- scope lock --------------------------------------------------
 
@@ -264,7 +268,7 @@ class DeliveryWorker:
                           delivery_id=row.get("delivery_id"),
                           result=env["result"], reconcile=True)
             stats["receipt_republished"] += 1
-            await self._retire_reconciled(aid, env, claim)
+            await self._retire_reconciled(aid, env, claim, info["rows"])
         for aid, info in journal.unfinished(records).items():
             row = info["record"]
             claim = self._reg.claims().get(row.get("delivery_id"))
@@ -284,7 +288,7 @@ class DeliveryWorker:
             self._journal("receipt", attempt_id=aid,
                           delivery_id=row.get("delivery_id"),
                           result=env["result"], reconcile=True)
-            await self._retire_reconciled(aid, env, claim)
+            await self._retire_reconciled(aid, env, claim, info["rows"])
         # A crash after receipt publication but before the registry flush
         # leaves an old granted claim. Its journal still forbids resending.
         for aid, rows in records.items():
@@ -293,15 +297,27 @@ class DeliveryWorker:
             claim = self._reg.claimed(rows[-1].get("delivery_id"))
             env = self._receipt_env(aid, rows, claim)
             if env is not None and self._ours(env):
-                await self._retire_reconciled(aid, env, claim)
+                await self._retire_reconciled(aid, env, claim, rows)
         # predecessors' files are closed now — bound their growth
         await self.maintain_journal(rotate=True)
         return stats
 
-    async def _retire_reconciled(self, aid, env, claim) -> None:
+    async def _retire_reconciled(self, aid, env, claim, rows) -> None:
+        # An attempt that never read a grant never sent, and its not_sent
+        # receipt settles it runner-side: the render stays queued (denied
+        # begin) or is reissued under a fresh delivery_id (granted begin,
+        # after which this spec only gets not_queued). Only one attempt
+        # per render is ever granted and a send needs the grant of the
+        # claim's own attempt_id, so leaving the delivery claimable
+        # cannot double-send — a tombstone would strand a transient
+        # denial (signal_notify_off) forever.
+        granted = any(r.get("phase") in ("granted", "started", "result")
+                      for r in rows)
         if claim is not None and claim.get("attempt_id") == aid:
-            await self._drop_claim(claim)
-        elif claim is None and not self._reg.is_dead(env["delivery_id"]) \
+            await self._drop_claim(
+                claim, dead=granted or claim.get("phase") != "begin_sent")
+        elif claim is None and granted \
+                and not self._reg.is_dead(env["delivery_id"]) \
                 and os.path.isfile(os.path.join(
                     self._dirs["render"], env["delivery_id"] + ".json")):
             self._reg.mark_dead(env["delivery_id"])
@@ -637,14 +653,18 @@ class DeliveryWorker:
                 self._reg.claim(spec["delivery_id"], claim)
                 return
             # transient denials — the queued render stays legitimate,
-            # so no dead tombstone: the flags check above already stops
-            # the re-claim churn, and the spec must be claimable again
-            # once the window lifts (interactive_off kill switch,
-            # restore_pending gate)
+            # so no dead tombstone. interactive_off / restore_pending
+            # are also held by the flags check in tick(); signal_notify_off
+            # is not in flags, so hold re-claims for SIGNAL_OFF_RETRY_S —
+            # every denied begin is a durable runner attempt row.
+            if error == "denied_signal_notify_off":
+                self._retry_after[spec["delivery_id"]] = \
+                    now + SIGNAL_OFF_RETRY_S
             await self._drop_claim(
                 claim, dead=error not in (
                     "denied_interactive_off",
-                    "denied_restore_pending"))
+                    "denied_restore_pending",
+                    "denied_signal_notify_off"))
             return
         if not self._verify_grant(claim, result):
             self._journal("denied",
@@ -884,7 +904,9 @@ class DeliveryWorker:
                         resume.append(spec)
                     continue          # dropped claims never re-claim
                 claim = self._reg.claimed(delivery_id)
-                if claim is None and not claimable:
+                if claim is None and (
+                        not claimable
+                        or now < self._retry_after.get(delivery_id, 0)):
                     continue
                 if claim is None:
                     if spent is None:
@@ -916,6 +938,8 @@ class DeliveryWorker:
             if resume:
                 await self._resume_dead(resume)
             await self._settle_orphan_claims(live_ids)
+        self._retry_after = {k: v for k, v in self._retry_after.items()
+                             if k in live_ids and v > now}
         await self.maintain_journal()
 
     def _spent_deliveries(self) -> set:
