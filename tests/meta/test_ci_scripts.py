@@ -23,6 +23,16 @@ def _boom():
     raise RuntimeError("generator exploded")
 
 
+@pytest.mark.parametrize("module_name", ["mcs_worker", "mcs_adapter"])
+@pytest.mark.parametrize("operation", ["api", "download", "cdp_json", "cdp_eval"])
+def test_mcs_worker_guard_blocks_production_child(module_name, operation):
+    import importlib
+    module = importlib.import_module(module_name)
+    # Even without the guard, zero timeout prevents a child from spawning.
+    with pytest.raises(RuntimeError, match="live MCS/CDP workers are disabled"):
+        module.bounded_call({"operation": operation}, timeout=0)
+
+
 def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
     result = subprocess.run(
         [sys.executable, "-I", "-c",

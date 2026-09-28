@@ -126,7 +126,7 @@
       "summary": "mcs_setup accepted secrets via --password/--typesafe-key argv (shell history + ps exposure); now env vars/getpass and security -i stdin with read-back verify",
       "tests": [
         "test_keychain_store_sends_password_via_stdin_not_argv",
-        "test_keychain_store_readback_mismatch_removes_entry",
+        "test_keychain_store_readback_mismatch_preserves_previous_entry",
         "test_init_secrets_from_env_not_argv",
         "test_password_argv_flag_rejected"
       ]

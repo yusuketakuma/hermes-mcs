@@ -153,6 +153,26 @@ _install(bounded_http, "bounded_http_request", _guarded_http_request)
 _install(_jev, "bounded_http_request", _guarded_http_request)
 
 
+# MCS and Chrome use a separate subprocess transport too. Only tests
+# replacing the worker command with an explicitly synthetic interpreter
+# may spawn it; replacing Popen alone could still wrap a real process.
+import mcs_worker  # noqa: E402
+import mcs_adapter  # noqa: E402
+
+_ORIG_MCS_CALL = mcs_worker.bounded_call
+_ORIG_MCS_COMMAND = mcs_worker._worker_command
+
+
+def _guarded_mcs_call(*args, **kwargs):
+    if mcs_worker._worker_command is _ORIG_MCS_COMMAND:
+        raise RuntimeError("live MCS/CDP workers are disabled in MCS tests")
+    return _ORIG_MCS_CALL(*args, **kwargs)
+
+
+_install(mcs_worker, "bounded_call", _guarded_mcs_call)
+_install(mcs_adapter, "bounded_call", _guarded_mcs_call)
+
+
 def _restore() -> None:
     while _ORIGINALS:
         module, name, original = _ORIGINALS.pop()

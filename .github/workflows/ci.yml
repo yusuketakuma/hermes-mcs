@@ -16,14 +16,14 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - name: ruff
-        run: pip install "ruff==0.6.9" && ruff check mcs/ tests/ hermes_plugin/ integration/
+        run: pip install "ruff==0.16.8" && ruff check mcs/ tests/ hermes_plugin/ integration/
       - name: pytest
-        run: pip install "pytest==8.3.3" && scripts/run_tests.sh -x -q
+        run: pip install "pytest==9.1.1" && scripts/run_tests.sh -x -q
       - name: check generated docs on PR
         if: github.event_name == 'pull_request'
         run: |
@@ -36,10 +36,10 @@ jobs:
     permissions:
       contents: write   # the only job that pushes (auto-commit on main)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - name: regenerate module table
         run: python3 scripts/update_readme.py
       - name: auto-commit on main / fail on PR
@@ -62,7 +62,7 @@ jobs:
   hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: no secrets or data dirs tracked
         run: |
           bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|config\.json$|token_cache\.json$)' || true)
@@ -93,10 +93,10 @@ jobs:
   incident-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - name: static failure-pattern gates
         run: python3 ci/gates.py
       - name: incident coverage from dev-records
@@ -105,7 +105,7 @@ jobs:
   hermes-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: hermes-mcs
       # the plugin contract is validated against ONE pinned Hermes ref —
@@ -113,14 +113,14 @@ jobs:
       # break (or silently change) the lane (F23)
       # Release prerequisite: advance this pin and install.sh together
       # whenever the companion Hermes changes are republished.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: yusuketakuma/hermes-agent
           ref: fd50a275e2616118c48fe07e7e1c878782b15ccd
           path: hermes-agent
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - name: install hermes (pinned ref) + integration test deps
         run: |
           python -m venv hermes-agent/.venv
