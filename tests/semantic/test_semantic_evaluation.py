@@ -574,6 +574,13 @@ def test_late_nonmandatory_fact_cannot_disappear_between_stages(stage):
     assert "fact_lifecycle_incomplete" in report["gate"]["reasons"]
 
 
+
+def test_lifecycle_ids_are_trimmed_like_fact_ids():
+    record = _lifecycle_record(2)
+    record["candidate"]["verified_fact_ids"] = [" f1", "f2 "]
+    report = evaluation.evaluate_records([record], MANIFEST, CRITERIA)
+    assert report["fact_lifecycle"]["complete"] == 1
+
 def test_extra_stage_fact_is_lifecycle_failure():
     record = _lifecycle_record(2)
     record["candidate"]["delivered_fact_ids"].append("f-ghost")

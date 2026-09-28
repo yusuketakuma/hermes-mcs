@@ -557,7 +557,10 @@ def _case_counts(record: dict) -> dict:
     lifecycle = {"complete": int(observed), "missing": 0, "extra": 0,
                  "missing_observations": int(not observed)}
     for stage in LIFECYCLE_STAGES:
-        ids = set(candidate.get(f"{stage}_fact_ids") or [])
+        # trimmed like the predicted fact ids (_fact_map) they are
+        # compared against
+        ids = {ref.strip() for ref in candidate.get(f"{stage}_fact_ids")
+               or []}
         lost = len(predicted.keys() - ids)
         added = len(ids - predicted.keys())
         lifecycle["missing"] += lost
