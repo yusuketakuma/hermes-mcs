@@ -113,12 +113,14 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
     as index — a key mislabel ('脈は48' -> bs:48) reads as NO_MATCH."""
     questions, layout, ctx_items = {}, [], {}
     n = QC_MAX_ITEMS
-    for section in ("meds", "symptoms", "events", "labs"):
+    # Sections audit in measured-NO_MATCH order — events are the
+    # largest unsupported-output class and mislabelled vitals are the
+    # most dangerous, so they claim the shared question budget BEFORE
+    # meds/symptoms/labs can consume it (production: 328/90/25/24/0).
+    for section in ("events",):
         for i, item in enumerate((ex.get(section) or [])[:n]):
-            label = (item if section == "events"
-                     else json.dumps(item, ensure_ascii=False))
             qid = f"{section[0]}{i}"
-            ctx_items[qid] = str(label)[:400]
+            ctx_items[qid] = str(item)[:400]
             questions[qid] = jev.noul_question(
                 f"state.context の id={qid} の抽出項目は、"
                 "対象の投稿本文に裏付けられているか",
@@ -128,8 +130,6 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
             n -= 1
             if n <= 0:
                 break
-        if n <= 0:
-            break
     vits = ex.get("vitals")
     if isinstance(vits, dict) and n > 0:
         for i, (k, val) in enumerate(list(vits.items())[:n]):
@@ -144,6 +144,22 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
                 f"本文に{jp}の項目としてstate.contextに示した値を裏付ける記述がない")
             layout.append((qid, "vitals", k))
             n -= 1
+    for section in ("meds", "symptoms", "labs"):
+        if n <= 0:
+            break
+        for i, item in enumerate((ex.get(section) or [])[:n]):
+            label = json.dumps(item, ensure_ascii=False)
+            qid = f"{section[0]}{i}"
+            ctx_items[qid] = str(label)[:400]
+            questions[qid] = jev.noul_question(
+                f"state.context の id={qid} の抽出項目は、"
+                "対象の投稿本文に裏付けられているか",
+                "本文にこの項目を裏付ける記述がある",
+                "本文にこの項目を裏付ける記述がない")
+            layout.append((qid, section, i))
+            n -= 1
+            if n <= 0:
+                break
     urg = ex.get("urgency")
     if urg in ("high", "routine"):
         questions["urg"] = jev.choice_question(
