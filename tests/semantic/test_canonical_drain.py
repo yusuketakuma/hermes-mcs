@@ -429,3 +429,32 @@ def test_rejected_fact_repaired_and_supported_still_passes(tmp_path):
         assert fact_audit["status"] == "PASS"
     finally:
         db.close()
+
+
+def test_budget_exhausted_at_promote_is_a_counted_retry(tmp_path,
+                                                        monkeypatch):
+    """U06-F03: a job budget that runs out between the last guarded
+    call and promotion is not source drift — no STALE results are
+    written and the job consumes a bounded retry attempt instead of
+    re-running forever uncounted."""
+    import semantic_runtime as runtime
+    db = _seeded_two(tmp_path)
+    try:
+        real = runtime.guard
+
+        def guard(ledger, token, **kw):
+            if kw.get("stage") == "promote":
+                raise runtime.RuntimeBudget("promote")
+            return real(ledger, token, **kw)
+
+        monkeypatch.setattr(runtime, "guard", guard)
+        _drain(db)
+        audits = [json.loads(r["content"])["status"]
+                  for r in _artifacts(db, KIND_AUDIT, 1)]
+        assert "STALE" not in audits
+        summaries = [_meta(r) for r in _artifacts(db, KIND_SUMMARY, 1)]
+        assert not any(m.get("stale") for m in summaries)
+        job = _job(db)
+        assert job["state"] == "pending" and job["attempts"] == 1
+    finally:
+        db.close()

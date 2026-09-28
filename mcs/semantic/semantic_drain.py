@@ -910,7 +910,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if results:
             try:
                 guard("partial_promote")
-            except runtime.RuntimeGuardError:
+            except runtime.RuntimeStale:
+                # generation moved — budget/off re-raise so _process_job
+                # maps them like every other boundary (bounded retry /
+                # pause), never as a silent uncounted stale
                 return "stale"
             # commit each completed target's outcome NOW — dropping it
             # would re-spend Jev calls on an identical input next run
@@ -937,7 +940,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     stale = False
     try:
         guard("promote")
-    except runtime.RuntimeGuardError:
+    except runtime.RuntimeStale:
+        # only a generation change labels the results STALE; an
+        # exhausted budget or a pause/OFF propagates to _process_job
+        # (retry/deferred/stale) and writes nothing after the boundary
         stale = True
     pending = not stale and any(r["status"] == "PENDING"
                                 for r in results.values())
