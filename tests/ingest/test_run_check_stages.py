@@ -1302,6 +1302,137 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     db.close()
 
 
+def test_attempt_relogin_owns_run_budget(tmp_path):
+    """The budget check lives inside the single auto_login entry point:
+    with the journal already at the cap a request is declined as
+    'budget_exhausted' — no adapter call, no journal entry, no
+    session_recovered notice."""
+    db = _ledger(tmp_path)
+    logins = []
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: logins.append(1) or "ok")
+    result = {"errors": [], "run_id": 1,
+              "relogin_attempts": [
+                  {"stage": "earlier", "error": "e", "state": "ok"}
+                  for _ in range(run_check.RELOGIN_MAX_PER_RUN)]}
+    assert run_check._attempt_relogin(
+        adapter, db, result, "run",
+        mcs_adapter.SessionExpired(status=403)) == "budget_exhausted"
+    assert logins == []
+    assert len(result["relogin_attempts"]) == run_check.RELOGIN_MAX_PER_RUN
+    assert db.db.execute("SELECT COUNT(*) FROM notify_outbox"
+                         ).fetchone()[0] == 0
+    db.close()
+
+
+def _expire_once():
+    """Stage stub: raw SessionExpired on the first call, clean on the
+    post-recovery replay."""
+    state = {"n": 0}
+
+    def stage(*a, **k):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise mcs_adapter.SessionExpired(status=403)
+        return None
+    return stage
+
+
+def _always_expired(*a, **k):
+    raise mcs_adapter.SessionExpired(status=403)
+
+
+def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
+                                                capsys):
+    """RELOGIN_MAX_PER_RUN bounds the whole run including the run-boundary
+    attempt: after three recovered stage failures a fourth expiry that
+    escalates raw gets 'budget_exhausted' at the boundary — no fourth
+    auto_login, no extra session_recovered, a session_expired alert,
+    exit 2, and the exhaustion is recorded in the run row and health."""
+    import maintenance
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+
+    class Adapter:
+        def __init__(self):
+            self.logins = 0
+
+        def set_deadline(self, deadline):
+            pass
+
+        def list_unread(self):
+            return mcs_adapter.UnreadSnapshot(timestamp=123, patients=[])
+
+        def auto_login(self, **kw):
+            self.logins += 1
+            return "ok"
+
+        def self_profile(self):
+            return {}
+
+    adapter = Adapter()
+    data = tmp_path / "data"
+    data.mkdir()
+    config = tmp_path / "config.json"
+    config.write_text(
+        '{"deep_history":false,"semantic":{"mode":"off"}}',
+        encoding="utf-8")
+    for name, value in {
+        "HOME": tmp_path, "DB": data / "ledger.db",
+        "ATTACH_DIR": data / "attachments", "LOCKFILE": data / "run.lock",
+        "HEALTH_FILE": data / "health.json", "CONF_PATH": config,
+        "MCSAdapter": lambda *a, **k: adapter,
+        "stage_derive": lambda *a, **k: None,
+    }.items():
+        monkeypatch.setattr(run_check, name, str(value)
+                            if isinstance(value, Path) else value)
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
+                 "gc", "clear_snapshot_dirty"):
+        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
+    monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    # three wrapped stages each recover once, spending the whole budget;
+    # the fourth expiry escalates raw (wrapper declined) to the boundary
+    monkeypatch.setattr(run_check, "stage_unread", _expire_once())
+    monkeypatch.setattr(run_check, "stage_backfill", _expire_once())
+    monkeypatch.setattr(job_ops, "run_discovery", _expire_once())
+    monkeypatch.setattr(job_ops, "run_reply_jobs", _always_expired)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+
+    assert run_check.main() == 2
+    out = json.loads(capsys.readouterr().out)
+    assert adapter.logins == run_check.RELOGIN_MAX_PER_RUN
+    assert [a["stage"] for a in out["relogin_attempts"]] == [
+        "unread", "backfill", "discovery"]
+    assert "auto_login=budget_exhausted" in out["errors"][-1]
+    health = json.loads((data / "health.json").read_text(encoding="utf-8"))
+    assert any("auto_login=budget_exhausted" in e
+               for e in health["errors"])
+    db = ledger.Ledger(str(data / "ledger.db"))
+    kinds = [r[0] for r in db.db.execute(
+        "SELECT kind FROM notify_outbox ORDER BY rowid")]
+    # session_recovered is intentionally unthrottled: one per REAL
+    # recovery, none for the declined boundary attempt
+    assert kinds == ["session_recovered"] * run_check.RELOGIN_MAX_PER_RUN \
+        + ["session_expired"]
+    row = db.db.execute(
+        "SELECT status, error FROM runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()
+    assert row[0] == "session_expired"
+    assert "auto_login=budget_exhausted" in row[1]
+    db.close()
+
+
 def _point_run_check_at(tmp_path, monkeypatch):
     data = tmp_path / "data"
     for name, value in {"HOME": tmp_path, "DB": data / "ledger.db",

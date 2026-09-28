@@ -242,7 +242,8 @@ def _wait_run_lock(wait_s: float) -> int | None:
 
 SESSION_ALERT_MIN_INTERVAL_S = 3600
 # a flapping session must not drive auto_login in a loop — each wrapped
-# stage allows one attempt, and this bounds the per-run total
+# stage allows one attempt, and _attempt_relogin (the single entry point
+# for every caller, run boundary included) bounds the per-run total
 RELOGIN_MAX_PER_RUN = 3
 
 
@@ -279,12 +280,19 @@ def _alert_session_recovered(ledger, run_id: int, detail: str) -> None:
 def _attempt_relogin(adapter, ledger, result, where: str,
                      err: "SessionExpired") -> str:
     """One bounded auto_login at the point a stage died on
-    SessionExpired. Every attempt is journaled in
-    result['relogin_attempts'] for the run log; on success a
-    session_recovered notice is queued so the channel sees the blip AND
-    its resolution instead of silence or a false manual-login alert."""
+    SessionExpired. This is the single entry point for every caller, so
+    it owns the per-run budget: once RELOGIN_MAX_PER_RUN attempts are
+    spent it returns 'budget_exhausted' without calling the adapter or
+    journaling (relogin_attempts records real attempts only). Every real
+    attempt is journaled in result['relogin_attempts'] for the run log;
+    on success a session_recovered notice is queued so the channel sees
+    the blip AND its resolution instead of silence or a false
+    manual-login alert."""
+    attempts = result.setdefault("relogin_attempts", [])
+    if len(attempts) >= RELOGIN_MAX_PER_RUN:
+        return "budget_exhausted"
     attempt = {"stage": where, "error": _err_str(err)}
-    result.setdefault("relogin_attempts", []).append(attempt)
+    attempts.append(attempt)
     try:
         state = adapter.auto_login(profile_dir=CHROME_PROFILE,
                                    chrome_bin=CHROME_BIN)
@@ -314,10 +322,12 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
     except SessionExpired as e:
         if "auto_login=" in (e.detail or ""):
             raise
-        if len(result.get("relogin_attempts") or []) \
-                >= RELOGIN_MAX_PER_RUN:
-            raise
         state = _attempt_relogin(adapter, ledger, result, where, e)
+        if state == "budget_exhausted":
+            # cap spent — the raw failure escalates undecided; the run
+            # boundary's own attempt is declined the same way and
+            # reports 'auto_login=budget_exhausted'
+            raise
         if state != "ok":
             raise SessionExpired(f"auto_login={state}") from e
         try:
@@ -342,10 +352,9 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
     except SessionExpired as e:
         # credential-free recovery: saved-password autofill + submit
         # click — journaled + notified like every other relogin path
-        if len(result.get("relogin_attempts") or []) \
-                >= RELOGIN_MAX_PER_RUN:
-            raise
         state = _attempt_relogin(adapter, ledger, result, "unread", e)
+        if state == "budget_exhausted":
+            raise
         if state == "ok":
             try:
                 snap = adapter.list_unread()
@@ -1210,7 +1219,9 @@ def main() -> int:
             # an expiry escaping an unwrapped path still earns one
             # recovery attempt before a manual-login alert goes out;
             # the wrapped stages already tried (their detail carries
-            # 'auto_login=<state>'), so don't double-attempt them
+            # 'auto_login=<state>'), so don't double-attempt them.
+            # _attempt_relogin enforces the run budget, so a capped run
+            # gets 'auto_login=budget_exhausted' with no adapter call.
             state = _attempt_relogin(adapter, ledger, result, "run", e)
             detail = f"{detail} auto_login={state}"
             recovered = state == "ok"
