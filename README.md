@@ -16,6 +16,47 @@
 > あくまで「確認候補」です。記録が見つからないことは
 > 「対応がなかった」ことの証拠にはなりません。
 
+## 画面イメージ
+
+通知は **Discord / Slack** のどちらにも同じカード形式で届きます。
+カードには送信者行と構造化要約だけを載せ、本文全文と添付ファイル
+（画像・PDF 等）はカードのコンパニオンスレッドへ配送します。
+
+**Discord — 通知カード（送信者行・構造化・操作ボタン）**
+
+![Discord通知カード](docs/screenshots/discord-card.svg)
+
+**Discord — 本文・添付はコンパニオンスレッドへ配送**
+
+![Discordカードとコンパニオンスレッド](docs/screenshots/discord-thread.svg)
+
+**Slack — 通知カード（構造化フィールド・操作ボタン）**
+
+![Slack通知カード](docs/screenshots/slack-card.svg)
+
+**Slack — 本文・添付はスレッドへ配送**
+
+![Slackカードとスレッド](docs/screenshots/slack-thread.svg)
+
+`📋 構造化` ブロックはローカルLLMの抽出（要約・要点・区分・バイタル・
+症状・依頼）をコンパクトに提示する「候補」です。本文はカードには
+載せず、`notify.card_thread` がオンの場合（`init` の既定はオン）は
+カードごとに専用スレッド（`💬 患者名 — MM-DD`）を立て、表示対象の
+本文全文と添付をリアルタイムでスレッド内へ投稿します。配送は
+ジャーナル化された parts（card→thread→本文chunk→添付）で、worker
+再起動後も中断点から再開し重複投稿しません。スレッドを持てない
+カード（オフ・作成失敗・削除済み）では `📄 本文表示` が残り、押した
+本人のみに全文を ephemeral 表示します。`✅ 確認` `👤 担当`
+`⏸ 保留` `📝 依頼作成` の操作はカード上のボタンから行います。
+
+**CLI — 取込状況・タイムライン（`mcs_view.py status` / `timeline`）**
+
+![status/timelineイメージ](docs/screenshots/view-status.svg)
+
+**CLI — レビュー候補シグナル（`mcs_view.py signals`）**
+
+![シグナル出力イメージ](docs/screenshots/signals-cli.svg)
+
 ## このシステムが助けること
 
 医療・介護の現場で起きがちな問題に対応します:
@@ -538,34 +579,6 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 hermes-mcs は記録から確認できる事実・経過を構造化するシステムであり、
 MCS 外の診療事実を自動補完しない。
-
-## 画面イメージ
-
-**Discord 通知 — カード上は送信者行＋構造化、本文・添付はコンパニオンスレッド**
-
-![Discord通知イメージ](docs/screenshots/discord-notify.svg)
-
-![カードとコンパニオンスレッド](docs/assets/discord-card-thread.svg)
-
-`📋 構造化` ブロックはローカルLLMの抽出(要約・要点・区分・バイタル・
-症状・依頼)をコンパクトに提示する。本文はカードには載せず、
-`notify.card_thread`をonにした場合(`init`の既定はオン)ではカードごとに専用スレッド
-(`💬 患者名 — MM-DD`)を立て、表示対象の本文全文と添付ファイルを
-リアルタイムでスレッド内へ投稿する。配送はジャーナル化された
-parts(card→thread→本文chunk→添付)で、worker 再起動後も中断点から
-再開し重複投稿しない。スレッドを持てないカード(オフ・作成失敗・
-削除済み)では `📄 本文表示` が残り、押した本人のみに全文を
-ephemeral 表示する(抽出が無い/失敗時は送信者行のみ)。
-`✅ 確認` `👤 担当` `⏸ 保留` `📝 依頼作成` の操作もカード上の
-ボタンから行う。
-
-**取込状況・タイムライン (`mcs_view.py status` / `timeline`)**
-
-![status/timelineイメージ](docs/screenshots/view-status.svg)
-
-**レビュー候補シグナル (`mcs_view.py signals`)**
-
-![シグナル出力イメージ](docs/screenshots/signals-cli.svg)
 
 ## 導入方法
 
