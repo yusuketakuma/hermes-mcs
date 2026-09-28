@@ -555,9 +555,29 @@ def _uid() -> int:
     return os.getuid()
 
 
-def _agent_pid(label: str) -> int | None:
-    r = subprocess.run(["launchctl", "print", f"gui/{_uid()}/{label}"],
-                       capture_output=True, text=True, timeout=T_GIT)
+def _run(argv: list, timeout: int = T_GIT) -> subprocess.CompletedProcess:
+    """subprocess.run that never raises — mcs_setup._run's contract,
+    kept local so a rolled-back tree never mixes generations. A hung
+    command yields returncode 124 (as timeout(1)), one that cannot start
+    127: every launchctl caller records a per-label problem and moves on,
+    so one wedged label never aborts a restart loop mid-way (H4)."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "",
+                                           f"timed out after {timeout}s")
+    except OSError as e:
+        return subprocess.CompletedProcess(argv, 127, "", str(e))
+
+
+def _agent_pid(label: str, unknown: int | None = None) -> int | None:
+    """Running pid, or None when the label is not running. A launchctl
+    that hung or could not start answers `unknown` — quiesce passes a
+    non-None value so an unverifiable stop is never taken as stopped."""
+    r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
+    if r.returncode in (124, 127):
+        return unknown
     if r.returncode != 0:
         return None
     m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
@@ -600,14 +620,13 @@ def quiesce() -> list[str]:
     _write_marker()
     stopped = []
     for label in RESIDENT_LABELS:
-        subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{label}"],
-                       capture_output=True, timeout=T_GIT)
+        _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
         deadline = time.time() + 15
         while time.time() < deadline:
-            if _agent_pid(label) is None:
+            if _agent_pid(label, unknown=-1) is None:
                 break
             time.sleep(0.5)
-        if _agent_pid(label) is not None:
+        if _agent_pid(label, unknown=-1) is not None:
             raise UpdateError(f"drainer_stop_failed: {label}")
         stopped.append(label)
     # stray sweep: helpers may have spawned drainers outside launchd
@@ -628,8 +647,7 @@ def quiesce() -> list[str]:
 def _bootstrap_agent(label: str, plist: str) -> bool:
     """Verified bootstrap (mcs_util.launchd_bootstrap — imported at
     process start, so a rolled-back tree never mixes generations)."""
-    return launchd_bootstrap(label, plist, lambda argv: subprocess.run(
-        argv, capture_output=True, text=True, timeout=T_GIT)) is None
+    return launchd_bootstrap(label, plist, _run) is None
 
 
 def restart_agents() -> list[str]:
@@ -638,8 +656,7 @@ def restart_agents() -> list[str]:
     problems = []
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
-        subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{label}"],
-                       capture_output=True, timeout=T_GIT)
+        _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
         if not _bootstrap_agent(label, plist):
             problems.append(f"bootstrap_failed:{label}")
             continue
@@ -653,9 +670,7 @@ def restart_agents() -> list[str]:
         if not pid:
             problems.append(f"drainer_not_running:{label}")
     for label in WATCHER_LABELS:
-        r = subprocess.run(
-            ["launchctl", "print", f"gui/{_uid()}/{label}"],
-            capture_output=True, timeout=T_GIT)
+        r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
         if r.returncode != 0 and not _bootstrap_agent(
                 label, os.path.join(AGENTS_DIR, label + ".plist")):
             problems.append(f"watcher_not_loaded:{label}")
@@ -666,11 +681,13 @@ def restart_agents() -> list[str]:
 def restart_gateway(cfg: dict) -> None:
     """Fire-and-forget — a cron-spawned updater is a gateway descendant;
     a synchronous `gateway restart` would wait on ourselves (S12)."""
-    subprocess.Popen(
-        ["launchctl", "kickstart", "-k",
-         f"gui/{_uid()}/ai.hermes.gateway"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    with suppress(OSError):  # runs after durable bookkeeping — never undo it
+        subprocess.Popen(
+            ["launchctl", "kickstart", "-k",
+             f"gui/{_uid()}/ai.hermes.gateway"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, close_fds=True,
+            start_new_session=True)
 
 
 def _clean_stale_git_locks() -> list[str]:
@@ -819,10 +836,9 @@ def _record_attempt(state: dict, tag: str | None, result: str,
 
 
 def _services_reconcile() -> None:
-    r = subprocess.run([sys.executable,
-                        os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
-                        "services"],
-                       capture_output=True, text=True, timeout=120)
+    r = _run([sys.executable,
+              os.path.join(REPO, "mcs", "ops", "mcs_setup.py"), "services"],
+             timeout=120)
     if r.returncode != 0:
         raise UpdateError("services_failed: "
                           + (r.stderr or r.stdout).strip()[:200])
@@ -1281,9 +1297,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
             continue
         if label not in desired_agents and label not in \
                 set(mcs_setup.AGENT_LABELS):
-            subprocess.run(["launchctl", "bootout",
-                            f"gui/{_uid()}/{label}"],
-                           capture_output=True, timeout=T_GIT)
+            _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
             with suppress(OSError):
                 os.unlink(path)
     return problems
@@ -1415,6 +1429,14 @@ def rollback(command_id: str | None = None) -> int:
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
         except UpdateError as e:
+            if quiesced:
+                # quiesce itself failed part-way (one drainer already
+                # stopped) — restart before reporting (H4)
+                problems = restart_agents()
+                _remove_marker()
+                quiesced = False
+                if problems:
+                    e = UpdateError(f"{e} restart:" + ",".join(problems))
             # consume the receipt — the attempt genuinely ran and the
             # human must see a result, not an infinite retry
             if command_id:
