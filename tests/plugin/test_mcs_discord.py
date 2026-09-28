@@ -2558,3 +2558,44 @@ def test_project_auto_authorizes_snapshot_projects(tmp_path):
            "snapshot": str(tmp_path / "missing.db")}
     assert not projects_mod.project_allowed(bad, 99)          # fail closed
     assert projects_mod.project_allowed(bad, 1)               # static floor
+
+
+def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(world):
+    """Project scope gates only 確定: a project leaving scope after the
+    preview answers 権限がありません without taking the confirm, while
+    the actor's own 取消 still drops it. An actor who lost user/channel
+    authorization can do neither."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+    confirm_id = cid[len("mcs:c:"):]
+    before = len(list((world.data / "cmd_int").glob("*.json")))
+
+    act._settings = {**SETTINGS, "allowed_user_ids": {"2002"},
+                     "project_ids": set()}
+    gone = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(gone))
+    assert gone.response.message["content"] == "権限がありません。"
+    assert reg.confirm(confirm_id) is not None
+
+    act._settings = {**SETTINGS, "project_ids": set()}
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(ok))
+    assert ok.response.message["content"] == "権限がありません。"
+    assert not reg.confirm(confirm_id).get("in_flight")
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == before
+    assert any(e == "interaction_denied"
+               and f["reason"] == "project_not_allowed"
+               for e, f in world.logs)
+
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(cancel))
+    assert cancel.response.message["content"] == "取り消しました。"
+    assert reg.confirm(confirm_id) is None
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == before

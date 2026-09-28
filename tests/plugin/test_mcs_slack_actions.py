@@ -361,7 +361,7 @@ async def _to_confirm(actions, app, dirs, project_id):
 def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(
         tmp_path):
     """A payload project leaving scope after the preview blocks 確定
-    silently without marking it in flight; 取消 still succeeds."""
+    (権限がありません) without marking it in flight; 取消 still succeeds."""
     async def scenario():
         actions, app, reg, dirs = fixture(
             tmp_path, kind="request", project_ids=frozenset({123, 999}))
@@ -371,7 +371,8 @@ def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(
         actions._settings["project_ids"] = frozenset({123})
         before = len(app.client.messages)
         await actions._confirm(ack, body, confirm_action)
-        assert len(app.client.messages) == before
+        assert [m["text"] for m in app.client.messages[before:]] == [
+            "権限がありません。"]
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
         assert not reg.confirm(confirm_id).get("in_flight")
         await actions._confirm(ack, body, cancel_action)
@@ -397,4 +398,29 @@ def test_confirm_expiring_before_take_never_publishes(tmp_path):
         await actions._confirm(ack, body, confirm_action)
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
         assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
+
+
+def test_card_project_out_of_scope_after_preview_still_cancellable(
+        tmp_path):
+    """The card's own project leaving scope must not strand the preview:
+    取消 needs only the actor's card pin, 確定 answers 権限がありません."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, cancel_action) = await _to_confirm(
+            actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        actions._settings["project_ids"] = frozenset({999})
+        await actions._confirm(ack, body, confirm_action)
+        assert app.client.messages[-1]["text"] == "権限がありません。"
+        assert not reg.confirm(confirm_id).get("in_flight")
+        foreign, _ = click(user="U_FOREIGN")
+        before = len(app.client.messages)
+        await actions._confirm(ack, foreign, cancel_action)
+        assert len(app.client.messages) == before
+        assert reg.confirm(confirm_id) is not None
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
     asyncio.run(scenario())
