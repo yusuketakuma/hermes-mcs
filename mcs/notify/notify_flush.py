@@ -764,6 +764,29 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     return True
 
 
+RERENDER_RETRY_S = 60
+
+
+def _base_render_gate_ok(ledger, ev, render_state, in_progress,
+                         res) -> bool:
+    """Render gate for a raw new_messages notice. The gate only guards
+    the OPTIONAL attached summary: before anything was sent, a stale or
+    policy-deferred summary means re-format on the next flush — never
+    suppress or hour-park the arrival notice itself. Once a chunk is
+    out, the gate's freeze/hold semantics apply unchanged."""
+    try:
+        _semantic_render_gate(ledger, ev, render_state,
+                              in_progress=in_progress)
+    except (_StaleSend, _DeferredSend):
+        if in_progress:
+            raise
+        ledger.outbox_mark(ev["event_id"], "failed",
+                           retry_in=RERENDER_RETRY_S)
+        res["rerender"] = res.get("rerender", 0) + 1
+        return False
+    return True
+
+
 def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
     """Format, chunk and send one text event — per-chunk progress is
     journaled so a crash mid-event resumes at the first unacknowledged
@@ -807,8 +830,9 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             _semantic_gate(ledger, ev, payload,
                            in_progress=bool(start or i))
         elif render_state:
-            _semantic_render_gate(ledger, ev, render_state,
-                                  in_progress=bool(start or i))
+            if not _base_render_gate_ok(ledger, ev, render_state,
+                                        bool(start or i), res):
+                return True
         # files ride the FIRST post only; on resume (start>0) they
         # were already delivered with chunk 0. A usage rejection
         # of the file-bearing send (exit 2 — never a delivery
@@ -828,8 +852,9 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
                 _semantic_gate(ledger, ev, payload,
                                in_progress=bool(start or i))
             elif render_state:
-                _semantic_render_gate(ledger, ev, render_state,
-                                      in_progress=bool(start or i))
+                if not _base_render_gate_ok(ledger, ev, render_state,
+                                            bool(start or i), res):
+                    return True
             _send_marked(ledger, ev, i, sent_ids, fingerprint,
                          argv, chunks[i], None, deadline)
         sent_ids.append(str(i + 1))

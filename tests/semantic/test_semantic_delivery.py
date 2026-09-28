@@ -310,3 +310,52 @@ def test_semantic_retry_keeps_frozen_chunk_receipt(
         for part in [first_part, *retry]
     )
     db.close()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("change", ["summary_changed", "mode_off"])
+def test_raw_notice_is_rerendered_not_dropped_when_summary_gate_trips(
+        tmp_path, monkeypatch, change):
+    """The render gate guards only the attached summary: if it trips
+    before anything was sent, the arrival notice itself is re-formatted
+    on a short retry — never suppressed or parked for an hour."""
+    db = _db(tmp_path, [_message()])
+    _summary(db, claims=1)
+    cfg = _cfg("enforce")
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_flush, "_target", lambda c, kind: "channel")
+    att = tmp_path / "scan.pdf"
+    att.write_bytes(b"%PDF-synthetic")
+    orig_fmt = notify_flush._format_event
+
+    def fmt(ledger, ev):
+        content, files = orig_fmt(ledger, ev)
+        return content, (files or []) + [("scan.pdf", str(att))]
+
+    monkeypatch.setattr(notify_flush, "_format_event", fmt)
+    calls = []
+
+    def send(argv, chunk, files, deadline=None):
+        calls.append(bool(files))
+        if len(calls) == 1:
+            if change == "summary_changed":
+                _summary(db, claims=2)
+            else:
+                cfg["semantic"]["mode"] = "off"
+            raise notify_flush._SendUsage("synthetic exit 2")
+        return "1"
+
+    monkeypatch.setattr(notify_flush, "_send", send)
+    res = notify_flush.flush(db)
+    row = db.db.execute(
+        "SELECT state, next_try FROM notify_outbox"
+        " WHERE kind='new_messages'").fetchone()
+    assert not res.get("suppressed") and not res.get("parked")
+    assert row["state"] in ("pending", "failed", "accepted")
+    if row["state"] != "accepted":
+        import time
+        assert row["next_try"] - time.time() <= 120
+    db.close()
