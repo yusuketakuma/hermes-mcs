@@ -54,7 +54,8 @@ def _create(db, **changes):
             "source_message_id": 1,
             "source_hash": db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0],
             "title": "synthetic confirmed request", "assignee": "synthetic owner",
-            "due_date": "2026-09-30", **changes}
+            "due_date": "2026-09-30", "reason": "synthetic confirmation",
+            **changes}
 
 
 def test_snapshot_migration_readonly_and_generation(tmp_path):
@@ -280,7 +281,8 @@ def test_request_atomicity_replay_revisions_source_edits(tmp_path):
     update = {"cmd": "request.update", "version": 1, "command_id": str(uuid.uuid4()),
               "actor": "reviewer", "human_confirmed": True, "project_id": 1,
               "request_id": receipt["request_id"], "expected_revision": 1,
-              "expected_source_hash": create["source_hash"], "patch": {"status": "in_progress", "assignee": None}}
+              "expected_source_hash": create["source_hash"], "patch": {"status": "in_progress", "assignee": None},
+              "reason": "synthetic confirmation"}
     barrier = Barrier(2)
 
     def competing_change():
@@ -412,7 +414,8 @@ def test_real_cli_snapshot_queue_host_receipt(tmp_path):
     before = subprocess.run(command + ["candidates", "--project", "1"], capture_output=True, text=True, check=True)
     assert any(m["candidates"] for m in json.loads(before.stdout)["items"])
     request = _create(db)
-    payload = {k: v for k, v in request.items() if k not in ("cmd", "version", "human_confirmed", "project_id")}
+    payload = {k: v for k, v in request.items()
+               if k not in ("cmd", "version", "human_confirmed", "project_id", "reason")}
     missing_reason = subprocess.run(command + ["requests", "create", "--project", "1", "--confirm-human"],
                                     input=json.dumps(payload), capture_output=True, text=True)
     assert missing_reason.returncode == 1 and not list(inbox.glob("*.json"))

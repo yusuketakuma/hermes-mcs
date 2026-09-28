@@ -30,7 +30,9 @@
 - `brain_export.py` は患者名・病名・要約・薬剤等の PHI を含む Markdown を
   ローカル出力する。出力後の知識ストア同期・LLM 利用は別のデータ経路であり、
   エクスポート実行だけではそれらの外部送信を許可したことにならない
-- 人承認操作は `--confirm-human` + `reason` + receipt 記録が必須
+- 人承認操作（依頼登録・更新、シグナル却下、閾値変更、更新適用・ロールバック・
+  DB 復元同意）は `--confirm-human` + receipt 記録が必須で、依頼・却下・閾値変更は
+  `reason` も必須（core の validator が強制）
 - 自己更新の信頼境界は GitHub/TLS と approval receipt。タグ署名は
   検証しないため `update.mode=auto` は「GitHub リポジトリへの
   push 権限 = このマシンでのコード実行」を意味する — auto は

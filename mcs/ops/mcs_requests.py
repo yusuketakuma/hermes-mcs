@@ -115,17 +115,18 @@ def _fields(fields):
 
 
 def _request_extras(req):
-    if "reason" in req and not _text(req["reason"], 2000):
+    # every human-confirmed request command carries its reason — the
+    # frontends already require one; the core enforces it so a command
+    # written straight into data/cmd cannot skip the approval record
+    if "reason" not in req:
+        return ("loop_reason_required" if "loop_ref" in req
+                else "reason_required")
+    if not _text(req["reason"], 2000):
         return "bad_reason"
     if "loop_ref" not in req:
         return None
     from request_loops import validate_loop_ref
-    error = validate_loop_ref(req["loop_ref"])
-    if error:
-        return error
-    if "reason" not in req:
-        return "loop_reason_required"
-    return None
+    return validate_loop_ref(req["loop_ref"])
 
 
 def validate(req):

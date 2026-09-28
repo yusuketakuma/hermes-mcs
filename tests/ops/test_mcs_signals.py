@@ -1634,3 +1634,36 @@ def test_malformed_pending_digest_does_not_block_new_signal(led):
     result = _ev(led, cfg={"signals": {"notify": True}})
     assert result["notify_enqueued"] == 1
     assert _outbox_payloads(led)[-1]["signal_keys"] == ["request_overdue:1:1"]
+
+
+def test_dismissed_signal_resolves_when_clear_and_reopens_on_recurrence(led):
+    """A dismissal covers one episode: once the condition clears the key
+    resolves, and a later burst in the same room opens again."""
+    key = "comm_concentration:1:current"
+    for i in range(mcs_signals.CONC_MIN_POSTS):
+        _msg(led.db, 100 + i, ts=NOW - 3600)
+    _ev(led)
+    assert _dismiss(led, key)["outcome"] == "applied"
+    later = NOW + 30 * DAY
+    r = _ev(led, now=later)
+    assert _states(led.db)[key] == "resolved" and r["resolved"] == 1
+    for i in range(mcs_signals.CONC_MIN_POSTS):
+        _msg(led.db, 500 + i, ts=later - 3600)
+    r = _ev(led, now=later)
+    assert _states(led.db)[key] == "open" and r["opened"] == 1
+
+
+def test_dismiss_checks_project_scope_before_revealing_row_ids(led):
+    import mcs_requests
+    from uuid import uuid4
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    req = {"cmd": "ops.signal_dismiss", "version": 1,
+           "command_id": str(uuid4()), "actor": "tester",
+           "human_confirmed": True, "project_id": 2,
+           "signal_key": "request_overdue:1:1", "reason": "確認済み",
+           "expected_signal_artifact_id": 999999}
+    r = mcs_requests.apply_command(led, req)
+    assert r["outcome"] == "rejected"
+    assert "project_mismatch" in json.dumps(r)
+    assert "current_artifact_id" not in json.dumps(r)
