@@ -779,3 +779,115 @@ def test_restart_drainers_retries_transient_bootstrap(
     assert fake.calls[0] == "bootout"
     assert fake.calls.count("bootstrap") == boots
     assert sleeps.count(1) == sum(rc != 0 for rc in outcomes)
+
+
+# ------------------- consent hold survives a git failure (= mcs_update)
+
+@pytest.mark.parametrize("failing", ["rev-parse", "status"])
+def test_git_failure_inside_consent_hold_keeps_the_freeze(
+        rec, tmp_path, monkeypatch, failing):
+    """The watchdog's own hold is journaled (restore_consent); a later
+    pass whose git fails keeps drainers down, both markers, 'applying'
+    and the receipt, reports restore_consent_blocked and never touches
+    the ledger — the old code escalated: drainers up, marker gone."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    restarts, notices = [], []
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda: restarts.append(1) or [])
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    Path(rec.MARKER_PATH).write_text("1")
+    assert rec.recover() == 0                       # held
+    hold = json.loads(Path(rec.STATE_PATH).read_text())["restore_consent"]
+    marker_path = tmp_path / "data" / "restore_pending.json"
+    assert hold["report_id"] == json.loads(
+        marker_path.read_text())["report_id"]
+    live_before = live.read_bytes()
+    original_git = rec._git
+
+    def broken(args, timeout=rec.T_GIT):
+        if args[0] == failing:
+            return None                             # hung / unspawnable
+        return original_git(args, timeout)
+    monkeypatch.setattr(rec, "_git", broken)
+    for _ in range(2):
+        assert rec.recover() == 1
+    assert restarts == []
+    assert Path(rec.MARKER_PATH).exists()
+    assert json.loads(marker_path.read_text())["phase"] == "awaiting_consent"
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    assert state["applying"]["rollback"] and state["restore_consent"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    assert live.read_bytes() == live_before         # digest intact
+    assert len(notices) == 1                        # hermes send, deduped
+
+
+def test_git_failure_outside_hold_still_escalates(rec, tmp_path,
+                                                  monkeypatch):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(_applying(prev, stage="merge"), f)
+    Path(rec.MARKER_PATH).write_text("1")
+    monkeypatch.setattr(rec, "_git", lambda args, timeout=rec.T_GIT: None)
+    assert rec.recover() == 1
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "escalate"
+    assert report["detail"] == "git unverifiable: rev-parse HEAD"
+    assert not Path(rec.MARKER_PATH).exists()
+
+
+# ------------------------------------------ escalation notice dedup
+
+def test_escalation_notifies_once_per_condition(rec, tmp_path,
+                                               monkeypatch):
+    """Every watchdog pass re-escalates the same stuck journal: notify
+    the first time, again only on a changed condition or after
+    ESCALATE_REALERT_S — never on each 900s pass."""
+    _make_repo(tmp_path)
+    notices = []
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    state = _applying("0" * 40, stage="merge")      # unclassifiable
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    for _ in range(3):
+        assert rec.recover() == 1
+    assert len(notices) == 1
+    # a different report in between (state change) re-arms the alert
+    rec._report("restore_consent_pending", "x")
+    assert rec.recover() == 1
+    assert len(notices) == 2
+    # changed journal = new condition
+    state["applying"]["tag"] = "v1.2.0"
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    assert rec.recover() == 1
+    assert len(notices) == 3
+    # unchanged but past the re-alert interval
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    report["notified_at"] -= rec.ESCALATE_REALERT_S
+    Path(rec.REPORT_PATH).write_text(json.dumps(report))
+    assert rec.recover() == 1
+    assert len(notices) == 4
+    assert rec.recover() == 1
+    assert len(notices) == 4
+
+
+def test_alert_key_matches_updater():
+    """Both tools dedup against one recovery_report.json."""
+    import mcs_update
+    recovery = _load()
+    state = _applying("p" * 40)
+    for detail in ("git unverifiable: git_timeout: rev-parse",
+                   "unclassifiable repo state — HEAD=abc",
+                   "resume incomplete: a,b"):
+        assert recovery._alert_key(state, detail) \
+            == mcs_update._alert_key(state, detail)
+    assert recovery.ESCALATE_REALERT_S == mcs_update.ESCALATE_REALERT_S
