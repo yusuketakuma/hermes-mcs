@@ -1,5 +1,6 @@
 """Synthetic contracts for current artifacts and thread-scoped attachments."""
 import json
+import time
 
 import pytest
 
@@ -84,8 +85,8 @@ def test_invalid_usage_cannot_refill_daily_budget(tmp_path, metadata):
         db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 5})
         with db.db:
             db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
-                          "VALUES('semantic_usage','{}',?,strftime('%s','now'))",
-                          (json.dumps(metadata),))
+                          "VALUES('semantic_usage','{}',?,?)",
+                          (json.dumps(metadata), time.time()))
         with pytest.raises(ValueError, match='semantic_usage_invalid'):
             semantic.jev_usage_today(db)
     finally:
