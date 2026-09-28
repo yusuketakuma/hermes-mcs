@@ -117,6 +117,20 @@ def test_coverage_missing_is_needs_review():
                for f in result["findings"])
 
 
+def test_open_obligations_block_pass_even_when_facts_supported():
+    """U06-F01/F05: every remaining fact supported plus a clean coverage
+    Choice is still NEEDS_REVIEW while the doc carries open
+    obligations — never PASS over an incomplete canonical doc."""
+    doc = _doc([_fact("fact_a")], [EV])
+    doc["coverage"].update(open_obligation_ids=["obl_x"],
+                           status="incomplete")
+    result = audit.audit_facts_v2(_Jev(), doc, "アムロジピンを継続。",
+                                  deadline=10**9)
+    assert result["evaluated"]
+    assert result["status"] == "NEEDS_REVIEW"
+    assert {"code": "canonical_coverage_incomplete"} in result["findings"]
+
+
 def test_audit_target_carries_structured_fields():
     seen = {}
 

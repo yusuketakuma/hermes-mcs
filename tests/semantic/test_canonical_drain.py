@@ -301,3 +301,131 @@ def test_drain_flags_incomplete_mandatory_pages(tmp_path):
                    for f in audit["findings"])
     finally:
         db.close()
+
+
+def _seed_one(tmp_path):
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1, body="アムロジピン5mgを継続します。")]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    return db
+
+
+class _RejectFactOnceJev(_FakeJev):
+    """Preflight: medication present.  The first per-fact audit of each
+    fact answers not_supported; later audits of the same fact support."""
+
+    def __init__(self, only=""):
+        choice_map = {f"has_{c}": "absent" for c in sf.MANDATORY_CATEGORIES}
+        choice_map["has_medication"] = "present"
+        super().__init__(choice_map=choice_map)
+        self.only = only
+        self.rejected = set()
+
+    def evaluate(self, state, questions, deadline):
+        target = (state.get("target") or {}).get("id")
+        text = (state.get("target") or {}).get("text") or ""
+        if target in questions and target not in self.rejected \
+                and self.only in text:
+            self.rejected.add(target)
+            self.choice_map[target] = "not_supported"
+        elif target in questions:
+            self.choice_map[target] = "supports"
+        return super().evaluate(state, questions, deadline)
+
+
+def _job(db):
+    return dict(db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone())
+
+
+def _latest_diag(db):
+    row = db.db.execute(
+        "SELECT content FROM artifacts WHERE kind='v4_diagnostic' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    return json.loads(row["content"]) if row else None
+
+
+def test_repair_reopening_obligations_never_publishes_pass(tmp_path):
+    """U06-F01: a repair that drops the rejected medication fact reopens
+    its obligation — the repaired doc is incomplete and must park for
+    review, never mint the semantic_facts_v4 PASS read model."""
+    db = _seed_one(tmp_path)
+    try:
+        def llm(prompt):
+            if "要約器" in prompt:
+                return json.dumps({"claims": [], "limitations": []},
+                                  ensure_ascii=False)
+            if "監査で不合格" in prompt:     # repair drops the fact
+                return json.dumps(
+                    {"facts": [], "category_presence":
+                     dict(NO_FACTS, medication="one")},
+                    ensure_ascii=False)
+            return json.dumps(
+                {"facts": [_med_fact("アムロジピン", "アムロジピン5mgを継続",
+                                     "continue")],
+                 "category_presence": dict(NO_FACTS, medication="one")},
+                ensure_ascii=False)
+
+        out = _drain(db, llm=llm, jev=_RejectFactOnceJev())
+        latest = json.loads(_artifacts(db, KIND_FACTS_V2, 1)[-1]["content"])
+        assert latest["coverage"]["status"] == "incomplete"
+        kinds = {r[0] for r in db.db.execute(
+            "SELECT kind FROM artifacts WHERE message_id=1")}
+        assert "semantic_facts_v4" not in kinds
+        assert "canonical_projection" not in kinds
+        assert out["failed"] == 1 and not out["done"]
+        assert _job(db)["state"] == "failed"
+        audit = _audit_doc(db, 1)
+        assert audit["status"] == "NEEDS_REVIEW"
+        assert {"code": "canonical_coverage_incomplete"} in audit["findings"]
+        assert _latest_diag(db)["status"] == "NEEDS_REVIEW"
+    finally:
+        db.close()
+
+
+def test_evaluated_needs_review_without_fact_findings_is_terminal(tmp_path):
+    """U06-F02: an evaluated fact audit that is NEEDS_REVIEW with no
+    repairable per-fact finding (Jev: an important event is missing)
+    is a clinical verdict — the job stops for review in one drain with
+    a NEEDS_REVIEW diagnostic, never an endless PENDING deferral."""
+    db = _seed_one(tmp_path)
+    try:
+        choice_map = {f"has_{c}": "absent" for c in sf.MANDATORY_CATEGORIES}
+        choice_map["has_medication"] = "present"
+        choice_map["source_fact_coverage"] = "missing"
+        out = _drain(db, jev=_FakeJev(choice_map=choice_map))
+        assert out["failed"] == 1 and not out["deferred"]
+        assert _job(db)["state"] == "failed"
+        diag = _latest_diag(db)
+        assert diag["status"] == "NEEDS_REVIEW"
+        codes = [f["code"] for f in diag["findings"]]
+        assert "fact_stage_hard_fail" in codes
+        assert "source_fact_coverage_missing" in codes
+        assert _audit_doc(db, 1)["status"] == "NEEDS_REVIEW"
+        kinds = {r[0] for r in db.db.execute(
+            "SELECT kind FROM artifacts WHERE message_id=1")}
+        assert "semantic_facts_v4" not in kinds
+    finally:
+        db.close()
+
+
+def test_rejected_fact_repaired_and_supported_still_passes(tmp_path):
+    """Control for U06-F01: a repair that keeps coverage complete is
+    re-audited and may still publish PASS."""
+    db = _seed_one(tmp_path)
+    try:
+        out = _drain(db, jev=_RejectFactOnceJev(only="継続"))
+        latest = json.loads(_artifacts(db, KIND_FACTS_V2, 1)[-1]["content"])
+        assert latest["coverage"]["status"] == "complete"
+        assert out["done"] == 1 and not out["failed"]
+        kinds = {r[0] for r in db.db.execute(
+            "SELECT kind FROM artifacts WHERE message_id=1")}
+        # the fact stage passed (projection minted); the summary audit
+        # verdict is independent of this control
+        assert "canonical_projection" in kinds
+        fact_audit = json.loads(_artifacts(db, KIND_FACT_AUDIT, 1)[-1]["content"])
+        assert fact_audit["status"] == "PASS"
+    finally:
+        db.close()
