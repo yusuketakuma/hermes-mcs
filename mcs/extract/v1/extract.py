@@ -61,16 +61,22 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 4
+RULE_VERSION = 5
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
+_PLANNED_BEFORE = re.compile(r"次回|予定|明日|明後日|今度|来週")
+_PLANNED_AFTER = re.compile(r"[　\s]*(?:の|を)?[　\s]*(?:予定|します|いたします|致します)")
 _VITAL_PATTERNS = {
     "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:\.\d)?)\s*[℃度]?",
-    "hr":   r"(?:脈拍|(?<!静)(?<!動)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})",
+    # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
+    "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})",
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})",
     "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})",
-    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})\s*[%％]?",
+    # a number followed by a flow unit is oxygen delivery (酸素10L),
+    # never a saturation reading
+    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.])"
+            r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
     "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})",
 }
 
@@ -170,13 +176,21 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["events"] = sorted(ev)
 
     # --- visit date (first M/D preceding 訪問/診察) — a past event ---
-    m = _VISIT_DATE.search(body)
-    if m:
+    # A planned mention (次回10/5訪問予定) is not a visit that happened:
+    # resolving it "past" would fabricate a date one year back.
+    for m in _VISIT_DATE.finditer(body):
+        # the look-behind stays inside the date's own sentence
+        pre = re.split(r"[。．\n!！?？]",
+                       body[max(0, m.start() - 6):m.start()])[-1]
+        if _PLANNED_BEFORE.search(pre) \
+                or _PLANNED_AFTER.match(body, m.end()):
+            continue
         d = _ymd(int(m.group(2)), int(m.group(3)),
                  int(m.group(1)) if m.group(1) else year,
                  posted, "any" if m.group(1) else "past")
         if d:
             out["visit_date"] = d
+        break
 
     # --- next planned date — a FUTURE date ---
     m = re.search(r"次回.{0,8}?(\d{1,2})[/月](\d{1,2})", body)
