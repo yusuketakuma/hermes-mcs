@@ -1916,6 +1916,12 @@ _SIGNAL_RE = re.compile(
     r"|親御|親族|本人|患者|利用者|御本人"
     r"|検査|採血|血液|レントゲン|エコー|心電図|異常|正常|上昇|低下")
 
+# Inflection-free stems of _EVENT_CUES entries whose cue pins one
+# conjugation (亡くな(?:っ|り), 落ち(?:た|て|る)) — "亡くなられました" /
+# "落ちました" must reach the LLM too. Not new vocabulary: a superset
+# net only routes more rows to the model.
+_EVENT_STEM_RE = re.compile(r"亡くな|落ち")
+
 # Empty extraction payload for filtered bodies — same shape as a
 # validated extraction so every reader (rollup/structured_view/stats)
 # treats it as "nothing found", while meta.prefilter keeps the
@@ -1935,6 +1941,13 @@ def _low_signal(body: str, hints: dict | None) -> bool:
     broadened signal regex finds no token worth an LLM read. A hints
     parse failure (None) can never prove emptiness — never skip."""
     if hints is None or len(hints) > 1:   # {"v":1} = the empty dict
+        return False
+    # The validator's own event cues (and their inflection-free stems)
+    # must never be settled as routine without a read: a body the
+    # grounding check would accept as eol/fall/visit evidence is by
+    # definition not "no signal".
+    if _EVENT_STEM_RE.search(body) or any(
+            cue.search(body) for cue in _EVENT_CUES.values()):
         return False
     return _SIGNAL_RE.search(body) is None
 
