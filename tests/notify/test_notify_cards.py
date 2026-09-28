@@ -2075,6 +2075,32 @@ def test_card_resolve_delivered_must_match_journal_message(led, tmp_path):
     assert _card(led)["message_id"] == "m-7"
 
 
+
+def test_card_resolve_delivered_accepts_idless_journal_result(led, tmp_path):
+    """A delivered journal row without a message id cannot contradict
+    the operator's id — but it still refutes mark_not_sent."""
+    render = _deliverable(led, tmp_path)
+    aid = f"{1:016x}"
+    _begin(led, render)
+    _journal(tmp_path,
+             {"attempt_id": aid, "phase": "started",
+              "delivery_id": render["delivery_id"]},
+             {"attempt_id": aid, "phase": "result", "result": "delivered",
+              "delivery_id": render["delivery_id"]})
+    r = _resolve(led, render, aid, evidence={
+        "method": "channel_lookup", "worker_stopped": True,
+        "proof": "remote_absent", "ref": "channel:ch1"})
+    _rejected_no_reissue(led, r, "journal_contradicts_proof")
+    req = {"version": 1, "cmd": "ops.card_resolve", "command_id": _uuid(63),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "checked channel",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **SCOPE, "message_id": "m-7",
+           "evidence": {"method": "channel_lookup", "ref": "synthetic"}}
+    r = notify_transport.apply_card_resolve(led, req, CFG, now=NOW)
+    assert r["outcome"] == "applied"
+    assert _card(led)["message_id"] == "m-7"
+
 def test_begin_denies_source_changed_and_reissues_at_once(led, tmp_path):
     """A source edit between issue and begin never posts the stale
     bytes, and the fresh render is published by the denial itself — no

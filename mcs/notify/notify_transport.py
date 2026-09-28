@@ -875,12 +875,15 @@ def _journal_contradiction(ledger, req) -> str | None:
         return "journal_unverifiable"
     rec = attempts.get(req["attempt_id"]) or {"rows": [], "tainted": False}
     rows = [r for r in rec["rows"] if not r.get("part_id")]
-    delivered = {str(r.get("message_id")) for r in rows
-                 if r.get("phase") == "result"
-                 and r.get("result") == "delivered"}
+    delivered = [r for r in rows if r.get("phase") == "result"
+                 and r.get("result") == "delivered"]
     if req["result"] == "mark_delivered":
+        # a delivered row that recorded no message id witnesses the send
+        # but cannot contradict the operator's id
+        ids = {str(r["message_id"]) for r in delivered
+               if r.get("message_id") not in (None, "")}
         return "message_id_mismatch" \
-            if delivered - {str(req["message_id"])} else None
+            if ids - {str(req["message_id"])} else None
     if delivered:
         return "journal_contradicts_proof"
     if req["evidence"].get("proof") == "no_journal_started" and (
