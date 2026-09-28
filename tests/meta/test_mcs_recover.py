@@ -243,6 +243,8 @@ def test_stale_git_locks_removed(rec, tmp_path):
     prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
     lock = repo / ".git" / "index.lock"
     lock.write_text("")
+    now = time.time()                        # the clock the code reads
+    os.utime(lock, (now, now))
     state = _applying(prev, stage="quiesce", ago=4000)
     with open(rec.STATE_PATH, "w") as f:
         json.dump(state, f)
