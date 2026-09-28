@@ -1690,6 +1690,32 @@ def test_confirm_publish_failure_releases_in_flight(world, monkeypatch,
     assert "取り消し" in cancel.response.message["content"]
 
 
+def test_confirm_expiring_before_take_never_publishes(world):
+    """The TTL may lapse between the confirm lookup and taking it — the
+    take must answer expiry, not queue the command from the stale
+    lookup (the old begin_confirm result was ignored)."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+    before = len(list((world.data / "cmd_int").glob("*.json")))
+    real = act._authorized
+
+    def lapse(interaction, pids=None):
+        reg._data["pending_confirms"][cid[len("mcs:c:"):]]["expires"] = 0
+        return real(interaction, pids)
+    act._authorized = lapse
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(ok))
+    assert "期限切れ" in ok.response.message["content"]
+    assert len(list((world.data / "cmd_int").glob("*.json"))) == before
+
+
 def test_send_modal_failure_releases_modal(world):
     """send_modal past the ~3s window raises — the modal entry must be
     dropped (a dead modal_id is not claimable state) and the click gets

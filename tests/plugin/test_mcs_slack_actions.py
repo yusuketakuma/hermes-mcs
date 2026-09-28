@@ -342,3 +342,59 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
         assert reg.confirm(confirm_id) is None
     asyncio.run(scenario())
+
+
+async def _to_confirm(actions, app, dirs, project_id):
+    body, action = click()
+    await actions._action(ack, body, action)
+    env = command(dirs)
+    modal_id = app.client.views[0]["view"]["private_metadata"]
+    view_body, view = submitted(modal_id, title="合成依頼", reason="合成理由",
+                                assignee="", due_date="")
+    await actions._modal(ack, view_body, view)
+    result(dirs, env["request_id"], request_id=env["request_id"],
+           outcome="applied", modal=True, params={"project_id": project_id})
+    await actions.sweep_followups()
+    return body, app.client.messages[-1]["blocks"][1]["elements"]
+
+
+def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(
+        tmp_path):
+    """A payload project leaving scope after the preview blocks 確定
+    silently without marking it in flight; 取消 still succeeds."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(
+            tmp_path, kind="request", project_ids=frozenset({123, 999}))
+        body, (confirm_action, cancel_action) = await _to_confirm(
+            actions, app, dirs, 999)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        actions._settings["project_ids"] = frozenset({123})
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        assert len(app.client.messages) == before
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+        assert not reg.confirm(confirm_id).get("in_flight")
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
+
+
+def test_confirm_expiring_before_take_never_publishes(tmp_path):
+    """TTL lapsing between the lookup and the take must not queue the
+    command from the stale lookup."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        real = actions._pinned
+
+        def lapse(*args):
+            reg._data["pending_confirms"][confirm_id]["expires"] = 0
+            return real(*args)
+        actions._pinned = lapse
+        await actions._confirm(ack, body, confirm_action)
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+        assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
