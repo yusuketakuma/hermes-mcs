@@ -25,6 +25,8 @@ HOME = os.path.expanduser("~/.mcs")
 CONF_PATH = os.path.join(HOME, "config.json")
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 DB = os.path.join(HOME, "data", "ledger.db")
+# written under <HOME>/data by mcs_update while an update is applied
+UPDATE_MARKER_NAME = "update_in_progress.marker"
 CACHE = os.path.join(HOME, "token_cache.json")   # outside data/ (sandbox-mounted)
 CHROME_PROFILE = os.path.join(HOME, "chrome-profile")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -73,6 +75,24 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
                     # value in a later dotenv file
                     break
     return None
+
+
+def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
+    """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
+    file: readers see the whole old ``dest`` or the whole new one."""
+    if mode is not None:
+        os.chmod(tmp, mode)
+    fd = os.open(tmp, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, dest)
+    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def atomic_write(path: str, writer, mode: int | None = None,

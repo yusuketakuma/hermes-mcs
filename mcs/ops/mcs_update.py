@@ -45,8 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 
-from mcs_util import (acquire_run_lock, atomic_write,  # noqa: E402
-                      load_config)
+from mcs_util import (UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
+                      atomic_write, load_config)
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
@@ -56,7 +56,7 @@ LEDGER = os.path.join(DATA, "ledger.db")
 STATE_PATH = os.path.join(DATA, "update_state.json")
 UPDATE_LOCK = os.path.join(DATA, "update.lock")
 RUN_LOCK = os.path.join(DATA, "run.lock")
-MARKER_PATH = os.path.join(DATA, "update_in_progress.marker")
+MARKER_PATH = os.path.join(DATA, UPDATE_MARKER_NAME)
 MANIFEST_PATH = os.path.join(DATA, "service_manifest.json")
 REPORT_PATH = os.path.join(DATA, "recovery_report.json")
 RESTORE_REPORT_PATH = os.path.join(DATA, "restore_report.json")

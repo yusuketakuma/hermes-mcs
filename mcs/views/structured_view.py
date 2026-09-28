@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
-                         med_is_patient_current)
+                         med_is_patient_current, request_unverified)
 
 
 def _content_dict(r) -> dict | None:
@@ -307,7 +307,7 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 else ""
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
-            (reqs if r.get("unverified", False) is False else cands).append(
+            (cands if request_unverified(r) else reqs).append(
                 prefix + to + str(r.get("action") or "")[:30] + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:

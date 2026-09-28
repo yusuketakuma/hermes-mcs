@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text
+from mcs_util import html_to_text, publish_tmp
 
 
 SCHEMA_VERSION = 7
@@ -1881,14 +1881,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
             src.close()
         if not valid_mcs_db(tmp):
             return None
-        with open(tmp, "rb") as snapshot:
-            os.fsync(snapshot.fileno())
-        os.replace(tmp, dest)
-        directory = os.open(dest_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
         return dest
     finally:
