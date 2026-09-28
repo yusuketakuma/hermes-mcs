@@ -40,6 +40,23 @@ def test_filters_and_labels(db):
     assert "家族→医師へ状態確認(期限:2026-10-01)" in joined
 
 
+def test_events_union_keeps_v1_only_kinds(db):
+    """A partial llm event list must not shadow v1 detections — the
+    llm enum has no medication/adherence/media_ref, and production
+    showed eol lost when llm listed only [visit]."""
+    joined = _render(db, {"events": ["visit"]},
+                     {"events": ["visit", "eol", "medication"]})
+    assert "訪問" in joined and "看取り" in joined and "投薬" in joined
+
+
+def test_vitals_merge_per_key(db):
+    """llm wins keys it emitted; v1 regex fills keys llm omitted — a
+    partial llm vitals dict must not hide v1-only measurements."""
+    joined = _render(db, {"vitals": {"hr": 88}},
+                     {"vitals": {"sbp": 128, "dbp": 76, "bt": 36.8}})
+    assert "HR 88" in joined and "BP 128/76" in joined and "BT 36.8" in joined
+
+
 def test_resolved_cancels_rule_positive(db):
     joined = _render(db, {"symptoms": [{"text": "発熱", "status": "resolved"}]},
                      {"symptoms": ["発熱"]})

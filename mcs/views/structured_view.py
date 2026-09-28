@@ -10,6 +10,23 @@ diverge between surfaces.
 Freshness/safety gate lives in latest_artifact's SQL: the artifact must
 be bound to the message's CURRENT content_hash and the message must not
 be deleted — a tombstoned message never contributes extracted data.
+
+Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
+  events   — UNION of llm+v1; llm's enum lacks v1-only kinds
+             (medication/adherence/media_ref) and a partial llm list
+             must not shadow v1 detections.
+  vitals   — per-key merge: llm wins keys it emitted (already
+             guard-verified against body numerals); v1 regex fills keys
+             llm omitted.
+  symptoms — llm entries carry polarity/subject; v1 tokens merge in
+             unless they overlap an llm symptom (typed negation must not
+             resurface as a bare symptom token).
+  meds     — llm ONLY when it emitted meds (even all-filtered): falling
+             back to v1 would resurrect filtered negated/family items.
+             v1 feeds "薬剤候補（未確認）" only when llm saw nothing.
+  requests — llm preferred; v1 formulaic 確認/連絡 fill only when llm
+             emitted none.
+  canonical facts — appended last as the highest-authority layer.
 """
 from __future__ import annotations
 
@@ -145,17 +162,27 @@ def _head_lines(llm: dict, v1: dict) -> list[str]:
            if isinstance(p, str) and p.strip()]
     if pts:
         lines.append("要点: " + " / ".join(p[:40] for p in pts[:3]))
-    evs = [e for e in (llm.get("events") or v1.get("events") or [])
-           if e in EVT_LABEL]
+    # events merge as a UNION — llm's enum excludes v1-only kinds
+    # (medication/adherence/media_ref) and a partial llm list must not
+    # shadow v1 detections (production: 区分 lost eol on ~400 posts).
+    evs = [e for e in dict.fromkeys(
+        list(llm.get("events") or []) + list(v1.get("events") or []))
+        if e in EVT_LABEL]
     if evs:
         lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs[:5]))
     return lines
 
 
 def _vital_line(llm: dict, v1: dict):
-    vit = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else None
-    if not vit and isinstance(v1.get("vitals"), dict):
-        vit = v1["vitals"]
+    # Per-key merge: llm wins on keys it extracted (vitals_guard has
+    # already relabelled/dropped mislabelled values), v1's regex
+    # catches keys llm omitted entirely (production: ~520 posts lost
+    # v1-only hr/sbp/dbp readings under a partial llm vitals dict).
+    lv = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else {}
+    vv = v1.get("vitals") if isinstance(v1.get("vitals"), dict) else {}
+    vit = {k: v for k in ("sbp", "dbp", "bt", "hr", "rr", "spo2", "bs")
+           if (v := lv.get(k) if lv.get(k) is not None
+               else vv.get(k)) is not None}
     if not vit:
         return None
     parts = []
