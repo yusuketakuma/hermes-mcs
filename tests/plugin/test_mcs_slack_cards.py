@@ -95,3 +95,12 @@ def test_render_rejects_invalid_delivery_before_building_blocks():
     # When rendered, then it fails closed before any network consumer.
     with pytest.raises(ValueError, match="bad_slack_scope"):
         render(spec)
+
+
+def test_slack_spec_with_unknown_feature_is_rejected_not_rendered():
+    """An outdated Slack worker holds a spec carrying a feature key it
+    does not know instead of rendering the card without it."""
+    spec = _spec()
+    spec["parts"]["future_poll"] = {"q": "?"}
+    with pytest.raises(ValueError, match="unsupported_parts_key"):
+        render(spec)

@@ -949,3 +949,44 @@ def test_live_segment_rotates_and_closed_segment_is_compacted(
     assert (state / "journal-w1~000001.jsonl").exists()
     assert not first.exists()                  # fully settled -> removed
     assert list(journal.scan(str(state))) == ["b2" * 8]
+
+
+# ---------- runner/worker spec compatibility (U04-F04) ----------------------
+
+@pytest.mark.parametrize("mutate,reason", [
+    (lambda s: s["parts"].__setitem__("future_poll", {"q": "?"}),
+     "unsupported_parts_key"),
+    (lambda s: s["parts"]["manifest"][1].__setitem__("future_flag", 1),
+     "unsupported_part_key"),
+    (lambda s: s["delivery"].__setitem__("future_route", "x"),
+     "unsupported_delivery_key"),
+    (lambda s: s.__setitem__("future_top", 1), "unsupported_spec_key"),
+])
+def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
+                                                         reason):
+    """A worker that was not restarted after a runner upgrade must not
+    send the card and silently drop a feature it does not understand —
+    the spec is rejected whole, nothing is claimed or sent, and the
+    rejection is logged once instead of every tick."""
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    logs = []
+    w, reg, bot = _mkworker(tmp_path)
+    w._log = lambda event, **f: logs.append((event, f))
+    spec = _sealed(_spec(_chunks(1)))
+    spec_mod.validate(spec)                       # baseline is accepted
+    mutate(spec)
+    with pytest.raises(ValueError, match=reason):
+        spec_mod.validate(spec)
+    _publish_spec(tmp_path, spec)
+    sent_before = len(bot.channels[42].sent)
+
+    async def ticks():
+        for _ in range(3):
+            await w.tick()
+    asyncio.run(ticks())
+    assert len(bot.channels[42].sent) == sent_before
+    assert not reg.claimed(DELIVERY_ID)
+    assert not list((tmp_path / "cmd_int").glob("*.json"))
+    assert not list((tmp_path / "discord_render").glob("*.claimed"))
+    assert logs == [("spec_rejected", {"delivery_id": DELIVERY_ID,
+                                       "error": reason})]
