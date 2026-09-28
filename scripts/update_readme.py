@@ -41,8 +41,12 @@ for _root, _dirs, _files in os.walk(MCS_DIR):
 
 
 def _first_docline(obj) -> str:
+    """First sentence of an object's docstring."""
+    return _first_sentence(getattr(obj, "__doc__", None) or "")
+
+
+def _first_sentence(doc: str) -> str:
     """First sentence of a docstring — join wrapped lines until a period."""
-    doc = getattr(obj, "__doc__", None) or ""
     parts = []
     for ln in doc.strip().splitlines():
         ln = ln.strip()
@@ -61,14 +65,17 @@ def _mod_docline(path: Path) -> str:
         doc = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8")))
     except (SyntaxError, UnicodeDecodeError):
         return ""
-    return (doc or "").strip().split("\n", 1)[0].strip()
+    return _first_sentence(doc or "")
 
 
 def _clean(desc: str, strip_prefix: bool = False) -> str:
     # module docstrings often start "Name — summary"; function docstrings
-    # are plain sentences — only strip the Name prefix for modules.
+    # are plain sentences — only strip the Name prefix for modules. The
+    # separator must be a spaced dash: a hyphenated word ("Durable
+    # medication-event …", "Auto-metrics …") is part of the summary.
     if strip_prefix:
-        desc = re.sub(r"^[A-Z][A-Za-z0-9 _-]*[—–-]\s*", "", desc or "")
+        desc = re.sub(r"^[A-Z][A-Za-z0-9 _.-]*?\s+[—–-]\s+", "",
+                      desc or "")
     return desc.replace("|", "\\|")
 
 
