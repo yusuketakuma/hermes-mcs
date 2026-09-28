@@ -236,6 +236,27 @@ def test_resealed_pending_intents_do_not_starve_text_events(tmp_path,
         db.close()
 
 
+def test_invalid_interactive_payload_is_held_not_retried(tmp_path,
+                                                        monkeypatch):
+    """U03-F07: a non-dict frozen payload is quarantined by dispatch; the
+    flush must not re-arm it with an hourly retry forever."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: sys.executable)
+    monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
+    try:
+        _seed_card_patients(db, 1)
+        eid = db.outbox_add("new_messages", 1, {"message_ids": [100]})
+        db.db.execute("UPDATE notify_outbox SET payload='[]' "
+                      "WHERE event_id=?", (eid,))
+        db.db.commit()
+        assert notify_flush.flush(db)["failed"] == 1
+        row = db.db.execute("SELECT state,next_try FROM notify_outbox "
+                            "WHERE event_id=?", (eid,)).fetchone()
+        assert row["state"] == "failed" and row["next_try"] is None
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("failure", ["uncertain", "partial_usage", "corrupt"])
 def test_hold_uses_current_delivery_receipt(tmp_path, monkeypatch, failure):
     """A freshly written receipt must prevent a rescue of an ambiguous send."""
