@@ -318,6 +318,9 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (root / name).mkdir(parents=True)
     dirs = slack_paths.ensure_dirs(str(root))
+    (root / "flags" / "notify.json").write_text(json.dumps({
+        "interactive": True, "transport": "slack",
+    }))
     reg = registry.Registry(dirs["state"], scope=scope)
     worker = DeliveryWorker(
         sender=adapter, settings=scope, root=str(root), reg=reg,

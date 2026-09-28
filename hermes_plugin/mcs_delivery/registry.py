@@ -9,6 +9,7 @@ a lost file is rebuilt from the snapshot — never invented.
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import time
@@ -61,6 +62,17 @@ def _default() -> dict:
             "parts": {}}
 
 
+def _expired(value, *, ttl: float = 0, now: float | None = None) -> bool:
+    """Malformed expiry never preserves an interaction authorization."""
+    if type(value) not in (int, float):
+        return True
+    try:
+        return (not math.isfinite(value) or value < 0
+                or value + ttl <= (time.time() if now is None else now))
+    except OverflowError:
+        return True
+
+
 class _RegistryBatch:
     """Context manager returned by Registry.batch — defers save() calls
     and flushes once on exit."""
@@ -94,12 +106,22 @@ class Registry:
         try:
             with open(self._path, "rb") as handle:
                 data = json.loads(handle.read().decode("utf-8"))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             data = None
-        self._data = data if isinstance(data, dict) else _default()
+        except (ValueError, RecursionError):
+            raise ValueError("registry_corrupt") from None
+        else:
+            if not isinstance(data, dict):
+                raise ValueError("registry_corrupt")
+        self._data = data if data is not None else _default()
         for key, default in _default().items():
-            if not isinstance(self._data.get(key), type(default)):
+            if key not in self._data:
                 self._data[key] = default
+            elif type(self._data[key]) is not type(default):
+                raise ValueError("registry_corrupt")
+            if isinstance(default, dict) and key not in ("dead", "parts"):
+                if not all(isinstance(row, dict) for row in self._data[key].values()):
+                    raise ValueError("registry_corrupt")
         if data is None and self._scope is not None:
             self._restore_legacy_scope()
 
@@ -141,11 +163,11 @@ class Registry:
         if self._batch_depth and not immediate:
             self._dirty = True
             return
-        self._dirty = False
         raw = json.dumps(self._data, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
         paths.atomic_write(self._path, raw, tmp_prefix=".reg-",
                            mode=0o600)
+        self._dirty = False
 
     # -- claims ----------------------------------------------------
 
@@ -208,7 +230,7 @@ class Registry:
 
     def modal(self, modal_id: str) -> dict | None:
         rec = self._data["pending_modals"].get(modal_id)
-        if rec and rec.get("expires", 0) <= time.time():
+        if rec is not None and _expired(rec.get("expires")):
             self._data["pending_modals"].pop(modal_id, None)
             self.save()
             return None
@@ -225,7 +247,7 @@ class Registry:
 
     def confirm(self, confirm_id: str) -> dict | None:
         rec = self._data["pending_confirms"].get(confirm_id)
-        if rec and rec.get("expires", 0) <= time.time():
+        if rec is not None and _expired(rec.get("expires")):
             self._data["pending_confirms"].pop(confirm_id, None)
             self.save()
             return None
@@ -245,7 +267,7 @@ class Registry:
 
     def followup(self, command_id: str) -> dict | None:
         rec = self._data["followups"].get(command_id)
-        if rec and rec.get("expires", 0) <= time.time():
+        if rec is not None and _expired(rec.get("expires")):
             self._data["followups"].pop(command_id, None)
             self.save()
             return None
@@ -265,7 +287,7 @@ class Registry:
         if not rec:
             return None
         if rec.get("ok") is False \
-                and rec.get("at", 0) + CAPABILITY_NEG_S <= time.time():
+                and _expired(rec.get("at"), ttl=CAPABILITY_NEG_S):
             return None                     # negative entries age out
         return rec
 
@@ -294,19 +316,19 @@ class Registry:
         now = time.time()
         changed = False
         stale = [k for k, v in self._data["dead"].items()
-                 if v + DEAD_TTL_S <= now]
+                 if _expired(v, ttl=DEAD_TTL_S, now=now)]
         for k in stale:
             del self._data["dead"][k]
             changed = True
         for table in ("pending_modals", "pending_confirms", "followups"):
             dead = [k for k, v in self._data[table].items()
-                    if v.get("expires", 0) <= now]
+                    if _expired(v.get("expires"), now=now)]
             for k in dead:
                 del self._data[table][k]
                 changed = True
         for table in ("tokens", "messages"):
             dead = [k for k, v in self._data[table].items()
-                    if v.get("at", 0) + CONTEXT_KEEP_S <= now]
+                    if _expired(v.get("at"), ttl=CONTEXT_KEEP_S, now=now)]
             for k in dead:
                 del self._data[table][k]
                 changed = True

@@ -8,6 +8,8 @@ environment without the SDK.
 """
 from __future__ import annotations
 
+from typing import BinaryIO
+
 from ..mcs_delivery.spec import MAX_TEXT
 
 # accent bar colour per card kind — the visible card edge; a missing
@@ -86,7 +88,7 @@ def build_view(spec: dict):
     return view
 
 
-async def send_attachment(target, path: str, name: str):
+async def send_attachment(target, path: str | BinaryIO, name: str):
     """File upload for a durable attachment part — kept here so
     delivery.py stays SDK-free (only cards/actions may import
     discord.py, and only inside functions)."""

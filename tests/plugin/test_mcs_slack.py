@@ -944,6 +944,25 @@ def test_slack_attachment_foreign_file_never_binds(led, tmp_path):
     assert len(w.client.upload_calls) == 1
 
 
+def test_slack_attachment_metadata_without_hash_is_not_delivery_proof(led, tmp_path):
+    _seed_thread(led)
+    _aid, _f, blob = _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    assert asyncio.run(w.sender.bind())
+    spec = json.loads(_latest_render(led)["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part")
+    w.client.replies["1790000000.000001"] = [{
+        "ts": "1790000000.000099", "bot_id": w.client.bot_id,
+        "files": [{"id": "F_UNVERIFIED", "name": part["name"], "size": len(blob)}]}]
+    out = asyncio.run(w.worker._attachment_part(
+        {**spec, "op": "update"}, part,
+        {"thread_id": "1790000000.000001", "history": None, "consumed": set()}))
+    assert out["result"] == "delivered" and out["remote_id"] != "F_UNVERIFIED"
+    assert len(w.client.upload_calls) == 1
+
+
 def test_slack_attachment_unavailable_stays_disclosed(led, tmp_path):
     _seed_thread(led)
     aid, _f, _blob = _attach(led, tmp_path, state="failed")

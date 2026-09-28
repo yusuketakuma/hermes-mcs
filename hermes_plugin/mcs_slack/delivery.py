@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import hashlib
 import re
 from collections.abc import Mapping
-from pathlib import Path
 
+from ..mcs_delivery.paths import read_verified_attachment
 from ..mcs_delivery.spec import token_map
 from ..mcs_delivery.worker import DeliveryWorker as _BaseWorker
 
@@ -17,23 +16,6 @@ from .paths import ensure_dirs, notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-
-
-def _read_verified(path: str | None, part: dict) -> bytes | None:
-    """Read the sealed file once — the exact bytes hash-verified are
-    the bytes uploaded, so nothing can be substituted between the
-    check and the send. A missing/changed/corrupt file yields None."""
-    want_sha = part.get("sha256")
-    if not path or not want_sha:
-        return None
-    try:
-        blob = Path(path).read_bytes()
-    except OSError:
-        return None
-    want_n = part.get("bytes")
-    if want_n is not None and len(blob) != want_n:
-        return None
-    return blob if hashlib.sha256(blob).hexdigest() == want_sha else None
 
 
 def _upload_file_id(data) -> str | None:
@@ -240,8 +222,8 @@ class DeliveryWorker(_BaseWorker):
         """One manifest part's wire call. The card's own ts is the
         thread root, so 'thread' needs no second post — the delivered
         card attempt already proved it exists. Body chunks go inside
-        that root as ordered replies; attachments stay a visible
-        not_sent until the upload edge lands (T10)."""
+        that root as ordered replies; attachments use the bound
+        client upload edge with verified sealed bytes."""
         spec = claim["spec"]
         if part["kind"] == "thread":
             mid = ctx.get("card_message_id")
@@ -325,7 +307,8 @@ class DeliveryWorker(_BaseWorker):
             rid = await self._file_remote_match(thread_ts, part, ctx)
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid}
-        blob = _read_verified(part.get("path"), part)
+        blob = await asyncio.to_thread(
+            read_verified_attachment, part.get("path"), part)
         if blob is None:
             return {"result": "not_sent",
                     "error_code": "attachment_mismatch"}
@@ -350,7 +333,7 @@ class DeliveryWorker(_BaseWorker):
                                  ctx: dict):
         """Bounded replies scan for a bot/app-authored message already
         carrying this file — the remote entry must match the sealed
-        name and size (and sha256 when remote reports it), then the
+        name, size and sha256, then the
         part binds that file's real id. A foreign user's file with
         identical metadata can never satisfy a part. Each file id
         binds once so identical uploads dedupe one-for-one."""
@@ -380,7 +363,7 @@ class DeliveryWorker(_BaseWorker):
                         and f.get("size") != part["bytes"]:
                     continue
                 rsha = f.get("sha256")
-                if rsha and want_sha and rsha != want_sha:
+                if not want_sha or rsha != want_sha:
                     continue
                 ctx["consumed"].add(fid)
                 return fid

@@ -67,7 +67,7 @@ def _validate_head(spec) -> None:
     card identity."""
     if spec.get("schema") != SCHEMA:
         _err("bad_schema")
-    if not _UUID.match(str(spec.get("delivery_id") or "")):
+    if not _UUID.fullmatch(str(spec.get("delivery_id") or "")):
         _err("bad_delivery_id")
     if spec.get("op") not in OPS:
         _err("bad_op")
@@ -106,7 +106,7 @@ def _validate_delivery(spec) -> dict:
     if type(delivery.get("route_epoch")) is not int \
             or delivery["route_epoch"] < 1:
         _err("bad_route_epoch")
-    if not _HEX32.match(str(delivery.get("correlation") or "")):
+    if not _HEX32.fullmatch(str(delivery.get("correlation") or "")):
         _err("bad_correlation")
     ids = delivery.get("intent_event_ids")
     if not isinstance(ids, list) \
@@ -172,11 +172,12 @@ def _action_rows_cost(rows) -> int:
         for b in row:
             if not isinstance(b, dict) or b.get("ui") != "button":
                 _err("bad_button")
-            if not _TOKEN.match(str(b.get("token") or "")):
+            if not _TOKEN.fullmatch(str(b.get("token") or "")):
                 _err("bad_button_token")
             if not _text(b.get("label"), MAX_LABEL):
                 _err("bad_button_label")
-            if b.get("style", "secondary") not in STYLES:
+            if (not isinstance(b.get("style", "secondary"), str)
+                    or b.get("style", "secondary") not in STYLES):
                 _err("bad_button_style")
             if not _text(b.get("id"), 32):
                 _err("bad_button_id")
@@ -193,6 +194,8 @@ def validate(spec) -> dict:
     parts = spec.get("parts")
     if not isinstance(parts, dict):
         _err("bad_parts")
+    if parts.get("context") is not None and not isinstance(parts["context"], dict):
+        _err("bad_context")
     containers = parts.get("containers")
     if not isinstance(containers, list):
         _err("bad_containers")
@@ -251,7 +254,7 @@ def _validate_manifest(manifest) -> None:
             _err("bad_part_index")
         last_idx = p["index"]
         if p.get("sha256") is not None \
-                and not _HEX64.match(str(p["sha256"])):
+                and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
         if kind == "card" and i != 0:
@@ -270,7 +273,7 @@ def _validate_manifest(manifest) -> None:
                 continue
             if not _text(p.get("path"), MAX_ATTACH_PATH):
                 _err("bad_attachment_path")
-            if not _HEX64.match(str(p.get("sha256") or "")):
+            if not _HEX64.fullmatch(str(p.get("sha256") or "")):
                 _err("bad_attachment_sha256")
             if type(p.get("bytes")) is not int or p["bytes"] < 0:
                 _err("bad_attachment_bytes")
@@ -282,6 +285,8 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
     card = manifest[0]
     if card["kind"] != "card":
         _err("bad_card_part")
+    if "footer" not in parts or "action_rows" not in parts:
+        _err("bad_card_payload")
     card_sha = hashlib.sha256(canonical(
         {"containers": parts["containers"], "footer": parts["footer"],
          "action_rows": parts["action_rows"]})).hexdigest()
@@ -294,7 +299,9 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
         # keeping its chunks is as corrupt as the reverse
         if chunks is None or len(chunks) != len(body_parts):
             _err("body_part_count")
-        for p, c in zip(body_parts, chunks, strict=False):
+        for i, (p, c) in enumerate(zip(body_parts, chunks, strict=True)):
+            if p["part_id"] != f"body:{i + 1:04d}":
+                _err("bad_body_part_id")
             if p.get("sha256") != _sha_bytes(c) \
                     or p.get("bytes") != len(c.encode("utf-8")):
                 _err("body_part_sha256")

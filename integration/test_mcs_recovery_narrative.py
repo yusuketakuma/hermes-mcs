@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "mcs"))
 import _mcs_path  # noqa: E402,F401  registers mcs/* subdirs as roots
@@ -82,7 +84,6 @@ class _FakeFile:
 
 _td_mod = TD._fake_discord()
 _td_mod.File = _FakeFile
-sys.modules["discord"] = _td_mod
 
 _td_thread_init = TD.FakeThread.__init__
 
@@ -103,8 +104,18 @@ async def _td_thread_send(self, content=None, **kw):
     return SimpleNamespace(id=self._next_id)
 
 
-TD.FakeThread.__init__ = _td_thread_init2
-TD.FakeThread.send = _td_thread_send
+@pytest.fixture(autouse=True)
+def isolated_narrative_state(monkeypatch):
+    """Keep SDK fakes and updater path stubs local to each test."""
+    monkeypatch.setitem(sys.modules, "discord", _td_mod)
+    monkeypatch.setattr(TD.FakeThread, "__init__", _td_thread_init2)
+    monkeypatch.setattr(TD.FakeThread, "send", _td_thread_send)
+    for name in ("REPO", "LEDGER", "DATA", "STATE_PATH", "UPDATE_LOCK",
+                 "RUN_LOCK", "MARKER_PATH", "REPORT_PATH", "RESTORE_REPORT_PATH",
+                 "BACKUP_DIR", "MANIFEST_PATH", "quiesce", "_services_reconcile",
+                 "_reconcile_membership", "_postcheck", "load_config",
+                 "_enqueue_notice", "restart_gateway", "restart_agents"):
+        monkeypatch.setattr(mcs_update, name, getattr(mcs_update, name))
 
 
 def _threads(bot):
@@ -549,7 +560,7 @@ def _run_narrative(tmp_path):
         exporter = ext.GovernedExporter(N.tmp / "exp-state")
         res_a = exporter.deliver(envelope, sink, auth_path=N.tmp
                                / "auth.json")
-        res_b = exporter.deliver(envelope, sink)
+        res_b = exporter.deliver(envelope, sink, auth_path=N.tmp / "auth.json")
         sink.drop_ack = False
         sink.receive(envelope)        # the late ack lands
         res_c = exporter.reconcile(envelope["envelope_id"], sink)
@@ -662,8 +673,9 @@ def _run_narrative(tmp_path):
 
         # ---- 9. consent -> swap -> reconcile -> resume no dup ------
         _seed_consent(str(N.data / "ledger.db"), str(backup))
-        assert mcs_update.recover_interrupted() == 0
+        # Production quiescence closes every writer before replacing the DB.
         led.close()
+        assert mcs_update.recover_interrupted() == 0
         led = _ledger.Ledger(str(N.data / "ledger.db"))
         rec = notify_reconcile.reconcile_after_restore(led, SLACK)
         N.check("reconcile_after_restore_settles_journal",

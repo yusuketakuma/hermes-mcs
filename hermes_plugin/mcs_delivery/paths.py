@@ -8,6 +8,7 @@ under the configured data root.
 from __future__ import annotations
 
 import os
+import hashlib
 import tempfile
 from contextlib import suppress
 
@@ -92,12 +93,42 @@ def read_result(results_dir: str, command_id: str) -> dict | None:
 
 
 def read_flags(root: str) -> dict:
-    """flags/notify.json — the runner-published effective state."""
+    """Read effective flags and hold immediately when a restore marker appears."""
     import json
     path = os.path.join(root, "flags", "notify.json")
     try:
         with open(path, "rb") as handle:
             data = json.loads(handle.read().decode("utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    # A restore writes its durable marker before it can publish flags.
+    # Previously granted cards and dependent parts must see that hold too.
+    try:
+        os.lstat(os.path.join(root, "restore_pending.json"))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        data["restore_pending"] = True
+    else:
+        data["restore_pending"] = True
+    return data
+
+
+def read_verified_attachment(path: str | None, part: dict) -> bytes | None:
+    """Return the sealed bytes once, bounded by the collector's 64 MiB limit."""
+    size = part.get("bytes")
+    if (not path or not part.get("sha256") or type(size) is not int
+            or not 0 <= size <= 64 * 1024 * 1024):
+        return None
+    try:
+        with open(path, "rb") as stream:
+            if os.fstat(stream.fileno()).st_size != size:
+                return None
+            blob = stream.read(size + 1)
+    except (OSError, ValueError):
+        return None
+    if len(blob) != size or hashlib.sha256(blob).hexdigest() != part["sha256"]:
+        return None
+    return blob

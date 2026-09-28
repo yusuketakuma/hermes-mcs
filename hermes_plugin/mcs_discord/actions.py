@@ -94,10 +94,27 @@ def _same_origin(pinned: dict, current: dict,
     """Re-auth at every stage: the interaction must still come from the
     same application/channel/guild as the click that started the flow —
     and for a modal submit, the same card message."""
-    keys = ["application_id", "channel_id", "guild_id"]
+    keys = ["application_id", "channel_id", "guild_id", "profile"]
     if strict_message:
         keys.append("message_id")
     return all((pinned.get(k) or None) == (current.get(k) or None) for k in keys)
+
+
+def _context_projects(context: dict) -> list[int]:
+    """Every project in a digest must be authorized before acting on it."""
+    if context.get("project_id") is not None:
+        values = [context["project_id"]]
+    else:
+        nested = context.get("context")
+        signals = nested.get("signals") if isinstance(nested, dict) else None
+        if not isinstance(signals, dict) or not signals:
+            return []
+        if not all(isinstance(item, dict) for item in signals.values()):
+            return []
+        values = [item.get("project_id") for item in signals.values()]
+    if not all(type(pid) is int and pid > 0 for pid in values):
+        return []
+    return sorted(set(values))
 
 
 class Actions:
@@ -121,14 +138,15 @@ class Actions:
         chats = {str(c) for c in s.get("allowed_chat_ids") or set()}
         uid = str(interaction.user.id)
         cid, _ = _authorizing_channel(interaction)
-        if users and uid not in {str(u) for u in users}:
+        if not users or uid not in {str(u) for u in users}:
             return "user_not_allowed"
-        if chats and cid not in chats \
-                and str(interaction.channel_id) not in chats:
+        if not chats or (cid not in chats and str(interaction.channel_id) not in chats):
             return "chat_not_allowed"
         if project_ids is not None:
+            if not project_ids:
+                return "project_not_allowed"
             for pid in project_ids:
-                if pid is not None and not projects.project_allowed(s, pid):
+                if not projects.project_allowed(s, pid):
                     return "project_not_allowed"
         return None
 
@@ -235,8 +253,7 @@ class Actions:
             return
         action = ctx.get("action")
 
-        pids = ([ctx.get("project_id")] if ctx.get("project_id")
-                else None)
+        pids = _context_projects(ctx)
         denial = self._authorized(interaction, pids)
         if denial:
             self._deny_reason(interaction, denial)
@@ -308,7 +325,8 @@ class Actions:
             self._reg.put_followup(cid, {
                 "application_id": str(interaction.application_id),
                 "token": interaction.token,
-                "kind": "action", "request_id": cid})
+                "kind": "action", "request_id": cid,
+                "actor": actor, "origin": origin, "project_ids": pids})
             await self._followup(interaction,
                                  "処理を受け付けました。結果は反映後に表示されます。")
             return
@@ -373,7 +391,8 @@ class Actions:
             return
         denial = self._authorized(
             interaction,
-            [pending.get("context", {}).get("project_id")])
+            _context_projects({"project_id": pending.get("context", {}).get("project_id"),
+                               "context": pending.get("context")}))
         if denial:
             self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
@@ -510,6 +529,9 @@ class Actions:
 
     async def _on_confirm(self, interaction, rest: str) -> None:
         confirm_id, _, suffix = rest.partition(":")
+        if rest not in (confirm_id, f"{confirm_id}:cancel"):
+            await self._ephemeral(interaction, "この操作は無効です。")
+            return
         pending = self._reg.confirm(confirm_id)
         if pending is None:
             await self._ephemeral(
@@ -520,13 +542,6 @@ class Actions:
         if pending["actor"] != actor:
             await self._ephemeral(interaction,
                                   "確認した本人のみ確定できます。")
-            return
-        if suffix == "cancel":
-            self._reg.drop_confirm(confirm_id)
-            self._result_log(interaction,
-                             pending["payload"].get("cmd"),
-                             {"outcome": "cancelled"})
-            await self._ephemeral(interaction, "取り消しました。")
             return
         denial = self._authorized(
             interaction, [pending["payload"].get("project_id")])
@@ -540,6 +555,13 @@ class Actions:
             await self._ephemeral(
                 interaction,
                 "確認を開始した場所と送信元が一致しません。")
+            return
+        if suffix == "cancel":
+            self._reg.drop_confirm(confirm_id)
+            self._result_log(interaction,
+                             pending["payload"].get("cmd"),
+                             {"outcome": "cancelled"})
+            await self._ephemeral(interaction, "取り消しました。")
             return
         await interaction.response.defer(ephemeral=True)
         payload = pending["payload"]
@@ -564,7 +586,9 @@ class Actions:
         self._reg.put_followup(cid, {
             "application_id": str(interaction.application_id),
             "token": interaction.token, "kind": "human",
-            "project_id": payload.get("project_id")})
+            "project_id": payload.get("project_id"), "actor": actor,
+            "origin": pending["origin"],
+            "project_ids": [payload.get("project_id")]})
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
@@ -574,6 +598,21 @@ class Actions:
 
     # -- pending followup sweep (called by the supervisor) ---------------
 
+    def _followup_authorized(self, record: dict) -> bool:
+        origin = record.get("origin")
+        pids = record.get("project_ids")
+        s = self._settings
+        users = {f"discord:{u}" for u in s.get("allowed_user_ids") or []}
+        if (record.get("actor") not in users or not isinstance(origin, dict)
+                or not isinstance(pids, list) or not pids
+                or record.get("application_id") != s.get("application_id")):
+            return False
+        if not _same_origin(origin, s):
+            return False
+        chats = {str(c) for c in s.get("allowed_chat_ids") or []}
+        return (origin.get("channel_id") in chats
+                and all(projects.project_allowed(s, pid) for pid in pids))
+
     async def sweep_followups(self) -> None:
         """Report results that outlived the first wait window — while
         the interaction token still lives (~14 min)."""
@@ -581,6 +620,9 @@ class Actions:
         for cid, rec in list(self._reg.followups().items()):
             if self._reg.followup(cid) is None:
                 continue                         # expired — dropped
+            if not self._followup_authorized(rec):
+                self._reg.drop_followup(cid)
+                continue
             result = await asyncio.to_thread(
                 paths.read_result, self._dirs["cmd_results"], cid)
             if result is None or (rec.get("request_id") is not None
@@ -596,13 +638,14 @@ class Actions:
                 # application webhook, and ephemeral sends are refused
                 # (ValueError) unless the local type reflects that
                 hook.type = discord.WebhookType.application
-                if result.get("action") == "body" and result.get("body"):
+                applied = result.get("outcome") == "applied"
+                if applied and result.get("action") == "body" and result.get("body"):
                     # a body click that outlived the wait window still
                     # owes the full text — generic text.ja would report
                     # "反映しました" and never deliver it
                     for msg in text.body_messages(result):
                         await hook.send(msg, ephemeral=True)
-                elif result.get("action") == "tasks":
+                elif applied and result.get("action") == "tasks":
                     # same debt for the 📋 list — and its transition
                     # tokens must be registered before the buttons can
                     # be clicked
@@ -618,7 +661,7 @@ class Actions:
                     else:
                         await hook.send("このスレッドのタスクはありません。",
                                         ephemeral=True)
-                elif result.get("action") == "task_status":
+                elif applied and result.get("action") == "task_status":
                     await hook.send(text.task_done_text(result),
                                     ephemeral=True)
                 else:
