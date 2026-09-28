@@ -26,6 +26,13 @@ CHANGE_ACTIONS_SQL = ",".join(f"'{a}'" for a in CHANGE_ACTIONS)
 TRANSITION_EVENTS_SQL = "'discharge','transfer'"
 
 
+def json_or_null(col: str) -> str:
+    """JSON document argument that is NULL unless `col` is valid JSON.
+    JSON functions outside current_extract_pred's CASE take their input
+    through this, so a malformed row cannot raise under any join order."""
+    return f"CASE WHEN json_valid({col}) THEN {col} END"
+
+
 def current_extract_pred(art: str = "a", msg: str = "m", *,
                          content: bool = True,
                          error_check: bool = True) -> str:
@@ -70,15 +77,17 @@ def qc_source_id(msg: str = "m", *, version: int) -> str:
     return ("(SELECT MAX(qx.artifact_id) FROM artifacts qx"
             f" WHERE qx.kind='extract_llm' AND qx.message_id={msg}.message_id"
             f" {current_extract_pred('qx', msg)}"
-            " AND json_type(qx.content)='object'"
-            f" AND json_extract(qx.meta,'$.extract_version')={version})")
+            f" AND json_type({json_or_null('qx.content')})='object'"
+            f" AND json_extract({json_or_null('qx.meta')},"
+            f"'$.extract_version')={version})")
 
 
 def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
     """QC belongs to an exact extraction, including same-body re-extraction."""
+    meta = json_or_null(f"{art}.meta")
     return (current_extract_pred(art, msg)
-            + f" AND json_extract({art}.meta,'$.extract_version')={version}"
-              f" AND json_extract({art}.meta,'$.source_artifact_id')="
+            + f" AND json_extract({meta},'$.extract_version')={version}"
+              f" AND json_extract({meta},'$.source_artifact_id')="
               f"{qc_source_id(msg, version=version)}")
 
 
@@ -145,7 +154,8 @@ def qc_v4_source_id(msg: str = "m") -> str:
             f" AND v.project_id={msg}.project_id"
             f" AND {msg}.body_state IS NOT 'deleted'"
             f" AND {current_v4_pred('v', f'{msg}.content_hash')}"
-            f" AND json_extract(v.meta,'$.extract_version')=4)")
+            f" AND json_extract({json_or_null('v.meta')},"
+            "'$.extract_version')=4)")
 
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,
@@ -178,7 +188,8 @@ def med_period_artifacts(db):
         "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
         "WHERE a.kind='extract_v1'"
         f"{current_extract_pred(error_check=False)} "
-        "AND json_array_length(a.content,'$.med_periods')>0").fetchall()
+        f"AND json_array_length({json_or_null('a.content')},"
+        "'$.med_periods')>0").fetchall()
 
 
 def med_is_patient_current(med) -> bool:
@@ -268,7 +279,7 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
         f"""SELECT DISTINCT d.project_id, d.message_id, m.message_id
             FROM messages d
             {join_p}CROSS JOIN artifacts da ON da.message_id=d.message_id
-            CROSS JOIN json_each(da.content,'$.events') ev
+            CROSS JOIN json_each({json_or_null('da.content')},'$.events') ev
             CROSS JOIN messages m ON m.project_id=d.project_id
                  AND m.posted_at_ts BETWEEN d.posted_at_ts-?
                                         AND d.posted_at_ts+?
@@ -281,7 +292,8 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
                              '{V4_PROJECTION_KIND}')
               {current_fact_pred('a', 'm')}
               {pred_p}AND EXISTS
-                  (SELECT 1 FROM json_each(a.content,'$.meds') je
+                  (SELECT 1 FROM json_each({json_or_null('a.content')},
+                                           '$.meds') je
                    WHERE json_extract({JSON_OBJECT_SQL},'$.action')
                        IN ({CHANGE_ACTIONS_SQL})
                      AND {MED_PATIENT_CURRENT_SQL}

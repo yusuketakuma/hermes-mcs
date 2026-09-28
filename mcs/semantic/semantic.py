@@ -255,7 +255,8 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
         if meta.get("needs_review"):
             out["v2_needs_review"] += 1
     for r in ledger.db.execute(
-            "SELECT json_extract(meta,'$.audit_status') s, COUNT(*) c "
+            "SELECT CASE WHEN json_valid(meta) AND json_type(meta)='object' "
+            "THEN json_extract(meta,'$.audit_status') END s, COUNT(*) c "
             "FROM artifacts WHERE kind=? GROUP BY s",
             (KIND_FACT_AUDIT,)):
         out["fact_audits"][r["s"] or "unknown"] = r["c"]

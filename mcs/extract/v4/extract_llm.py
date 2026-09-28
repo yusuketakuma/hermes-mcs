@@ -36,7 +36,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_queries import current_extract_pred, current_v4_id
+from mcs_queries import current_extract_pred, current_v4_id, json_or_null
 from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
@@ -1524,7 +1524,8 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
         f"SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
         f"WHERE a.kind=? AND m.message_id=? {current_extract_pred()} "
         "AND m.content_hash=? "
-        "AND json_extract(a.meta,'$.extract_version')=? LIMIT 1",
+        f"AND json_extract({json_or_null('a.meta')},'$.extract_version')=? "
+        "LIMIT 1",
         (KIND, mid, content_hash, EXTRACT_VERSION)).fetchone() is not None
 
 
@@ -1582,15 +1583,16 @@ def _thin_pending_sql() -> str:
     no-signal row is honest, not thin. The new row carries
     meta.thin_retried so a still-thin retry settles permanently."""
     # Use the same clinical fields as the in-memory completeness check.
-    counts = [f"COALESCE(json_array_length(t.content,'$.{field}'),0)"
+    content, meta = json_or_null("t.content"), json_or_null("t.meta")
+    counts = [f"COALESCE(json_array_length({content},'$.{field}'),0)"
               for field in _FACT_LIST_FIELDS]
-    counts.append("(SELECT COUNT(*) FROM json_each(t.content,'$.vitals'))")
+    counts.append(f"(SELECT COUNT(*) FROM json_each({content},'$.vitals'))")
     return f"""SELECT t.artifact_id FROM artifacts t
         WHERE t.kind='{KIND}' AND t.message_id=m.message_id
           {current_extract_pred('t')}
-          AND json_extract(t.meta,'$.extract_version')={EXTRACT_VERSION}
-          AND json_extract(t.meta,'$.prefilter') IS NULL
-          AND json_extract(t.meta,'$.thin_retried') IS NULL
+          AND json_extract({meta},'$.extract_version')={EXTRACT_VERSION}
+          AND json_extract({meta},'$.prefilter') IS NULL
+          AND json_extract({meta},'$.thin_retried') IS NULL
           AND length(m.body_text) >= {_THIN_BODY_MIN}
           AND ({' + '.join(counts)}) < {_THIN_FACTS_MIN}
           ORDER BY t.artifact_id DESC LIMIT 1"""
@@ -1616,12 +1618,12 @@ def pending_pred() -> str:
         AND NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}
-                          AND json_extract(f.meta,'$.extract_version')={EXTRACT_VERSION}
-                          AND json_extract(f.meta,'$.qc_fix') IS NOT NULL)
+                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
+                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
         AND (NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='{KIND}' AND a.message_id=m.message_id
                           {current_extract_pred()}
-                          AND json_extract(a.meta,'$.extract_version')={EXTRACT_VERSION})
+                          AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
              OR EXISTS ({_qc_flagged_sql(val="1")})
              OR EXISTS ({_thin_pending_sql()}))"""
 
@@ -1657,8 +1659,9 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
              WHERE q2.kind='extract_qc'
                AND q2.message_id={msg}.message_id
                {current_qc_pred('q2', msg, version=EXTRACT_VERSION)})
-         AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
-         AND json_extract(q.content,'$.qc')='done'
+         AND json_extract({json_or_null('q.meta')},'$.source_artifact_id')
+             =a.artifact_id
+         AND json_extract({json_or_null('q.content')},'$.qc')='done'
          AND ({_QC_ACTIONABLE_SQL})
         WHERE a.kind='{KIND}' AND a.artifact_id={src}
         ORDER BY q.artifact_id DESC LIMIT 1"""
@@ -2006,7 +2009,7 @@ def _ensure_v1(ledger, r, hints) -> None:
             "AND NOT EXISTS (SELECT 1 FROM artifacts a "
             "WHERE a.kind='extract_v1' AND a.message_id=m.message_id "
             f"{current_extract_pred()} "
-            "AND json_extract(a.meta,'$.rule_version')=?)",
+            f"AND json_extract({json_or_null('a.meta')},'$.rule_version')=?)",
             (json.dumps(hints, ensure_ascii=False),
              json.dumps({"hash": r["content_hash"],
                          "rule_version": extract.RULE_VERSION}), time.time(),
