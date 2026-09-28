@@ -45,7 +45,7 @@ def _journal_dirs(dirs: dict) -> list:
     return [dirs[t + "_state"] for t in ("discord", "slack")]
 
 
-def _scan_journals(dirs: dict) -> dict:
+def _scan_journals(dirs: dict) -> tuple[dict, bool]:
     """attempt_id -> {"rows": [...], "tainted": bool}, across every
     per-worker journal file in both transport state dirs.
 
@@ -55,13 +55,10 @@ def _scan_journals(dirs: dict) -> dict:
     any attempt recorded in it.
     """
     out: dict[str, dict] = {}
+    incomplete = False
     for state_dir in _journal_dirs(dirs):
-        try:
-            names = sorted(n for n in os.listdir(state_dir)
-                           if n.startswith("journal-")
-                           and n.endswith(".jsonl"))
-        except OSError:
-            continue
+        names = sorted(n for n in os.listdir(state_dir)
+                       if n.startswith("journal-") and n.endswith(".jsonl"))
         for name in names:
             file_rows: dict[str, list] = {}
             tainted = False
@@ -73,7 +70,7 @@ def _scan_journals(dirs: dict) -> dict:
                             continue
                         try:
                             row = json.loads(raw)
-                        except ValueError:
+                        except (ValueError, RecursionError):
                             tainted = True
                             continue
                         if not isinstance(row, dict):
@@ -82,14 +79,19 @@ def _scan_journals(dirs: dict) -> dict:
                         aid = row.get("attempt_id")
                         if isinstance(aid, str) and aid:
                             file_rows.setdefault(aid, []).append(row)
+                        else:
+                            tainted = True
             except OSError:
-                continue
+                # An inaccessible journal can contain an effect lost by
+                # the restored DB. Do not clear the global restore hold.
+                raise
+            incomplete = incomplete or tainted
             for aid, rows in file_rows.items():
                 rec = out.setdefault(aid, {"rows": [], "tainted": False})
                 rec["rows"].extend(rows)
                 if tainted:
                     rec["tainted"] = True
-    return out
+    return out, incomplete
 
 
 def _read_spec(dirs: dict, delivery_id) -> dict | None:
@@ -249,6 +251,10 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
         return _apply_hold(db, aid, delivery_id, "journal_conflict",
                            dirs, now)
     result_row = results[-1] if results else None
+    if info["tainted"] and not results \
+            and not any(r.get("phase") == "started" for r in rows):
+        return _apply_hold(db, aid, delivery_id,
+                           "journal_corrupt:pre_http", dirs, now)
     if part["state"] in _RESULT_VALUES + ("held",):
         if result_row is None:
             return {"attempt_id": aid, "delivery_id": delivery_id,
@@ -410,6 +416,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     dirs = cards.notify_dirs(root)
     cards.ensure_dirs(root)
     marker = cards.restore_pending(root) or {}
+    if marker.get("unreadable"):
+        raise ValueError("restore_marker_unreadable")
     if marker.get("phase") == "awaiting_consent":
         # Consent-hold marker: no swap has happened, so there is nothing
         # to reconcile — and clearing it here would silently drop the
@@ -417,13 +425,14 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         return {"v": 1, "at": now, "skipped": "awaiting_consent",
                 "counts": {}, "verdicts": [], "held": [],
                 "events_held": 0}
-    attempts = _scan_journals(dirs)
+    attempts, journal_incomplete = _scan_journals(dirs)
     verdicts, held = [], []
     for aid in sorted(attempts):
         try:
             v = _reconcile_attempt(ledger, db, cfg, aid, attempts[aid],
                                    dirs, now)
         except Exception as e:
+            journal_incomplete = True
             v = _apply_hold(db, aid, None,
                             f"reconcile_crash:{type(e).__name__}",
                             dirs, now)
@@ -470,10 +479,14 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                  for h in held],
         "events_held": sum(h.get("events_held", 0) for h in held)
                         + mass_held,
+        "journal_incomplete": journal_incomplete,
     }
     cards.publish_file(root, cards.RESTORE_RECEIPT,
                        cards.canonical(receipt))
-    cards.clear_restore_pending(root)
+    if journal_incomplete and not marker:
+        cards.mark_restored(root, by="reconcile_incomplete", now=now)
+    elif not journal_incomplete:
+        cards.clear_restore_pending(root)
     if held:
         ledger.outbox_add("update_notice", None, {
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"

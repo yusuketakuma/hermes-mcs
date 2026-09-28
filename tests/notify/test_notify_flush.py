@@ -239,6 +239,31 @@ def test_deleted_message_cannot_supply_notification_content(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("kind", ["new_messages", "attachment_followup"])
+def test_event_cannot_read_another_patient(tmp_path, kind):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        db.ensure_patient(2)
+        db.db.execute(
+            "INSERT INTO messages(message_id,project_id,body_state,body_text,body_html,posted_at) "
+            "VALUES(200,2,'full','OTHER','<p>OTHER</p>','2026-09-24T08:00')")
+        path = tmp_path / "synthetic"
+        path.write_bytes(b"OTHER")
+        import hashlib
+        db.db.execute(
+            "INSERT INTO attachments(attachment_id,message_id,file_id,name,state,local_path,sha256) "
+            "VALUES(1,200,'f','synthetic.txt','downloaded',?,?)",
+            (str(path), hashlib.sha256(b"OTHER").hexdigest()))
+        db.db.commit()
+        payload = {"message_ids": [200]} if kind == "new_messages" else {"attachment_id": 1}
+        with pytest.raises(notify_flush._StaleSend):
+            notify_flush._format_event(db, {"kind": kind, "project_id": 1,
+                                           "payload": json.dumps(payload)})
+    finally:
+        db.close()
+
+
 def test_session_recovered_renders_as_resolved_notice(tmp_path):
     """The recovery notice is a plain system text event — it reports the
     expiry AS resolved and rides notify_system_target like

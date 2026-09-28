@@ -30,6 +30,8 @@ import mcs_signals
 import semantic_send_gate
 import structured_view
 from mcs_util import html_to_text, load_config
+from mcs_requests import positive
+from notify_render import _signal_evidence
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
@@ -167,22 +169,12 @@ def _signal_text(ledger, payload: dict, latest: dict):
         name = r["patient_name"].strip() if r and r["patient_name"] else ""
         if name:
             lines[1] = f"{name}（{lines[1]}）"
-        ev = latest.get("evidence")
-        mids = (ev.get("message_ids") if isinstance(ev, dict)
-                else None) or []
-        mid = (mids[-1] if mids and type(mids[-1]) is int
-               else (ev.get("discharge_message_id")
-                     if isinstance(ev, dict) else None))
-        if type(mid) is int:
-            m = ledger.db.execute(
-                "SELECT sender_name, posted_at, body_text FROM messages"
-                " WHERE message_id=? AND body_state IS NOT 'deleted'",
-                (mid,)).fetchone()
-            if m and m["body_text"]:
-                snippet = " ".join(str(m["body_text"]).split())[:120]
-                lines.append(
-                    f"最新言及 {m['posted_at'] or '?'} "
-                    f"{m['sender_name'] or '?'}: {snippet}")
+        _, m = _signal_evidence(ledger.db, {**latest, "project_id": pid})
+        if m and m["body_state"] != "deleted" and m["body_text"]:
+            snippet = " ".join(str(m["body_text"]).split())[:120]
+            lines.append(
+                f"最新言及 {m['posted_at'] or '?'} "
+                f"{m['sender_name'] or '?'}: {snippet}")
         lines.append(f"確認: /mcs {{\"op\":\"timeline\",\"project_id\":{pid}}}")
     return "\n".join(lines)
 
@@ -261,18 +253,19 @@ def _signal_notice_text(ledger, payload: dict) -> str:
     return text
 
 
-def _followup_files(ledger, payload: dict):
+def _followup_files(ledger, payload: dict, project_id):
     """a body notice went out before this file downloaded — deliver
     just the file now (F11). If the file is no longer sendable
     (pruned/withdrawn/never finished) the intent is terminal."""
     aid = payload.get("attachment_id")
-    if type(aid) is not int:
+    if not positive(aid):
         raise ValueError("payload_invalid")
     a = ledger.db.execute(
         "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256"
         " FROM attachments a JOIN messages m ON m.message_id=a.message_id"
-        " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'",
-        (aid,)).fetchone()
+        " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'"
+        " AND (? IS NULL OR m.project_id=?)",
+        (aid, project_id, project_id)).fetchone()
     if not a or a["state"] != "downloaded" or not a["local_path"]:
         raise _StaleSend("attachment_not_ready")
     files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
@@ -323,24 +316,25 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if ev["kind"] == "signal":
         return _signal_notice_text(ledger, payload), []
     if ev["kind"] == "attachment_followup":
-        return _followup_files(ledger, payload)
+        return _followup_files(ledger, payload, ev["project_id"])
     return _message_notice(ledger, ev, payload)
 
 
-def _msg_rows(ledger, payload: dict) -> list:
+def _msg_rows(ledger, payload: dict, project_id) -> list:
     """message_ids shape check + row load — missing/deleted bodies are
     dropped, a fully-empty result means the intent went stale."""
     ids = payload.get("message_ids") or []
     if (not isinstance(ids, list)
-            or any(type(mid) is not int or mid <= 0 for mid in ids)):
+            or any(not positive(mid) for mid in ids)):
         raise ValueError("payload_invalid")
     rows = []
     for mid in ids:
         r = ledger.db.execute("""
           SELECT m.*, p.patient_name FROM messages m
           LEFT JOIN patients p ON p.project_id = m.project_id
-          WHERE m.message_id=? AND m.body_state IS NOT 'deleted'""",
-            (mid,)).fetchone()
+          WHERE m.message_id=? AND m.body_state IS NOT 'deleted'
+            AND (? IS NULL OR m.project_id=?)""",
+            (mid, project_id, project_id)).fetchone()
         if r:
             rows.append(r)
     if not rows:
@@ -399,7 +393,7 @@ def _sem_block(ledger, r) -> str:
 def _message_notice(ledger, ev, payload: dict):
     """New-message notice body — replies group under their parent when
     both are new in this event; file order follows the text order."""
-    rows = _msg_rows(ledger, payload)
+    rows = _msg_rows(ledger, payload, ev["project_id"])
     src = payload.get("source", "unread")
     att_map = _attachments_map(ledger, [r["message_id"] for r in rows])
     by_id = {r["message_id"]: r for r in rows}

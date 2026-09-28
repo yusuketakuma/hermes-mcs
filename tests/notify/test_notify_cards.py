@@ -1655,13 +1655,16 @@ def test_gc_removes_old_cmd_results(led, tmp_path):
     assert not old.exists() and fresh.exists()
 
 
-def test_drain_quarantines_corrupt_command(led, tmp_path):
+@pytest.mark.parametrize("raw", ["{not json", "null", "[]", "true", "7",
+                                 "[" * 1100 + "]" * 1100],
+                         ids=["syntax", "null", "array", "boolean", "number", "nested"])
+def test_drain_quarantines_corrupt_command(led, tmp_path, raw):
     """Publication is atomic — a readable .json that fails to parse is
     permanently corrupt and must not be re-read every drain."""
     int_dir = tmp_path / "data" / "cmd_int"
     int_dir.mkdir(parents=True)
     bad = int_dir / "bad.json"
-    bad.write_text("{not json")
+    bad.write_text(raw)
     res = {"errors": []}
     notify_cmds.drain_int_commands(led, res, CFG, str(tmp_path / "data"))
     assert not bad.exists()
@@ -1670,6 +1673,16 @@ def test_drain_quarantines_corrupt_command(led, tmp_path):
     res2 = {"errors": []}
     assert notify_cmds.drain_int_commands(
         led, res2, CFG, str(tmp_path / "data")) == 0
+
+
+def test_notification_command_id_rejects_trailing_newline():
+    token = "a" * 32
+    req = {"version": 1, "op": "notification", "actor": "synthetic",
+           "command_id": token + ":" + "b" * 16, "token": token,
+           "origin": {"application_id": "app", "channel_id": "channel", "message_id": "message"}}
+    assert notify_cmds.validate_int(req) is None
+    req["command_id"] += "\n"
+    assert notify_cmds.validate_int(req) == "bad_command_id"
 
 
 # ---------- D4: sweep change detection without intents (RC19) ----------

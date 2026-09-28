@@ -26,12 +26,14 @@ PAGE_TEXT_BUDGET = 3200
 BODY_MAX_CHARS = 6000
 
 
-def _latest_signals(db, keys: list) -> dict:
+def _latest_signals(db, keys: list, project_id=None) -> dict:
     """key -> {'artifact_id','content'} of the newest signal_v1 row."""
     out = {}
     for k in keys:
+        if not isinstance(k, str) or not k:
+            continue
         row = db.execute(
-            """SELECT artifact_id, content FROM artifacts
+            """SELECT artifact_id, project_id, content FROM artifacts
                WHERE kind='signal_v1' AND json_valid(meta)
                  AND json_valid(content)
                  AND json_extract(meta,'$.key')=?
@@ -40,9 +42,11 @@ def _latest_signals(db, keys: list) -> dict:
             continue
         try:
             content = json.loads(row["content"])
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
-        if isinstance(content, dict):
+        if (isinstance(content, dict) and positive(content.get("project_id"))
+                and row["project_id"] in (None, content["project_id"])
+                and (project_id is None or content["project_id"] == project_id)):
             out[k] = {"artifact_id": row["artifact_id"],
                       "content": content}
     return out
@@ -165,32 +169,38 @@ def _source_fp(db, card) -> str:
     if kind == "thread":
         msgs = db.execute(
             "SELECT message_id,content_hash,body_state FROM messages "
-            "WHERE (message_id=? OR parent_id=?) ORDER BY posted_at_ts",
-            (card["root_message_id"], card["root_message_id"])).fetchall()
+            "WHERE (message_id=? OR parent_id=?) AND project_id=? "
+            "ORDER BY posted_at_ts,message_id",
+            (card["root_message_id"], card["root_message_id"],
+             card["project_id"])).fetchall()
         return payload_hash({"k": "t", "msgs": [
             (m["message_id"], m["content_hash"], m["body_state"])
             for m in msgs],
             "name": _patient_name(db, card["project_id"])})
     keys = _anchor_keys(card)
-    sigs = _latest_signals(db, keys)
+    sigs = _latest_signals(db, keys, card["project_id"])
     names = sorted({_patient_name(db, s["content"].get("project_id"))
                     for s in sigs.values()})
     evidence_ids = set()
     for signal in sigs.values():
         evidence = signal["content"].get("evidence") or {}
-        evidence_ids.update(mid for mid in evidence.get("message_ids") or []
-                            if type(mid) is int)
+        if not isinstance(evidence, dict):
+            continue
+        pid = signal["content"]["project_id"]
+        mids = evidence.get("message_ids")
+        if isinstance(mids, list):
+            evidence_ids.update((pid, mid) for mid in mids if positive(mid))
         for key in ("message_id", "discharge_message_id"):
-            if type(evidence.get(key)) is int:
-                evidence_ids.add(evidence[key])
+            if positive(evidence.get(key)):
+                evidence_ids.add((pid, evidence[key]))
     # Evidence may change before the signal evaluator publishes its
     # next artifact, including on pages other than the one displayed.
     evidence_state = []
-    for mid in sorted(evidence_ids):
+    for pid, mid in sorted(evidence_ids):
         row = db.execute(
-            "SELECT content_hash,body_state FROM messages WHERE message_id=?",
-            (mid,)).fetchone()
-        evidence_state.append((mid, tuple(row) if row else None))
+            "SELECT content_hash,body_state FROM messages WHERE message_id=? AND project_id=?",
+            (mid, pid)).fetchone()
+        evidence_state.append((pid, mid, tuple(row) if row else None))
     return payload_hash({"k": kind, "m": [
         (k, sigs[k]["artifact_id"], sigs[k]["content"].get("state"))
         for k in keys if k in sigs], "names": names,
@@ -200,18 +210,19 @@ def _source_fp(db, card) -> str:
 def _anchor_keys(card) -> list:
     try:
         anchor = json.loads(card["anchor_key"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         anchor = {}
     if card["kind"] == "thread":
         return [card["root_message_id"]]
-    keys = anchor.get("signal_keys")
-    return [k for k in keys or [] if type(k) is str]
+    keys = anchor.get("signal_keys") if isinstance(anchor, dict) else None
+    return [k for k in keys if type(k) is str and k] if isinstance(keys, list) else []
 
 
 def _page(ui_state, pages: int, default: int = 0) -> int:
     try:
-        p = (json.loads(ui_state or "{}") or {}).get("page", default)
-    except (json.JSONDecodeError, TypeError):
+        state = json.loads(ui_state or "{}")
+        p = state.get("page", default) if isinstance(state, dict) else default
+    except (ValueError, TypeError, RecursionError):
         p = default
     if type(p) is not int:
         p = default
@@ -223,15 +234,19 @@ def _page(ui_state, pages: int, default: int = 0) -> int:
 def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
     """Select and fetch the message cited by a signal's latest evidence."""
     ev = sig.get("evidence") or {}
-    mids = ev.get("message_ids") or []
+    if not isinstance(ev, dict) or not positive(sig.get("project_id")):
+        return None, None
+    mids = ev.get("message_ids")
+    mids = mids if isinstance(mids, list) else []
     mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
         or ev.get("discharge_message_id") or ev.get("message_id")
-    if type(mid) is not int:
+    if not positive(mid):
         return None, None
     message = db.execute(
         "SELECT sender_name,profession,organization,posted_at,"
         "body_text,body_state "
-        "FROM messages WHERE message_id=?", (mid,)).fetchone()
+        "FROM messages WHERE message_id=? AND project_id=?",
+        (mid, sig["project_id"])).fetchone()
     return mid, message
 
 
@@ -295,17 +310,20 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
     delivery plans every part instead of dropping a tail."""
     try:
         shown = json.loads(man["shown"] or "[]")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        shown = []
+    if not isinstance(shown, list):
         shown = []
     if card["kind"] == "thread":
         lines = []
         for mid in shown:
-            if type(mid) is not int:
+            if not positive(mid):
                 continue
             m = db.execute(
                 "SELECT sender_name,profession,organization,posted_at,"
                 "body_text,body_state "
-                "FROM messages WHERE message_id=?", (mid,)).fetchone()
+                "FROM messages WHERE message_id=? AND project_id=?",
+                (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
             body = ("（削除済み）" if m["body_state"] == "deleted"
@@ -322,7 +340,8 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
         title = f"💬 {name} — 本文"
         text = "\n\n".join(lines)
     else:
-        sigs = _latest_signals(db, shown)
+        shown = [k for k in shown if isinstance(k, str)]
+        sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
             _signal_body(db, sigs[k]["content"]) for k in shown
             if k in sigs)
@@ -377,7 +396,7 @@ def _card_content(db, card) -> dict:
         shown_kind = "message_ids"
     else:
         keys = _anchor_keys(card)
-        sigs = _latest_signals(db, keys)
+        sigs = _latest_signals(db, keys, card["project_id"])
         ordered = [k for k in keys if k in sigs]
         sig_blocks = {k: _signal_display(db, sigs[k]["content"])
                       for k in ordered}

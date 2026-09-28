@@ -172,6 +172,70 @@ def test_flags_publish_restore_pending(world):
     assert flags["restore_pending"] is False
 
 
+@pytest.mark.parametrize("raw", [b"{broken", b"[]", b"{}", b'[{"x":' * 1200],
+                         ids=["syntax", "array", "empty", "recursive"])
+def test_invalid_restore_marker_keeps_writers_and_senders_held(world, raw):
+    path = world.data / notify_cards.RESTORE_MARKER
+    path.write_bytes(raw)
+    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_cards.restore_awaiting_consent(str(world.data)) is not None
+    with pytest.raises(ValueError, match="restore_marker_unreadable"):
+        notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert path.read_bytes() == raw
+
+
+def test_unreadable_restore_marker_is_not_absent(world):
+    path = world.data / notify_cards.RESTORE_MARKER
+    path.mkdir()
+    assert notify_cards.restore_pending(str(world.data)) is not None
+    assert notify_cards.restore_awaiting_consent(str(world.data)) is not None
+
+
+@pytest.mark.parametrize("raw", [b"[]", b"null", b"1", b"[" * 1200, b"\xff"],
+                         ids=["array", "null", "number", "recursive", "encoding"])
+def test_flags_repaired_after_invalid_json_shape(world, raw):
+    path = world.data / "flags" / "notify.json"
+    path.write_bytes(raw)
+    assert notify_cards.publish_flags(CFG, str(world.data)) is True
+    flags = json.loads(path.read_bytes())
+    assert flags["interactive"] is True
+    assert notify_cards.publish_flags(CFG, str(world.data)) is False
+
+
+def test_unreadable_journal_keeps_restore_hold(world):
+    notify_cards.mark_restored(str(world.data))
+    (world.data / "discord_state" / "journal-w1.jsonl").mkdir()
+    with pytest.raises(OSError):
+        notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert notify_cards.restore_pending(str(world.data)) is not None
+
+
+def test_unattributed_corrupt_journal_cannot_release_restore(world):
+    notify_cards.mark_restored(str(world.data))
+    (world.data / "discord_state" / "journal-w1.jsonl").write_text("{broken\n")
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert rep["journal_incomplete"] is True
+    assert notify_cards.restore_pending(str(world.data)) is not None
+
+
+def test_corrupt_part_journal_does_not_prove_non_delivery(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = f"p:{render['delivery_id'].replace('-', '')}:body:0001"
+    state = world.data / "discord_state"
+    journal.append(str(state), "w1", {
+        "phase": "begin", "attempt_id": aid, "part_id": "body:0001",
+        "delivery_id": render["delivery_id"]})
+    with (state / "journal-w1.jsonl").open("a") as stream:
+        stream.write("{broken\n")
+    notify_cards.mark_restored(str(world.data))
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    row = next(v for v in rep["verdicts"] if v["attempt_id"] == aid)
+    assert row["verdict"] == "held"
+    assert notify_cards.restore_pending(str(world.data)) is not None
+
+
 # ---------- reconcile: delivered effect lost by restore ----------
 
 def test_lost_delivered_attempt_holds_scope(world):

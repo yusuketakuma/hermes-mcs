@@ -3,9 +3,8 @@
 The Discord plugin drops files into data/cmd_int/ (atomic publish is
 the plugin's own job). The runner drains them under the run lock:
 read -> validate -> dispatch -> publish a result file under
-data/cmd_results/ -> consume. Ordering is two-pass: transport receipts
-(dependency resolution) first, then begins/interactions (dispatcher
-application) — matching the plan's dependency ordering.
+data/cmd_results/ -> consume. Transport begins establish durable grants
+before receipts settle them; interactions run after these dependencies.
 
 Human commands (request.create / ops.signal_dismiss) are forwarded to
 the existing mcs_requests.apply_command with tighter requirements than
@@ -66,10 +65,10 @@ def _delivery_ids(req, cid, attempt_re, worker=False) -> str | None:
     if not valid_uuid(cid):
         return "bad_command_id"
     if not (isinstance(req.get("attempt_id"), str)
-            and attempt_re.match(req["attempt_id"])):
+            and attempt_re.fullmatch(req["attempt_id"])):
         return "bad_attempt_id"
     if worker and not (isinstance(req.get("worker_id"), str)
-                       and _WORKER_ID.match(req["worker_id"])):
+                       and _WORKER_ID.fullmatch(req["worker_id"])):
         return "bad_worker_id"
     if not valid_uuid(req.get("delivery_id")):
         return "bad_delivery_id"
@@ -100,13 +99,13 @@ def _guild_id(req) -> str | None:
 
 def _correlation(req) -> str | None:
     return None if (isinstance(req.get("correlation"), str)
-                    and _CORRELATION.match(req["correlation"])) \
+                    and _CORRELATION.fullmatch(req["correlation"])) \
         else "bad_correlation"
 
 
 def _part_identity(req) -> str | None:
     if not (isinstance(req.get("part_id"), str)
-            and _PART_ID.match(req["part_id"])):
+            and _PART_ID.fullmatch(req["part_id"])):
         return "bad_part_id"
     if req.get("kind") is not None \
             and req["kind"] not in (
@@ -199,7 +198,7 @@ def _val_notification(req, cid, slack: bool) -> str | None:
         return "unknown_field"
     if "request_id" in req and not valid_uuid(req["request_id"]):
         return "bad_request_id"
-    if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.match(cid):
+    if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.fullmatch(cid):
         return "bad_command_id"
     if not _text(req.get("actor"), 120):
         return "bad_actor"
@@ -359,6 +358,8 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         path = os.path.join(int_dir, name)
         try:
             req = mcs_requests.read_command(path)
+            if not isinstance(req, dict):
+                raise ValueError("bad_command")
         except ValueError:
             # publication is atomic (mkstemp+rename), so a readable file
             # that fails to parse is permanently corrupt — quarantine it

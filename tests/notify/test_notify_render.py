@@ -5,13 +5,81 @@ import json
 import pytest
 
 import notify_cards
+import notify_flush
 import notify_render
 from test_notify_cards import (
-    CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render,
+    CFG, NOW, ORIGIN, _begin, _card, _dispatch, _intent, _latest_render,
     _msg, _notif, _patient, _receipt, _signal_row, _token_for, led,
 )
 
 __all__ = ["led"]  # shared isolated-ledger fixture
+
+
+def test_signal_evidence_cannot_read_another_patient(led):
+    _patient(led, 1)
+    _patient(led, 2, name="合成患者B")
+    _msg(led, 200, pid=2, body="SYNTHETIC-OTHER-PATIENT")
+    sig = {"project_id": 1, "type": "med_followup", "note": "合成候補",
+           "evidence": {"message_ids": [200]}}
+    blocks = notify_render._signal_display(led.db, sig)
+    body = notify_render._signal_body(led.db, sig)
+    text = notify_flush._signal_text(
+        led, {"text": "候補\n場所", "project_id": 1}, sig)
+    assert "SYNTHETIC-OTHER-PATIENT" not in json.dumps(blocks) + body + text
+
+
+def test_thread_manifest_cannot_read_another_patient(led):
+    _patient(led, 1)
+    _patient(led, 2, name="合成患者B")
+    _msg(led, 100, body="OWN-PATIENT")
+    _msg(led, 200, pid=2, parent=100, body="SYNTHETIC-OTHER-PATIENT")
+    card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
+    _, body = notify_render._card_body_text(led.db, card, {"shown": "[100,200]"})
+    assert "OWN-PATIENT" in body and "SYNTHETIC-OTHER-PATIENT" not in body
+    before = notify_render._source_fp(led.db, card)
+    led.db.execute("UPDATE messages SET content_hash='foreign-edit' WHERE message_id=200")
+    assert notify_render._source_fp(led.db, card) == before
+
+
+def test_dispatch_does_not_follow_foreign_parent_or_event_member(led):
+    _patient(led, 1)
+    _patient(led, 2, name="合成患者B")
+    _msg(led, 200, pid=2, body="OTHER")
+    _msg(led, 100, pid=1, parent=200, body="OWN")
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 200]}))
+    card = _card(led)
+    assert card["project_id"] == 1 and card["root_message_id"] == 100
+    assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
+    content = notify_render._card_content(led.db, card)
+    assert content["shown"] == [100]
+
+
+def test_signal_card_rejects_foreign_artifact_and_context(led):
+    _patient(led, 1)
+    _patient(led, 2, name="合成患者B")
+    _msg(led, 200, pid=2, body="OTHER")
+    _signal_row(led, "foreign-signal", pid=2, mids=[200])
+    _dispatch(led, _intent(led, "signal", payload={
+        "signal_keys": ["foreign-signal"], "project_id": 1}))
+    card = _card(led)
+    assert notify_render._card_content(led.db, card)["shown"] == []
+    assert notify_cards._render_context(led.db, card) == {}
+
+
+def test_long_thread_title_keeps_spec_deliverable(led):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _patient(led, 1, name="合成患者名" * 40)
+    _msg(led, 100)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    spec = json.loads(_latest_render(led)["spec_json"])
+    assert spec_mod.validate(spec) is spec
+
+
+@pytest.mark.parametrize("raw", ["[]", '"string"', "1", "[" * 1200],
+                         ids=["array", "string", "number", "recursive"])
+def test_invalid_card_state_falls_back_safely(raw):
+    assert notify_render._anchor_keys({"kind": "signal", "anchor_key": raw}) == []
+    assert notify_render._page(raw, 3, default=2) == 2
 
 
 @pytest.mark.parametrize(

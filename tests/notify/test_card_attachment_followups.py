@@ -78,3 +78,31 @@ def test_slack_manifest_attachment_suppresses_text_followup(led, tmp_path):
     assert not led.db.execute(
         "SELECT 1 FROM notify_outbox WHERE kind='attachment_followup'"
     ).fetchall()
+
+
+@pytest.mark.parametrize("part_state", ["pending", "unknown", "held"])
+def test_retention_waits_for_unsettled_attachment_parts(led, tmp_path, monkeypatch, part_state):
+    import maintenance
+    _seed_thread(led, mids=(100,))
+    blob = tmp_path / "synthetic.bin"
+    blob.write_bytes(b"synthetic")
+    led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,bytes,sha256,state,downloaded_at) "
+        "VALUES(100,'synthetic','synthetic.bin',?,9,?,'downloaded',?)",
+        (str(blob), hashlib.sha256(blob.read_bytes()).hexdigest(),
+         NOW - maintenance.ATTACHMENT_KEEP_S - 1))
+    event = _intent(led, payload={"message_ids": [100]})
+    _dispatch(led, event, SLACK)
+    with led.db:
+        led.db.execute("UPDATE notify_outbox SET state='accepted'")
+        led.db.execute("UPDATE notification_renders SET state='delivered'")
+        led.db.execute("UPDATE notification_render_parts SET state=? WHERE kind='attachment_part'",
+                       (part_state,))
+    monkeypatch.setattr(maintenance.time, "time", lambda: NOW)
+    db_path = led.db.execute("PRAGMA database_list").fetchone()[2]
+    assert maintenance.prune_attachments(db_path) == 0
+    assert blob.exists()
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered' WHERE kind='attachment_part'")
+    assert maintenance.prune_attachments(db_path) == 1
+    assert not blob.exists()
