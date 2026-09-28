@@ -1541,6 +1541,32 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     return True
 
 
+def _thin_pending_sql() -> str:
+    """A current, valid, same-version artifact that is under-extracted
+    (<=2 non-empty real fields on a >=300-char body) and not retried
+    yet — re-pends for ONE quality re-extract. Thinness is recomputed
+    from content shape so artifacts written before meta.thin existed
+    qualify without a backfill. Prefilter markers are excluded: a
+    no-signal row is honest, not thin. The new row carries
+    meta.thin_retried so a still-thin retry settles permanently."""
+    return f"""SELECT 1 FROM artifacts t
+        WHERE t.kind='{KIND}' AND t.message_id=m.message_id
+          {current_extract_pred('t')}
+          AND json_extract(t.meta,'$.extract_version')={EXTRACT_VERSION}
+          AND json_extract(t.meta,'$.prefilter') IS NULL
+          AND json_extract(t.meta,'$.thin_retried') IS NULL
+          AND length(m.body_text) >= {_THIN_BODY_MIN}
+          AND (SELECT COUNT(*) FROM json_each(t.content) j
+               WHERE substr(j.key,1,1) != '_'
+                 AND CASE j.type
+                       WHEN 'null' THEN 0
+                       WHEN 'array' THEN json_array_length(j.value) > 0
+                       WHEN 'object' THEN j.value != '{{}}'
+                       ELSE j.value IS NOT NULL AND j.value != ''
+                            AND j.value != 0
+                     END) <= {_THIN_KEYS_MAX}"""
+
+
 def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
     """Scalar subquery: the extract artifact whose current Jev QC audit
     flagged unsupported items (NO_MATCH verdicts) or an urgency
@@ -1976,11 +2002,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             adm_post = admitted_ids
     # QC-flagged rows keep their current artifact but re-enter pending
     # for exactly one feedback re-extract — a meta.qc_fix artifact
-    # (applied or declined) ends the loop.
+    # (applied or declined) ends the loop. Thin artifacts re-pend once
+    # under the same settle-or-replace contract (meta.thin_retried).
     rows = ledger.db.execute(f"""
       SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
              m.parent_id, m.posted_at, m.posted_at_ts,
              ({_qc_flagged_sql()}) AS qc_src,
+             ({_thin_pending_sql()}) AS thin_src,
              MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
       FROM messages m
       LEFT JOIN artifacts e ON e.message_id=m.message_id AND e.kind=?
@@ -2009,7 +2037,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         WHERE a.kind=? AND a.message_id=m.message_id
                           {current_extract_pred()}
                           AND json_extract(a.meta,'$.extract_version')=?)
-             OR EXISTS ({_qc_flagged_sql(val="1")}))
+             OR EXISTS ({_qc_flagged_sql(val="1")})
+             OR EXISTS ({_thin_pending_sql()}))
         AND (? IS NULL OR m.message_id % ? = ?)
       GROUP BY m.message_id
       HAVING attempts < 5
@@ -2123,6 +2152,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                     qc_fix={"qc": qc["qc"],
                                             "applied": False})
                     return
+                if r["thin_src"]:
+                    # A thin retry that failed still settles: re-mint
+                    # the prior content with the retried marker so the
+                    # row leaves pending (same contract as qc_fix —
+                    # never burn an LLM call every cycle on a row the
+                    # model cannot enrich).
+                    src = ledger.db.execute(
+                        "SELECT content FROM artifacts WHERE artifact_id=?",
+                        (r["thin_src"],)).fetchone()
+                    if src is not None:
+                        with lock(per_write_lock) as held:
+                            if held:
+                                _replace_current(
+                                    ledger, r, src["content"],
+                                    extra_meta={"thin_retried": True})
+                    return
                 with lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
@@ -2139,9 +2184,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             circuit_success(ledger)   # an answered call = endpoint alive
             d["_model"] = MODEL
             with lock(per_write_lock) as held:
-                # QC-flagged rows already hold a current artifact —
+                # QC-flagged/thin rows already hold a current artifact —
                 # replacing it is the point of the feedback pass.
-                if held and (qc is not None
+                if held and (qc is not None or r["thin_src"]
                              or not _current(ledger, r["message_id"],
                                              r["content_hash"])):
                     if not _replace_current(ledger, r,
@@ -2150,7 +2195,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                             integrity=integrity,
                                             qc_fix=({"qc": qc["qc"],
                                                      "applied": True}
-                                                    if qc else None)):
+                                                    if qc else None),
+                                            extra_meta=(
+                                                {"thin_retried": True}
+                                                if r["thin_src"]
+                                                else None)):
                         deferred += 1
                         return
                     # the whole body is now covered — checkpoints for
@@ -2269,9 +2318,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         group: list = []
         for tup in claimed:
             _index, r, ctx, saved, _h, qc, _l = tup
-            # QC-flagged rows take the single lane — their feedback
-            # prompt differs from the shared batch envelope.
-            if batch_k >= 2 and qc is None and ctx is None and not saved \
+            # QC-flagged/thin-retry rows take the single lane — their
+            # feedback/repair prompts differ from the shared batch
+            # envelope.
+            if batch_k >= 2 and qc is None and not r["thin_src"] \
+                    and ctx is None and not saved \
                     and len(text_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
                 group.append(tup)
                 if len(group) >= batch_k:
