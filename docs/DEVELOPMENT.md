@@ -91,7 +91,7 @@
 - `data/backups/`           — 日次検証済み sqlite backup (7世代)
 - `data/cmd/*.json`         — bot コマンドキュー (WatchPaths で即時実行)
 - `token_cache.json`        — bearer cache (0600; data/ 外=サンドボックス非公開)
-- `config.json`             — {discord_channel_id, mcs_login_id,
+- `config.json`             — {mcs_login_id, notify_target,
                               notify_bot_profile?, discover_archived?,
                               notify_max_age_h?} —
                               notify_bot_profile 設定時は通知投稿を
@@ -122,11 +122,11 @@
   `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
   実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る。
   **夜間間引き**: 投稿がほぼ 07-21 時に集中する実績から、22-06 時は
-  スクリプト内で :00/:20/:40 のみ実行（20分間隔 — MCS セッションの
+  スクリプト内で :00/:20/:40 起点の5分窓のみ実行（20分間隔 — MCS セッションの
   失効上限30分を下回り bearer を維持。auto_login 不在でも切れない）。
   health watcher は昼5分・夜20分の実行予定と完了猶予を使い、
   `health.max_missed_runs` 回の欠測許容を判定する。夜間も一律25分とは扱わない
-- 深掘り trickle: hermes cron `MCS job drain`（`7,37 * * * *`, `--jobs-only`） —
+- 深掘り trickle: hermes cron `MCS durable drain`（`7,37 * * * *`, `--jobs-only`） —
   未読取得を飛ばし fetch_jobs のみ消化。全患者の全履歴を
   `since=0` まで少しずつ取得(1run=最大8患者×3頁、cursor は payload に
   耐久保存、中断しても次 run で続きから)。config `deep_history` で
