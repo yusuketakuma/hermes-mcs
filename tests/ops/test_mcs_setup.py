@@ -256,6 +256,35 @@ def test_queue_warnings_distinguish_stall_from_lag(monkeypatch,
         db.close()
 
 
+def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
+    """The gateway regenerates __pycache__ at load — pyc mtimes are
+    always newer than the process start. Only source mtimes may
+    trigger the stale-plugin warning."""
+    import os
+    import time
+    plugin = tmp_path / "hermes_plugin" / "mcs_delivery"
+    cache = plugin / "__pycache__"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(tmp_path))
+
+    class R:
+        returncode = 0
+        stdout = "Mon Sep 28 13:00:00 2026"
+    started = time.mktime(time.strptime(R.stdout, "%a %b %d %H:%M:%S %Y"))
+    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: R())
+
+    src = plugin / "worker.py"
+    src.write_text("x = 1")
+    pyc = cache / "worker.cpython-311.pyc"
+    pyc.write_bytes(b"")
+    os.utime(src, (started - 100, started - 100))     # loaded before start
+    os.utime(pyc, (started + 100, started + 100))     # regenerated at load
+    assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
+    # a genuinely newer SOURCE file still warns
+    os.utime(src, (started + 100, started + 100))
+    assert mcs_setup._plugin_newer_than_gateway("PID 123 running")
+
+
 def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
     """FIX-SU1: the password must travel on `security -i` stdin and be
     verified by read-back — it must never appear in any child argv."""
