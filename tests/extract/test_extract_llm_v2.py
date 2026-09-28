@@ -1868,6 +1868,48 @@ def test_qc_clean_artifact_stays_settled(tmp_path, monkeypatch):
     assert res["selected"] == 0
 
 
+@pytest.mark.parametrize("text", ["no match", "No-Match", "NO_MATCH"])
+def test_qc_match_verdict_with_no_match_text_stays_settled(
+        tmp_path, monkeypatch, text):
+    """U05-F05: the SQL flag must agree with _qc_feedback — a MATCH
+    audit whose item TEXT happens to contain 'no match' (LIKE is
+    case-insensitive and '_' is a wildcard) was selected, skipped
+    unsettled and re-selected every cycle."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    chash = _hash(db, 1)
+    src = _extract_artifact(db, 1, {"summary": "s"}, chash)
+    _qc_artifact(db, 1, src, chash,
+                 {"qc": "done", "items": [
+                     {"section": "points", "index": 0,
+                      "item": {"text": f"合成 {text} 記載"},
+                      "verdict": "MATCH", "noul": 0.9}]})
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda *a, **k: {"summary": "x"})
+    for _ in range(2):
+        res = extract_llm.run_pending(db, limit=10, budget_s=120)
+        assert res["selected"] == 0
+
+
+def test_qc_feedback_ignores_superseded_generation_audit(tmp_path,
+                                                         monkeypatch):
+    """_qc_feedback reads the same current-generation audit the SQL
+    flag pinned: an older-version audit on the same source is not the
+    newest current QC."""
+    db = _ledger(tmp_path)
+    _seed_qc_flagged(db)
+    chash = _hash(db, 1)
+    src = db.artifacts("extract_llm", message_id=1)[-1]["artifact_id"]
+    db.artifact_add(
+        "extract_qc", json.dumps({"qc": "done", "items": []}),
+        project_id=1, message_id=1, model="jev-test",
+        meta={"hash": chash,
+              "extract_version": extract_llm.EXTRACT_VERSION - 1,
+              "source_artifact_id": src, "qc": "done"})
+    fb = extract_llm._qc_feedback(db, src)
+    assert fb is not None and "裏付け" in fb["notes"][0]
+
+
 def test_qc_stale_source_artifact_does_not_flag(tmp_path, monkeypatch):
     """A QC row pinned to a SUPERSEDED extraction never re-pends the
     message — only the verdict on the current artifact counts."""

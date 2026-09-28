@@ -1616,6 +1616,22 @@ def pending_pred() -> str:
              OR EXISTS ({_thin_pending_sql()}))"""
 
 
+# Exactly the verdicts _qc_feedback turns into notes — a looser SQL
+# test (the old LIKE '%NO_MATCH%' also hit "no match" in item text)
+# selects rows the feedback pass then skips unsettled, every cycle.
+_QC_ACTIONABLE_SQL = """CASE WHEN json_valid(q.content) THEN
+           (json_type(q.content,'$.items')='array'
+            AND EXISTS (SELECT 1 FROM json_each(q.content,'$.items') qi
+                        WHERE qi.type='object'
+                          AND json_extract(qi.value,'$.verdict')
+                              ='NO_MATCH'))
+           OR (json_type(q.content,'$.urgency')='object'
+               AND json_extract(q.content,'$.urgency.jev') IS NOT NULL
+               AND json_extract(q.content,'$.urgency.jev') IS NOT
+                   json_extract(q.content,'$.urgency.extracted'))
+           ELSE 0 END"""
+
+
 def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
     """Scalar subquery: the extract artifact whose current Jev QC audit
     flagged unsupported items (NO_MATCH verdicts) or an urgency
@@ -1633,10 +1649,7 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
                {current_qc_pred('q2', msg, version=EXTRACT_VERSION)})
          AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
          AND json_extract(q.content,'$.qc')='done'
-         AND (q.content LIKE '%NO_MATCH%'
-              OR (json_extract(q.content,'$.urgency.jev') IS NOT NULL
-                  AND json_extract(q.content,'$.urgency.jev') !=
-                      json_extract(q.content,'$.urgency.extracted')))
+         AND ({_QC_ACTIONABLE_SQL})
         WHERE a.kind='{KIND}' AND a.artifact_id={src}
         ORDER BY q.artifact_id DESC LIMIT 1"""
 
@@ -1645,11 +1658,16 @@ def _qc_feedback(ledger, src_artifact_id):
     """Flagged QC audit for a current extraction -> {src, qc, notes}
     for a feedback re-extract, or None when nothing actionable remains
     (the artifact vanished, or the newest audit is clean)."""
+    from mcs_queries import current_qc_pred
+    # Same audit row _qc_flagged_sql pinned: the newest CURRENT QC of
+    # this extraction generation — never an older/stale audit.
     row = ledger.db.execute(
-        """SELECT q.artifact_id, q.content FROM artifacts q
+        f"""SELECT q.artifact_id, q.content FROM artifacts q
            JOIN artifacts a ON a.artifact_id=?
+           JOIN messages m ON m.message_id=a.message_id
            WHERE q.kind='extract_qc' AND q.message_id=a.message_id
              AND (q.project_id IS NULL OR q.project_id=a.project_id)
+             {current_qc_pred('q', 'm', version=EXTRACT_VERSION)}
              AND CASE WHEN json_valid(q.meta) AND json_valid(q.content)
                  THEN json_type(q.content)='object'
                   AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
