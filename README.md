@@ -1,6 +1,6 @@
 # hermes-mcs — MedicalCareStation 記録の収集・整理・見直し支援
 
-**v1.0.4** — 変更履歴は [CHANGELOG.md](CHANGELOG.md)、リリースは
+**v1.0.5** — 変更履歴は [CHANGELOG.md](CHANGELOG.md)、リリースは
 [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)。
 
 > **MCS にたまる医療・介護チームのやり取りを、あとから検索・集計・
