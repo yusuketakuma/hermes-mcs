@@ -43,7 +43,7 @@ from contextlib import suppress
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _latest_signals, _mmdd, _patient_name, _source_fp)
+    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
@@ -333,14 +333,19 @@ def delivery_scope(cfg: dict) -> dict | None:
 def restore_pending(root: str) -> dict | None:
     """A restore marker blocks every send grant until reconcile runs.
     A corrupt or unreadable marker still blocks — fail closed."""
+    path = os.path.join(root, RESTORE_MARKER)
     try:
-        with open(os.path.join(root, RESTORE_MARKER), "rb") as handle:
+        with open(path, "rb") as handle:
             data = json.loads(handle.read().decode("utf-8"))
-    except OSError:
-        return None
-    except ValueError:
+    except FileNotFoundError:
+        return {"unreadable": True} if os.path.lexists(path) else None
+    except (OSError, ValueError, RecursionError):
         return {"unreadable": True}
-    return data if isinstance(data, dict) else {"unreadable": True}
+    if isinstance(data, dict) and (
+            data.get("phase") in ("restored", "awaiting_consent")
+            or ("phase" not in data and "restored_at" in data)):
+        return data
+    return {"unreadable": True}
 
 
 def mark_restored(root: str, backup_path=None, by="manual",
@@ -360,11 +365,11 @@ def mark_restored(root: str, backup_path=None, by="manual",
 
 
 def restore_awaiting_consent(root: str) -> dict | None:
-    """A restore marker in the consent-hold phase: writers and senders
-    stay frozen until the bound receipt arrives and the swap lands."""
+    """Hold writers for pending consent or an unreadable restore phase."""
     marker = restore_pending(root)
     if isinstance(marker, dict) \
-            and marker.get("phase") == "awaiting_consent":
+            and (marker.get("phase") == "awaiting_consent"
+                 or marker.get("unreadable")):
         return marker
     return None
 
@@ -472,12 +477,13 @@ def publish_flags(cfg: dict, root: str) -> bool:
     if old is not None:
         try:
             prior = json.loads(old)
-            prior.pop("at", None)
-            cur = dict(flags)
-            cur.pop("at", None)
-            if prior == cur:
-                return False
-        except (json.JSONDecodeError, TypeError):
+            if isinstance(prior, dict):
+                prior.pop("at", None)
+                cur = dict(flags)
+                cur.pop("at", None)
+                if prior == cur:
+                    return False
+        except (ValueError, RecursionError):
             pass
     publish_file(os.path.dirname(path), "notify.json", raw)
     return True
@@ -505,11 +511,7 @@ def _find_signal_card(db, pid, keys, scope):
             continue
         if r["transport"] == "slack" and not _scope_match(r, scope):
             continue
-        try:
-            anchor = json.loads(r["anchor_key"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if keyset & set(anchor.get("signal_keys") or []):
+        if keyset & set(_anchor_keys(r)):
             return r["card_id"]
     return None
 
@@ -520,16 +522,12 @@ def _card_for(db, target, scope, now) -> int:
                                   target["anchor"]["signal_keys"], scope)
         if found is not None:
             # widen the anchor if this intent adds member keys
-            row = db.execute("SELECT anchor_key FROM notification_cards "
+            row = db.execute("SELECT kind,anchor_key FROM notification_cards "
                              "WHERE card_id=?", (found,)).fetchone()
-            try:
-                anchor = json.loads(row["anchor_key"] or "{}")
-            except (json.JSONDecodeError, TypeError):
-                anchor = {}
+            prior_keys = _anchor_keys(row)
             merged = list(dict.fromkeys(
-                (anchor.get("signal_keys") or [])
-                + target["anchor"]["signal_keys"]))
-            if merged != anchor.get("signal_keys"):
+                prior_keys + target["anchor"]["signal_keys"]))
+            if merged != prior_keys:
                 db.execute("UPDATE notification_cards SET anchor_key=?,"
                            "updated_at=? WHERE card_id=?",
                            (json.dumps({"signal_keys": merged},
@@ -693,8 +691,11 @@ def _plan_attachments(db, shown) -> list:
             ORDER BY a.attachment_id""", ids).fetchall()
     out = []
     for a in rows:
+        name = a["name"] or f"file-{a['attachment_id']}"
+        if len(name) > 200:
+            name = name[:199] + "…"
         entry = {"attachment_id": a["attachment_id"],
-                 "name": a["name"] or f"file-{a['attachment_id']}"}
+                 "name": name}
         if a["state"] == "pending":
             continue      # in-flight download — followup path owns it
         if a["state"] == "downloaded" and a["local_path"] \
@@ -731,9 +732,14 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     man = {"shown": json.dumps(content["shown"], ensure_ascii=False)}
     body = _card_body_text(db, card, man, max_chars=None)[1]
     chunks = _split_body_chunks(body)      # lossless — no chunk dropped
-    truncated = len(chunks) > MAX_PARTS - 3   # card+thread+marker room
-    if truncated:
-        chunks = chunks[:MAX_PARTS - 3] + [_TRUNCATED_PART]
+    attachments = _plan_attachments(db, content["shown"])
+    if len(chunks) + len(attachments) > MAX_PARTS - 2:
+        # One shared budget includes card, thread and an explicit omission
+        # marker. Unplanned downloaded attachments retain the existing
+        # attachment-followup path after the card is delivered.
+        chunks = chunks[:MAX_PARTS - 3]
+        attachments = attachments[:MAX_PARTS - 3 - len(chunks)]
+        chunks.append(_TRUNCATED_PART)
     parts["thread_body_parts"] = chunks
     for i, chunk in enumerate(chunks):
         manifest.append({"part_id": f"body:{i + 1:04d}",
@@ -741,7 +747,7 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
                          "sha256": _sha_text(chunk),
                          "bytes": len(chunk.encode("utf-8"))})
         idx += 1
-    for a in _plan_attachments(db, content["shown"]):
+    for a in attachments:
         entry = {"part_id": f"attach:{a['attachment_id']:04d}",
                  "kind": "attachment_part", "index": idx, **a}
         manifest.append(entry)
@@ -1044,19 +1050,20 @@ def _thread_name(db, card) -> str:
                        (card["root_message_id"],)).fetchone()
         if r:
             d = _mmdd(r["posted_at"])
-    return f"💬 {name} — {d}"
+    title = f"💬 {name} — {d}"
+    return title if len(title) <= 100 else title[:99] + "…"
 
 
 def _digest_thread_name(content) -> str:
     return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
 
 
-def _source_hash(db, mid) -> str | None:
+def _source_hash(db, mid, project_id) -> str | None:
     """Pinned content hash of a displayed source message — only a
     full-body message with a valid hash can anchor a render."""
     r = db.execute(
         "SELECT content_hash,body_state FROM messages "
-        "WHERE message_id=?", (mid,)).fetchone()
+        "WHERE message_id=? AND project_id=?", (mid, project_id)).fetchone()
     if r and r["body_state"] == "full" and valid_hash(r["content_hash"]):
         return r["content_hash"]
     return None
@@ -1079,12 +1086,12 @@ def _render_context(db, card) -> dict:
         if positive(mid):
             ctx["project_id"] = card["project_id"]
             ctx["source_message_id"] = mid
-            pin = _source_hash(db, mid)
+            pin = _source_hash(db, mid, card["project_id"])
             if pin is not None:
                 ctx["source_hash"] = pin
         return ctx
     keys = _anchor_keys(card)
-    sigs = _latest_signals(db, keys)
+    sigs = _latest_signals(db, keys, card["project_id"])
     if not sigs:
         return ctx
     ctx["signals"] = {k: {"artifact_id": s["artifact_id"],
@@ -1093,14 +1100,11 @@ def _render_context(db, card) -> dict:
     if not positive(card["project_id"]):
         return ctx                       # digest — no card-level pin
     rep = sigs.get(keys[0]) or next(iter(sigs.values()))
-    ev = rep["content"].get("evidence") or {}
-    mids = ev.get("message_ids") or []
-    mid = (mids[-1] if mids and type(mids[-1]) is int else None) \
-        or ev.get("discharge_message_id") or ev.get("message_id")
-    if type(mid) is int:
+    mid, message = _signal_evidence(db, rep["content"])
+    if message is not None:
         ctx["project_id"] = card["project_id"]
         ctx["source_message_id"] = mid
-        pin = _source_hash(db, mid)
+        pin = _source_hash(db, mid, card["project_id"])
         if pin is not None:
             ctx["source_hash"] = pin
     return ctx
@@ -1178,17 +1182,19 @@ def _resolve_targets(db, ev, payload) -> list:
     kind = ev["kind"]
     if kind == "new_messages":
         ids = sorted({m for m in (payload.get("message_ids") or [])
-                      if type(m) is int})
+                      if positive(m)})
         roots = {}
         for mid in ids:
-            roots.setdefault(_thread_root(db, mid), []).append(mid)
-        out = []
-        for root_mid, mids in roots.items():
-            r = db.execute("SELECT project_id FROM messages "
-                           "WHERE message_id=?", (root_mid,)).fetchone()
-            pid = r["project_id"] if r else ev["project_id"]
-            if not positive(pid):
+            row = db.execute("SELECT project_id FROM messages WHERE message_id=?",
+                             (mid,)).fetchone()
+            if row is None or not positive(row["project_id"]) \
+                    or (ev["project_id"] is not None
+                        and row["project_id"] != ev["project_id"]):
                 continue
+            pid = row["project_id"]
+            roots.setdefault((pid, _thread_root(db, mid, pid)), []).append(mid)
+        out = []
+        for (pid, root_mid), mids in roots.items():
             out.append({"card_key": f"v1|thread|{pid}|{root_mid}",
                         "kind": "thread", "project_id": pid,
                         "root_message_id": root_mid,
@@ -1213,20 +1219,24 @@ def _resolve_targets(db, ev, payload) -> list:
         if not keys or not positive(payload.get("project_id")):
             return []
         pid = payload["project_id"]
+        if ev["project_id"] is not None and ev["project_id"] != pid:
+            return []
         return [{"card_key": f"v1|signal|{pid}|{keys[0]}",
                  "kind": "signal", "project_id": pid,
                  "coverage": keys, "anchor": {"signal_keys": keys}}]
     return []
 
 
-def _thread_root(db, mid):
+def _thread_root(db, mid, project_id):
     cur, seen = mid, set()
     for _ in range(32):
         if cur is None or cur in seen:
             return mid
         seen.add(cur)
-        r = db.execute("SELECT parent_id FROM messages "
+        r = db.execute("SELECT parent_id,project_id FROM messages "
                        "WHERE message_id=?", (cur,)).fetchone()
+        if r is not None and r["project_id"] != project_id:
+            return mid
         if r is None or r["parent_id"] is None:
             return cur
         cur = r["parent_id"]

@@ -159,6 +159,50 @@ def test_spec_manifest_validates(led):
     assert spec_mod.validate(spec) is spec
 
 
+@pytest.mark.parametrize("chunk_count,attachment_count", [(255, 0), (254, 1), (1, 300)])
+def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
+                                                   chunk_count, attachment_count):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _seed_thread(led)
+    monkeypatch.setattr(notify_cards, "_card_body_text",
+                        lambda *a, **k: ("合成", "x" * (1900 * chunk_count)))
+    attachments = [{"attachment_id": i + 1, "name": f"file-{i}.txt",
+                    "path": f"/tmp/synthetic-{i}", "sha256": "ab" * 32,
+                    "bytes": 10} for i in range(attachment_count)]
+    monkeypatch.setattr(notify_cards, "_plan_attachments", lambda *a: attachments)
+    _dispatch(led, _intent(led))
+    spec = _spec(_latest_render(led))
+    assert len(spec["parts"]["manifest"]) <= notify_cards.MAX_PARTS
+    assert notify_cards._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
+    assert spec_mod.validate(spec) is spec
+
+
+def test_long_attachment_name_keeps_spec_deliverable(led):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _seed_thread(led)
+    _attach(led, 100, name="synthetic-" + "a" * 240 + ".txt")
+    _dispatch(led, _intent(led))
+    spec = _spec(_latest_render(led))
+    assert spec_mod.validate(spec) is spec
+
+
+def test_attachment_outside_part_budget_uses_existing_followup(led, monkeypatch):
+    _seed_thread(led)
+    _msg(led, 102, parent=100, body="x" * 4000)
+    aid = _attach(led, 100)
+    monkeypatch.setattr(notify_cards, "MAX_PARTS", 4)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
+    render = _latest_render(led)
+    spec = _spec(render)
+    assert len(spec["parts"]["manifest"]) == 4
+    assert notify_cards._TRUNCATED_PART in spec["parts"]["thread_body_parts"]
+    assert not any(p["kind"] == "attachment_part" for p in spec["parts"]["manifest"])
+    _begin_and_deliver_card(led, render)
+    followups = led.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='attachment_followup'").fetchall()
+    assert [json.loads(row["payload"])["attachment_id"] for row in followups] == [aid]
+
+
 def test_spec_rejects_card_content_changed_after_sealing(led):
     from hermes_plugin.mcs_delivery import spec as spec_mod
     _seed_thread(led)
