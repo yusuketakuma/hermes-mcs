@@ -243,3 +243,43 @@ def test_not_sent_llm_defers_only_when_no_jev_was_spent(
     monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
     assert semantic_drain._process_job(
         None, None, None, client, lambda *a, **k: None, None) == expected
+
+
+def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):
+    """LLMNotSent on target 2's summary must still commit target 1's
+    audited result — otherwise every pass re-spends its Jev audit."""
+    import semantic_runtime
+    from test_mcs_semantic import _FakeJev, _llm
+    db = _seeded(tmp_path)
+    jev = _FakeJev()
+    calls = {"summary": 0}
+
+    def llm(prompt):
+        if "要約器" in prompt:
+            calls["summary"] += 1
+            if calls["summary"] >= 2:
+                raise semantic_runtime.LLMNotSent("llm_admission:held")
+        return _llm(prompt)
+
+    try:
+        spent = []
+        for _ in range(3):
+            with db.db:
+                db.db.execute(
+                    "UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            before = jev.requests_made
+            out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                                   time.monotonic() + 300, jev_client=jev,
+                                   llm_fn=llm)
+            assert out["deferred"] == 1 and not out["failed"]
+            spent.append(jev.requests_made - before)
+        audits = dict(db.db.execute(
+            "SELECT message_id, json_extract(meta,'$.audit_status') "
+            "FROM artifacts WHERE kind='semantic_audit'").fetchall())
+        assert audits.get(1) == "PASS"
+        assert spent[1:] == [0, 0]
+        assert db.db.execute(
+            "SELECT attempts FROM fetch_jobs WHERE kind='semantic'"
+        ).fetchone()[0] == 0
+    finally:
+        db.close()

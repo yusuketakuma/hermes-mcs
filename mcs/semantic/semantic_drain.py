@@ -607,6 +607,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     verdicts: dict[int, dict] = {}
     incomplete = False
     hard_fail = False   # non-retryable Jev error — bound the retries
+    not_sent = None     # LLMNotSent from a target summary (see below)
     retryable_failure = False
     resource_wait = False
     for mid in all_targets:
@@ -794,9 +795,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
                 summary = candidate["content"]
             else:
-                summary, summary_reason = summarize(
-                    llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                    deadline=deadline, return_reason=True)
+                try:
+                    summary, summary_reason = summarize(
+                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                        deadline=deadline, return_reason=True)
+                except runtime.LLMNotSent as e:
+                    # the local model never got this target's request:
+                    # stop here like any incomplete pass, so targets
+                    # already audited are still committed below
+                    not_sent = e
+                    summary, summary_reason = None, "not_sent"
         if summary is None:
             # same dedup as the assess wait-state above: a persistent
             # local-LLM outage defers without stacking identical
@@ -819,6 +827,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "technical_status": "pending"})
             incomplete = True
+            if not_sent is not None:
+                break         # the model is held — later targets too
             continue
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy, "s6_summary",
@@ -937,6 +947,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             return "failed"
         if retryable_failure:
             return "retry"
+        if not_sent is not None:
+            raise not_sent    # _process_job maps it (Jev-spend backoff)
         return "deferred"
 
     # generation guard: the bundle, config, and complete job identity must
