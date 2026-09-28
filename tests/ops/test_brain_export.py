@@ -415,3 +415,59 @@ def test_machine_export_long_stat_is_complete_not_sliced(env):
     # and every line is under no artificial byte cap — the JSON itself
     # decides completeness
     assert (out / "export.jsonl").stat().st_size > 0
+
+
+def test_machine_records_keep_counts_and_ids_without_surface_text(env, monkeypatch):
+    snap, out = env
+    secret = "SYNTHETIC_FREE_TEXT_73"
+    monkeypatch.setattr(brain_export.mcs_stats, "run_stats", lambda *a: {
+        "stats": {"meds": {"status": "ok", "distinct_names": 1,
+                           "action_totals": {"start": 2},
+                           "by_name_month": {"items": [{"name": secret}]},
+                           "future_field": secret}}})
+    monkeypatch.setattr(brain_export.mcs_signals, "current_open", lambda *a, **kw: {
+        "items": [{"type": "rx_period_expiry", "project_id": 1,
+                   "detected_at": SNAP_TS,
+                   "evidence": {"message_ids": [100], "med": secret,
+                                "raw": secret, "future_field": secret}}],
+        "total": 1})
+    brain_export.run(out, snap)
+    assert secret not in (out / "export.jsonl").read_text()
+    records = _jsonl(out)
+    value = next(r["value"] for r in records if r["type"] == "stat")
+    assert value["distinct_names"] == 1 and value["action_totals"] == {"start": 2}
+    assert next(r["evidence"] for r in records if r["type"] == "signal") \
+        == {"message_ids": [100]}
+    assert secret in (out / "stats/latest.md").read_text()
+
+
+def test_retention_preserves_foreign_date_names_and_symlink_targets(tmp_path):
+    out = tmp_path / "exports"
+    (out / "stats").mkdir(parents=True)
+    (out / "signals").mkdir()
+    foreign = [out / "2000-01-01.md", out / "2000-01-01.jsonl",
+               out / "stats" / "export-2000-01-01.jsonl",
+               out / "stats" / "2000-01-01.jsonl", out / "notes.md"]
+    for path in foreign:
+        path.write_text("keep unrelated content")
+    link = out / "stats" / "2000-01-01.md"
+    link.symlink_to(out / "notes.md")
+    generated = out / "export-2000-01-01.jsonl"
+    generated.write_text("expired generated export")
+    assert brain_export._sweep_exports(out, SNAP_TS) == [generated.name]
+    assert link.is_symlink()
+    assert all(path.read_text() == "keep unrelated content" for path in foreign)
+
+
+def test_machine_export_preserves_pruned_attachment_state(env):
+    snap, out = env
+    with sqlite3.connect(snap) as db:
+        db.execute("CREATE TABLE attachments (attachment_id INTEGER, message_id INTEGER, "
+                   "name TEXT, bytes INTEGER, sha256 TEXT, state TEXT)")
+        db.execute("INSERT INTO attachments VALUES (1,100,'synthetic.txt',10,'h1','pruned')")
+    brain_export.run(out, snap)
+    records = _jsonl(out)
+    attachment = next(r for r in records if r["type"] == "attachment")
+    assert attachment["state"] == "pruned" and "name" not in attachment
+    coverage = next(r for r in records if r["type"] == "coverage")
+    assert coverage["coverage"]["attachments"]["pruned"] == 1

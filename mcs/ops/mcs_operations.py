@@ -516,6 +516,9 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     if content.get("state") != "open":
         return "signal_not_open", {"signal_key": req["signal_key"],
                                    "state": content.get("state")}
+    evidence = content.get("evidence", {})
+    if not isinstance(evidence, dict):
+        return "signal_corrupt", {"signal_key": req["signal_key"]}
     dismissed = dict(content, state="dismissed", dismissed_at=now,
                      resolved_at=None, dismissed_by=req["actor"],
                      dismiss_reason=req["reason"],
@@ -524,8 +527,7 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,?,?,?,?,?)",
         ("signal_v1", row["project_id"],
-         content.get("evidence", {}).get("message_id")
-         or content.get("evidence", {}).get("discharge_message_id"),
+         evidence.get("message_id") or evidence.get("discharge_message_id"),
          json.dumps(dismissed, ensure_ascii=False), "human",
          json.dumps({"key": req["signal_key"],
                      "type": content.get("type"),
@@ -652,6 +654,8 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
             if path is not None:
                 with suppress(OSError):
                     os.unlink(path)
+
+
 def _apply_refstat_approve_tx(db, req: dict, now: float,
                              filesystem_changes) -> tuple[str | None, dict]:
     """Human-approved promotion of a captured stats reference set:

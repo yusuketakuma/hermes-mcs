@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 import unicodedata
 import urllib.request
 from contextlib import suppress
@@ -123,6 +124,30 @@ def _default_state() -> dict:
             "executed": {}, "applying": None}
 
 
+def _valid_state(state):
+    """Check journal shapes before any recovery decision or mutation."""
+    if not isinstance(state, dict) or type(state.get("v")) is not int \
+            or state["v"] != 1:
+        return False
+    for key in ("stages", "applied"):
+        if not isinstance(state.get(key, []), list) \
+                or any(not isinstance(row, dict) for row in state.get(key, [])):
+            return False
+    if state.get("applying") is not None and not isinstance(state["applying"], dict):
+        return False
+    for key in ("attempts", "executed", "restore_consent"):
+        if key in state and not isinstance(state[key], dict):
+            return False
+    records = [*state.get("stages", []), *state.get("applied", []),
+               state.get("applying") or {}]
+    for row in records:
+        stamp = row.get("at", 0)
+        if type(stamp) not in (int, float) or not 0 <= stamp < 1e12:
+            return False
+    return all(isinstance(row.get("stage"), str)
+               for row in state.get("stages", []))
+
+
 def load_state() -> dict:
     """Lock-free read — writers publish atomically so a torn read never
     happens. Unparsable state is 'corrupt': callers must escalate and
@@ -132,11 +157,11 @@ def load_state() -> dict:
             state = json.load(f)
     except FileNotFoundError:
         return _default_state()
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {"_corrupt": True}
-    if not isinstance(state, dict) or state.get("v") != 1:
+    if not _valid_state(state):
         return {"_corrupt": True}
-    return state
+    return {**_default_state(), **state}
 
 
 def save_state(state: dict) -> None:
@@ -229,12 +254,18 @@ def remote_tag_sha(tag: str) -> str | None:
 def _ver_key(name: str) -> tuple | None:
     """Semver ordering key: (major, minor, patch, release-flag, pre).
     A prerelease sorts BELOW the same release; None when not semver."""
-    m = SEMVER_RE.fullmatch(name or "")
+    if not isinstance(name, str) or len(name) > 255:
+        return None
+    m = SEMVER_RE.fullmatch(name)
     if not m:
         return None
     pre = m.group(4)
+    if pre and any(not part for part in pre.split(".")):
+        return None
+    identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
+                        for part in pre.split(".")) if pre else ()
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
-            0 if pre else 1, pre or "")
+            0 if pre else 1, identifiers)
 
 
 def detect_latest(include_prerelease: bool = False
@@ -308,11 +339,16 @@ def fetch_notes(tag: str) -> str | None:
             url, headers={"Accept": "application/vnd.github+json",
                           "User-Agent": "mcs-update"})
         with mcs_util.no_proxy_opener().open(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                return None
+            data = json.loads(raw)
     except Exception:
         return None
-    title = data.get("name") or tag
-    body = (data.get("body") or "").strip()
+    if not isinstance(data, dict):
+        return None
+    title = data.get("name") if isinstance(data.get("name"), str) else tag
+    body = data.get("body") if isinstance(data.get("body"), str) else ""
     return f"{title}\n{body}".strip()
 
 
@@ -691,12 +727,16 @@ def scan_pending_approvals(state: dict
             continue
         try:
             rec = json.loads(rj)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) or rec.get("scheduled") is not True:
             continue
         cmd = rec.get("cmd")
         if cmd == "ops.update_apply" and rec.get("scheduled") is True:
+            if _ver_key(rec.get("tag")) is None \
+                    or not isinstance(rec.get("target_sha"), str) \
+                    or not HEX_RE.fullmatch(rec["target_sha"]):
+                continue
             applies.append({"command_id": cid, "tag": rec.get("tag"),
                             "target_sha": rec.get("target_sha"),
                             "base_sha": rec.get("base_sha"),
@@ -1028,6 +1068,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if upd_fd is None:
             return 0                    # another updater is alive
         state = load_state()            # fresh view under the lock
+        if state.get("_corrupt"):
+            return 2
         if state.get("applying") or state.get("stages"):
             os.close(upd_fd)
             upd_fd = None
@@ -1193,6 +1235,8 @@ def _reconcile_membership(desired: dict) -> list[str]:
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
                                timeout=30)
+            if r.returncode != 0:
+                problems.append("cron_list_unverifiable")
             for block in re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
                     r"((?:\s{4}\S[^\n]*\n?)+)", r.stdout, re.M):
@@ -1209,6 +1253,8 @@ def _reconcile_membership(desired: dict) -> list[str]:
                         problems.append(f"cron_remove_failed:{script}")
         except (OSError, subprocess.TimeoutExpired):
             problems.append("cron_list_unverifiable")
+    else:
+        problems.append("cron_list_unverifiable")
     desired_agents = {a.get("label") for a in
                       (desired or {}).get("agents", [])}
     def _owned(label: str) -> bool:
@@ -1268,6 +1314,8 @@ def rollback(command_id: str | None = None) -> int:
     consent_hold = False
     try:
         state = load_state()            # fresh view under the lock
+        if state.get("_corrupt"):
+            return 2
         applied = state.get("applied") or []
         entry = applied[-1] if applied else state.get("applying")
         if not entry or not entry.get("prev_sha"):
@@ -1398,6 +1446,23 @@ def _table_count(con: sqlite3.Connection, table: str) -> int:
         return 0
 
 
+def _restore_content_digest(con):
+    """Bind consent to the contents of the stored-data and delivery tables."""
+    digest = hashlib.sha256()
+    for table in (*_STORED_TABLES, *_EFFECT_TABLES):
+        columns = con.execute(f"PRAGMA table_info({table})").fetchall()
+        digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
+        if not columns:
+            continue
+        for row in con.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+            encoded = json.dumps(
+                row, ensure_ascii=False, separators=(",", ":"),
+                default=lambda value: {"blob": value.hex()}).encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
 def _file_sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -1408,9 +1473,8 @@ def _file_sha256(path: str) -> str:
 
 def _restore_loss_report(backup_path: str) -> dict:
     """Loss report a human must approve before the live DB is replaced.
-    Deterministic over (backup bytes, backup schema, live-vs-backup row
-    deltas) — any write that slips past the writer hold changes the
-    report_id and invalidates every receipt bound to the stale one."""
+    Binds backup bytes/schema, row deltas, and the contents of the stored-data
+    and delivery tables. Changes to an existing row invalidate stale consent."""
     try:
         live = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
     except sqlite3.Error as e:
@@ -1422,6 +1486,9 @@ def _restore_loss_report(backup_path: str) -> dict:
         live.close()
         raise UpdateError(f"restore_report_backup_db: {e}") from e
     try:
+        live.execute("BEGIN")
+        back.execute("BEGIN")
+        live_digest = _restore_content_digest(live)
         try:
             watermark = back.execute(
                 "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
@@ -1435,6 +1502,7 @@ def _restore_loss_report(backup_path: str) -> dict:
         live.close()
         back.close()
     metrics = {"v": 1,
+               "live_content_sha256": live_digest,
                "backup_sha256": _file_sha256(backup_path),
                "backup_schema": _db_version(backup_path),
                "watermark_ts": watermark,
@@ -1499,7 +1567,9 @@ def _reconcile_restored() -> None:
     import notify_reconcile
     restored = ledger.Ledger(LEDGER)
     try:
-        notify_reconcile.reconcile_after_restore(restored, load_config())
+        report = notify_reconcile.reconcile_after_restore(restored, load_config())
+        if report.get("journal_incomplete"):
+            raise ValueError("restore_journal_incomplete")
     except Exception as e:
         raise UpdateError(
             f"restore_reconcile_failed: {type(e).__name__}") from e
@@ -1507,12 +1577,60 @@ def _reconcile_restored() -> None:
         restored.close()
 
 
+def _replace_database(backup_path, expected_sha, before_replace):
+    """Stage and verify the backup before checkpointing and replacing the live DB."""
+    directory = os.path.dirname(LEDGER)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as dst, open(backup_path, "rb") as src:
+            shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        if _file_sha256(temporary) != expected_sha:
+            raise OSError("backup_changed_during_restore")
+        candidate = sqlite3.connect(
+            Path(temporary).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+        try:
+            if candidate.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise OSError("backup_integrity_failed")
+        finally:
+            candidate.close()
+        # Preserve committed WAL contents even if the subsequent replace fails.
+        # SQLite owns journal removal; never unlink a live WAL by hand.
+        live = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=rw",
+                               uri=True, timeout=5)
+        try:
+            if live.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
+                raise OSError("live_checkpoint_busy")
+            if live.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+                raise OSError("live_journal_busy")
+        finally:
+            live.close()
+        if any(os.path.lexists(LEDGER + suffix)
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise OSError("live_sidecars_remaining")
+        before_replace()
+        os.replace(temporary, LEDGER)
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except sqlite3.Error as exc:
+        raise OSError("restore_database_unverifiable") from exc
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
 def _restore_db(backup_path: str) -> None:
     """Verified restore — validate the backup before touching the live
     DB. Skips when the live schema already matches the backup (a failed
-    apply may never have migrated). Removes WAL/SHM sidecars FIRST so a
-    stale journal can never be replayed against the restored file
-    (F9); caller already quiesced every writer.
+    apply may never have migrated). Stages the private copy, verifies its
+    approved hash, then checkpoints the live DB before replacement so a
+    failed copy cannot erase committed WAL data. Callers quiesce every writer.
     A real replace requires a per-restore human consent receipt bound
     to the exact backup bytes/schema/loss report (R2 — an earlier
     update or rollback approval does not substitute): missing consent
@@ -1521,6 +1639,9 @@ def _restore_db(backup_path: str) -> None:
     already sent cannot be retracted (design R2)."""
     import ledger
     import notify_cards
+    marker = notify_cards.restore_pending(DATA)
+    if marker and marker.get("unreadable"):
+        raise UpdateError("restore_marker_unreadable")
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
     live_ver = _db_version(LEDGER)
@@ -1563,26 +1684,10 @@ def _restore_db(backup_path: str) -> None:
     # DB. A stale marker is harmless — the next tick's reconcile finds
     # nothing to hold and clears it.
     try:
-        notify_cards.mark_restored(DATA, backup_path=backup_path,
-                                   by="mcs_update",
-                                   report_id=report["report_id"])
-    except OSError as e:
-        raise UpdateError(f"restore_marker_failed: {e}") from e
-    for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
-        with suppress(OSError):
-            os.unlink(side)
-    tmp = LEDGER + ".restore-tmp"
-    try:
-        with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-            dst.flush()
-            os.fsync(dst.fileno())
-        os.replace(tmp, LEDGER)
-        dfd = os.open(os.path.dirname(LEDGER), os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        _replace_database(backup_path, report["backup_sha256"],
+                          lambda: notify_cards.mark_restored(
+                              DATA, backup_path=backup_path, by="mcs_update",
+                              report_id=report["report_id"]))
     except OSError as e:
         # callers catch UpdateError (apply bail / recover escalate /
         # rollback rb_error); a raw OSError would slip past them and
@@ -1623,6 +1728,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if run_fd is None:
             return 0                   # a tick is running — retry next
         state = load_state()           # fresh view under both locks
+        if state.get("_corrupt"):
+            _report("corrupt_state", "update_state.json unreadable under lock")
+            return 2
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
         if not applying and not stages:
@@ -1859,6 +1967,8 @@ def cmd_check() -> int:
         return 0                        # another updater is alive
     try:
         state = load_state()            # fresh view under the lock
+        if state.get("_corrupt"):
+            return 2
         if state.get("applying") or state.get("stages"):
             # an interrupted/held update owns the journal — check must
             # defer to recovery AFTER releasing update.lock (a
