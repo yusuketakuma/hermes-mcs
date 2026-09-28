@@ -15,4 +15,6 @@ __pycache__/
 
 uv.lock
 .omo/
+.agent/
+.codex/
 .debug-journal.md

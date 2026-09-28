@@ -14,5 +14,11 @@ New gateway-bound tests MUST keep the `test_hermes_*` prefix.
 import importlib.util
 
 collect_ignore_glob = []
-if importlib.util.find_spec("gateway") is None:
+# the hermes checkout's own venv carries every third-party import the
+# hermes-bound files need at collection time — a partial environment
+# (gateway importable, yaml/discord/slack_sdk/dotenv missing) must
+# skip too, not fail at import
+_hermes_deps = ("gateway", "hermes_cli", "yaml", "discord", "dotenv",
+                "slack_sdk")
+if any(importlib.util.find_spec(mod) is None for mod in _hermes_deps):
     collect_ignore_glob.append("integration/test_hermes_*")

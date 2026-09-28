@@ -546,8 +546,8 @@ Install → Allow → `xoxb-` の **Bot User OAuth Token** をコピー
 **Step 8: Configure** — `~/.hermes/.env` に:
 
 ```bash
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_APP_TOKEN=xapp-your-app-token
+SLACK_BOT_TOKEN=xoxb-…
+SLACK_APP_TOKEN=xapp-…
 SLACK_ALLOWED_USERS=U01ABC2DEF3        # カンマ区切り Member ID
 SLACK_HOME_CHANNEL=C01234567890        # 任意: cron/通知の既定ch
 ```
