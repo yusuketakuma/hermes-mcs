@@ -520,6 +520,12 @@ def _vitals_guard(body: str | None, vit: dict,
 _RX_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
 
 
+def _cap(v, maxlen: int):
+    """Length-bound an optional string field; non-strings pass as-is
+    (type checks happen at the call site)."""
+    return v[:maxlen] if isinstance(v, str) else v
+
+
 def _clean_text(v, maxlen: int) -> str | None:
     """Strip a free-text field; reject JSON-structural fragments and
     cap length. None means the value is not a usable string."""
@@ -857,9 +863,13 @@ class _Validator:
                          or isinstance(r.get("from"), str))):
                 self.drop_item("requests")
                 continue
-            item = {"to": r.get("to"), "action": r.get("action")}
+            # Ungrounded free text reaches notifications — bound its
+            # length (the prompt asks for 15 chars; a runaway or
+            # injected string must not ride through unbounded).
+            item = {"to": _cap(r.get("to"), 30),
+                    "action": _cap(r.get("action"), 60)}
             if isinstance(r.get("from"), str):
-                item["from"] = r["from"].strip()
+                item["from"] = r["from"].strip()[:30]
             if isinstance(r.get("due"), str) \
                     and _valid_date(r["due"].strip()):
                 item["due"] = r["due"].strip()
