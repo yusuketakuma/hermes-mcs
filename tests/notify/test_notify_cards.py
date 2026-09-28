@@ -2007,6 +2007,43 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     assert 'body' not in third
 
 
+def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
+    """U03-F02: the 📄 result carries the body for its one delivery, but
+    the durable command receipt (and so the published snapshot) must
+    not keep a copy that outlives the source's deletion."""
+    import ledger as _ledger2
+    import mcs_view
+    marker = "合成本文F02"
+    _, spec = _delivered_card(led, tmp_path, cfg=NO_THREAD_CFG)
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
+                   (marker,))
+    led.db.commit()
+    req = {**_notif(_token_for(spec, "body")),
+           "origin": dict(ORIGIN, message_id="m-9")}
+    first = notify_cards.apply_notification(led, req, CFG, now=NOW)
+    assert first["outcome"] == "applied" and marker in first["body"]
+    stored = led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()["receipt_json"]
+    assert marker not in stored and json.loads(stored)["action"] == "body"
+    led.db.execute("UPDATE messages SET body_state='deleted' "
+                   "WHERE message_id=100")
+    led.db.commit()
+    snap_dir = tmp_path / "snap"
+    snap_dir.mkdir()
+    assert _ledger2.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
+                                     str(snap_dir))
+    view = mcs_view.View(str(snap_dir / "ledger-snapshot.db"))
+    try:
+        r = view.notification_receipt(req["command_id"])
+        assert r["outcome"] == "applied" and "body" not in r
+    finally:
+        view.close()
+    # a re-click still answers from the live (now deleted) source
+    again = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
+    assert marker not in again["body"]
+
+
 def test_notification_request_ids_get_fresh_results_without_duplicate_writes(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
     req = _notif(_token_for(spec, 'ack'))
