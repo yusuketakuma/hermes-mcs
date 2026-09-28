@@ -476,10 +476,29 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         warnings.extend(
             f"LaunchAgent {label} not installed — templates and "
             "install steps in deployment/launchagents/README.md"
-            for label in ("ai.mcs.extract-drainer",
-                          "ai.mcs.extract-drainer-rt",
-                          "local.mcs-cmd", "local.mcs-int")
+            for label in AGENT_LABELS
             if not os.path.exists(os.path.join(agents, f"{label}.plist")))
+        # plist presence is not liveness: an installed-but-unloaded
+        # agent stops extraction silently (2026-09-28 incident: the
+        # drainers sat unloaded while the backlog grew for days and
+        # `check` stayed green). _agent_loaded resolves the GUI-domain
+        # service; a domain that does not answer at all means this
+        # session simply cannot verify — warn once, don't per-agent fail.
+        domain_ok = _run(["launchctl", "print", f"gui/{os.getuid()}"],
+                         timeout=10).returncode == 0
+        if not domain_ok:
+            warnings.append(
+                f"launchd gui/{os.getuid()} unreachable from this "
+                "session — cannot verify agent load state")
+        for label in AGENT_LABELS:
+            plist = os.path.join(agents, f"{label}.plist")
+            if not os.path.exists(plist) or not domain_ok:
+                continue
+            if not _agent_loaded(label):
+                errors.append(
+                    f"LaunchAgent {label} installed but not loaded — "
+                    "run `mcs_setup.py services` or "
+                    f"`launchctl bootstrap gui/{os.getuid()} {plist}`")
     # T20: with the admission boundary enabled, every MCS LLM route
     # must be registered — a missing route fails closed FOREVER, so a
     # misconfigured broker is a blocked-startup error, not a stall.
@@ -1240,12 +1259,70 @@ def cmd_jev_value(args) -> int:
     return 0 if report["evaluated"] else 2
 
 
+def _queue_warnings(cfg: dict | None = None) -> list[str]:
+    """Ledger-backed liveness: a stalled job queue or a mounting
+    extract_llm backlog is invisible to machine probes (the 2026-09-28
+    drainer outage surfaced only as thin cards). Read-only; a locked or
+    missing ledger just means nothing to report."""
+    out = []
+    db_path = os.path.join(HOME, "data", "ledger.db")
+    if not os.path.exists(db_path):
+        return out
+    try:
+        import sqlite3
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            now = time.time()
+            for kind in ("extract_qc", "semantic"):
+                r = db.execute(
+                    "SELECT COUNT(*), MIN(created_at) FROM fetch_jobs "
+                    "WHERE kind=? AND state='pending'", (kind,)).fetchone()
+                if r and r[0] and r[1] and now - r[1] > 86400:
+                    out.append(f"{kind} jobs pending={r[0]} oldest="
+                               f"{(now - r[1]) / 86400:.1f}d — drain is "
+                               "lagging (nightly catchup covers it; "
+                               "check semantic_drain.log)")
+            backlog = db.execute(
+                "SELECT COUNT(*) FROM messages m WHERE m.body_state='full'"
+                " AND m.body_text != '' AND NOT EXISTS ("
+                " SELECT 1 FROM artifacts a WHERE a.message_id=m.message_id"
+                "   AND a.kind='extract_llm' AND json_valid(a.meta)"
+                "   AND json_extract(a.meta,'$.hash')=m.content_hash"
+                "   AND COALESCE(json_extract(a.meta,'$.error'),0)=0)"
+            ).fetchone()[0]
+            if backlog > 500:
+                out.append(f"extract_llm backlog={backlog} messages — "
+                           "drainers (ai.mcs.extract-drainer*) chew DESC; "
+                           "a persistent count means they are down")
+            # shadow coverage: semantic mode on means the canonical
+            # projection pipeline should eventually publish — zero
+            # projections against a populated extract_llm history means
+            # the layer never ran, which is silent in every other probe.
+            if (cfg or {}).get("semantic", {}).get("mode", "off") != "off":
+                llm_done, canon = db.execute(
+                    "SELECT COUNT(*) FILTER (WHERE kind='extract_llm'),"
+                    " COUNT(*) FILTER (WHERE kind='canonical_projection')"
+                    " FROM artifacts WHERE kind IN"
+                    " ('extract_llm','canonical_projection')").fetchone()
+                if llm_done > 50 and canon == 0:
+                    out.append(
+                        "semantic layer enabled but canonical_projection"
+                        " has 0 artifacts against "
+                        f"{llm_done} extract_llm — the publish stage "
+                        "has never run (check semantic queue)")
+        finally:
+            db.close()
+    except Exception as e:
+        out.append(f"queue health unreadable ({type(e).__name__})")
+    return out
+
+
 def cmd_check(args) -> int:
     cfg = load_config()
     errors, warnings = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     errors += e2
-    warnings += w2
+    warnings += w2 + _queue_warnings(cfg)
     for w in warnings:
         print(f"  warn : {w}")
     for e in errors:
