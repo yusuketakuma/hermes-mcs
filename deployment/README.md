@@ -11,7 +11,7 @@ repo との drift になる。
 | パス | 内容 |
 |---|---|
 | `launchagents/` | launchd plist テンプレート 6件。ジョブ構成・プレースホルダ規則・drainer 設計は [launchagents/README.md](launchagents/README.md) |
-| `scripts/` | hermes cron 用 wrapper スクリプト 5件（`~/.hermes/scripts/` へレンダリング） |
+| `scripts/` | hermes cron 用 wrapper スクリプト 6件（`~/.hermes/scripts/` へレンダリング） |
 | `recovery/` | `mcs_recover.py` — 更新中断を自律復旧する独立 watchdog ツール（install.sh が `~/.mcs-recovery/` へコピーし `org.mcs.recovery` で定期起動） |
 | `cco-terminal.candidate.yaml` | CCO terminal/file 隔離の候補設定（terminal 節のみの差分） |
 | `cco-approval-scope.json` | 上記候補の適用範囲・検証・適用前後ハッシュの記録 |

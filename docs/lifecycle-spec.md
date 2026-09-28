@@ -202,7 +202,9 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 実行予定を数え、既定で2回の欠落と最終予定回の最大実行時間480秒を許容して
 古い `health.json` を判定する。別の実行間隔を使う環境では
 `health.tick_interval_s` を設定し、夜間間引きを行わない場合は
-`health.night_thinning=false` にする。
+`health.night_thinning=false` にする。判定基準時刻は未読収集が最後に完了した
+`unread_at`（無い旧形式では `at`）で、未読収集をしない `--jobs-only` の deep
+実行が `at` を更新しても停止した未読チェックを隠さない。
 
 | 状態 | 自動応答 | 実装 |
 |---|---|---|

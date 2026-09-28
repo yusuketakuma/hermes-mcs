@@ -14,12 +14,13 @@ PY=__PYTHON__
 # no new posts outside 07-21 JST, so 22:00-06:59 polls at a 20-minute
 # cadence — under the 30-minute session-expiry limit, keeping the bearer
 # alive without needing auto_login overnight.
+# A window, not an exact minute: a cron start that slips into :01-:04
+# still runs instead of silently skipping the slot.
 case "$(date +%H)" in
   22|23|00|01|02|03|04|05|06)
-    case "$(date +%M)" in
-      00|20|40) ;;
-      *) exit 0 ;;
-    esac ;;
+    if [ $((10#$(date +%M) % 20)) -ge 5 ]; then
+      exit 0
+    fi ;;
 esac
 
 "$PY" __REPO__/mcs/ingest/run_check.py --json --download-files --mark-read >>"$LOG" 2>&1
