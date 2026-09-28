@@ -1942,3 +1942,125 @@ def test_structured_view_shows_v4_detail(tmp_path):
     assert "疼痛(中等度・昨日から)" in joined
     assert "検査: HbA1c 7.2%(高)" in joined
     db.close()
+
+
+def test_blood_pressure_at_body_end_keeps_diastolic_side():
+    out = extract_llm._validate({"vitals": {"dbp": 80}}, "血圧120/80")
+    assert out["vitals"] == {"dbp": 80.0}
+
+
+def test_multichunk_labs_survive_and_latest_reading_wins(monkeypatch):
+    body = "合成検査A 1。" + "あ" * 2500 + "\n" + "い" * 1000 + "合成検査A 2。合成検査B 3。"
+    replies = iter([
+        {"labs": [{"name": "合成検査A", "value": 1, "evidence": "合成検査A 1"}]},
+        {"labs": [{"name": "合成検査A", "value": 2, "evidence": "合成検査A 2"},
+                  {"name": "合成検査B", "value": 3, "evidence": "合成検査B 3"}]},
+    ])
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **kw: next(replies))
+    out = extract_llm.llm_extract(body)
+    assert [(lab["name"], lab["value"]) for lab in out["labs"]] == [
+        ("合成検査A", 2), ("合成検査B", 3)]
+
+
+@pytest.mark.parametrize("bad", [
+    {"meds": [{"name": "合成薬", "action": []}]},
+    {"labs": [{"name": "合成検査", "value": 10**400}]},
+    {"vitals": {"hr": 10**400}},
+])
+def test_invalid_item_never_discards_valid_sibling(bad):
+    out = extract_llm._validate({**bad, "summary": "合成要約"}, "合成本文")
+    assert out["summary"] == "合成要約"
+    assert out["_items_dropped"] == 1
+
+
+@pytest.mark.parametrize("bad", ["meta_scalar", "content_scalar", "foreign_patient"])
+def test_invalid_chunk_checkpoint_is_reinferred(tmp_path, monkeypatch, bad):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成薬を確認")])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._persist_chunks(db, row, {0: {"summary": "旧要約"}})
+    if bad == "meta_scalar":
+        db.db.execute("UPDATE artifacts SET meta='[]' WHERE kind='extract_llm_chunk'")
+    elif bad == "content_scalar":
+        db.db.execute("UPDATE artifacts SET content='7' WHERE kind='extract_llm_chunk'")
+    else:
+        db.db.execute("UPDATE artifacts SET project_id=2 WHERE kind='extract_llm_chunk'")
+    db.db.commit()
+    calls = []
+    monkeypatch.setattr(extract_llm, "_llm_call",
+                        lambda *a, **kw: calls.append(1) or {"summary": "再抽出"})
+    result = extract_llm.run_pending(db, budget_s=180)
+    assert result["done"] == 1 and calls == [1]
+    assert json.loads(db.artifacts("extract_llm")[0]["content"])["summary"] == "再抽出"
+    db.close()
+
+
+def test_delayed_rule_write_preserves_new_source_artifact(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="旧本文")])
+    stale = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    db.save_messages([_message(body="改訂本文")])
+    current = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._ensure_v1(db, current, {"v": 1, "summary": "改訂"})
+    extract_llm._ensure_v1(db, stale, {"v": 1, "summary": "旧版"})
+    rows = db.artifacts("extract_v1")
+    assert len(rows) == 1
+    assert json.loads(rows[0]["content"])["summary"] == "改訂"
+    db.close()
+
+
+def test_newer_clean_qc_supersedes_older_flag(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    chash = _seed_qc_flagged(db)
+    src = db.artifacts("extract_llm")[0]["artifact_id"]
+    _qc_artifact(db, 1, src, chash, {"qc": "done", "items": []})
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda *a, **kw: pytest.fail("latest QC is clean"))
+    assert extract_llm.run_pending(db)["selected"] == 0
+    db.close()
+
+
+def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成本文")])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    other = _ledger(tmp_path)
+    published = []
+
+    def publish_before_insert(sql):
+        if not published and sql.startswith("INSERT INTO artifacts(kind,"):
+            other.artifact_add("semantic_facts_v4", '{"meds":[]}',
+                               project_id=1, message_id=1,
+                               meta={"hash": row["content_hash"], "engine_version": 4})
+            published.append(True)
+
+    db.db.set_trace_callback(publish_before_insert)
+    try:
+        assert extract_llm._replace_current(db, row, '{"summary":"旧経路"}') is False
+        assert published == [True] and db.artifacts("extract_llm") == []
+    finally:
+        db.db.set_trace_callback(None)
+        other.close()
+        db.close()
+
+
+@pytest.mark.parametrize("second", [None, {"semantic": {"fact_source": "canonical"}}])
+def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second):
+    now = [0.0]
+    configs = iter([{}, second])
+    admitted = []
+    monkeypatch.setattr(extract_llm, "load_config", lambda: next(configs))
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep",
+                        lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--stop-after", "2"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+
+    def run(*args, **kwargs):
+        admitted.append(kwargs["admitted_ids"])
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+
+    monkeypatch.setattr(extract_llm, "run_pending", run)
+    assert extract_llm.main() == 0
+    assert admitted == [None, set()]

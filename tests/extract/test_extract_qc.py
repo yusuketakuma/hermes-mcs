@@ -19,14 +19,14 @@ from extract_testkit import _hash, _ledger, _message
 from test_mcs_semantic import _FakeJev
 
 
-def _v2_artifact(db, mid, chash, content=None):
+def _v2_artifact(db, mid, chash, content=None, project_id=1):
     return db.artifact_add(
         "extract_llm",
         json.dumps(content or {"meds": [{"name": "プレドニン",
                                          "action": "stop",
                                          "subject": "patient"}],
                                "urgency": "routine"}),
-        project_id=1, message_id=mid,
+        project_id=project_id, message_id=mid,
         meta={"hash": chash,
               "extract_version": extract_llm.EXTRACT_VERSION})
 
@@ -391,7 +391,7 @@ def test_drain_no_jev_client_leaves_job_pending(tmp_path):
 def test_qc_respects_project_scope(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(project_id=9)])
-    _v2_artifact(db, 1, _hash(db))
+    _v2_artifact(db, 1, _hash(db), project_id=9)
     client = _FakeJev(choice="routine")
     out = semantic.run_due(
         db, _cfg(extract_qc="annotate", project_ids=[1]),
@@ -570,7 +570,7 @@ def test_semantic_jobs_outrank_qc_backfill(tmp_path):
 
 def test_qc_questions_cover_vitals():
     """Vitals join the audit keyed by vital name — a mislabel
-    (脈は48 -> bs:48) audits as '本文に血糖値が48である旨の記述がない'."""
+    (脈は48 -> bs:48) asks whether the contextual value is a blood glucose."""
     ex = {"vitals": {"bs": 48, "hr": 72}}
     questions, layout, ctx = semantic_drain._qc_questions(ex)
     v_layout = [e for e in layout if e[1] == "vitals"]
@@ -578,3 +578,31 @@ def test_qc_questions_cover_vitals():
     blob = json.dumps(questions, ensure_ascii=False)
     assert "血糖値" in blob and "脈拍" in blob
     assert ctx["v0"] and "bs" in ctx["v0"]
+
+
+def test_qc_vital_text_stays_out_of_instructions():
+    marker = 'SYNTHETIC_UNTRUSTED_VITAL'
+    questions, _, context = semantic_drain._qc_questions({
+        'vitals': {marker: marker, 'hr': marker}})
+    assert marker not in json.dumps(questions)
+    assert marker in json.dumps(context)
+
+
+def test_qc_coverage_cap_includes_vitals(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    _v2_artifact(db, 1, _hash(db), content={
+        "meds": [{"name": f"synthetic-{i}"} for i in range(10)],
+        "vitals": {"bt": 36.5, "hr": 72, "rr": 16, "sbp": 120,
+                   "dbp": 80, "spo2": 98, "bs": 100}})
+    out = semantic.run_due(
+        db, _cfg(extract_qc="annotate"), {"errors": []},
+        time.monotonic() + 60, jev_client=_FakeJev(noul=0.9))
+    assert out["done"] == 1
+    coverage = json.loads(_qc_artifact(db)["content"])["coverage"]
+    assert coverage["capped"] is True
+    assert coverage["total"] == 17
+    assert coverage["checked"] == semantic_drain.QC_MAX_ITEMS
+    assert coverage["unchecked"] == 1
+    assert coverage["by_field"]["vitals"]["unchecked"] == 1
+    db.close()

@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger
-from mcs_queries import JST, current_fact_pred, med_is_patient_current
+from mcs_queries import (JST, current_extract_pred, current_fact_pred,
+                         med_is_patient_current)
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -48,7 +49,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     msgs = db.execute("""
       SELECT message_id, posted_at, posted_at_ts, body_text, sender_name, sender_type,
              parent_id, updated_seen, body_state
-      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC
+      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
     out: dict = {"project_id": project_id, "generated_at": time.time(),
                  "msg_count": len(msgs),
@@ -66,12 +67,7 @@ def build_rollup(ledger, project_id: int) -> dict:
       WHERE m.project_id=? AND a.kind IN
           ('extract_v1','extract_llm','canonical_projection',
            'semantic_facts_v4')
-        AND CASE WHEN json_valid(a.meta) THEN
-          json_extract(a.meta,'$.error') IS NOT 1
-          AND json_extract(a.meta,'$.hash')=m.content_hash
-        ELSE 0 END
-        AND CASE WHEN json_valid(a.content)
-                 THEN json_type(a.content)='object' ELSE 0 END
+        {current_extract_pred()}
         AND (a.kind='extract_v1' OR (1=1 {current_fact_pred()}))
       ORDER BY a.artifact_id
     """, (project_id,)):
@@ -128,7 +124,7 @@ def build_rollup(ledger, project_id: int) -> dict:
             if isinstance(vit, dict) and vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
         # v4 labs: newest report per analyte wins (msgs walk newest-first)
-        for lb in lm.get("labs") or []:
+        for lb in _dicts(lm.get("labs")):
             if isinstance(lb, dict) and isinstance(lb.get("name"), str) \
                     and lb["name"].strip() and lb["name"] not in latest_labs:
                 latest_labs[lb["name"]] = {"at": m["posted_at"], **lb}
@@ -369,9 +365,13 @@ def dirty_projects(ledger) -> list:
     """, (KIND,)).fetchall()
     now = time.time()
     return [x["project_id"] for x in rows
-            if x["gen"] is None
+            if type(x["gen"]) not in (int, float)
+            or not 0 <= x["gen"] < 1e12
             or x["period_version"] != 1
-            or (x["next_check"] is not None and x["next_check"] <= now)
+            or (x["next_check"] is not None and (
+                type(x["next_check"]) not in (int, float)
+                or not 0 <= x["next_check"] < 1e12
+                or x["next_check"] <= now))
             or (x["art_ts"] or 0) > x["gen"]
             or (x["msg_ts"] or 0) > x["gen"]]
 

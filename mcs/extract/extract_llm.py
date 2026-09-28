@@ -20,7 +20,6 @@ import argparse
 import contextlib
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import queue
@@ -37,6 +36,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
+from mcs_queries import current_extract_pred, current_v4_id
 from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
@@ -45,8 +45,12 @@ from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_llm"
-ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
-MODEL = "Qwen3.5-9B"
+# defaults — config.json local_llm.url/local_llm.model override them
+# per call via local_llm.resolve (see _llm_call); the constants stay a
+# test patch point (a patched constant wins over config)
+ENDPOINT = local_llm.ENDPOINT
+MODEL = local_llm.MODEL
+_ENDPOINT_PIN, _MODEL_PIN = ENDPOINT, MODEL
 # 300s, not the previous 90: under dual-slot load decode runs ~3-5 t/s,
 # so a legitimate ~1K-token output needs ~250s — a 90s client timeout
 # disconnected mid-generation, the server cancelled the task, and the
@@ -464,9 +468,9 @@ def _vitals_guard(body: str | None, vit: dict,
 
     def bp_side(s, e):
         """120/80: before the slash is systolic, after is diastolic."""
-        if body[e:e + 1] in "/／":
+        if body[e:e + 1] in ("/", "／"):
             return "sbp"
-        if body[s - 1:s] in "/／":
+        if body[s - 1:s] in ("/", "／"):
             return "dbp"
         return None
 
@@ -672,7 +676,9 @@ class _Validator:
             if not (isinstance(m, dict)
                     and isinstance(m.get("name"), str)
                     and m["name"].strip()
-                    and m.get("action") in _RX_ACTS
+                    and (m.get("action") is None
+                         or (isinstance(m.get("action"), str)
+                             and m["action"] in _RX_ACTS))
                     and ("negated" not in m
                          or type(m.get("negated")) is bool)
                     and ("prn" not in m
@@ -683,7 +689,7 @@ class _Validator:
                 continue
             dose = m.get("dose")
             if type(dose) in (int, float) \
-                    and math.isfinite(dose):
+                    and -1e308 <= dose <= 1e308:
                 dose = str(dose)
             elif not isinstance(dose, str | type(None)):
                 dose = None
@@ -776,7 +782,7 @@ class _Validator:
                 continue
             item = {"name": lb["name"].strip()[:40]}
             val = lb["value"]
-            if type(val) in (int, float) and math.isfinite(val):
+            if type(val) in (int, float) and -1e308 <= val <= 1e308:
                 item["value"] = val
             else:
                 sv = _clean_text(val, 30)
@@ -847,7 +853,7 @@ class _Validator:
             if val is None:
                 continue
             if type(val) not in (int, float) \
-                    or not math.isfinite(val):
+                    or not -1e308 <= val <= 1e308:
                 self.drop_item("vitals")
                 continue
             vit[k] = float(val)
@@ -959,6 +965,13 @@ def _llm_call(prompt: str, deadline: float | None = None,
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
     fmt = _probe_format(deadline=deadline)
+    # resolve per call so a config.json local_llm.url/model change
+    # takes effect without a code edit; patched constants still win
+    endpoint, model = local_llm.resolve(load_config())
+    if ENDPOINT != _ENDPOINT_PIN:
+        endpoint = ENDPOINT
+    if MODEL != _MODEL_PIN:
+        model = MODEL
     while True:
         # the same floor gates retries: a format degrade (4xx) loops
         # back here and would otherwise re-fire a full call that can
@@ -978,7 +991,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             # confirmed terminal retirement — a held/deferred verdict
             # parks the message, it never becomes a silent failure
             response = local_llm.admitted_chat(
-                "mcs.extract", prompt, endpoint=ENDPOINT, model=MODEL,
+                "mcs.extract", prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT,
                 deadline=deadline, response_format=rf,
                 request_fn=_opener_request, error_out=err_out)
@@ -986,7 +999,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 return _DEFERRED
         else:
             response = local_llm.chat(
-                prompt, endpoint=ENDPOINT, model=MODEL,
+                prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
                 extra_payload={"id_slot": _choose_slot(deadline=deadline)},
@@ -1033,6 +1046,7 @@ def _merge(outs: list[dict]) -> dict:
     out: dict = {}
     seen_requests: set = set()
     sym_idx: dict = {}
+    lab_idx: dict = {}
     for d in outs:
         for m in d.get("meds") or []:
             k = (m["name"], m.get("subject"), m.get("action"))
@@ -1049,6 +1063,13 @@ def _merge(outs: list[dict]) -> dict:
             else:
                 sym_idx[key] = len(out.setdefault("symptoms", []))
                 out["symptoms"].append(s)
+        for lab in d.get("labs") or []:
+            name = lab["name"]
+            if name in lab_idx:
+                out["labs"][lab_idx[name]] = lab
+            else:
+                lab_idx[name] = len(out.setdefault("labs", []))
+                out["labs"].append(lab)
         for rq in d.get("requests") or []:
             k = (rq.get("to"), rq.get("from"), rq.get("action"),
                  rq.get("due"))
@@ -1395,12 +1416,12 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
     hash-only contract so a still-current v1 row stays visible until the
     v2 row atomically replaces it."""
     return ledger.db.execute(
-        "SELECT 1 FROM artifacts WHERE kind=? AND message_id=? "
-        "AND json_valid(meta) "
-        "AND json_extract(meta,'$.error') IS NOT 1 "
-        "AND json_extract(meta,'$.hash')=? "
-        "AND json_extract(meta,'$.extract_version')=? LIMIT 1",
+        f"SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+        f"WHERE a.kind=? AND m.message_id=? {current_extract_pred()} "
+        "AND m.content_hash=? "
+        "AND json_extract(a.meta,'$.extract_version')=? LIMIT 1",
         (KIND, mid, content_hash, EXTRACT_VERSION)).fetchone() is not None
+
 
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
@@ -1416,20 +1437,6 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     `ctx` records whether thread context was supplied: the content hash
     covers only the body, so without the flag a context-free
     extraction is indistinguishable from a context-aware one."""
-    # T18 generation fence: once a PASS-only v4 row covers this exact
-    # source revision, a delayed v3-engine write is refused outright —
-    # the v4 generation is never shadowed back to a legacy row.
-    _V4_FENCE_SQL = (
-        "SELECT 1 FROM artifacts WHERE kind='semantic_facts_v4' "
-        "AND message_id=? AND json_valid(meta) "
-        "AND json_extract(meta,'$.hash')=? "
-        "AND json_extract(meta,'$.engine_version')=4 "
-        "AND COALESCE(json_extract(meta,'$.invalidated'),0)=0 "
-        "LIMIT 1")
-    if ledger.db.execute(
-            _V4_FENCE_SQL,
-            (r["message_id"], r["content_hash"])).fetchone() is not None:
-        return False
     meta = {"hash": r["content_hash"],
             "extract_version": EXTRACT_VERSION}
     if ctx:
@@ -1441,21 +1448,14 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     if extra_meta:
         meta.update(extra_meta)
     with ledger.db:
-        # A guarded INSERT takes the write lock before superseding any
-        # result. An edit/deletion during inference must preserve the
-        # newer source and any extraction already saved for it. The
-        # v4 fence is re-checked INSIDE the transaction — a v4 row
-        # committed between the outer check and this write must still
-        # refuse the legacy write (no shadowed-back window).
-        if ledger.db.execute(
-                _V4_FENCE_SQL,
-                (r["message_id"], r["content_hash"])).fetchone() is not None:
-            return False
+        # Source and v4 admission are checked by the INSERT itself, under
+        # SQLite's write lock; a preceding SELECT is not a transaction fence.
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
-            "SELECT ?,project_id,message_id,?,?,?,? FROM messages "
+            "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
             "WHERE message_id=? AND content_hash=? "
-            "AND (body_state IS NULL OR body_state='full')",
+            "AND (body_state IS NULL OR body_state='full') "
+            f"AND {current_v4_id()} IS NULL",
             (KIND, content, MODEL, json.dumps(meta), time.time(),
              r["message_id"], r["content_hash"]))
         if not cur.rowcount:
@@ -1473,12 +1473,16 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
     flagged unsupported items (NO_MATCH verdicts) or an urgency
     mismatch. The source pin lands on the NEWEST current extraction —
     a verdict on a superseded artifact never flags."""
-    from mcs_queries import qc_source_id
+    from mcs_queries import qc_source_id, current_qc_pred
     src = qc_source_id(msg, version=EXTRACT_VERSION)
     return f"""SELECT {val} FROM artifacts a
         JOIN artifacts q ON q.message_id=a.message_id
          AND q.kind='extract_qc'
-         AND json_valid(q.meta) AND json_valid(q.content)
+         {current_qc_pred('q', msg, version=EXTRACT_VERSION)}
+         AND q.artifact_id=(SELECT MAX(q2.artifact_id) FROM artifacts q2
+             WHERE q2.kind='extract_qc'
+               AND q2.message_id={msg}.message_id
+               {current_qc_pred('q2', msg, version=EXTRACT_VERSION)})
          AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
          AND json_extract(q.content,'$.qc')='done'
          AND (q.content LIKE '%NO_MATCH%'
@@ -1495,14 +1499,13 @@ def _qc_feedback(ledger, src_artifact_id):
     (the artifact vanished, or the newest audit is clean)."""
     row = ledger.db.execute(
         """SELECT q.artifact_id, q.content FROM artifacts q
-           WHERE q.kind='extract_qc'
-             AND json_valid(q.meta) AND json_valid(q.content)
-             AND json_extract(q.meta,'$.source_artifact_id')=?
-             AND json_extract(q.content,'$.qc')='done'
-             AND (q.content LIKE '%NO_MATCH%'
-                  OR (json_extract(q.content,'$.urgency.jev') IS NOT NULL
-                      AND json_extract(q.content,'$.urgency.jev') !=
-                          json_extract(q.content,'$.urgency.extracted')))
+           JOIN artifacts a ON a.artifact_id=?
+           WHERE q.kind='extract_qc' AND q.message_id=a.message_id
+             AND (q.project_id IS NULL OR q.project_id=a.project_id)
+             AND CASE WHEN json_valid(q.meta) AND json_valid(q.content)
+                 THEN json_type(q.content)='object'
+                  AND json_extract(q.meta,'$.source_artifact_id')=a.artifact_id
+                  AND json_extract(q.content,'$.qc')='done' ELSE 0 END
            ORDER BY q.artifact_id DESC LIMIT 1""",
         (src_artifact_id,)).fetchone()
     if row is None:
@@ -1512,7 +1515,8 @@ def _qc_feedback(ledger, src_artifact_id):
     except (json.JSONDecodeError, TypeError):
         return None
     notes = []
-    for it in c.get("items") or []:
+    items = c.get("items")
+    for it in items if isinstance(items, list) else []:
         if not isinstance(it, dict) or it.get("verdict") != "NO_MATCH":
             continue
         item = it.get("item")
@@ -1663,22 +1667,32 @@ def _saved_chunks(ledger, r, context: str | None = None) -> dict:
     extractor generation (F14) — anything else (edited body, older
     schema, different chunking) is ignored, never merged."""
     out = {}
-    for a in ledger.artifacts("extract_llm_chunk",
-                              message_id=r["message_id"]):
+    context_hash = _chunk_context(r, context)
+    count = len(text_chunks(r["body_text"], _CHUNK_SIZE))
+    for a in ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]):
         try:
             meta = json.loads(a["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+            content = json.loads(a["content"])
+        except (ValueError, TypeError, RecursionError):
             continue
-        if meta.get("hash") != r["content_hash"] \
-                or meta.get("ver") != EXTRACT_VERSION \
-                or meta.get("chunk_size") != _CHUNK_SIZE \
-                or meta.get("context") != _chunk_context(r, context) \
-                or type(meta.get("chunk")) is not int:
+        if (a["project_id"] not in (None, r["project_id"])
+                or not isinstance(meta, dict)
+                or meta.get("hash") != r["content_hash"]
+                or meta.get("ver") != EXTRACT_VERSION
+                or meta.get("chunk_size") != _CHUNK_SIZE
+                or meta.get("context") != context_hash
+                or type(meta.get("chunk")) is not int
+                or not 0 <= meta["chunk"] < count):
             continue
-        try:
-            out[meta["chunk"]] = json.loads(a["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
+        # The latest checkpoint owns its index even if its content is broken.
+        out.pop(meta["chunk"], None)
+        validated = _validate(content, r["body_text"]) \
+            if isinstance(content, dict) else None
+        if validated is not None:
+            for key in ("_items_dropped", "_evidence_dropped"):
+                if type(content.get(key)) is int and content[key] >= 0:
+                    validated[key] = max(validated.get(key, 0), content[key])
+            out[meta["chunk"]] = validated
     return out
 
 
@@ -1794,24 +1808,25 @@ def _ensure_v1(ledger, r, hints) -> None:
     if hints is None:
         return
     import extract
-    if ledger.db.execute(
-        "SELECT 1 FROM artifacts WHERE kind='extract_v1'"
-        " AND message_id=? AND json_valid(meta)"
-        " AND json_extract(meta,'$.hash')=?"
-        " AND json_extract(meta,'$.rule_version')=? LIMIT 1",
-        (r["message_id"], r["content_hash"],
-         extract.RULE_VERSION)).fetchone():
-        return
     with ledger.db:
-        ledger.db.execute(
-            "DELETE FROM artifacts WHERE kind='extract_v1'"
-            " AND message_id=?", (r["message_id"],))
-        ledger.artifact_add_tx(
-            "extract_v1", json.dumps(hints, ensure_ascii=False),
-            project_id=r["project_id"], message_id=r["message_id"],
-            model="rules-v1",
-            meta={"hash": r["content_hash"],
-                  "rule_version": extract.RULE_VERSION})
+        cur = ledger.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "SELECT 'extract_v1',m.project_id,m.message_id,?,'rules-v1',?,? "
+            "FROM messages m WHERE m.message_id=? AND m.content_hash=? "
+            "AND (m.body_state IS NULL OR m.body_state='full') "
+            "AND NOT EXISTS (SELECT 1 FROM artifacts a "
+            "WHERE a.kind='extract_v1' AND a.message_id=m.message_id "
+            f"{current_extract_pred()} "
+            "AND json_extract(a.meta,'$.rule_version')=?)",
+            (json.dumps(hints, ensure_ascii=False),
+             json.dumps({"hash": r["content_hash"],
+                         "rule_version": extract.RULE_VERSION}), time.time(),
+             r["message_id"], r["content_hash"], extract.RULE_VERSION))
+        if cur.rowcount:
+            ledger.db.execute(
+                "DELETE FROM artifacts WHERE kind='extract_v1' "
+                "AND message_id=? AND artifact_id!=?",
+                (r["message_id"], cur.lastrowid))
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
@@ -1919,11 +1934,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                           AND json_extract(f.meta,'$.qc_fix') IS NOT NULL)
         AND (NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind=? AND a.message_id=m.message_id
-                          AND CASE WHEN json_valid(a.meta) THEN
-                            json_extract(a.meta,'$.error') IS NOT 1
-                            AND json_extract(a.meta,'$.hash')=m.content_hash
-                            AND json_extract(a.meta,'$.extract_version')=?
-                          ELSE 0 END)
+                          {current_extract_pred()}
+                          AND json_extract(a.meta,'$.extract_version')=?)
              OR EXISTS ({_qc_flagged_sql(val="1")}))
         AND (? IS NULL OR m.message_id % ? = ?)
       GROUP BY m.message_id
@@ -2268,33 +2280,27 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left = ledger.db.execute("""
+    left = ledger.db.execute(f"""
       SELECT COUNT(*) FROM messages m
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
         AND (m.body_state IS NULL OR m.body_state='full')
         AND NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind=? AND a.message_id=m.message_id
-                          AND CASE WHEN json_valid(a.meta) THEN
-                            json_extract(a.meta,'$.error') IS NOT 1
-                            AND json_extract(a.meta,'$.hash')=m.content_hash
-                            AND json_extract(a.meta,'$.extract_version')=?
-                          ELSE 0 END)
+                          {current_extract_pred()}
+                          AND json_extract(a.meta,'$.extract_version')=?)
     """, (KIND, EXTRACT_VERSION)).fetchone()[0]
     # T14: queue-age bounds over the still-pending set (age of the OLDEST
     # pending body is the backlog's starvation indicator) and aggregate
     # per-call timings — every field stays None when unmeasured instead
     # of reporting a fake zero.
-    age_min, age_max = ledger.db.execute("""
+    age_min, age_max = ledger.db.execute(f"""
       SELECT MIN(m.posted_at_ts), MAX(m.posted_at_ts) FROM messages m
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
         AND (m.body_state IS NULL OR m.body_state='full')
         AND NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind=? AND a.message_id=m.message_id
-                          AND CASE WHEN json_valid(a.meta) THEN
-                            json_extract(a.meta,'$.error') IS NOT 1
-                            AND json_extract(a.meta,'$.hash')=m.content_hash
-                            AND json_extract(a.meta,'$.extract_version')=?
-                          ELSE 0 END)
+                          {current_extract_pred()}
+                          AND json_extract(a.meta,'$.extract_version')=?)
     """, (KIND, EXTRACT_VERSION)).fetchone()
     now_ts = time.time()
     llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
@@ -2421,22 +2427,20 @@ def main() -> int:
           file=sys.stderr, flush=True)
     led = Ledger(DB)
     # T18: under the v4 engine (fact_source=canonical) the legacy
-    # extractor admits nothing outside explicit conversion manifests —
-    # the standalone daemon obeys the same zero-default boundary as the
-    # tick path, and a manifest read error fails CLOSED (empty set).
-    try:
-        import semantic_policy
-        canonical_mode = semantic_policy.semantic_config(
-            load_config() or {})[0].get("fact_source") == "canonical"
-    except Exception:
-        canonical_mode = False
-
+    # extractor admits nothing: conversion manifests are v4 jobs. The
+    # standalone daemon obeys the same boundary as the tick path, and
+    # an admission read error fails CLOSED (empty set).
     def _admitted():
-        # re-resolved per batch so a newly declared cohort is picked up
-        # without a daemon restart
-        if not canonical_mode:
-            return None
         try:
+            import semantic_policy
+            cfg = load_config()
+            if not isinstance(cfg, dict):
+                return set()
+            policy, error = semantic_policy.semantic_config(cfg)
+            if error:
+                return set()
+            if policy.get("fact_source") != "canonical":
+                return None
             import semantic_v4
             return semantic_v4.active_legacy_admissions(led)
         except Exception:
