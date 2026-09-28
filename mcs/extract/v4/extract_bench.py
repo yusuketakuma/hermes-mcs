@@ -28,7 +28,9 @@ items matching nothing count as FP.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -36,12 +38,13 @@ from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
-sys.path.insert(0, os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 
 DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "..", "..", "evaluation", "extract_cases.json")
+                             "..", "..", "..", "evaluation",
+                             "extract_cases.json")
 
 
 # safety-bearing med attributes — when a case SPECIFIES one it is part
@@ -68,6 +71,8 @@ def _match_symptom(expected: dict, got: list) -> bool:
     return any(type(s) is dict
                and want and want in str(s.get("text", ""))
                and s.get("negated") == expected.get("negated", False)
+               and all(expected.get(k) in (None, s.get(k))
+                       for k in ("subject", "status", "evidence"))
                for s in got)
 
 
@@ -127,6 +132,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
                          ("events", exp.get("events")),
                          ("requests", exp.get("requests"))):
             fields[f] = {"tp": 0, "fp": 0, "fn": len(items or [])}
+        if "vitals" in exp:
+            fields["vitals"] = {"tp": 0, "fp": 0, "fn": len(exp["vitals"])}
         if "urgency" in exp:
             fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
         for key in _MED_ATTRS:
@@ -148,6 +155,11 @@ def _score_case(case: dict, out: dict | None) -> dict:
         "requests": _field_pr(exp.get("requests", []), got_requests,
                               _match_request),
     }
+    if "vitals" in exp:
+        actual = out.get("vitals") or {}
+        wanted = exp["vitals"]
+        tp = sum(actual.get(k) == v for k, v in wanted.items())
+        fields["vitals"] = {"tp": tp, "fp": len(actual) - tp, "fn": len(wanted) - tp}
     if "urgency" in exp:
         ok = out.get("urgency") == exp["urgency"]
         fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
@@ -204,19 +216,34 @@ def _aggregate(scores: list[dict]) -> dict:
     return agg
 
 
-def _load_cases(path: str) -> list:
-    corpus = json.loads(Path(path).read_text())
+def _load_corpus(path: str) -> tuple[list, str]:
+    """Validate cases and fingerprint the exact same file snapshot."""
+    raw = Path(path).read_bytes()
+    corpus = json.loads(raw)
     cases = corpus.get("cases")
     if not isinstance(cases, list):
         raise ValueError("cases file must contain a 'cases' list")
     for c in cases:
         if not isinstance(c.get("body"), str) or not c.get("id"):
             raise ValueError("each case needs string 'body' and 'id'")
-    return cases
+    return cases, hashlib.sha256(raw).hexdigest()
+
+
+def _load_cases(path: str) -> list:
+    return _load_corpus(path)[0]
+
+
+def _duration_percentiles(durations: list[float]) -> dict:
+    """Nearest-rank latency percentiles, or null when no cases ran."""
+    ordered = sorted(durations)
+    return {f"p{percentile}_s": (
+        ordered[math.ceil(len(ordered) * percentile / 100) - 1]
+        if ordered else None)
+        for percentile in (50, 95)}
 
 
 def cmd_run(args) -> int:
-    cases = _load_cases(args.cases)
+    cases, corpus_sha256 = _load_corpus(args.cases)
     if args.mock_ok:
         import extract_llm
         results = [{"id": c["id"],
@@ -232,17 +259,29 @@ def cmd_run(args) -> int:
     import extract_llm
     scores = []
     t0 = time.time()
+    durations = []
     for c in cases:
-        out = extract_llm.llm_extract(c["body"])
+        meta = {}
+        started = time.monotonic()
+        out = extract_llm.llm_extract(c["body"], meta_out=meta)
+        elapsed = time.monotonic() - started
+        durations.append(elapsed)
         if out is extract_llm._DEFERRED:
             out = None
         scores.append(_score_case(c, out))
+        scores[-1]["performance"] = {
+            "elapsed_s": elapsed, "calls": meta.get("calls"),
+            "repairs": meta.get("repairs", 0),
+            "usage": meta.get("usage"), "timings": meta.get("timings")}
+
         print(f"  {c['id']}: "
               + ("FAIL" if scores[-1].get("error") else "ok"))
     agg = _aggregate(scores)
     n_err = sum(1 for s in scores if s.get("error"))
     report = {"tag": args.tag, "created_at": int(time.time()),
               "elapsed_s": round(time.time() - t0, 1),
+              "corpus_sha256": corpus_sha256,
+              "performance": _duration_percentiles(durations),
               "n_cases": len(cases),
               # end-to-end success: extraction completed at all, over
               # the WHOLE corpus — success-case F1 alone hides total
@@ -271,6 +310,10 @@ def cmd_run(args) -> int:
 
 def cmd_report(args) -> int:
     reps = [json.loads(Path(p).read_text()) for p in args.files]
+    fingerprints = {r.get("corpus_sha256") for r in reps}
+    if len(fingerprints) != 1 or None in fingerprints:
+        print("Cannot compare: reports must identify the same frozen corpus.")
+        return 2
     fields = sorted({f for r in reps for f in r["fields"]})
     print(f"{'field':10s}" + "".join(f"{r['tag']:>24s}" for r in reps))
     for field in fields:

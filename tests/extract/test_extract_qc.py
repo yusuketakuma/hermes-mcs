@@ -609,3 +609,26 @@ def test_qc_coverage_cap_includes_vitals(tmp_path):
     assert coverage["by_field"]["vitals"]["unchecked"] == 0
     assert coverage["by_field"]["meds"]["unchecked"] == 1
     db.close()
+
+
+def test_qc_reserves_clinical_sections_and_deduplicates_events():
+    _, layout, _ = semantic_drain._qc_questions({
+        'events': ['visit'] * 30,
+        'vitals': {'hr': 72, 'sbp': 120},
+        'meds': [{'name': f'合成薬{i}'} for i in range(30)],
+        'symptoms': [{'text': '合成症状'}],
+        'labs': [{'name': '合成検査'}],
+    })
+    assert len(layout) == 16
+    assert {x[1] for x in layout} == {'events', 'vitals', 'meds', 'symptoms', 'labs'}
+    assert sum(x[1] == 'events' for x in layout) == 1
+
+
+def test_qc_dedup_keeps_original_item_indices():
+    _, layout, context = semantic_drain._qc_questions({
+        "events": ["visit", "visit", "exam"],
+        "vitals": {"hr": 72},
+    })
+    assert layout == [("v0", "vitals", "hr"),
+                      ("e0", "events", 0), ("e1", "events", 2)]
+    assert json.loads(context["e1"]) == "exam"

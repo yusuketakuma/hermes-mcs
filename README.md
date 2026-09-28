@@ -164,7 +164,7 @@ notify_flush.py ──► Discord #mcs  mcs_view.py ──► 検索/統計/シ�
 
 | 用途 | モデル | 使用先 | モジュール |
 |---|---|---|---|
-| メッセージ構造化抽出(薬・依頼・否定極性・50字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` | `mcs/extract/extract_llm.py` |
+| メッセージ構造化抽出(薬・依頼・否定極性・50字要約) | `Qwen3.5-9B` | ローカル llama.cpp `127.0.0.1:8080` | `mcs/extract/v4/extract_llm.py` |
 | セマンティック処理のリアルタイム問合せ | `Qwen3.5-9B` | 同上 | `mcs/semantic/semantic.py` `llm_chat` |
 | 意味的妥当性の評価・監査・ベンチ | `jev-1.13.0`(固定) | TypeSafe Jev API `api.typesafe.ai/v1/systemone` | `mcs/semantic/semantic_jev.py`・`semantic_assessment.py`・`semantic_audit.py`・`semantic_bench.py` |
 

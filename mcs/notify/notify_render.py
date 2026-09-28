@@ -173,15 +173,12 @@ def _source_fp(db, card) -> str:
             "ORDER BY posted_at_ts,message_id",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"])).fetchall()
-        # fact-readiness belongs in the fingerprint: extract_llm lands
-        # minutes to hours after the message (drain queue), and without
-        # it in the fp a card rendered early would keep its v1-only
-        # 構造化 block forever — the landing flips this and re-renders.
-        ready = structured_view.fact_ready_ids(
+        # Selected artifact generations invalidate actions after corrections.
+        ready = structured_view.fact_generations(
             db, [m["message_id"] for m in msgs])
         return payload_hash({"k": "t", "msgs": [
             (m["message_id"], m["content_hash"], m["body_state"],
-             m["message_id"] in ready)
+             ready.get(m["message_id"], {}))
             for m in msgs],
             "name": _patient_name(db, card["project_id"])})
     keys = _anchor_keys(card)

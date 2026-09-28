@@ -41,7 +41,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from contextlib import suppress
+from contextlib import closing, suppress
 from pathlib import Path
 
 # mcs/ requires >=3.10 (runtime PEP-604 unions) — fail loudly before the
@@ -1265,84 +1265,94 @@ def cmd_jev_value(args) -> int:
     return 0 if report["evaluated"] else 2
 
 
+def _semantic_queue_warnings(db, sem: dict, now: float):
+    """Yield stalled-job warnings for enabled, due work in the selected projects."""
+    projects = sem.get("project_ids", [])
+    if projects == []:
+        return
+    scope, params = "", []
+    if isinstance(projects, list):
+        scope = " AND project_id IN (" + ",".join("?" for _ in projects) + ")"
+        params = projects
+    enabled_kinds = (("extract_qc", sem.get("extract_qc") == "annotate"),
+                     ("semantic", sem.get("mode", "off") != "off"))
+    for kind, enabled in enabled_kinds:
+        if not enabled:
+            continue
+        row = db.execute(
+            "SELECT COUNT(*), MIN(MAX(updated_at,next_try)) FROM fetch_jobs "
+            "WHERE kind=? AND state='pending' AND next_try<=?" + scope,
+            (kind, now, *params)).fetchone()
+        if not (row and row[0]):
+            continue
+        pending, oldest = row
+        done_24h = db.execute(
+            "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
+            "AND state='done' AND updated_at>?" + scope,
+            (kind, now - 86400, *params)).fetchone()[0]
+        age_d = (now - oldest) / 86400 if oldest else 0
+        if done_24h == 0 and age_d >= 1:
+            yield (f"{kind} jobs pending={pending} with no progress "
+                   f"for {age_d:.1f}d — drain may be stalled")
+        elif age_d > 3:
+            yield (f"{kind} jobs pending={pending} oldest eligible "
+                   f"wait={age_d:.1f}d — review drain capacity")
+
+
+def _extract_queue_warnings(db):
+    """Yield extraction backlog warnings using the worker's shared predicate."""
+    import extract_llm
+    backlog = db.execute(
+        "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred()
+    ).fetchone()[0]
+    if backlog > 500:
+        yield (f"extract_llm backlog={backlog} messages — "
+               "drainers (ai.mcs.extract-drainer*) chew DESC; "
+               "review eligible backlog and recent progress")
+
+
+def _fact_pipeline_warnings(db, sem: dict):
+    """Yield missing-output warnings for the configured shadow/canonical stages."""
+    fact_source = sem.get("fact_source", "legacy")
+    if sem.get("mode", "off") == "off" or fact_source == "legacy":
+        return
+    # Shadow produces v2 documents; canonical must also publish projections.
+    llm_done, v2, canon = db.execute(
+        "SELECT COUNT(*) FILTER (WHERE kind='extract_llm'),"
+        " COUNT(*) FILTER (WHERE kind='semantic_facts_v2'),"
+        " COUNT(*) FILTER (WHERE kind='canonical_projection')"
+        " FROM artifacts WHERE kind IN ('extract_llm',"
+        " 'semantic_facts_v2','canonical_projection')"
+    ).fetchone()
+    if llm_done > 50 and v2 == 0:
+        yield ("semantic shadow pipeline produced 0 "
+               f"semantic_facts_v2 against {llm_done} "
+               "extract_llm — the semantic drain has never "
+               "run (check semantic queue/scheduling)")
+    if fact_source == "canonical" and v2 > 0 and canon == 0:
+        yield ("fact_source=canonical but canonical_projection"
+               " has 0 artifacts — every generation parks "
+               "non-PASS (check v4_diagnostic / semantic_audit)")
+
+
 def _queue_warnings(cfg: dict | None = None) -> list[str]:
-    """Ledger-backed liveness: a stalled job queue or a mounting
-    extract_llm backlog is invisible to machine probes (the 2026-09-28
-    drainer outage surfaced only as thin cards). Read-only; a locked or
-    missing ledger just means nothing to report."""
+    """Read queue health without creating a ledger or mutating its contents.
+
+    Missing ledgers are silent. Read failures retain earlier findings and
+    append an unreadable warning; every opened connection is closed.
+    """
     out = []
     db_path = os.path.join(HOME, "data", "ledger.db")
     if not os.path.exists(db_path):
         return out
     try:
         import sqlite3
-        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
+        with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as db:
             now = time.time()
-            for kind in ("extract_qc", "semantic"):
-                r = db.execute(
-                    "SELECT COUNT(*), MIN(created_at) FROM fetch_jobs "
-                    "WHERE kind=? AND state='pending'", (kind,)).fetchone()
-                if not (r and r[0]):
-                    continue
-                # Backfill is intentionally slow (Jev daily budget, lane
-                # fairness) — warn on a STALL, not on expected lag: no
-                # completions in 24h while work waits, or a queue that
-                # has been growing for more than 3 days.
-                done_24h = db.execute(
-                    "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
-                    "AND state='done' AND updated_at>?",
-                    (kind, now - 86400)).fetchone()[0]
-                age_d = (now - r[1]) / 86400 if r[1] else 0
-                if done_24h == 0:
-                    out.append(f"{kind} jobs pending={r[0]} with 0 "
-                               "completions in 24h — the drain is "
-                               "stalled (check semantic_drain.log / "
-                               "nightly catchup)")
-                elif age_d > 3:
-                    out.append(f"{kind} jobs pending={r[0]} oldest="
-                               f"{age_d:.1f}d — backlog is growing "
-                               "faster than the daily budget drains it")
-            backlog = db.execute(
-                "SELECT COUNT(*) FROM messages m WHERE m.body_state='full'"
-                " AND m.body_text != '' AND NOT EXISTS ("
-                " SELECT 1 FROM artifacts a WHERE a.message_id=m.message_id"
-                "   AND a.kind='extract_llm' AND json_valid(a.meta)"
-                "   AND json_extract(a.meta,'$.hash')=m.content_hash"
-                "   AND COALESCE(json_extract(a.meta,'$.error'),0)=0)"
-            ).fetchone()[0]
-            if backlog > 500:
-                out.append(f"extract_llm backlog={backlog} messages — "
-                           "drainers (ai.mcs.extract-drainer*) chew DESC; "
-                           "a persistent count means they are down")
-            # Shadow/canonical coverage: the layer's expected output
-            # depends on fact_source — shadow only writes v2 docs for
-            # comparison while canonical must publish projections. Zero
-            # expected artifacts against a populated extract_llm history
-            # means the pipeline never ran, which is silent elsewhere.
             sem = (cfg or {}).get("semantic") or {}
-            fact_source = sem.get("fact_source", "legacy")
-            if sem.get("mode", "off") != "off" and fact_source != "legacy":
-                llm_done, v2, canon = db.execute(
-                    "SELECT COUNT(*) FILTER (WHERE kind='extract_llm'),"
-                    " COUNT(*) FILTER (WHERE kind='semantic_facts_v2'),"
-                    " COUNT(*) FILTER (WHERE kind='canonical_projection')"
-                    " FROM artifacts WHERE kind IN ('extract_llm',"
-                    " 'semantic_facts_v2','canonical_projection')"
-                ).fetchone()
-                if llm_done > 50 and v2 == 0:
-                    out.append(
-                        "semantic shadow pipeline produced 0 "
-                        f"semantic_facts_v2 against {llm_done} "
-                        "extract_llm — the semantic drain has never "
-                        "run (check semantic queue/scheduling)")
-                if fact_source == "canonical" and v2 > 0 and canon == 0:
-                    out.append(
-                        "fact_source=canonical but canonical_projection"
-                        " has 0 artifacts — every generation parks "
-                        "non-PASS (check v4_diagnostic / semantic_audit)")
-        finally:
-            db.close()
+            out.extend(_semantic_queue_warnings(db, sem, now))
+            out.extend(_extract_queue_warnings(db))
+            out.extend(_fact_pipeline_warnings(db, sem))
     except Exception as e:
         out.append(f"queue health unreadable ({type(e).__name__})")
     return out

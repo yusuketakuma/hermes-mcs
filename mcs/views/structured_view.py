@@ -12,12 +12,8 @@ be bound to the message's CURRENT content_hash and the message must not
 be deleted — a tombstoned message never contributes extracted data.
 
 Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
-  events   — UNION of llm+v1; llm's enum lacks v1-only kinds
-             (medication/adherence/media_ref) and a partial llm list
-             must not shadow v1 detections.
-  vitals   — per-key merge: llm wins keys it emitted (already
-             guard-verified against body numerals); v1 regex fills keys
-             llm omitted.
+  events   — llm authoritative when present; rules add media references only.
+  vitals   — preserve one source; no cross-subject or cross-time key filling.
   symptoms — llm entries carry polarity/subject; v1 tokens merge in
              unless they overlap an llm symptom (typed negation must not
              resurface as a bare symptom token).
@@ -32,7 +28,7 @@ from __future__ import annotations
 
 import json
 
-from mcs_queries import (current_extract_pred, current_fact_pred,
+from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          med_is_patient_current)
 
 
@@ -57,28 +53,29 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
     return _content_dict(r)
 
 
+def fact_generations(db, mids: list) -> dict:
+    """Current selected fact and rule generations, fetched in bounded batches."""
+    ids = list(dict.fromkeys(int(m) for m in mids if isinstance(m, int) or
+                            (isinstance(m, str) and m.isdigit())))
+    result = {}
+    for offset in range(0, len(ids), 400):
+        batch = ids[offset:offset + 400]
+        marks = ",".join("?" * len(batch))
+        for r in db.execute(
+                "SELECT a.message_id,a.kind,MAX(a.artifact_id) generation "
+                "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                f"WHERE a.message_id IN ({marks}) AND ("
+                f"(a.kind='extract_v1' {current_extract_pred()}) OR "
+                f"(a.kind IN ({FACT_KINDS_SQL}) "
+                f"{current_fact_pred()})) GROUP BY a.message_id,a.kind", batch):
+            result.setdefault(r["message_id"], {})[r["kind"]] = r["generation"]
+    return result
+
+
 def fact_ready_ids(db, mids: list) -> set:
-    """mids that carry a CURRENT fact artifact (extract_llm /
-    canonical_projection / semantic_facts_v4) under the same
-    freshness/shadow predicate latest_fact_artifact applies — batched
-    so callers can fingerprint "structured block exists" without
-    one query per message."""
-    ids = [int(m) for m in mids if isinstance(m, int) or
-           (isinstance(m, str) and m.isdigit())]
-    if not ids:
-        return set()
-    marks = ",".join("?" * len(ids))
-    return {r["message_id"] for r in db.execute(
-        "SELECT DISTINCT a.message_id FROM artifacts a "
-        "JOIN messages m ON m.message_id=a.message_id "
-        f"WHERE a.message_id IN ({marks}) "
-        "AND a.kind IN ('extract_llm','canonical_projection',"
-        "'semantic_facts_v4') "
-        "AND m.body_state IS NOT 'deleted' "
-        "AND CASE WHEN json_valid(a.content) THEN "
-        "json_type(a.content)='object' ELSE 0 END "
-        f"{current_fact_pred('a', 'm')}",
-        tuple(ids)).fetchall()}
+    """Message IDs with a current selected fact artifact."""
+    return {mid for mid, kinds in fact_generations(db, mids).items()
+            if any(k != "extract_v1" for k in kinds)}
 
 
 def latest_fact_artifact(db, mid: int) -> dict | None:
@@ -90,7 +87,7 @@ def latest_fact_artifact(db, mid: int) -> dict | None:
     r = db.execute(
         "SELECT a.content FROM artifacts a JOIN messages m "
         "ON m.message_id=a.message_id WHERE a.message_id=? "
-        "AND a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4') "
+        f"AND a.kind IN ({FACT_KINDS_SQL}) "
         "AND m.body_state IS NOT 'deleted' "
         "AND CASE WHEN json_valid(a.content) THEN "
         "json_type(a.content)='object' ELSE 0 END "
@@ -162,27 +159,23 @@ def _head_lines(llm: dict, v1: dict) -> list[str]:
            if isinstance(p, str) and p.strip()]
     if pts:
         lines.append("要点: " + " / ".join(p[:40] for p in pts[:3]))
-    # events merge as a UNION — llm's enum excludes v1-only kinds
-    # (medication/adherence/media_ref) and a partial llm list must not
-    # shadow v1 detections (production: 区分 lost eol on ~400 posts).
-    evs = [e for e in dict.fromkeys(
-        list(llm.get("events") or []) + list(v1.get("events") or []))
-        if e in EVT_LABEL]
+    # LLM omissions can encode negation, subject or temporal exclusions.
+    rule_events = list(v1.get("events") or [])
+    if llm:
+        rule_events = [event for event in rule_events if event == "media_ref"]
+    events = list(llm.get("events") or []) + rule_events
+    evs = [event for event in dict.fromkeys(events) if event in EVT_LABEL]
     if evs:
         lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs[:5]))
     return lines
 
 
 def _vital_line(llm: dict, v1: dict):
-    # Per-key merge: llm wins on keys it extracted (vitals_guard has
-    # already relabelled/dropped mislabelled values), v1's regex
-    # catches keys llm omitted entirely (production: ~520 posts lost
-    # v1-only hr/sbp/dbp readings under a partial llm vitals dict).
     lv = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else {}
     vv = v1.get("vitals") if isinstance(v1.get("vitals"), dict) else {}
-    vit = {k: v for k in ("sbp", "dbp", "bt", "hr", "rr", "spo2", "bs")
-           if (v := lv.get(k) if lv.get(k) is not None
-               else vv.get(k)) is not None}
+    # A missing LLM key may be an intentional subject/time exclusion.
+    # Keep a reading intact; never construct a BP pair across sources.
+    vit = lv if llm else vv
     if not vit:
         return None
     parts = []

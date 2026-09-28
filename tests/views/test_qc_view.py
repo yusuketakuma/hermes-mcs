@@ -178,20 +178,19 @@ def test_qc_view_binds_exact_extraction_and_discloses_unchecked_fields(tmp_path)
         db.close()
 
 
-def test_qc_questions_audit_events_and_vitals_first():
-    """The shared item budget goes to the highest-NO_MATCH sections
-    first — production measured events/vitals as the dominant
-    unsupported-output classes, so they audit ahead of meds/symptoms/
-    labs even when those fill the rest of the extraction."""
+def test_qc_questions_reserve_each_section():
+    """Every section gets an audit opportunity despite duplicate events."""
     ex = {"events": ["visit"] * 8, "vitals": {"hr": 90, "sbp": 120},
           "meds": [{"name": f"薬{i}"} for i in range(10)],
           "symptoms": [{"text": f"症状{i}"} for i in range(10)],
           "labs": [{"name": "採血"}]}
     _, layout, _ = semantic_qc._qc_questions(ex)
     sections = [s for _, s, _ in layout if s != "urgency"]
-    assert sections[:10] == ["events"] * 8 + ["vitals", "vitals"]
+    assert sections[:5] == ["vitals", "meds", "symptoms", "labs", "events"]
+    assert sections.count("events") == 1
     assert len(sections) == semantic_qc.QC_MAX_ITEMS
-    assert sections.count("meds") == semantic_qc.QC_MAX_ITEMS - 10
+    assert sections.count("meds") == 6
+    assert sections.count("symptoms") == 6
 
 
 def test_qc_view_separates_age_scope_from_unfinished_work(tmp_path, monkeypatch):

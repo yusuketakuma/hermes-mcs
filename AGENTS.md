@@ -26,11 +26,17 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `core/`(DB・共通処理・LLM admission) · `ingest/`(収集・health監視) ·
   `notify/`(通知・配送整合) · `extract/`(抽出・評価) · `semantic/`(意味解析) ·
   `views/`(読み取りモデル・統計) · `ops/`(依頼・運用・外部出力契約)
+  `extract/` 内は推論エンジン世代でフォルダ分け: `v1/`(ルール抽出
+  `extract.py`) · `v2/`/`v3/`(in-place 置換で退役した旧 extract_llm —
+  README のみ、旧実装は git 履歴) · `v4/`(現行 `extract_llm.py` と
+  `extract_bench.py`)。`semantic/` は v4 canonical エンジン群と
+  世代横断の QC・評価基盤のため世代分割しない。`rollup.py` は
+  v1+v4 を読む世代横断集約で `extract/` 直下に残す。
   個別モジュールの一覧は `docs/DEVELOPMENT.md` の生成表を参照。
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
-  sys.path に挿れて `import _mcs_path`（全サブディレクトリを import root
-  として登録）する2行ブートストラップを持つ。`mcs/` 直下に import 可能な
-  モジュールは `_mcs_path.py` のみ
+  sys.path に挿れて `import _mcs_path`（.py を持つ全サブディレクトリを
+  任意の深さで import root として登録）する2行ブートストラップを持つ。
+  `mcs/` 直下に import 可能なモジュールは `_mcs_path.py` のみ
 - `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置
   （`conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
   テスト間ヘルパーimportを維持 + socket 遮断ガード）

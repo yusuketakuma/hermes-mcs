@@ -232,28 +232,46 @@ def test_queue_warnings_distinguish_stall_from_lag(monkeypatch,
     db = ledger.Ledger(str(home / "data" / "ledger.db"))
     try:
         now = time.time()
-        # stalled queue: pending job + nothing done recently
+        cfg = {"semantic": {"mode": "shadow", "extract_qc": "annotate", "project_ids": [1]}}
         db.job_add("extract_qc", 1, 1, payload={"hash": "h"})
-        warns = mcs_setup._queue_warnings({})
-        assert any("extract_qc" in w and "stalled" in w for w in warns)
-        # progress clears the stall warning
-        db.db.execute(
-            "UPDATE fetch_jobs SET state='done', updated_at=? "
-            "WHERE kind='extract_qc'", (now,))
-        db.db.execute(
-            "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
-            "state,next_try,created_at,updated_at) VALUES('semantic',1,2,"
-            "'{}','done',0,?,?)", (now - 5 * 86400, now))
-        db.db.execute(
-            "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
-            "state,next_try,created_at,updated_at) VALUES('semantic',1,3,"
-            "'{}','pending',0,?,?)", (now - 4 * 86400, now))
+        assert not mcs_setup._queue_warnings(cfg)
+        db.db.execute("UPDATE fetch_jobs SET updated_at=?,next_try=?",
+                      (now - 2 * 86400, now - 2 * 86400))
         db.db.commit()
-        warns = mcs_setup._queue_warnings({})
-        assert not any("stalled" in w for w in warns)
-        assert any("semantic" in w and "growing" in w for w in warns)
+        assert not mcs_setup._queue_warnings({})
+        assert not mcs_setup._queue_warnings({"semantic": {**cfg["semantic"], "project_ids": [2]}})
+        assert any("stalled" in w for w in mcs_setup._queue_warnings(cfg))
+        db.db.execute("UPDATE fetch_jobs SET state='done',updated_at=?", (now,))
+        db.db.commit()
+        db.job_add("extract_qc", 1, 1)
+        assert not mcs_setup._queue_warnings(cfg)
+        db.db.execute("UPDATE fetch_jobs SET next_try=?", (now + 86400,))
+        db.db.commit()
+        assert not mcs_setup._queue_warnings(cfg)
     finally:
         db.close()
+
+
+def test_queue_warnings_preserve_findings_when_later_query_fails(
+        monkeypatch, tmp_path):
+    import sqlite3
+
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup.time, "time", lambda: 3 * 86400)
+    db = sqlite3.connect(tmp_path / "data" / "ledger.db")
+    try:
+        db.execute("CREATE TABLE fetch_jobs(kind,state,project_id,next_try,updated_at)")
+        db.execute("INSERT INTO fetch_jobs VALUES('semantic','pending',1,1,1)")
+        db.commit()
+    finally:
+        db.close()
+
+    warnings = mcs_setup._queue_warnings({
+        "semantic": {"mode": "shadow", "project_ids": [1]}})
+    assert len(warnings) == 2
+    assert "stalled" in warnings[0]
+    assert warnings[1] == "queue health unreadable (OperationalError)"
 
 
 def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
