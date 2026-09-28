@@ -213,6 +213,49 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     assert any("unreachable" in w for w in warnings)
 
 
+def test_queue_warnings_distinguish_stall_from_lag(monkeypatch,
+                                                   tmp_path):
+    """Backfill lag is steady-state (Jev budget cap) — warn only on a
+    real stall (pending work but zero completions in 24h) or a queue
+    that has been growing for days."""
+    import time
+
+    import ledger
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    monkeypatch.setattr(mcs_setup, "HOME", str(home))
+
+    # no ledger at all -> silence, not noise
+    assert mcs_setup._queue_warnings({"semantic": {"mode": "shadow"}}) \
+        == []
+
+    db = ledger.Ledger(str(home / "data" / "ledger.db"))
+    try:
+        now = time.time()
+        # stalled queue: pending job + nothing done recently
+        db.job_add("extract_qc", 1, 1, payload={"hash": "h"})
+        warns = mcs_setup._queue_warnings({})
+        assert any("extract_qc" in w and "stalled" in w for w in warns)
+        # progress clears the stall warning
+        db.db.execute(
+            "UPDATE fetch_jobs SET state='done', updated_at=? "
+            "WHERE kind='extract_qc'", (now,))
+        db.db.execute(
+            "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+            "state,next_try,created_at,updated_at) VALUES('semantic',1,2,"
+            "'{}','done',0,?,?)", (now - 5 * 86400, now))
+        db.db.execute(
+            "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+            "state,next_try,created_at,updated_at) VALUES('semantic',1,3,"
+            "'{}','pending',0,?,?)", (now - 4 * 86400, now))
+        db.db.commit()
+        warns = mcs_setup._queue_warnings({})
+        assert not any("stalled" in w for w in warns)
+        assert any("semantic" in w and "growing" in w for w in warns)
+    finally:
+        db.close()
+
+
 def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
     """FIX-SU1: the password must travel on `security -i` stdin and be
     verified by read-back — it must never appear in any child argv."""

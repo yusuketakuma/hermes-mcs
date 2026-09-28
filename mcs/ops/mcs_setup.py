@@ -1277,11 +1277,26 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
                 r = db.execute(
                     "SELECT COUNT(*), MIN(created_at) FROM fetch_jobs "
                     "WHERE kind=? AND state='pending'", (kind,)).fetchone()
-                if r and r[0] and r[1] and now - r[1] > 86400:
+                if not (r and r[0]):
+                    continue
+                # Backfill is intentionally slow (Jev daily budget, lane
+                # fairness) — warn on a STALL, not on expected lag: no
+                # completions in 24h while work waits, or a queue that
+                # has been growing for more than 3 days.
+                done_24h = db.execute(
+                    "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
+                    "AND state='done' AND updated_at>?",
+                    (kind, now - 86400)).fetchone()[0]
+                age_d = (now - r[1]) / 86400 if r[1] else 0
+                if done_24h == 0:
+                    out.append(f"{kind} jobs pending={r[0]} with 0 "
+                               "completions in 24h — the drain is "
+                               "stalled (check semantic_drain.log / "
+                               "nightly catchup)")
+                elif age_d > 3:
                     out.append(f"{kind} jobs pending={r[0]} oldest="
-                               f"{(now - r[1]) / 86400:.1f}d — drain is "
-                               "lagging (nightly catchup covers it; "
-                               "check semantic_drain.log)")
+                               f"{age_d:.1f}d — backlog is growing "
+                               "faster than the daily budget drains it")
             backlog = db.execute(
                 "SELECT COUNT(*) FROM messages m WHERE m.body_state='full'"
                 " AND m.body_text != '' AND NOT EXISTS ("
@@ -1294,22 +1309,32 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
                 out.append(f"extract_llm backlog={backlog} messages — "
                            "drainers (ai.mcs.extract-drainer*) chew DESC; "
                            "a persistent count means they are down")
-            # shadow coverage: semantic mode on means the canonical
-            # projection pipeline should eventually publish — zero
-            # projections against a populated extract_llm history means
-            # the layer never ran, which is silent in every other probe.
-            if (cfg or {}).get("semantic", {}).get("mode", "off") != "off":
-                llm_done, canon = db.execute(
+            # Shadow/canonical coverage: the layer's expected output
+            # depends on fact_source — shadow only writes v2 docs for
+            # comparison while canonical must publish projections. Zero
+            # expected artifacts against a populated extract_llm history
+            # means the pipeline never ran, which is silent elsewhere.
+            sem = (cfg or {}).get("semantic") or {}
+            fact_source = sem.get("fact_source", "legacy")
+            if sem.get("mode", "off") != "off" and fact_source != "legacy":
+                llm_done, v2, canon = db.execute(
                     "SELECT COUNT(*) FILTER (WHERE kind='extract_llm'),"
+                    " COUNT(*) FILTER (WHERE kind='semantic_facts_v2'),"
                     " COUNT(*) FILTER (WHERE kind='canonical_projection')"
-                    " FROM artifacts WHERE kind IN"
-                    " ('extract_llm','canonical_projection')").fetchone()
-                if llm_done > 50 and canon == 0:
+                    " FROM artifacts WHERE kind IN ('extract_llm',"
+                    " 'semantic_facts_v2','canonical_projection')"
+                ).fetchone()
+                if llm_done > 50 and v2 == 0:
                     out.append(
-                        "semantic layer enabled but canonical_projection"
-                        " has 0 artifacts against "
-                        f"{llm_done} extract_llm — the publish stage "
-                        "has never run (check semantic queue)")
+                        "semantic shadow pipeline produced 0 "
+                        f"semantic_facts_v2 against {llm_done} "
+                        "extract_llm — the semantic drain has never "
+                        "run (check semantic queue/scheduling)")
+                if fact_source == "canonical" and v2 > 0 and canon == 0:
+                    out.append(
+                        "fact_source=canonical but canonical_projection"
+                        " has 0 artifacts — every generation parks "
+                        "non-PASS (check v4_diagnostic / semantic_audit)")
         finally:
             db.close()
     except Exception as e:
