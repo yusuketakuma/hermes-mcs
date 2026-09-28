@@ -377,3 +377,73 @@ def test_send_marked_clears_marker_on_reported_failure(tmp_path):
         (eid,)).fetchone()[0])
     assert progress["sending"] is None and progress["next"] == 0
     db.close()
+
+
+def _synthetic_msg_ledger(tmp_path, messages):
+    from ledger import Ledger
+    (tmp_path / "data").mkdir()
+    db = Ledger(str(tmp_path / "data" / "ledger.db"))
+    db.db.execute("INSERT INTO patients(project_id,patient_name,is_archived)"
+                  " VALUES(1,'合成患者',0)")
+    for mid, posted_at, parent in messages:
+        db.db.execute(
+            "INSERT INTO messages(message_id,project_id,sender_name,"
+            "posted_at,body_html,body_text,content_hash,body_state,"
+            "parent_id) VALUES(?,1,'職員',?,'<p>本文</p>','本文',?,'full',?)",
+            (mid, posted_at, f"{mid:064x}", parent))
+    db.db.commit()
+    return db
+
+
+def _event(db, mids):
+    eid = db.outbox_add("new_messages", 1, {"message_ids": mids})
+    return db.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                         (eid,)).fetchone()
+
+
+def test_unsent_attachments_are_marked_in_text(tmp_path, monkeypatch):
+    """U03-F04: a downloaded file dropped by the cumulative cap or a hash
+    mismatch must be marked 未送信, not listed as if attached; more than
+    five files show a remainder count."""
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    monkeypatch.setattr(notify_flush, "_MAX_FILE_BYTES", 10)
+    monkeypatch.setattr(notify_flush, "_MAX_FILES_BYTES", 12)
+    db = _synthetic_msg_ledger(tmp_path, [(1, "2026-09-24T08:00", None)])
+    try:
+        specs = [(b"12345678", True), (b"abcdefgh", True), (b"zzzz", False)]
+        specs += [(b"", False)] * 4           # not yet downloaded
+        for i, (content, good) in enumerate(specs):
+            path = tmp_path / f"att{i}"
+            path.write_bytes(content)
+            digest = (hashlib.sha256(content).hexdigest() if good
+                      else "0" * 64)
+            db.db.execute(
+                "INSERT INTO attachments(message_id,file_id,name,state,"
+                "local_path,bytes,sha256) VALUES(1,?,?,?,?,?,?)",
+                (f"f{i}", f"file{i}.pdf",
+                 "downloaded" if i < 3 else "pending",
+                 str(path), len(content), digest))
+        db.db.commit()
+        text, files = notify_flush._format_event(db, _event(db, [1]))
+        assert [name for name, _ in files] == ["file0.pdf"]
+        line = next(ln for ln in text.splitlines() if ln.startswith("📎"))
+        assert "file0.pdf、" in line and "file0.pdf (" not in line
+        assert "file1.pdf (容量上限·未送信)" in line
+        assert "file2.pdf (未送信)" in line
+        assert line.endswith("、他2件")
+    finally:
+        db.close()
+
+
+def test_null_posted_at_does_not_sink_text_notice(tmp_path, monkeypatch):
+    """U03-F05: a message with NULL posted_at (still announced by the
+    ledger) must render instead of failing the whole event."""
+    monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    db = _synthetic_msg_ledger(tmp_path, [
+        (1, "2026-09-24T08:00", None), (2, None, None),
+        (3, None, 1), (4, "2026-09-24T08:05", 1)])
+    try:
+        text, _ = notify_flush._format_event(db, _event(db, [1, 2, 3, 4]))
+        assert "新着 4 件" in text and "— ?" in text
+    finally:
+        db.close()

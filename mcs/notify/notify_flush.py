@@ -101,7 +101,8 @@ def _attachments_map(ledger, mids: list[int]) -> dict:
     """message_id -> attachment rows (all states) for 📎 markers + files."""
     if not mids:
         return {}
-    q = ("SELECT message_id,file_id,name,state,local_path,bytes,sha256 "
+    q = ("SELECT attachment_id,message_id,file_id,name,state,local_path,"
+         "bytes,sha256 "
          f"FROM attachments WHERE message_id IN ({','.join('?' * len(mids))}) "
          "AND state != 'withdrawn' ORDER BY attachment_id")
     out: dict[int, list] = {}
@@ -110,26 +111,43 @@ def _attachments_map(ledger, mids: list[int]) -> dict:
     return out
 
 
-def _collect_files(att_map: dict, order: list[int]) -> list[tuple[str, str]]:
+def _collect_files(att_map: dict, order: list[int],
+                   skipped: dict | None = None) -> list[tuple[str, str]]:
     """Downloaded attachment (filename, local_path) pairs for upload —
-    message order, max _MAX_FILES, each <= _MAX_FILE_BYTES."""
+    message order, max _MAX_FILES, each <= _MAX_FILE_BYTES. A downloaded
+    file left out (caps, missing, unverifiable) is recorded in
+    ``skipped`` as attachment_id -> text marker so the notice can say
+    it was not sent instead of listing it as attached."""
     files = []
     total = 0
+
+    def skip(a, why):
+        if skipped is not None:
+            skipped[a["attachment_id"]] = why
+
     for mid in order:
         for a in att_map.get(mid, []):
-            if len(files) >= _MAX_FILES:
-                return files
-            if a["state"] != "downloaded" or not a["local_path"]:
+            if a["state"] != "downloaded":
                 continue
-            if not os.path.exists(a["local_path"]):
+            if len(files) >= _MAX_FILES:
+                skip(a, "件数上限·未送信")
+                continue
+            if not a["local_path"] or not os.path.exists(a["local_path"]):
+                skip(a, "未送信")
                 continue
             try:
                 size = os.path.getsize(a["local_path"])
             except OSError:
+                skip(a, "未送信")
                 continue
-            if size > _MAX_FILE_BYTES or total + size > _MAX_FILES_BYTES:
+            if size > _MAX_FILE_BYTES:
+                skip(a, "25MB超·未送信")
+                continue
+            if total + size > _MAX_FILES_BYTES:
+                skip(a, "容量上限·未送信")
                 continue
             if not a["sha256"]:
+                skip(a, "未送信")
                 continue
             h = hashlib.sha256()
             try:
@@ -137,8 +155,10 @@ def _collect_files(att_map: dict, order: list[int]) -> list[tuple[str, str]]:
                     for block in iter(lambda: f.read(1024 * 1024), b""):
                         h.update(block)
             except OSError:
+                skip(a, "未送信")
                 continue
             if h.hexdigest() != a["sha256"]:
+                skip(a, "未送信")
                 continue
             fname = os.path.basename(str(a["name"] or a["file_id"] or "file"))
             fname = re.sub(r'["\\\r\n]', "_", fname) or "file"
@@ -342,7 +362,8 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
     return rows
 
 
-def _fmt_row(ledger, ev, att_map: dict, r, indent="") -> str:
+def _fmt_row(ledger, ev, att_map: dict, r, indent="",
+             skipped: dict | None = None) -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"])
     urg = _urgency(ledger, r["message_id"])
@@ -358,20 +379,22 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent="") -> str:
     head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
             f"{parent}{state}{warn}\n"
             f"{indent}{who}{f' ({meta})' if meta else ''} — "
-            f"{r['posted_at'][:16]}")
+            f"{(r['posted_at'] or '?')[:16]}")
     atts = att_map.get(r["message_id"], [])
     att_line = ""
     if atts:
         marks = []
         for a in atts:
             nm = str(a["name"] or a["file_id"] or "file")
-            if a["state"] == "downloaded":
-                if (a["bytes"] or 0) > _MAX_FILE_BYTES:
-                    nm += " (25MB超·未送信)"
-            else:
+            if a["state"] != "downloaded":
                 nm += " (未取得)"
+            elif skipped is not None and a["attachment_id"] in skipped:
+                nm += f" ({skipped[a['attachment_id']]})"
+            elif skipped is None and (a["bytes"] or 0) > _MAX_FILE_BYTES:
+                nm += " (25MB超·未送信)"
             marks.append(nm)
-        att_line = f"\n{indent}📎 {'、'.join(marks[:5])}"
+        more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
+        att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
     if s_lines:
         struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
         return (f"{head}\n{indent}📋 構造化\n{struct}\n"
@@ -403,18 +426,22 @@ def _message_notice(ledger, ev, payload: dict):
     for r in rows:
         if r["parent_id"] and r["parent_id"] in by_id:
             kids.setdefault(r["parent_id"], []).append(r)
-    out = []
-    order = []
+    # (row, indent) in text order — files are collected before the rows
+    # render so each 📎 line can mark the files that did not go out
+    seq = []
     for r in parents:
-        out.append(_fmt_row(ledger, ev, att_map, r) + _sem_block(ledger, r))
-        order.append(r["message_id"])
-        for k in sorted(kids.get(r["message_id"], []),
-                        key=lambda x: x["posted_at"]):
-            out.append(_fmt_row(ledger, ev, att_map, k, "↳ "))
-            order.append(k["message_id"])
+        seq.append((r, ""))
+        seq.extend((k, "↳ ") for k in sorted(
+            kids.get(r["message_id"], []),
+            key=lambda x: x["posted_at"] or ""))
+    skipped: dict = {}
+    files = _collect_files(att_map, [r["message_id"] for r, _ in seq],
+                           skipped)
+    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped)
+           + ("" if indent else _sem_block(ledger, r))
+           for r, indent in seq]
     head = f"[MCS {src}] 新着 {len(rows)} 件"
-    return (head + "\n\n" + "\n\n".join(out),
-            _collect_files(att_map, order))
+    return (head + "\n\n" + "\n\n".join(out), files)
 
 
 # --- send-time semantic gates ------------------------------------------
