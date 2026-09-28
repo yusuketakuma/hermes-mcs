@@ -89,3 +89,36 @@ def test_rollup_skips_unlisted_canonical_entries(db):
          "2026-09-18T00:00:00+09:00")
     out = rollup.build_rollup(db, 1)
     assert [f["fact_id"] for f in out["canonical_facts"]] == ["f1"]
+
+
+@pytest.mark.parametrize("invalid", ["foreign_patient", "deleted"])
+def test_rule_rollup_requires_current_patient_source(db, invalid):
+    _add(db, 1, "extract_v1", {"vitals": {"temp": 38.1}},
+         "2026-09-18T00:00:00+09:00")
+    if invalid == "foreign_patient":
+        db.db.execute("UPDATE artifacts SET project_id=2")
+    else:
+        db.db.execute("UPDATE messages SET body_state='deleted'")
+    assert "latest_vitals" not in rollup.build_rollup(db, 1)
+
+
+def test_malformed_lab_container_keeps_other_facts(db):
+    _add(db, 1, "extract_llm", {"labs": 7, "summary": "合成要約"},
+         "2026-09-18T00:00:00+09:00")
+    assert rollup.build_rollup(db, 1)["summary"]["text"] == "合成要約"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("generated_at", "broken"), ("generated_at", float("inf")),
+    ("next_med_period_check", "broken"),
+])
+def test_invalid_rollup_schedule_is_rebuilt(db, field, value):
+    _add(db, 1, "extract_v1", {}, "2026-09-18T00:00:00+09:00")
+    rollup.rebuild(db, 1)
+    row = db.db.execute("SELECT meta FROM artifacts WHERE kind=?",
+                        (rollup.KIND,)).fetchone()
+    meta = json.loads(row[0])
+    meta[field] = value
+    db.db.execute("UPDATE artifacts SET meta=? WHERE kind=?",
+                  (json.dumps(meta), rollup.KIND))
+    assert rollup.dirty_projects(db) == [1]
