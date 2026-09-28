@@ -432,6 +432,66 @@ def test_v4_readers_skip_invalid_shapes_and_use_shared_generation_rule(tmp_path)
         db.close()
 
 
+def _stage_receipts(db, mid):
+    """Receipts whose meta is a JSON object (malformed rows excluded)."""
+    out = []
+    for r in _rows(db, v4.KIND_V4_STAGE, mid):
+        try:
+            meta = json.loads(r["meta"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(meta, dict):
+            out.append((json.loads(r["content"]), meta))
+    return out
+
+
+def test_record_stage_dedupes_identical_receipt(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic")], project_id=1)
+    try:
+        for _ in range(2):
+            v4.record_stage(db, 1, 1, "fp", "pol", "s1_extract", "PASS",
+                            n=1)
+        v4.record_stage(db, 1, 1, "fp", "pol", "s1_extract", "PENDING",
+                        n=1)
+        got = [(c["status"], m["stage"], m["fingerprint"])
+               for c, m in _stage_receipts(db, 1)]
+        assert got == [("PASS", "s1_extract", "fp"),
+                       ("PENDING", "s1_extract", "fp")]
+    finally:
+        db.close()
+
+
+def test_record_stage_skips_malformed_meta_rows_fail_open(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic")], project_id=1)
+    try:
+        for raw in ("{not json", "[1,2]", '"s1_extract"', "5", None):
+            aid = db.artifact_add(v4.KIND_V4_STAGE, "{}", project_id=1,
+                                  message_id=1)
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (raw, aid))
+        db.db.commit()
+        # run twice: first writes, second is deduped against the first
+        for _ in range(2):
+            v4.record_stage(db, 1, 1, "fp", "pol", "s1_extract", "PASS",
+                            n=1)
+        with db.db:
+            v4.record_stage(db, 1, 1, "fp", "pol", "s1_extract", "PASS",
+                            tx=True, n=1)
+        got = _stage_receipts(db, 1)
+        assert len(got) == 1  # every pre-seeded meta is malformed
+        content, meta = got[-1]
+        assert content["status"] == "PASS" and content["n"] == 1
+        assert meta["stage"] == "s1_extract" and meta["fingerprint"] == "fp"
+        assert meta["policy_fingerprint"] == "pol"
+        assert len(_rows(db, v4.KIND_V4_STAGE, 1)) == 6
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("ceilings,expiry", [
     ({"items": True}, NOW + 3600),
     ({"items": -1}, NOW + 3600),
