@@ -552,7 +552,8 @@ python mcs/extract/v4/extract_bench.py run --mock-ok   # オフライン: 期待
 ```
 
 テストは一時DBと通信スタブだけを使い、実MCS・Discord・Keychain・原本DBへ
-アクセスしない。`integration/` は hermes-agent checkout 上でのみ収集される。
+アクセスしない。`integration/test_hermes_*` は hermes-agent checkout 上でのみ
+収集される（合成テストのみの `test_mcs_*` は常に収集される）。
 
 ## 未検証残件
 
