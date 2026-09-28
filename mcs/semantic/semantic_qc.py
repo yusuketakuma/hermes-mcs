@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from contextlib import suppress
 
 from mcs_util import load_config
@@ -18,6 +19,7 @@ import semantic_runtime as runtime
 from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, semantic_config
 
 QC_MAX_ITEMS = 16
+_QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events")
 # QC covers posts from the last 60 days. A pending job that ages past
 # the window is reaped rather than evaluated late.
 QC_REALTIME_MAX_AGE_S = 60 * 86400
@@ -103,6 +105,30 @@ _VITAL_JP = {"bt": "体温", "hr": "脈拍・心拍数", "rr": "呼吸数",
              "spo2": "SpO2(酸素飽和度)", "bs": "血糖値"}
 
 
+def _qc_candidates(ex: dict):
+    """Select a bounded round-robin audit while retaining original item indices."""
+    pools = {}
+    for section in _QC_SECTIONS:
+        value = ex.get(section) or ([] if section != "vitals" else {})
+        entries = value.items() if isinstance(value, dict) else enumerate(value)
+        seen = set()
+        pools[section] = deque()
+        for index, item in entries:
+            identity = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            if section == "events" and identity in seen:
+                continue
+            seen.add(identity)
+            pools[section].append((index, item))
+    n = QC_MAX_ITEMS
+    while n > 0 and any(pools.values()):
+        for section, pool in pools.items():
+            if not pool or n <= 0:
+                continue
+            index, item = pool.popleft()
+            yield section, index, item
+            n -= 1
+
+
 def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
     """Per-item support questions (noul) plus classification audits
     (choice). Returns (questions, layout, context_items): layout maps
@@ -112,54 +138,20 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
     attacker-controlled text). Vitals join the audit with the vital KEY
     as index — a key mislabel ('脈は48' -> bs:48) reads as NO_MATCH."""
     questions, layout, ctx_items = {}, [], {}
-    n = QC_MAX_ITEMS
-    # Sections audit in measured-NO_MATCH order — events are the
-    # largest unsupported-output class and mislabelled vitals are the
-    # most dangerous, so they claim the shared question budget BEFORE
-    # meds/symptoms/labs can consume it (production: 328/90/25/24/0).
-    for section in ("events",):
-        for i, item in enumerate((ex.get(section) or [])[:n]):
-            qid = f"{section[0]}{i}"
-            ctx_items[qid] = str(item)[:400]
-            questions[qid] = jev.noul_question(
-                f"state.context の id={qid} の抽出項目は、"
-                "対象の投稿本文に裏付けられているか",
-                "本文にこの項目を裏付ける記述がある",
-                "本文にこの項目を裏付ける記述がない")
-            layout.append((qid, section, i))
-            n -= 1
-            if n <= 0:
-                break
-    vits = ex.get("vitals")
-    if isinstance(vits, dict) and n > 0:
-        for i, (k, val) in enumerate(list(vits.items())[:n]):
-            qid = f"v{i}"
-            ctx_items[qid] = json.dumps({"vitals": {k: val}},
-                                        ensure_ascii=False)
-            jp = _VITAL_JP.get(k, "未分類のバイタル")
-            questions[qid] = jev.noul_question(
-                f"state.context の id={qid} のバイタル項目は、"
-                "対象の投稿本文に裏付けられているか",
-                f"本文に{jp}の項目としてstate.contextに示した値を裏付ける記述がある",
-                f"本文に{jp}の項目としてstate.contextに示した値を裏付ける記述がない")
-            layout.append((qid, "vitals", k))
-            n -= 1
-    for section in ("meds", "symptoms", "labs"):
-        if n <= 0:
-            break
-        for i, item in enumerate((ex.get(section) or [])[:n]):
-            label = json.dumps(item, ensure_ascii=False)
-            qid = f"{section[0]}{i}"
-            ctx_items[qid] = str(label)[:400]
-            questions[qid] = jev.noul_question(
-                f"state.context の id={qid} の抽出項目は、"
-                "対象の投稿本文に裏付けられているか",
-                "本文にこの項目を裏付ける記述がある",
-                "本文にこの項目を裏付ける記述がない")
-            layout.append((qid, section, i))
-            n -= 1
-            if n <= 0:
-                break
+    sequence = {section: 0 for section in _QC_SECTIONS}
+    for section, index, item in _qc_candidates(ex):
+        # Numeric IDs keep untrusted vital names out of instructions.
+        qid = f"{section[0]}{sequence[section]}"
+        sequence[section] += 1
+        label = {"vitals": {index: item}} if section == "vitals" else item
+        ctx_items[qid] = json.dumps(label, ensure_ascii=False)[:400]
+        measurement = (_VITAL_JP.get(index, "測定")
+                       if section == "vitals" else "項目")
+        questions[qid] = jev.noul_question(
+            f"state.context の id={qid} の抽出{measurement}は、対象の投稿本文に裏付けられているか",
+            f"本文にこの{measurement}と値を裏付ける記述がある",
+            f"本文にこの{measurement}と値を裏付ける記述がない")
+        layout.append((qid, section, index))
     urg = ex.get("urgency")
     if urg in ("high", "routine"):
         questions["urg"] = jev.choice_question(

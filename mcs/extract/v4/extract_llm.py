@@ -30,8 +30,8 @@ import time
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
-sys.path.insert(0, os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
@@ -541,7 +541,7 @@ _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
 # broad for a keyword check to falsify.
 _EVENT_CUES = {
     "eol": re.compile(
-        r"看取り|逝去|死去|永眠|お亡くなり|亡くなっ|死亡|息を引き取|"
+        r"看取り|逝去|死去|永眠|お亡くなり|亡くな(?:っ|り)|死亡|息を引き取|"
         r"心肺停止|心停止|呼吸停止|終末期|臨終|旅立|安らか|緩和ケア|"
         r"ACP|モルヒネ|オピオイド"),
     "fall": re.compile(r"転倒|転落|滑落|落ち(?:た|て|る)|倒れ"),
@@ -549,9 +549,9 @@ _EVENT_CUES = {
     "discharge": re.compile(r"退院|出院|退所|退館"),
     "transfer": re.compile(r"転院|転棟|転所|搬送|施設間|移動|移り"),
     "exam": re.compile(
-        r"診察|診療|受診|往診|検査|採血|レントゲン|エコー|心電図|"
+        r"外来|診察|診療|受診|往診|検査|採血|レントゲン|エコー|心電図|"
         r"CT|MRI|血液検査|尿検査|処置"),
-    "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい"),
+    "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい|家に来"),
 }
 _MED_STATUSES = {"current", "past", "planned"}
 _MED_SUBJECTS = {"patient", "family", "other"}
@@ -1144,27 +1144,50 @@ def _drop_total(v: dict | None) -> float:
     return v.get("_evidence_dropped", 0) + v.get("_items_dropped", 0)
 
 
-def _richness(v: dict | None) -> int:
-    """Non-empty real fields in a validated extraction — None (total
-    failure) is poorer than any dict, matching _drop_total's order."""
-    if v is None:
-        return -1
-    return sum(1 for k, x in v.items() if not k.startswith("_") and x)
+_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "requests")
 
 
-# A long body whose validated output carries <=2 real fields is almost
-# certainly under-extracted (production: ~0.5% of current artifacts —
-# the model answered {"events":..,"urgency":..} and stopped). One
-# repair nudge costs one call; a thin artifact settles the message
-# permanently otherwise.
+def _facts(v: dict | None) -> set:
+    """Clinical assertions retained independently of prose fields."""
+    facts = set()
+    for key in _FACT_LIST_FIELDS:
+        for item in (v or {}).get(key) or []:
+            if isinstance(item, dict):
+                item = {k: x for k, x in item.items()
+                        if not k.startswith("_")
+                        and k not in ("unverified", "evidence")}
+            facts.add((key, json.dumps(item, sort_keys=True,
+                                       ensure_ascii=False)))
+    for key, value in ((v or {}).get("vitals") or {}).items():
+        facts.add(("vitals", key, value))
+    return facts
+
+
+def _improves(candidate: dict | None, prior: dict | None) -> bool:
+    """Accept repairs only when retained assertions do not regress."""
+    if candidate is None:
+        return False
+    if prior is None:
+        return True
+    prior_facts, candidate_facts = _facts(prior), _facts(candidate)
+    if not prior_facts.issubset(candidate_facts):
+        return False
+    if prior.get("urgency") == "high" and candidate.get("urgency") != "high":
+        return False
+    return (_drop_total(candidate), -len(candidate_facts)) < (
+        _drop_total(prior), -len(prior_facts))
+
+
+# One bounded completeness pass for sparse clinical assertions. Prose
+# fields never count as recovered facts; multiple items in one field do.
 _THIN_BODY_MIN = 300
-_THIN_KEYS_MAX = 2
+_THIN_FACTS_MIN = 2
 
 
 def _is_thin(v: dict | None, body: str | None) -> bool:
     return (v is not None and body is not None
             and len(body) >= _THIN_BODY_MIN
-            and _richness(v) <= _THIN_KEYS_MAX)
+            and len(_facts(v)) < _THIN_FACTS_MIN)
 
 
 def _repair_issues(drops: dict, v: dict | None) -> list[str]:
@@ -1175,8 +1198,8 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
               for q in drops.get("ev") or []]
     issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
                for s in drops.get("vitals") or []]
-    issues += [f"event「{e}」は対象本文に根拠となる記述がありません"
-               "（本文に無い出来事は出力しないでください）"
+    issues += [f"event「{e}」の根拠表現を確認できませんでした"
+               "（対象本文の言い換え・活用も再確認し、根拠がなければ省いてください）"
                for e in drops.get("events") or []]
     issues += [f"「{f}」の項目がスキーマ違反でした"
                for f in drops.get("items") or []]
@@ -1275,8 +1298,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
                     rv = _validate(rd, body)
-                    if (_drop_total(rv), -_richness(rv)) \
-                            < (_drop_total(v), -_richness(v)):
+                    if _improves(rv, v):
                         v = rv
                 if meta_out is not None:
                     meta_out["repairs"] = meta_out.get("repairs", 0) + 1
@@ -1543,28 +1565,55 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
 
 def _thin_pending_sql() -> str:
     """A current, valid, same-version artifact that is under-extracted
-    (<=2 non-empty real fields on a >=300-char body) and not retried
+    (<2 clinical assertions on a >=300-char body) and not retried
     yet — re-pends for ONE quality re-extract. Thinness is recomputed
     from content shape so artifacts written before meta.thin existed
     qualify without a backfill. Prefilter markers are excluded: a
     no-signal row is honest, not thin. The new row carries
     meta.thin_retried so a still-thin retry settles permanently."""
-    return f"""SELECT 1 FROM artifacts t
+    # Use the same clinical fields as the in-memory completeness check.
+    counts = [f"COALESCE(json_array_length(t.content,'$.{field}'),0)"
+              for field in _FACT_LIST_FIELDS]
+    counts.append("(SELECT COUNT(*) FROM json_each(t.content,'$.vitals'))")
+    return f"""SELECT t.artifact_id FROM artifacts t
         WHERE t.kind='{KIND}' AND t.message_id=m.message_id
           {current_extract_pred('t')}
           AND json_extract(t.meta,'$.extract_version')={EXTRACT_VERSION}
           AND json_extract(t.meta,'$.prefilter') IS NULL
           AND json_extract(t.meta,'$.thin_retried') IS NULL
           AND length(m.body_text) >= {_THIN_BODY_MIN}
-          AND (SELECT COUNT(*) FROM json_each(t.content) j
-               WHERE substr(j.key,1,1) != '_'
-                 AND CASE j.type
-                       WHEN 'null' THEN 0
-                       WHEN 'array' THEN json_array_length(j.value) > 0
-                       WHEN 'object' THEN j.value != '{{}}'
-                       ELSE j.value IS NOT NULL AND j.value != ''
-                            AND j.value != 0
-                     END) <= {_THIN_KEYS_MAX}"""
+          AND ({' + '.join(counts)}) < {_THIN_FACTS_MIN}
+          ORDER BY t.artifact_id DESC LIMIT 1"""
+
+
+def _thin_retry_content(ledger, row) -> str | None:
+    """Read the pinned thin source under its message, project and hash scope."""
+    source = ledger.db.execute(
+        "SELECT content FROM artifacts WHERE artifact_id=? "
+        "AND kind=? AND message_id=? "
+        "AND (project_id=? OR project_id IS NULL) "
+        "AND json_valid(meta) AND json_extract(meta,'$.hash')=?",
+        (row["thin_src"], KIND, row["message_id"], row["project_id"],
+         row["content_hash"])).fetchone()
+    return source["content"] if source is not None else None
+
+
+def pending_pred() -> str:
+    """Shared body-current extraction and quality-retry eligibility."""
+    return f"""m.body_text IS NOT NULL AND m.body_text != ''
+        AND (m.body_state IS NULL OR m.body_state='full')
+        AND {current_v4_id()} IS NULL
+        AND NOT EXISTS (SELECT 1 FROM artifacts f
+                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
+                          {current_extract_pred('f')}
+                          AND json_extract(f.meta,'$.extract_version')={EXTRACT_VERSION}
+                          AND json_extract(f.meta,'$.qc_fix') IS NOT NULL)
+        AND (NOT EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind='{KIND}' AND a.message_id=m.message_id
+                          {current_extract_pred()}
+                          AND json_extract(a.meta,'$.extract_version')={EXTRACT_VERSION})
+             OR EXISTS ({_qc_flagged_sql(val="1")})
+             OR EXISTS ({_thin_pending_sql()}))"""
 
 
 def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
@@ -1707,7 +1756,7 @@ _BATCH_MAX_TOKENS = MAX_TOKENS * 3   # K outputs share one envelope;
 # generation cancelled, every produced token wasted. Deferring costs
 # nothing: the row stays pending and a drainer with a real budget
 # picks it up next cycle.
-_MIN_CALL_S = 90.0      # one full extraction call (eval + decode)
+_MIN_CALL_S = 75.0      # one full extraction call (eval + decode)
 _MIN_REPAIR_S = 75.0    # repair re-ask — same shape as a single call
 _BATCH_PER_ITEM_S = 55.0  # decode share per item inside a batch call
 
@@ -2027,18 +2076,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         AND NOT EXISTS (SELECT 1 FROM artifacts bad
                         WHERE bad.kind=? AND bad.message_id=m.message_id
                           AND NOT json_valid(bad.meta))
-        AND NOT EXISTS (SELECT 1 FROM artifacts f
-                        WHERE f.kind=? AND f.message_id=m.message_id
-                          AND json_valid(f.meta)
-                          AND json_extract(f.meta,'$.hash')=m.content_hash
-                          AND json_extract(f.meta,'$.extract_version')=?
-                          AND json_extract(f.meta,'$.qc_fix') IS NOT NULL)
-        AND (NOT EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind=? AND a.message_id=m.message_id
-                          {current_extract_pred()}
-                          AND json_extract(a.meta,'$.extract_version')=?)
-             OR EXISTS ({_qc_flagged_sql(val="1")})
-             OR EXISTS ({_thin_pending_sql()}))
+        AND {pending_pred()}
         AND (? IS NULL OR m.message_id % ? = ?)
       GROUP BY m.message_id
       HAVING attempts < 5
@@ -2047,8 +2085,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
       ORDER BY m.posted_at_ts {order}
       LIMIT ?
     """, (KIND, EXTRACT_VERSION, *adm_params,
-          KIND, KIND, EXTRACT_VERSION,
-          KIND, EXTRACT_VERSION,
+          KIND,
           shard[1] if shard else None,
           shard[1] if shard else 1,
           shard[0] if shard else 0,
@@ -2070,7 +2107,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and qc is None \
+        if prefilter and qc is None and not r["thin_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable
             # marker + v1 coverage instead of burning an LLM call
@@ -2158,14 +2195,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # row leaves pending (same contract as qc_fix —
                     # never burn an LLM call every cycle on a row the
                     # model cannot enrich).
-                    src = ledger.db.execute(
-                        "SELECT content FROM artifacts WHERE artifact_id=?",
-                        (r["thin_src"],)).fetchone()
-                    if src is not None:
+                    content = _thin_retry_content(ledger, r)
+                    if content is not None:
                         with lock(per_write_lock) as held:
                             if held:
                                 _replace_current(
-                                    ledger, r, src["content"],
+                                    ledger, r, content,
                                     extra_meta={"thin_retried": True})
                     return
                 with lock(per_write_lock) as held:
@@ -2182,6 +2217,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                      max(r["attempts"], prev))
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
+            if r["thin_src"] and qc is None:
+                content = _thin_retry_content(ledger, r)
+                if content is None:
+                    deferred += 1
+                    return
+                prior = json.loads(content)
+                if not _improves(d, prior):
+                    d = prior
             d["_model"] = MODEL
             with lock(per_write_lock) as held:
                 # QC-flagged/thin rows already hold a current artifact —
@@ -2404,28 +2447,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left = ledger.db.execute(f"""
-      SELECT COUNT(*) FROM messages m
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
-        AND NOT EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind=? AND a.message_id=m.message_id
-                          {current_extract_pred()}
-                          AND json_extract(a.meta,'$.extract_version')=?)
-    """, (KIND, EXTRACT_VERSION)).fetchone()[0]
-    # T14: queue-age bounds over the still-pending set (age of the OLDEST
-    # pending body is the backlog's starvation indicator) and aggregate
-    # per-call timings — every field stays None when unmeasured instead
-    # of reporting a fake zero.
-    age_min, age_max = ledger.db.execute(f"""
-      SELECT MIN(m.posted_at_ts), MAX(m.posted_at_ts) FROM messages m
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
-        AND NOT EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind=? AND a.message_id=m.message_id
-                          {current_extract_pred()}
-                          AND json_extract(a.meta,'$.extract_version')=?)
-    """, (KIND, EXTRACT_VERSION)).fetchone()
+    left = ledger.db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE {pending_pred()}").fetchone()[0]
+    age_min, age_max = ledger.db.execute(
+        "SELECT MIN(m.posted_at_ts), MAX(m.posted_at_ts) FROM messages m "
+        f"WHERE {pending_pred()}").fetchone()
     now_ts = time.time()
     llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
                  "tokens": 0}

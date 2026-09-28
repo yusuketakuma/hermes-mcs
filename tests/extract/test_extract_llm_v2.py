@@ -163,13 +163,14 @@ def test_validate_events_grounded_in_body():
     assert out["events"] == ["eol"]
 
 
-def test_is_thin_and_richness():
+def test_is_thin():
     body = "あ" * 400
     assert extract_llm._is_thin({"urgency": "routine"}, body)
     assert extract_llm._is_thin({"events": ["visit"], "urgency": "high"},
                                 body)
-    assert not extract_llm._is_thin(
+    assert extract_llm._is_thin(
         {"events": ["visit"], "urgency": "high", "summary": "a"}, body)
+    assert not extract_llm._is_thin({"events": ["visit", "exam"]}, body)
     assert not extract_llm._is_thin({"urgency": "routine"}, "短い")
     assert not extract_llm._is_thin(None, body)
 

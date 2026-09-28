@@ -241,7 +241,7 @@ python3 mcs/semantic/semantic_evaluation.py --input new-labelled/evaluation.json
 
 | 現行の契約 | 確認した制約 | v4での決定 |
 | --- | --- | --- |
-| 旧`extract_llm.EXTRACT_VERSION=3`（出力JSON形はv2） | 抽出・QC・viewの選択、失敗再試行に世代番号を使用。単純に4へ上げると旧投稿が再候補となり、混在workerは結果を3→4→3へ逆行させ得る。旧kindの置換保存は旧v3行も削除する（`mcs/extract/extract_llm.py:54,1251-1290,1610-1668`）。 | v4 PASSまでは旧結果を明示的な現行版として保持し、**別の保存境界**に`engine_version=4`と公開派生の`extract_version=4`を記録する。対象ごとの安全な切替後は旧LLM生成成果物を上書きできるが、旧抽出定数だけをin-placeで変更しない。 |
+| 旧`extract_llm.EXTRACT_VERSION=3`（出力JSON形はv2） | 抽出・QC・viewの選択、失敗再試行に世代番号を使用。単純に4へ上げると旧投稿が再候補となり、混在workerは結果を3→4→3へ逆行させ得る。旧kindの置換保存は旧v3行も削除する（`mcs/extract/v4/extract_llm.py`）。 | v4 PASSまでは旧結果を明示的な現行版として保持し、**別の保存境界**に`engine_version=4`と公開派生の`extract_version=4`を記録する。対象ごとの安全な切替後は旧LLM生成成果物を上書きできるが、旧抽出定数だけをin-placeで変更しない。 |
 | canonical facts `semantic-facts/v2` / semantic artifact schema `2026-09-20` | これらはエンジンv3/4と独立。現行の事実生成→別の要約生成→Jev監査→条件付き全文修正は複数呼出し（`mcs/semantic/semantic_drain.py:235-337,659-749`）。 | evidence、facts、claim、通知を一つの**世代付きjob/receipt列**で結ぶ。現行fact schemaを無条件に改版しない。 |
 | 旧PASSのcache / 出力 | `policy_fingerprint`に`fact_source`がなく、切替後に古い要約を再利用し得る（`mcs/semantic/semantic_policy.py:160-163`）。確認済みfactは40件で切られ、通常の通知追記は`mandatory_facts`を読まない（`mcs/semantic/semantic_render.py:33-83`; `mcs/semantic/semantic_send_gate.py:334-393`）。 | fact source・engine・生成入力・修復結果・依存relation世代をcache/公開の照合対象にする。専用通知と通常/返信表示の両面でverified fact ID集合を全件追跡し、無言の件数省略を禁止する。 |
 

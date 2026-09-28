@@ -123,3 +123,52 @@ def test_case_file_validates_offline():
         if exp:
             assert isinstance(extract_llm._validate(dict(exp)), dict), \
                 f"{c['id']}: expectation fails _validate"
+
+
+def test_bench_scores_foreign_and_mixed_vitals():
+    case = {'id': 'synthetic-vital', 'expect': {'vitals': {'sbp': 90}}}
+    score = extract_bench._score_case(case, {'vitals': {'sbp': 90, 'dbp': 80}})
+    assert score['fields']['vitals'] == {'tp': 1, 'fp': 1, 'fn': 0}
+    assert extract_bench._score_case(case, None)['fields']['vitals']['fn'] == 1
+
+
+def test_bench_symptom_subject_and_time_are_scored():
+    assert not extract_bench._match_symptom(
+        {'text': '発熱', 'subject': 'patient', 'status': 'ongoing'},
+        [{'text': '発熱', 'subject': 'family', 'status': 'past', 'negated': False}])
+
+
+def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import extract_llm
+    cases = tmp_path / 'synthetic.json'
+    cases.write_text(json.dumps({'cases': [{'id': 's', 'body': '合成', 'expect': {}}]}))
+    def fake(body, **kwargs):
+        kwargs['meta_out'].update(calls=2, repairs=1, usage={'total_tokens': 12})
+        return {}
+    monkeypatch.setattr(extract_llm, 'llm_extract', fake)
+    outputs = []
+    for tag in ('before', 'after'):
+        out = tmp_path / (tag + '.json')
+        assert extract_bench.cmd_run(SimpleNamespace(
+            cases=str(cases), out=str(out), tag=tag, mock_ok=False)) == 0
+        outputs.append(str(out))
+    report = json.loads(Path(outputs[0]).read_text())
+    assert report['cases'][0]['performance']['calls'] == 2
+    assert report['cases'][0]['performance']['usage']['total_tokens'] == 12
+    assert report['performance']['p95_s'] is not None
+    assert extract_bench.cmd_report(SimpleNamespace(files=outputs)) == 0
+    report['corpus_sha256'] = 'different'
+    Path(outputs[0]).write_text(json.dumps(report))
+    assert extract_bench.cmd_report(SimpleNamespace(files=outputs)) == 2
+
+
+@pytest.mark.parametrize(("durations", "expected"), [
+    ([], {"p50_s": None, "p95_s": None}),
+    ([12.5], {"p50_s": 12.5, "p95_s": 12.5}),
+    ([9, 1, 4, 2], {"p50_s": 2, "p95_s": 9}),
+    (list(range(20, 0, -1)), {"p50_s": 10, "p95_s": 19}),
+])
+def test_benchmark_latency_percentiles(durations, expected):
+    assert extract_bench._duration_percentiles(durations) == expected

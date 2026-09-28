@@ -30,7 +30,7 @@ WINDOW_S=3300
 
 # gap-fill: if the extract drainer died, cover shard 0/2 on slot 0 too
 if ! pgrep -f "extract_llm.py --all" >/dev/null 2>&1; then
-  "$PY" __REPO__/mcs/extract/extract_llm.py --all --workers 1 \
+  "$PY" __REPO__/mcs/extract/v4/extract_llm.py --all --workers 1 \
     --shard 0/2 --slot 0 --stop-after "$WINDOW_S" \
     >>__DATA__/extract_drain.log 2>&1 &
 fi

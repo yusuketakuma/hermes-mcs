@@ -84,7 +84,7 @@ def _module_surface(tree, module: str, permitted: set[str]) -> list[str]:
 
 
 def _py_files(*dirs: Path) -> list[Path]:
-    # mcs/ modules live in first-level subdirs (flat import namespace —
+    # mcs/ modules live in subdirs at any depth (flat import namespace —
     # the filename stays the identity); skip __pycache__ artifacts.
     out = []
     for d in dirs:

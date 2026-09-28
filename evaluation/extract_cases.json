@@ -124,6 +124,13 @@
                  {"name": "カルベジロール", "action": "start"}],
         "urgency": "routine"
       }
-    }
+    },
+    {"id": "review-eol-inflection", "body": "昨日亡くなりました。", "expect": {"events": ["eol"]}},
+    {"id": "review-outpatient-synonym", "body": "今日は内科の外来に行ってきました。", "expect": {"events": ["exam"]}},
+    {"id": "review-visit-colloquial", "body": "看護師が家に来てくださいました。", "expect": {"events": ["visit"]}},
+    {"id": "review-negated-admission", "body": "本日訪問しました。入院は不要です。", "expect": {"events": ["visit"]}, "forbid": {"events": ["admission"]}},
+    {"id": "review-discharge-only", "body": "本日退院して自宅に戻りました。", "expect": {"events": ["discharge"]}, "forbid": {"events": ["admission"]}},
+    {"id": "review-family-vital", "body": "本人の脈拍は72です。同居の娘さんの血圧は180/110でした。", "expect": {"vitals": {"hr": 72}}},
+    {"id": "review-multiple-bp", "body": "午前の血圧120/80。現在の収縮期血圧は90、拡張期血圧は測定できませんでした。", "expect": {"vitals": {"sbp": 90}}}
   ]
 }

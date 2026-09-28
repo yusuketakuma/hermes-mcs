@@ -40,21 +40,18 @@ def test_filters_and_labels(db):
     assert "家族→医師へ状態確認(期限:2026-10-01)" in joined
 
 
-def test_events_union_keeps_v1_only_kinds(db):
-    """A partial llm event list must not shadow v1 detections — the
-    llm enum has no medication/adherence/media_ref, and production
-    showed eol lost when llm listed only [visit]."""
+def test_llm_event_exclusions_are_not_overridden(db):
+    """Rule hits cannot resurrect events omitted by the selected facts."""
     joined = _render(db, {"events": ["visit"]},
                      {"events": ["visit", "eol", "medication"]})
-    assert "訪問" in joined and "看取り" in joined and "投薬" in joined
+    assert "訪問" in joined and "看取り" not in joined and "投薬" not in joined
 
 
-def test_vitals_merge_per_key(db):
-    """llm wins keys it emitted; v1 regex fills keys llm omitted — a
-    partial llm vitals dict must not hide v1-only measurements."""
+def test_vitals_preserve_selected_source(db):
+    """A partial selected reading cannot import unrelated rule values."""
     joined = _render(db, {"vitals": {"hr": 88}},
                      {"vitals": {"sbp": 128, "dbp": 76, "bt": 36.8}})
-    assert "HR 88" in joined and "BP 128/76" in joined and "BT 36.8" in joined
+    assert "HR 88" in joined and "BP" not in joined and "BT" not in joined
 
 
 def test_resolved_cancels_rule_positive(db):
