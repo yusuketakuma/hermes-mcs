@@ -101,6 +101,10 @@ T_POST_MERGE = 600        # services + restart + postcheck can be slow
 T_LAUNCHCTL = 10
 RESTART_BUDGET_S = 120
 STALE_S = 1800            # no stage progress for this long => stale apply
+# an unchanged unresolved escalation re-notifies at most this often
+# (health_watch.REALERT_S dedup convention; longer here because the
+# human was already told it needs manual action)
+ESCALATE_REALERT_S = 6 * 3600
 GIT_LOCK_MIN_AGE_S = 600  # younger .git/*.lock may belong to a live op
 RUN_LOCK_TRIES = 40       # 30s x 40 = 20min > RUN_DEADLINE_S (S21)
 RUN_LOCK_INTERVAL = 30
@@ -1060,6 +1064,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     quiesced = False
     rollback_failed = False
     consent_hold = False
+    delegated = False
 
     def bail(reason: str) -> int:
         nonlocal rollback_failed, consent_hold
@@ -1133,6 +1138,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if state.get("applying") or state.get("stages"):
             os.close(upd_fd)
             upd_fd = None
+            # the journal is ANOTHER run's: whatever recover raises must
+            # propagate (as in rollback()), never reach bail() below,
+            # which would treat that journal as this apply's own and
+            # _rollback_tree it unlocked, then overwrite it
+            delegated = True
             return recover_interrupted()
 
         journal(state, "local_checks")
@@ -1249,9 +1259,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if applied_entry[-1].get("plugin_changed"):
             restart_gateway(cfg)
         return 0
-    except UpdateError as e:
-        return bail(str(e))
     except Exception as e:
+        if delegated:
+            raise
+        if isinstance(e, UpdateError):
+            return bail(str(e))
         return bail(f"unexpected:{type(e).__name__}")
     finally:
         if quiesced and not consent_hold:
@@ -1829,12 +1841,19 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 save_state(state)
-            _report("escalate", detail)
+            key = _alert_key(state, detail)
+            notify, notified_at = _alert_due("escalate", key, time.time())
+            _report("escalate", detail, alert_key=key,
+                    notified_at=notified_at)
             problems = restart_agents()
             _remove_marker()
-            _enqueue_notice(
-                f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
-                + ((" restart:" + ",".join(problems)) if problems else ""))
+            # every pass (daily check, consent respawn) re-escalates the
+            # same stuck journal — notify once per condition (dedup)
+            if notify and not _enqueue_notice(
+                    f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
+                    + ((" restart:" + ",".join(problems))
+                       if problems else "")):
+                _report("escalate", detail, alert_key=key)  # retry next
             return 1
 
         if state.get("restore_consent") and not (
@@ -2005,16 +2024,46 @@ def _finish_recovery(state: dict, result: str, removed: list) -> None:
     _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}")
 
 
-def _report(result: str, detail: str) -> None:
+def _report(result: str, detail: str, **extra) -> None:
     """Atomic report write — a torn report must never mislead a human
     checking `status` after a crash."""
     with suppress(OSError):
         atomic_write(REPORT_PATH,
                      lambda f: json.dump({"result": result,
                                           "detail": detail,
-                                          "at": time.time()},
+                                          "at": time.time(), **extra},
                                          f, ensure_ascii=False),
                      tmp_prefix=".ureport.")
+
+
+def _alert_key(state: dict, detail: str) -> str:
+    """Dedup key of an unresolved recovery condition: the stuck journal
+    (applying + stages, untouched by escalate) and the reason class
+    (detail up to its first ':', '—' or '(' — volatile tails such as
+    stderr stay out). Identical in mcs_recover.py so both tools dedup
+    against the same recovery_report.json."""
+    reason = re.split(r"[:—(]", detail, maxsplit=1)[0].strip()
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), reason],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _alert_due(result: str, key: str, now: float) -> tuple[bool, float]:
+    """(notify?, notified_at to record). The previous report suppresses
+    only the same (result, key) notified less than ESCALATE_REALERT_S
+    ago; any other report in between (a state change) or an unreadable
+    one re-alerts — the first alert is never suppressed."""
+    try:
+        with open(REPORT_PATH, encoding="utf-8") as f:
+            last = json.load(f)
+        at = last.get("notified_at")
+        if (last.get("result"), last.get("alert_key")) == (result, key) \
+                and type(at) in (int, float) \
+                and 0 <= now - at < ESCALATE_REALERT_S:
+            return False, at
+    except (OSError, ValueError, AttributeError, RecursionError):
+        pass
+    return True, now
 # -------------------------------------------------------------------- CLI
 
 def cmd_check() -> int:

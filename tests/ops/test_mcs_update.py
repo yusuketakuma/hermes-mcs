@@ -1573,3 +1573,80 @@ def test_restart_agents_all_hung_stays_within_budget(
                         "bootstrap_failed:ai.mcs.b",
                         "watcher_not_loaded:local.mcs-w",
                         "restart_deadline:local.mcs-v"]
+
+
+# ------------------- apply delegating to recover never bails its journal
+
+def test_apply_never_bails_a_foreign_journal_when_recover_raises(
+        updater, tmp_path, monkeypatch):
+    """A journal that appears between apply's first read and its locked
+    re-read belongs to another run. recover_interrupted raising (e.g.
+    OSError from save_state) must propagate like in rollback(), never
+    reach bail(): the old code _rollback_tree'd that journal unlocked
+    and overwrote it with this apply's failure."""
+    foreign = updater._default_state()
+    foreign["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                           "prev_sha": "b" * 40, "command_id": "other",
+                           "at": time.time()}
+    foreign["stages"] = [{"stage": "merge", "at": time.time()}]
+    real_load = updater.load_state
+    reads = []
+
+    def load_state():
+        reads.append(1)
+        return updater._default_state() if len(reads) == 1 \
+            else real_load()
+    updater.save_state(foreign)
+    before = Path(updater.STATE_PATH).read_bytes()
+    monkeypatch.setattr(mcs_update, "load_state", load_state)
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    rolled, notices = [], []
+    monkeypatch.setattr(mcs_update, "_rollback_tree", rolled.append)
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+
+    def recover():
+        raise OSError("disk full")
+    monkeypatch.setattr(mcs_update, "recover_interrupted", recover)
+    with pytest.raises(OSError, match="disk full"):
+        updater.apply("v1.2.0", None, "mine")
+    assert rolled == [] and notices == []
+    assert Path(updater.STATE_PATH).read_bytes() == before
+    fd = updater.acquire_update_lock()              # released
+    assert fd is not None
+    os.close(fd)
+
+
+# ------------------------------------------ escalation notice dedup
+
+def test_recover_escalation_notifies_once_per_condition(
+        updater, tmp_path, monkeypatch):
+    """Daily check / consent respawn re-run recover on the same stuck
+    journal: one notice per condition, again on change or after
+    ESCALATE_REALERT_S; a failed enqueue is retried next pass."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    monkeypatch.setattr(mcs_update, "restart_agents", lambda: [])
+    notices, ok = [], [False]
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or ok[0])
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                         "prev_sha": "b" * 40, "at": time.time()}
+    state["stages"] = [{"stage": "merge", "at": time.time()}]
+    updater.save_state(state)
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1       # enqueue failed
+    ok[0] = True
+    for _ in range(3):
+        assert updater.recover_interrupted() == 1
+    assert len(notices) == 2                        # retry, then quiet
+    state["stages"].append({"stage": "post_merge", "at": time.time()})
+    updater.save_state(state)
+    assert updater.recover_interrupted() == 1
+    assert len(notices) == 3                        # new condition
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    report["notified_at"] -= mcs_update.ESCALATE_REALERT_S
+    Path(mcs_update.REPORT_PATH).write_text(json.dumps(report))
+    assert updater.recover_interrupted() == 1
+    assert len(notices) == 4

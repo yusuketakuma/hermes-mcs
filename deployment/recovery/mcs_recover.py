@@ -71,6 +71,7 @@ KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
 STALE_S = 1800
+ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
 GIT_LOCK_MIN_AGE_S = 600
 T_GIT = 30
 
@@ -160,18 +161,53 @@ def _save_state(state):
         raise
 
 
-def _report(result, detail):
+def _report(result, detail, **extra):
     try:
         fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rpt.",
                                    suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"result": result, "detail": detail,
-                       "at": time.time()}, f)
+            json.dump(dict({"result": result, "detail": detail,
+                            "at": time.time()}, **extra), f)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, REPORT_PATH)
     except OSError:
         pass
+
+
+def _alert_key(state, detail):
+    """Copy of mcs_update._alert_key — keep identical so both tools
+    dedup against the same recovery_report.json."""
+    reason = re.split(r"[:—(]", detail, maxsplit=1)[0].strip()
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), reason],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _alert_due(result, key, now):
+    """Copy of mcs_update._alert_due: suppress only the same (result,
+    key) notified < ESCALATE_REALERT_S ago; anything else alerts."""
+    try:
+        with open(REPORT_PATH, encoding="utf-8") as f:
+            last = json.load(f)
+        at = last.get("notified_at")
+        if (last.get("result"), last.get("alert_key")) == (result, key) \
+                and type(at) in (int, float) \
+                and 0 <= now - at < ESCALATE_REALERT_S:
+            return False, at
+    except (OSError, ValueError, AttributeError, RecursionError):
+        pass
+    return True, now
+
+
+def _report_alert(result, state, detail, text):
+    """Report + deduped human notice. _notify is `hermes send` directly
+    (not notify_outbox — the ledger is untouched)."""
+    key = _alert_key(state, detail)
+    notify, notified_at = _alert_due(result, key, time.time())
+    _report(result, detail, alert_key=key, notified_at=notified_at)
+    if notify:
+        _notify(text)
 
 
 def _try_lock(path):
@@ -598,7 +634,21 @@ def _replace_database(backup_path, expected_sha, before_replace):
             pass
 
 
-def _restore_db(backup_path):
+def _record_hold(state, report, backup_path):
+    """Journal the hold like mcs_update._consent_hold (same record) — a
+    later pass of either tool then sees state['restore_consent'] and
+    keeps the freeze on a git failure instead of escalating."""
+    state["restore_consent"] = {
+        "report_id": report["report_id"], "backup_path": backup_path,
+        "backup_sha256": report["backup_sha256"],
+        "backup_schema": report["backup_schema"],
+        "intervening_messages": report["intervening_messages"],
+        "external_effect_rows": report["external_effect_rows"],
+        "at": time.time()}
+    _save_state(state)
+
+
+def _restore_db(backup_path, on_hold=None):
     """Restore only when the live schema differs, with a verified staged copy.
     Checkpoint the live DB before replacement to preserve committed WAL data.
     Returns an error string for the caller to escalate, or None on a
@@ -661,6 +711,11 @@ def _restore_db(backup_path):
     except OSError as e:
         return f"restore_marker_failed: {e}"
     if _consent_for(report) is None:
+        if on_hold is not None:
+            # a failed journal write propagates (as mcs_update's
+            # _consent_hold): an escalate here would restart drainers
+            # on the unrestored newer-schema DB
+            on_hold(report)
         return "restore_consent_pending:" + report["report_id"]
     try:
         _replace_database(backup_path, report["backup_sha256"],
@@ -717,12 +772,31 @@ def recover(if_stale=False):
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 _save_state(state)
-            _report("escalate", detail)
+            _report_alert("escalate", state, detail,
+                          "[MCS] 更新の中断復旧ができません"
+                          f"（要手動対応）: {detail}")
             _restart_drainers()
             _remove_marker()
-            _notify("[MCS] 更新の中断復旧ができません"
-                    f"（要手動対応）: {detail}")
             return 1
+
+        def git_failed(what):
+            # Canonical policy: mcs_update.recover_interrupted's
+            # `except UpdateError` — keep the two in sync. Inside a
+            # restore-consent hold the tree is unmeasurable while the DB
+            # may still be the newer schema: never restart drainers,
+            # keep both markers, 'applying' and the receipt, and never
+            # write notify_outbox (it is in the loss report's digest —
+            # a write voids the pending consent). Report + a direct
+            # `hermes send` (bypasses the ledger) only; next pass retries.
+            if state.get("restore_consent"):
+                _report_alert("restore_consent_blocked", state,
+                              "hold kept, retried next pass — "
+                              "git unverifiable: " + what,
+                              "[MCS] 復元承認待ちの保留中に git を"
+                              "確認できません（保留は維持・自動再試行）: "
+                              + what)
+                return 1
+            return escalate("git unverifiable: " + what)
 
         if state.get("restore_consent") and not (
                 applying and applying.get("rollback")
@@ -768,16 +842,26 @@ def recover(if_stale=False):
             return 0
 
         head = _head()
+        if not head:
+            return git_failed("rev-parse HEAD")
         clean = _clean()
         if clean is None:
-            return escalate("git status failed")
+            return git_failed("status")
         if head == target:
             if not clean:
-                _git_out(["reset", "--hard", target])
-                if _clean() is not True:
+                r = _git(["reset", "--hard", target])
+                if r is None or r.returncode != 0:
+                    return git_failed("reset --hard")
+                clean = _clean()
+                if clean is None:
+                    return git_failed("status")
+                if not clean:
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
-                err = _restore_db(applying["backup_path"])
+                err = _restore_db(applying["backup_path"],
+                                  on_hold=lambda report: _record_hold(
+                                      state, report,
+                                      applying["backup_path"]))
                 if err and err.startswith("restore_consent_pending:"):
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, 'applying' stays — each watchdog
