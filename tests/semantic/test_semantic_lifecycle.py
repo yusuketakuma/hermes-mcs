@@ -19,6 +19,7 @@ from test_mcs_semantic import _ledger, _message, _patient
 from test_semantic_evaluation import CRITERIA, MANIFEST, _record
 
 FP, POLICY, REV = "fp-synthetic", "policy-synthetic", "rev-synthetic"
+TARGET = "discord:synthetic"
 
 
 def _fact(fid, statement):
@@ -92,21 +93,23 @@ def _chain(tmp_path, facts, audit="PASS", notice=True):
     return db, final_id, event_id, chunks, summary
 
 
-def _receipt(db, event_id, state, accepted, count=None):
+def _receipt(db, event_id, state, accepted, fingerprint="synthetic"):
     db.db.execute(
         "UPDATE notify_outbox SET state=?,progress=? WHERE event_id=?",
         (state, json.dumps({"next": accepted,
                             "sent": [str(i) for i in range(1, accepted + 1)],
-                            "fingerprint": "synthetic", "sending": None}),
+                            "fingerprint": fingerprint, "sending": None}),
          event_id))
     db.db.commit()
 
 
-def _read(tmp_path, final_id):
+def _read(tmp_path, final_id, cfg=None):
     with sqlite3.connect((tmp_path / "ledger.db").resolve().as_uri()
                          + "?mode=ro", uri=True) as con:
         con.row_factory = sqlite3.Row
-        return lifecycle.fact_lifecycle(con, final_id)
+        if cfg is None:
+            return lifecycle.fact_lifecycle(con, final_id)
+        return lifecycle.fact_lifecycle(con, final_id, cfg=cfg)
 
 
 def test_full_chain_yields_equal_sets_and_complete_evaluator_lifecycle(
@@ -160,8 +163,11 @@ def test_undelivered_chunk_drops_every_fact_it_carries(tmp_path):
     db, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
     try:
         assert len(chunks) >= 3
-        _receipt(db, event_id, "failed", 1)       # only chunk 1 accepted
-        got = _read(tmp_path, final_id)["fact_ids"]
+        fingerprint = notify_flush._delivery_fingerprint(
+            TARGET, chunks, [])
+        _receipt(db, event_id, "failed", 1, fingerprint)
+        got = _read(tmp_path, final_id,
+                    {"notify_target": TARGET})["fact_ids"]
         ids = [f["fact_id"] for f in facts]
         assert got["verified"] == ids and got["rendered"] == ids
         delivered = got["delivered"]
@@ -179,6 +185,92 @@ def test_undelivered_chunk_drops_every_fact_it_carries(tmp_path):
         # once every chunk is accepted the same notice delivers them all
         _receipt(db, event_id, "accepted", len(chunks))
         assert _read(tmp_path, final_id)["fact_ids"]["delivered"] == ids
+    finally:
+        db.close()
+
+
+def _cli(tmp_path, final_id, config=None):
+    """semantic_blind --lifecycle-snapshot on a 40-fact candidate record;
+    returns (annotated record, evaluator report)."""
+    record = _record(source="human")
+    for stage in evaluation.LIFECYCLE_STAGES:
+        del record["candidate"][f"{stage}_fact_ids"]
+    record["candidate"]["facts"].extend(
+        {"fact_id": f"f{i}"} for i in range(3, 41))
+    record["artifact_ids"] = {"final_id": final_id}
+    source = tmp_path / "candidate-records.jsonl"
+    source.write_text(json.dumps(record, ensure_ascii=False) + "\n")
+    argv = ["--input", str(source), "--output-dir", str(tmp_path / "out"),
+            "--lifecycle-snapshot", str(tmp_path / "ledger.db")]
+    if config is not None:
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(config))
+        argv += ["--config", str(path)]
+    assert blind.main(argv) == 0
+    out = json.loads((tmp_path / "out" / "candidate-records.jsonl")
+                     .read_text())
+    return out, evaluation.evaluate_records([out], MANIFEST, CRITERIA)
+
+
+def test_cli_credits_a_matching_partial_receipt_from_supplied_config(
+        tmp_path):
+    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+             for i in range(1, 41)]
+    db, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
+    try:
+        assert len(chunks) >= 3
+        _receipt(db, event_id, "failed", 1,
+                 notify_flush._delivery_fingerprint(TARGET, chunks, []))
+        # the sender strips the target; the reader must resolve it alike
+        out, report = _cli(tmp_path, final_id,
+                           {"notify_target": f"  {TARGET}  ",
+                            "notify_system_target": "slack:unrelated"})
+        lines = dict(zip(summary["mandatory_fact_ids"],
+                         summary["mandatory_facts"], strict=True))
+        expected = [f["fact_id"] for f in facts
+                    if "・" + lines[f["fact_id"]] in chunks[0]]
+        assert expected and len(expected) < len(facts)
+        assert out["candidate"]["delivered_fact_ids"] == expected
+        assert out["fact_lifecycle_observations"]["delivered"] == \
+            "notice_receipt"
+        assert report["fact_lifecycle"]["missing_observations"] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("config", [None, {}, {"notify_target": TARGET}],
+                         ids=["no-config", "empty-config", "config"])
+def test_cli_partial_receipt_with_changed_chunk_width_is_unprovable(
+        tmp_path, monkeypatch, config):
+    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+             for i in range(1, 41)]
+    db, final_id, event_id, chunks, _ = _chain(tmp_path, facts)
+    try:
+        assert len(chunks) >= 3
+        _receipt(db, event_id, "failed", 1,
+                 notify_flush._delivery_fingerprint(TARGET, chunks, []))
+        monkeypatch.setattr(notify_flush, "_MAX_LEN", 1000)
+        out, report = _cli(tmp_path, final_id, config)
+        assert "delivered_fact_ids" not in out["candidate"]
+        assert out["fact_lifecycle_observations"]["delivered"] == \
+            "notice_receipt_unprovable"
+        assert report["fact_lifecycle"]["missing_observations"] == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("fingerprint", [None, 7, "wrong"])
+def test_partial_receipt_without_valid_fingerprint_is_unprovable(
+        tmp_path, fingerprint):
+    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+             for i in range(1, 41)]
+    db, final_id, event_id, chunks, _ = _chain(tmp_path, facts)
+    try:
+        _receipt(db, event_id, "failed", 1, fingerprint)
+        got = _read(tmp_path, final_id, {"notify_target": TARGET})
+        assert "delivered" not in got["fact_ids"]
+        assert got["observations"]["delivered"] == \
+            "notice_receipt_unprovable"
     finally:
         db.close()
 

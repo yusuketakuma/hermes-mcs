@@ -51,6 +51,11 @@ SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
             "project_ids": {1}}
 
 
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+
+
 # ---------- fake discord SDK --------------------------------------------
 
 class FakeHTTP(Exception):

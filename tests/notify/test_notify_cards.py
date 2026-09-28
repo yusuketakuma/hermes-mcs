@@ -42,6 +42,11 @@ SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
             "project_ids": {1}}
 
 
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+
+
 def _uuid(n: int) -> str:
     return f"{n:08x}-0000-4000-8000-{n:012x}"[:36]
 

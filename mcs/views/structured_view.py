@@ -294,7 +294,7 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
 
 
 def _request_lines(llm: dict, v1: dict) -> list[str]:
-    reqs = []
+    reqs, cands = [], []
     for r in llm.get("requests") or []:
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
             to = str(r.get("to") or "")
@@ -305,14 +305,20 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             due = r.get("due")
             suffix = f"(期限:{due})" if isinstance(due, str) and due \
                 else ""
-            reqs.append(prefix + to + str(r.get("action") or "")[:30]
-                        + suffix)
-    if not reqs:
+            # negated/speculative/ungrounded requests must not read as
+            # confirmed; any flag other than a literal False fails closed
+            (reqs if r.get("unverified", False) is False else cands).append(
+                prefix + to + str(r.get("action") or "")[:30] + suffix)
+    # rule fallback only when the selected facts carry no request at all
+    if not reqs and not cands:
         reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"
                     f"{r['ctx'][:24]}"
                     for r in v1.get("requests") or []
                     if isinstance(r, dict) and r.get("ctx"))
-    return ["依頼: " + " / ".join(reqs[:3])] if reqs else []
+    lines = ["依頼: " + " / ".join(reqs[:3])] if reqs else []
+    if cands:
+        lines.append("依頼候補（未確認）: " + " / ".join(cands[:3]))
+    return lines
 
 
 def structured_lines(db, mid: int) -> list[str]:

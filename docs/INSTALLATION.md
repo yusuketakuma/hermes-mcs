@@ -311,8 +311,8 @@ crontab -e
 30 22 * * * $HOME/.mcs/scripts/mcs_llm_catchup.sh
 ```
 
-`mcs_check.sh` には夜間間引き（22-06時は :00/:20/:40 のみ実行）が
-組み込み済み — 5分 cron のまま貼ればスクリプト側が間引く。
+`mcs_check.sh` には夜間間引き（22-06時は :00/:20/:40 を起点とする各5分窓で実行。
+分の値が20で割った余り5未満なら実行）が組み込み済み — 5分 cron のまま貼ればスクリプト側が間引く。
 この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
 併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
 通知を送信し得る。抽出は上記の定期ジョブから実行される。
@@ -407,7 +407,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
-| 未読チェック `run_check --download-files --mark-read` | `*/5 * * * *`（スクリプト内で 22-06時は :00/:20/:40 のみに間引き — 30分のセッション失効上限を下回るため） | hermes cron |
+| 未読チェック `run_check --download-files --mark-read` | `*/5 * * * *`（スクリプト内で 22-06時は :00/:20/:40 を起点とする各5分窓に間引き — 30分のセッション失効上限を下回るため） | hermes cron |
 | durable-job drain `--jobs-only` | `7,37 * * * *` | hermes cron |
 | semantic/QC 夜間 drain | `30 22 * * *`（最大55分） | hermes cron |
 | llama-server 再起動 | `0 4 * * *` | hermes cron |
