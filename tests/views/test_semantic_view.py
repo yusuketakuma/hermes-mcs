@@ -81,3 +81,30 @@ def test_semantic_view_lists_canonical_artifacts(tmp_path):
         assert sem["canonical_projection"][0]["current"] is True
     finally:
         view.close()
+
+
+@pytest.mark.parametrize("flags", [{"invalidated": True}, {"error": "failed"}])
+def test_matching_fingerprint_does_not_revive_invalidated_artifact(tmp_path, flags):
+    import semantic_store
+    store = ledger.Ledger(str(tmp_path / "ledger.db"))
+    try:
+        with store.db:
+            store.db.execute(
+                "INSERT INTO messages(message_id,project_id,body_state,body_text,content_hash) "
+                "VALUES(1,1,'full','synthetic message',?)", ("a" * 64,))
+        fingerprint = semantic_store.thread_bundle(store, 1, 1)["source_fingerprint"]
+        store.artifact_add("semantic_policy", "polx")
+        store.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                           meta={"fingerprint": fingerprint,
+                                 "policy_fingerprint": "polx", **flags})
+        snapshot = ledger.publish_snapshot(str(tmp_path / "ledger.db"),
+                                           str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    view = mcs_view.View(snapshot)
+    try:
+        artifact = view.read("semantic", project=1, message_id=1)["semantic"]["canonical_projection"][0]
+        assert artifact["current"] is False
+        assert artifact["effective_status"] == "STALE"
+    finally:
+        view.close()

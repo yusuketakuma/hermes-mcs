@@ -470,7 +470,9 @@ class View:
                 meta, content = _artifact_json(r)
                 fp_key = meta.get("fingerprint") \
                     or meta.get("source_fingerprint")
-                current = bool(fingerprint and fp_key == fingerprint)
+                current = bool(fingerprint and fp_key == fingerprint
+                               and not meta.get("invalidated")
+                               and not meta.get("error"))
                 if kind in ("semantic_assess", "semantic_summary",
                             "semantic_audit", "semantic_coverage",
                             "semantic_facts_v2", "semantic_facts_audit",
@@ -521,6 +523,8 @@ class View:
         from semantic import thread_bundle
         from request_loops import valid_origin_evidence
 
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("bad_limit")
         items = []
         policy_row = self.db.execute(
             "SELECT content FROM artifacts WHERE kind='semantic_policy' "
@@ -531,7 +535,7 @@ class View:
                 "SELECT artifact_id,message_id,content,meta,created_at "
                 "FROM artifacts WHERE kind='loop_candidate' "
                 "AND project_id=? ORDER BY artifact_id DESC LIMIT ?",
-                (pid, max(1, min(limit, 200)))):
+                (pid, limit)):
             try:
                 cand = json.loads(r["content"])
             except (json.JSONDecodeError, TypeError):
@@ -539,6 +543,8 @@ class View:
             if not isinstance(cand, dict):
                 continue
             origin = cand.get("origin") or {}
+            if not isinstance(origin, dict):
+                origin = {}
             try:
                 candidate_meta = json.loads(r["meta"] or "{}")
             except (json.JSONDecodeError, TypeError):
@@ -585,7 +591,8 @@ class View:
                 # not user-facing relations — hide them
                 if ev.get("relation") == "unrelated":
                     continue
-                trigger = members.get(ev.get("trigger_message_id"))
+                trigger_id = ev.get("trigger_message_id")
+                trigger = members.get(trigger_id) if requests.positive(trigger_id) else None
                 ev["stale"] = not (
                     current and bundle and trigger and isinstance(meta, dict)
                     and meta.get("source_fingerprint", meta.get("fingerprint"))
@@ -604,7 +611,9 @@ class View:
             # artifact stays immutable (§17.3). History is derived the
             # same way: the stored record only logs its creation entry,
             # later transitions live in relation events.
-            history = list(cand.get("history") or [])
+            history = cand.get("history")
+            history = [entry for entry in history if isinstance(entry, dict)] \
+                if isinstance(history, list) else []
             for ts, e in reversed(events):
                 if not e["stale"] and e.get("relation") in ("completion_report",
                                          "cancellation_report"):
@@ -686,19 +695,30 @@ class View:
             # They must stay behind the project-scoped receipt reader.
             return {"outcome": "rejected", "error": "receipt_kind_mismatch"}
         if receipt.get("kind") == "ops.card_resolve" \
-                and not context.get("operator"):
+                and context.get("operator") is not True:
             return {"outcome": "rejected", "error": "operator_only"}
         actor = receipt.get("actor")
-        if actor is not None and actor != context.get("actor"):
+        if not isinstance(actor, str) or not actor.strip() or actor != context.get("actor"):
             return {"outcome": "rejected", "error": "actor_mismatch"}
-        scope = receipt.get("origin") or receipt.get("scope") or {}
+        scope = receipt.get("origin", receipt.get("scope"))
+        if not isinstance(scope, dict) or any(
+                not isinstance(scope.get(key), str) or not scope[key].strip()
+                for key in ("application_id", "channel_id")):
+            return {"outcome": "rejected", "error": "scope_mismatch"}
         for key in ("application_id", "channel_id", "guild_id",
-                    "profile"):
+                    "profile", "team_id"):
             if scope.get(key) and scope[key] != context.get(key):
                 return {"outcome": "rejected", "error": "scope_mismatch"}
-        allowed = set(context.get("projects") or [])
-        want = set(receipt.get("projects") or [])
+        allowed = context.get("projects", [])
+        want = receipt.get("projects", [])
+        if (not isinstance(allowed, (list, tuple, set, frozenset))
+                or not isinstance(want, list)
+                or not all(requests.positive(pid) for pid in (*allowed, *want))):
+            return {"outcome": "rejected", "error": "project_scope_mismatch"}
+        allowed, want = set(allowed), set(want)
         if receipt.get("project_id") is not None:
+            if not requests.positive(receipt["project_id"]):
+                return {"outcome": "rejected", "error": "project_scope_mismatch"}
             want.add(receipt["project_id"])
         if want and not want <= allowed:
             return {"outcome": "rejected",
@@ -726,7 +746,7 @@ class View:
         import mcs_signals
         try:
             limit = min(max(int(args.get("limit") or 50), 1), 200)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError("bad_limit") from None
         result = mcs_signals.current_open(
             self.db, project_id=args.get("project"), limit=limit)

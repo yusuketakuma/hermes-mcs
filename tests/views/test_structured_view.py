@@ -125,3 +125,35 @@ def test_canonical_facts_do_not_duplicate_legacy_slots(db):
     joined = "\n".join(structured_view.structured_lines(db.db, 1))
     assert "現行薬を継続" not in joined      # shown via 薬剤 slot only
     assert "アレルギー・不耐｜ペニシリンアレルギー" in joined
+
+
+@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm",
+                                 "canonical_projection", "semantic_facts_v4"])
+def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
+    db.artifact_add(kind, json.dumps({"summary": "別患者の合成情報",
+                                     "medications": [{"name": "別患者薬"}]}),
+                    project_id=2, message_id=1,
+                    meta={"hash": "synthetic-hash", "engine_version": 4})
+    assert structured_view.structured_lines(db.db, 1) == []
+
+
+def test_error_rule_artifact_cannot_supply_structured_facts(db):
+    db.artifact_add("extract_v1", json.dumps({"symptoms": ["合成症状"]}),
+                    project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", "error": "synthetic failure"})
+    assert structured_view.structured_lines(db.db, 1) == []
+
+
+def test_canonical_finding_with_missing_id_does_not_break_render(db):
+    _fact_artifact(db, "canonical_projection", {"canonical_facts": [
+        {"kind": "preference", "statement": "不正な合成行"},
+        {"fact_id": "f1", "kind": "preference", "statement": "有効な合成行"}]})
+    text = "\n".join(structured_view.structured_lines(db.db, 1))
+    assert "不正な合成行" not in text
+    assert "有効な合成行" in text
+
+
+def test_legacy_artifact_without_project_uses_message_scope(db):
+    db.artifact_add("extract_llm", json.dumps({"summary": "旧形式の合成結果"}),
+                    message_id=1, meta={"hash": "synthetic-hash"})
+    assert structured_view.structured_lines(db.db, 1) == ["要約: 旧形式の合成結果"]

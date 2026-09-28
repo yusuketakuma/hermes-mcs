@@ -6,6 +6,27 @@ import mcs_view
 import pytest
 
 
+@pytest.mark.parametrize("changes", [
+    {"actor": None}, {"actor": ""}, {"origin": None}, {"origin": []},
+    {"origin": {}}, {"origin": {"application_id": "app-A"}},
+    {"origin": {"application_id": "app-A", "channel_id": ["channel-A"]}},
+    {"projects": [[1]]}, {"projects": [True]}, {"projects": "1"},
+    {"project_id": True},
+    {"origin": {"application_id": "app-A", "channel_id": "channel-A",
+                "team_id": "other-team"}},
+])
+def test_incomplete_or_malformed_receipt_scope_never_releases_content(changes):
+    receipt = {"kind": "notification", "actor": "discord:7",
+               "origin": {"application_id": "app-A", "channel_id": "channel-A"},
+               "projects": [1], "outcome": "applied",
+               "detail": "synthetic-private", **changes}
+    context = {"actor": "discord:7", "projects": [1], "operator": False,
+               "application_id": "app-A", "channel_id": "channel-A"}
+    result = mcs_view.View._scope_notification_receipt(receipt, context)
+    assert result["outcome"] == "rejected"
+    assert "detail" not in result
+
+
 @pytest.mark.parametrize("receipt", [
     {"actor": "discord:7", "project_id": 9, "before": {"title": "synthetic-private"}},
     {"kind": "refresh", "actor": "discord:7", "project_id": 9},

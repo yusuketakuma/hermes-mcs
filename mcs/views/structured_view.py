@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import json
 
-from mcs_queries import (current_fact_pred, med_is_patient_current)
+from mcs_queries import (current_extract_pred, current_fact_pred,
+                         med_is_patient_current)
 
 
 def _content_dict(r) -> dict | None:
@@ -34,12 +35,7 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
     r = db.execute(
         "SELECT a.content FROM artifacts a JOIN messages m "
         "ON m.message_id=a.message_id WHERE a.kind=? AND a.message_id=? "
-        "AND m.body_state IS NOT 'deleted' "
-        "AND CASE WHEN json_valid(a.meta) THEN "
-        "json_extract(a.meta,'$.error') IS NOT 1 AND "
-        "json_extract(a.meta,'$.hash')=m.content_hash ELSE 0 END "
-        "AND CASE WHEN json_valid(a.content) THEN "
-        "json_type(a.content)='object' ELSE 0 END "
+        f"{current_extract_pred()} "
         "ORDER BY a.artifact_id DESC LIMIT 1", (kind, mid)).fetchone()
     return _content_dict(r)
 
@@ -103,10 +99,12 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
             continue
         label = _FINDING_LABEL.get(f.get("kind"))
         statement = f.get("statement")
+        fid = f.get("fact_id")
         if label is None or not isinstance(statement, str) \
-                or not statement.strip() or f["fact_id"] in seen:
+                or not statement.strip() or not isinstance(fid, str) \
+                or not fid.strip() or fid in seen:
             continue
-        seen.add(f.get("fact_id"))
+        seen.add(fid)
         line = f"{label}｜{statement.strip()[:60]}"
         quote = f.get("evidence_quote")
         if isinstance(quote, str) and quote.strip():
