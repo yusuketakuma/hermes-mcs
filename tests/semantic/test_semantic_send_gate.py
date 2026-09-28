@@ -5,13 +5,13 @@ import pytest
 
 import notify_flush
 import semantic
-from test_mcs_semantic import _cfg
-from test_semantic_delivery import _db, _message, _patient, _semantic_event
+from semantic_testkit import (_cfg, _delivery_db, _delivery_patient, _message,
+                              _semantic_event)
 
 
 def test_normal_gate_requires_source_target_revision_and_pass_summary(
         tmp_path, monkeypatch):
-    db = _db(tmp_path, [_message()])
+    db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
     event = _semantic_event(db)
     payload = json.loads(event["payload"])
@@ -48,7 +48,7 @@ def test_normal_gate_requires_source_target_revision_and_pass_summary(
 
 def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
         tmp_path, monkeypatch):
-    db = _db(tmp_path, [_message()])
+    db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
     source_id = db.outbox_add("new_messages", 1, {"message_ids": [1]})
     bundle = semantic.thread_bundle(db, 1, 1)
@@ -84,7 +84,7 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
         "UPDATE notify_outbox SET state='pending',attempts=0,progress=? "
         "WHERE event_id=?", (json.dumps({}), source_id))
     db.db.commit()
-    db.save_patient(_patient([_message(body="訂正された本文", unread=False)]),
+    db.save_patient(_delivery_patient([_message(body="訂正された本文", unread=False)]),
                     notify=None)
     with pytest.raises(notify_flush._StaleSend, match="stale_generation"):
         notify_flush._semantic_gate(db, event, payload)
@@ -92,7 +92,7 @@ def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
 
 
 def test_raw_notice_ignores_shadow_publication(tmp_path, monkeypatch):
-    db = _db(tmp_path, [_message()])
+    db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
     event = db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='new_messages'"

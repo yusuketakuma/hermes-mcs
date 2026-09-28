@@ -8,33 +8,17 @@ import json
 
 import semantic
 import semantic_render as render
-from test_mcs_semantic import _seeded
+from semantic_testkit import SOURCE, _seeded, v2_doc, v2_fact
 
 
 def _doc(facts=(), obligations=()):
-    return {"version": "semantic-facts/v2",
-            "source": {"message_id": "m1", "revision": "r1",
-                       "content_hash": "h", "body_codepoints": 10,
-                       "content_quality": "full",
-                       "attachments_complete": True,
-                       "source_fingerprint": "sf_x"},
-            "atoms": [], "chunks": [], "evidence": [],
-            "facts": list(facts), "obligations": list(obligations),
-            "relations": [],
-            "coverage": {"category_counts": {},
-                         "open_obligation_ids": [], "limitations": [],
-                         "status": "complete"}}
+    return v2_doc(facts, obligations=list(obligations),
+                  source={**SOURCE, "body_codepoints": 10})
 
 
 def _fact(statement, kind="medication_event", verified=True):
-    return {"fact_id": f"fact_{statement}", "kind": kind,
-            "subject": "patient:1", "actor": "sender:s1",
-            "statement": statement, "polarity": "affirmed",
-            "epistemic": "asserted", "workflow_status": "performed",
-            "event_time": "unknown", "valid_time": "unknown",
-            "evidence_ids": [], "obligation_ids": [],
-            "importance": "T1", "provenance": "local_llm",
-            "validation_status": "verified" if verified else "unverified"}
+    return v2_fact(f"fact_{statement}", kind=kind, statement=statement,
+                   validation_status="verified" if verified else "unverified")
 
 
 def _obligation(category, status):

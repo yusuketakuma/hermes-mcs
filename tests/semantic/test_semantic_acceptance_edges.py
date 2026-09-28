@@ -7,8 +7,7 @@ import uuid
 import mcs_requests
 import semantic
 import semantic_loops
-from test_mcs_semantic import _FakeJev, _cfg, _message, _seeded
-from test_semantic_loop_generations import _pending_fact
+from semantic_testkit import _cfg, _FakeJev, _message, _pending_fact, _seeded
 
 
 def test_unicode_evidence_uses_codepoints_and_rejects_utf16_offsets():

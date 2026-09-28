@@ -7,27 +7,7 @@ import sqlite3
 import pytest
 
 import mcs_stats
-
-SCHEMA = """
-CREATE TABLE snapshot_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                            generation_id TEXT, generated_at REAL);
-CREATE TABLE patients (project_id INTEGER PRIMARY KEY, is_archived INTEGER,
-                       fetch_state TEXT, created_at REAL);
-CREATE TABLE messages (message_id INTEGER PRIMARY KEY, project_id INTEGER,
-                       parent_id INTEGER, sender_id INTEGER,
-                       sender_name TEXT, sender_type TEXT, profession TEXT,
-                       organization TEXT, posted_at TEXT, posted_at_ts INTEGER,
-                       body_text TEXT, body_state TEXT, content_hash TEXT,
-                       reply_count INTEGER DEFAULT 0);
-CREATE TABLE artifacts (artifact_id INTEGER PRIMARY KEY, kind TEXT,
-                        project_id INTEGER, message_id INTEGER,
-                        content TEXT, model TEXT, meta TEXT, created_at REAL);
-CREATE TABLE requests (request_id INTEGER PRIMARY KEY, project_id INTEGER,
-                       status TEXT, due_date TEXT, updated_at REAL,
-                       source_message_id INTEGER);
-"""
-
-SNAP_TS = 1789975073.0  # 2026-09-21 JST
+from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
 
 
 @pytest.fixture
@@ -37,24 +17,6 @@ def db():
     conn.execute("INSERT INTO snapshot_meta VALUES (1,'g',?)", (SNAP_TS,))
     yield conn
     conn.close()
-
-
-def _msg(db, mid, pid=1, sender=1, name="n1", prof="看護師", org="orgA",
-         ts=1789900000, state="full", chash="h1"):
-    db.execute(
-        "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (mid, pid, None, sender, name, "staff", prof, org,
-         "2026-09-20T10:00:00+09:00", ts, "b", state, chash, 0))
-
-
-def _extract(db, mid, chash, meds, events=None):
-    content = {"meds": meds}
-    if events is not None:
-        content["events"] = events
-    db.execute(
-        "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps(content), json.dumps({"hash": chash})))
 
 
 def run(db, **args):
@@ -391,7 +353,6 @@ def test_stale_parsed_counts_only_messages_without_current_extraction(db):
     _extract(db, 1, "h2", [{"name": "薬A", "action": "start"}])  # current
     st = run(db, stat="data_quality")["data_quality"]
     assert st["stale_parsed"] == 0
-
 
 
 def test_parsed_counts_v4_current_message_without_extract_llm(db):

@@ -4,7 +4,7 @@ import time
 import ledger
 import mcs_view
 import semantic
-from test_mcs_semantic import _FakeJev, _cfg, _llm, _message, _seeded
+from semantic_testkit import _FakeJev, _cfg, _llm, _message, _seeded
 
 
 def test_snapshot_view_marks_old_context_audit_stale(tmp_path):

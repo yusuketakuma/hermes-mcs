@@ -271,10 +271,15 @@ def test_shadow_relations_use_repaired_facts_for_following_message(monkeypatch):
     import semantic_audit
     import semantic_extraction
     import semantic_relations
-    from test_semantic_mandatory_render import _doc, _fact
+    from semantic_testkit import SOURCE, v2_doc, v2_fact
+
+    def _doc(statement):
+        # mandatory-render shape: statement-keyed id, 10-codepoint source
+        return v2_doc([v2_fact(f"fact_{statement}", statement=statement)],
+                      source={**SOURCE, "body_codepoints": 10})
 
     def extract(_llm, member, *args, **kwargs):
-        return {"doc": _doc(facts=[_fact(f"message-{member['message_id']}")]),
+        return {"doc": _doc(f"message-{member['message_id']}"),
                 "extraction_complete": True}
 
     def audit(_client, doc, *args):
@@ -284,7 +289,7 @@ def test_shadow_relations_use_repaired_facts_for_following_message(monkeypatch):
                              for f in rejected]}
 
     def repair(*args, **kwargs):
-        return {"repaired": True, "doc": _doc(facts=[_fact("repaired")])}
+        return {"repaired": True, "doc": _doc("repaired")}
 
     histories = []
 

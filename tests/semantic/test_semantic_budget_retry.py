@@ -4,7 +4,7 @@ import time
 import pytest
 
 import semantic
-from test_mcs_semantic import _FakeJev, _cfg, _llm, _seeded
+from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
 @pytest.mark.parametrize('slow_stage', ['jev', 'llm'])

@@ -6,7 +6,7 @@ import pytest
 import semantic_assessment as assessment
 import semantic_jev as jev
 from semantic_runtime import RuntimeGuardError
-from test_mcs_semantic import _ledger
+from semantic_testkit import _ledger
 
 
 SCFG = {"model": jev.JEV_MODEL, "match_threshold": 0.7,

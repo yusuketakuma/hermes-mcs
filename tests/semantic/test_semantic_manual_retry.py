@@ -8,7 +8,7 @@ import mcs_requests
 import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
-from test_mcs_semantic import _cfg, _FakeJev, _llm, _message, _seeded
+from semantic_testkit import _cfg, _FakeJev, _llm, _message, _seeded
 
 
 def _command(**fields):

@@ -5,7 +5,7 @@ import time
 import pytest
 
 import semantic
-from test_mcs_semantic import _message, _seeded
+from semantic_testkit import _message, _seeded
 
 
 def test_thread_attachment_scope_order_and_generation(tmp_path):

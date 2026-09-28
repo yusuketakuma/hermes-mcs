@@ -7,7 +7,7 @@ import ledger
 import mcs_view
 import notify_flush
 import semantic
-from test_mcs_semantic import _cfg, _FakeJev, _llm, _seeded
+from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
 def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, monkeypatch):

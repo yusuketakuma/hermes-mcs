@@ -40,7 +40,7 @@ def test_blind_packet_separates_key_and_refuses_mixed_inputs(tmp_path):
 
 def test_fixed_bundle_outputs_bind_artifacts_before_baseline_call(tmp_path):
     import semantic
-    from test_mcs_semantic import _seeded
+    from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
         bundle = semantic.thread_bundle(db, 1, 1)
@@ -89,7 +89,7 @@ def test_snapshot_cli_uses_explicit_artifacts_without_database_writes(tmp_path, 
     import time
     import semantic
     import extract_llm
-    from test_mcs_semantic import _seeded, _cfg, _FakeJev, _llm
+    from semantic_testkit import _seeded, _cfg, _FakeJev, _llm
     db = _seeded(tmp_path)
     try:
         with db.db:
@@ -175,7 +175,7 @@ def test_unblind_rejects_modified_text_and_preserves_human_judgments(tmp_path):
 
 def test_review_labels_merge_into_exact_candidate_and_keep_synthetic_provenance(tmp_path):
     import semantic_evaluation as evaluation
-    from test_semantic_evaluation import _record, MANIFEST, CRITERIA
+    from semantic_testkit import _record, MANIFEST, CRITERIA
     record = _record()
     record["bundle"]["fingerprint"] = "fixed"
     labels = record.pop("label")
@@ -234,7 +234,7 @@ def test_candidate_on_a_subset_of_methods_is_refused():
     """U06-F08: predictions appear only on choices whose output carries
     an evaluation_candidate — a subset would reveal the method behind a
     label, so prepare requires all three or none."""
-    from test_semantic_evaluation import _record
+    from semantic_testkit import _record
     record = _record()
     for i, claim in enumerate(record["candidate"]["claims"]):
         claim["text"] = "statement " + str(i)

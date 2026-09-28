@@ -12,50 +12,13 @@ import pytest
 
 import extract_llm
 import semantic
-import semantic_jev as jev
 import semantic_v4 as v4
 from mcs_queries import (current_fact_pred, qc_v4_source_id)
 from semantic_policy import KIND_FACT_REPAIR
-from test_canonical_drain import _drain, _seeded_two
-from test_mcs_semantic import _FakeJev, _ledger, _message, _patient
+from semantic_testkit import (_AuditFailJev, _drain, _ledger,
+                              _message, _PassJev, _patient, _seeded_two)
 
 NOW = time.time()
-
-
-class _PassJev(_FakeJev):
-    """Jev answers that let a clean synthetic corpus reach PASS:
-    category preflight 'present' for medication only, fact/claim
-    support 'supports', coverage 'complete', and medication detail
-    dimensions echoing the extracted fact's own value."""
-    def evaluate(self, state, questions, deadline):
-        self.requests_made += 1
-        self.calls.append(sorted(questions))
-        if self.error:
-            raise self.error
-        target = (state or {}).get("target") or {}
-        out = {}
-        for qid, q in questions.items():
-            if q.get("type") != "choice":
-                out[qid] = {"type": "noul", "noul": self.noul}
-                continue
-            opts = list(q.get("criteria") or {})
-            if qid in ("status", "polarity"):
-                pick = target.get(qid)
-                if pick not in opts:
-                    pick = opts[0] if opts else None
-            elif qid == "source_fact_coverage":
-                pick = "complete"
-            elif qid.startswith("has_"):
-                pick = "present" if qid == "has_medication" else "absent"
-            elif qid.startswith("fact_") or qid.startswith("claim"):
-                pick = "supports"
-            else:
-                pick = opts[0] if opts else None
-            out[qid] = {"type": "choice", "choice": pick,
-                        "confidence": 0.95,
-                        "probabilities": {o: 1.0 / len(opts)
-                                         for o in opts}}
-        return {"answers": out, "model": jev.JEV_MODEL}
 
 
 def _rows(db, kind, mid):
@@ -102,20 +65,6 @@ def test_v4_pass_publishes_read_model_and_stage_ledger(tmp_path):
         assert not _rows(db, v4.KIND_V4_DIAG, 1)
     finally:
         db.close()
-
-
-class _AuditFailJev(_FakeJev):
-    """Fact-support questions get 'not_supported' — the fact audit
-    deterministically lands NEEDS_REVIEW with a rejected finding."""
-    def evaluate(self, state, questions, deadline):
-        if any(k.startswith("fact_") for k in questions):
-            self.requests_made += 1
-            return {"answers": {
-                k: {"type": "choice", "choice": "not_supported",
-                    "confidence": 0.9,
-                    "probabilities": {"not_supported": 1.0}}
-                for k in questions}, "model": jev.JEV_MODEL}
-        return super().evaluate(state, questions, deadline)
 
 
 def test_nonpass_leaves_diagnostic_only(tmp_path):
