@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards
+import notify_reconcile
 import notify_render
 import notify_transport
 import notify_cmds
@@ -2210,6 +2212,9 @@ def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
     import mcs_view
     marker = "合成本文F02"
     _, spec = _delivered_card(led, tmp_path, cfg=NO_THREAD_CFG)
+    did = _latest_render(led)["delivery_id"]
+    frozen = _spec_json(led, did)
+    assert frozen is not None and "本文" in frozen
     led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100",
                    (marker,))
     led.db.commit()
@@ -2224,6 +2229,9 @@ def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
     led.db.execute("UPDATE messages SET body_state='deleted' "
                    "WHERE message_id=100")
     led.db.commit()
+    # the settled delivered render's frozen copy goes with the next gc
+    assert notify_cards.gc(led, CFG, now=NOW + 1)["spec_json_cleared"] == 1
+    assert _spec_json(led, did) is None
     snap_dir = tmp_path / "snap"
     snap_dir.mkdir()
     assert _ledger2.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
@@ -2234,6 +2242,14 @@ def test_body_text_not_retained_in_receipts_or_snapshot(led, tmp_path):
         assert r["outcome"] == "applied" and "body" not in r
     finally:
         view.close()
+    snap = sqlite3.connect(
+        f"file:{snap_dir / 'ledger-snapshot.db'}?mode=ro", uri=True)
+    try:
+        assert snap.execute(
+            "SELECT COUNT(*) FROM notification_renders WHERE "
+            "spec_json IS NOT NULL").fetchone()[0] == 0
+    finally:
+        snap.close()
     # a re-click still answers from the live (now deleted) source
     again = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
     assert marker not in again["body"]
@@ -2329,6 +2345,116 @@ def test_gc_eligible_payload_is_not_starved_by_unsettled_card(led, tmp_path):
                           (old_second['delivery_id'],)).fetchone()[0] is None
     assert led.db.execute('SELECT spec_json FROM notification_renders WHERE delivery_id=?',
                           (first['delivery_id'],)).fetchone()[0] is not None
+
+
+def _spec_json(led, delivery_id):
+    return led.db.execute(
+        "SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+        (delivery_id,)).fetchone()[0]
+
+
+def _settle_parts(led, render):
+    led.db.execute(
+        "UPDATE notification_render_parts SET state='delivered' "
+        "WHERE delivery_id=?", (render["delivery_id"],))
+    notify_cards._update_parts_state(led.db, render["delivery_id"], NOW)
+    led.db.commit()
+
+
+def _delivered_create(led, tmp_path):
+    render = _deliverable(led, tmp_path)
+    _begin(led, render)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    return render
+
+
+def test_gc_keeps_delivered_body_until_parts_settle(led, tmp_path):
+    render = _delivered_create(led, tmp_path)
+    assert json.loads(_spec_json(led, render["delivery_id"])
+                      )["parts"]["thread_body_parts"]
+    # thread/body parts still pending — the body stays replayable
+    assert notify_cards.gc(led, CFG, now=NOW + 1)["spec_json_cleared"] == 0
+    assert "本文" in _spec_json(led, render["delivery_id"])
+    parts_before = led.db.execute(
+        "SELECT part_id,payload_sha256,state FROM notification_render_parts "
+        "WHERE delivery_id=? ORDER BY part_id",
+        (render["delivery_id"],)).fetchall()
+    _settle_parts(led, render)
+    assert notify_cards.gc(led, CFG, now=NOW + 2)["spec_json_cleared"] == 1
+    row = led.db.execute(
+        "SELECT * FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],)).fetchone()
+    assert row["spec_json"] is None and row["state"] == "delivered"
+    assert (row["payload_hash"], row["correlation"]) == (
+        render["payload_hash"], render["correlation"])
+    assert [(p[0], p[1]) for p in led.db.execute(
+        "SELECT part_id,payload_sha256 FROM notification_render_parts "
+        "WHERE delivery_id=? ORDER BY part_id",
+        (render["delivery_id"],)).fetchall()] == [
+        (p[0], p[1]) for p in parts_before]
+    # a repeated gc is a no-op
+    assert notify_cards.gc(led, CFG, now=NOW + 3)["spec_json_cleared"] == 0
+
+
+def test_gc_keeps_delivered_body_while_card_attempt_unsettled(led, tmp_path):
+    render = _delivered_create(led, tmp_path)
+    _settle_parts(led, render)
+    _msg(led, 103, 1, parent=100)          # drift -> update render
+    notify_cards.sweep(led, CFG)
+    nxt = _latest_render(led)
+    assert nxt["op"] == "update"
+    assert _begin(led, nxt, n=2)["granted"]
+    assert notify_cards.gc(led, CFG, now=NOW + 1)["spec_json_cleared"] == 0
+    assert _spec_json(led, render["delivery_id"]) is not None
+    _receipt(led, nxt, f"{2:016x}", result="unknown", n=10)
+    assert notify_cards.gc(led, CFG, now=NOW + 2)["spec_json_cleared"] == 0
+    assert _spec_json(led, render["delivery_id"]) is not None
+
+
+def test_gc_keeps_delivered_body_under_restore_hold(led, tmp_path):
+    render = _delivered_create(led, tmp_path)
+    _settle_parts(led, render)
+    led.db.execute(
+        "INSERT INTO notification_restore_holds(card_id,delivery_id,"
+        "reason,held_at) VALUES(1,?,'synthetic',?)",
+        (render["delivery_id"], NOW))
+    led.db.commit()
+    assert notify_cards.gc(led, CFG, now=NOW + 1)["spec_json_cleared"] == 0
+    assert _spec_json(led, render["delivery_id"]) is not None
+    notify_cards.release_holds(led.db, card_id=1, now=NOW + 2)
+    led.db.commit()
+    assert notify_cards.gc(led, CFG, now=NOW + 3)["spec_json_cleared"] == 1
+    assert _spec_json(led, render["delivery_id"]) is None
+
+
+def test_card_updates_revokes_and_reconciles_after_body_gc(led, tmp_path):
+    render = _delivered_create(led, tmp_path)
+    _settle_parts(led, render)
+    assert notify_cards.gc(led, CFG, now=NOW + 1)["spec_json_cleared"] == 1
+    _msg(led, 103, 1, parent=100)          # stale card after gc
+    notify_cards.sweep(led, CFG)
+    nxt = _latest_render(led)
+    assert nxt["op"] == "update" and nxt["render_rev"] == 2
+    spec = json.loads((tmp_path / "data" / "discord_render"
+                       / (nxt["delivery_id"] + ".json")).read_text())
+    assert spec["delivery"]["message_id"] == "m-9"
+    assert _begin(led, nxt, n=2)["granted"]
+    _receipt(led, nxt, f"{2:016x}", message_id="m-9", n=10)
+    card = _card(led)
+    assert card["applied_render_rev"] == 2
+    assert card["delivery_state"] == "delivered"
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    r3 = _latest_render(led)
+    assert r3["op"] == "revoke" and r3["state"] == "queued"
+    assert _begin(led, r3, n=3)["granted"]
+    _receipt(led, r3, f"{3:016x}", message_id="m-9", n=11)
+    assert _latest_render(led)["state"] == "delivered"
+    out = notify_reconcile.reconcile_after_restore(led, CFG, now=NOW + 5)
+    assert not out["held"]
+    assert not led.db.execute(
+        "SELECT 1 FROM notification_restore_holds").fetchone()
 
 
 # ---------- thread task list + transitions ----------
