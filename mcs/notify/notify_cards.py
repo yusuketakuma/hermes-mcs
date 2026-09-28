@@ -1243,6 +1243,14 @@ def _thread_root(db, mid, project_id):
     return cur or mid
 
 
+def _reseat(db, event_id, now) -> None:
+    """Push a still-pending card-owned intent's next re-examination out
+    by RESEAT_S so it does not stay due (and hog flush slots) forever."""
+    db.execute(
+        "UPDATE notify_outbox SET next_try=?,updated_at=? "
+        "WHERE event_id=?", (now + RESEAT_S, now, event_id))
+
+
 def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
     """Freeze an interactive intent: sealed batch -> card fan-out ->
     immutable render -> atomic spec publication. Idempotent re-entry on
@@ -1279,6 +1287,9 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     (now, event_id))
                 mark_snapshot_dirty(db)
                 return {"suppressed": True}
+            # sealed with signals off: re-examine hourly, never every
+            # flush — a due-forever intent would starve outbox_due slots
+            _reseat(db, event_id, now)
             return {"skipped": True}
         if batch is not None:
             if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
@@ -1287,7 +1298,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     and batch["scope_json"] != canonical(scope).decode():
                 return {"error": "scope_mismatch"}
             # sealed already — a flush re-entry only repairs + completes
-            _complete_intent(db, event_id, now)
+            if _complete_intent(db, event_id, now) is None:
+                _reseat(db, event_id, now)
             specs.extend(
                 json.loads(r["spec_json"])
                 for r in db.execute(
@@ -1333,9 +1345,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
             if card_ids:
                 for cid in card_ids:
                     _issue_render(db, cid, cfg, now, specs)
-                db.execute(
-                    "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                    "WHERE event_id=?", (now + RESEAT_S, now, event_id))
+                _reseat(db, event_id, now)
                 outcome.update(dispatched=True, cards=len(card_ids))
             else:
                 # nothing deliverable — suppress like a stale text send
