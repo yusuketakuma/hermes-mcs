@@ -4,7 +4,6 @@ Loads deployment/recovery/mcs_recover.py by path (it is not on the
 mcs import roots — it must run standalone on a broken repo). Fully
 synthetic temp repos/state; no real services touched.
 """
-import importlib.util
 import json
 import os
 import subprocess
@@ -13,15 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-
-
-def _load():
-    path = (Path(__file__).resolve().parents[2]
-            / "deployment" / "recovery" / "mcs_recover.py")
-    spec = importlib.util.spec_from_file_location("mcs_recover", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+from ops_testkit import _load
 
 
 def _git(repo, *args, check=True):

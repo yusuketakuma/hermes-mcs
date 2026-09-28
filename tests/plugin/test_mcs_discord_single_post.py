@@ -17,9 +17,9 @@ from hermes_plugin.mcs_delivery.registry import Registry
 from hermes_plugin.mcs_delivery import paths
 from hermes_plugin.mcs_discord import cards
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
-from test_mcs_discord_delivery import (BOT_USER, SETTINGS, FakeHTTP,
-                                       FakeHTTPClient, _chunks, _claim,
-                                       _receipts, _sent_parts, _spec, _state)
+from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
+                                      FakeHTTPClient, _chunks, _claim,
+                                      _receipts, _sent_parts, _spec, _state)
 
 _discord = types.ModuleType("discord")          # send_attachment's File
 _discord.File = lambda path, filename=None: (path, filename)

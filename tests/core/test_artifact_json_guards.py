@@ -80,7 +80,7 @@ def test_med_stats_ignore_malformed_content(planner):
 
 @pytest.mark.parametrize("planner", PLANNERS)
 def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
-    from test_mcs_signals import NOW, _extract_v1, _msg
+    from ops_testkit import NOW, _extract_v1, _msg
     lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
     try:
         _msg(lg.db, 1)

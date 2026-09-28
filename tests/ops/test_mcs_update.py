@@ -6,7 +6,6 @@ network. No real MCS, Discord, Keychain, or external repo access.
 import json
 import os
 import sqlite3
-from contextlib import suppress
 import subprocess
 import time
 from pathlib import Path
@@ -15,43 +14,8 @@ import pytest
 
 import mcs_update
 import mcs_util
-
-
-# ---------------------------------------------------------------- helpers
-
-def _git(repo, *args, check=True):
-    r = subprocess.run(["git", "-C", repo, *args],
-                       capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise AssertionError(f"git {' '.join(args)}: {r.stderr}")
-    return r
-
-
-def _make_repo(tmp_path):
-    """A repo with v1.0.0 (lightweight) and v1.1.0 (annotated) tags."""
-    bare = tmp_path / "remote.git"
-    work = tmp_path / "remote-work"
-    work.mkdir()
-    _git(work, "init", "-q", "-b", "main")
-    _git(work, "config", "user.email", "t@t")
-    _git(work, "config", "user.name", "t")
-    (work / "f.txt").write_text("one")
-    _git(work, "add", ".")
-    _git(work, "commit", "-qm", "c1")
-    _git(work, "tag", "v1.0.0")            # lightweight — no peel line
-    (work / "f.txt").write_text("two")
-    _git(work, "commit", "-qam", "c2")
-    _git(work, "tag", "-a", "v1.1.0", "-m", "release")   # annotated
-    _git(work, "init", "-q", "--bare", str(bare))
-    _git(work, "push", "-q", str(bare), "main",
-         "v1.0.0", "v1.1.0")
-
-    repo = tmp_path / "repo"
-    subprocess.run(["git", "clone", "-q", str(bare), str(repo)],
-                   check=True)
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    return repo, bare
+from ops_testkit import (_git, _make_repo, _mk_schema, _receipts_db,
+                         _seed_consent)
 
 
 @pytest.fixture
@@ -102,7 +66,7 @@ def test_state_roundtrip_and_corrupt(updater, tmp_path):
 ])
 def test_corrupt_journal_shapes_are_rejected_by_both_readers(
         updater, tmp_path, monkeypatch, field, value):
-    from test_mcs_recover import _load
+    from ops_testkit import _load
     recovery = _load()
     monkeypatch.setattr(recovery, "STATE_PATH", updater.STATE_PATH)
     state = updater._default_state()
@@ -320,37 +284,6 @@ def test_stale_git_lock_cleanup(updater, tmp_path):
 
 
 # ------------------------------------------------------------ receipts
-
-def _receipts_db(path):
-    con = sqlite3.connect(path)
-    con.execute("""CREATE TABLE IF NOT EXISTS command_receipts(
-      command_id TEXT PRIMARY KEY, payload_hash TEXT, project_id INTEGER,
-      request_id INTEGER,
-      outcome TEXT CHECK(outcome IN ('applied','rejected')),
-      receipt_json TEXT, processed_at REAL)""")
-    return con
-
-
-def _seed_consent(ledger_path, backup_path, cid="cid-consent",
-                  report=None):
-    """Drop an ops.restore_approve receipt bound to the CURRENT loss
-    report into the live DB — the same row the human-approval path
-    commits. Returns the report it was bound to."""
-    if report is None:
-        report = mcs_update._restore_loss_report(backup_path)
-    con = _receipts_db(ledger_path)
-    con.execute(
-        "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
-        "'applied',?,?)",
-        (cid, "h" * 64, json.dumps({
-            "cmd": "ops.restore_approve", "scheduled": True,
-            "command_id": cid, "report_id": report["report_id"],
-            "backup_sha256": report["backup_sha256"],
-            "backup_schema": report["backup_schema"]}), time.time()))
-    con.commit()
-    con.close()
-    return report
-
 
 def _rec(cid, cmd, at, **kw):
     return json.dumps({"cmd": cmd, "scheduled": True,
@@ -870,27 +803,6 @@ def test_rollback_restarts_agents_on_unexpected_error(
 # schema + loss report. An earlier update/rollback approval never
 # substitutes; every writer/sender stays frozen while it waits.
 
-def _mk_schema(path, version, messages=0):
-    """A real Ledger-created DB pinned to `version` — passes the real
-    valid_mcs_db gate, so consent tests exercise the true restore path."""
-    import ledger as _ledger
-    lg = _ledger.Ledger(str(path))
-    lg.db.execute(f"PRAGMA user_version={version}")
-    for i in range(messages):
-        lg.db.execute(
-            "INSERT INTO messages(message_id,project_id,posted_at,"
-            "posted_at_ts,body_html,body_state,content_hash,first_seen)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (i + 1, 1, "2026-01-01", 100 + i, "<b>x</b>", "full",
-             f"h{i}", 1))
-    lg.db.commit()
-    lg.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    lg.db.close()
-    for side in (str(path) + "-wal", str(path) + "-shm"):
-        with suppress(OSError):
-            os.unlink(side)
-
-
 def _schema_bump_world(updater, tmp_path, monkeypatch):
     """applied v1.1.0 entry flagged schema_bump with a real v7 backup;
     live DB sits one schema ahead at v8. Every external boundary is
@@ -1109,7 +1021,7 @@ def test_restore_consent_expires_when_existing_message_changes(
 
 @pytest.mark.parametrize("independent", [False, True])
 def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, independent):
-    from test_mcs_recover import _load
+    from ops_testkit import _load
     _repo, live, back, _before, _after, _restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     recovery = _load() if independent else updater

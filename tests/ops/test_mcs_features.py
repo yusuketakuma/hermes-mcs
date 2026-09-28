@@ -19,43 +19,8 @@ import job_ops
 import ledger
 import mcs_requests as requests
 import mcs_view
-from mcs_adapter import Attachment, Message
-
-
-def _source(tmp_path):
-    db = ledger.Ledger(str(tmp_path / "source.db"))
-    for pid in (1, 2, 3):
-        db.ensure_patient(pid)
-    for mid, pid, parent, state in ((1, 1, None, "full"), (2, 1, None, "unknown"),
-                                    (3, 1, 1, "full"), (4, 1, None, "full"), (5, 2, None, "full")):
-        msg = Message(mid, pid, parent, 1, "synthetic sender", "user", "", "",
-                      "2026-09-19T00:00:00+09:00" if mid != 4 else "",
-                      "<p>確認お願いします literal %_</p>", state, False, 0)
-        if mid == 1:
-            msg.reply_count = 2
-            msg.attachments = [Attachment("file", "synthetic.txt", "https://invalid.test/secret-signed")]
-        db.save_messages([msg])
-    db.set_history_floor(2, 0)
-    db.set_history_floor(3, 100)
-    with db.db:
-        db.db.execute("UPDATE patients SET url='https://www.medical-care.net/projects/medical/1',fetch_reason='schema_error' WHERE project_id=1")
-    extract.run_pending(db)
-    return db
-
-
-def _snapshot(db, tmp_path):
-    path = ledger.publish_snapshot(str(tmp_path / "source.db"), str(tmp_path / "snapshots"))
-    return mcs_view.View(path)
-
-
-def _create(db, **changes):
-    return {"version": 1, "cmd": "request.create", "command_id": str(uuid.uuid4()),
-            "actor": "synthetic reviewer", "human_confirmed": True, "project_id": 1,
-            "source_message_id": 1,
-            "source_hash": db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0],
-            "title": "synthetic confirmed request", "assignee": "synthetic owner",
-            "due_date": "2026-09-30", "reason": "synthetic confirmation",
-            **changes}
+from mcs_adapter import Message
+from ops_testkit import _create, _snapshot, _source
 
 
 def test_snapshot_migration_readonly_and_generation(tmp_path):

@@ -24,7 +24,7 @@ sys.path.insert(0, str(_TESTS.parent / "mcs"))
 import _mcs_path  # noqa: E402,F401  registers every subdir as import root
 
 # tests/ mirrors mcs/'s area subdirs; register each as an import root so
-# cross-file helper imports (`from test_mcs_semantic import _seeded`)
+# shared area testkits (`from semantic_testkit import _seeded`)
 # keep working regardless of which area dir a test lives in.
 for _d in sorted(_TESTS.iterdir()):
     if _d.is_dir() and not _d.name.startswith((".", "_")):

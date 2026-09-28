@@ -20,7 +20,7 @@ sys.path.insert(0, str(MCS_ROOT / "tests" / "plugin"))
 from hermes_cli.plugins import PluginManager  # noqa: E402
 from gateway.platforms.base import BasePlatformAdapter  # noqa: E402
 from hermes_plugin.mcs_delivery.spec import token_map  # noqa: E402
-from test_mcs_slack_cards import _spec  # noqa: E402
+from slack_card_testkit import _spec  # noqa: E402
 
 
 def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypatch):

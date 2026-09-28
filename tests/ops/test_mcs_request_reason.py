@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 import mcs_requests as requests
-from test_mcs_features import _create, _source
+from ops_testkit import _create, _source
 
 
 def test_reason_is_recorded_for_create_and_update_and_replay(tmp_path):
