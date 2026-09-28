@@ -35,6 +35,11 @@ CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
        "signals": {"notify": True}}
 
 
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+
+
 @pytest.fixture
 def world(tmp_path):
     data = tmp_path / "data"

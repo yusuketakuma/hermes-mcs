@@ -19,8 +19,13 @@ import notify_cmds as runner_cmds
 import notify_reconcile
 from test_mcs_slack_cards import _spec
 from test_notify_slack import (
-    SLACK, SCOPE, _dispatch, _intent, _latest_render, _seed_thread,
+    NOW, SLACK, SCOPE, _dispatch, _intent, _latest_render, _seed_thread,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(runner_cards.time, "time", lambda: NOW)
 
 
 @pytest.fixture(name="led")

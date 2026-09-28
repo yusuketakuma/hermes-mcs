@@ -32,6 +32,11 @@ SLACK_FLAT = {"notify": {"interactive": "slack", "route_epoch": 1,
 ACTOR = "slack:T_SYNTHETIC:U_SYNTHETIC"
 
 
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(cards.time, "time", lambda: NOW)
+
+
 @pytest.fixture(name="led")
 def slack_ledger(tmp_path):
     root = tmp_path / "data"
