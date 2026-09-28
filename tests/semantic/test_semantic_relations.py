@@ -188,3 +188,18 @@ def test_malformed_inputs_are_safe():
     result = sr.reconcile_facts([{"bad": 1}], [{"fact_id": "fact_x"}])
     assert result["relations"] == []
     assert sr.relation_set_fingerprint(None).startswith("relset_")
+
+
+def test_generic_action_word_is_not_a_shared_entity():
+    """U07-F05: two different drugs sharing only a generic action word
+    (投与) are unrelated — a stop of one must not supersede the other."""
+    left = _fact("fact_aaaa", "アムロジピンを投与", action="start",
+                 event_time="2026-09-01", evidence=("ev_a",))
+    right = _fact("fact_bbbb", "ロキソニンの投与を中止", action="stop",
+                  event_time="2026-09-02", evidence=("ev_b",))
+    assert sr.classify_pair(left, right) is None
+    # the same drug still links through its name
+    same = _fact("fact_cccc", "アムロジピンの投与を中止", action="stop",
+                 event_time="2026-09-02", evidence=("ev_c",))
+    rel = sr.classify_pair(left, same)
+    assert rel is not None and rel["type"] == "EXPLICIT_SUPERSESSION"

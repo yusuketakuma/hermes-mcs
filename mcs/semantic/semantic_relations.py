@@ -42,6 +42,17 @@ _ACTION_SUPERSESSION = {
 
 _ENTITY_TOKEN = re.compile(r"[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}|[一-龥々]{2,}")
 
+# Generic action/administration words are CJK runs too, but they name
+# what happened, not which entity — "アムロジピンを投与" and
+# "ロキソニンの投与を中止" share only 投与 and must not be related.
+# A token made up solely of these words never counts as shared entity.
+_GENERIC_WORDS = (
+    "投与", "内服", "服用", "服薬", "処方", "使用", "開始", "中止",
+    "終了", "継続", "再開", "変更", "追加", "増量", "減量", "休薬",
+    "予定", "指示", "実施", "確認", "検討", "希望",
+)
+_GENERIC_TOKEN = re.compile("(?:" + "|".join(_GENERIC_WORDS) + ")+")
+
 
 def relation_set_fingerprint(relations: list) -> str:
     """Canonical fingerprint of a relation set — persisted before
@@ -71,8 +82,9 @@ def _entity_tokens(statement: str) -> set:
 
 
 def _entity_overlap(left: dict, right: dict) -> set:
-    return _entity_tokens(left.get("statement")) \
+    shared = _entity_tokens(left.get("statement")) \
         & _entity_tokens(right.get("statement"))
+    return {t for t in shared if not _GENERIC_TOKEN.fullmatch(t)}
 
 
 def _iso(value) -> str | None:
