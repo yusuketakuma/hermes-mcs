@@ -162,6 +162,11 @@ def admitted_chat(client_route: str, prompt: str, *,
     if cls is None:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": None, "admission": "unknown_client"}
+    # invalid arguments fail before a permit exists — never recorded
+    # as a backend-uncertain ``unknown`` permit that holds a slot
+    _validate_chat_args(prompt, kw.get("endpoint", ENDPOINT),
+                        kw.get("timeout", TIMEOUT),
+                        kw.get("max_tokens", MAX_TOKENS))
     acq = broker.acquire(client_route, cls)
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \
@@ -173,21 +178,32 @@ def admitted_chat(client_route: str, prompt: str, *,
         if deadline is not None:
             until = min(until, deadline)
         state = "waiting"
-        while time.monotonic() < until:
-            state = broker.poll(pid).get("state", "waiting")
-            if state != "waiting":
-                break
-            time.sleep(0.05)
+        try:
+            while time.monotonic() < until:
+                state = broker.poll(pid).get("state", "waiting")
+                if state != "waiting":
+                    break
+                time.sleep(0.05)
+        except BaseException:
+            broker.cancel(pid)
+            raise
         if state == "admitted":
             acq = {"admitted": True, "permit_id": pid,
                    "epoch": acq.get("epoch")}
         else:
+            if state == "waiting":
+                # wait timed out — retire the never-sent intent so the
+                # RT-waiting flag does not hold BACKLOG shut
+                broker.cancel(pid)
             return {"text": None, "finish_reason": None,
                     "usage": None, "status": None,
                     "admission": f"wait_{state}",
                     "permit_id": pid, "epoch": acq.get("epoch")}
     if not acq.get("admitted"):
-        # waiting RT or held backlog — honest deferral, no send
+        # waiting RT or held backlog — honest deferral, no send; a
+        # waiting RT intent the caller will not wait out is retired
+        if acq.get("reason") == "waiting" and pid is not None:
+            broker.cancel(pid)
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": None,
                 "admission": acq.get("reason", "held"),
@@ -317,6 +333,21 @@ def _timings_dict(timings) -> dict | None:
     return out or None
 
 
+def _validate_chat_args(prompt, endpoint, timeout, max_tokens) -> None:
+    """Pre-send argument checks shared by ``chat`` and ``admitted_chat``
+    — a request rejected here provably never reached the backend."""
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError("prompt_invalid")
+    if not bounded_http._loopback_endpoint_allowed(endpoint):
+        raise ValueError("local_endpoint_not_allowed")
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) \
+            or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout_invalid")
+    if max_tokens is not None and (type(max_tokens) is not int
+                                 or max_tokens <= 0):
+        raise ValueError("max_tokens_invalid")
+
+
 def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
          max_tokens: int = MAX_TOKENS, timeout: float = TIMEOUT,
          deadline: float | None = None, response_format=None,
@@ -335,16 +366,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     (never started / down), which callers may treat as free-of-cost
     unlike a timeout that consumed real server work.
     """
-    if not isinstance(prompt, str) or not prompt:
-        raise ValueError("prompt_invalid")
-    if not bounded_http._loopback_endpoint_allowed(endpoint):
-        raise ValueError("local_endpoint_not_allowed")
-    if isinstance(timeout, bool) or not isinstance(timeout, int | float) \
-            or not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout_invalid")
-    if max_tokens is not None and (type(max_tokens) is not int
-                                 or max_tokens <= 0):
-        raise ValueError("max_tokens_invalid")
+    _validate_chat_args(prompt, endpoint, timeout, max_tokens)
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
