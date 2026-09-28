@@ -139,6 +139,43 @@ def test_status_reports_oldest_pending_age_without_writes(tmp_path, monkeypatch)
         db.close()
 
 
+def test_canonical_readiness_reports_shadow_material(tmp_path):
+    """The promotion readout must show how much v2 shadow material
+    exists and what has passed the audit/publish stages — counts only,
+    no model calls, and honest about a disabled/unavailable config."""
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add("semantic_facts_v2", "{}",
+                        project_id=1, message_id=1,
+                        meta={"coverage_status": "complete"})
+        db.artifact_add("semantic_facts_v2", "{}",
+                        project_id=1, message_id=2,
+                        meta={"coverage_status": "incomplete",
+                              "needs_review": True})
+        db.artifact_add("semantic_facts_audit", "{}",
+                        project_id=1, message_id=1,
+                        meta={"audit_status": "PASS"})
+        db.artifact_add("semantic_facts_audit", "{}",
+                        project_id=1, message_id=2,
+                        meta={"audit_status": "NEEDS_REVIEW"})
+        db.artifact_add("canonical_projection", "{}",
+                        project_id=1, message_id=1)
+        r = semantic._canonical_readiness(
+            db, _cfg("shadow", fact_source="shadow"))
+        assert r["available"] and r["fact_source"] == "shadow"
+        assert r["shadow_v2_docs"] == 2
+        assert r["v2_coverage_complete"] == 1
+        assert r["v2_needs_review"] == 1
+        assert r["fact_audits"] == {"PASS": 1, "NEEDS_REVIEW": 1}
+        assert r["canonical_projection"] == 1
+        assert r["semantic_facts_v4"] == 0
+
+        assert semantic._canonical_readiness(db, None)["available"] \
+            is False
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch, failure):
     from test_mcs_semantic import _FakeJev

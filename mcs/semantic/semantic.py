@@ -208,6 +208,55 @@ def seed(ledger, message_id: int, origin: str = "replay",
     return row["r"]
 
 
+def _canonical_readiness(ledger, cfg: dict | None) -> dict:
+    """Shadow -> canonical migration readout (read-only counts).
+
+    Answers the promotion question — how much v2 shadow material
+    exists, how much of it completed coverage, and how much has already
+    passed the audit/publish stages — without running any model call.
+    The promotion gate itself (fact_source=canonical needs human-
+    labelled gate evidence) stays with `mcs_setup fact-source`."""
+    from semantic_policy import (KIND_FACTS_V2, KIND_FACT_AUDIT,
+                                 KIND_FACT_PROJ, semantic_config)
+    from semantic_v4 import KIND_V4
+    out = {"fact_source": None, "shadow_v2_docs": 0,
+           "v2_coverage_complete": 0, "v2_needs_review": 0,
+           "fact_audits": {}, "canonical_projection": 0,
+           "semantic_facts_v4": 0}
+    if cfg is None:
+        out["available"] = False
+        return out
+    scfg, errors = semantic_config(cfg)
+    if errors:
+        out.update(available=False, reason="config_invalid")
+        return out
+    out["available"] = True
+    out["fact_source"] = scfg["fact_source"]
+    for r in ledger.db.execute(
+            "SELECT meta FROM artifacts WHERE kind=?",
+            (KIND_FACTS_V2,)):
+        out["shadow_v2_docs"] += 1
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        if meta.get("coverage_status") == "complete":
+            out["v2_coverage_complete"] += 1
+        if meta.get("needs_review"):
+            out["v2_needs_review"] += 1
+    for r in ledger.db.execute(
+            "SELECT json_extract(meta,'$.audit_status') s, COUNT(*) c "
+            "FROM artifacts WHERE kind=? GROUP BY s",
+            (KIND_FACT_AUDIT,)):
+        out["fact_audits"][r["s"] or "unknown"] = r["c"]
+    for kind, key in ((KIND_FACT_PROJ, "canonical_projection"),
+                      (KIND_V4, "semantic_facts_v4")):
+        out[key] = ledger.db.execute(
+            "SELECT COUNT(*) c FROM artifacts WHERE kind=?",
+            (kind,)).fetchone()["c"]
+    return out
+
+
 def status_report(ledger, cfg: dict | None = None) -> dict:
     from semantic_metrics import audit_history, current_quality
     jobs = {"pending": 0, "failed": 0, "done": 0}
@@ -231,6 +280,7 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
     return {"semantic_jobs": jobs, "audit_statuses": history["audit_statuses"],
+            "canonical_readiness": _canonical_readiness(ledger, cfg),
             "audit_statuses_scope": "history", "history": history,
             "current_quality": current_quality(ledger, cfg),
             "oldest_pending_job_age_s": (max(0.0, time.time() - oldest)
