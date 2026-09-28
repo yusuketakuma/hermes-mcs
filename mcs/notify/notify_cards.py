@@ -1912,13 +1912,18 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
 
 
 def gc(ledger, cfg=None, now=None, limit=500) -> dict:
-    """Delete expired action tokens and strip PHI-bearing spec_json from
-    superseded renders (cancelled/not_sent with a delivered successor,
-    no unsettled attempt on the card, no pending intent binding). Rows,
-    hashes and correlations stay for audit. Delivered renders keep
-    their spec_json (containers and thread_body_parts) — nothing clears
-    it on settle. Bounded per call — the rest waits for the next
-    tick."""
+    """Delete expired action tokens and strip PHI-bearing spec_json
+    (containers and thread_body_parts) once nothing can replay it:
+    superseded renders (cancelled/not_sent with a delivered successor)
+    and delivered renders whose durable parts are all settled and no
+    active restore hold covers the render or its card — in both cases
+    only with no unsettled attempt on the card and no pending intent
+    binding. Every DB reader of spec_json (dispatch re-entry, sweep
+    watchdog, recover) republishes queued/held renders only, and a
+    delivered render never returns to either; the worker and reconcile
+    read the spec file, which a pending part plan keeps. Rows, hashes,
+    correlations and part metadata stay for audit. Bounded per call —
+    the rest waits for the next tick."""
     db = _db(ledger)
     now = time.time() if now is None else now
     with db:
@@ -1929,7 +1934,6 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         for r in db.execute(
                 """SELECT r.delivery_id FROM notification_renders r
                    WHERE r.spec_json IS NOT NULL
-                     AND r.state IN ('cancelled','not_sent')
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_delivery_attempts a
                        JOIN notification_renders active
@@ -1939,11 +1943,22 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_intent_cards ic
                        WHERE ic.delivery_id=r.delivery_id AND ic.state='pending')
-                     AND EXISTS (
-                       SELECT 1 FROM notification_renders successor
-                       WHERE successor.card_id=r.card_id
-                         AND successor.render_rev>r.render_rev
-                         AND successor.state='delivered')
+                     AND ((r.state IN ('cancelled','not_sent')
+                           AND EXISTS (
+                             SELECT 1 FROM notification_renders successor
+                             WHERE successor.card_id=r.card_id
+                               AND successor.render_rev>r.render_rev
+                               AND successor.state='delivered'))
+                          OR (r.state='delivered'
+                              AND NOT EXISTS (
+                                SELECT 1 FROM notification_render_parts p
+                                WHERE p.delivery_id=r.delivery_id
+                                  AND p.state='pending')
+                              AND NOT EXISTS (
+                                SELECT 1 FROM notification_restore_holds h
+                                WHERE h.released_at IS NULL
+                                  AND (h.delivery_id=r.delivery_id
+                                       OR h.card_id=r.card_id))))
                    ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
             db.execute(
                 "UPDATE notification_renders SET spec_json=NULL,"
