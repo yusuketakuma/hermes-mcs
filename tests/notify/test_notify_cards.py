@@ -2075,7 +2075,10 @@ def test_card_resolve_delivered_must_match_journal_message(led, tmp_path):
     assert _card(led)["message_id"] == "m-7"
 
 
-def test_begin_denies_source_changed_and_sweep_reissues(led, tmp_path):
+def test_begin_denies_source_changed_and_reissues_at_once(led, tmp_path):
+    """A source edit between issue and begin never posts the stale
+    bytes, and the fresh render is published by the denial itself — no
+    wait for the rotating sweep to reach the card."""
     _patient(led)
     _msg(led, 100)
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
@@ -2085,15 +2088,17 @@ def test_begin_denies_source_changed_and_sweep_reissues(led, tmp_path):
     led.db.commit()
     r = _begin(led, render)
     assert r["granted"] is False and r["error"] == "denied_source_changed"
-    # transient, not final: the spec stays until the sweep supersedes it
-    assert (tmp_path / "data" / "discord_render"
-            / (render["delivery_id"] + ".json")).exists()
-    notify_cards.sweep(led, CFG)
+    render_dir = tmp_path / "data" / "discord_render"
     assert led.db.execute(
         "SELECT state FROM notification_renders WHERE delivery_id=?",
         (render["delivery_id"],)).fetchone()["state"] == "cancelled"
+    assert not (render_dir / (render["delivery_id"] + ".json")).exists()
     nxt = _latest_render(led)
     assert nxt["render_rev"] == 2 and nxt["state"] == "queued"
+    assert (render_dir / (nxt["delivery_id"] + ".json")).exists()
+    # a replayed begin is idempotent — no second reissue
+    assert _begin(led, render)["error"] == "denied_source_changed"
+    assert _latest_render(led)["render_rev"] == 2
     assert _begin(led, nxt, n=2)["granted"]
 
 

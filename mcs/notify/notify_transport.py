@@ -235,12 +235,24 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
                 "UPDATE notification_renders SET state='sending',"
                 "updated_at=? WHERE delivery_id=? AND state='queued'",
                 (now, req["delivery_id"]))
+        reissued = []
+        if reason == "source_changed":
+            # reissue from the new source now, in the same commit — the
+            # rotating sweep could take many ticks to reach this card,
+            # and a raw arrival notice must not wait on semantic writes
+            card_id = db.execute(
+                "SELECT card_id FROM notification_renders "
+                "WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
+            cards._issue_render(db, card_id["card_id"], cfg, now, reissued)
         cards.mark_snapshot_dirty(db)
         result = _begin_result(db, db.execute(
             "SELECT * FROM notification_delivery_attempts "
             "WHERE begin_command_id=?", (cid,)).fetchone())
-    if reason is not None and _denial_is_final(
-            db, req["delivery_id"], reason):
+    if reissued:
+        cards._publish_specs(db, cards.notify_dirs(cards.data_root(ledger)),
+                             reissued, now)
+    if reason is not None and (reissued or _denial_is_final(
+            db, req["delivery_id"], reason)):
         render = db.execute(
             "SELECT transport FROM notification_renders WHERE delivery_id=?",
             (req["delivery_id"],)).fetchone()
