@@ -1006,3 +1006,263 @@ def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
     assert not list((tmp_path / "discord_render").glob("*.claimed"))
     assert logs == [("spec_rejected", {"delivery_id": DELIVERY_ID,
                                        "error": reason})]
+
+
+# ---------- transient begin denials (signal notify) -------------------------
+
+REVOKED_ID = "00000000-0000-4000-8000-00000000dead"
+
+
+def _card_spec(delivery_id, kind="signal"):
+    """A legacy card with no manifest — the tick sends only the card."""
+    return {"schema": "mcs-card-render/v1",
+            "delivery_id": delivery_id,
+            "logical_intent_id": f"v1|{kind}|1|sig-1",
+            "card_key": f"v1|{kind}|1|sig-1", "kind": kind, "op": "create",
+            "render_rev": 1, "source_generation": 1,
+            "presentation_generation": 1, "ui_revision": 1,
+            "delivery": {"route_epoch": 1, "correlation": "cd" * 16,
+                         "profile": "mcs", "application_id": "1",
+                         "channel_id": "42", "guild_id": "7",
+                         "intent_event_ids": [1]},
+            "parts": {"containers": [{"type": "text",
+                                      "text": f"{kind} card"}]}}
+
+
+def _write_begin_result(tmp_path, begin, *, granted, error=None):
+    """The runner's begin-result shape, written where the worker reads it."""
+    body = {"granted": granted, "command_id": begin["command_id"],
+            "attempt_id": begin["attempt_id"],
+            "delivery_id": begin["delivery_id"],
+            "attempt_state": "granted" if granted else "not_sent",
+            "worker_id": begin["worker_id"],
+            "render_rev": begin["render_rev"],
+            "payload_hash": begin["payload_hash"],
+            "route_epoch": begin["route_epoch"]}
+    if error:
+        body["error"] = error
+    name = paths.safe_name(begin["command_id"]) + ".json"
+    (tmp_path / "cmd_results" / name).write_text(json.dumps(body))
+
+
+def _spec_path(tmp_path, delivery_id):
+    return tmp_path / "discord_render" / f"{delivery_id}.json"
+
+
+def _journal_rows(tmp_path):
+    rec = journal.scan(str(_state(tmp_path)))
+    return [r for rows in rec.values() for r in rows]
+
+
+def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
+        tmp_path, monkeypatch):
+    """denied_signal_notify_off drops the claim without a dead tombstone.
+
+    A worker restart between OFF and ON reloads the registry and still
+    claims the same spec; the grant then records a real send. A
+    non-transient denial (denied_card_revoked) still tombstones.
+    """
+    from hermes_plugin.mcs_discord import cards as cards_mod
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+
+    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    w, reg, bot = _mkworker(tmp_path)
+    sent_before = len(bot.channels[42].sent)
+    revoked = _card_spec(REVOKED_ID, kind="thread")
+    signal = _card_spec(DELIVERY_ID, kind="signal")
+    spec_mod.validate(revoked)
+    spec_mod.validate(signal)
+    _publish_spec(tmp_path, revoked)
+    _publish_spec(tmp_path, signal)
+
+    async def deny(worker, registry, delivery_id, error):
+        await worker.tick()
+        claim = registry.claimed(delivery_id)
+        assert claim and claim["phase"] == "begin_sent"
+        _write_begin_result(tmp_path, claim["begin_env"],
+                            granted=False, error=error)
+        await worker.tick()
+        return claim
+
+    async def run():
+        revoked_claim = await deny(
+            w, reg, REVOKED_ID, "denied_card_revoked")
+        assert reg.claimed(REVOKED_ID) is None
+        assert reg.is_dead(REVOKED_ID)
+        assert _spec_path(tmp_path, REVOKED_ID).is_file()
+        # restart must not expire a tombstone whose spec is still published
+        reloaded = Registry(str(_state(tmp_path)))
+        assert reloaded.is_dead(REVOKED_ID)
+        assert reloaded.claimed(REVOKED_ID) is None
+
+        denied = await deny(
+            w, reg, DELIVERY_ID, "denied_signal_notify_off")
+        assert reg.claimed(DELIVERY_ID) is None
+        assert not reg.is_dead(DELIVERY_ID)
+        assert _spec_path(tmp_path, DELIVERY_ID).is_file()
+        assert len(bot.channels[42].sent) == sent_before
+        assert any(r.get("phase") == "denied"
+                   and r.get("error") == "denied_signal_notify_off"
+                   and r.get("delivery_id") == DELIVERY_ID
+                   for r in _journal_rows(tmp_path))
+
+        # process restart between OFF and ON — disk registry, new worker_id
+        w2, reg2, _ = _mkworker(tmp_path, bot=bot, wid="w-restart")
+        assert not reg2.is_dead(DELIVERY_ID)
+        assert reg2.claimed(DELIVERY_ID) is None
+        assert _spec_path(tmp_path, DELIVERY_ID).is_file()
+        await w2.tick()                    # re-claim + new begin
+        claim = reg2.claimed(DELIVERY_ID)
+        assert claim and claim["phase"] == "begin_sent"
+        assert claim["attempt_id"] != denied["attempt_id"]
+        assert claim["worker_id"] == "w-restart"
+        _write_begin_result(tmp_path, claim["begin_env"], granted=True)
+        await w2.tick()                    # grant -> send -> receipt
+        return revoked_claim, claim
+
+    _, claim = asyncio.run(run())
+    sent = bot.channels[42].sent
+    assert len(sent) == sent_before + 1
+    message_id = str(sent[-1].id)
+    delivered = [r for r in _journal_rows(tmp_path)
+                 if r.get("phase") == "result"
+                 and r.get("delivery_id") == DELIVERY_ID
+                 and not r.get("part_id")]
+    assert len(delivered) == 1
+    assert delivered[0]["result"] == "delivered"
+    assert delivered[0]["message_id"] == message_id
+    assert delivered[0]["attempt_id"] == claim["attempt_id"]
+    receipts = [e for e in _receipts(tmp_path / "cmd_int")
+                if e.get("op") == "transport_receipt"
+                and e.get("delivery_id") == DELIVERY_ID]
+    assert any(e.get("result") == "delivered"
+               and e.get("message_id") == message_id
+               and e.get("attempt_id") == claim["attempt_id"]
+               for e in receipts)
+    # the revoked spec was never sent
+    assert not any(r.get("phase") == "result"
+                   and r.get("delivery_id") == REVOKED_ID
+                   for r in _journal_rows(tmp_path))
+
+
+def _begins(tmp_path, delivery_id=DELIVERY_ID):
+    return [e for e in _receipts(tmp_path / "cmd_int")
+            if e.get("op") == "transport_begin"
+            and e.get("delivery_id") == delivery_id]
+
+
+def _clock(monkeypatch, start=1_000_000.0):
+    from hermes_plugin.mcs_delivery import worker as worker_mod
+    now = [start]
+    monkeypatch.setattr(worker_mod, "time",
+                        types.SimpleNamespace(time=lambda: now[0]))
+    return now
+
+
+def test_signal_notify_off_backs_off_before_rebegin(tmp_path, monkeypatch):
+    """A signal_notify_off denial holds the spec for SIGNAL_OFF_RETRY_S —
+    no re-claim churn (attempt row + result file + journal per tick)."""
+    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from hermes_plugin.mcs_discord import cards as cards_mod
+
+    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    now = _clock(monkeypatch)
+    w, reg, _ = _mkworker(tmp_path)
+    _publish_spec(tmp_path, _card_spec(DELIVERY_ID))
+    backoff = worker_mod.SIGNAL_OFF_RETRY_S
+
+    async def run():
+        await w.tick()
+        first = reg.claimed(DELIVERY_ID)
+        _write_begin_result(tmp_path, first["begin_env"], granted=False,
+                            error="denied_signal_notify_off")
+        await w.tick()                              # denied -> released
+        assert reg.claimed(DELIVERY_ID) is None
+        assert not reg.is_dead(DELIVERY_ID)
+        start = now[0]
+        for dt in (0.0, 2.0, 60.0, backoff - 1):
+            now[0] = start + dt
+            await w.tick()
+            assert len(_begins(tmp_path)) == 1, dt
+            assert reg.claimed(DELIVERY_ID) is None
+        now[0] = start + backoff
+        await w.tick()
+        await w.tick()
+        second = reg.claimed(DELIVERY_ID)
+        assert second and second["phase"] == "begin_sent"
+        assert second["attempt_id"] != first["attempt_id"]
+
+    asyncio.run(run())
+    assert len(_begins(tmp_path)) == 2
+    claimed = [r for r in _journal_rows(tmp_path)
+               if r.get("phase") == "claimed"
+               and r.get("delivery_id") == DELIVERY_ID]
+    assert len(claimed) == 2
+
+
+def test_restart_reconcile_keeps_begin_sent_signal_claimable(
+        tmp_path, monkeypatch):
+    """A gateway restart with the claim in begin_sent (OFF) goes through
+    the real reconcile(): the pre-HTTP attempt is reported not_sent but
+    never tombstoned, a second restart does not tombstone it either, and
+    after ON the same delivery_id is sent exactly once."""
+    from hermes_plugin.mcs_discord import cards as cards_mod
+
+    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    _clock(monkeypatch)
+    w1, reg1, bot = _mkworker(tmp_path)
+    sent_before = len(bot.channels[42].sent)
+    _publish_spec(tmp_path, _card_spec(DELIVERY_ID))
+    marker = tmp_path / "discord_render" / f"{DELIVERY_ID}.json.claimed"
+
+    async def run():
+        await w1.tick()                   # claim + begin, then "crash"
+        a = reg1.claimed(DELIVERY_ID)
+        assert a["phase"] == "begin_sent" and marker.is_file()
+
+        # restart 1 — tasks.py order: fresh Registry -> reconcile -> ticks
+        w2, reg2, _ = _mkworker(tmp_path, bot=bot, wid="w2")
+        stats = await w2.reconcile()
+        assert stats["not_sent"] == 1
+        assert not reg2.is_dead(DELIVERY_ID)
+        assert reg2.claimed(DELIVERY_ID) is None
+        assert not marker.exists()
+        assert _spec_path(tmp_path, DELIVERY_ID).is_file()
+        assert any(e.get("op") == "transport_receipt"
+                   and e.get("attempt_id") == a["attempt_id"]
+                   and e.get("result") == "not_sent"
+                   and e.get("error_code") == "worker_restart"
+                   for e in _receipts(tmp_path / "cmd_int"))
+        await w2.tick()                   # still OFF: re-begin, denied
+        b = reg2.claimed(DELIVERY_ID)
+        assert b["attempt_id"] != a["attempt_id"]
+        _write_begin_result(tmp_path, b["begin_env"], granted=False,
+                            error="denied_signal_notify_off")
+        await w2.tick()
+        assert reg2.claimed(DELIVERY_ID) is None
+
+        # restart 2 during the backoff — A's receipt row must not
+        # tombstone the delivery now that no claim holds it
+        w3, reg3, _ = _mkworker(tmp_path, bot=bot, wid="w3")
+        await w3.reconcile()
+        assert not reg3.is_dead(DELIVERY_ID)
+        await w3.tick()                   # ON now: runner grants C
+        c = reg3.claimed(DELIVERY_ID)
+        assert c["attempt_id"] not in (a["attempt_id"], b["attempt_id"])
+        _write_begin_result(tmp_path, c["begin_env"], granted=True)
+        await w3.tick()
+        await w3.tick()
+        return c
+
+    c = asyncio.run(run())
+    sent = bot.channels[42].sent
+    assert len(sent) == sent_before + 1
+    delivered = [r for r in _journal_rows(tmp_path)
+                 if r.get("phase") == "result"
+                 and r.get("delivery_id") == DELIVERY_ID]
+    assert [(r["result"], r["attempt_id"]) for r in delivered] \
+        == [("delivered", c["attempt_id"])]
+    receipts = [e for e in _receipts(tmp_path / "cmd_int")
+                if e.get("op") == "transport_receipt"
+                and e.get("result") == "delivered"]
+    assert [e["attempt_id"] for e in receipts] == [c["attempt_id"]]
