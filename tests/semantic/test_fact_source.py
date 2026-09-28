@@ -2,8 +2,12 @@
 validation, v2->v1 projection shape, and the evidence-gated activation
 command."""
 import json
+from functools import cache
+from pathlib import Path
 
+import pytest
 
+import semantic_evaluation as evaluation
 import semantic_facts as sf
 from semantic_policy import semantic_config
 import semantic_projection as projection
@@ -137,8 +141,22 @@ def _cmd_cfg(tmp_path, monkeypatch, cfg):
     return conf
 
 
+@cache
+def _shipped_criteria_identity():
+    """(version, criteria_sha256) as the real scorer stamps them when run
+    against the shipped G6 criteria file (synthetic record)."""
+    from test_semantic_evaluation import MANIFEST, _record
+    criteria = json.loads((Path(__file__).resolve().parents[2] / "evaluation"
+                           / "g6-criteria-v1.json").read_text())
+    report = evaluation.evaluate_records([_record("human")], MANIFEST,
+                                         criteria)
+    return report["criteria_version"], report["criteria_sha256"]
+
+
 def _report(pass_=True, g6=True, human=200):
-    return {"schema_version": "v1", "criteria_version": "g6-v1",
+    version, sha = _shipped_criteria_identity()
+    return {"schema_version": "v1", "criteria_version": version,
+            "criteria_sha256": sha,
             "label_provenance": {"human": human, "synthetic": 0,
                                  "missing": 0},
             "gate": {"pass": pass_, "g6_eligible": g6, "reasons": []}}
@@ -200,7 +218,8 @@ def test_fact_source_canonical_pins_gate(tmp_path, monkeypatch):
         _Args("canonical", str(ev))) == 0
     sem = json.loads(conf.read_text())["semantic"]
     assert sem["fact_source"] == "canonical"
-    assert sem["fact_source_gate"].startswith("g6-v1:")
+    assert sem["fact_source_gate"].startswith(
+        _shipped_criteria_identity()[0] + ":")
     # The pinned config passes the production validator.
     out, errors = semantic_config(json.loads(conf.read_text()))
     assert out["fact_source"] == "canonical" and not errors
@@ -226,3 +245,44 @@ def test_fact_source_back_to_legacy_clears_gate(tmp_path, monkeypatch):
     sem = json.loads(conf.read_text())["semantic"]
     assert sem["fact_source"] == "legacy"
     assert "fact_source_gate" not in sem
+
+
+@pytest.mark.parametrize("attack", [
+    "one_not_tested", "below_min_human", "missing_criteria",
+    "foreign_criteria", "missing_count", "missing_provenance",
+    "gate_reasons", "gate_reasons_missing",
+])
+def test_fact_source_canonical_rejects_untrusted_receipts(
+        tmp_path, monkeypatch, attack):
+    """Gate booleans alone never promote: the report must be scored on
+    the shipped criteria, carry >= min_human_labels human labels, and
+    have an empty reason list."""
+    conf = _cmd_cfg(tmp_path, monkeypatch, {
+        "mcs_login_id": "x", "notify_target": "slack",
+        "semantic": {"mode": "off", "fact_source": "legacy"}})
+    before = conf.read_bytes()
+    report = _report()
+    if attack == "one_not_tested":
+        report["label_provenance"]["human"] = 1
+        report["human_validation"] = {"status": "NOT_TESTED",
+                                      "verified_human_cases": 0}
+    elif attack == "below_min_human":
+        report["label_provenance"]["human"] = 199
+    elif attack == "missing_criteria":
+        report.pop("criteria_version")
+        report.pop("criteria_sha256")
+    elif attack == "foreign_criteria":
+        report["criteria_sha256"] = "0" * 64
+    elif attack == "missing_count":
+        report["label_provenance"].pop("human")
+    elif attack == "missing_provenance":
+        report.pop("label_provenance")
+    elif attack == "gate_reasons":
+        report["gate"]["reasons"] = ["human_labels_insufficient"]
+    elif attack == "gate_reasons_missing":
+        report["gate"].pop("reasons")
+    evidence = tmp_path / "report.json"
+    evidence.write_text(json.dumps(report), encoding="utf-8")
+    assert mcs_setup.cmd_fact_source(
+        _Args("canonical", str(evidence))) == 1
+    assert conf.read_bytes() == before

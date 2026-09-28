@@ -625,7 +625,7 @@ def _init_env(monkeypatch, tmp_path, cfg):
     # plugin integration is tested separately — keep init tests off the
     # real hermes CLI entirely
     monkeypatch.setattr(mcs_setup, "_apply_plugin_integration",
-                        lambda c, a: None)
+                        lambda c, a: True)
     monkeypatch.setattr(mcs_setup, "load_config", lambda: dict(cfg))
 
 
@@ -645,6 +645,45 @@ def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):
     assert cfg["self_posts"] is True
     assert cfg["notify"] == {"interactive": "discord",
                              "card_thread": False}
+
+
+@pytest.mark.parametrize("source,settings", [
+    ("legacy", ['semantic.fact_source="canonical"',
+                'semantic.fact_source_gate="fabricated:token"']),
+    ("legacy", ['semantic={"mode":"off","fact_source":"canonical",'
+                '"fact_source_gate":"fabricated:token"}']),
+    ("canonical", ['semantic.fact_source_gate="fabricated:replacement"']),
+])
+def test_init_set_cannot_mint_or_repin_canonical(
+        monkeypatch, tmp_path, capsys, source, settings):
+    """--set is not a path around `fact-source canonical --gate-evidence`:
+    promoting or re-pinning canonical is refused and nothing is written."""
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "u1", "notify_target": "slack",
+        "semantic": {"mode": "off", "fact_source": source,
+                     "fact_source_gate": "existing:pin"}})
+    argv = ["mcs_setup", "init", "--yes"]
+    for setting in settings:
+        argv += ["--set", setting]
+    monkeypatch.setattr(mcs_setup.sys, "argv", argv)
+    assert mcs_setup.main() == 1
+    assert "fact-source canonical --gate-evidence" in capsys.readouterr().out
+    assert not (tmp_path / "c.json").exists()
+
+
+def test_init_keeps_existing_canonical_on_unrelated_set(monkeypatch, tmp_path):
+    import json
+    sem = {"mode": "off", "fact_source": "canonical",
+           "fact_source_gate": "existing:pin"}
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "u1", "notify_target": "slack", "semantic": sem})
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes",
+                         "--set", "self_posts=true"])
+    assert mcs_setup.main() == 0
+    saved = json.loads((tmp_path / "c.json").read_text())
+    assert saved["self_posts"] is True
+    assert saved["semantic"] == sem
 
 
 def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
@@ -773,10 +812,14 @@ def test_wizard_dash_removes_optional_key(monkeypatch, tmp_path):
 # ---- services (launchd + hermes cron automation) --------------------
 
 def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
-                  loaded=frozenset(), cron_entries=None):
+                  loaded=frozenset(), cron_entries=None,
+                  cron_applies=True):
     """Isolate cmd_services: temp dirs, no real launchctl/hermes.
     `cron_names` is legacy sugar: it fabricates verified `cron list`
-    entries whose schedules match CRON_JOBS (=> 'exists', no edit)."""
+    entries whose schedules match CRON_JOBS (=> 'exists', no edit).
+    The fake hermes cron is stateful — create/edit/remove change what
+    the next `cron list` returns — unless `cron_applies` is False
+    (a zero-exit call that changed nothing)."""
     from types import SimpleNamespace
     calls = []
     loaded = set(loaded)
@@ -810,6 +853,16 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
             loaded.add(argv[3].rsplit("/", 1)[-1][:-6])
         elif argv[:2] == ["launchctl", "bootout"]:
             loaded.discard(argv[2].rsplit("/", 1)[-1])
+        elif argv[1:3] == ["cron", "create"] and cron_applies:
+            entries.append({"id": f"c{len(calls):05d}",
+                            "name": argv[argv.index("--name") + 1],
+                            "schedule": argv[3],
+                            "script": argv[argv.index("--script") + 1]})
+        elif argv[1:3] == ["cron", "edit"] and cron_applies:
+            next(e for e in entries if e["id"] == argv[3])["schedule"] = \
+                argv[argv.index("--schedule") + 1]
+        elif argv[1:3] == ["cron", "remove"] and cron_applies:
+            entries[:] = [e for e in entries if e["id"] != argv[3]]
         return SimpleNamespace(returncode=0, stdout="", stderr="")
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     return calls, SimpleNamespace(dry_run=False)
@@ -853,7 +906,6 @@ def test_services_skips_loaded_agents_and_existing_cron(
     loaded = set(mcs_setup.AGENT_LABELS)
     calls, args = _services_env(
         monkeypatch, tmp_path, loaded=loaded,
-        cron_names={s for _, _, s in mcs_setup.CRON_JOBS},
         cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
                        "script": sc}
                       for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)])
@@ -937,6 +989,87 @@ def test_services_hermes_missing_reports_problem(monkeypatch, tmp_path):
     calls, args = _services_env(monkeypatch, tmp_path)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: False)
     assert mcs_setup.cmd_services(args) == 1
+
+
+def _cron_creates(calls):
+    return [a for a in calls if a[1:3] == ["cron", "create"]]
+
+
+def test_services_rerun_keeps_one_cron_per_script(monkeypatch, tmp_path):
+    calls, args = _services_env(monkeypatch, tmp_path)
+    assert mcs_setup.cmd_services(args) == 0
+    assert mcs_setup.cmd_services(args) == 0
+    entries = mcs_setup._cron_list("/x/hermes")
+    scripts = [e["script"] for e in entries]
+    assert sorted(scripts) == sorted(s for _, _, s in mcs_setup.CRON_JOBS)
+    # the second run found every job and created nothing
+    assert len(_cron_creates(calls)) == len(mcs_setup.CRON_JOBS)
+
+
+def _seed_manifest(tmp_path):
+    import json
+    path = tmp_path / "data" / "service_manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = {"v": 1, "cron": [{"name": "MCS unread check",
+                                  "script": "mcs_check.sh",
+                                  "id": "000001"}],
+                "agents": [], "scripts": []}
+    path.write_text(json.dumps(previous))
+    return path, previous
+
+
+def test_services_failure_preserves_last_recoverable_manifest(
+        monkeypatch, tmp_path):
+    import json
+    calls, args = _services_env(monkeypatch, tmp_path)
+    path, previous = _seed_manifest(tmp_path)
+    monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert json.loads(path.read_text()) == previous
+    assert not _cron_creates(calls)
+
+
+def test_services_duplicate_owned_script_blocks_cron_mutation(
+        monkeypatch, tmp_path):
+    import json
+    dup = [{"id": f"00000{i}", "name": "MCS unread check",
+            "schedule": "*/5 * * * *", "script": "mcs_check.sh"}
+           for i in (1, 2)]
+    # an obsolete owned job would normally be removed — not while blocked
+    stale = {"id": "000009", "name": "old", "schedule": "0 0 * * *",
+             "script": "mcs_old.sh"}
+    calls, args = _services_env(monkeypatch, tmp_path,
+                                cron_entries=dup + [stale])
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"].append({"script": "mcs_old.sh"})
+    path.write_text(json.dumps(previous))
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(a[1:2] == ["cron"] and a[2] != "list" for a in calls)
+    assert json.loads(path.read_text()) == previous
+
+
+def test_services_noop_create_is_a_problem_not_a_manifest_entry(
+        monkeypatch, tmp_path):
+    """`cron create` exiting 0 without a job appearing must not be
+    recorded as installed."""
+    calls, args = _services_env(monkeypatch, tmp_path, cron_applies=False)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _cron_creates(calls)
+    assert not (tmp_path / "data" / "service_manifest.json").exists()
+
+
+def test_services_unparseable_script_identity_is_a_problem(
+        monkeypatch, tmp_path):
+    """A job whose name matches but whose Script field is missing is
+    unverifiable: no duplicate create, no 'exists' manifest record."""
+    entries = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
+               for i, (n, s, sc) in enumerate(mcs_setup.CRON_JOBS)]
+    del entries[0]["script"]
+    calls, args = _services_env(monkeypatch, tmp_path,
+                                cron_entries=entries)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not _cron_creates(calls)
+    assert not (tmp_path / "data" / "service_manifest.json").exists()
 
 
 def test_services_installs_gateway_when_interactive(
@@ -1048,8 +1181,81 @@ def test_plugin_integration_off_is_noop(monkeypatch):
     monkeypatch.setattr(
         mcs_setup, "_hermes_exe",
         lambda c: (_ for _ in ()).throw(AssertionError("must not run")))
-    mcs_setup._apply_plugin_integration(
-        {"notify": {"interactive": "off"}}, _plugin_args())
+    assert mcs_setup._apply_plugin_integration(
+        {"notify": {"interactive": "off"}}, _plugin_args()) is True
+
+
+_SLACK_CFG = {"notify": {"interactive": "slack", "slack": {
+    "profile": "ops", "application_id": "A1",
+    "team_id": "T1", "channel_id": "C1"}}}
+
+
+@pytest.mark.parametrize("cfg,failing", [
+    (_DISCORD_CFG, "settings.guild_id"),
+    (_DISCORD_CFG, "DISCORD_BOT_TOKEN"),
+    (_SLACK_CFG, "settings.slack_team_id"),
+    (_SLACK_CFG, "SLACK_APP_TOKEN"),
+])
+def test_plugin_integration_reports_failed_write(monkeypatch, cfg, failing):
+    """Any attempted `config set` that fails makes the result False —
+    the remaining keys are still attempted."""
+    sets = []
+    _plugin_env(monkeypatch)
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_config_set",
+        lambda e, p, k, v: sets.append(k) or not k.endswith(failing))
+    for tok in ("DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
+        monkeypatch.setenv(tok, "synthetic-token")
+    assert mcs_setup._apply_plugin_integration(
+        dict(cfg), _plugin_args(plugin_user_ids="u1")) is False
+    assert any(k.endswith(failing) for k in sets)
+    assert any(k.endswith("snapshot") for k in sets)
+
+
+def test_plugin_integration_skipped_keys_are_not_failures(monkeypatch):
+    """--yes leaves unanswered allowlists/tokens unset — reported, but
+    not a failed write."""
+    sets = _plugin_env(monkeypatch)
+    assert mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args()) is True
+    assert all(not k.endswith("_ids") for _, k, _ in sets)
+
+
+def test_plugin_integration_without_hermes_cli_fails(monkeypatch):
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda c: "/x/hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda e: False)
+    assert mcs_setup._apply_plugin_integration(
+        dict(_SLACK_CFG), _plugin_args()) is False
+
+
+@pytest.mark.parametrize("cfg", [_DISCORD_CFG, _SLACK_CFG])
+def test_init_fails_when_plugin_settings_not_written(
+        monkeypatch, tmp_path, capsys, cfg):
+    """A failed Hermes write still lets init finish the gateway sync
+    and check, then exits 1 with a repair hint."""
+    import json
+    real_integration = mcs_setup._apply_plugin_integration
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "u1", "notify_target": "slack", **cfg})
+    _plugin_env(monkeypatch)
+    monkeypatch.setattr(mcs_setup, "_apply_plugin_integration",
+                        real_integration)
+    monkeypatch.setattr(mcs_setup, "_hermes_config_set",
+                        lambda e, p, k, v: False)
+    ran = []
+    monkeypatch.setattr(mcs_setup, "_sync_gateway",
+                        lambda *a, **k: ran.append("gateway") or 0)
+    monkeypatch.setattr(mcs_setup, "cmd_check",
+                        lambda args: ran.append("check") or 0)
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes"])
+    assert mcs_setup.main() == 1
+    assert ran == ["gateway", "check"]
+    assert "init: FAIL — Hermes plugin settings were not fully written" \
+        in capsys.readouterr().out
+    # the config itself was still written before the Hermes step
+    saved = json.loads((tmp_path / "c.json").read_text())
+    assert saved["notify"] == cfg["notify"]
 
 
 def test_plugin_integration_existing_allowlist_kept(monkeypatch):
