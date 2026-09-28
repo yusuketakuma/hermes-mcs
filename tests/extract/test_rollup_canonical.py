@@ -122,3 +122,51 @@ def test_invalid_rollup_schedule_is_rebuilt(db, field, value):
     db.db.execute("UPDATE artifacts SET meta=? WHERE kind=?",
                   (json.dumps(meta), rollup.KIND))
     assert rollup.dirty_projects(db) == [1]
+
+
+@pytest.mark.parametrize("flag", [True, "false", 0, None, "yes"])
+def test_rollup_keeps_request_unverified_flag(db, flag):
+    """Unverified requests keep their flag through the rollup; anything
+    but a literal False (or a missing key) fails closed (todo 15)."""
+    _add(db, 1, "canonical_projection",
+         {"requests": [
+             {"to": "SYNTH-医師", "action": "確認済み依頼",
+              "unverified": False},
+             {"to": "SYNTH-薬局", "action": "未確認依頼",
+              "unverified": flag},
+             {"to": "SYNTH-訪看", "action": "フラグ無し依頼"}]},
+         "2026-09-19T00:00:00+09:00")
+    out = rollup.build_rollup(db, 1)
+    assert [(r["ctx"], r["unverified"]) for r in out["recent_requests"]] \
+        == [("確認済み依頼", False), ("未確認依頼", True),
+            ("フラグ無し依頼", False)]
+
+
+def test_pre_flag_rollup_is_rebuilt_with_unverified_flag(db):
+    """A rollup persisted before todo 15 (version-1 meta, no
+    'unverified' keys) is dirty once and rebuilt with the flag; the
+    rebuilt row is not re-dirtied (no rebuild loop)."""
+    _add(db, 1, "canonical_projection",
+         {"requests": [{"to": "SYNTH-薬局", "action": "未確認依頼",
+                        "unverified": True}]},
+         "2026-09-19T00:00:00+09:00")
+    rollup.rebuild(db, 1)
+    content, meta = db.db.execute(
+        "SELECT content, meta FROM artifacts WHERE kind=?",
+        (rollup.KIND,)).fetchone()
+    content, meta = json.loads(content), json.loads(meta)
+    for r in content["recent_requests"]:
+        del r["unverified"]
+    meta["period_check_version"] = 1
+    db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE kind=?",
+                  (json.dumps(content), json.dumps(meta), rollup.KIND))
+    assert rollup.dirty_projects(db) == [1]
+
+    for _ in range(2):  # an interrupted tick retrying stays idempotent
+        rollup.rebuild(db, 1)
+        rows = db.db.execute("SELECT content FROM artifacts WHERE kind=?",
+                             (rollup.KIND,)).fetchall()
+        assert len(rows) == 1
+        assert [r["unverified"] for r in
+                json.loads(rows[0][0])["recent_requests"]] == [True]
+        assert rollup.dirty_projects(db) == []

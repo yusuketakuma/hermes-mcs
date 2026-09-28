@@ -471,3 +471,59 @@ def test_machine_export_preserves_pruned_attachment_state(env):
     assert attachment["state"] == "pruned" and "name" not in attachment
     coverage = next(r for r in records if r["type"] == "coverage")
     assert coverage["coverage"]["attachments"]["pruned"] == 1
+
+
+def _set_requests(db_path: Path, requests: list) -> None:
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT content FROM artifacts "
+                       "WHERE kind='patient_rollup'").fetchone()
+    content = json.loads(row[0])
+    content["recent_requests"] = requests
+    conn.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
+                 (json.dumps(content),))
+    conn.commit()
+    conn.close()
+
+
+def _table_rows(text: str, title: str):
+    for chunk in text.split("\n## ")[1:]:
+        head, _, body = chunk.partition("\n")
+        if head == title:
+            return [line for line in body.splitlines()
+                    if line.startswith("| ") and not line.startswith(
+                        ("| at ", "| ---"))]
+    return None
+
+
+def _req(ctx, **flag):
+    return {"kind": "確認", "ctx": ctx, "at": "2026-09-19", "mid": 100,
+            **flag}
+
+
+def test_unverified_requests_exported_apart_from_confirmed(env):
+    snap, out = env
+    _set_requests(snap, [
+        _req("SYNTH 確定A"), _req("SYNTH 確定B", unverified=False),
+        _req("SYNTH 候補C", unverified=True),
+        _req("SYNTH 候補D", unverified="false"),
+        _req("SYNTH 候補E", unverified=0)])
+    brain_export.run(out, snap)
+    text = (out / "patients" / "p1.md").read_text()
+    assert _table_rows(text, "open-looking requests") == [
+        "| 2026-09-19 | 確認 | SYNTH 確定A |",
+        "| 2026-09-19 | 確認 | SYNTH 確定B |"]
+    assert _table_rows(text, "依頼候補（未確認）") == [
+        "| 2026-09-19 | 確認 | SYNTH 候補C |",
+        "| 2026-09-19 | 確認 | SYNTH 候補D |",
+        "| 2026-09-19 | 確認 | SYNTH 候補E |"]
+
+
+def test_unverified_only_requests_never_in_confirmed_table(env):
+    snap, out = env
+    _set_requests(snap, [_req("SYNTH 候補のみ", unverified=True)])
+    brain_export.run(out, snap)
+    text = (out / "patients" / "p1.md").read_text()
+    assert _table_rows(text, "open-looking requests") is None
+    assert "open-looking requests" not in text
+    assert _table_rows(text, "依頼候補（未確認）") == [
+        "| 2026-09-19 | 確認 | SYNTH 候補のみ |"]
