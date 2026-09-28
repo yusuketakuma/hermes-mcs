@@ -47,6 +47,9 @@ from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
+# cheap authenticated read used to tell an expired session from a
+# route-level 403 (see _request)
+SESSION_PROBE_PATH = "/users/self/count"
 LS_TOKEN_KEY = "ngStorage-lastSessionToken"
 _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # MCS /files/* 302s to a self-authenticating signed URL on the operator's CDN;
@@ -592,7 +595,7 @@ class MCSAdapter:
 
     def check_session(self) -> bool:
         try:
-            self._get("/users/self/count", {"targets": "unread_groups"},
+            self._get(SESSION_PROBE_PATH, {"targets": "unread_groups"},
                       extend_session=False)
             return True
         except SessionExpired:
@@ -882,6 +885,13 @@ class MCSAdapter:
                     self._sleep_bounded(1.5 * (attempt + 1))
                 continue
             status = result["status"]
+            if status == 403 and path != SESSION_PROBE_PATH \
+                    and self.check_session():
+                # the session is fine — a route/project-level denial
+                # (retired route, revoked project) is a per-request
+                # error, never a re-login trigger that aborts the run
+                raise MCSError("forbidden", f"{method} {path}",
+                               status=status)
             if status in (401, 403):
                 raise SessionExpired(f"{method} {path}", status=status)
             if status >= 300:

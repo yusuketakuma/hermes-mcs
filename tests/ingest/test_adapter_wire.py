@@ -3,11 +3,13 @@ list_projects / fetch_* pagination / fetch_latest / self_profile,
 websocket framing, Keychain + auto_login, request/worker deadlines,
 assert_allowed_url.  In-memory fakes only — conftest blocks sockets."""
 
+import base64
 import hashlib
 import json
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1088,3 +1090,43 @@ def test_fetch_latest_rejects_malformed(response):
     adapter = _LatestAdapter(response)
     with pytest.raises(mcs_adapter.SchemaError):
         adapter.fetch_latest(7)
+
+
+def _status_adapter(monkeypatch, statuses):
+    adapter = mcs_adapter.MCSAdapter(worker=lambda *a, **k: None)
+    adapter._token = "synthetic-bearer"
+    calls = []
+
+    def worker(payload, **kwargs):
+        path = urllib.parse.urlparse(payload["url"]).path
+        calls.append(path)
+        status = next(s for p, s in statuses.items() if path.endswith(p))
+        return {"status": status, "headers": {},
+                "body": base64.b64encode(b"{}").decode("ascii")}
+
+    adapter._worker = worker
+    monkeypatch.setattr(adapter, "_sleep_bounded", lambda seconds: None)
+    return adapter, calls
+
+
+def test_route_level_403_under_valid_session_is_not_expiry(monkeypatch):
+    """A 403 while the session probe still succeeds (retired route,
+    revoked project) is a per-request error — never a re-login trigger
+    that aborts the whole run."""
+    adapter, calls = _status_adapter(
+        monkeypatch, {"/users/self/count": 200, "/projects/2/messages": 403})
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        adapter._request("GET", "/projects/2/messages", retries=0)
+    assert not isinstance(error.value, mcs_adapter.SessionExpired)
+    assert error.value.kind == "forbidden" and error.value.status == 403
+    assert calls[-1].endswith("/users/self/count")
+
+
+def test_403_with_failing_session_probe_stays_expiry(monkeypatch):
+    adapter, calls = _status_adapter(
+        monkeypatch, {"/users/self/count": 403, "/projects/2/messages": 403})
+    with pytest.raises(mcs_adapter.SessionExpired) as error:
+        adapter._request("GET", "/projects/2/messages", retries=0)
+    assert error.value.status == 403
+    # the probe itself never recurses into another probe
+    assert len(calls) == 2
