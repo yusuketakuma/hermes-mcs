@@ -177,6 +177,20 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   旧 `registry.json` は保持し、配送 claim・未確定フォームは送信元 scope が
   一致する記録だけ引き継ぐ。scope 情報のない旧 token cache はクリック時に再生成し、
   旧 followup の結果は `/mcs` の receipt 照会で確認する。
+- DB 復元後は `data/restore_pending.json` が全 grant を止め、runner の各 tick が
+  journal と復元 DB を照合する（`restore_reconcile.json` に結果、held があれば
+  ops 通知は新しい hold を記録した回だけ1回）。journal に解析できない行があると
+  その file は tainted となり、marker は自動では外れない。復旧手順:
+  1. Hermes gateway を停止して worker の追記を止め、該当 `journal-*.jsonl`
+     （`discord_state/`・`slack_state/`）を別の場所へ複製保存する（原本の証跡を失わない）。
+  2. `restore_reconcile.json` の `held` と壊れた行の前後の `attempt_id` を照合し、
+     該当 scope が配送先 channel に投稿済みかを人が確認する。
+  3. 壊れた行だけを journal から取り除く（他の行は順序ごと保持）。
+     壊れた行が `started`/`result` を隠していた可能性があるため、2 の確認が
+     済むまで行わない。
+  4. 次の tick で照合が再実行され、tainted が無くなれば marker が外れる。
+     残った hold は `ops.card_resolve`（operator 検証済みの rebind/resume）で解除し、
+     gateway を起動し直す。
 - ボタンは `mcs:a:`、モーダルは `mcs:m:`、確認は `mcs:c:` の custom_id のみを
   処理し、他の interaction は一切応答しない。actor・application・guild・channel
   （modal submit では message も）は各段階で再検証する。

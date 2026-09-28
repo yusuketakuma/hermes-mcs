@@ -26,6 +26,12 @@ ops ``update_notice`` alerts held scopes, and the ``restore_pending``
 marker — which blocks all send grants — clears only after the receipt
 is durable. Holds release via ``ops.card_resolve`` (operator-verified
 rebind/resume) or a factual receipt settling the attempt.
+
+A tainted journal keeps the marker (reconcile re-runs every tick and
+alerts only for newly recorded holds). Nothing here clears it
+automatically: the operator procedure — stop the gateway, preserve a
+copy, verify the held scopes in the channel, then remove only the
+corrupt line — is in hermes_plugin/README.md.
 """
 from __future__ import annotations
 
@@ -406,6 +412,11 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
                               result, dirs, now)
 
 
+def _hold_rows(db) -> int:
+    return db.execute(
+        "SELECT COUNT(*) FROM notification_restore_holds").fetchone()[0]
+
+
 def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     """Journal <-> restored DB comparison + hold/settle for every
     disputed delivery scope. Clears the restore marker only after the
@@ -426,6 +437,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                 "counts": {}, "verdicts": [], "held": [],
                 "events_held": 0}
     attempts, journal_incomplete = _scan_journals(dirs)
+    holds_before = _hold_rows(db)
     verdicts, held = [], []
     for aid in sorted(attempts):
         try:
@@ -487,7 +499,10 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         cards.mark_restored(root, by="reconcile_incomplete", now=now)
     elif not journal_incomplete:
         cards.clear_restore_pending(root)
-    if held:
+    # a tainted journal keeps the marker, so reconcile re-runs every
+    # tick — alert only when this run recorded a new hold, never repeat
+    # the same notice for holds already announced
+    if held and _hold_rows(db) > holds_before:
         ledger.outbox_add("update_notice", None, {
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
                     f"（held={len(held)}件）。restore_reconcile.json と "
