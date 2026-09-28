@@ -120,14 +120,21 @@ class Actions:
         # client — the single place the retry_handlers copy lives.
         return self._sender.single_attempt()
 
-    def _pinned(self, token, origin, actor):
+    def _card(self, token, origin, actor):
+        """The token's card pin and the actor — no project scope."""
         ctx = self._reg.token(token)
-        if not ctx:
+        if not ctx or actor != origin.get("actor"):
             return None
         if ctx.get("action") != "task_status" and (
                 ctx.get("team_id") != origin["team_id"]
                 or ctx.get("channel_id") != origin["channel_id"]
                 or ctx.get("message_id") != origin["message_id"]):
+            return None
+        return ctx
+
+    def _pinned(self, token, origin, actor):
+        ctx = self._card(token, origin, actor)
+        if not ctx:
             return None
         # task_status tokens ride an ephemeral task list — the ctx pins
         # only the card/project scope; origin() already bound the click
@@ -146,8 +153,6 @@ class Actions:
                         self._settings, s.get("project_id"))
                     for s in signals.values()):
                 return None
-        if actor != origin.get("actor"):
-            return None
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None):
@@ -345,15 +350,22 @@ class Actions:
         actor = f"slack:{origin['team_id']}:{user}"
         if pending["actor"] != actor \
                 or (body.get("channel") or {}).get("id") != origin["channel_id"] \
-                or not self._pinned(pending["token"],
-                                    {**origin, "actor": actor}, actor):
+                or not self._card(pending["token"],
+                                  {**origin, "actor": actor}, actor):
             return
         payload = pending["payload"]
+        # project scope (card and payload) gates only 確定 — a 取消 drops
+        # the actor's own preview and queues nothing
+        allowed = bool(self._pinned(pending["token"],
+                                    {**origin, "actor": actor}, actor)) \
+            and projects.project_allowed(self._settings, payload["project_id"])
         # decided before the first await: a racing cancel sees in_flight
-        taken = self._reg.take_confirm(
-            confirm_id, bool(cancel), allowed=projects.project_allowed(
-                self._settings, payload["project_id"]))
-        if taken in ("gone", "denied"):
+        taken = self._reg.take_confirm(confirm_id, bool(cancel),
+                                       allowed=allowed)
+        if taken == "gone":
+            return
+        if taken == "denied":
+            await self._say(origin["channel_id"], user, "権限がありません。")
             return
         if taken == "busy":
             # a 確定 is queueing this command — never report a cancel
