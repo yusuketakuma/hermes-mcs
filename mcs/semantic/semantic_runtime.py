@@ -45,6 +45,12 @@ class RuntimeBudget(RuntimeGuardError):
     """The tick or per-job execution budget was exhausted."""
 
 
+class LLMNotSent(RuntimeGuardError):
+    """The local-model request was never dispatched — admission held or
+    deferred it, or the backend refused the connection. Nothing was
+    consumed, so the job waits instead of spending a retry attempt."""
+
+
 def parse_payload(row: dict | object) -> dict:
     raw = row.get("payload") if isinstance(row, dict) else row["payload"]
     try:

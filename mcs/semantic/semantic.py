@@ -158,8 +158,14 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     """One local-llama.cpp chat call via the shared loopback adapter.
     The model gets no tools and no send capability; worker-isolated
     request, no proxy, no redirect, bounded bytes (INV-13, §15.3).
-    Returns raw text or None."""
+    Returns raw text or None (a model failure); raises
+    ``semantic_runtime.LLMNotSent`` when the request never left — an
+    admission hold/deferral or a refused connection — so callers can
+    wait without consuming an attempt (mirrors extract_llm's
+    ``_DEFERRED``)."""
+    from semantic_runtime import LLMNotSent
     endpoint, model = llm_conf()
+    err_out: dict = {}
     if local_llm.admission_enabled():
         # T20: route through the RT/BACKLOG admission boundary — the
         # registered route binds the class; the response shape carries
@@ -168,13 +174,17 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             "mcs.semantic", prompt,
             endpoint=endpoint, model=model, timeout=timeout,
             max_tokens=max_tokens,
-            request_fn=local_llm.bounded_request)
+            request_fn=local_llm.bounded_request, error_out=err_out)
+        if response is not None and response.get("admission"):
+            raise LLMNotSent(f"llm_admission:{response['admission']}")
     else:
         response = local_llm.chat(
             prompt, endpoint=endpoint, model=model,
             timeout=timeout, max_tokens=max_tokens,
             extra_payload={"id_slot": local_llm.request_slot()},
-            request_fn=local_llm.bounded_request)
+            request_fn=local_llm.bounded_request, error_out=err_out)
+    if response is None and err_out.get("kind") == "unreachable":
+        raise LLMNotSent("llm_unreachable")
     # canonical acceptance: a length-truncated or empty completion is an
     # incomplete result, never a success payload — even when its text
     # happens to parse (C05)

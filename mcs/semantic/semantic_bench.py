@@ -35,6 +35,7 @@ from mcs_util import atomic_write, env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
 from semantic_llm import extract_facts, summarize
+from semantic_runtime import LLMNotSent
 from semantic_store import bundle_fingerprint, thread_bundle
 
 DB = os.path.join(os.path.expanduser("~/.mcs"), "data", "ledger.db")
@@ -162,7 +163,14 @@ def cmd_run(args) -> int:
         # per-case deadline — the job budget applies to each case, not
         # the whole run (drain parity)
         deadline = time.monotonic() + args.job_budget
-        r = _run_case(case, semantic.llm_chat, jev_client, deadline)
+        try:
+            r = _run_case(case, semantic.llm_chat, jev_client, deadline)
+        except LLMNotSent:
+            # the local model never received the request — a deferred
+            # case, not a model failure
+            r = {"case_id": case["case_id"], "deferred": True,
+                 "error": "llm_not_sent", "n_claims": 0,
+                 "findings": [], "claims": []}
         results.append(r)
         print(f"  {r['case_id']}: facts={r.get('n_facts')} "
               f"claims={r.get('n_claims')} findings={r.get('findings')}",

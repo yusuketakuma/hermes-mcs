@@ -161,3 +161,58 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
     assert body["max_tokens"] == semantic.LLM_MAX_TOKENS
     assert body["temperature"] == 0
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def _held_admission(monkeypatch, calls):
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: True)
+
+    def held(route, prompt, **kw):
+        calls.append(route)
+        return {"text": None, "finish_reason": None, "usage": None,
+                "status": None, "admission": "held", "permit_id": 1,
+                "epoch": 1}
+    monkeypatch.setattr(local_llm, "admitted_chat", held)
+
+
+def _refused_connection(monkeypatch, calls):
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+
+    def refused(prompt, error_out=None, **kw):
+        calls.append(prompt)
+        if error_out is not None:
+            error_out["kind"] = "unreachable"
+        return None
+    monkeypatch.setattr(local_llm, "chat", refused)
+
+
+@pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection])
+def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
+                                                      not_sent):
+    """U07-F01: an admission hold or a refused connection means the local
+    model never received the request — the job waits (deferred) instead
+    of burning its bounded retry attempts until it fails."""
+    import semantic_runtime
+    calls = []
+    not_sent(monkeypatch, calls)
+    with pytest.raises(semantic_runtime.LLMNotSent):
+        semantic.llm_chat("synthetic prompt")
+    db = _seeded(tmp_path)
+    try:
+        for _ in range(7):
+            with db.db:
+                db.db.execute(
+                    "UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            out = semantic.run_due(
+                db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
+                jev_client=_FakeJev(), llm_fn=semantic.llm_chat)
+            assert out["deferred"] == 1 and not out["failed"]
+        row = db.db.execute(
+            "SELECT state,attempts,next_try FROM fetch_jobs "
+            "WHERE kind='semantic'").fetchone()
+        assert row["state"] == "pending" and row["attempts"] == 0
+        assert row["next_try"] > time.time()
+        assert len(calls) >= 8
+    finally:
+        db.close()

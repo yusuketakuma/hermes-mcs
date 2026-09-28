@@ -1085,6 +1085,11 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "stale"
     except runtime.RuntimeOff:
         return "stale"
+    except runtime.LLMNotSent:
+        # admission hold / refused connection: the request never left,
+        # so no attempt is consumed — the job waits like a resource
+        # outage, even when earlier calls of this job were dispatched
+        return "deferred"
     except runtime.RuntimeBudget:
         sent = (jev_client is not None
                 and jev_client.requests_made > requests_before)
