@@ -333,6 +333,9 @@ def _human_cmd_check(req) -> str | None:
     return None
 
 
+SCAN_FACTOR = 16
+
+
 def drain_int_commands(ledger, result, cfg, root, deadline=None,
                        limit=32) -> int:
     """Bounded three-class drain of data/cmd_int. Begins apply first —
@@ -353,8 +356,11 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         return 0
     if not names:
         return 0
+    # classify a wider window than we apply: with a backlog, a receipt
+    # can sort into the first `limit` names while its begin sorts past
+    # them — begins must be picked from the whole scanned window first
     pending = []
-    for name in names[:limit]:
+    for name in names[:limit * SCAN_FACTOR]:
         path = os.path.join(int_dir, name)
         try:
             req = mcs_requests.read_command(path)
@@ -382,7 +388,7 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                                         "thread_receipt",
                                         "part_receipt")]
     done = 0
-    for path, req in begins + receipts + others:
+    for path, req in (begins + receipts + others)[:limit]:
         if deadline is not None and time.monotonic() > deadline:
             result.setdefault("errors", []).append(
                 "cmd_int_drain_deadline")

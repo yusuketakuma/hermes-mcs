@@ -1154,6 +1154,41 @@ def test_drain_int_receipts_first_settles_then_begin(led, tmp_path):
     ).fetchone()["c"] == 1
 
 
+def test_drain_int_backlog_never_orphans_a_begin_past_the_window(
+        led, tmp_path):
+    """With a backlog larger than one drain, a receipt that sorts into
+    the window while its begin sorts past it must not be consumed as
+    unknown_attempt — begins are picked from the wider scanned window."""
+    render = _deliverable(led, tmp_path)
+    root = tmp_path / "data"
+    begin_req = {"version": 1, "op": "transport_begin",
+                 "command_id": _uuid(1), "attempt_id": "0" * 15 + "7",
+                 "worker_id": "dd" * 8,
+                 "delivery_id": render["delivery_id"],
+                 "render_rev": 1,
+                 "payload_hash": render["payload_hash"],
+                 "route_epoch": 1, **SCOPE}
+    rcpt_req = {"version": 1, "op": "transport_receipt",
+                "command_id": _uuid(2), "attempt_id": "0" * 15 + "7",
+                "delivery_id": render["delivery_id"],
+                "render_rev": 1,
+                "payload_hash": render["payload_hash"],
+                "route_epoch": 1,
+                "correlation": render["correlation"], **SCOPE,
+                "result": "delivered", "message_id": "m-7"}
+    int_dir = root / "cmd_int"
+    (int_dir / "a0.json").write_text(json.dumps(rcpt_req))
+    for i in range(1, 6):
+        (int_dir / f"a{i}.json").write_text(json.dumps(
+            {"version": 1, "op": "bogus", "command_id": _uuid(10 + i)}))
+    (int_dir / "z.json").write_text(json.dumps(begin_req))
+    notify_cmds.drain_int_commands(led, {"errors": []}, CFG, str(root),
+                                   limit=2)
+    row = led.db.execute(
+        "SELECT state FROM notification_delivery_attempts "
+        "WHERE attempt_id=?", ("0" * 15 + "7",)).fetchone()
+    assert row is not None and row["state"] == "delivered"
+
 def test_drain_int_validation_quarantine(led, tmp_path):
     root = tmp_path / "data"
     notify_cards.ensure_dirs(str(root))
