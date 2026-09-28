@@ -46,6 +46,29 @@ _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
+# Every key this worker generation knows how to honor. The runner and a
+# long-lived gateway worker upgrade separately (a worker picks up new
+# code only on ``hermes gateway restart``); a spec carrying a key an
+# old worker does not know is rejected whole — held and logged as
+# ``unsupported_*`` — instead of sending the card and silently dropping
+# the feature (the 2026-09 incident: card delivered, companion thread
+# body and attachments missing). Extend these sets together with the
+# code that consumes the new key.
+SPEC_KEYS = frozenset({
+    "schema", "delivery_id", "logical_intent_id", "card_key", "kind", "op",
+    "render_rev", "source_generation", "presentation_generation",
+    "ui_revision", "delivery", "parts"})
+DELIVERY_KEYS = frozenset({
+    "profile", "application_id", "guild_id", "channel_id", "message_id",
+    "thread_id", "route_epoch", "correlation", "intent_event_ids",
+    "transport", "team_id"})
+PARTS_KEYS = frozenset({
+    "containers", "footer", "action_rows", "context", "manifest_id",
+    "page", "pages", "thread_name", "thread_body_parts", "manifest"})
+PART_ENTRY_KEYS = frozenset({
+    "part_id", "kind", "index", "sha256", "bytes", "name",
+    "attachment_id", "path", "unavailable"})
+
 STYLES = {"primary": 1, "secondary": 2, "success": 3, "danger": 4}
 _CONTAINER_TYPES = ("heading", "text", "field", "quote", "meta")
 
@@ -60,6 +83,11 @@ def _text(v, n):
 
 def _opt_id(v):
     return v is None or _text(v, 64)
+
+
+def _known_keys(obj: dict, allowed: frozenset, where: str) -> None:
+    if not obj.keys() <= allowed:
+        _err(f"unsupported_{where}_key")
 
 
 def _validate_head(spec) -> None:
@@ -190,10 +218,12 @@ def validate(spec) -> dict:
     if not isinstance(spec, dict):
         _err("bad_spec")
     _validate_head(spec)
-    _validate_delivery(spec)
+    _known_keys(spec, SPEC_KEYS, "spec")
+    _known_keys(_validate_delivery(spec), DELIVERY_KEYS, "delivery")
     parts = spec.get("parts")
     if not isinstance(parts, dict):
         _err("bad_parts")
+    _known_keys(parts, PARTS_KEYS, "parts")
     if parts.get("context") is not None and not isinstance(parts["context"], dict):
         _err("bad_context")
     containers = parts.get("containers")
@@ -245,6 +275,7 @@ def _validate_manifest(manifest) -> None:
         if not isinstance(p, dict) \
                 or not _text(p.get("part_id"), MAX_PART_ID):
             _err("bad_part_id")
+        _known_keys(p, PART_ENTRY_KEYS, "part")
         if p["part_id"] in seen:
             _err("duplicate_part_id")
         seen.add(p["part_id"])

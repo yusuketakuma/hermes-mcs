@@ -105,6 +105,7 @@ class DeliveryWorker:
         self._lock_fd = None
         self._stopping = False
         self._segment = 0
+        self._rejected: dict[str, str] = {}   # delivery_id -> logged error
 
     # -- scope lock --------------------------------------------------
 
@@ -723,6 +724,7 @@ class DeliveryWorker:
         Returns [(path, spec)] for claimable specs; rejected specs are
         logged and skipped (never half-parsed into a send)."""
         out = []
+        rejected = {}
         for path in self._spec_files():
             try:
                 with open(path, "rb") as handle:
@@ -742,12 +744,17 @@ class DeliveryWorker:
             try:
                 self._validate_spec(spec)
             except ValueError as e:
-                self._log("spec_rejected",
-                          delivery_id=os.path.basename(path)[:-5],
-                          error=str(e))
+                # held, not sent — logged once per spec rather than every
+                # tick (an outdated worker keeps rejecting until restart)
+                delivery_id = os.path.basename(path)[:-5]
+                rejected[delivery_id] = str(e)
+                if self._rejected.get(delivery_id) != str(e):
+                    self._log("spec_rejected", delivery_id=delivery_id,
+                              error=str(e))
                 continue
             if self._ours(spec["delivery"]):
                 out.append((path, spec))
+        self._rejected = rejected
         return out
 
     def _validate_spec(self, spec: dict) -> None:
