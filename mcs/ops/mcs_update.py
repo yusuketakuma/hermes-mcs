@@ -1034,10 +1034,19 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 # the post-merge child may already have restarted the
                 # drainers (and removed the marker) — hold exactly like
                 # rollback(): writers stopped, marker kept until consent
-                quiesce()
+                # record the hold FIRST: a failing quiesce must never
+                # lose the consent record or let finally drop the marker
                 consent_hold = True
-                return _hold_rollback_for_consent(
+                rc = _hold_rollback_for_consent(
                     state, e, tag, command_id, reason)
+                try:
+                    quiesce()
+                except Exception as qe:
+                    # keep the consent report intact — the hold (and its
+                    # awaiting-consent freeze) already stands; log only
+                    print("consent hold: quiesce failed:",
+                          f"{type(qe).__name__}: {qe}"[:200])
+                return rc
             except Exception as e:
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"

@@ -1366,3 +1366,20 @@ def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
         str(tmp_path / "health.json"), later, 1800)
     assert report["status"] == "stale"
     db.close()
+
+
+@pytest.mark.parametrize("cause", ["marker", "code_changed"])
+def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
+                                                   cause):
+    """A tick that waited out an updater must not run its pre-update
+    code against the post-update tree."""
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    if cause == "marker":
+        (data / "update_in_progress.marker").write_text("x")
+    else:
+        monkeypatch.setattr(run_check, "_CODE_STAMP", -1)
+    monkeypatch.setattr(run_check, "LOCK_POLL_S", 0.01)
+    assert run_check._wait_run_lock(0.2) is None
+    fd = run_check.acquire_run_lock(str(data / "run.lock"))
+    assert fd is not None      # the lock was released, not leaked
+    os.close(fd)

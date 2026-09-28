@@ -1197,6 +1197,57 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     assert Path(mcs_update.MARKER_PATH).exists()
 
 
+def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
+                                                       monkeypatch):
+    """Recording the hold comes first: a quiesce failure after it must
+    not lose restore_consent or drop the update marker."""
+    import maintenance
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")
+    monkeypatch.setattr(mcs_update, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "pre.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)
+    monkeypatch.setattr(mcs_update, "load_config",
+                        lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
+    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(mcs_update, "precheck_tag",
+                        lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
+    calls = {"n": 0}
+
+    def quiesce():
+        calls["n"] += 1
+        mcs_update._write_marker()
+        if calls["n"] >= 2:
+            raise mcs_update.UpdateError("drainer_stop_failed: synthetic")
+        return []
+
+    monkeypatch.setattr(mcs_update, "quiesce", quiesce)
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda: (mcs_update._remove_marker(), [])[1])
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
+
+    def post_merge(_s):
+        raise mcs_update.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
+    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
+    st = mcs_update.load_state()
+    assert st.get("restore_consent")
+    assert (st.get("applying") or {}).get("rollback") is True
+    assert Path(mcs_update.MARKER_PATH).exists()
+
+
 def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
         updater, monkeypatch):
     """An interrupted apply journal belongs to recovery — a manual

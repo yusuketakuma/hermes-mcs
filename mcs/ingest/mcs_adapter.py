@@ -593,6 +593,15 @@ class MCSAdapter:
             raise BootstrapError("session token failed shape check")
         return tok
 
+    def _probe_session_ok(self) -> bool:
+        """check_session for the 403 classifier — a probe that itself
+        fails (network, 5xx, deadline) keeps the pre-existing expiry
+        classification instead of replacing the 403 with its own error."""
+        try:
+            return self.check_session()
+        except MCSError:
+            return False
+
     def check_session(self) -> bool:
         try:
             self._get(SESSION_PROBE_PATH, {"targets": "unread_groups"},
@@ -886,7 +895,7 @@ class MCSAdapter:
                 continue
             status = result["status"]
             if status == 403 and path != SESSION_PROBE_PATH \
-                    and self.check_session():
+                    and self._probe_session_ok():
                 # the session is fine — a route/project-level denial
                 # (retired route, revoked project) is a per-request
                 # error, never a re-login trigger that aborts the run
