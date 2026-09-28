@@ -116,10 +116,27 @@ class FakeChannel:
         raise FakeHTTP(404)
 
 
+class _NoWireSession:
+    def request(self, *_a, **_kw):
+        raise AssertionError("fake channels never reach the session")
+
+
+class FakeHTTPClient:
+    """Verified-SDK shape the single-post guard checks before a create
+    POST; the fake channels above bypass the session entirely."""
+
+    user_agent = ("DiscordBot (https://github.com/Rapptz/discord.py 2.7.1)"
+                  " Python/3.11 aiohttp/3.14.3")
+
+    def __init__(self):
+        self._HTTPClient__session = _NoWireSession()
+
+
 class FakeBot:
     def __init__(self, channel_id=42):
         self.channels = {channel_id: FakeChannel(channel_id)}
         self.user = BOT_USER
+        self.http = FakeHTTPClient()
 
     def get_channel(self, cid):
         return self.channels.get(cid)
