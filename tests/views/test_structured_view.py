@@ -40,6 +40,51 @@ def test_filters_and_labels(db):
     assert "家族→医師へ状態確認(期限:2026-10-01)" in joined
 
 
+def _request_rows(joined):
+    return [ln for ln in joined.split("\n") if ln.startswith("依頼")]
+
+
+def test_unverified_requests_render_apart_from_confirmed(db):
+    joined = _render(db, {"requests": [
+        {"to": "医師", "action": "状態確認"},
+        {"to": "不明", "action": "採血の検討", "unverified": True},
+        {"to": "訪問看護", "action": "処置変更", "due": "2026-10-02",
+         "unverified": True}]})
+    assert _request_rows(joined) == [
+        "依頼: 医師へ状態確認",
+        "依頼候補（未確認）: 採血の検討 / 訪問看護へ処置変更(期限:2026-10-02)"]
+
+
+def test_unverified_only_requests_never_render_as_confirmed(db):
+    """Only-unverified LLM requests do not fall back to rule requests
+    either: the selected facts decided the request is uncertain."""
+    joined = _render(db, {"requests": [
+        {"to": "不明", "action": "往診しない", "unverified": True}]},
+        {"requests": [{"kind": "doctor", "ctx": "往診依頼の文脈"}]})
+    assert _request_rows(joined) == ["依頼候補（未確認）: 往診しない"]
+
+
+def test_confirmed_requests_render_unchanged(db):
+    joined = _render(db, {"requests": [
+        {"to": "医師", "action": "a", "unverified": False},
+        {"to": "医師", "action": "b"}, {"to": "医師", "action": "c"},
+        {"to": "医師", "action": "d"}]})
+    assert _request_rows(joined) == ["依頼: 医師へa / 医師へb / 医師へc"]
+
+
+def test_malformed_unverified_flag_fails_closed(db):
+    """A non-bool flag (string, number, null) is never shown as confirmed;
+    items missing both to/action are dropped as before."""
+    joined = _render(db, {"requests": [
+        {"action": "文字列", "unverified": "false"},
+        {"action": "数値", "unverified": 0},
+        {"action": "null", "unverified": None},
+        {"action": "c4", "unverified": "yes"},
+        {"from": "家族", "unverified": True}, "not-a-dict"]})
+    assert _request_rows(joined) == [
+        "依頼候補（未確認）: 文字列 / 数値 / null"]
+
+
 def test_llm_event_exclusions_are_not_overridden(db):
     """Rule hits cannot resurrect events omitted by the selected facts."""
     joined = _render(db, {"events": ["visit"]},
