@@ -436,8 +436,15 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         # extract_llm row.
         _v4_doc_hash = payload_hash({"f": v2_doc["facts"],
                                      "e": v2_doc["evidence"]})
-        if _current(ledger, KIND_FACT_PROJ, mid, fp, policy) is None:
-            from semantic_projection import project_v2_doc_legacy
+        from semantic_projection import (PROJECTION_VERSION,
+                                         project_v2_doc_legacy)
+        prev_proj = _current(ledger, KIND_FACT_PROJ, mid, fp, policy)
+        # a row minted by an older projection version (or from another
+        # audited document) is stale — supersede it with a fresh row
+        if prev_proj is None \
+                or prev_proj["meta"].get("projection_version") \
+                != PROJECTION_VERSION \
+                or prev_proj["meta"].get("doc_hash") != _v4_doc_hash:
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s5_projection", "done",
                             doc_hash=_v4_doc_hash)
@@ -451,7 +458,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "hash": member["revision"],
-                      "doc_hash": _v4_doc_hash})
+                      "doc_hash": _v4_doc_hash,
+                      "projection_version": PROJECTION_VERSION})
         else:
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s5_projection", "reused",

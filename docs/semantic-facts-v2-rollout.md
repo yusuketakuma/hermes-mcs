@@ -24,12 +24,19 @@ python3 mcs/ops/mcs_setup.py fact-source canonical --gate-evidence report.json
 ```
 
 `canonical` requires `--gate-evidence`: a `semantic_evaluation` report
-with `schema_version`, passing `gate.pass`, passing `gate.g6_eligible`,
-and at least one human-labelled item (`label_provenance.human >= 1`).
-The config stores a pinned token `g6-v1:<sha256-prefix>`; selecting a
-non-canonical source clears the pin.  A canonical config without the
-pin is rejected by the production validator
-(`config: semantic_fact_source_gate_required`).
+scored against the shipped `evaluation/g6-criteria-v1.json` — its
+`criteria_sha256` and `criteria_version` must match that file (normalized
+and hashed the way the evaluator embeds them) — with `schema_version`,
+`gate.pass` and `gate.g6_eligible` true, `gate.reasons` an empty list, and
+`label_provenance.human` at least the shipped `min_human_labels` (200).
+Synthetic, failing or foreign-criteria reports are rejected.  The config
+stores a pinned token `<criteria version>:<report sha256-prefix>` (the
+prefix is the shipped criteria `version`); selecting a non-canonical
+source clears the pin.  A canonical config without the pin is rejected by
+the production validator (`config: semantic_fact_source_gate_required`).
+`mcs_setup.py init --set` cannot select `canonical` or change its pin
+(including through a whole `semantic` object); an unchanged existing
+selection passes through, and promotion goes only through `fact-source`.
 
 ## Canonical pipeline
 
@@ -73,13 +80,28 @@ Per target message, inside the shared drain queue:
 8. **Mandatory rendering** — `mandatory_render` lists every verified
    fact and discloses every non-terminal obligation in the stored
    summary and the rendered notice, even if the model summary dropped
-   them.
+   them.  Each line carries the stated quantity, polarity, epistemic,
+   workflow status, action, valid time and actor (codes, omitted when
+   `unknown`) next to its `ID:`/`証拠:` binding.
 9. **Projection** — an audited doc also writes `canonical_projection`:
    the legacy `extract_llm` content shape (meds/symptoms/events/
    requests), honestly lossy (allergy, adverse events, vitals,
    preferences, observations have no legacy slot).  Read-side consumers
    (`mcs_stats`, `mcs_queries`, `mcs_signals`, `rollup`) prefer a
    hash-current projection over `extract_llm` via `current_fact_pred`.
+   The legacy slots never assert what the canonical doc leaves open:
+   adherence/administration reports are observations (not `meds`); a
+   cancelled workflow or a performed/reported stop is `past`; a
+   medication event with no, `hold` or `consider` action, an endpoint
+   of a `CONTRADICTION`/`UNRESOLVED` relation, or a fact without a
+   bound evidence quote is `unverified` (never a current patient
+   medication or a completed care transition); requests keep the full
+   statement plus an `unverified` flag.  Rows carry
+   `meta.projection_version` (`semantic_projection.PROJECTION_VERSION`);
+   `canonical_projection` and `semantic_facts_v4` rows are reused only
+   when that version (and the audited `doc_hash`) match, otherwise the
+   message's next reprocessing writes a superseding row.  Existing rows
+   keep their old content until the message is reprocessed.
 
 ## Artifacts
 

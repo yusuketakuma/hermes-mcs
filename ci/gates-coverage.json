@@ -191,10 +191,13 @@
     },
     "FIX-SR1": {
       "status": "covered",
-      "summary": "mandatory_render silently truncated verified facts past the 40-line cap; omission now disclosed as a limitation",
+      "summary": "mandatory_render silently truncated verified facts past the 40-line cap; every verified fact now renders with ID/evidence binding in bounded pages, and an incomplete page set is NEEDS_REVIEW, never an omission limitation",
       "tests": [
         "test_mandatory_render_dedupes_without_cap",
-        "test_mandatory_render_covers_41_facts_with_identity"
+        "test_mandatory_render_covers_41_facts_with_identity",
+        "test_mandatory_render_pages_120_facts_within_budget",
+        "test_verify_mandatory_pages_detects_tampering",
+        "test_drain_flags_incomplete_mandatory_pages"
       ]
     },
     "FIX-SE4": {

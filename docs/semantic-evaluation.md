@@ -54,11 +54,26 @@ supported final claims; critical overclaim uses human critical claims marked
 unsupported. Candidate critical flags, fact references, and any
 `final_fact_ids` metadata are never treated as truth.
 
-`delivered_fact_ids` continues the verified -> rendered -> delivered chain:
-mandatory gold facts absent from the candidate's delivered ID set score
-against `delivered_fact_recall`, so a fact lost between render and transport
-fails the same way a dropped render does. An absent list scores as nothing
-delivered rather than being skipped.
+`verified_fact_ids`, `rendered_fact_ids` and `delivered_fact_ids` record the
+verified -> rendered -> delivered chain. All three use the same contract: a
+list of unique non-empty strings. Mandatory gold facts absent from the rendered
+or delivered set score against `rendered_fact_recall` /
+`delivered_fact_recall`, so a fact lost between render and transport fails the
+same way a dropped render does. An absent list scores as nothing reached that
+stage rather than being skipped.
+
+Those recall metrics only cover mandatory gold facts. Report schema v3 adds
+`fact_lifecycle` (overall and per split) over **every** candidate fact:
+`complete` counts cases whose three stage sets all equal the candidate's
+`facts` IDs; `missing` and `extra` sum, across the three stages, IDs lost from
+or added to a stage; `missing_observations` counts cases lacking at least one
+stage list. A late non-mandatory fact (for example the 41st) that disappears
+between stages therefore still fails the gate with
+`fact_lifecycle_incomplete` whenever held-out `complete` differs from the
+held-out case count. Records written before v3 that lack `verified_fact_ids`
+still score every existing metric, but fail closed on the lifecycle: the
+missing observation is never derived from `facts` or another stage, because
+that would certify a stage nobody observed.
 
 The criteria file fixes the gate. `required_metrics` defaults to all WP08
 metrics, but keeping it explicit is recommended:
@@ -103,7 +118,8 @@ missing count, totals, mean, p50, and p95 for requests and token counters.
 
 The gate is false when human labels are insufficient, a required split is
 empty, a required metric or telemetry section has a zero denominator, a
-threshold is missed, or any critical overclaim is present. `g6_eligible`
+threshold is missed, any critical overclaim is present, or a held-out case's
+fact lifecycle is incomplete (`fact_lifecycle_incomplete`). `g6_eligible`
 additionally requires every case label to be human. The current task has no
 real human labels, so synthetic fixtures and their passing unit tests do not
 constitute G6 or a production

@@ -14,6 +14,8 @@
 
 現時点の制約：正解factは本人が原文から定義する必要がある。固定構造データのfacts/loops/usage/latencyは生成時の観測から準備し、結合処理で補作しない。自由記述だけの評価を定量labelへ自動変換しない。
 
+評価器schema v3では、candidateの全factについてverified_fact_ids・rendered_fact_ids・delivered_fact_idsの観測集合も生成時に記録する（mandatory・概要に出たIDだけを記録しない）。分割表示されたfactは全ページの配送確認後だけdeliveredへ含める。いずれかの集合が欠けた旧recordも採点はされるが、欠けた段階は補作せず`fact_lifecycle_incomplete`としてgateを不合格にする。
+
 
 定量評価に使う評価票は、作成前に各outputsへ`evaluation_candidate`として評価器用candidate全体（facts/claims/loops/status/usage/latency/version）を渡す。claimsのIDと本文は表示主張に一致させる。評価票にはpredictionsとしてfacts/loops/statusも表示されるため、本文だけでなくこの予測も確認する。管理者用キーにはcandidate全体のhashを保存し、結合時に差し替えを拒否する。
 

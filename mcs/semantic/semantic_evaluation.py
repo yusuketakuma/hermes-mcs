@@ -26,8 +26,9 @@ from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
 
 
-SCHEMA_VERSION = "semantic-evaluation/v2"
+SCHEMA_VERSION = "semantic-evaluation/v3"
 SPLITS = ("dev", "calibration", "test")
+LIFECYCLE_STAGES = ("verified", "rendered", "delivered")
 METRICS = (
     "important_fact_recall", "final_recall", "critical_overclaim",
     "medication_recall", "negation_recall", "time_recall",
@@ -310,24 +311,18 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         _item_id(row, "loop_id")
         if type(row.get("resolved")) is not bool:
             raise EvaluationError("candidate_loop_resolved_required")
-    rendered = candidate.get("rendered_fact_ids", [])
-    if not isinstance(rendered, list):
-        raise EvaluationError("candidate_rendered_fact_ids_list_required")
-    if any(not isinstance(ref, str) or not ref.strip() for ref in rendered):
-        raise EvaluationError("candidate_rendered_fact_id_invalid")
-    if len(rendered) != len(set(rendered)):
-        raise EvaluationError("candidate_rendered_fact_id_duplicate")
-    # verified -> rendered -> delivered chain (T6): the delivered id
-    # set follows the rendered contract — same shape, same dedupe, and
-    # an absent list scores as nothing delivered rather than skipped.
-    delivered = candidate.get("delivered_fact_ids", [])
-    if not isinstance(delivered, list):
-        raise EvaluationError("candidate_delivered_fact_ids_list_required")
-    if any(not isinstance(ref, str) or not ref.strip()
-           for ref in delivered):
-        raise EvaluationError("candidate_delivered_fact_id_invalid")
-    if len(delivered) != len(set(delivered)):
-        raise EvaluationError("candidate_delivered_fact_id_duplicate")
+    # verified -> rendered -> delivered chain (T6): every stage's id
+    # set follows one contract — same shape, same dedupe. An absent list
+    # is a missing observation, scored as nothing reached that stage
+    # rather than skipped.
+    for stage in LIFECYCLE_STAGES:
+        ids = candidate.get(f"{stage}_fact_ids", [])
+        if not isinstance(ids, list):
+            raise EvaluationError(f"candidate_{stage}_fact_ids_list_required")
+        if any(not isinstance(ref, str) or not ref.strip() for ref in ids):
+            raise EvaluationError(f"candidate_{stage}_fact_id_invalid")
+        if len(ids) != len(set(ids)):
+            raise EvaluationError(f"candidate_{stage}_fact_id_duplicate")
     for row in _items(candidate.get("relations", []), "candidate_relations"):
         _id(row.get("left_fact_id"), "candidate_relation_left")
         _id(row.get("right_fact_id"), "candidate_relation_right")
@@ -553,6 +548,22 @@ def _case_counts(record: dict) -> dict:
                        for row in _items(candidate.get("unresolved", []),
                                          "candidate_unresolved")}
     silently_dropped = mandatory - predicted.keys() - unresolved_refs
+    # Full lifecycle over EVERY predicted fact, not only mandatory gold
+    # ones: a late non-mandatory fact lost between verify, render and
+    # delivery is still a completeness failure. An absent stage list is
+    # a missing observation and never imputed from another stage.
+    observed = all(f"{stage}_fact_ids" in candidate
+                   for stage in LIFECYCLE_STAGES)
+    lifecycle = {"complete": int(observed), "missing": 0, "extra": 0,
+                 "missing_observations": int(not observed)}
+    for stage in LIFECYCLE_STAGES:
+        ids = set(candidate.get(f"{stage}_fact_ids") or [])
+        lost = len(predicted.keys() - ids)
+        added = len(ids - predicted.keys())
+        lifecycle["missing"] += lost
+        lifecycle["extra"] += added
+        if lost or added:
+            lifecycle["complete"] = 0
 
     gold_relations = _items(label.get("relations", []), "label_relations")
     pred_relations = _items(candidate.get("relations", []),
@@ -594,6 +605,7 @@ def _case_counts(record: dict) -> dict:
         "deferred": [int(deferred), 1],
         "latency": float(latency) if latency is not None else None,
         "usage": usage_values,
+        "lifecycle": lifecycle,
     }
 
 
@@ -612,8 +624,12 @@ def _scope_report(records: list[dict]) -> dict:
              ("requests", "input_tokens",
               "output_tokens", "total_tokens")}
     usage_cases = 0
+    lifecycle = {"complete": 0, "missing": 0, "extra": 0,
+                 "missing_observations": 0}
     for record in records:
         values = _case_counts(record)
+        for key in lifecycle:
+            lifecycle[key] += values["lifecycle"][key]
         for key in counts:
             counts[key][0] += values[key][0]
             counts[key][1] += values[key][1]
@@ -662,7 +678,8 @@ def _scope_report(records: list[dict]) -> dict:
             "p95": _percentile([float(v) for v in values], 0.95),
         }
     return {"cases": len(records), "metrics": metrics,
-            "latency": latency, "usage": usage_report}
+            "latency": latency, "usage": usage_report,
+            "fact_lifecycle": lifecycle}
 
 
 def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
@@ -676,6 +693,8 @@ def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
            for split in required_splits):
         reasons.append("required_split_missing")
     heldout = report["splits"]["test"]
+    if heldout["fact_lifecycle"]["complete"] != heldout["cases"]:
+        reasons.append("fact_lifecycle_incomplete")
     metrics = heldout["metrics"]
     reasons.extend(f"denominator_zero:{name}" for name in METRICS
                    if metrics[name]["denominator"] == 0)
@@ -741,6 +760,7 @@ def evaluate_records(records: list[dict], manifest: dict,
     report["metrics"] = overall["metrics"]
     report["latency"] = overall["latency"]
     report["usage"] = overall["usage"]
+    report["fact_lifecycle"] = overall["fact_lifecycle"]
     report["gate"] = _gate(report, criteria, checked["provenance"])
     return report
 

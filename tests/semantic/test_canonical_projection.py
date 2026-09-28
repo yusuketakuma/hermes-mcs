@@ -312,6 +312,101 @@ def test_projection_preserves_subject_and_uncertainty():
     assert not out["symptoms"][2].get("unverified")
 
 
+def _med_bucket(med):
+    from rollup import _med_states
+    state = {}
+    _med_states({"posted_at": "2026-09-01T00:00:00+09:00"}, {},
+                {"meds": [dict(med, name="アムロジピン")]}, state)
+    return state["アムロジピン"][0]
+
+
+def _disputed_doc(rel_type):
+    doc = _doc([_fact("f1"), _fact("f2", statement="アムロジピン中止",
+                                   action="stop")])
+    doc["relations"] = [{"left_fact_id": "f1", "right_fact_id": "f2",
+                         "type": rel_type}]
+    return doc
+
+
+@pytest.mark.parametrize("doc", [
+    # adherence reports are observations, not current prescriptions
+    _doc([_fact("f1", kind="adherence_administration",
+                statement="アムロジピン服用済み")]),
+    # cancelled workflow is past whatever the action says
+    _doc([_fact("f1", action="continue", workflow_status="cancelled")]),
+    _doc([_fact("f1", action="cancelled", workflow_status="done")]),
+    # no stated / only held or considered action is not confirmed
+    _doc([_fact("f1", action="unknown")]),
+    _doc([_fact("f1", action="hold")]),
+    _doc([_fact("f1", action="consider")]),
+    _doc([{k: v for k, v in _fact("f1").items() if k != "action"}]),
+    # open conflicts are retained, never asserted
+    _disputed_doc("CONTRADICTION"),
+    _disputed_doc("UNRESOLVED"),
+    # a fact whose evidence id binds no stored quote
+    _doc([_fact("f1", evidence_ids=["ev_missing"])]),
+], ids=["adherence", "cancelled_workflow", "cancelled_done",
+        "action_unknown", "action_hold", "action_consider",
+        "action_absent", "contradiction", "unresolved", "no_quote"])
+def test_projection_never_asserts_unconfirmed_current_medication(doc):
+    from mcs_queries import med_is_patient_current
+    out = projection.project_v2_doc_legacy(doc)
+    for med in out.get("meds", []):
+        assert not med_is_patient_current(med), med
+        assert _med_bucket(med) != "current", med
+    # the fact itself is never lost — it stays a canonical fact
+    assert {f["fact_id"] for f in doc["facts"]} \
+        == {f["fact_id"] for f in out["canonical_facts"]}
+
+
+def test_projection_adherence_and_cancel_semantics():
+    out = projection.project_v2_doc_legacy(_doc([
+        _fact("adh", kind="adherence_administration")]))
+    assert "meds" not in out
+    assert out["canonical_facts"][0]["kind"] == "adherence_administration"
+    assert projection.project_v2_facts(_doc([
+        _fact("adh", kind="adherence_administration")]))[0]["kind"] \
+        == "observation"
+    # operator precedence: a stop that is only planned is not past
+    planned_stop = projection.project_v2_doc_legacy(_doc([
+        _fact("f1", action="stop", workflow_status="planned")]))
+    assert planned_stop["meds"][0]["status"] == "planned"
+
+
+def test_projection_confirmed_medication_stays_current():
+    from mcs_queries import med_is_patient_current
+    med = projection.project_v2_doc_legacy(_doc([_fact("f1")]))["meds"][0]
+    assert med_is_patient_current(med) and _med_bucket(med) == "current"
+
+
+def test_projection_disputed_or_unbound_care_event_is_not_a_transition():
+    doc = _doc([_fact("f1", kind="care_event", statement="本日退院済み"),
+                _fact("f2", kind="care_event", statement="本日退院済み")])
+    doc["relations"] = [{"left_fact_id": "f1", "right_fact_id": "f2",
+                         "type": "CONTRADICTION"}]
+    assert "events" not in projection.project_v2_doc_legacy(doc)
+    doc = _doc([_fact("f1", kind="care_event", statement="本日退院済み",
+                      evidence_ids=[])])
+    assert "events" not in projection.project_v2_doc_legacy(doc)
+
+
+@pytest.mark.parametrize("kw,unverified", [
+    ({}, False),
+    ({"polarity": "negated"}, True),
+    ({"polarity": "uncertain"}, True),
+    ({"epistemic": "speculated"}, True),
+    ({"evidence_ids": []}, True),
+])
+def test_projection_request_keeps_full_statement(kw, unverified):
+    statement = "来週の往診までに残薬を数えて薬局へ報告してください"
+    out = projection.project_v2_doc_legacy(_doc([
+        _fact("r1", kind="request_pending", statement=statement,
+              workflow_status="pending", **kw)]))
+    request = out["requests"][0]
+    assert request["action"] == statement      # never cut at 15 chars
+    assert request["unverified"] is unverified
+
+
 def test_current_fact_pred_resolves_one_generation(tmp_path):
     """C06: among hash-current projections only THE newest row is
     current — a newer (even empty) projection supersedes older
@@ -392,5 +487,79 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
             "WHERE a.kind IN ('extract_llm','canonical_projection') AND m.message_id=1 "
             + current_fact_pred())]
         assert kinds == ["extract_llm"]
+    finally:
+        db.close()
+
+
+def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
+    """A projection row minted by an older PROJECTION_VERSION for the
+    same fingerprint/doc_hash is stale semantics: reprocessing writes a
+    fresh row (the newest wins for readers) instead of reusing it, and
+    a same-version rerun still reuses."""
+    import time
+    import semantic
+    import semantic_drain as drain
+    import semantic_v4 as v4
+    from mcs_queries import current_projection_id, current_v4_id
+    from semantic_policy import policy_fingerprint, semantic_config
+    from test_canonical_drain import _canonical_cfg, _llm_v2, _seeded_two
+    from test_semantic_v4 import _PassJev
+
+    def rows(kind):
+        return db.db.execute(
+            "SELECT artifact_id,meta FROM artifacts WHERE kind=? "
+            "AND message_id=1 ORDER BY artifact_id", (kind,)).fetchall()
+
+    def current(sub):
+        return db.db.execute(
+            f"SELECT {sub} FROM messages m WHERE m.message_id=1"
+        ).fetchone()[0]
+
+    db = _seeded_two(tmp_path)
+    try:
+        semantic.run_due(db, _canonical_cfg(), {"errors": []},
+                         time.monotonic() + 300, jev_client=_PassJev(),
+                         llm_fn=_llm_v2)
+        for kind in ("canonical_projection", v4.KIND_V4):
+            assert [json.loads(r["meta"])["projection_version"]
+                    for r in rows(kind)] == [projection.PROJECTION_VERSION]
+            # simulate a row minted before the projection changed
+            db.db.execute(
+                "UPDATE artifacts SET meta=json_set(meta,"
+                "'$.projection_version',?) WHERE kind=? AND message_id=1",
+                (projection.PROJECTION_VERSION - 1, kind))
+        db.db.commit()
+        old_proj = rows("canonical_projection")[0]["artifact_id"]
+        old_v4 = rows(v4.KIND_V4)[0]["artifact_id"]
+        assert current(current_projection_id()) == old_proj
+        scfg = semantic_config(_canonical_cfg())[0]
+        bundle = semantic.thread_bundle(db, 1, 1)
+        member = next(m for m in bundle["members"] if m["message_id"] == 1)
+        fp, policy = bundle["source_fingerprint"], policy_fingerprint(scfg)
+
+        def rerun():
+            stage = drain._fact_stage(db, scfg, member, 1, 1, fp, policy,
+                                      _PassJev(), _llm_v2,
+                                      time.monotonic() + 300)
+            assert stage["outcome"] is None
+            with db.db:
+                return v4.publish(db, 1, 1, fp, policy, member,
+                                  stage["v2_doc"])
+
+        new_v4 = rerun()
+        proj_rows = rows("canonical_projection")
+        assert len(proj_rows) == 2
+        assert json.loads(proj_rows[-1]["meta"])["projection_version"] \
+            == projection.PROJECTION_VERSION
+        assert json.loads(proj_rows[-1]["meta"])["doc_hash"] \
+            == json.loads(proj_rows[0]["meta"])["doc_hash"]
+        assert current(current_projection_id()) == proj_rows[-1]["artifact_id"]
+        assert new_v4 != old_v4 and current(current_v4_id()) == new_v4
+        assert json.loads(rows(v4.KIND_V4)[-1]["meta"])[
+            "projection_version"] == projection.PROJECTION_VERSION
+        # same version + same document -> reuse, no row churn
+        assert rerun() == new_v4
+        assert len(rows("canonical_projection")) == 2
+        assert len(rows(v4.KIND_V4)) == 2
     finally:
         db.close()
