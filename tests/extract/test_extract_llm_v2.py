@@ -2220,3 +2220,15 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
     monkeypatch.setattr(extract_llm, "run_pending", run)
     assert extract_llm.main() == 0
     assert admitted == [None, set()]
+
+
+def test_request_free_text_fields_are_length_capped():
+    """U05-F08 hardening: ungrounded request text is bounded."""
+    d = extract_llm._validate({"requests": [
+        {"to": "医" * 100, "from": "看" * 100, "action": "合" * 500}]})
+    rq = d["requests"][0]
+    assert len(rq["to"]) == 30 and len(rq["from"]) == 30
+    assert len(rq["action"]) == 60
+    short = extract_llm._validate({"requests": [
+        {"to": "医師", "action": "合成確認"}]})["requests"][0]
+    assert short["to"] == "医師" and short["action"] == "合成確認"
