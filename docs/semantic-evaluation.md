@@ -75,6 +75,45 @@ still score every existing metric, but fail closed on the lifecycle: the
 missing observation is never derived from `facts` or another stage, because
 that would certify a stage nobody observed.
 
+The three lists are produced from a ledger snapshot by
+`mcs/semantic/semantic_lifecycle.py` (CLI:
+`semantic_blind.py --lifecycle-snapshot`, see the candidate-record steps
+below). For a record naming its `semantic_summary` artifact in
+`artifact_ids.final_id`, each stage is read from its own durable record:
+
+- `verified`: the `fact_id`s marked `verified` in the newest
+  `semantic_facts_v2` document of the summary's generation (message +
+  source fingerprint), only when the newest evaluated
+  `semantic_facts_audit` for the summary's policy fingerprint and that
+  document's hash is PASS and the document's coverage is complete.
+- `rendered`: the IDs bound (`、ID:<id>、証拠:`) in the summary's stored
+  `mandatory_pages`, only when `verify_mandatory_pages` reports them
+  complete.
+- `delivered`: the rendered IDs whose line reached the channel through
+  the generation's `semantic_notice` outbox intent (same target message,
+  revision, fingerprint and policy; degraded notices excluded). Semantic
+  notices are legacy text sends — cards carry no semantic content, so
+  `notification_renders`/`notification_render_parts` are not part of this
+  chain. The frozen notice text is re-chunked with the send path's own
+  chunker (`notify_flush._semantic_chunks`); a fact counts only when every
+  chunk its line spans lies inside the accepted-chunk receipt
+  (`progress.next`/`sent`). An in-flight (`sending`) chunk is not
+  accepted.
+
+A stage that cannot be proven is left out, and
+`fact_lifecycle_observations` on the record names why with a code
+(`fact_audit_not_pass`, `pages_incomplete`, `notice_missing`,
+`notice_receipt_unprovable`, …). Delivery is unprovable when no matching
+intent exists, an intent's payload/receipt cannot be parsed, or an
+`accepted` intent does not record every chunk. A non-PASS fact audit
+leaves `verified` out instead of refusing the case, so the case stays in
+the held-out denominator and fails `fact_lifecycle_incomplete` visibly.
+The producer opens the snapshot `mode=ro` in one read transaction, writes
+nothing to it, and emits IDs and codes only — no source text. Known
+limit: partial-delivery attribution assumes the current chunk size
+(`notify_flush._MAX_LEN`) matches the one used at send time; the stored
+delivery fingerprint also hashes the send target and is not re-verified.
+
 The criteria file fixes the gate. `required_metrics` defaults to all WP08
 metrics, but keeping it explicit is recommended:
 
@@ -228,12 +267,16 @@ completedの各human_labels[A/B/C]には自由記述だけでなく評価器のl
 
 ### 定量評価の実行順序
 
-1. 許可済みの固定入力・3方式の実出力から、方式ごとの未ラベルcandidate-recordsを準備する。計測値の欠測を0で埋めない。
+1. 許可済みの固定入力・3方式の実出力から、方式ごとの未ラベルcandidate-recordsを準備する。計測値の欠測を0で埋めない。各recordの`artifact_ids.final_id`に対象`semantic_summary`のartifact IDを入れ、下の`--lifecycle-snapshot`で`verified_fact_ids`・`rendered_fact_ids`・`delivered_fact_ids`を台帳snapshotから付与する（読み取り専用。証明できない段階は付与せず、理由コードを`fact_lifecycle_observations`に残す）。既に段階リストを持つrecordは上書きせず拒否する。この付与は評価票作成（candidate全体のhash固定）より**前**に行う。
 2. comparison.jsonlの各outputへ対応candidate全体をevaluation_candidateとして含める。claim_textsの順番をcandidate.claimsと揃え、IDはc1,c2…にする。原文・候補・方式対応を保存する。
 3. 次の最初のコマンドで評価票を作り、本人がworksheetのhuman_labelsだけを記入してcompleted.jsonlとして保存する。
 4. 残りのコマンドでラベルを結合し、初期基準v1による結果を作る。他の方式も別の出力先と対応candidate-recordsで評価する。
 
 ```sh
+python3 mcs/semantic/semantic_blind.py --input audited-records-draft.jsonl \
+  --lifecycle-snapshot evaluation.db --output-dir new-lifecycle
+# new-lifecycle/candidate-records.jsonl のcandidateをcomparison.jsonlのevaluation_candidateと
+# --evaluation-recordsの入力に使う
 python3 mcs/semantic/semantic_blind.py --input comparison.jsonl --output-dir new-packet
 # 人手記入後に以下を実行する。completed.jsonlは自動生成しない。
 python3 mcs/semantic/semantic_blind.py --input completed.jsonl \

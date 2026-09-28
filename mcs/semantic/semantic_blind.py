@@ -369,6 +369,9 @@ def main(argv=None) -> int:
     parser.add_argument("--evaluation-records")
     parser.add_argument("--manifest")
     parser.add_argument("--method", choices=METHODS)
+    parser.add_argument("--lifecycle-snapshot",
+                        help="read-only SQLite; attach observed verified/rendered/delivered "
+                             "fact IDs to candidate-records naming artifact_ids.final_id")
     args = parser.parse_args(argv)
     merge_options = (args.evaluation_records, args.manifest, args.method)
     if any(merge_options) and (not all(merge_options) or not args.unblind_key):
@@ -377,6 +380,8 @@ def main(argv=None) -> int:
         parser.error("unblinding cannot generate model output")
     if bool(args.snapshot) != args.generate_local_baseline:
         parser.error("snapshot requires --generate-local-baseline")
+    if args.lifecycle_snapshot and (args.snapshot or args.unblind_key or any(merge_options)):
+        parser.error("lifecycle snapshot only annotates candidate-records")
     try:
         directory = Path(args.output_dir)
         directory.mkdir(mode=0o700)  # reserve before any model call
@@ -384,7 +389,11 @@ def main(argv=None) -> int:
         if args.snapshot:
             from extract_llm import llm_extract
             records = snapshot_records(args.snapshot, records, llm_extract)
-        if args.evaluation_records:
+        if args.lifecycle_snapshot:
+            from semantic_lifecycle import attach_lifecycle
+            files = (("candidate-records.jsonl",
+                      attach_lifecycle(args.lifecycle_snapshot, records)),)
+        elif args.evaluation_records:
             from semantic_evaluation import load_json
             files = (("evaluation.jsonl", merge_labels(
                 load_jsonl(args.evaluation_records), records, load_jsonl(args.unblind_key),
