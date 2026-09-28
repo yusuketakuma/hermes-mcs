@@ -316,6 +316,12 @@ def _begin_check(db, req, cfg) -> str | None:
             # a revoke render against a revoked card is exactly the
             # delete Discord is owed — every other op is refused
             return "card_revoked"
+        if render["op"] != "revoke" and card["source_fp"] is not None \
+                and cards._source_fp(db, card) != card["source_fp"]:
+            # the sealed bytes predate a source edit — never post stale
+            # PHI; transient: the drain's sweep reissues from the new
+            # source and cancels this render
+            return "source_changed"
         if cards._unsettled_attempt(db, card["card_id"]):
             return "in_flight"
     return None
@@ -684,6 +690,12 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                     if render is not None
                     and render["card_id"] is not None else None)
             error = _resolve_check(attempt, render, card, req)
+            if error is None and attempt["state"] not in (
+                    "delivered", "not_sent"):
+                # the operator's proof never outranks the worker's own
+                # witness — settling not_sent over a journaled send
+                # would reissue it (double post)
+                error = _journal_contradiction(ledger, req)
             if error == "unknown_attempt":
                 # the restore may have erased the attempt row — a
                 # recorded restore hold is the operator's handle for
@@ -831,6 +843,38 @@ def _resolve_check(attempt, render, card, req) -> str | None:
             and card.get("message_id") is not None \
             and str(req["message_id"]) != card["message_id"]:
         return "message_id_mismatch"
+    return None
+
+
+def _journal_contradiction(ledger, req) -> str | None:
+    """Check an attempt-row resolve against the delivery journal (the
+    same scan post-restore reconcile trusts). A delivered ``result``
+    refutes any mark_not_sent and pins mark_delivered's message id; a
+    ``started`` row or a tainted journal (a corrupt line could hide
+    one) refutes the ``no_journal_started`` proof. An unreadable
+    journal proves nothing — fail closed."""
+    import notify_reconcile   # lazy: notify_reconcile imports this module
+    root = cards.data_root(ledger)
+    try:
+        cards.ensure_dirs(root)
+        attempts, incomplete = notify_reconcile._scan_journals(
+            cards.notify_dirs(root))
+    except OSError:
+        return "journal_unverifiable"
+    rec = attempts.get(req["attempt_id"]) or {"rows": [], "tainted": False}
+    rows = [r for r in rec["rows"] if not r.get("part_id")]
+    delivered = {str(r.get("message_id")) for r in rows
+                 if r.get("phase") == "result"
+                 and r.get("result") == "delivered"}
+    if req["result"] == "mark_delivered":
+        return "message_id_mismatch" \
+            if delivered - {str(req["message_id"])} else None
+    if delivered:
+        return "journal_contradicts_proof"
+    if req["evidence"].get("proof") == "no_journal_started" and (
+            any(r.get("phase") == "started" for r in rows)
+            or rec["tainted"] or incomplete):
+        return "journal_contradicts_proof"
     return None
 
 

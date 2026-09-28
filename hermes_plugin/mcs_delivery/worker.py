@@ -874,6 +874,7 @@ class DeliveryWorker:
             self._reg.expire(keep={spec["delivery_id"]
                                    for _, spec in scanned})
             resume = []
+            spent = None
             for path, spec in scanned:
                 delivery_id = spec["delivery_id"]
                 live_ids.add(delivery_id)
@@ -886,6 +887,22 @@ class DeliveryWorker:
                 if claim is None and not claimable:
                     continue
                 if claim is None:
+                    if spent is None:
+                        # one journal read per tick, only when a fresh
+                        # claim is actually on the table
+                        spent = await asyncio.to_thread(
+                            self._spent_deliveries)
+                    if delivery_id in spent:
+                        # a delivery_id never re-begins once its card
+                        # send started — seeing its spec claimable again
+                        # means the DB was rewound (a restore without
+                        # the restore_pending marker, after the dead
+                        # tombstone expired). Fence it; the spec stays
+                        # for operator reconcile.
+                        self._log("restore_suspect",
+                                  delivery_id=delivery_id)
+                        self._reg.mark_dead(delivery_id)
+                        continue
                     claim = await self._fresh_claim(path, spec, now)
                 if claim is not None:
                     try:
@@ -900,6 +917,15 @@ class DeliveryWorker:
                 await self._resume_dead(resume)
             await self._settle_orphan_claims(live_ids)
         await self.maintain_journal()
+
+    def _spent_deliveries(self) -> set:
+        """delivery_ids whose card attempt the journal shows started or
+        resulted — dependent-part rows excluded."""
+        return {str(r.get("delivery_id"))
+                for rows in journal.scan(self._dirs["state"]).values()
+                for r in rows
+                if r.get("phase") in ("started", "result")
+                and not r.get("part_id")}
 
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'
