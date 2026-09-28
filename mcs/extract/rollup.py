@@ -120,7 +120,10 @@ def build_rollup(ledger, project_id: int) -> dict:
                 and lm["summary"]:
             summary = {"text": lm["summary"], "at": m["posted_at"]}
         if latest_vitals is None:
-            vit = lm.get("vitals") or v1.get("vitals")
+            # Same rule as structured_view._vital_line: once an LLM
+            # row exists, a missing vitals key may be an intentional
+            # exclusion — never resurrect the v1 rule reading over it.
+            vit = lm.get("vitals") if lm else v1.get("vitals")
             if isinstance(vit, dict) and vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
         # v4 labs: newest report per analyte wins (msgs walk newest-first)

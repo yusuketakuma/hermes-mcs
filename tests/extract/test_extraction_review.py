@@ -250,3 +250,57 @@ def test_ambiguous_batch_index_retries_only_its_message(db, monkeypatch, workers
     summaries = {a['message_id']: json.loads(a['content'])['summary']
                  for a in db.artifacts('extract_llm')}
     assert summaries == {1: '一意の候補', 2: '再抽出'}
+
+
+# U05-F02: oxygen flow and arrhythmia counts are not vitals.
+@pytest.mark.parametrize(('body', 'key'), [
+    ('酸素10L投与中。', 'spo2'),
+    ('在宅酸素 3L→酸素 12Lへ増量', 'spo2'),
+    ('酸素120L', 'spo2'),
+    ('酸素 2リットルで経過観察', 'spo2'),
+    ('不整脈は20回程度', 'hr'),
+])
+def test_v1_vitals_reject_flow_units_and_findings(body, key):
+    vit = extract.extract_message(body, '2026-09-20T10:00:00+09:00') \
+        .get('vitals') or {}
+    assert key not in vit
+
+
+@pytest.mark.parametrize(('body', 'expected'), [
+    ('SpO2 96%', {'spo2': 96}),
+    ('酸素 95%', {'spo2': 95}),
+    ('脈拍72回/分', {'hr': 72}),
+    ('脈 88', {'hr': 88}),
+])
+def test_v1_vitals_keep_labelled_readings(body, expected):
+    assert extract.extract_message(
+        body, '2026-09-20T10:00:00+09:00')['vitals'] == expected
+
+
+def test_rollup_vitals_do_not_fall_back_to_v1_over_llm_row(db):
+    db.save_messages([_message(body='合成本文')])
+    h = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
+    db.artifact_add('extract_v1', json.dumps({'v': 1,
+                                              'vitals': {'spo2': 10}}),
+                    project_id=1, message_id=1,
+                    meta={'hash': h, 'rule_version': extract.RULE_VERSION})
+    db.artifact_add('extract_llm', json.dumps({'summary': '合成要約'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': h,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert rollup.build_rollup(db, 1).get('latest_vitals') is None
+
+
+# U05-F04: a planned visit is not a past visit_date.
+@pytest.mark.parametrize(('body', 'expected'), [
+    ('次回10/5訪問予定です', {'next_planned': '2026-10-05'}),
+    ('明日9/21訪問予定', {}),
+    ('9/25 訪問します', {}),
+    ('2026/10/5 訪問の予定', {}),
+    ('次回10/5訪問予定。9/18訪問しました',
+     {'visit_date': '2026-09-18', 'next_planned': '2026-10-05'}),
+])
+def test_planned_visit_is_not_a_past_visit_date(body, expected):
+    result = extract.extract_message(body, '2026-09-20T10:00:00+09:00')
+    assert {key: result[key] for key in ('visit_date', 'next_planned')
+            if key in result} == expected
