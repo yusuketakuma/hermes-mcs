@@ -198,6 +198,57 @@ def test_thin_output_gets_one_repair_nudge(monkeypatch):
     assert "thin" not in meta
 
 
+def test_thin_artifact_re_pends_once(tmp_path, monkeypatch):
+    """A current valid artifact that is under-extracted re-enters
+    pending for ONE retry — thinness is recomputed from content shape
+    so rows written before meta.thin existed qualify. The retry output
+    carries thin_retried so a still-thin result settles permanently."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成の長い本文です。" * 30)])
+    # a prior extraction wrote a thin but valid current artifact
+    db.artifact_add("extract_llm", json.dumps({"urgency": "routine"}),
+                    project_id=1, message_id=1,
+                    meta={"hash": _hash(db),
+                          "extract_version": extract_llm.EXTRACT_VERSION})
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **_: {"summary": "再抽出", "vitals": {"bt": 37.0},
+                           "symptoms": [{"text": "咳"}]})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res["done"] == 1
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 1            # the thin row was replaced
+    assert json.loads(rows[0]["meta"])["thin_retried"] is True
+    assert json.loads(rows[0]["content"])["vitals"]["bt"] == 37.0
+    # settled — must not re-pend again
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res2["done"] == 0 and res2["selected"] == 0
+    db.close()
+
+
+def test_thin_retry_failure_settles_without_loop(tmp_path, monkeypatch):
+    """A failed thin retry re-mints the prior content with the retried
+    marker — the row leaves pending instead of burning a call every
+    cycle on a message the model cannot enrich."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成の長い本文です。" * 30)])
+    db.artifact_add("extract_llm", json.dumps({"urgency": "routine"}),
+                    project_id=1, message_id=1,
+                    meta={"hash": _hash(db),
+                          "extract_version": extract_llm.EXTRACT_VERSION})
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **_: True)
+    extract_llm.run_pending(db, limit=10, budget_s=30)
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 1
+    assert json.loads(rows[0]["meta"])["thin_retried"] is True
+    # still-thin retry output would have been settled the same way —
+    # no error row, no re-pend
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res2["done"] == 0 and res2["failed"] == 0
+    db.close()
+
+
 def test_thin_unresolved_marks_meta(monkeypatch):
     """Still thin after the nudge — keep the artifact but mark meta so
     coverage audits can find it."""
