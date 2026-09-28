@@ -788,3 +788,164 @@ def test_resume_requires_delivered_card(tmp_path):
                     "result": "not_sent", "error_code": "http_403"})
     asyncio.run(w._resume_parts(spec))
     assert not ch.threads and len(ch.sent) == 1
+
+
+# ---------- journal growth / scan bounds (U04-F05) --------------------------
+
+def _sealed(spec):
+    """The runner seals the card part hash; the synthetic spec must too
+    before the tick's validate() will accept it."""
+    parts = spec["parts"]
+    parts["manifest"][0]["sha256"] = hashlib.sha256(envelopes.canonical(
+        {k: parts[k] for k in ("containers", "footer", "action_rows")}
+    )).hexdigest()
+    return spec
+
+
+def _publish_spec(tmp_path, spec):
+    (tmp_path / "discord_render" / f"{spec['delivery_id']}.json").write_text(
+        json.dumps(spec))
+
+
+def test_dead_spec_with_unproven_card_is_not_rescanned_every_tick(
+        tmp_path, monkeypatch):
+    """A lingering dead spec whose card outcome is unknown (awaiting an
+    operator card_resolve) must not cost a full journal scan per tick."""
+    w, reg, _ = _mkworker(tmp_path)
+    spec = _sealed(_spec(_chunks(2)))
+    _publish_spec(tmp_path, spec)
+    journal.append(str(_state(tmp_path)), "w0",
+                   {"phase": "result", "attempt_id": "ab" * 8,
+                    "delivery_id": DELIVERY_ID, "result": "unknown",
+                    "error_code": "worker_crash"})
+    reg.mark_dead(DELIVERY_ID)
+    calls = []
+    real = journal.scan
+    monkeypatch.setattr(journal, "scan",
+                        lambda d: calls.append(d) or real(d))
+
+    async def ticks():
+        for _ in range(5):
+            await w.tick()
+    asyncio.run(ticks())
+    assert len(calls) <= 1
+    assert reg.parts_done(DELIVERY_ID)
+    assert not bot_sent_parts(tmp_path)
+
+
+def bot_sent_parts(tmp_path):
+    return _sent_parts(_state(tmp_path))
+
+
+def test_dead_tombstone_outlives_ttl_while_spec_is_published(
+        tmp_path, monkeypatch):
+    """An expired tombstone for a still-published spec would re-claim it
+    daily; one whose spec is gone expires with its part progress."""
+    from hermes_plugin.mcs_delivery import registry as registry_mod
+    w, reg, _ = _mkworker(tmp_path)
+    spec = _sealed(_spec(_chunks(2)))
+    _publish_spec(tmp_path, spec)
+    gone = "00000000-0000-4000-8000-00000000beef"
+    for did in (DELIVERY_ID, gone):
+        reg.mark_dead(did)
+        reg.put_parts_done(did)
+    monkeypatch.setattr(registry_mod, "time", types.SimpleNamespace(
+        time=lambda: 10 ** 10))                  # far past DEAD_TTL_S
+    asyncio.run(w.tick())
+    assert reg.is_dead(DELIVERY_ID) and reg.parts_done(DELIVERY_ID)
+    assert not reg.is_dead(gone) and not reg.parts_done(gone)
+    assert not reg.claimed(DELIVERY_ID)
+    assert not list((tmp_path / "cmd_int").glob("*.json"))
+
+
+def _envelope(channel_id="42"):
+    return {"op": "transport_begin", "profile": "mcs",
+            "application_id": "1", "channel_id": channel_id,
+            "guild_id": "7"}
+
+
+def _settled(state, wid, aid, delivery_id, ts, *, result="delivered",
+             channel_id="42"):
+    for phase, extra in (("begin", {"begin_envelope": _envelope(channel_id),
+                                    "receipt_envelope": _envelope(channel_id)}),
+                         ("granted", {}), ("started", {}),
+                         ("result", {"result": result}),
+                         ("receipt", {"result": result})):
+        journal.append(str(state), wid, {"phase": phase, "attempt_id": aid,
+                                         "delivery_id": delivery_id,
+                                         "ts": ts, **extra})
+
+
+def _backup(tmp_path, mtime):
+    import os
+    (tmp_path / "backups").mkdir(exist_ok=True)
+    path = tmp_path / "backups" / "ledger-20260101.db"
+    path.write_bytes(b"")
+    os.utime(path, (mtime, mtime))
+
+
+def test_journal_compaction_drops_only_settled_pre_backup_attempts(tmp_path):
+    import time as _time
+    w, reg, _ = _mkworker(tmp_path)
+    state = _state(tmp_path)
+    now = _time.time()
+    old, recent = now - 5 * 86400, now - 3600
+    ids = {k: f"00000000-0000-4000-8000-0000000000{i:02d}"
+           for i, k in enumerate(("done", "unknown", "open", "recent",
+                                  "claimed", "pending", "foreign"))}
+    _settled(state, "w0", "a1" * 8, ids["done"], old)
+    _settled(state, "w0", "a2" * 8, ids["unknown"], old, result="unknown")
+    journal.append(str(state), "w0", {
+        "phase": "started", "attempt_id": "a3" * 8,
+        "delivery_id": ids["open"], "ts": old,
+        "receipt_envelope": _envelope()})
+    _settled(state, "w0", "a4" * 8, ids["recent"], recent)
+    _settled(state, "w0", "a5" * 8, ids["claimed"], old)
+    _settled(state, "w0", "a6" * 8, ids["pending"], old)
+    _settled(state, "w9", "a7" * 8, ids["foreign"], old, channel_id="99")
+    _settled(state, "w8", "a8" * 8, ids["done"] + "x", old)
+    with (state / "journal-w8.jsonl").open("a") as stream:
+        stream.write("{torn\n")
+    reg.put_parts_done(ids["done"])
+    reg.claim(ids["claimed"], {"attempt_id": "zz", "phase": "settled"})
+    pending = dict(_sealed(_spec(_chunks(1))), delivery_id=ids["pending"])
+    _publish_spec(tmp_path, pending)             # parts not yet done
+    before = journal.scan(str(state))
+
+    # no restorable backup set -> nothing is pruned
+    asyncio.run(w.maintain_journal(rotate=True))
+    assert journal.scan(str(state)) == before
+
+    _backup(tmp_path, now - 86400)
+    asyncio.run(w.maintain_journal(rotate=True))
+    after = journal.scan(str(state))
+    assert "a1" * 8 not in after
+    assert set(before) - set(after) == {"a1" * 8}
+    assert after["a3" * 8] == before["a3" * 8]
+    assert (state / "journal-w8.jsonl").read_text().endswith("{torn\n")
+    # the recorded crash-recovery classification is unchanged
+    assert journal.unfinished(after).keys() == journal.unfinished(before).keys()
+    assert journal.unreported(after).keys() == journal.unreported(before).keys()
+
+
+def test_live_segment_rotates_and_closed_segment_is_compacted(
+        tmp_path, monkeypatch):
+    import time as _time
+    from hermes_plugin.mcs_delivery import worker as worker_mod
+    w, reg, _ = _mkworker(tmp_path)
+    state = _state(tmp_path)
+    old = _time.time() - 5 * 86400
+    _backup(tmp_path, _time.time())
+    monkeypatch.setattr(worker_mod, "JOURNAL_SEGMENT_BYTES", 256)
+    did = "00000000-0000-4000-8000-0000000000aa"
+    for phase in ("begin", "granted", "started", "result", "receipt"):
+        w._journal(phase, attempt_id="b1" * 8, delivery_id=did, ts=old,
+                   result="delivered", begin_envelope=_envelope())
+    reg.put_parts_done(did)
+    first = state / "journal-w1.jsonl"
+    assert first.exists()
+    asyncio.run(w.maintain_journal())
+    w._journal("claimed", attempt_id="b2" * 8, delivery_id="x")
+    assert (state / "journal-w1~000001.jsonl").exists()
+    assert not first.exists()                  # fully settled -> removed
+    assert list(journal.scan(str(state))) == ["b2" * 8]

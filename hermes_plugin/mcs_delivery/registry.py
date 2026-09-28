@@ -327,17 +327,32 @@ class Registry:
             self._data["parts"][str(delivery_id)] = "done"
             self.save()
 
+    def done_parts(self) -> set:
+        return {k for k, v in self._data["parts"].items() if v == "done"}
+
     # -- sweep -------------------------------------------------------
 
-    def expire(self) -> None:
+    def expire(self, *, keep: set | frozenset = frozenset()) -> None:
         """Drop dead followups/modals/confirms — the 14-minute Discord
-        ceiling means a followup older than that can never send."""
+        ceiling means a followup older than that can never send.
+
+        ``keep`` names delivery_ids whose spec file is still published:
+        their dead tombstone outlives DEAD_TTL_S, or a lingering spec
+        (e.g. an unknown render awaiting card_resolve) would be
+        re-claimed daily. Part progress expires with its tombstone."""
         now = time.time()
         changed = False
         stale = [k for k, v in self._data["dead"].items()
-                 if _expired(v, ttl=DEAD_TTL_S, now=now)]
+                 if k not in keep
+                 and _expired(v, ttl=DEAD_TTL_S, now=now)]
         for k in stale:
             del self._data["dead"][k]
+            changed = True
+        orphan = [k for k in self._data["parts"]
+                  if k not in self._data["dead"]
+                  and k not in self._data["claims"]]
+        for k in orphan:
+            del self._data["parts"][k]
             changed = True
         for table in ("pending_modals", "pending_confirms", "followups"):
             dead = [k for k, v in self._data[table].items()

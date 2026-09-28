@@ -14,7 +14,15 @@ contract the whole recovery story hangs on:
   — never resent, never silently dropped; it goes to reconcile.
 
 Per-worker files keep a crashed worker's tail intact for inspection by
-its successor.
+its successor. A long-lived worker rotates to a new segment file
+(``journal-<worker>~<n>.jsonl``) so its closed segments can be compacted.
+
+Compaction (``compact``) only rewrites closed files and only drops an
+attempt whose every row sits in that one file and which the caller
+proves settled and no longer needed. The runner's post-restore
+reconcile (mcs/notify/notify_reconcile.py) treats these rows as the
+witness of effects a restored DB lost, so the caller also bounds pruning
+by the oldest restorable backup.
 """
 from __future__ import annotations
 
@@ -26,13 +34,17 @@ PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
 
 
-def _path(state_dir: str, worker_id: str) -> str:
-    return os.path.join(state_dir, f"journal-{worker_id}.jsonl")
+def _path(state_dir: str, worker_id: str, segment: int = 0) -> str:
+    # "~" sorts after ".", so every reader's sorted() listing keeps a
+    # worker's segments in write order after its first file
+    name = worker_id if not segment else f"{worker_id}~{segment:06d}"
+    return os.path.join(state_dir, f"journal-{name}.jsonl")
 
 
-def append(state_dir: str, worker_id: str, record: dict) -> str:
+def append(state_dir: str, worker_id: str, record: dict, *,
+           segment: int = 0) -> str:
     """Append one fsync'd record. Returns the journal path."""
-    path = _path(state_dir, worker_id)
+    path = _path(state_dir, worker_id, segment)
     row = {"v": 1, "worker_id": worker_id, "ts": time.time(), **record}
     if row.get("phase") not in PHASES:
         raise ValueError("bad_phase")
@@ -71,13 +83,88 @@ def _scan_file(path: str, out: dict) -> None:
         return
 
 
+def _names(state_dir: str) -> list[str]:
+    return sorted(n for n in os.listdir(state_dir)
+                  if n.startswith("journal-") and n.endswith(".jsonl"))
+
+
+def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
+    """Drop settled attempts from closed journal files. Returns rows dropped.
+
+    ``active`` is the caller's live segment path, never touched. A file
+    is rewritten only when every line parses (a torn/corrupt line keeps
+    the file as-is: restore reconcile treats it as tainted evidence) and
+    ``file_ok(rows)`` accepts it. An attempt is dropped only when all of
+    its rows are in that file and ``prunable(attempt_id, rows)`` holds.
+    Each rewrite is atomic (tmp + fsync + rename + dir fsync), so a crash
+    leaves either the old or the new file, never half an attempt.
+    """
+    from .paths import atomic_write
+    try:
+        names = _names(state_dir)
+    except OSError:
+        return 0
+    files: dict[str, list] = {}
+    homes: dict[str, set] = {}
+    for name in names:
+        path = os.path.join(state_dir, name)
+        lines, clean = [], True
+        try:
+            with open(path, "rb") as handle:
+                for raw in handle:
+                    if not raw.strip():
+                        continue
+                    try:
+                        row = json.loads(raw)
+                    except (ValueError, RecursionError):
+                        row = None
+                    aid = row.get("attempt_id") if isinstance(row, dict) \
+                        else None
+                    if not isinstance(aid, str) or not aid \
+                            or not raw.endswith(b"\n"):
+                        clean = False
+                        continue
+                    homes.setdefault(aid, set()).add(name)
+                    lines.append((raw, row, aid))
+        except OSError:
+            clean = False
+        if clean and path != active:
+            files[name] = lines
+    dropped = 0
+    for name, lines in files.items():
+        if not lines or not file_ok([row for _, row, _ in lines]):
+            continue
+        by_aid: dict[str, list] = {}
+        for _, row, aid in lines:
+            by_aid.setdefault(aid, []).append(row)
+        gone = {aid for aid, rows in by_aid.items()
+                if homes.get(aid) == {name} and prunable(aid, rows)}
+        if not gone:
+            continue
+        keep = [raw for raw, _, aid in lines if aid not in gone]
+        path = os.path.join(state_dir, name)
+        try:
+            if keep:
+                atomic_write(path, b"".join(keep), tmp_prefix=".journal-",
+                             mode=0o600)
+            else:
+                os.unlink(path)
+                dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+        except OSError:
+            continue
+        dropped += len(lines) - len(keep)
+    return dropped
+
+
 def scan(state_dir: str) -> dict[str, list[dict]]:
     """attempt_id -> ordered records, across every worker journal."""
     out: dict[str, list[dict]] = {}
     try:
-        names = sorted(n for n in os.listdir(state_dir)
-                       if n.startswith("journal-")
-                       and n.endswith(".jsonl"))
+        names = _names(state_dir)
     except OSError:
         return out
     for name in names:
