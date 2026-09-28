@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="560" viewBox="0 0 940 560" font-family="'Hiragino Sans', sans-serif">
+  <title>完全合成の Discord カード＋コンパニオンスレッド表示例</title>
+  <desc>実患者・実投稿を参照せずに新規作成した、カードとコンパニオンスレッドの図。</desc>
+  <rect width="940" height="560" fill="#0d1117"/>
+  <defs>
+    <marker id="dt_ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <text x="30" y="28" font-size="11" fill="#8b949e">完全合成の表示例（実患者・実投稿の匿名化データは不使用）</text>
+
+  <!-- card (left) -->
+  <rect x="30" y="46" width="310" height="330" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="48" y="72" font-size="12" fill="#e6edf3" font-weight="bold">📋 カード（患者ごとに1枚）</text>
+  <text x="48" y="94" font-size="10" fill="#e6edf3">山田 太郎（合成例）· 09-28</text>
+  <text x="48" y="110" font-size="9" fill="#8b949e">09:40 訪問看護 佐藤 / 09:50 ケアマネ 鈴木</text>
+  <rect x="44" y="122" width="282" height="118" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="56" y="142" font-size="10" fill="#58a6ff">📋 構造化</text>
+  <text x="56" y="162" font-size="9" fill="#b5bac1">要約: 服薬変更の連絡を共有</text>
+  <text x="56" y="180" font-size="9" fill="#b5bac1">区分: 服薬変更</text>
+  <text x="56" y="198" font-size="9" fill="#b5bac1">バイタル: BP 142/88・脈 76・SpO2 96%</text>
+  <text x="56" y="216" font-size="9" fill="#b5bac1">症状: 起立時めまい（転倒なし）</text>
+  <text x="56" y="232" font-size="9" fill="#b5bac1">依頼: 次回訪問で残薬を確認</text>
+  <text x="48" y="262" font-size="10" fill="#e6edf3">✅確認  👤担当  ⏸保留</text>
+  <text x="48" y="282" font-size="10" fill="#e6edf3">📝依頼作成  📄本文表示</text>
+  <text x="48" y="310" font-size="9" fill="#6e7681">カード本体は要約と操作だけ</text>
+  <text x="48" y="328" font-size="9" fill="#6e7681">📄はスレッド無効時の予備</text>
+  <text x="48" y="356" font-size="9" fill="#8b949e">💬 本文・添付 2件 → スレッド配送済み</text>
+
+  <!-- arrow -->
+  <line x1="344" y1="210" x2="420" y2="210" stroke="#58a6ff" stroke-width="2" marker-end="url(#dt_ar)"/>
+  <text x="382" y="192" font-size="9" fill="#8b949e" text-anchor="middle">本文・添付は</text>
+  <text x="382" y="230" font-size="9" fill="#8b949e" text-anchor="middle">こちらへ</text>
+
+  <!-- companion thread (right) -->
+  <rect x="428" y="46" width="482" height="440" rx="10" fill="#161b22" stroke="#1f6feb" stroke-width="1.5"/>
+  <text x="446" y="72" font-size="13" fill="#e6edf3" font-weight="bold">💬 山田 太郎 — 09-28</text>
+  <text x="446" y="90" font-size="9" fill="#6e7681">コンパニオンスレッド（カードごとに自動作成・合成例）</text>
+
+  <!-- post 1 -->
+  <circle cx="456" cy="112" r="10" fill="#248046"/>
+  <text x="456" y="116" font-size="8" fill="#fff" text-anchor="middle">佐</text>
+  <text x="474" y="116" font-size="10" fill="#e6edf3">訪問看護 佐藤（合成）</text>
+  <text x="630" y="116" font-size="9" fill="#6e7681">09:40</text>
+  <text x="456" y="140" font-size="9" fill="#b5bac1">夕方バイタルを測定しました。BP142/88、脈76、SpO2 96%。</text>
+  <text x="456" y="156" font-size="9" fill="#b5bac1">起立時にめまいの訴え。転倒・外傷なし。</text>
+  <text x="456" y="172" font-size="9" fill="#b5bac1">血圧手帳の写真と診療情報提供書を添付します。</text>
+
+  <!-- attachments -->
+  <rect x="446" y="188" width="180" height="120" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <rect x="456" y="196" width="160" height="80" rx="4" fill="#e8e4d8"/>
+  <text x="536" y="218" font-size="9" fill="#5a5240" text-anchor="middle">血圧手帳（写真）</text>
+  <text x="536" y="240" font-size="12" fill="#a33" text-anchor="middle" font-weight="bold">142 / 88</text>
+  <line x1="468" y1="252" x2="606" y2="252" stroke="#b8b0a0" stroke-width="1"/>
+  <line x1="468" y1="258" x2="588" y2="258" stroke="#b8b0a0" stroke-width="1"/>
+  <text x="456" y="298" font-size="9" fill="#8b949e">🖼 血圧手帳.jpg  2.4MB</text>
+  <rect x="636" y="188" width="176" height="120" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <rect x="648" y="202" width="46" height="56" rx="4" fill="#b5352c"/>
+  <text x="671" y="236" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">PDF</text>
+  <text x="704" y="222" font-size="9" fill="#b5bac1">診療情報提供書.pdf</text>
+  <text x="704" y="240" font-size="9" fill="#6e7681">128KB・1ページ</text>
+  <text x="648" y="298" font-size="9" fill="#8b949e">📄 クリックで開く</text>
+
+  <!-- post 2 -->
+  <circle cx="456" cy="330" r="10" fill="#6e40c9"/>
+  <text x="456" y="334" font-size="8" fill="#fff" text-anchor="middle">鈴</text>
+  <text x="474" y="334" font-size="10" fill="#e6edf3">ケアマネ 鈴木（合成）</text>
+  <text x="640" y="334" font-size="9" fill="#6e7681">09:50</text>
+  <text x="456" y="358" font-size="9" fill="#b5bac1">かかりつけ医より服薬変更の連絡。</text>
+  <text x="456" y="374" font-size="9" fill="#b5bac1">フェロキシピンは中止、カルベジロール2.5mgを開始します。</text>
+
+  <!-- thread notes -->
+  <line x1="446" y1="398" x2="894" y2="398" stroke="#30363d" stroke-width="1"/>
+  <text x="446" y="420" font-size="9" fill="#6e7681">関連する新しい投稿も同じスレッドに続きます</text>
+  <text x="446" y="440" font-size="9" fill="#6e7681">配送は card→thread→本文chunk→添付 の parts ジャーナルで管理</text>
+  <text x="446" y="458" font-size="9" fill="#6e7681">中断・再起動後も中断点から再開し、重複投稿しません</text>
+
+  <!-- captions -->
+  <text x="185" y="412" font-size="10" fill="#8b949e" text-anchor="middle">カードは読みやすく</text>
+  <text x="185" y="430" font-size="10" fill="#8b949e" text-anchor="middle">要約と操作だけを表示</text>
+  <text x="185" y="530" font-size="10" fill="#8b949e" text-anchor="middle">チャンネルはコンパクトのまま</text>
+  <text x="670" y="524" font-size="10" fill="#8b949e" text-anchor="middle">本文・画像・PDFをスレッドへ配送</text>
+  <text x="670" y="542" font-size="9" fill="#6e7681" text-anchor="middle">実在する患者・職員・診療・投稿を表すものではありません</text>
+</svg>
