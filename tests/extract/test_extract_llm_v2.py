@@ -147,6 +147,68 @@ def test_validate_events_still_string_only():
     assert out["events"] == ["visit"]
 
 
+def test_validate_events_grounded_in_body():
+    """Discrete clinical events need a cue in the target body — an
+    event lifted from thread context (or invented) is dropped and
+    reported for the repair pass, never silently published."""
+    drops = {}
+    out = extract_llm._validate(
+        {"events": ["visit", "eol", "fall"], "summary": "訪問確認"},
+        "本日訪問しました。状態は安定しています。", drops)
+    assert out["events"] == ["visit"]
+    assert set(drops["events"]) == {"eol", "fall"}
+    out = extract_llm._validate(
+        {"events": ["eol"], "summary": "連絡"},
+        "本日ご本人がお亡くなりになりました")
+    assert out["events"] == ["eol"]
+
+
+def test_is_thin_and_richness():
+    body = "あ" * 400
+    assert extract_llm._is_thin({"urgency": "routine"}, body)
+    assert extract_llm._is_thin({"events": ["visit"], "urgency": "high"},
+                                body)
+    assert not extract_llm._is_thin(
+        {"events": ["visit"], "urgency": "high", "summary": "a"}, body)
+    assert not extract_llm._is_thin({"urgency": "routine"}, "短い")
+    assert not extract_llm._is_thin(None, body)
+
+
+def test_thin_output_gets_one_repair_nudge(monkeypatch):
+    """A long body returning <=2 fields is almost certainly
+    under-extracted — the repair pass re-reads once; a richer answer
+    with equal drop count wins."""
+    body = "本日訪問。熱が持続し倦怠感あり。追加対応を検討。明日再訪。" * 14
+    calls = []
+
+    def fake_call(prompt, **_ignored):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return {"events": ["visit"], "urgency": "routine"}
+        return {"events": ["visit"], "urgency": "high",
+                "summary": "発熱持続",
+                "symptoms": [{"text": "倦怠", "status": "ongoing"}],
+                "requests": [{"to": "医師", "action": "再訪確認"}]}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
+    meta = {}
+    out = extract_llm.llm_extract(body, meta_out=meta)
+    assert len(calls) == 2 and "抽出項目が少なすぎます" in calls[1]
+    assert out["urgency"] == "high" and out["symptoms"]
+    assert "thin" not in meta
+
+
+def test_thin_unresolved_marks_meta(monkeypatch):
+    """Still thin after the nudge — keep the artifact but mark meta so
+    coverage audits can find it."""
+    monkeypatch.setattr(
+        extract_llm, "_llm_call",
+        lambda prompt, **_ignored: {"urgency": "routine"})
+    meta = {}
+    out = extract_llm.llm_extract("あ" * 400, meta_out=meta)
+    assert out == {"urgency": "routine"} and meta["thin"] is True
+
+
 # ---------- lazy-replace version migration ----------
 
 def _run(db, monkeypatch, result):

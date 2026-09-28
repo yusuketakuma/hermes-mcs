@@ -94,7 +94,7 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "labs": 本文に結果が明記された検査値の配列 [{"name": "検査項目名", "value": 数値または短い結果表現, "unit": "単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用"}] — 推測の基準値判定はしない。記載の無い検査は含めない
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
-- "urgency": "high" または "routine" (至急・緊急・救急・搬送等ならhigh)
+- "urgency": "high" または "routine" — 至急・緊急・救急・搬送等の語が無くても、以下の臨床的な重大兆候・イベントがあれば "high": 死亡・看取り・心肺停止・呼吸停止、意識消失/意識がない、転倒後の状態変化、高熱(39°C超)または発熱の持続、SpO2低下、激しい疼痛の増悪、誤嚥・窒息、出血が止まらない等。過去形で済んだ出来事の単なる報告(例:「先月入院していた」)は "routine"
 
 日付規則: 「明日」「来週」等の相対表現は投稿日時を基準に解釈する。投稿日時が「不明」な場合や原文に年の根拠が無い場合は確定日付を推測しない — due は null にし、due_text に原文表現を残す。
 
@@ -534,6 +534,25 @@ def _clean_text(v, maxlen: int) -> str | None:
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
 _EVENTS = {"visit", "exam", "admission", "discharge", "transfer", "fall",
            "eol", "care", "family_contact", "other"}
+# Discrete clinical events must be grounded in the target body — the
+# model sometimes lifts an event from thread context or invents one
+# (Jev audit: events are the largest NO_MATCH class). Unlisted kinds
+# (care/family_contact/other) stay ungrounded: their cues are too
+# broad for a keyword check to falsify.
+_EVENT_CUES = {
+    "eol": re.compile(
+        r"看取り|逝去|死去|永眠|お亡くなり|亡くなっ|死亡|息を引き取|"
+        r"心肺停止|心停止|呼吸停止|終末期|臨終|旅立|安らか|緩和ケア|"
+        r"ACP|モルヒネ|オピオイド"),
+    "fall": re.compile(r"転倒|転落|滑落|落ち(?:た|て|る)|倒れ"),
+    "admission": re.compile(r"入院|搬送|救急|急性期"),
+    "discharge": re.compile(r"退院|出院|退所|退館"),
+    "transfer": re.compile(r"転院|転棟|転所|搬送|施設間|移動|移り"),
+    "exam": re.compile(
+        r"診察|診療|受診|往診|検査|採血|レントゲン|エコー|心電図|"
+        r"CT|MRI|血液検査|尿検査|処置"),
+    "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい"),
+}
 _MED_STATUSES = {"current", "past", "planned"}
 _MED_SUBJECTS = {"patient", "family", "other"}
 _SYM_STATUSES = {"new", "ongoing", "resolved", "past"}
@@ -802,11 +821,24 @@ class _Validator:
     def events(self, d: dict, out: dict):
         if "events" not in d:
             return
-        if isinstance(d["events"], list):
-            out["events"] = [e for e in d["events"]
-                             if isinstance(e, str) and e in _EVENTS]
-        else:
+        if not isinstance(d["events"], list):
             self.drop_item("events")
+            return
+        evs = []
+        for e in d["events"]:
+            if not isinstance(e, str) or e not in _EVENTS:
+                continue
+            cue = _EVENT_CUES.get(e)
+            if cue is not None and self.body is not None \
+                    and not cue.search(self.body):
+                self.items_dropped += 1
+                if self.drops is not None:
+                    lst = self.drops.setdefault("events", [])
+                    if len(lst) < 5 and e not in lst:
+                        lst.append(e)
+                continue
+            evs.append(e)
+        out["events"] = evs
 
     def requests(self, d: dict, out: dict):
         if "requests" not in d:
@@ -1112,6 +1144,29 @@ def _drop_total(v: dict | None) -> float:
     return v.get("_evidence_dropped", 0) + v.get("_items_dropped", 0)
 
 
+def _richness(v: dict | None) -> int:
+    """Non-empty real fields in a validated extraction — None (total
+    failure) is poorer than any dict, matching _drop_total's order."""
+    if v is None:
+        return -1
+    return sum(1 for k, x in v.items() if not k.startswith("_") and x)
+
+
+# A long body whose validated output carries <=2 real fields is almost
+# certainly under-extracted (production: ~0.5% of current artifacts —
+# the model answered {"events":..,"urgency":..} and stopped). One
+# repair nudge costs one call; a thin artifact settles the message
+# permanently otherwise.
+_THIN_BODY_MIN = 300
+_THIN_KEYS_MAX = 2
+
+
+def _is_thin(v: dict | None, body: str | None) -> bool:
+    return (v is not None and body is not None
+            and len(body) >= _THIN_BODY_MIN
+            and _richness(v) <= _THIN_KEYS_MAX)
+
+
 def _repair_issues(drops: dict, v: dict | None) -> list[str]:
     """Concrete failure list for the repair prompt — evidence quotes
     that failed to locate plus fields whose items violated the schema.
@@ -1120,6 +1175,9 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
               for q in drops.get("ev") or []]
     issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
                for s in drops.get("vitals") or []]
+    issues += [f"event「{e}」は対象本文に根拠となる記述がありません"
+               "（本文に無い出来事は出力しないでください）"
+               for e in drops.get("events") or []]
     issues += [f"「{f}」の項目がスキーマ違反でした"
                for f in drops.get("items") or []]
     if v is None and not issues:
@@ -1188,13 +1246,25 @@ def llm_extract(body: str, *, context: str | None = None,
             return _DEFERRED
         drops: dict = {}
         v = _validate(d, body, drops) if d is not None else None
-        if d is not None and (v is None or drops):
+        # Thin-nudge only when the prompt covered the WHOLE body — a
+        # sparse chunk legitimately yields few fields, and the nudge's
+        # "extract everything" ask is only fair when one call saw the
+        # entire message. Multi-chunk thin output is still recorded on
+        # the merged result via meta.thin below.
+        thin = len(chunks) == 1 and _is_thin(v, body)
+        if d is not None and (v is None or drops or thin):
             # Bounded repair: one re-ask showing the rejected output
             # and the concrete failures — converts a would-be failure
-            # (or a lossy extraction) into a clean one instead of
-            # burning a whole retry attempt. Skipped when the budget
-            # is already gone; a salvaged v stays usable either way.
+            # (or a lossy/under-complete extraction) into a clean one
+            # instead of burning a whole retry attempt. Skipped when
+            # the budget is already gone; a salvaged v stays usable
+            # either way.
             issues = _repair_issues(drops, v)
+            if thin:
+                issues.append(
+                    "本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
+                    "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を"
+                    "全て抽出してください")
             if issues and (deadline is None
                            or time.monotonic() < deadline):
                 rd = _llm_call(
@@ -1205,7 +1275,8 @@ def llm_extract(body: str, *, context: str | None = None,
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
                     rv = _validate(rd, body)
-                    if _drop_total(rv) < _drop_total(v):
+                    if (_drop_total(rv), -_richness(rv)) \
+                            < (_drop_total(v), -_richness(v)):
                         v = rv
                 if meta_out is not None:
                     meta_out["repairs"] = meta_out.get("repairs", 0) + 1
@@ -1225,6 +1296,8 @@ def llm_extract(body: str, *, context: str | None = None,
     # the returned dict keeps its exact legacy shape ({} stays {}).
     if meta_out is not None:
         meta_out.update(_integrity_summary(notes[note_start:]))
+        if _is_thin(out, body):
+            meta_out["thin"] = True   # still thin after the repair nudge
     return out
 
 
