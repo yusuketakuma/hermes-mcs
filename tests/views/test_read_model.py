@@ -293,3 +293,20 @@ def test_read_surfaces_share_one_snapshot_generation(tmp_path):
     assert stats["snapshot"]["generation_id"] == gen
     assert signals["snapshot"]["generation_id"] == gen
     assert model["snapshot"]["generation_id"] == gen
+
+
+def test_truncated_page_keeps_whole_scope_coverage(tmp_path):
+    db = _db(tmp_path, tuple(range(1, 12)))
+    page = read_model.read_model(db.db, limit=5)
+    full = read_model.read_model(db.db)
+    assert page["coverage"] == full["coverage"]
+    assert page["coverage"]["collection"]["messages"] == page["total"]
+    db.close()
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, True])
+def test_read_model_rejects_bad_limit(tmp_path, limit):
+    db = _db(tmp_path, (1, 2))
+    with pytest.raises(ValueError, match="bad_limit"):
+        read_model.read_model(db.db, limit=limit)
+    db.close()

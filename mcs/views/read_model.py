@@ -317,14 +317,20 @@ def read_model(db, scope: str = "aggregate", project_id=None,
     honestly (``truncated`` + ``total``), never slicing JSON."""
     if scope not in SCOPES:
         raise ValueError("read_model_scope_invalid")
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise ValueError("bad_limit")
     records, total, truncated = _message_records(
         db, scope, project_id, limit)
+    # coverage describes the whole scope like `total` does — never just
+    # the page `limit` cut
+    counted = (_message_records(db, scope, project_id, None)[0]
+               if truncated else records)
     attachments = _attachments(db, scope, project_id)
     return {
         "contract": CONTRACT,
         "snapshot": _snapshot_meta(db),
         "scope": scope,
-        "coverage": _coverage(db, records, attachments, project_id),
+        "coverage": _coverage(db, counted, attachments, project_id),
         "attachments": attachments,
         "records": records,
         "total": total,

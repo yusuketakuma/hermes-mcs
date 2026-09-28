@@ -357,3 +357,50 @@ def test_invalid_due_dates_preserve_other_request_counts(db):
 def test_nonfinite_limit_is_a_validation_error(db):
     with pytest.raises(ValueError, match="bad_limit"):
         run(db, stat="patient_activity", limit=float("inf"))
+
+
+def test_same_hash_reextraction_counts_the_newest_row(db):
+    """Stats read the same generation every display reader shows — the
+    newest current extraction, not the oldest."""
+    _msg(db, 1, chash="h1")
+    _extract(db, 1, "h1", [{"name": "OLD", "action": "start"}])
+    _extract(db, 1, "h1", [{"name": "NEW", "action": "stop"}])
+    st = run(db, stat="meds")["meds"]
+    assert st["action_totals"].get("stop") == 1
+    assert not st["action_totals"].get("start")
+
+
+def test_as_of_freezes_the_window_without_until(db):
+    """A post after as_of is not counted whether or not --until is
+    given (refstats pins as_of to freeze its windows)."""
+    _msg(db, 1, chash="h1", ts=int(SNAP_TS) - 100)   # 2026-09-21 JST
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])
+    frozen = run(db, stat="meds", as_of="2026-09-20")["meds"]
+    bounded = run(db, stat="meds", as_of="2026-09-20",
+                  until="2026-12-01")["meds"]
+    assert not frozen["action_totals"].get("start")
+    assert frozen["action_totals"] == bounded["action_totals"]
+    burden = run(db, stat="med_change_burden",
+                 as_of="2026-09-20")["med_change_burden"]
+    assert burden["busiest_days"]["total"] == 0
+
+
+def test_stale_parsed_counts_only_messages_without_current_extraction(db):
+    _msg(db, 1, chash="h2")
+    _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])  # old rev
+    _extract(db, 1, "h2", [{"name": "薬A", "action": "start"}])  # current
+    st = run(db, stat="data_quality")["data_quality"]
+    assert st["stale_parsed"] == 0
+
+
+def test_request_is_not_overdue_on_its_due_date(db):
+    db.execute("INSERT INTO requests(request_id,project_id,status,"
+               "due_date,updated_at) VALUES (1,1,'open','2026-09-21',0)")
+    db.execute("INSERT INTO requests(request_id,project_id,status,"
+               "due_date,updated_at) VALUES (2,1,'open','2026-09-20',0)")
+    st = run(db, stat="open_loop_aging")["open_loop_aging"]
+    assert st["age_buckets"]["not_yet_due"] == 1
+    assert st["age_buckets"]["0-7d"] == 1
+    days = {r["request_id"]: r["days_since_due"]
+            for r in st["formal_open_requests"]["items"]}
+    assert days == {1: 0, 2: 1}

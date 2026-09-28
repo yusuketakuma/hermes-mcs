@@ -179,8 +179,12 @@ def _vital_line(llm: dict, v1: dict):
     if not vit:
         return None
     parts = []
-    if vit.get("sbp") is not None:
-        parts.append(f"BP {vit['sbp']}/{vit.get('dbp')}")
+    if vit.get("sbp") is not None or vit.get("dbp") is not None:
+        # a half-extracted pair renders its known side only — never
+        # the literal "None" in a clinical line
+        sbp, dbp = vit.get("sbp"), vit.get("dbp")
+        parts.append(f"BP {'?' if sbp is None else sbp}"
+                     f"/{'?' if dbp is None else dbp}")
     for k, lab in (("bt", "BT"), ("hr", "HR"), ("rr", "RR"),
                    ("spo2", "SpO2"), ("bs", "BS")):
         if vit.get(k) is not None:
