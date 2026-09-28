@@ -337,3 +337,23 @@ def test_stats_cli_rejects_bad_limit_but_caps_silently(db):
         _msg(db, 100 + i, pid=9)
     st = run(db, stat="patient_activity", limit=2)["patient_activity"]
     assert st["windows"]["last_7d"]["returned"] <= 2
+
+
+def test_invalid_due_dates_preserve_other_request_counts(db):
+    for rid, due in enumerate(("", "!synthetic-invalid-date", None, "2026-09-18"), 1):
+        db.execute("INSERT INTO requests(request_id,project_id,status,due_date) "
+                   "VALUES (?,1,'open',?)", (rid, due))
+    st = run(db, stat="open_loop_aging")["open_loop_aging"]
+    assert st["status"] == "partial"
+    assert st["formal_open_requests"]["total"] == 4
+    assert st["age_buckets"]["no_due"] == 3
+    assert st["age_buckets"]["0-7d"] == 1
+    assert st["oldest_open_due"] == "2026-09-18"
+    rows = {row["request_id"]: row for row in st["formal_open_requests"]["items"]}
+    assert rows[1]["due_unparseable"] and rows[2]["due_unparseable"]
+    assert rows[3]["due_unparseable"] is None
+
+
+def test_nonfinite_limit_is_a_validation_error(db):
+    with pytest.raises(ValueError, match="bad_limit"):
+        run(db, stat="patient_activity", limit=float("inf"))

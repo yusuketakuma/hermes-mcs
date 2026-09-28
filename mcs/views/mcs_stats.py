@@ -80,7 +80,7 @@ def _scope(args: dict, snapshot_ts: int) -> dict:
             raise ValueError("bad_period")
     try:
         limit = min(max(int(args.get("limit") or 20), 1), DETAIL_LIMIT)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("bad_limit") from None
     return {"since": since, "until": until, "as_of": as_of,
             "project_id": args.get("project"), "limit": limit}
@@ -586,7 +586,7 @@ def st_open_loop_aging(db, scope):
     for rid, pid, status, due in rows:
         age_d = None
         unparseable = False
-        if due:
+        if due is not None:
             try:
                 age_d = (scope["as_of"] - _parse_when(str(due))) / DAY_S
             except (ValueError, TypeError, OverflowError):
@@ -612,7 +612,8 @@ def st_open_loop_aging(db, scope):
         "formal_open_requests": _items(items, scope["limit"]),
         "age_buckets": buckets,
         "oldest_open_due": min((i["due_date"] for i in items
-                                if i["due_date"]), default=None),
+                                if i["due_date"] is not None
+                                and not i["due_unparseable"]), default=None),
         "text_candidates": {"status": "unavailable",
                             "reason": "needs interaction_links"},
         "notes": ["overdue age measured from due date, not creation",

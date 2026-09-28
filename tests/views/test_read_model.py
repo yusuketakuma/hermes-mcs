@@ -126,6 +126,51 @@ def test_facts_and_relations_bind_evidence_ids(tmp_path):
     db.close()
 
 
+def test_actual_projection_preserves_validation_and_relation_type(tmp_path):
+    from semantic_projection import project_v2_doc_legacy
+    from test_canonical_projection import _doc, _fact
+    db = _db(tmp_path, (1,))
+    try:
+        doc = _doc([_fact('f1'), _fact('f2')])
+        doc['relations'] = [{'left_fact_id': 'f1', 'right_fact_id': 'f2',
+                             'type': 'COMPLEMENTS'}]
+        _artifact(db, 'canonical_projection', 1, project_v2_doc_legacy(doc),
+                  {'hash': _hash_of(db, 1)})
+        rec = read_model.read_model(db.db)['records'][0]
+        assert {f['validation_status'] for f in rec['facts']} == {'verified'}
+        assert rec['relations'] == [{'left_fact_id': 'f1', 'right_fact_id': 'f2',
+                                    'kind': 'COMPLEMENTS'}]
+        # A deleted source never exposes derived facts as usable.
+        with db.db:
+            db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
+        rec = read_model.read_model(db.db)['records'][0]
+        assert rec['facts'] == [] and rec['relations'] == []
+        assert rec['extraction']['canonical_projection']['state'] == 'stale'
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('fault', ['wrong_engine', 'wrong_project', 'error_flag'])
+def test_v4_read_model_rejects_unusable_newer_rows(tmp_path, fault):
+    db = _db(tmp_path, (1,))
+    try:
+        meta = {'hash': _hash_of(db, 1), 'engine_version': 4}
+        _artifact(db, 'semantic_facts_v4', 1, {'canonical_facts': [{'fact_id': 'good'}]},
+                  meta)
+        changed = {**meta, **({'engine_version': 3} if fault == 'wrong_engine'
+                             else {'error': 2} if fault == 'error_flag' else {})}
+        _artifact(db, 'semantic_facts_v4', 1, {'canonical_facts': [{'fact_id': 'bad'}]},
+                  changed)
+        if fault == 'wrong_project':
+            with db.db:
+                db.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id='
+                              '(SELECT MAX(artifact_id) FROM artifacts)')
+        rec = read_model.read_model(db.db)['records'][0]
+        assert [f['fact_id'] for f in rec['facts']] == ['good']
+    finally:
+        db.close()
+
+
 def test_aggregate_scope_contains_no_raw_content(tmp_path):
     db = _db(tmp_path, (1, 2))
     db.db.execute(
@@ -144,6 +189,29 @@ def test_aggregate_scope_contains_no_raw_content(tmp_path):
     detail = read_model.read_model(db.db, scope="detail")
     assert detail["attachments"][0]["name"] == "SYNTH_SECRET_FILENAME.pdf"
     db.close()
+
+
+def test_project_scope_limits_attachments_and_coverage(tmp_path):
+    db = _db(tmp_path, (1,))
+    _patient(db, pid=2)
+    db.save_messages([_message(2, pid=2, body="synthetic other")],
+                     project_id=2)
+    db.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,bytes,sha256,"
+        "state) VALUES(1,'f1','room-one.pdf',10,'aa','done')")
+    db.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,bytes,sha256,"
+        "state) VALUES(2,'f2','room-two.pdf',20,'bb','done')")
+    db.db.commit()
+    try:
+        model = read_model.read_model(db.db, scope="detail", project_id=1)
+        assert [r["message_id"] for r in model["records"]] == [1]
+        assert [a["name"] for a in model["attachments"]] == [
+            "room-one.pdf"]
+        assert model["coverage"]["collection"]["patients"] == 1
+        assert model["coverage"]["attachments"]["total"] == 1
+    finally:
+        db.close()
 
 
 def test_coverage_distinguishes_no_record_from_no_event(tmp_path):

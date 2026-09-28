@@ -65,7 +65,7 @@ def _snapshot_meta(db) -> dict:
             "published": True}
 
 
-def _kind_state(rows, content_hash: str) -> dict:
+def _kind_state(rows, content_hash: str, *, engine_version=None) -> dict:
     """Classify one message's artifacts of one extraction kind.
     `rows` = artifact rows (newest-first) as mappings; the first valid
     hash-current non-invalidated row wins — an older row matching the
@@ -85,12 +85,15 @@ def _kind_state(rows, content_hash: str) -> dict:
             continue
         if not isinstance(meta, dict) or not isinstance(content, dict):
             continue
-        if meta.get("error") in (True, 1) or content.get("_error"):
+        if (meta.get("error") not in (None, False, 0)
+                or content.get("_error") not in (None, False, 0)):
             saw_error = True
+            continue
+        if engine_version is not None and meta.get("engine_version") != engine_version:
             continue
         if content_hash is not None \
                 and meta.get("hash") == content_hash \
-                and not meta.get("invalidated"):
+                and meta.get("invalidated") in (None, False, 0):
             current_id = r["artifact_id"]
             current_meta = meta
             break
@@ -129,17 +132,35 @@ def _message_records(db, scope: str, project_id, limit):
     if limit is not None and len(rows) > limit:
         rows = rows[:limit]
         truncated = True
+    # One batched artifacts scan per ~500 messages replaces the
+    # per-message query (N+1). Chunking stays under SQLite's host-variable
+    # ceiling; kind remains the leading term so idx_artifacts_kind_msg
+    # serves each chunk. Rows arrive globally artifact_id-DESC, which
+    # preserves the newest-first order _kind_map relies on.
+    arts_by_mid: dict = {}
+    pid_by_mid = {m["message_id"]: m["project_id"] for m in rows}
+    mids = list(pid_by_mid)
+    for i in range(0, len(mids), 500):
+        chunk = mids[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        for a in db.execute(
+                "SELECT a.message_id, a.project_id, a.kind, a.artifact_id,"
+                " a.content, a.meta FROM artifacts a WHERE a.kind IN "
+                "('extract_v1','extract_llm','canonical_projection',"
+                "'semantic_facts_v4') AND a.message_id IN (" + ph + ") "
+                "ORDER BY a.artifact_id DESC", chunk):
+            if a["project_id"] != pid_by_mid[a["message_id"]]:
+                continue  # same guard as the per-message project_id=? clause
+            arts_by_mid.setdefault(a["message_id"], []).append(a)
     records = []
     for msg in rows:
         mid = msg["message_id"]
-        art_rows = db.execute(
-            "SELECT kind, artifact_id, content, meta FROM artifacts "
-            "WHERE message_id=? AND kind IN "
-            "('extract_v1','extract_llm','canonical_projection',"
-            "'semantic_facts_v4') "
-            "ORDER BY artifact_id DESC",
-            (mid,)).fetchall()
+        art_rows = arts_by_mid.get(mid, [])
         by_kind = _kind_map(art_rows, msg["content_hash"])
+        if msg["body_state"] == "deleted":
+            for entry in by_kind.values():
+                if entry["state"] == "current":
+                    entry.update(state="stale", artifact_id=None)
         rec = {"project_id": msg["project_id"], "message_id": mid,
                "parent_id": msg["parent_id"],
                "posted_at_ts": msg["posted_at_ts"],
@@ -159,7 +180,8 @@ def _kind_map(art_rows, content_hash) -> dict:
     by_kind: dict = {}
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
-        st = _kind_state(kind_rows, content_hash)
+        st = _kind_state(kind_rows, content_hash,
+                         engine_version=4 if kind == "semantic_facts_v4" else None)
         entry = {"state": st["state"],
                  "artifact_id": st["artifact_id"]}
         if st["last_error"]:
@@ -224,21 +246,26 @@ def _fact_relations(by_kind: dict, art_rows, scope: str):
     relations.extend({
         "left_fact_id": rel.get("left_fact_id"),
         "right_fact_id": rel.get("right_fact_id"),
-        "kind": rel.get("kind")}
+        "kind": rel.get("type", rel.get("kind"))}
         for rel in doc.get("canonical_relations") or []
         if isinstance(rel, dict))
     return facts, relations
 
 
-def _attachments(db, scope: str):
+def _attachments(db, scope: str, project_id=None):
     """The attachment manifest — ids/state always, file names only in
     detail scope (a name is user-authored content)."""
     if not _table_exists(db, "attachments"):
         return None
     out = []
-    for r in db.execute(
-            "SELECT attachment_id, message_id, name, bytes, sha256, "
-            "state FROM attachments ORDER BY attachment_id"):
+    sql = ("SELECT a.attachment_id, a.message_id, a.name, a.bytes, "
+           "a.sha256, a.state FROM attachments a")
+    params = ()
+    if project_id is not None:
+        sql += " JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=?"
+        params = (project_id,)
+    sql += " ORDER BY a.attachment_id"
+    for r in db.execute(sql, params):
         item = {"attachment_id": r["attachment_id"],
                 "message_id": r["message_id"], "bytes": r["bytes"],
                 "sha256": r["sha256"], "state": r["state"]}
@@ -248,7 +275,7 @@ def _attachments(db, scope: str):
     return out
 
 
-def _coverage(db, records) -> dict:
+def _coverage(db, records, attachments, project_id=None) -> dict:
     extraction = {k: {"current": 0, "stale": 0, "pending": 0,
                       "unknown": 0} for k in EXTRACTION_KINDS}
     for rec in records:
@@ -259,17 +286,21 @@ def _coverage(db, records) -> dict:
     collection = {"patients": None, "messages": len(records),
                   "deleted": None, "extraction_eligible": None}
     with suppress(Exception):
-        collection["patients"] = db.execute(
-            "SELECT COUNT(*) FROM patients").fetchone()[0]
+        if project_id is None:
+            collection["patients"] = db.execute(
+                "SELECT COUNT(*) FROM patients").fetchone()[0]
+        else:
+            collection["patients"] = db.execute(
+                "SELECT COUNT(*) FROM patients WHERE project_id=?",
+                (project_id,)).fetchone()[0]
     collection["deleted"] = sum(
         1 for r in records if r["body_state"] == "deleted")
     collection["extraction_eligible"] = sum(
         1 for r in records if r["extraction_eligible"])
-    att = _attachments(db, "aggregate")
     att_counts = None
-    if att is not None:
-        att_counts = {"total": len(att)}
-        for a in att:
+    if attachments is not None:
+        att_counts = {"total": len(attachments)}
+        for a in attachments:
             att_counts[a["state"] or "unknown"] = \
                 att_counts.get(a["state"] or "unknown", 0) + 1
     return {"collection": collection, "extraction": extraction,
@@ -288,12 +319,13 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         raise ValueError("read_model_scope_invalid")
     records, total, truncated = _message_records(
         db, scope, project_id, limit)
+    attachments = _attachments(db, scope, project_id)
     return {
         "contract": CONTRACT,
         "snapshot": _snapshot_meta(db),
         "scope": scope,
-        "coverage": _coverage(db, records),
-        "attachments": _attachments(db, scope),
+        "coverage": _coverage(db, records, attachments, project_id),
+        "attachments": attachments,
         "records": records,
         "total": total,
         "truncated": truncated,
