@@ -1,8 +1,9 @@
 name: mcs-discord-commands
 version: 0.1.0
 description: >
-  Read the configured MCS snapshot and queue only explicitly confirmed
-  human Discord request commands.
+  Discord /mcs command (snapshot reads and explicitly confirmed human
+  request, control and install-wide lifecycle commands) plus the MCS
+  interactive card workers for Discord and Slack.
 author: Hermes Agent
 kind: standalone
 platforms:
@@ -20,15 +21,19 @@ config_schema:
   allowed_user_ids:
     type: list
     required: true
-    description: Discord user IDs allowed to use this command.
+    description: Discord user IDs allowed to use /mcs and Discord card
+      actions (Slack uses slack_allowed_user_ids). Also the only gate,
+      with allowed_chat_ids, for install-wide update/restore approvals.
   allowed_chat_ids:
     type: list
     required: true
-    description: Discord chat or channel IDs allowed to use this command.
+    description: Discord chat or channel IDs allowed to use /mcs and
+      Discord card actions.
   project_ids:
     type: list
     required: true
-    description: MCS project IDs visible to this command.
+    description: MCS project IDs visible to /mcs and the card workers
+      (does not restrict install-wide update/restore approvals).
   project_ids_auto:
     type: bool
     required: false
