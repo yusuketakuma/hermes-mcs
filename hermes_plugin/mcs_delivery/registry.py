@@ -263,13 +263,25 @@ class Registry:
     # report 取り消しました for a command that is being queued. First
     # caller wins; the marker is persisted so a crash mid-publish leaves
     # the confirm unusable (the command may already be queued) until TTL.
-    def begin_confirm(self, confirm_id: str) -> bool:
+    # One synchronous decision (no await between check and mark) shared
+    # by every transport: gone -> busy -> cancel -> denied -> taken.
+    # ``allowed`` is the caller's late scope recheck; it gates only the
+    # 確定 path, so an out-of-scope confirm can still be cancelled.
+    def take_confirm(self, confirm_id: str, cancel: bool, *,
+                     allowed: bool = True) -> str:
         rec = self.confirm(confirm_id)
-        if rec is None or rec.get("in_flight"):
-            return False
+        if rec is None:
+            return "gone"
+        if rec.get("in_flight"):
+            return "busy"
+        if cancel:
+            self.drop_confirm(confirm_id)
+            return "cancelled"
+        if not allowed:
+            return "denied"
         rec["in_flight"] = True
         self.save(immediate=True)
-        return True
+        return "taken"
 
     def end_confirm(self, confirm_id: str) -> None:
         """Publish failed before the command was queued — the user may retry."""
