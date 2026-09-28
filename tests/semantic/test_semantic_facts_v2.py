@@ -195,6 +195,15 @@ def test_out_of_chunk_quote_not_borrowed():
     doc = result["doc"]
     sf.validate_facts_doc(doc)
     assert result["chunks_total"] >= 2
+    # the chunk that holds the quote verifies its fact; the other chunk's
+    # copy cannot borrow that out-of-chunk evidence and stays unverified
+    llm_facts = [f for f in doc["facts"] if f["provenance"] == "local_llm"]
+    statuses = sorted(f["validation_status"] for f in llm_facts)
+    assert statuses == ["unverified", "verified"], statuses
+    unverified = next(f for f in llm_facts
+                      if f["validation_status"] == "unverified")
+    assert unverified["evidence_ids"] == []
+    assert "unverified_facts" in doc["coverage"]["limitations"]
 
 
 def test_durable_prefix_reuse_v2():

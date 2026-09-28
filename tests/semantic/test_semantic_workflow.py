@@ -93,15 +93,29 @@ def test_compare_aggregates_and_marks_not_tested():
     assert agg["source"]["model_s_p50"] is not None
 
 
-@pytest.mark.parametrize("model", [
-    {},                                         # no timing bounds
-    {"overview_read_s": 0.0},                   # zero cost
-    {"overview_read_s": -1.0},                  # negative
-    {"overview_read_s": "fast"},                # non-numeric
+@pytest.mark.parametrize("model, code", [
+    ({}, "cost_model_required"),                          # no timing bounds
+    ({"overview_read_s": 1.0}, "cost_model_incomplete"),  # partial model
 ])
-def test_cost_model_without_bounds_rejected(model):
-    with pytest.raises(workflow.WorkflowError, match="cost_model"):
+def test_cost_model_without_bounds_rejected(model, code):
+    with pytest.raises(workflow.WorkflowError, match=code):
         workflow.measure_case(_case(), cost_model=model)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, "fast", True, float("inf"),
+                                 float("nan")])
+def test_cost_model_value_rejected_in_complete_model(bad):
+    """A complete model with one bad value must fail on THAT value — a
+    single-key model only ever exercised the missing-keys check."""
+    model = dict(workflow.DEFAULT_COST_MODEL)
+    field = sorted(model)[0]
+    model[field] = bad
+    with pytest.raises(workflow.WorkflowError,
+                       match=f"cost_model_invalid:{field}"):
+        workflow.measure_case(_case(), cost_model=model)
+    # control: the untouched complete model is accepted
+    workflow.measure_case(_case(),
+                          cost_model=dict(workflow.DEFAULT_COST_MODEL))
 
 
 def test_case_schema_validated():

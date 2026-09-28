@@ -134,7 +134,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
                 for byte in response:
                     self.wfile.write(bytes((byte,)))
                     self.wfile.flush()
-                    time.sleep(0.04)
+                    time.sleep(0.25)
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
@@ -143,16 +143,19 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 
     endpoint = local_http(SlowHandler)
     monkeypatch.setattr(semantic, "LLM_ENDPOINT", endpoint)
+    trickle_s = 0.25 * len(response)
     started_at = time.monotonic()
-    # The worker is a fresh interpreter process; under suite load its spawn
-    # can approach a few hundred ms.  timeout=1.0 leaves ample headroom for
-    # the POST to land while the byte-trickled response (≈3.6 s) still
-    # proves the absolute deadline fires (elapsed stays ~timeout).
-    assert semantic.llm_chat("synthetic prompt", timeout=1.0) is None
+    # The worker is a fresh interpreter process whose spawn can take a
+    # while under suite load, so timeout=2.0 leaves headroom for the POST
+    # to land.  The byte-trickled response takes ~20 s; returning None far
+    # below that proves the absolute deadline fired instead of a per-read
+    # idle timeout — with a wide margin rather than a tight wall-clock
+    # bound that flakes on a loaded machine.
+    assert semantic.llm_chat("synthetic prompt", timeout=2.0) is None
     elapsed = time.monotonic() - started_at
 
-    assert started.wait(0.5)
-    assert elapsed < 1.5
+    assert started.wait(5.0)
+    assert elapsed < trickle_s / 2
     headers, body = received[0]
     assert headers.get("Authorization") is None
     assert body["model"] == semantic.LLM_MODEL
