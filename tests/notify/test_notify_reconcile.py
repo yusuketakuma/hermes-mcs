@@ -236,6 +236,30 @@ def test_corrupt_part_journal_does_not_prove_non_delivery(world):
     assert notify_cards.restore_pending(str(world.data)) is not None
 
 
+def test_tainted_journal_rerun_alerts_once(world):
+    """U03-F06: a tainted journal keeps the restore marker, so reconcile
+    re-runs every tick; the held-scope notice must not repeat for holds
+    it already announced."""
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = f"p:{render['delivery_id'].replace('-', '')}:body:0001"
+    state = world.data / "discord_state"
+    journal.append(str(state), "w1", {
+        "phase": "begin", "attempt_id": aid, "part_id": "body:0001",
+        "delivery_id": render["delivery_id"]})
+    with (state / "journal-w1.jsonl").open("a") as stream:
+        stream.write("{broken\n")
+    notify_cards.mark_restored(str(world.data))
+    for _ in range(3):
+        rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+        assert rep["held"]
+        assert notify_cards.restore_pending(str(world.data)) is not None
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'"
+    ).fetchone()[0] == 1
+
+
 # ---------- reconcile: delivered effect lost by restore ----------
 
 def test_lost_delivered_attempt_holds_scope(world):
@@ -556,3 +580,6 @@ def test_reconcile_idempotent(world):
     rep2 = notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert rep1["verdicts"] == rep2["verdicts"]
     assert len(world.holds()) == 1
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'"
+    ).fetchone()[0] == 1
