@@ -18,6 +18,7 @@ import json
 import sys
 import time
 import types
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -106,14 +107,31 @@ class FakeChannel:
 
 
 class FakeBot:
-    def __init__(self):
+    def __init__(self, http=None):
         self.channels = {42: FakeChannel(42)}
+        self.http = http
 
     def get_channel(self, cid):
         return self.channels.get(cid)
 
     async def fetch_channel(self, cid):
         return self.channels[cid]
+
+
+class _NoWireSession:
+    def request(self, *_a, **_kw):
+        raise AssertionError("fake channels never reach the session")
+
+
+class FakeHTTPClient:
+    """Verified-SDK shape the single-post guard requires before a
+    create POST (as in tests/plugin/test_mcs_discord_delivery.py)."""
+
+    user_agent = ("DiscordBot (https://github.com/Rapptz/discord.py 2.7.1)"
+                  " Python/3.11 aiohttp/3.14.3")
+
+    def __init__(self):
+        self._HTTPClient__session = _NoWireSession()
 
 
 def _mk_ledger(tmp_path):
@@ -178,6 +196,9 @@ def _measure_pipeline(world, n):
             (eid,)).fetchone())
         notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
     t_dispatch = time.perf_counter() - t0
+    # the worker only claims once the runner publishes interactive=on
+    # (as the runner does, after dispatch created the flags dir)
+    notify_cards.publish_flags(CFG, str(data))
     for f in (data / "discord_render").glob("*.json"):
         starts[f.stem] = time.time()    # publish observation point
 
@@ -221,13 +242,27 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
         _seed_patient(led, 1 + i)
         _seed_msg(led, 10_000 + i, 1 + i)
     led.db.commit()
+    # the worker only sends through a verified-SDK client
+    bot = FakeBot(http=FakeHTTPClient())
     reg = registry.Registry(str(data / "discord_state"))
     worker = delivery.DeliveryWorker(
-        bot=FakeBot(), settings=SETTINGS,
+        bot=bot, settings=SETTINGS,
         root=str(data), reg=reg,
         worker_id=registry.new_worker_id(),
         log=lambda e, **f: None)
     out = _measure_pipeline((led, data, worker, reg), n)
+    # timing alone proves nothing if nothing was sent: every card must
+    # be delivered exactly once and bound to the message the bot posted
+    cards = [dict(r) for r in led.db.execute(
+        "SELECT card_id, delivery_state, message_id "
+        "FROM notification_cards")]
+    tally = Counter(c["delivery_state"] for c in cards)
+    sent_ids = {str(m.id) for m in bot.channels[42].sent}
+    print(f"\n  cards={len(cards)} states={dict(tally)} "
+          f"sent={len(bot.channels[42].sent)}")
+    assert tally == {"delivered": n}
+    assert len(bot.channels[42].sent) == n == len(sent_ids)
+    assert {str(c["message_id"]) for c in cards} == sent_ids
     print(f"\n== delivery pipeline n={n} ==")
     for k in ("dispatch", "claim_begin", "grant_drain", "send",
               "settle_drain"):
@@ -241,6 +276,9 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
 def test_perf_operation_apply(tmp_path, monkeypatch):
     """RC26 — click command file -> applied receipt commit, p95<=6s."""
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    # tokens are minted at the fixed NOW (TTL 7d); pin the wall clock
+    # as test_notify_cards does so apply never sees them expire
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     led, data = _mk_ledger(tmp_path)
     _seed_patient(led, 1)
     _seed_msg(led, 100, 1)
@@ -251,9 +289,13 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
         "SELECT * FROM notify_outbox WHERE event_id=?",
         (eid,)).fetchone())
     notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
+    # the worker only claims once the runner publishes interactive=on,
+    # and only sends through a verified-SDK client
+    notify_cards.publish_flags(CFG, str(data))
+    bot = FakeBot(http=FakeHTTPClient())
     reg = registry.Registry(str(data / "discord_state"))
     worker = delivery.DeliveryWorker(
-        bot=FakeBot(), settings=SETTINGS,
+        bot=bot, settings=SETTINGS,
         root=str(data), reg=reg,
         worker_id=registry.new_worker_id(),
         log=lambda e, **f: None)
@@ -274,9 +316,13 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
               for b in row if b["id"] == "ack"]
     card = dict(led.db.execute(
         "SELECT * FROM notification_cards WHERE card_id=1").fetchone())
+    # clicks can only apply against a card bound to a real message
+    assert card["delivery_state"] == "delivered" and card["message_id"]
+    assert len(tokens) == 1
     origin = {**SCOPE, "message_id": card["message_id"]}
 
     samples = []
+    outcomes = Counter()
     n = 200
     for i in range(n):
         tok = tokens[0]
@@ -292,7 +338,13 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
                     for c in env["request_id"]) + ".json")
         assert got.exists()
         samples.append(time.perf_counter() - t0)
+        receipt = json.loads(got.read_text())
+        outcomes[(receipt.get("outcome"), receipt.get("error"))] += 1
     print("\n== operation apply (click -> receipt commit) ==")
+    print(f"  outcomes: {dict(outcomes)}")
+    # every click must reach the apply path — a rejected receipt is
+    # committed just as fast, so timing alone proves nothing
+    assert outcomes == {("applied", None): n}
     r = _report("notification apply", samples, 6)
     led.close()
     assert r["p95"] <= 6.0

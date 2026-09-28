@@ -106,7 +106,7 @@ def _health(ledger, result: dict, status: str,
     `run_id` binds this evidence to the source run that produced it."""
     import extract_llm
     import notify_cards
-    from mcs_queries import current_extract_pred
+    from mcs_queries import current_extract_pred, json_or_null
     now = time.time()
     notify_res = result.get("notify") or {}
     notify_state = ("incomplete"
@@ -143,7 +143,7 @@ def _health(ledger, result: dict, status: str,
         AND EXISTS(SELECT 1 FROM artifacts a
           WHERE a.kind='extract_llm' AND a.message_id=m.message_id
             {current_extract_pred('a', 'm')}
-            AND json_extract(a.meta,'$.extract_version')=?)
+            AND json_extract({json_or_null('a.meta')},'$.extract_version')=?)
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     collection = ("incomplete"
                   if result.get("incomplete") or result.get("coverage_gaps")
