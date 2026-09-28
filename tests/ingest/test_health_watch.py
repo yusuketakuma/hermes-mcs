@@ -192,6 +192,30 @@ def test_new_bad_observation_alerts_once_each(tmp_path):
     assert not _eval(tmp_path, 1360.0)["alert"]
 
 
+
+def test_continuous_ok_updates_stay_silent(tmp_path):
+    # a fresh 'ok' file every tick must not alert — a healthy producer
+    # writing on schedule is not an event
+    _health_file(tmp_path, {"overall": "ok", "at": 700})
+    assert not _eval(tmp_path, 1000.0)["alert"]    # first ok: silent
+    _health_file(tmp_path, {"overall": "ok", "at": 990})
+    assert not _eval(tmp_path, 1001.0)["alert"]    # ok -> ok: silent
+    _health_file(tmp_path, {"overall": "ok", "at": 995})
+    r = _eval(tmp_path, 1002.0)
+    assert r["status"] == "ok" and not r["alert"]
+
+
+def test_recovery_once_then_further_ok_is_silent(tmp_path):
+    _health_file(tmp_path, {"overall": "ok", "at": 50})
+    assert _eval(tmp_path, 1000.0)["alert"]        # stale alert
+    _health_file(tmp_path, {"overall": "ok", "at": 1190})
+    assert _eval(tmp_path, 1250.0)["alert"]        # recovery: once
+    # keep writing healthy files — none of them is an event
+    _health_file(tmp_path, {"overall": "ok", "at": 1290})
+    assert not _eval(tmp_path, 1300.0)["alert"]
+    _health_file(tmp_path, {"overall": "ok", "at": 1590})
+    assert not _eval(tmp_path, 1600.0)["alert"]
+
 def test_malformed_previous_state_does_not_stop_watcher(tmp_path):
     _health_file(tmp_path, {"overall": "degraded", "at": 990})
     state = tmp_path / "data" / "health_watch.json"
@@ -232,3 +256,13 @@ def test_main_prints_only_on_alert(tmp_path, capsys):
                             str(_local_time(27, 12, 31))])
     assert rc == 0
     assert capsys.readouterr().out == ""     # deduped: silent
+
+
+def test_main_stays_silent_on_ok_to_ok(tmp_path, capsys):
+    _health_file(tmp_path, {"overall": "ok", "at": _local_time(27, 14, 55)})
+    assert health_watch.main(["--home", str(tmp_path), "--now",
+                              str(_local_time(27, 15, 0))]) == 0
+    _health_file(tmp_path, {"overall": "ok", "at": _local_time(27, 15, 0)})
+    assert health_watch.main(["--home", str(tmp_path), "--now",
+                              str(_local_time(27, 15, 1))]) == 0
+    assert capsys.readouterr().out == ""           # ok->ok prints nothing

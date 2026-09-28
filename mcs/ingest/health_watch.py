@@ -158,8 +158,12 @@ def evaluate(home: str = HOME, now: float | None = None,
     """Classify current evidence, apply alert dedup, persist state.
 
     Dedup key is (status, health_at): an unchanged file never re-alerts.
-    A non-ok status re-alerts after REALERT_S. 'ok' is only produced by
-    a fresh in-deadline file — recovery can never be assumed."""
+    ok->ok never alerts even when the file is fresh — a healthy
+    producer keeping cadence is not an event. Alerts fire on: first
+    non-ok observation, every transition INTO a non-ok status, one
+    bad->ok recovery, and an unchanged non-ok state re-alerted after
+    REALERT_S. 'ok' is only produced by a fresh in-deadline file —
+    recovery can never be assumed."""
     now = time.time() if now is None else now
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
@@ -181,7 +185,14 @@ def evaluate(home: str = HOME, now: float | None = None,
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
                     or now - alerted_at >= REALERT_S))
-    alert = transition if prior_known else obs["status"] != "ok"
+    if not prior_known:
+        alert = obs["status"] != "ok"
+    else:
+        # a fresh 'ok' replacing an 'ok' is a producer keeping its
+        # cadence, not an event — only bad->ok recovery and any
+        # transition into a non-ok status carry an alert
+        alert = transition and (obs["status"] != "ok"
+                                or last.get("status") != "ok")
     alert = alert or realert
 
     report = dict(obs)
