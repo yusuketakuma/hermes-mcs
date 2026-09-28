@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: ruff
-        run: pip install "ruff==0.16.8" && ruff check mcs/ tests/ hermes_plugin/ integration/
+        run: pip install "ruff==0.16.8" && ruff check mcs/ tests/ hermes_plugin/ integration/ ci/ scripts/ deployment/ conftest.py
       - name: pytest
         run: pip install "pytest==9.1.1" && scripts/run_tests.sh -x -q
       - name: check generated docs on PR
@@ -42,22 +42,18 @@ jobs:
           python-version: "3.13"
       - name: regenerate module table
         run: python3 scripts/update_readme.py
-      - name: auto-commit on main / fail on PR
+      # the job only runs on push to main; the PR drift check lives in
+      # lint-test ("check generated docs on PR")
+      - name: auto-commit on main
         run: |
           if git diff --quiet README.md docs/DEVELOPMENT.md; then
             echo "generated docs are up to date"; exit 0
           fi
-          if [ "${{ github.event_name }}" = "push" ] && \
-             [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add README.md docs/DEVELOPMENT.md
-            git commit -m "docs: auto-update generated doc blocks [skip ci]"
-            git push
-          else
-            echo "::error::generated doc blocks are stale — run: python3 scripts/update_readme.py"
-            exit 1
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/DEVELOPMENT.md
+          git commit -m "docs: auto-update generated doc blocks [skip ci]"
+          git push
 
   hygiene:
     runs-on: ubuntu-latest

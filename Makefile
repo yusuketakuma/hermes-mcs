@@ -11,7 +11,7 @@ PYTEST = scripts/run_tests.sh
 RUFF   = ruff
 endif
 
-LINT_PATHS = mcs/ tests/ hermes_plugin/ integration/
+LINT_PATHS = mcs/ tests/ hermes_plugin/ integration/ ci/ scripts/ deployment/ conftest.py
 
 test:           ## run the full test suite
 	$(PYTEST)

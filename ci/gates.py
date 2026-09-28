@@ -210,8 +210,10 @@ def gate_plugin_sandbox() -> list[str]:
     return bad
 
 
-# maintenance.py opens its BACKUP TARGET (a fresh tmp file) read-write —
-# that connect() writes the copy, never the source ledger.
+# maintenance.py opens backup targets (fresh tmp files) read-write AND,
+# in prune_attachments, the live ledger itself — that write is only safe
+# because run_check._housekeeping calls it under run.lock. The exemption
+# is file-wide, so any new RW connect added there needs the same lock.
 # llm_admission.py's broker owns a dedicated admission store
 # (admission.db), not the ledger/snapshot surface.
 _SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}

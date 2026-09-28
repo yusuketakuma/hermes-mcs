@@ -246,3 +246,13 @@ def test_writer_gate_checks_lock_on_each_caller_path(
     path.write_text(source)
     monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
     assert bool(gates.gate_writer_lock()) is not locked
+
+
+def test_suite_guard_denies_any_path_on_live_llm_authority():
+    """/slots, /v1/models and a localhost spelling of the production
+    llama-server are as live as the chat endpoint."""
+    import bounded_http
+    for url in ("http://127.0.0.1:8080/slots",
+                "http://localhost:8080/v1/models"):
+        with pytest.raises(RuntimeError, match="live LLM/Jev"):
+            bounded_http.bounded_http_request(url, "GET", None, 1)
