@@ -115,14 +115,41 @@ def test_forbidden_request_is_reported_with_extracted_items():
 
 
 def test_case_file_validates_offline():
-    import extract_llm
     cases = extract_bench._load_cases(extract_bench.DEFAULT_CASES)
     assert len(cases) >= 10
     for c in cases:
-        exp = c.get("expect", {})
-        if exp:
-            assert isinstance(extract_llm._validate(dict(exp)), dict), \
-                f"{c['id']}: expectation fails _validate"
+        for key in ("expect", "forbid"):
+            assert extract_bench._section_valid(c.get(key, {})), \
+                f"{c['id']}: {key} fails _validate"
+
+
+# U05-F06: a dropped item must fail, not become "expect nothing".
+@pytest.mark.parametrize("case", [
+    {"id": "bad-expect", "body": "合成",
+     "expect": {"meds": [{"name": "合成薬", "status": "currnt"}],
+                "urgency": "routine"}},
+    {"id": "bad-forbid", "body": "合成", "expect": {},
+     "forbid": {"meds": [{"name": "合成薬", "status": "currnt"}]}},
+])
+def test_mock_ok_rejects_dropped_expectation_items(tmp_path, case):
+    import json
+    from types import SimpleNamespace
+    path = tmp_path / "synthetic.json"
+    path.write_text(json.dumps({"cases": [case]}))
+    assert extract_bench.cmd_run(SimpleNamespace(
+        cases=str(path), out=None, tag="t", mock_ok=True)) == 1
+
+
+def test_mock_ok_cli_runs_without_out():
+    # U05-F07: the documented `run --mock-ok` usage works as written
+    import subprocess
+    script = Path(extract_bench.__file__)
+    proc = subprocess.run([sys.executable, str(script), "run", "--mock-ok"],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    bad = subprocess.run([sys.executable, str(script), "run"],
+                         capture_output=True, text=True, timeout=60)
+    assert bad.returncode == 2 and "--out" in bad.stderr
 
 
 def test_bench_scores_foreign_and_mixed_vitals():

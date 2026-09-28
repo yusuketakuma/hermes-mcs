@@ -242,13 +242,23 @@ def _duration_percentiles(durations: list[float]) -> dict:
         for percentile in (50, 95)}
 
 
+def _section_valid(section) -> bool:
+    """An expect/forbid block survives _validate WHOLE — a dropped item
+    (typo'd enum, missing name) would otherwise turn silently into
+    "expect nothing" and the case would pass vacuously."""
+    import extract_llm
+    if not isinstance(section, dict):
+        return False
+    v = extract_llm._validate(dict(section))
+    return isinstance(v, dict) and not v.get("_items_dropped")
+
+
 def cmd_run(args) -> int:
     cases, corpus_sha256 = _load_corpus(args.cases)
     if args.mock_ok:
-        import extract_llm
         results = [{"id": c["id"],
-                    "validate_ok": isinstance(
-                        extract_llm._validate(c.get("expect", {})), dict)}
+                    "validate_ok": _section_valid(c.get("expect", {}))
+                    and _section_valid(c.get("forbid", {}))}
                    for c in cases]
         bad = [r for r in results if not r["validate_ok"]]
         print(f"mock: {len(results)} cases, "
@@ -335,7 +345,7 @@ def main() -> int:
     r = sub.add_parser("run")
     r.add_argument("--cases", default=DEFAULT_CASES)
     r.add_argument("--tag", default="run")
-    r.add_argument("--out", required=True)
+    r.add_argument("--out", help="result JSON (required unless --mock-ok)")
     r.add_argument("--mock-ok", action="store_true",
                    help="offline: only check expectations pass _validate")
     r.set_defaults(fn=cmd_run)
@@ -343,6 +353,8 @@ def main() -> int:
     p.add_argument("files", nargs="+")
     p.set_defaults(fn=cmd_report)
     args = ap.parse_args()
+    if args.cmd == "run" and not args.mock_ok and not args.out:
+        ap.error("run: --out is required unless --mock-ok")
     return args.fn(args)
 
 
