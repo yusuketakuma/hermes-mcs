@@ -902,23 +902,27 @@ def _csv_yaml(text: str) -> str:
                       ensure_ascii=False)
 
 
-def _apply_plugin_integration(cfg: dict, args) -> None:
+def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
     config.yaml / .env; never touches hermes-agent internals. Runs
     when notify.interactive is "discord" or "slack" (the one plugin
-    serves both transports; slack scope keys are slack_*)."""
+    serves both transports; slack scope keys are slack_*).
+
+    Returns False when the CLI is unavailable or any attempted write
+    failed; keys left unset by choice (--yes, empty answer) are not
+    failures."""
     ntf = cfg.get("notify")
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
-        return
+        return True
     transport = ntf["interactive"]
     exe = _hermes_exe(cfg)
     if not _hermes_ok(exe):
         print("\nhermes CLI が見つかりません — プラグイン設定は後で "
               "`hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で行ってください")
-        return
+        return False
     nd = ntf.get(transport) if isinstance(ntf.get(transport), dict) else {}
     label = {"discord": "Discord", "slack": "Slack"}[transport]
     profile = getattr(args, "plugin_profile", None)
@@ -972,12 +976,14 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
                   ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
     missing = []
+    failed = False
     for key, val in fixed.items():
         if _hermes_config_set(exe, profile, f"{PLUGIN_SETTINGS}.{key}",
                               val):
             print(f"  settings.{key}: 設定")
         else:
             missing.append(key)
+            failed = True
 
     for key, flag_val, desc, default in lists:
         if flag_val is None:
@@ -1002,6 +1008,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
             print(f"  settings.{key}: 設定")
         else:
             missing.append(key)
+            failed = True
     if missing:
         print("  未設定: " + ", ".join(missing) +
               " — 後で `hermes config set "
@@ -1018,6 +1025,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         tok = os.environ.get(env_key)
         if tok:
             ok = _hermes_config_set(exe, profile, env_key, tok)
+            failed |= not ok
             print(f"  {env_key}: "
                   + (f"hermes {'-p ' + profile if profile else '既定'} "
                      ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
@@ -1030,6 +1038,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
                     "空欄=スキップ）: ") or None
                 if tok:
                     ok = _hermes_config_set(exe, profile, env_key, tok)
+                    failed |= not ok
                     print(f"  {env_key}: "
                           + (f"hermes {'-p ' + profile if profile else '既定'}"
                              " .env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
@@ -1037,6 +1046,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
                 print(f"  {env_key}: 未設定 — `hermes "
                       + (f"-p {profile} " if profile else "")
                       + "setup` で後から設定")
+    return not failed
 
 
 def cmd_init(args) -> int:
@@ -1056,6 +1066,8 @@ def cmd_init(args) -> int:
 
     # --set KEY=JSON gives non-interactive coverage of every config
     # key (dotted paths nest); the trailing cmd_check validates them.
+    fact_selection = (_get_key(cfg, "semantic.fact_source"),
+                      _get_key(cfg, "semantic.fact_source_gate"))
     for kv in args.set or []:
         k, sep, v = kv.partition("=")
         if not sep or not k.strip():
@@ -1066,6 +1078,16 @@ def cmd_init(args) -> int:
         except ValueError:
             val = v
         _set_key(cfg, k.strip(), val)
+    # canonical promotion is gated by `fact-source` (evidence check +
+    # pinned token) — --set, including a whole `semantic` object, must
+    # not mint or re-pin it. An unchanged existing pin passes through.
+    selection = (_get_key(cfg, "semantic.fact_source"),
+                 _get_key(cfg, "semantic.fact_source_gate"))
+    if selection[0] == "canonical" and selection != fact_selection:
+        print("--set: semantic.fact_source=canonical (and its gate) can "
+              "only be set via `mcs_setup.py fact-source canonical "
+              "--gate-evidence <report>` — config not written")
+        return 1
 
     # secrets come from the environment (or getpass) — never argv flags,
     # which persist in shell history and `ps` (FIX-SU1)
@@ -1157,7 +1179,7 @@ def cmd_init(args) -> int:
     _write_atomic(CONF_PATH, json.dumps(cfg, ensure_ascii=False,
                                       indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: wrote {CONF_PATH}")
-    _apply_plugin_integration(cfg, args)
+    integration_ok = _apply_plugin_integration(cfg, args)
     # an interactive transport needs the supervised gateway — on a
     # first install `services` ran BEFORE init could configure
     # interactive, so sync just the gateway here rather than leaving
@@ -1169,19 +1191,36 @@ def cmd_init(args) -> int:
         if _hermes_ok(exe):
             _sync_gateway(cfg, exe, lambda m: print(f"  {m}"),
                           dry=False)
-    return cmd_check(args)
+    check_result = cmd_check(args)
+    if not integration_ok:
+        print("init: FAIL — Hermes plugin settings were not fully "
+              "written; repair the serving profile/CLI and re-run init")
+        return 1
+    return check_result
+
+
+def _shipped_g6_criteria() -> tuple[dict, str]:
+    """The shipped G6 criteria, normalized and hashed exactly as
+    semantic_evaluation embeds them in a report (criteria_sha256)."""
+    import semantic_evaluation
+    with open(G6_CRITERIA_PATH, encoding="utf-8") as f:
+        criteria = semantic_evaluation.validate_criteria(json.load(f))
+    digest = hashlib.sha256(json.dumps(
+        criteria, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return criteria, digest
 
 
 def cmd_fact_source(args) -> int:
     """Set semantic.fact_source with an evidence gate for ``canonical``.
 
     Production promotion is pinned: ``--gate-evidence`` must be a
-    semantic_evaluation report whose gate passed on human-labelled data
-    (gate.pass and gate.g6_eligible).  Synthetic or failing reports can
-    never mint the token, and the written config is validated
-    fail-closed before it lands.
+    semantic_evaluation report scored against the shipped G6 criteria
+    (criteria_sha256 match) whose gate passed with no reasons on at
+    least min_human_labels human-labelled cases.  Synthetic, failing or
+    foreign-criteria reports can never mint the token, and the written
+    config is validated fail-closed before it lands.
     """
-    import hashlib
     cfg = load_config()
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
@@ -1218,8 +1257,29 @@ def cmd_fact_source(args) -> int:
             print("fact_source: gate evidence does not pass on "
                   f"human-labelled data{f' ({reasons})' if reasons else ''}")
             return 1
+        try:
+            criteria, criteria_sha = _shipped_g6_criteria()
+        except Exception as e:
+            # the gate cannot be judged without its criteria — fail closed
+            print(f"fact_source: shipped G6 criteria unreadable "
+                  f"({type(e).__name__}: {e})")
+            return 1
+        reasons = gate.get("reasons")
+        problem = None
+        if report.get("criteria_sha256") != criteria_sha \
+                or report.get("criteria_version") != criteria["version"]:
+            problem = ("not scored against the shipped G6 criteria "
+                       f"({os.path.relpath(G6_CRITERIA_PATH, REPO_ROOT)})")
+        elif human < criteria["min_human_labels"]:
+            problem = (f"{human} human labels < min_human_labels "
+                       f"{criteria['min_human_labels']}")
+        elif not isinstance(reasons, list) or reasons:
+            problem = f"gate reasons not empty ({reasons!r})"
+        if problem:
+            print(f"fact_source: gate evidence rejected — {problem}")
+            return 1
         digest = hashlib.sha256(raw).hexdigest()[:16]
-        criteria_version = str(report.get("criteria_version", "unknown"))
+        criteria_version = criteria["version"]
         sem["fact_source_gate"] = f"{criteria_version}:{digest}"
     else:
         sem.pop("fact_source_gate", None)
@@ -1410,6 +1470,8 @@ SCRIPTS_DIR = os.path.join(HERMES_HOME, "scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
+G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
+                                "g6-criteria-v1.json")
 
 CRON_JOBS = [
     ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
@@ -1622,6 +1684,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
              "no cron mutations performed")
         return 1
     problems = 0
+    mutated = False
     # derive identities from the SAME verified list — a second
     # `cron list` call could fail transiently and return an
     # empty set that looks like 'no jobs' (fail-open, M1)
@@ -1630,6 +1693,14 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
     by_script = {e.get("script"): e for e in entries
                  if e.get("script")}
     desired_scripts = {s for _, _, s in CRON_JOBS}
+    # one job per owned script is the invariant every step below
+    # relies on — which duplicate is authoritative is an operator call
+    dups = sorted(s for s in desired_scripts
+                  if sum(e.get("script") == s for e in entries) > 1)
+    if dups:
+        note("cron: duplicate owned scripts — resolve job IDs manually "
+             f"({', '.join(dups)}), then re-run services")
+        return 1
     owned_scripts = desired_scripts | {
         c.get("script") for c in prev.get("cron", [])
         if isinstance(c, dict) and c.get("script")}
@@ -1637,14 +1708,15 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
         entry = by_script.get(script)
         if entry is None and (name in existing
                               or script in existing):
-            # identity seen but fields unparseable — leave it
-            note(f"cron '{name}': exists")
-            manifest["cron"].append(
-                {"name": name, "schedule": sched,
-                 "script": script})
+            # identity seen but its script is unparseable — neither
+            # 'exists' (unverified) nor safe to create (duplicate)
+            note(f"cron '{name}': identity seen but script unverifiable "
+                 "— no create; inspect `hermes cron list --all`")
+            problems += 1
             continue
         if entry is None:
             note(f"cron '{name}': create ({sched} -> {script})")
+            mutated = True
             if not dry:
                 r = _run(
                     [hermes, "cron", "create", sched,
@@ -1664,6 +1736,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
         if cur_sched and want_sched and cur_sched != want_sched:
             note(f"cron '{name}': schedule "
                  f"{cur_sched} -> {sched}")
+            mutated = True
             if not dry:
                 r = _run(
                     [hermes, "cron", "edit", entry["id"],
@@ -1683,6 +1756,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                 and script not in desired_scripts:
             note(f"cron '{entry.get('name', script)}': "
                  f"undesired — remove {entry['id']}")
+            mutated = True
             if not dry:
                 r = _run(
                     [hermes, "cron", "remove", entry["id"]])
@@ -1690,6 +1764,18 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                     note(f"  remove failed: "
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
+    if mutated and not dry:
+        # a zero exit is not proof — confirm the converged state, else
+        # the manifest would record jobs that do not exist
+        after = _cron_list(hermes)
+        if after is None or any(
+                sum(e.get("script") == script
+                    and _norm_sched(e.get("schedule")) == _norm_sched(sched)
+                    for e in after) != 1
+                for _, sched, script in CRON_JOBS):
+            note("cron: post-change state unverifiable or not exactly one "
+                 "job per script — re-run services")
+            problems += 1
     return problems
 
 

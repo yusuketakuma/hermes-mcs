@@ -13,6 +13,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL = ROOT / "install.sh"
 
@@ -52,6 +54,7 @@ if [ "$1" = "venv" ]; then
 echo "venv-hermes $*" >> "$STUB_LOG"
 case "$1" in
   config) exit 1 ;;
+  plugins) [ -z "$STUB_FAIL_PLUGIN" ] || exit 1 ;;
 esac
 exit 0
 INNER
@@ -84,6 +87,9 @@ case "$1" in
     plist=""
     for a in "$@"; do plist="$a"; done
     label="$(basename "$plist" .plist)"
+    if [ -n "$STUB_FAIL_WATCHDOG" ] && [ "$label" = org.mcs.recovery ]; then
+        exit 1
+    fi
     touch "$STUB_STATE/loaded/$label"; exit 0 ;;
   bootout)
     label="${2##*/}"
@@ -93,6 +99,9 @@ exit 0
 """,
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
+case "$*" in
+  *"mcs_setup.py services"*) [ -z "$STUB_FAIL_SERVICES" ] || exit 1 ;;
+esac
 exit 0
 """,
     "llama-server": """#!/bin/sh
@@ -347,3 +356,41 @@ def test_custom_hermes_home_refused_with_services(tmp_path):
     r = _run(env, custom)
     assert r.returncode == 2 and "HERMES_HOME" in r.stderr
     assert _run(env, custom, "--no-services").returncode == 0
+
+
+STOPPED = "installation stopped; repair the failed stage and re-run install.sh"
+
+
+@pytest.mark.parametrize("switch,message", [
+    ("STUB_FAIL_PLUGIN", "plugins enable failed"),
+    ("STUB_FAIL_SERVICES", "services reported problems"),
+    ("STUB_FAIL_WATCHDOG", "watchdog bootstrap failed"),
+])
+def test_failed_stage_stops_install_then_rerun_recovers(
+        tmp_path, switch, message):
+    """A failed stage is a non-zero stop with a repair hint — never a
+    warn-and-continue 'Done.'. Once repaired, a plain re-run converges
+    and the previous recovery generation survives both runs."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    old_gen = b"# old generation - only thing that still runs"
+    (rec / "mcs_recover.py").write_bytes(old_gen)
+
+    r = _run({**env, switch: "1"}, hermes_home)
+    assert r.returncode != 0
+    assert message in r.stderr
+    assert STOPPED in r.stderr
+    assert "Done." not in r.stdout
+    if switch != "STUB_FAIL_WATCHDOG":
+        # stopped before stage 6 — the old tool is untouched
+        assert (rec / "mcs_recover.py").read_bytes() == old_gen
+        assert not (rec / "mcs_recover.py.prev").exists()
+
+    r2 = _run(env, hermes_home)
+    assert r2.returncode == 0, r2.stderr
+    assert STOPPED not in r2.stderr
+    assert (rec / "mcs_recover.py.prev").read_bytes() == old_gen
+    assert (rec / "mcs_recover.py").read_bytes() == (
+        ROOT / "deployment" / "recovery" / "mcs_recover.py").read_bytes()
+    assert not list(rec.glob("*.tmp"))

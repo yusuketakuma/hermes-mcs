@@ -26,6 +26,8 @@
 #
 # Re-running is safe: every stage checks first and skips what exists,
 # so partially-installed machines converge instead of starting over.
+# A stage that fails stops the install with a non-zero exit — repair
+# it and re-run; later stages never run on top of a broken one.
 # What is NOT automated (needs your secrets / interactive choices):
 # `mcs_setup.py init` (guided all-settings wizard), the Discord/Slack
 # tokens, and the plugin settings block — the final summary lists them.
@@ -61,6 +63,10 @@ if [ "$HERMES_HOME" != "$HOME/.hermes" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
     echo "use the default ~/.hermes, or pass --no-services and register services yourself" >&2
     exit 2
 fi
+# every non-zero exit from here on is a stopped install, not a usage error
+trap 'if [ "$?" -ne 0 ]; then
+    echo "error: installation stopped; repair the failed stage and re-run install.sh" >&2
+fi' EXIT
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 HERMES_DIR="$HERMES_HOME/hermes-agent"
@@ -79,6 +85,7 @@ say()  { printf '\n=== %s ===\n' "$1"; }
 ok()   { echo "  ok: $*"; }
 skip() { echo "  skip: $*"; }
 warn() { echo "  warn: $*" >&2; }
+die()  { echo "error: $*" >&2; exit 1; }
 
 # Quote data for the generated shell shim and XML/sed replacements.
 shell_quote() {
@@ -221,7 +228,7 @@ else
     if "$HERMES_BIN" plugins enable mcs-discord-commands --no-allow-tool-override; then
         ok "plugin enabled"
     else
-        warn "plugins enable failed — add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml"
+        die "plugins enable failed — repair the Hermes CLI/plugin configuration (or add 'mcs-discord-commands' to plugins.enabled in the profile config.yaml), then re-run install.sh"
     fi
 fi
 fi  # SKIP_PLUGIN
@@ -242,7 +249,7 @@ else
         LLAMA_BIN="$(brew --prefix)/bin/llama-server"
     fi
     if [ ! -x "$LLAMA_BIN" ]; then
-        warn "llama-server not found even after brew — install manually"
+        die "llama-server not found even after brew — install it (or pass --no-llm and serve :8080 yourself), then re-run install.sh"
     else
         if [ ! -f "$MODEL_FILE" ]; then
             echo "  downloading model (~6 GB): $MODEL_FILE"
@@ -251,7 +258,7 @@ else
                     && mv "$MODEL_FILE.part" "$MODEL_FILE"; then
                 ok "model downloaded"
             else
-                warn "model download failed — fetch $MODEL_URL into $MODEL_FILE"
+                die "model download failed — fetch $MODEL_URL into $MODEL_FILE, then re-run install.sh"
             fi
         else
             skip "model already present"
@@ -272,7 +279,7 @@ else
             if launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"; then
                 ok "llama-server LaunchAgent started"
             else
-                warn "launchctl bootstrap failed for ai.mcs.llamaserver"
+                die "launchctl bootstrap failed for ai.mcs.llamaserver — inspect $PLIST_DST, then re-run install.sh"
             fi
         fi
     fi
@@ -284,11 +291,11 @@ if [ "$SKIP_SERVICES" -eq 1 ]; then
     skip "stage skipped (--no-services) — run it later:"
     skip "  ${MCS_PY:-python3} $REPO/mcs/ops/mcs_setup.py services"
 elif [ -z "$MCS_PY" ]; then
-    warn "no Python >=3.10 interpreter found — services not installed"
+    die "no Python >=3.10 interpreter found — services not installed; install one (or pass --no-services), then re-run install.sh"
 elif "$MCS_PY" "$REPO/mcs/ops/mcs_setup.py" services; then
     ok "services installed"
 else
-    warn "services reported problems — see deployment/launchagents/README.md"
+    die "services reported problems — see deployment/launchagents/README.md, then re-run install.sh"
 fi
 
 # --------------------------------- 6. update recovery (independent)
@@ -298,19 +305,26 @@ if [ "$SKIP_RECOVERY" -eq 1 ]; then
 else
 RECOVERY_DIR="$HOME/.mcs-recovery"
 mkdir -p "$RECOVERY_DIR"
+RECOVERY_SRC="$REPO/deployment/recovery/mcs_recover.py"
+RECOVERY_DST="$RECOVERY_DIR/mcs_recover.py"
 # preserve the prior generation — on a bad update it may be the only
 # thing that can still run
 # (only when the generation actually changes — a same-release re-run
-# must not overwrite the real previous generation with the current one)
-if [ -f "$RECOVERY_DIR/mcs_recover.py" ] && ! cmp -s \
-        "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"; then
-    cp -p "$RECOVERY_DIR/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py.prev"
+# must not overwrite the real previous generation with the current one).
+# Both files are published via tmp + rename so an interrupted install
+# never leaves a truncated tool or .prev behind.
+if ! cmp -s "$RECOVERY_SRC" "$RECOVERY_DST"; then
+    if [ -f "$RECOVERY_DST" ]; then
+        cp -p "$RECOVERY_DST" "$RECOVERY_DST.prev.tmp"
+        mv -f "$RECOVERY_DST.prev.tmp" "$RECOVERY_DST.prev"
+    fi
+    cp "$RECOVERY_SRC" "$RECOVERY_DST.tmp"
+    chmod 755 "$RECOVERY_DST.tmp"
+    mv -f "$RECOVERY_DST.tmp" "$RECOVERY_DST"
 fi
-cp "$REPO/deployment/recovery/mcs_recover.py" "$RECOVERY_DIR/mcs_recover.py"
-chmod 755 "$RECOVERY_DIR/mcs_recover.py"
 # the tool runs outside the repo — record which checkout it recovers
 printf '%s\n' "$REPO" > "$RECOVERY_DIR/repo_path"
-ok "recovery tool: $RECOVERY_DIR/mcs_recover.py"
+ok "recovery tool: $RECOVERY_DST"
 
 if [ "$(uname -s)" = "Darwin" ]; then
     WATCH_PLIST="$HOME/Library/LaunchAgents/org.mcs.recovery.plist"
@@ -323,7 +337,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if launchctl bootstrap "gui/$(id -u)" "$WATCH_PLIST"; then
         ok "recovery watchdog loaded (StartInterval 900)"
     else
-        warn "watchdog bootstrap failed — load manually: launchctl bootstrap gui/$(id -u) $WATCH_PLIST"
+        die "watchdog bootstrap failed — inspect $WATCH_PLIST (or load it: launchctl bootstrap gui/$(id -u) $WATCH_PLIST), then re-run install.sh"
     fi
 else
     skip "watchdog: not macOS — install the timer manually"
