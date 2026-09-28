@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 from collections import Counter
+from functools import partial
 
 from ..mcs_delivery import envelopes, paths, registry, text, worker
 from . import cards
@@ -44,6 +45,10 @@ class DeliveryWorker(worker.DeliveryWorker):
         spec = claim["spec"]
         delivery = spec["delivery"]
         op = spec["op"]
+        if op not in ("revoke", "update") \
+                and not cards.single_post_ready(self._bot):
+            return {"result": "not_sent",
+                    "error_code": "retry_policy_unknown"}
         channel = await self._channel(delivery["channel_id"])
         if op == "revoke":
             mid = delivery.get("message_id")
@@ -68,7 +73,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             msg = await channel.fetch_message(int(mid))
             await msg.edit(view=view)
             return {"result": "delivered", "message_id": mid}
-        sent = await channel.send(view=view)      # create / notice
+        sent = await cards.single_post(           # create / notice
+            self._bot, partial(channel.send, view=view))
         return {"result": "delivered",
                 "message_id": str(sent.id)}
 
@@ -79,6 +85,11 @@ class DeliveryWorker(worker.DeliveryWorker):
         """One manifest part's wire call — thread create/verify, a body
         chunk, or an attachment upload, each returning its remote id."""
         spec = claim["spec"]
+        if not cards.single_post_ready(self._bot):
+            # every part kind may POST — none runs under an SDK whose
+            # retry loop the single-post guard cannot hold
+            return {"result": "not_sent",
+                    "error_code": "retry_policy_unknown"}
         if part["kind"] == "thread":
             return await self._thread_part(claim, part, ctx)
         thread = ctx.get("thread")
@@ -96,7 +107,8 @@ class DeliveryWorker(worker.DeliveryWorker):
                 if mid is not None:
                     return {"result": "delivered",
                             "remote_id": str(mid)}
-            sent = await thread.send(body)
+            sent = await cards.single_post(
+                self._bot, partial(thread.send, body))
             rid = getattr(sent, "id", None)
             if not rid:
                 # the wire call completed but carries no provable
@@ -111,8 +123,9 @@ class DeliveryWorker(worker.DeliveryWorker):
                 return {"result": "not_sent",
                         "error_code": "attachment_mismatch"}
             with io.BytesIO(blob) as source:
-                sent = await cards.send_attachment(
-                    thread, source, part.get("name") or "file")
+                sent = await cards.single_post(self._bot, partial(
+                    cards.send_attachment, thread, source,
+                    part.get("name") or "file"))
             rid = getattr(sent, "id", None)
             if not rid:
                 return {"result": "unknown",
@@ -142,7 +155,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             channel = await self._channel(delivery["channel_id"])
             msg = await channel.fetch_message(int(ctx["card_message_id"]))
             try:
-                thread = await msg.create_thread(name=part["name"])
+                thread = await cards.single_post(self._bot, partial(
+                    msg.create_thread, name=part["name"]))
             except Exception as create_exc:
                 # the goal may already hold — a thread bound under the
                 # card message by a crashed or older-generation worker
@@ -208,7 +222,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             channel = await self._channel(spec["delivery"]["channel_id"])
             sent_message = await channel.fetch_message(int(message_id))
             try:
-                thread = await sent_message.create_thread(name=name)
+                thread = await cards.single_post(self._bot, partial(
+                    sent_message.create_thread, name=name))
             except Exception as create_exc:
                 # same already-exists recovery as _thread_part — the
                 # thread a previous attempt or older worker left under
@@ -281,7 +296,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         sent = 0
         for chunk in chunks:
             try:
-                await thread.send(chunk)
+                await cards.single_post(
+                    self._bot, partial(thread.send, chunk))
                 sent += 1
             except Exception as exc:
                 self._log("thread_body_failed",

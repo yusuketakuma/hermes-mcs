@@ -30,7 +30,8 @@ from datetime import datetime
 from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S, JST,
                          JSON_OBJECT_SQL, MED_NOT_CAPABILITY_SQL, MED_PATIENT_CURRENT_SQL,
                          TRANSITION_EVENTS_SQL, current_fact_pred,
-                         iter_period_ends, med_capability_evidence,
+                         iter_period_ends, json_or_null,
+                         med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences)
 from structured_view import latest_artifact
@@ -276,7 +277,7 @@ def _med_followup(db, now, th, sig_cfg):
                 FROM artifacts a
                 JOIN messages m ON m.message_id=a.message_id
                 JOIN patients p ON p.project_id=m.project_id
-                JOIN json_each(a.content,'$.meds') je
+                JOIN json_each({json_or_null('a.content')},'$.meds') je
                 WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
                   {current_fact_pred()}
                   AND m.posted_at_ts IS NOT NULL
@@ -484,7 +485,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
-            JOIN json_each(a.content,'$.requests') je
+            JOIN json_each({json_or_null('a.content')},'$.requests') je
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
@@ -534,7 +535,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
-            JOIN json_each(a.content,'$.requests') je
+            JOIN json_each({json_or_null('a.content')},'$.requests') je
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
@@ -624,7 +625,7 @@ def _adherence_concern(db, now, th, sig_cfg):
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
-            JOIN json_each(a.content,'$.meds') je
+            JOIN json_each({json_or_null('a.content')},'$.meds') je
             WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
@@ -700,7 +701,7 @@ def _discharge_notice(db, now, th, sig_cfg):
             FROM messages d
             JOIN patients p ON p.project_id=d.project_id
             JOIN artifacts da ON da.message_id=d.message_id
-            JOIN json_each(da.content,'$.events') ev
+            JOIN json_each({json_or_null('da.content')},'$.events') ev
             WHERE da.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
               {current_fact_pred('da', 'd')}
               AND ev.value IN ({TRANSITION_EVENTS_SQL})

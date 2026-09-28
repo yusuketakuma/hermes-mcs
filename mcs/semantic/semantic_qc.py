@@ -68,7 +68,8 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
             'pending', ?, ?, ?
           FROM artifacts a JOIN messages m ON m.message_id=a.message_id
           WHERE a.artifact_id={qc_source_id(version=version)}
-            AND json_extract(a.meta,'$.prefilter') IS NULL
+            AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object'
+                THEN json_extract(a.meta,'$.prefilter') IS NULL END
             AND {scope}
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                            WHERE q.kind=? AND q.message_id=a.message_id

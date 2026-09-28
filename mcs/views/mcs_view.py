@@ -263,7 +263,7 @@ class View:
         least one item or could not run. With --message-id: the full
         per-item verdicts for that message."""
         import extract_llm
-        from mcs_queries import current_qc_pred, qc_source_id
+        from mcs_queries import current_qc_pred, json_or_null, qc_source_id
         from semantic_qc import QC_REALTIME_MAX_AGE_S, qc_scope_sql
         version = extract_llm.EXTRACT_VERSION
         if mid is not None:
@@ -290,6 +290,7 @@ class View:
             return {"message": msg, "qc": rows}
         cur = ("a.kind='extract_qc' AND m.project_id=? "
                + current_qc_pred(version=version))
+        content = json_or_null("a.content")
         base = ("FROM artifacts a JOIN messages m "
                 "ON m.message_id=a.message_id WHERE " + cur)
         summary = dict(self.db.execute(
@@ -309,7 +310,7 @@ class View:
                 "SELECT COALESCE(json_extract(je.value,'$.verdict'),'?') v,"
                 " COUNT(*) c FROM artifacts a"
                 " JOIN messages m ON m.message_id=a.message_id,"
-                " json_each(a.content,'$.items') je WHERE " + cur +
+                f" json_each({content},'$.items') je WHERE " + cur +
                 " GROUP BY v", (pid,)):
             summary.setdefault("verdicts", {})[r["v"]] = r["c"]
         summary.setdefault("verdicts", {})
@@ -335,14 +336,14 @@ class View:
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
             "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
-            " AND (json_extract(a.content,'$.qc')='unevaluated'"
-            "  OR json_extract(a.content,'$.coverage.unchecked')>0"
-            "  OR EXISTS(SELECT 1 FROM json_each(a.content,'$.items') je"
+            f" AND (json_extract({content},'$.qc')='unevaluated'"
+            f"  OR json_extract({content},'$.coverage.unchecked')>0"
+            f"  OR EXISTS(SELECT 1 FROM json_each({content},'$.items') je"
             "            WHERE json_extract(je.value,'$.verdict')"
             "                  IS NOT 'MATCH')"
-            "  OR (json_extract(a.content,'$.urgency.jev') IS NOT NULL"
-            "      AND json_extract(a.content,'$.urgency.jev')"
-            "          IS NOT json_extract(a.content,'$.urgency.extracted')))",
+            f"  OR (json_extract({content},'$.urgency.jev') IS NOT NULL"
+            f"      AND json_extract({content},'$.urgency.jev')"
+            f"          IS NOT json_extract({content},'$.urgency.extracted')))",
             [pid], ["a.artifact_id"], ["qc", pid], limit, cursor)
         for row in page["items"]:
             try:

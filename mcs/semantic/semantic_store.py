@@ -180,11 +180,11 @@ def invalidate_projections(ledger, scfg: dict) -> int:
       SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
       WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
-        AND json_valid(a.meta)
-        AND json_type(a.meta)='object'
-        AND (COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
+        AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' THEN
+             COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
              OR (? AND json_extract(a.meta,'$.invalidated')=1
-                 AND json_extract(a.meta,'$.invalidated_reason')='fact_source'))
+                 AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
+             END
     """, (enabled or off,)).fetchall()
     current_ids = set()
     if enabled and any(json.loads(r["meta"]).get("invalidated") for r in rows):
