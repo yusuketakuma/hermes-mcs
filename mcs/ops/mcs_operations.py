@@ -499,6 +499,9 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         (req["signal_key"],)).fetchone()
     if row is None:
         return "signal_not_found", {"signal_key": req["signal_key"]}
+    if row["project_id"] != req["project_id"]:
+        # scope first — another project's row id must never leak
+        return "project_mismatch", {"signal_key": req["signal_key"]}
     if req.get("expected_signal_artifact_id") is not None \
             and row["artifact_id"] != req["expected_signal_artifact_id"]:
         # the card pinned the signal row it displayed — a newer signal
@@ -511,8 +514,6 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         # json_valid passed but the payload is a scalar/array — a corrupt
         # row must reject cleanly, not crash the whole command drain
         return "signal_corrupt", {"signal_key": req["signal_key"]}
-    if row["project_id"] != req["project_id"]:
-        return "project_mismatch", {"signal_key": req["signal_key"]}
     if content.get("state") != "open":
         return "signal_not_open", {"signal_key": req["signal_key"],
                                    "state": content.get("state")}

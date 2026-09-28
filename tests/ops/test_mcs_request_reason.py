@@ -32,7 +32,11 @@ def test_reason_is_recorded_for_create_and_update_and_replay(tmp_path):
                       "patch": {"status": "done"}}
     without_reason.pop("reason")
     omitted = requests.apply_command(db, without_reason)
-    assert omitted["reason"] is None
+    # the core enforces the approval record, not only the frontends
+    assert omitted["outcome"] == "rejected"
+    assert omitted["error"] == "reason_required"
+    assert db.db.execute("SELECT status FROM requests").fetchone()[0] \
+        == "in_progress"
     db.close()
 
 

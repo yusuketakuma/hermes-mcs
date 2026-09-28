@@ -16,8 +16,10 @@ Drives the update lifecycle documented in docs/auto-update-plan.md:
 
 Safety invariants: never touches protected paths (data/, config.json,
 .env), never runs `git clean`, treats unverifiable as failure, and the
-approval boundary is the command_receipts commit — argv is re-verified
-against receipts, never trusted.
+approval boundary is the command_receipts commit on the receipt-driven
+path (check -> detached spawn, which passes no argv). A local operator's
+`apply --command-id` is NOT looked up in receipts — the CLI trusts the
+shell user it runs as.
 """
 from __future__ import annotations
 
@@ -1014,9 +1016,10 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     run_fd = upd_fd = None
     quiesced = False
     rollback_failed = False
+    consent_hold = False
 
     def bail(reason: str) -> int:
-        nonlocal rollback_failed
+        nonlocal rollback_failed, consent_hold
         transient = reason.split(":")[0] in _TRANSIENT_BAIL
         stages = [s.get("stage") for s in state.get("stages", [])]
         merged = "merge" in stages or "post_merge" in stages
@@ -1028,6 +1031,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 _rollback_tree(state["applying"])
                 reason += " (rolled back)"
             except RestoreConsentPending as e:
+                # the post-merge child may already have restarted the
+                # drainers (and removed the marker) — hold exactly like
+                # rollback(): writers stopped, marker kept until consent
+                quiesce()
+                consent_hold = True
                 return _hold_rollback_for_consent(
                     state, e, tag, command_id, reason)
             except Exception as e:
@@ -1194,7 +1202,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     except Exception as e:
         return bail(f"unexpected:{type(e).__name__}")
     finally:
-        if quiesced:
+        if quiesced and not consent_hold:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -1305,6 +1313,10 @@ def rollback(command_id: str | None = None) -> int:
     if state.get("_corrupt"):
         print("update_state corrupt — refusing to act")
         return 2
+    # an interrupted apply/rollback journal belongs to recovery — rolling
+    # back the last APPLIED entry would overwrite it (same rule as apply)
+    if state.get("applying") or state.get("stages"):
+        return recover_interrupted()
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         print("another updater is active — retry later")
@@ -1316,6 +1328,10 @@ def rollback(command_id: str | None = None) -> int:
         state = load_state()            # fresh view under the lock
         if state.get("_corrupt"):
             return 2
+        if state.get("applying") or state.get("stages"):
+            os.close(upd_fd)
+            upd_fd = None
+            return recover_interrupted()
         applied = state.get("applied") or []
         entry = applied[-1] if applied else state.get("applying")
         if not entry or not entry.get("prev_sha"):

@@ -1374,7 +1374,7 @@ def test_consent_hold_defers_everything_but_restore_approve(
             {"cmd": "ops.pause", "project_id": 1, "feature": "semantic"},
             {"cmd": "request.create", "project_id": 1,
              "source_message_id": 1, "source_hash": "e" * 64,
-             "title": "synthetic"},
+             "title": "synthetic", "reason": "synthetic"},
             {"cmd": "ops.restore_approve", "project_id": None,
              "report_id": rid, "backup_sha256": "d" * 64,
              "backup_schema": 7, "reason": "synthetic"}):

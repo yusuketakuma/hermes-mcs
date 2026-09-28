@@ -134,7 +134,7 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
         "version": 1, "cmd": "request.create", "command_id": str(uuid.uuid4()),
         "actor": "synthetic reviewer", "human_confirmed": True, "project_id": 1,
         "source_message_id": 1, "source_hash": source_hash,
-        "title": "synthetic task",
+        "title": "synthetic task", "reason": "synthetic confirmation",
     }, data / "cmd")
     assert run_check.main() == 0
     capsys.readouterr()

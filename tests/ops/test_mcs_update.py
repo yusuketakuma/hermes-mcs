@@ -1135,3 +1135,84 @@ def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, 
             "durable synthetic update")
     finally:
         writer.close()
+
+
+def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
+                                                       monkeypatch):
+    """A post-merge failure on a schema-bump release that lands in the
+    restore-consent hold keeps the same invariant as rollback(): the
+    drainers the NEW-code child restarted are quiesced again and the
+    update marker stays up until consent."""
+    import maintenance
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")
+    monkeypatch.setattr(mcs_update, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "pre.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)
+    monkeypatch.setattr(mcs_update, "load_config",
+                        lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
+    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(mcs_update, "precheck_tag",
+                        lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
+    events = []
+
+    def quiesce():
+        events.append("quiesce")
+        mcs_update._write_marker()
+        return []
+
+    def restart():
+        events.append("restart")
+        mcs_update._remove_marker()   # real restart_agents drops it
+        return []
+
+    monkeypatch.setattr(mcs_update, "quiesce", quiesce)
+    monkeypatch.setattr(mcs_update, "restart_agents", restart)
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
+
+    def post_merge(_state):
+        st = mcs_update.load_state()
+        mcs_update.journal(st, "services")
+        restart()
+        mcs_update.journal(st, "restart")
+        raise mcs_update.UpdateError(
+            "post_merge_failed: postcheck_failed: new_env_error: x")
+
+    monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
+    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
+    st = mcs_update.load_state()
+    assert st.get("restore_consent")
+    assert events[-1] == "quiesce" and "restart" in events
+    assert Path(mcs_update.MARKER_PATH).exists()
+
+
+def test_manual_rollback_defers_to_recovery_of_interrupted_apply(
+        updater, monkeypatch):
+    """An interrupted apply journal belongs to recovery — a manual
+    rollback of the last APPLIED entry must not overwrite it."""
+    state = {"v": 1, "applied": [{"tag": "v1.0.5", "sha": "a" * 40,
+                                  "prev_sha": "b" * 40}],
+             "applying": {"tag": "v1.0.6", "sha": "c" * 40,
+                          "prev_sha": "a" * 40, "at": time.time()},
+             "stages": [{"stage": "merge", "at": time.time()}],
+             "attempts": {}, "executed": {}}
+    mcs_update.save_state(state)
+    calls = []
+    monkeypatch.setattr(mcs_update, "recover_interrupted",
+                        lambda *a, **k: calls.append(1) or 0)
+    monkeypatch.setattr(mcs_update, "quiesce",
+                        lambda: pytest.fail("rollback must not quiesce"))
+    assert mcs_update.rollback() == 0
+    assert calls == [1]
+    assert mcs_update.load_state()["applying"]["tag"] == "v1.0.6"

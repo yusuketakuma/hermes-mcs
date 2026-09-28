@@ -910,7 +910,12 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             # an unfinished or crashed detector must never turn
             # "not inspected" into a recorded "resolved" (the ledger
             # history is a review record, not a guess)
-            if (old is not None and key not in current and old["state"] == "open"
+            # a dismissed key resolves too once its condition clears:
+            # the dismissal covered that episode, and evidence such as
+            # comm_concentration's bare project id would otherwise
+            # silence every later recurrence in the room for good
+            if (old is not None and key not in current
+                    and old["state"] in ("open", "dismissed")
                     and old.get("type") in ran_types):
                 row = dict(old, state="resolved", resolved_at=now)
                 row.pop("reopened_at", None)
