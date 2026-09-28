@@ -1,7 +1,17 @@
-"""Supervise the Slack sender with the existing durable card worker."""
+"""Supervise the Slack sender with the existing durable card worker.
+
+The Hermes Slack adapter rebuilds its native ``AsyncApp`` on an
+in-process reconnect and re-runs the handler factory on the new app,
+while the previous supervisor is still alive and holds the scope lock.
+The newest supervisor for a scope therefore asks its in-process
+predecessor to stop and waits ``LOCK_WAIT_S`` for the lock, so the
+rebuilt app regains its MCS handlers without a process restart (the
+Discord supervisor does the same via ``bot.is_closed()``).
+"""
 from __future__ import annotations
 
 import asyncio
+import time
 
 from ..mcs_delivery import paths as shared_paths
 from ..mcs_delivery import registry
@@ -10,6 +20,13 @@ from ..mcs_delivery.worker import POLL_S
 from . import paths
 from .actions import Actions
 from .delivery import DeliveryWorker, SlackCardAdapter
+
+# Handoff window: the predecessor stops between sends (every send
+# re-checks the stop flag), then releases the lock when its tick ends.
+LOCK_WAIT_S = POLL_S * 15
+
+# scope key -> newest supervisor in this process
+_LIVE: dict = {}
 
 
 class Supervisor:
@@ -36,6 +53,11 @@ class Supervisor:
         self._task = None
 
     def start(self):
+        key = registry.scope_key(self._settings)
+        previous = _LIVE.get(key)
+        _LIVE[key] = self
+        if previous is not None and previous is not self:
+            previous.unload()          # superseded by a rebuilt app
         self._task = self._ctx.spawn_task(
             self._run(), name=f"mcs-slack:{self._worker_id}")
         if self._task is None or self._task.done():
@@ -51,9 +73,14 @@ class Supervisor:
 
     async def _run(self):
         try:
-            if not self._worker.acquire_scope_lock():
-                self._log("scope_lock_unavailable")
-                return
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while not self._worker.acquire_scope_lock():
+                # wait out a superseded in-process predecessor; never
+                # race a live foreign owner past the window
+                if self._stopping or time.monotonic() >= deadline:
+                    self._log("scope_lock_unavailable")
+                    return
+                await asyncio.sleep(0.25)
             self._reg.reload()
             with self._reg.batch():
                 stats = await self._worker.reconcile()
@@ -79,3 +106,6 @@ class Supervisor:
         finally:
             self._actions.unload()
             self._worker.release_scope_lock()
+            key = registry.scope_key(self._settings)
+            if _LIVE.get(key) is self:
+                del _LIVE[key]

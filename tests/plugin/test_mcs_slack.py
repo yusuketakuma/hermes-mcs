@@ -995,3 +995,66 @@ def test_slack_thread_part_needs_the_proven_card_root(led):
         part, {"card_message_id": "1790000000.000001"}))
     assert out == {"result": "delivered",
                    "remote_id": "1790000000.000001"}
+
+
+def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
+                                                            monkeypatch):
+    """Hermes rebuilds its AsyncApp on an in-process reconnect and re-runs
+    the factory on the new app while the old supervisor still holds the
+    scope lock; the successor must take over and wire its handlers."""
+    from hermes_plugin.mcs_slack import tasks as slack_tasks
+    monkeypatch.setattr(slack_tasks, "POLL_S", 0.01)
+    monkeypatch.setattr(slack_tasks, "_LIVE", {}, raising=False)
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(
+        json.dumps({"interactive": True, "transport": "slack"}))
+    settings = {"transport": "slack", "data_root": str(tmp_path),
+                "team_id": "T_SYNTHETIC", "application_id": "A_SYNTHETIC",
+                "channel_id": "C_SYNTHETIC", "profile": "cco",
+                "allowed_user_ids": {"U_OPERATOR"}, "project_ids": {1}}
+    logs = []
+
+    class App:
+        def __init__(self):
+            self.client = FakeClient()
+            self.handlers = []
+
+        def action(self, pattern):
+            return lambda fn: self.handlers.append(pattern)
+
+        def view(self, name):
+            return lambda fn: self.handlers.append(name)
+
+    class Ctx:
+        def spawn_task(self, coro, name=None):
+            return asyncio.ensure_future(coro)
+
+        def on_unload(self, fn):
+            pass
+
+    async def until(cond):
+        for _ in range(500):
+            if cond():
+                return True
+            await asyncio.sleep(0.01)
+        return False
+
+    async def scenario():
+        old_app, new_app = App(), App()
+        old = slack_tasks.Supervisor(ctx=Ctx(), app=old_app, adapter=None,
+                                     settings=settings,
+                                     log=lambda e, **f: logs.append(e))
+        assert old.start()
+        assert await until(lambda: old_app.handlers)
+        new = slack_tasks.Supervisor(ctx=Ctx(), app=new_app, adapter=None,
+                                     settings=settings,
+                                     log=lambda e, **f: logs.append(e))
+        assert new.start()
+        assert await until(lambda: new_app.handlers)
+        assert old._task.done()
+        assert not old._actions._active and new._actions._active
+        assert "scope_lock_unavailable" not in logs
+        new.unload()
+        await new._task
+    asyncio.run(scenario())
