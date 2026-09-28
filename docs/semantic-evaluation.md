@@ -169,7 +169,7 @@ job_metricsの `usage` は、検証済み応答の `input_tokens` / `output_toke
 
 入力が申告する指紋一致を検査するが、生成来歴を証明するものではない。既存DBからの生成は後述の明示的snapshotモードを使う。同一固定bundleからのbaseline生成と出力の来歴照合が済んだデータを用いる。未監査/要確認出力を含み得る研究評価用資料であり、臨床利用向けの監査済み表示ではない。作成失敗時は資料を配布せず、別の新規ディレクトリで作り直す。
 
-`semantic_blind.fixed_bundle_outputs(bundle, target_id, candidate, final, baseline_fn)` は保存bundleの指紋を再計算し、対象revision/project、候補/最終artifactのpolicy/mode/stageを照合してから比較本文を作る。candidate/finalはcontent/metaをJSON decodeしたartifact行を渡す。baseline_fnへは固定bundle内の対象本文だけを渡す。実行側が既存 `extract_llm.llm_extract` を明示的に渡せば既存prompt・3000文字上限・validatorを再利用するが、このヘルパー自身はモデル接続を選択しない。baseline生成失敗は比較不能とする。NEEDS_REVIEWの最終候補も品質評価に含めるが、監査合格へ変換しない。
+`semantic_blind.fixed_bundle_outputs(bundle, target_id, candidate, final, baseline_fn)` は保存bundleの指紋を再計算し、対象revision/project、候補/最終artifactのpolicy/mode/stageを照合してから比較本文を作る。candidate/finalはcontent/metaをJSON decodeしたartifact行を渡す。baseline_fnへは固定bundle内の対象本文と、同じスレッドの先行投稿から組み立てた文脈を渡す。実行側が既存 `extract_llm.llm_extract` を明示的に渡せば既存prompt・3000文字上限・validatorを再利用するが、このヘルパー自身はモデル接続を選択しない。baseline生成失敗は比較不能とする。NEEDS_REVIEWの最終候補も品質評価に含めるが、監査合格へ変換しない。
 
 このヘルパーは後述のsnapshot CLIから呼ばれる。実モデルでの生成は未実行。評価用本文はsummary/pointsまたはclaims/limitationsを同じ改行形式にし、方式名の接頭辞を追加しない。
 
@@ -231,11 +231,13 @@ python3 mcs/semantic/semantic_evaluation.py --input new-labelled/evaluation.json
 
 これらのファイル名は入力例であり、実人手ラベル入りのデータを同梱したという意味ではない。snapshotモードが返す定性比較資料に架空の構造化factsや計測値を補って定量評価へ進めない。
 
-## 要約v4次期推論エンジン統合実装計画（未実装）
+## 要約v4次期推論エンジン統合実装計画（段階実装中）
 
 この節は既存のG6評価契約を変えず、次期**推論エンジンv4**の実装・検証・切替条件を定める。七領域と要約刷新を一つにしたタスク、依存関係、障害復旧、Discord/Slackのスレッド配送、導入更新、外部連携の詳細は、Hermes作業場の `/Users/yusuke/.hermes/hermes-agent/.omo/plans/mcs-seven-domain-reliability.md` のIS-1〜IS-8 / Todo 1〜20を正本とする。ここではv4の臨床品質・速度・排他・版移行を読み切れる契約にする。計画段階であり、実MCS、患者データ、ローカルLLM、Jev、Discord/Slack、本番DBや稼働設定にはアクセスも変更もしない。
 
-### 現状の制約と区別する版
+### 計画作成時の制約と区別する版
+
+以下の表は2026-09-25の計画作成時点の課題を記録したもの。現在の実装には修正済みの項目も含まれる。移行処理の現時点の保留条件は後述の「実装上の保留条件（2026-09-27）」を参照する。
 
 | 現行の契約 | 確認した制約 | v4での決定 |
 | --- | --- | --- |
@@ -264,6 +266,8 @@ Jevの`Choice`は同じ`state`に複数設問を送れるが、現行fact/claim�
 旧版を無制限に一度に再推論せず、対象・依存閉包・総call/token/retry予算・期限・再開cursorを固定した有限cohortを順番に処理する。v4を同じ原文に対して生成・Jev監査し、全必須factsと旧版だけが供給していた情報（例: `extract_v1`由来の薬剤期間）を新readerで表現できると確認してから、対象ごとの現行選択を**原子的にv4 PASSへ置換**する。`extract_v1`の規則成果物はLLM生成ファイルの上書き許可とは別扱い。旧workerの遅延保存は世代fenceで拒否し、旧QC・通知・集計のartifact参照を移行または終端確認する。旧QCの判定をv4への監査成功として付け替えず、旧成果物IDを参照する必要があればメタデータだけのtombstone/監査receiptへ移す。旧LLM生成payload/ファイルの物理的な上書き・削除は別の有限cleanup manifest（対象ID、source世代、`retire_after_at`、検証済み復旧手段を固定）で、参照切替と復旧用保持期間が過ぎた場合だけ許す。manifestや復旧確認が無ければ自動削除しない。最低限の版・source hash・判定・置換先ID・処理時点を示す監査receiptは残し、チャット本文は対象外にする。
 
 v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行ならその対象の旧成果を上書きせず、旧版と未完了理由を表示する。cohortを繰り返して旧版の現行選択を減らし、残数・最古滞留・失敗理由を可視化する。「全件v4完了」は未処理旧版や未解決例外が残る間は宣言しない。旧生成payloadを既に上書きした対象で問題が出た場合、存在しない旧ファイルへ黙って戻さず、保存済み原文から許可済みの有限再処理または原文+pendingへ移る。原文の長期保存に必要なバックアップ/復元可能性は別の運用検証対象であり、現行のローカル日次backupだけで端末喪失への耐性を保証しない。
+
+**実装上の保留条件（2026-09-27）**: `semantic_v4.run_cohort` は原文・依存閉包を固定し、ジョブと受付receiptを同一transactionで保存する。件数上限はcohort全期間で共有し、再起動で補充しない。cohortはv3抽出器への受付許可を与えない。現在のJev adapterには送信前のtoken上限制御がないため、cohort由来の解析ジョブはモデル呼出し前に `token_budget_not_enforceable` を記録して停止する。通常の新着解析の経路とは別の保留条件であり、総call/token/retry予算の強制を実装済みとは扱わない。`retire_payloads` も、別のcleanup manifestと復旧検証を受け取る実装がない間は `cleanup_manifest_and_recovery_required` として旧payloadを保持する。変換receiptとv4 PASSだけでは物理削除を許可しない。
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 

@@ -198,6 +198,12 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 `health.json` がサブシステム状態を公開（`collection`/`notify`/
 `semantic`/`extract_qc`/`cards`…）。各状態の自動応答:
 
+`health_watch.py` は `mcs_check.sh` の通常5分・夜間（22:00–06:59）20分の
+実行予定を数え、既定で2回の欠落と最終予定回の最大実行時間480秒を許容して
+古い `health.json` を判定する。別の実行間隔を使う環境では
+`health.tick_interval_s` を設定し、夜間間引きを行わない場合は
+`health.night_thinning=false` にする。
+
 | 状態 | 自動応答 | 実装 |
 |---|---|---|
 | collection=incomplete | mcs_check.sh の stdout 警報行（watchdog）+ 次回 tick で再試行 | ✅ |
