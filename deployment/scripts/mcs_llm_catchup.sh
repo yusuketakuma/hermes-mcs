@@ -18,11 +18,11 @@ PY=__PYTHON__
 
 # quiesce guard: while an update owns the process lifecycle this
 # launcher must never respawn drainers (S8)
-if [ -f "__DATA__/update_in_progress.marker" ]; then
+if [ -f __DATA__/update_in_progress.marker ]; then
   exit 0
 fi
 DRAIN=__REPO__/mcs/semantic/semantic_drain.py
-LOG="__DATA__/semantic_drain.log"
+LOG=__DATA__/semantic_drain.log
 # Hermes cron のスクリプトタイムアウト既定は
 # cron.script_timeout_seconds=3600s。drain の業務上限は内部で 14h だが、
 # cron 配下で走るこのランチャは timeout 未満に収めないと毎回 kill される。
@@ -32,7 +32,7 @@ WINDOW_S=3300
 if ! pgrep -f "extract_llm.py --all" >/dev/null 2>&1; then
   "$PY" __REPO__/mcs/extract/extract_llm.py --all --workers 1 \
     --shard 0/2 --slot 0 --stop-after "$WINDOW_S" \
-    >>"__DATA__/extract_drain.log" 2>&1 &
+    >>__DATA__/extract_drain.log 2>&1 &
 fi
 
 MCS_LLM_SLOT=1 "$PY" "$DRAIN" --drain \

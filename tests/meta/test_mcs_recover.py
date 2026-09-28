@@ -419,6 +419,23 @@ def test_restore_db_rejects_unreadable_backup(rec, tmp_path, monkeypatch):
     assert rec._db_version(str(live)) == 7
 
 
+@pytest.mark.parametrize("payload", ["{broken", "[]", '{"phase":"invalid"}'])
+def test_restore_preserves_unreadable_marker(rec, tmp_path, payload):
+    marker = tmp_path / "data" / "restore_pending.json"
+    marker.write_text(payload)
+    assert rec._restore_db(str(tmp_path / "missing.db")) == "restore_marker_unreadable"
+    assert marker.read_text() == payload
+
+
+def test_reconcile_reports_failed_service_command(rec, tmp_path, monkeypatch):
+    setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
+    setup.parent.mkdir(parents=True)
+    setup.write_text("# synthetic")
+    monkeypatch.setattr(rec.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 1, "", "failed"))
+    assert "services_reconcile_failed" in rec._reconcile_membership(None)
+
+
 def test_restore_db_rejects_unreadable_live(rec, tmp_path, monkeypatch):
     live = tmp_path / "data" / "ledger.db"          # absent
     back = tmp_path / "data" / "backup.db"
@@ -454,7 +471,9 @@ def test_restore_db_reports_copy_failure(rec, tmp_path, monkeypatch):
     _mk_db(back, 7)
     monkeypatch.setattr(rec, "LEDGER", str(live))
     _consent(rec, live, back)
-    os.mkdir(str(live) + ".recover-tmp")      # blocks the tmp write
+    def fail_copy(*args):
+        raise OSError("synthetic copy failure")
+    monkeypatch.setattr(rec.shutil, "copyfileobj", fail_copy)
     err = rec._restore_db(str(back))
     assert err and err.startswith("restore_failed:")
     assert rec._db_version(str(live)) == 8    # live DB untouched
@@ -497,6 +516,30 @@ def test_restore_db_stale_consent_rejected(rec, tmp_path, monkeypatch):
     err = rec._restore_db(str(back))
     assert err and err.startswith("restore_consent_pending:")
     assert rec._db_version(str(live)) == 8
+
+
+def test_loss_report_matches_updater_and_binds_row_updates(rec, tmp_path, monkeypatch):
+    import mcs_update
+    import sqlite3
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    with sqlite3.connect(live) as con:
+        con.execute("CREATE TABLE messages(message_id INTEGER, body_html TEXT)")
+        con.execute("INSERT INTO messages VALUES(1, 'synthetic')")
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(mcs_update, "LEDGER", str(live))
+    monkeypatch.setattr(mcs_update, "RESTORE_REPORT_PATH",
+                        str(tmp_path / "data" / "report.json"))
+    approved = _consent(rec, live, back)
+    assert approved["report_id"] == mcs_update._restore_loss_report(str(back))["report_id"]
+    with sqlite3.connect(live) as con:
+        con.execute("UPDATE messages SET body_html='changed synthetic'")
+    current = rec._loss_report(str(back))
+    assert current["report_id"] == mcs_update._restore_loss_report(str(back))["report_id"]
+    assert current["report_id"] != approved["report_id"]
+    assert rec._consent_for(current) is None
 
 
 def test_restore_db_verify_mismatch(rec, tmp_path, monkeypatch):
@@ -608,3 +651,13 @@ def test_recover_holds_at_restore_consent(rec, tmp_path, monkeypatch):
     # second pass is stable — still held, still no swap
     assert rec.recover() == 0
     assert live.read_bytes() == live_before
+
+
+def test_known_cron_scripts_cover_setup_cron_jobs():
+    """mcs_setup.CRON_JOBS scripts must all live in KNOWN_CRON_SCRIPTS —
+    a missing entry makes a snapshot-based recovery delete a live,
+    desired cron job (the mcs_health.sh drift class)."""
+    import mcs_setup
+    rec = _load()
+    desired = {script for _name, _sched, script in mcs_setup.CRON_JOBS}
+    assert desired <= rec.KNOWN_CRON_SCRIPTS

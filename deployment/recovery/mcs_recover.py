@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
@@ -47,7 +48,7 @@ EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 # CRON_JOBS; recovery must never delete what the restored code wants
 KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
-    "mcs_check.sh", "mcs_deep.sh", "mcs_llm_catchup.sh",
+    "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
 STALE_S = 1800
 GIT_LOCK_MIN_AGE_S = 600
@@ -77,16 +78,40 @@ def _clean():
     return None if r is None or r.returncode != 0 else r.stdout.strip() == ""
 
 
+def _valid_state(state):
+    """Check journal shapes before any recovery decision or mutation."""
+    if not isinstance(state, dict) or type(state.get("v")) is not int \
+            or state["v"] != 1:
+        return False
+    for key in ("stages", "applied"):
+        if not isinstance(state.get(key, []), list) \
+                or any(not isinstance(row, dict) for row in state.get(key, [])):
+            return False
+    if state.get("applying") is not None and not isinstance(state["applying"], dict):
+        return False
+    for key in ("attempts", "executed", "restore_consent"):
+        if key in state and not isinstance(state[key], dict):
+            return False
+    records = [*state.get("stages", []), *state.get("applied", []),
+               state.get("applying") or {}]
+    for row in records:
+        stamp = row.get("at", 0)
+        if type(stamp) not in (int, float) or not 0 <= stamp < 1e12:
+            return False
+    return all(isinstance(row.get("stage"), str)
+               for row in state.get("stages", []))
+
+
 def _load_state():
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
             s = json.load(f)
-        if not isinstance(s, dict) or s.get("v") != 1:
+        if not _valid_state(s):
             return {"_corrupt": True}
         return s
     except FileNotFoundError:
         return {"v": 1, "stages": [], "applied": [], "applying": None}
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {"_corrupt": True}
 
 
@@ -98,6 +123,11 @@ def _save_state(state):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, STATE_PATH)
+        dfd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -226,6 +256,8 @@ def _reconcile_membership(snapshot):
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
                                timeout=T_GIT)
+            if r.returncode != 0:
+                problems.append("cron_list_unverifiable")
             for block in re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
                     r"((?:\s{4}\S[^\n]*\n?)+)", r.stdout, re.M):
@@ -237,8 +269,10 @@ def _reconcile_membership(snapshot):
                 if script.startswith("mcs_") and script.endswith(".sh") \
                         and script not in desired_cron \
                         and script not in KNOWN_CRON_SCRIPTS:
-                    subprocess.run([hermes, "cron", "remove", jid],
-                                   capture_output=True, timeout=T_GIT)
+                    removed = subprocess.run([hermes, "cron", "remove", jid],
+                                             capture_output=True, timeout=T_GIT)
+                    if removed.returncode != 0:
+                        problems.append("cron_remove_failed:" + script)
         except (OSError, subprocess.TimeoutExpired):
             problems.append("cron_list_unverifiable")
     else:
@@ -247,10 +281,14 @@ def _reconcile_membership(snapshot):
     setup_py = os.path.join(REPO, "mcs", "ops", "mcs_setup.py")
     if os.path.isfile(setup_py):
         try:
-            subprocess.run([sys.executable, setup_py, "services"],
-                           capture_output=True, timeout=120)
+            result = subprocess.run([sys.executable, setup_py, "services"],
+                                    capture_output=True, timeout=120)
+            if result.returncode != 0:
+                problems.append("services_reconcile_failed")
         except (OSError, subprocess.TimeoutExpired):
             problems.append("services_reconcile_failed")
+    else:
+        problems.append("services_reconcile_unavailable")
     return problems
 
 
@@ -335,6 +373,23 @@ def _table_count(con, table):
         return 0
 
 
+def _restore_content_digest(con):
+    """Bind consent to the contents of the stored-data and delivery tables."""
+    digest = hashlib.sha256()
+    for table in (*_STORED_TABLES, *_EFFECT_TABLES):
+        columns = con.execute(f"PRAGMA table_info({table})").fetchall()
+        digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
+        if not columns:
+            continue
+        for row in con.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+            encoded = json.dumps(
+                row, ensure_ascii=False, separators=(",", ":"),
+                default=lambda value: {"blob": value.hex()}).encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
 def _file_sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -361,6 +416,9 @@ def _loss_report(backup_path):
         live.close()
         return None
     try:
+        live.execute("BEGIN")
+        back.execute("BEGIN")
+        live_digest = _restore_content_digest(live)
         try:
             watermark = back.execute(
                 "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
@@ -374,6 +432,7 @@ def _loss_report(backup_path):
         live.close()
         back.close()
     metrics = {"v": 1,
+               "live_content_sha256": live_digest,
                "backup_sha256": _file_sha256(backup_path),
                "backup_schema": _db_version(backup_path),
                "watermark_ts": watermark,
@@ -439,15 +498,78 @@ def _consent_for(report):
     return None
 
 
+def _replace_database(backup_path, expected_sha, before_replace):
+    """Stage and verify the backup before checkpointing and replacing the live DB."""
+    directory = os.path.dirname(LEDGER)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as dst, open(backup_path, "rb") as src:
+            shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        if _file_sha256(temporary) != expected_sha:
+            raise OSError("backup_changed_during_restore")
+        candidate = sqlite3.connect(
+            Path(temporary).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+        try:
+            if candidate.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise OSError("backup_integrity_failed")
+        finally:
+            candidate.close()
+        # Preserve committed WAL contents even if the subsequent replace fails.
+        # SQLite owns journal removal; never unlink a live WAL by hand.
+        live = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=rw",
+                               uri=True, timeout=5)
+        try:
+            if live.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
+                raise OSError("live_checkpoint_busy")
+            if live.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+                raise OSError("live_journal_busy")
+        finally:
+            live.close()
+        if any(os.path.lexists(LEDGER + suffix)
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise OSError("live_sidecars_remaining")
+        before_replace()
+        os.replace(temporary, LEDGER)
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except sqlite3.Error as exc:
+        raise OSError("restore_database_unverifiable") from exc
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
 def _restore_db(backup_path):
-    """Restore only when the live schema differs — removes WAL/SHM
-    sidecars FIRST so stale journals can't replay against the file.
+    """Restore only when the live schema differs, with a verified staged copy.
+    Checkpoint the live DB before replacement to preserve committed WAL data.
     Returns an error string for the caller to escalate, or None on a
     completed or verified-skipped restore — an unreadable backup during
     rollback recovery is never a silent 'nothing to do' (the mcs_update
     copy escalates backup_invalid in the same situation; a silent skip
     here would leave OLD code running against a NEWER schema while the
     report claims success)."""
+    marker = os.path.join(DATA, "restore_pending.json")
+    try:
+        with open(marker, encoding="utf-8") as stream:
+            current = json.load(stream)
+    except FileNotFoundError:
+        if os.path.lexists(marker):
+            return "restore_marker_unreadable"
+        current = None
+    except (OSError, ValueError, RecursionError):
+        return "restore_marker_unreadable"
+    else:
+        if not isinstance(current, dict) or not (
+                current.get("phase") in ("restored", "awaiting_consent")
+                or ("phase" not in current and "restored_at" in current)):
+            return "restore_marker_unreadable"
     live = _db_version(LEDGER)
     back = _db_version(backup_path)
     if back is None:
@@ -459,12 +581,6 @@ def _restore_db(backup_path):
         # 'restored' rewrite and the swap can leave an awaiting_consent
         # marker pinning every send; promote it so the runner-side
         # reconcile releases the hold.
-        marker = os.path.join(DATA, "restore_pending.json")
-        try:
-            with open(marker, "rb") as f:
-                current = json.loads(f.read().decode("utf-8"))
-        except (OSError, ValueError):
-            current = None
         if isinstance(current, dict) \
                 and current.get("phase") == "awaiting_consent":
             try:
@@ -479,7 +595,10 @@ def _restore_db(backup_path):
         _mark_restored(backup_path, phase="awaiting_consent")
     except OSError as e:
         return f"restore_marker_failed: {e}"
-    report = _loss_report(backup_path)
+    try:
+        report = _loss_report(backup_path)
+    except (OSError, sqlite3.Error):
+        return "restore_report_failed: cannot measure loss"
     if report is None:
         return "restore_report_failed: cannot measure loss"
     try:
@@ -492,26 +611,9 @@ def _restore_db(backup_path):
     if _consent_for(report) is None:
         return "restore_consent_pending:" + report["report_id"]
     try:
-        _mark_restored(backup_path, report_id=report["report_id"])
-    except OSError as e:
-        return f"restore_marker_failed: {e}"
-    for side in (LEDGER + "-wal", LEDGER + "-shm", LEDGER + "-journal"):
-        try:
-            os.unlink(side)
-        except OSError:
-            pass
-    tmp = LEDGER + ".recover-tmp"
-    try:
-        with open(backup_path, "rb") as src, open(tmp, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-            dst.flush()
-            os.fsync(dst.fileno())
-        os.replace(tmp, LEDGER)
-        dfd = os.open(DATA, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        _replace_database(backup_path, report["backup_sha256"],
+                          lambda: _mark_restored(
+                              backup_path, report_id=report["report_id"]))
     except OSError as e:
         return f"restore_failed: {e}"
     if _db_version(LEDGER) != back:
@@ -544,6 +646,9 @@ def recover(if_stale=False):
         return 0                            # a tick is running — retry
     try:
         state = _load_state()               # fresh view under the locks
+        if state.get("_corrupt"):
+            _report("corrupt_state", "update_state.json unreadable under lock")
+            return 2
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
         if not applying and not stages:
@@ -650,6 +755,7 @@ def recover(if_stale=False):
                 result = "applied"
             state["applying"] = None
             state["stages"] = []
+            state.pop("restore_consent", None)
             cid = applying.get("command_id")
             if cid:
                 state.setdefault("executed", {})[cid] = {
@@ -698,6 +804,7 @@ def _finish(state, result, removed):
             "result": result, "at": time.time()}
     state["applying"] = None
     state["stages"] = []
+    state.pop("restore_consent", None)
     _save_state(state)
     _remove_marker()
     problems = _restart_drainers()

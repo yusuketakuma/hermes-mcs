@@ -1,6 +1,8 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
 from pathlib import Path
 
+import pytest
+
 import mcs_setup
 
 
@@ -14,6 +16,30 @@ def test_minimal_valid_config():
     errors, _ = mcs_setup.validate_config(
         {"mcs_login_id": "u1", "notify_target": "slack:#mcs"})
     assert errors == []
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan"), 10 ** 400])
+def test_unbounded_numeric_config_is_rejected(value):
+    errors, _ = mcs_setup.validate_config({
+        "mcs_login_id": "synthetic", "notify_target": "local",
+        "job_budget_seconds": value, "notify_max_age_h": value,
+        "signals": {"digest_interval_h": value},
+        "update": {"auto_delay_h": value},
+    })
+    for key in ("job_budget_seconds", "notify_max_age_h",
+                "digest_interval_h", "auto_delay_h"):
+        assert any(key in error for error in errors)
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "1e999"])
+def test_numeric_wizard_rejects_nonfinite_without_crashing(value):
+    assert mcs_setup._parse_answer("num", value)[0] is False
+
+
+def test_plugin_csv_list_escapes_literal_values():
+    import json
+    text = 'user"quote,user\\slash'
+    assert json.loads(mcs_setup._csv_yaml(text)) == text.split(",")
 
 
 def test_type_violations():
@@ -167,14 +193,13 @@ def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     assert mcs_setup._keychain_store("mcs", "s3cret pw") is True
     assert not any("s3cret pw" in a for argv, _ in calls for a in argv)
-    assert calls[0][0] == ["security", "-i"]
-    assert "s3cret pw" in calls[0][1]["input"]
+    write = next(call for call in calls if call[0] == ["security", "-i"])
+    assert "s3cret pw" in write[1]["input"]
     assert any("-w" in argv for argv, _ in calls)   # verify pass ran
 
 
-def test_keychain_store_readback_mismatch_removes_entry(monkeypatch):
-    """A botched write is detected on read-back and the entry is removed
-    rather than left half-registered."""
+def test_keychain_store_readback_mismatch_preserves_previous_entry(monkeypatch):
+    """A failed replacement restores the existing credential through stdin."""
     calls = []
 
     class R:
@@ -182,14 +207,16 @@ def test_keychain_store_readback_mismatch_removes_entry(monkeypatch):
             self.returncode, self.stdout, self.stderr = rc, out, ""
 
     def fake_run(argv, **kw):
-        calls.append(list(argv))
+        calls.append((list(argv), kw))
         if "-w" in argv:
             return R(out="different\n")
         return R()
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     assert mcs_setup._keychain_store("mcs", "s3cret pw") is False
-    assert any("delete-generic-password" in argv for argv in calls)
+    assert not any("delete-generic-password" in argv for argv, _ in calls)
+    assert calls[-1][0] == ["security", "-i"]
+    assert '"different"' in calls[-1][1]["input"]
 
 
 def test_keychain_store_verifies_adapter_read_path(monkeypatch):
@@ -214,11 +241,29 @@ def test_keychain_store_verifies_adapter_read_path(monkeypatch):
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     assert mcs_setup._keychain_store("mcs", "s3cret pw") is False
-    assert any("delete-generic-password" in argv for argv in calls)
-    verify = next(a for a in calls
-                  if a[:2] == ["security", "find-generic-password"]
-                  and "-w" in a)
-    assert "-a" not in verify
+    assert not any("delete-generic-password" in argv for argv in calls)
+    assert any(a[:2] == ["security", "find-generic-password"]
+               and "-w" in a and "-a" not in a for a in calls)
+
+
+@pytest.mark.parametrize("secret", [' leading and trailing ', '"quoted"', r"slash\quote'"])
+def test_env_credentials_roundtrip_exactly(tmp_path, secret):
+    from mcs_util import env_value
+    path = tmp_path / ".env"
+    mcs_setup._env_write(str(path), {"SYNTHETIC_CREDENTIAL": secret})
+    assert env_value("SYNTHETIC_CREDENTIAL", paths=[path], check_env=False) == secret
+
+
+@pytest.mark.parametrize("secret", ["line\nOTHER=value", "line\rvalue", "nul\x00value"])
+def test_control_characters_never_reach_credential_writers(tmp_path, monkeypatch, secret):
+    path = tmp_path / ".env"
+    path.write_text("KEEP=synthetic\n")
+    with pytest.raises(ValueError, match="invalid_env_update"):
+        mcs_setup._env_write(str(path), {"SYNTHETIC_CREDENTIAL": secret})
+    assert path.read_text() == "KEEP=synthetic\n"
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+                        pytest.fail("credential command must not run"))
+    assert mcs_setup._keychain_store("synthetic", secret) is False
 
 
 def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
@@ -500,6 +545,42 @@ def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
     assert cfg["trickle_pages"] == 5           # typed int answer
 
 
+def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
+    """interactive=slack prompts the notify.slack.* scope (team_id, not
+    guild_id) and gates out the discord-only keys."""
+    import json
+    _init_env(monkeypatch, tmp_path,
+              {"mcs_login_id": "u1", "notify_target": "slack:#mcs"})
+    prompts = []
+
+    def answer(prompt=""):
+        prompts.append(prompt)
+        if "notify.interactive" in prompt:
+            return "slack"
+        if "notify.slack." in prompt:
+            return {"notify.slack.profile": "ops",
+                    "notify.slack.application_id": "A1",
+                    "notify.slack.team_id": "T1",
+                    "notify.slack.channel_id": "C1"}[
+                        prompt.split(" ")[2]]
+        return ""
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    n = cfg["notify"]
+    assert n["interactive"] == "slack"
+    assert n["slack"] == {"profile": "ops", "application_id": "A1",
+                          "team_id": "T1", "channel_id": "C1"}
+    assert "discord" not in n
+    # discord-only keys were never prompted; card keys were (shared gate)
+    assert not any("notify.discord." in p for p in prompts)
+    assert not any("notify.operator" in p for p in prompts)
+    assert any("notify.card_thread" in p for p in prompts)
+
+
 def test_wizard_keeps_current_values(monkeypatch, tmp_path):
     """An existing config value is shown and kept on Enter."""
     import json
@@ -639,6 +720,58 @@ def test_services_dry_run_writes_nothing(monkeypatch, tmp_path):
     assert not (tmp_path / "scripts").exists()
     assert not (tmp_path / "agents").exists()
     assert calls == []
+
+
+def test_service_templates_preserve_literal_paths(monkeypatch, tmp_path):
+    import plistlib
+    import subprocess
+    calls, args = _services_env(monkeypatch, tmp_path)
+    unusual = str(tmp_path / "space & <tag> $(touch SHOULD_NOT_EXIST) 'quote'")
+    monkeypatch.setattr(mcs_setup, "HERMES_PY", unusual + "/python")
+    monkeypatch.setattr(mcs_setup, "HOME", unusual)
+    assert mcs_setup.cmd_services(args) == 0
+    script = (tmp_path / "scripts" / "mcs_health.sh").read_text()
+    # Replace just the final invocation with a literal-value print; no service runs.
+    script = script[:script.index('"$PY"')] + 'printf "%s" "$PY"\n'
+    # _services_env stubs subprocess.run, so use Popen for this isolated shell.
+    with subprocess.Popen(["/bin/sh"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, cwd=tmp_path) as proc:
+        out, err = proc.communicate(script, timeout=5)
+        assert proc.returncode == 0, err
+    assert out == unusual + "/python"
+    assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
+    plist = plistlib.loads((tmp_path / "agents" / "local.mcs-cmd.plist").read_bytes())
+    assert plist["ProgramArguments"][0] == unusual + "/python"
+    assert plist["WatchPaths"] == [unusual + "/data/cmd"]
+
+
+@pytest.mark.parametrize("output,expected", [
+    ("unexpected output", None), ("", None),
+    ("No scheduled jobs.\nCreate one with hermes cron create", []),
+])
+def test_unverifiable_cron_list_is_not_an_empty_schedule(monkeypatch, output, expected):
+    from types import SimpleNamespace
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=output))
+    assert mcs_setup._cron_list("/synthetic/hermes") == expected
+
+
+def test_decorated_schedule_compares_actual_five_fields():
+    assert mcs_setup._norm_sched("cron: */5 * * * * (UTC)") == "*/5 * * * *"
+
+
+def test_services_retires_previous_manifest_agent(monkeypatch, tmp_path):
+    import json
+    obsolete = "ai.mcs.extract-obsolete"
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={obsolete})
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / (obsolete + ".plist")).write_text("synthetic")
+    (tmp_path / "data").mkdir()
+    Path(mcs_setup.MANIFEST_PATH).write_text(json.dumps({"agents": [{"label": obsolete}]}))
+    assert mcs_setup.cmd_services(args) == 0
+    assert not (agents / (obsolete + ".plist")).exists()
+    assert ["launchctl", "bootout", "gui/501/" + obsolete] in calls
 
 
 def test_services_hermes_missing_reports_problem(monkeypatch, tmp_path):
@@ -781,6 +914,61 @@ def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
     assert ("", "DISCORD_BOT_TOKEN", "tok") in sets
 
 
+def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):
+    """Slack scope maps to slack_* settings keys; both slack tokens go
+    through `config set --stdin` (never argv); existing tokens are kept."""
+    sets = _plugin_env(
+        monkeypatch,
+        existing={"SLACK_APP_TOKEN": "xapp-already"})
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-tok")
+    cfg = {"notify": {"interactive": "slack", "slack": {
+        "profile": "ops", "application_id": "A1",
+        "team_id": "T1", "channel_id": "C1"}}}
+    mcs_setup._apply_plugin_integration(
+        cfg, _plugin_args(plugin_profile="ops",
+                          plugin_user_ids="U1,U2",
+                          plugin_project_ids="1,2"))
+    keys = {k for _, k, _ in sets}
+    for want in ("snapshot", "inbox", "data_root", "interactive",
+                 "slack_adapter_enabled", "slack_profile",
+                 "slack_application_id", "slack_team_id",
+                 "slack_channel_id", "slack_allowed_user_ids",
+                 "project_ids"):
+        assert f"{mcs_setup.PLUGIN_SETTINGS}.{want}" in keys, want
+    assert ("ops", f"{mcs_setup.PLUGIN_SETTINGS}.slack_adapter_enabled",
+            "true") in sets
+    assert ("ops",
+            f"{mcs_setup.PLUGIN_SETTINGS}.slack_allowed_user_ids",
+            '["U1", "U2"]') in sets
+    assert ("ops", "SLACK_BOT_TOKEN", "xoxb-tok") in sets
+    # already-configured token is left alone; discord-only scope keys
+    # (guild_id / bare allowed_*_ids) are never written for slack
+    assert all(k != "SLACK_APP_TOKEN" for _, k, _ in sets)
+    bare = {k.rsplit(".", 1)[-1] for _, k, _ in sets
+            if k.startswith(mcs_setup.PLUGIN_SETTINGS)}
+    assert not bare & {"allowed_user_ids", "allowed_chat_ids",
+                       "guild_id", "profile", "application_id",
+                       "channel_id"}
+
+
+def test_any_token_key_is_piped_via_stdin(monkeypatch):
+    """The *_TOKEN -> --stdin rule covers every token key, not just
+    DISCORD_BOT_TOKEN — a new token name must never leak into argv."""
+    from types import SimpleNamespace
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    assert mcs_setup._hermes_config_set("/fake/hermes", "p",
+                                        "SLACK_APP_TOKEN", "xapp-secret")
+    argv, kwargs = calls[0]
+    assert "--stdin" in argv and "xapp-secret" not in " ".join(argv)
+    assert kwargs["input"] == "xapp-secret"
+
+
 def test_env_merge_failure_preserves_existing_credentials(tmp_path, monkeypatch):
     import pytest
     path = tmp_path / ".env"
@@ -865,3 +1053,40 @@ def test_check_warns_when_gateway_unsupervised(monkeypatch):
         {"mcs_login_id": "u", "notify_target": "discord:1",
          "notify": {"interactive": "discord"}})
     assert any("gateway" in w for w in warnings)
+
+
+# ---- local_llm config validation ----------------------------------
+
+def test_local_llm_block_validation(monkeypatch):
+    """local_llm.url must stay loopback http — a non-loopback URL would
+    exfiltrate message bodies; the validator rejects it up front."""
+    ok, _w = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack",
+        "local_llm": {"url": "http://127.0.0.1:9999/v1/chat/completions",
+                      "model": "M"}})
+    assert not [e for e in ok if "local_llm" in e]
+
+    errors, _w = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack",
+        "local_llm": {"url": "https://evil.example.com/v1/chat"}})
+    assert any("local_llm.url" in e and "loopback" in e
+               for e in errors)
+
+    errors, _w = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack",
+        "local_llm": {"url": "http://u:p@127.0.0.1:8080/v1/x"}})
+    assert any("local_llm.url" in e for e in errors)   # creds rejected
+
+
+def test_stale_transport_scope_warns(monkeypatch):
+    """A scope block for the non-active transport is flagged — a
+    discord->slack switch must not silently leave dead config."""
+    _e, warnings = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack:#m",
+        "notify": {"interactive": "slack",
+                   "slack": {"profile": "p", "application_id": "a",
+                              "team_id": "t", "channel_id": "c"},
+                   "discord": {"profile": "p", "application_id": "a",
+                               "guild_id": "g", "channel_id": "c"}}})
+    assert any("notify.discord" in w and "ignored" in w
+               for w in warnings)

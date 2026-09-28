@@ -31,9 +31,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import hashlib
+from html import escape as xml_escape
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -41,6 +43,14 @@ import time
 import urllib.request
 from contextlib import suppress
 from pathlib import Path
+
+# mcs/ requires >=3.10 (runtime PEP-604 unions) — fail loudly before the
+# first project import instead of a cryptic TypeError inside mcs_util.
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "mcs_setup requires Python >= 3.10 — use the install-time "
+        "interpreter ~/.hermes/hermes-agent/venv/bin/python "
+        "(/usr/bin/python3 is too old)")
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -75,7 +85,8 @@ def _int_range(lo, hi):
 
 
 def _num(v):
-    return None if type(v) in (int, float) and v > 0 else "must be a positive number"
+    return (None if type(v) in (int, float) and 0 < v <= 1e9
+            else "must be a finite number in (0,1e9]")
 
 
 def _bot_profile(v):
@@ -103,7 +114,32 @@ CONFIG_RULES = {
     "signals":               (False, _dict),
     "semantic":              (False, _dict),
     "update":                (False, _dict),
+    "local_llm":             (False, _dict),
 }
+
+
+def _validate_llm(ll: dict) -> list[str]:
+    """local_llm subkeys — url must stay an unauthenticated loopback
+    http endpoint (mirrors bounded_http._loopback_endpoint_allowed):
+    message bodies are PHI and must not leave the machine."""
+    errors = []
+    for key in ("url", "model"):
+        if key in ll and (not isinstance(ll[key], str)
+                          or not ll[key].strip()):
+            errors.append(f"local_llm.{key}: must be a non-empty string")
+    url = ll.get("url")
+    if isinstance(url, str) and url.strip():
+        try:
+            import bounded_http
+            allowed = bounded_http._loopback_endpoint_allowed(url)
+        except Exception:
+            allowed = False
+        if not allowed:
+            errors.append(
+                "local_llm.url: must be an http:// endpoint on loopback "
+                "(127.0.0.1/localhost/::1), no credentials/fragment — "
+                "message bodies must not leave the machine")
+    return errors
 
 
 def _validate_notify(ntf: dict) -> list[str]:
@@ -158,8 +194,8 @@ def _validate_update(upd: dict) -> list[str]:
         errors.append('update.mode: must be "off", "notify" or "auto"')
     if "auto_delay_h" in upd:
         v = upd["auto_delay_h"]
-        if type(v) not in (int, float) or type(v) is bool or v < 0:
-            errors.append("update.auto_delay_h: must be a number >= 0")
+        if type(v) not in (int, float) or not 0 <= v <= 1e9:
+            errors.append("update.auto_delay_h: must be a finite number in [0,1e9]")
     if "include_prerelease" in upd \
             and type(upd["include_prerelease"]) is not bool:
         errors.append("update.include_prerelease: must be a boolean")
@@ -205,6 +241,18 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
             errors.append("signals.tiers: must be an object")
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
+        # a scope block for the transport that is NOT active is stale —
+        # keep it as a warning so a discord->slack switch leaves a
+        # visible note instead of a silently ignored config
+        act = cfg["notify"].get("interactive")
+        for other in ("discord", "slack"):
+            if other != act and isinstance(cfg["notify"].get(other),
+                                           dict):
+                warnings.append(
+                    f"notify.{other}: scope configured but interactive "
+                    f"is {act!r} — ignored until you switch back")
+    if isinstance(cfg.get("local_llm"), dict):
+        errors.extend(_validate_llm(cfg["local_llm"]))
     if isinstance(cfg.get("semantic"), dict):
         try:
             from semantic_policy import semantic_config
@@ -229,6 +277,23 @@ def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
+def _run(argv: list, *, timeout: int = 60, input_text: str | None = None):
+    """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
+    prompt this context cannot show, or a stuck gateway must fail the
+    check, not hang the session. Timeout yields a returncode=124 result
+    (mirroring timeout(1)); a binary that cannot start yields 127. Both
+    degrade through the caller's normal failure handling instead of
+    raising."""
+    try:
+        return subprocess.run(argv, input=input_text, capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, 124, "", f"timed out after {timeout}s")
+    except OSError as e:
+        return subprocess.CompletedProcess(argv, 127, "", str(e))
+
+
 def _hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None = None):
     """Public hermes CLI against a named profile ("" = launch/default).
     Returns the CompletedProcess, or None when the call can't run."""
@@ -247,8 +312,37 @@ def _hermes_config_get(exe: str, profile: str, key: str):
     return None
 
 
+def _plugin_newer_than_gateway(status_out: str) -> bool:
+    """True when hermes_plugin/ holds a file newer than the running
+    gateway process — a stale-worker signal. Unparseable states fail
+    open to False (no warning) rather than a false alarm."""
+    m = re.search(r"PID\s+(\d+)", status_out or "")
+    if not m:
+        return False
+    r = _run(["ps", "-o", "lstart=", "-p", m.group(1)])
+    if r.returncode != 0:
+        return False
+    stamp = re.sub(r"\s+", " ", (r.stdout or "").strip())
+    try:
+        started = time.mktime(
+            time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, OverflowError):
+        return False
+    plugin_dir = os.path.join(REPO_ROOT, "hermes_plugin")
+    newest = 0.0
+    for base, _dirs, files in os.walk(plugin_dir):
+        for name in files:
+            with suppress(OSError):
+                newest = max(newest, os.path.getmtime(
+                    os.path.join(base, name)))
+    return newest > started
+
+
 def _hermes_config_set(exe: str, profile: str, key: str, val) -> bool:
-    if key == "DISCORD_BOT_TOKEN":
+    # *_TOKEN keys are secrets: they travel over --stdin so `ps` never
+    # exposes them in child argv (DISCORD_BOT_TOKEN, SLACK_BOT_TOKEN,
+    # SLACK_APP_TOKEN, ...).
+    if key.endswith("_TOKEN"):
         r = _hermes_cli(exe, profile, "config", "set", key, "--stdin",
                         input_text=str(val))
     else:
@@ -267,9 +361,8 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         # login keychain is still locked — when present, keychain
         # unreadability is a warning, not a blocker.
         env_pw = bool(env_value("MCS_PASSWORD", check_env=False))
-        r = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE],
-            capture_output=True)
+        r = _run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE])
         if r.returncode != 0:
             (warnings if env_pw else errors).append(
                 f"Keychain entry '{KEYCHAIN_SERVICE}' not found"
@@ -283,10 +376,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             # 'keychain_locked'; probing -w here surfaces that at setup
             # time (and may pop the one-time 'Always Allow' dialog in an
             # interactive session).
-            w = subprocess.run(
+            w = _run(
                 ["security", "find-generic-password", "-s",
-                 KEYCHAIN_SERVICE, "-w"],
-                capture_output=True, text=True)
+                 KEYCHAIN_SERVICE, "-w"])
             if w.returncode != 0:
                 err = (w.stderr or "").lower()
                 if (w.returncode == 36 or "interaction is not allowed"
@@ -311,22 +403,27 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                         "re-register via `mcs_setup init`")
     if not os.path.exists(CHROME_BIN):
         errors.append(f"Chrome binary missing: {CHROME_BIN}")
+    # probe the CONFIGURED endpoint — a self-hosted server on another
+    # port (local_llm.url) is a valid deployment, not a failure
     try:
-        urllib.request.urlopen(LLM_MODELS_URL, timeout=3).close()
+        import local_llm
+        llm_ep, _ = local_llm.resolve(cfg)
+        models_url, slots_url = local_llm.probe_urls(llm_ep)
     except Exception:
-        warnings.append("local LLM endpoint 127.0.0.1:8080 not reachable — "
-                        "extract_llm/semantic jobs will stall until "
-                        "llama.cpp is up")
+        models_url, slots_url = LLM_MODELS_URL, None
+    try:
+        urllib.request.urlopen(models_url, timeout=3).close()
+    except Exception:
+        warnings.append(f"local LLM endpoint not reachable "
+                        f"({models_url}) — extract_llm/semantic jobs "
+                        "will stall until the server is up")
     else:
         # T19: a server advertising FEWER slots than the selected count
         # is a mismatch — a call pinned past the advertised width goes
         # unpinned and can land on the real-time slot. Flag it; never
         # run unpinned.
         try:
-            import local_llm
-            raw = urllib.request.urlopen(
-                LLM_MODELS_URL.rsplit("/v1/", 1)[0] + "/slots",
-                timeout=3).read()
+            raw = urllib.request.urlopen(slots_url, timeout=3).read()
             advertised = len(json.loads(raw.decode("utf-8")))
             if advertised < local_llm.SLOT_COUNT:
                 errors.append(
@@ -358,6 +455,13 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             warnings.append("hermes gateway is not supervised — "
                             "`mcs_setup services` installs it via "
                             "`hermes gateway install`")
+        elif _plugin_newer_than_gateway(r.stdout or ""):
+            # the gateway loads plugin code once at startup — a stale
+            # worker serves cards without companion thread bodies
+            # (2026-09 incident); surface the pending restart here
+            warnings.append(
+                "hermes_plugin/ is newer than the running gateway — "
+                "`hermes gateway restart` so workers load current code")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
             and env_value("TYPESAFE_API_KEY") is None:
@@ -405,6 +509,15 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
 
 def _env_write(path: str, updates: dict[str, str]):
     """Merge KEY=value lines — existing keys preserved unless updated."""
+    encoded = {}
+    for key, value in updates.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) \
+                or not isinstance(value, str) or any(c in value for c in "\r\n\x00"):
+            raise ValueError("invalid_env_update")
+        encoded[key] = (json.dumps(value, ensure_ascii=False)
+                        if value != value.strip() or any(c in value for c in "\"'\\")
+                        else value)
+    updates = encoded
     lines, seen = [], set()
     with suppress(FileNotFoundError), open(path, encoding="utf-8") as stream:
         lines = stream.read().splitlines()
@@ -438,18 +551,33 @@ def _keychain_store(account: str, pw: str) -> bool:
     def _q(v: str) -> str:
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    if any(c in value for value in (account, pw) for c in "\r\n\x00"):
+        return False
+    previous = _run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
+         "-a", account, "-w"])
+    if previous.returncode not in (0, 44):  # 44: no existing item
+        return False
+    old_password = previous.stdout.rstrip("\n") if previous.returncode == 0 else None
+    if old_password is not None and any(c in old_password for c in "\r\n\x00"):
+        return False
     cmd = (f"add-generic-password -s {_q(KEYCHAIN_SERVICE)} "
            f"-a {_q(account)} -U -w {_q(pw)}\n")
-    subprocess.run(["security", "-i"], input=cmd,
-                   capture_output=True, text=True)
-    chk = subprocess.run(
+    written = _run(["security", "-i"], input_text=cmd)
+    chk = _run(
         ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
-         "-w"], capture_output=True, text=True)
+         "-w"])
     if chk.returncode == 0 and chk.stdout.rstrip("\n") == pw:
         return True
-    # verification failed — drop any partially/incorrectly stored item
-    subprocess.run(["security", "delete-generic-password", "-s",
-                    KEYCHAIN_SERVICE, "-a", account], capture_output=True)
+    # Preserve a credential that existed before this attempt. Only a
+    # successfully created item with verified prior absence may be deleted.
+    if old_password is not None:
+        rollback = (f"add-generic-password -s {_q(KEYCHAIN_SERVICE)} "
+                    f"-a {_q(account)} -U -w {_q(old_password)}\n")
+        _run(["security", "-i"], input_text=rollback)
+    elif written.returncode == 0:
+        _run(["security", "delete-generic-password", "-s",
+              KEYCHAIN_SERVICE, "-a", account])
     return False
 
 
@@ -478,6 +606,15 @@ def _discord_on(cfg):
     return (cfg.get("notify") or {}).get("interactive") == "discord"
 
 
+def _slack_on(cfg):
+    return (cfg.get("notify") or {}).get("interactive") == "slack"
+
+
+def _cards_on(cfg):
+    return (cfg.get("notify") or {}).get("interactive") \
+        in ("discord", "slack")
+
+
 def _signals_on(cfg):
     return (cfg.get("signals") or {}).get("notify") is True
 
@@ -495,9 +632,9 @@ WIZARD = [
          "通知の送り先（hermes send target。例: discord:<チャンネルID>、"
          "slack:#mcs）", None),
     ]),
-    ("Discord カード通知（interactive=discord でボタン付きカード）", [
-        ("notify.interactive", "choice:off,discord", "off",
-         "通知形式 — discord=カード / off=従来テキストのみ", None),
+    ("カード通知（interactive=discord/slack でボタン付きカード）", [
+        ("notify.interactive", "choice:off,discord,slack", "off",
+         "通知形式 — discord/slack=カード / off=従来テキストのみ", None),
         ("notify.discord.profile", "req", None,
          "配送に使う hermes プロファイル名", _discord_on),
         ("notify.discord.application_id", "req", None,
@@ -506,14 +643,22 @@ WIZARD = [
          "Discord サーバーID", _discord_on),
         ("notify.discord.channel_id", "req", None,
          "カードの投稿先チャンネルID", _discord_on),
+        ("notify.slack.profile", "req", None,
+         "配送に使う hermes プロファイル名", _slack_on),
+        ("notify.slack.application_id", "req", None,
+         "Slack アプリID", _slack_on),
+        ("notify.slack.team_id", "req", None,
+         "Slack ワークスペース（team）ID", _slack_on),
+        ("notify.slack.channel_id", "req", None,
+         "カードの投稿先チャンネルID", _slack_on),
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
         ("notify.card_thread", "bool", True,
-         "患者スレッドごとにカードをまとめる", _discord_on),
+         "患者スレッドごとにカードをまとめる", _cards_on),
         ("notify.card_thread_archive_min", "int", 10080,
-         "カードスレッドをアーカイブするまでの分数", _discord_on),
+         "カードスレッドをアーカイブするまでの分数", _cards_on),
         ("notify.route_epoch", "int", 1,
-         "配送先を変えたとき+1する番号（通常はそのまま）", _discord_on),
+         "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
         ("notify_bot_profile", "opt", None,
          "通知投稿に使う hermes プロファイル（空欄=既定）", None),
         ("notify_system_target", "opt", None,
@@ -535,6 +680,13 @@ WIZARD = [
          "1回の実行で履歴を遡るページ数（1-40）", None),
         ("job_budget_seconds", "num", None,
          "内部処理の時間予算・秒（空欄=既定）", None),
+    ]),
+    ("ローカルLLM（空欄=既定 llama.cpp :8080 / Qwen3.5-9B）", [
+        ("local_llm.url", "opt", None,
+         "chat/completions エンドポイント URL（loopback http のみ）",
+         None),
+        ("local_llm.model", "opt", None,
+         "モデル名（OpenAI互換 API の model フィールド）", None),
     ]),
     ("レビュー候補シグナル（機械が確認候補を列挙）", [
         ("signals.notify", "bool", False,
@@ -625,8 +777,8 @@ def _parse_answer(kind: str, raw: str):
             v = float(raw)
         except ValueError:
             return False, "数値で入力してください"
-        if v <= 0:
-            return False, "0より大きい数値で入力してください"
+        if _num(v) is not None:
+            return False, "0より大きく10億以下の有限の数値で入力してください"
         return True, int(v) if v == int(v) else v
     if kind in ("csv", "intlist", "reqintlist"):
         parts = [x.strip() for x in raw.split(",") if x.strip()]
@@ -697,25 +849,29 @@ PLUGIN_SETTINGS = "plugins.entries.mcs-discord-commands.settings"
 def _csv_yaml(text: str) -> str:
     """Comma-separated ids -> YAML list literal, so `config set` stores a
     real list (the plugin schema expects lists, not csv strings)."""
-    return "[" + ", ".join(f'"{x.strip()}"'
-                           for x in text.split(",") if x.strip()) + "]"
+    return json.dumps([x.strip() for x in text.split(",") if x.strip()],
+                      ensure_ascii=False)
 
 
 def _apply_plugin_integration(cfg: dict, args) -> None:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
-    config.yaml / .env; never touches hermes-agent internals. Only
-    runs when notify.interactive == "discord"."""
+    config.yaml / .env; never touches hermes-agent internals. Runs
+    when notify.interactive is "discord" or "slack" (the one plugin
+    serves both transports; slack scope keys are slack_*)."""
     ntf = cfg.get("notify")
-    if not isinstance(ntf, dict) or ntf.get("interactive") != "discord":
+    if not isinstance(ntf, dict) \
+            or ntf.get("interactive") not in ("discord", "slack"):
         return
+    transport = ntf["interactive"]
     exe = _hermes_exe(cfg)
     if not _hermes_ok(exe):
         print("\nhermes CLI が見つかりません — プラグイン設定は後で "
               "`hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で行ってください")
         return
-    nd = ntf.get("discord") if isinstance(ntf.get("discord"), dict) else {}
+    nd = ntf.get(transport) if isinstance(ntf.get(transport), dict) else {}
+    label = {"discord": "Discord", "slack": "Slack"}[transport]
     profile = getattr(args, "plugin_profile", None)
     if profile is None:
         if args.yes:
@@ -723,9 +879,9 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         else:
             profile = input(
                 "\nプラグイン設定を書き込む hermes プロファイル名"
-                "（multiplex 構成では Discord を受け持つ profile。"
+                f"（multiplex 構成では {label} を受け持つ profile。"
                 "空欄=既定）: ").strip()
-    print(f"\nDiscord 連携 — hermes "
+    print(f"\n{label} 連携 — hermes "
           f"{'-p ' + profile if profile else '既定'}"
           " profile にプラグイン設定を書き込みます")
 
@@ -737,9 +893,35 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         "data_root": data,
         "interactive": "true",
     }
-    for k in ("profile", "application_id", "guild_id", "channel_id"):
-        if nd.get(k):
-            fixed[k] = nd[k]
+    if transport == "discord":
+        for k in ("profile", "application_id", "guild_id", "channel_id"):
+            if nd.get(k):
+                fixed[k] = nd[k]
+        # operator-specific allowlists: flag > existing value > prompt
+        lists = (
+            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Discord user ID", ""),
+            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
+             "コマンドを受け付ける Discord channel ID",
+             nd.get("channel_id", "")),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+        tokens = (("DISCORD_BOT_TOKEN", "Discord bot token"),)
+    else:
+        fixed["slack_adapter_enabled"] = "true"
+        for k in ("profile", "application_id", "team_id", "channel_id"):
+            if nd.get(k):
+                fixed[f"slack_{k}"] = nd[k]
+        lists = (
+            ("slack_allowed_user_ids",
+             getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Slack user ID", ""),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+        tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
+                  ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
     missing = []
     for key, val in fixed.items():
         if _hermes_config_set(exe, profile, f"{PLUGIN_SETTINGS}.{key}",
@@ -748,16 +930,7 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
         else:
             missing.append(key)
 
-    # allowlists are operator-specific: flag > existing value > prompt
-    lists = (
-        ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
-         "カード操作を許可する Discord user ID"),
-        ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
-         "コマンドを受け付ける Discord channel ID"),
-        ("project_ids", getattr(args, "plugin_project_ids", None),
-         "対象とする MCS project ID"),
-    )
-    for key, flag_val, label in lists:
+    for key, flag_val, desc, default in lists:
         if flag_val is None:
             if _hermes_config_get(exe, profile,
                                   f"{PLUGIN_SETTINGS}.{key}"):
@@ -766,10 +939,8 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
             if args.yes:
                 missing.append(key)
                 continue
-            default = nd.get("channel_id", "") \
-                if key == "allowed_chat_ids" else ""
             flag_val = input(
-                f"  {key} — {label}（カンマ区切り"
+                f"  {key} — {desc}（カンマ区切り"
                 + (f"。Enter={default}" if default else "")
                 + "）: ").strip() or default
         if not flag_val:
@@ -787,35 +958,36 @@ def _apply_plugin_integration(cfg: dict, args) -> None:
               " — 後で `hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
-    # Pipe the token to the public writer so process listings cannot expose
-    # it. Older Hermes versions must fail instead of falling back to argv.
-    # `config set` routes *_TOKEN keys to the profile .env. It must
-    # land in the SERVING profile's .env: under multiplex each profile's
-    # secret scope is authoritative and a miss never falls through to
-    # the default profile's .env (agent/secret_scope.py).
-    tok = os.environ.get("DISCORD_BOT_TOKEN")
-    if tok:
-        ok = _hermes_config_set(exe, profile, "DISCORD_BOT_TOKEN", tok)
-        print("  DISCORD_BOT_TOKEN: "
-              + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
-    elif _hermes_config_get(exe, profile, "DISCORD_BOT_TOKEN"):
-        print("  DISCORD_BOT_TOKEN: 設定済み")
-    else:
-        if not args.yes:
-            tok = getpass.getpass(
-                "  Discord bot token（hermes .env へ保存。"
-                "空欄=スキップ）: ") or None
-            if tok:
-                ok = _hermes_config_set(exe, profile,
-                                        "DISCORD_BOT_TOKEN", tok)
-                print("  DISCORD_BOT_TOKEN: "
-                      + (f"hermes {'-p ' + profile if profile else '既定'}"
-                         " .env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
-        if not tok:
-            print("  DISCORD_BOT_TOKEN: 未設定 — `hermes "
-                  + (f"-p {profile} " if profile else "")
-                  + "setup` で後から設定")
+    # Pipe tokens to the public writer so process listings cannot expose
+    # them. Older Hermes versions must fail instead of falling back to
+    # argv. `config set` routes *_TOKEN keys to the profile .env. They
+    # must land in the SERVING profile's .env: under multiplex each
+    # profile's secret scope is authoritative and a miss never falls
+    # through to the default profile's .env (agent/secret_scope.py).
+    # Already-configured installs keep their existing tokens.
+    for env_key, desc in tokens:
+        tok = os.environ.get(env_key)
+        if tok:
+            ok = _hermes_config_set(exe, profile, env_key, tok)
+            print(f"  {env_key}: "
+                  + (f"hermes {'-p ' + profile if profile else '既定'} "
+                     ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+        elif _hermes_config_get(exe, profile, env_key):
+            print(f"  {env_key}: 設定済み")
+        else:
+            if not args.yes:
+                tok = getpass.getpass(
+                    f"  {desc}（hermes .env へ保存。"
+                    "空欄=スキップ）: ") or None
+                if tok:
+                    ok = _hermes_config_set(exe, profile, env_key, tok)
+                    print(f"  {env_key}: "
+                          + (f"hermes {'-p ' + profile if profile else '既定'}"
+                             " .env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+            if not tok:
+                print(f"  {env_key}: 未設定 — `hermes "
+                      + (f"-p {profile} " if profile else "")
+                      + "setup` で後から設定")
 
 
 def cmd_init(args) -> int:
@@ -860,10 +1032,8 @@ def cmd_init(args) -> int:
         # auto_login reads MCS_PASSWORD when the keychain can't answer.
         updates["MCS_PASSWORD"] = pw
         if not _keychain_store(login_id or "mcs", pw):
-            print("keychain write failed — stored value did not read "
-                  "back; the .env fallback was still written, and the "
-                  "keychain can be repaired later with `security "
-                  "add-generic-password -s mcs-adapter`")
+            print("keychain update not verified — check the existing entry; "
+                  "the .env fallback is handled below")
             keychain_failed = True
         else:
             print(f"keychain: '{KEYCHAIN_SERVICE}' registered")
@@ -872,7 +1042,11 @@ def cmd_init(args) -> int:
     if ts_key:
         updates["TYPESAFE_API_KEY"] = ts_key
     if updates:
-        _env_write(ENV_PATH, updates)
+        try:
+            _env_write(ENV_PATH, updates)
+        except ValueError:
+            print(".env: invalid credential format; existing file retained")
+            return 1
         print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
     if keychain_failed:
         return 1
@@ -935,6 +1109,17 @@ def cmd_init(args) -> int:
                                       indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: wrote {CONF_PATH}")
     _apply_plugin_integration(cfg, args)
+    # an interactive transport needs the supervised gateway — on a
+    # first install `services` ran BEFORE init could configure
+    # interactive, so sync just the gateway here rather than leaving
+    # a manual `services` rerun as the last step
+    ntf = cfg.get("notify")
+    if isinstance(ntf, dict) \
+            and ntf.get("interactive") in ("discord", "slack"):
+        exe = _hermes_exe(cfg)
+        if _hermes_ok(exe):
+            _sync_gateway(cfg, exe, lambda m: print(f"  {m}"),
+                          dry=False)
     return cmd_check(args)
 
 
@@ -966,7 +1151,7 @@ def cmd_fact_source(args) -> int:
             with open(args.gate_evidence, "rb") as stream:
                 raw = stream.read(8 * 1024 * 1024)
             report = json.loads(raw)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RecursionError) as e:
             print(f"fact_source: gate evidence unreadable ({e})")
             return 1
         gate = report.get("gate") if isinstance(report, dict) else None
@@ -976,9 +1161,9 @@ def cmd_fact_source(args) -> int:
             if isinstance(provenance, dict) else 0
         if not isinstance(report, dict) \
                 or not report.get("schema_version") \
-                or not isinstance(gate, dict) or not gate.get("pass") \
-                or not gate.get("g6_eligible") \
-                or not isinstance(human, int) or human < 1:
+                or not isinstance(gate, dict) or gate.get("pass") is not True \
+                or gate.get("g6_eligible") is not True \
+                or type(human) is not int or human < 1:
             reasons = gate.get("reasons") if isinstance(gate, dict) \
                 else None
             print("fact_source: gate evidence does not pass on "
@@ -1103,9 +1288,8 @@ MANIFEST_PATH = os.path.join(HOME, "data", "service_manifest.json")
 
 
 def _render_template(text: str, subs: dict) -> str:
-    for k, v in subs.items():
-        text = text.replace("__" + k + "__", v)
-    return text
+    return re.sub(r"__([A-Z_]+)__",
+                  lambda match: subs.get(match.group(1), match.group(0)), text)
 
 
 def _write_atomic(path: str, body: str, mode: int | None = None) -> None:
@@ -1133,7 +1317,8 @@ def _cron_list(hermes: str) -> list[dict] | None:
         return None
     out: list[dict] = []
     cur = None
-    for line in r.stdout.splitlines():
+    output = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
+    for line in output.splitlines():
         m = re.match(r"^\s{2}([0-9a-f]{6,})\b", line)
         if m:
             cur = {"id": m.group(1)}
@@ -1144,20 +1329,24 @@ def _cron_list(hermes: str) -> list[dict] | None:
             if cur is None:
                 return None            # field before any header
             cur[m.group(1).lower()] = m.group(2)
+    if not out and "No scheduled jobs." not in output:
+        return None
+    if any(not entry.get("name") or not entry.get("schedule") for entry in out):
+        return None
     return out
 
 
 def _norm_sched(s: str) -> str | None:
     """Extract a comparable 5-field cron expr from a Schedule field —
     tolerant of 'cron: ' prefixes or extra decoration."""
-    m = re.search(r"(\S+\s+\S+\s+\S+\s+\S+\s+\S+)", s or "")
-    return m.group(1) if m else None
+    field = r"[0-9A-Za-z*/?,#\-]+"
+    m = re.search(rf"(?<!\S)({field}(?:\s+{field}){{4}})(?!\S)", s or "")
+    return " ".join(m.group(1).split()) if m else None
 
 
 def _agent_loaded(label: str) -> bool:
     uid = os.getuid()
-    r = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
-                       capture_output=True)
+    r = _run(["launchctl", "print", f"gui/{uid}/{label}"])
     return r.returncode == 0
 
 
@@ -1168,15 +1357,12 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
     if _agent_loaded(label):
         note(f"agent {label}: reload (content changed)")
         if not dry:
-            subprocess.run(["launchctl", "bootout",
-                            f"gui/{uid}/{label}"],
-                           capture_output=True, text=True)
+            _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
     else:
         note(f"agent {label}: bootstrap")
     if dry:
         return True
-    r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", dst],
-                       capture_output=True, text=True)
+    r = _run(["launchctl", "bootstrap", f"gui/{uid}", dst])
     if r.returncode != 0:
         note(f"  bootstrap failed: {r.stderr.strip()}")
         return False
@@ -1205,7 +1391,8 @@ def _sync_scripts(subs, manifest, note, dry) -> None:
         if not name.endswith(".sh"):
             continue
         body = _render_template(
-            Path(os.path.join(src, name)).read_text(encoding="utf-8"), subs)
+            Path(os.path.join(src, name)).read_text(encoding="utf-8"),
+            {key: shlex.quote(value) for key, value in subs.items()})
         dst = os.path.join(SCRIPTS_DIR, name)
         manifest["scripts"].append({"name": name,
                                     "sha256": _sha256(body)})
@@ -1233,7 +1420,8 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
     for label in AGENT_LABELS:
         srcp = os.path.join(pdir, label + ".plist")
         body = _render_template(
-            Path(srcp).read_text(encoding="utf-8"), subs)
+            Path(srcp).read_text(encoding="utf-8"),
+            {key: xml_escape(value, quote=False) for key, value in subs.items()})
         dst = os.path.join(AGENTS_DIR, label + ".plist")
         try:
             cur = Path(dst).read_text(encoding="utf-8")
@@ -1258,9 +1446,6 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
                                    "loaded": True})
     # retire owned-but-undesired agents: our naming space only,
     # never install.sh-owned labels (S5)
-    owned = set(AGENT_LABELS)
-    owned |= {a.get("label") for a in prev.get("agents", [])
-              if isinstance(a, dict)}
     for path in sorted(
             p for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")) \
             if os.path.isdir(AGENTS_DIR) else []:
@@ -1268,15 +1453,19 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
         mcs_owned = label.startswith("local.mcs-") \
             or label.startswith("ai.mcs.extract-")
         if not mcs_owned or label in EXCLUDED_LABELS \
-                or label in owned:
+                or label in AGENT_LABELS:
             continue
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
-            subprocess.run(["launchctl", "bootout",
-                            f"gui/{uid}/{label}"],
-                           capture_output=True, text=True)
-            with suppress(OSError):
+            _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
+            if _agent_loaded(label):
+                note(f"  agent {label}: still loaded; keeping plist")
+                problems += 1
+                continue
+            try:
                 os.unlink(os.path.join(AGENTS_DIR, path))
+            except OSError:
+                problems += 1
     return problems
 
 
@@ -1315,11 +1504,10 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
         if entry is None:
             note(f"cron '{name}': create ({sched} -> {script})")
             if not dry:
-                r = subprocess.run(
+                r = _run(
                     [hermes, "cron", "create", sched,
                      "--name", name, "--script", script,
-                     "--no-agent", "--deliver", "local"],
-                    capture_output=True, text=True)
+                     "--no-agent", "--deliver", "local"])
                 if r.returncode != 0:
                     note(f"  create failed: "
                          f"{(r.stderr or r.stdout).strip()}")
@@ -1335,10 +1523,9 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
             note(f"cron '{name}': schedule "
                  f"{cur_sched} -> {sched}")
             if not dry:
-                r = subprocess.run(
+                r = _run(
                     [hermes, "cron", "edit", entry["id"],
-                     "--schedule", sched],
-                    capture_output=True, text=True)
+                     "--schedule", sched])
                 if r.returncode != 0:
                     note(f"  edit failed: "
                          f"{(r.stderr or r.stdout).strip()}")
@@ -1355,9 +1542,8 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
             note(f"cron '{entry.get('name', script)}': "
                  f"undesired — remove {entry['id']}")
             if not dry:
-                r = subprocess.run(
-                    [hermes, "cron", "remove", entry["id"]],
-                    capture_output=True, text=True)
+                r = _run(
+                    [hermes, "cron", "remove", entry["id"]])
                 if r.returncode != 0:
                     note(f"  remove failed: "
                          f"{(r.stderr or r.stdout).strip()}")
@@ -1414,8 +1600,10 @@ def _record_llm_slots(manifest, note) -> None:
             note(f"WARNING: plist -np {plist_np} != selected "
                  f"{local_llm.SLOT_COUNT} — deployment width drifts "
                  "from the measured selection")
-    except (OSError, ValueError) as e:
-        note(f"manifest llm_slots: {e}")
+    except Exception as e:
+        # a manifest annotation must never take the services run down —
+        # the agents/cron above were the real work
+        note(f"manifest llm_slots: {type(e).__name__}: {e}")
 
 
 def cmd_services(args) -> int:
@@ -1444,7 +1632,7 @@ def cmd_services(args) -> int:
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6)
-    if not dry:
+    if not dry and not problems:
         try:
             _save_manifest(manifest)
             note(f"manifest: {MANIFEST_PATH}")
@@ -1482,15 +1670,17 @@ def main() -> int:
                         "separated (signals.self_professions; "
                         "normally derived from MCS /users/self)")
     p.add_argument("--plugin-profile", metavar="NAME",
-                   help="hermes profile serving Discord — plugin "
+                   help="hermes profile serving Discord/Slack — plugin "
                         "settings are written there (multiplex; "
                         "empty/omitted = default profile)")
     p.add_argument("--plugin-user-ids", metavar="A,B",
-                   help="Discord user ids allowed to operate cards "
-                        "(plugins ... settings.allowed_user_ids)")
+                   help="user ids allowed to operate cards "
+                        "(discord: allowed_user_ids / "
+                        "slack: slack_allowed_user_ids)")
     p.add_argument("--plugin-chat-ids", metavar="A,B",
                    help="Discord channel ids that accept /mcs commands "
-                        "(plugins ... settings.allowed_chat_ids)")
+                        "(allowed_chat_ids; discord only — slack pins "
+                        "a single channel via notify.slack.channel_id)")
     p.add_argument("--plugin-project-ids", metavar="A,B",
                    help="MCS project ids the plugin may read "
                         "(plugins ... settings.project_ids)")

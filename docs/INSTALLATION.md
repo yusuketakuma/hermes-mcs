@@ -51,15 +51,36 @@ cd hermes-mcs
                         # 引数で HERMES_HOME を変えられる（既定 ~/.hermes）
 ```
 
+一部導入済みの環境ではステージ単位でスキップできる:
+
+```bash
+./install.sh --no-llm        # 自前の LLM サーバを使う
+                             #   （MCS は 127.0.0.1:8080 の
+                             #     OpenAI 互換エンドポイントを期待）
+./install.sh --no-plugin     # プラグイン導入を自分で管理する
+                             #   （interactive=off のテキスト通知のみ
+                             #     なら不要）
+./install.sh --no-brew       # brew 管理外の依存を自前で用意済み
+./install.sh --no-services   # launchd/cron 登録を後で行う
+./install.sh --no-recovery   # 復旧 watchdog を導入しない
+```
+
+フラグ無しでも検出ベースで skip する: `:8080` で OpenAI 互換
+エンドポイントが応答すれば llama-server の導入・モデル DL を
+スキップし、導入済みの `plugins.enabled`・launchd agent・hermes
+cron・`~/.hermes` checkout はそのまま残る。`:8080` を占有する
+自前サーバがある場合、そのサーバが MCS の LLM として使われる
+（`/slots` が `SLOT_COUNT` と一致するか `check` が検証する）。
+
 `install.sh` が行うこと（6 ステージ）:
 
 | # | 内容 |
 |---|---|
 | 1 | brew パッケージ: `git` `python@3.13` `uv` `llama.cpp` `google-chrome`(cask) |
 | 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築・`~/.local/bin/hermes` shim を作成（既存 checkout があれば保持・pin 不一致は警告のみ） |
-| 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable` |
+| 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） |
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 2`・Qwen3.5-9B GGUF 約6GB を `~/.hermes/models/` へ DL。hermes 管理の `ai.hermes.llamacpp` が既にあれば skip） |
-| 5 | `mcs_setup.py services` — launchd agent 4件 + hermes cron 5件の配置・登録（§6 参照） |
+| 5 | `mcs_setup.py services` — launchd agent 4件 + hermes cron 6件の配置・登録（§6 参照） |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、15分間隔で中断した update を復旧） |
 
 手動で残るのは最後の案内に表示される `mcs_setup.py init`（秘密情報と
@@ -90,8 +111,12 @@ cd hermes-mcs
 ### A-3. `mcs_setup.py init` — 設定ウィザード
 
 ```bash
-python3 mcs/ops/mcs_setup.py init
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init
 ```
+
+（`mcs_setup` は Python ≥3.10 が必要。install.sh が用意した venv
+インタプリタを使うのが確実 — macOS 標準の `/usr/bin/python3` は
+3.9 系で古い）
 
 対話ウィザードが全 config キーをセクション別に案内する（各項目に
 説明と既定値を表示、Enter でそのまま進行。関連機能がオフの項目は
@@ -101,19 +126,21 @@ python3 mcs/ops/mcs_setup.py init
 - Keychain `mcs-adapter` へ MCS パスワードを登録
 - `~/.mcs/.env` に `MCS_PASSWORD`（Keychain ロック中のフォールバック）
   と `TYPESAFE_API_KEY`（環境変数で渡した場合）を保存
-- `notify.interactive=discord` を選んだ場合、hermes 側へも書き込む:
+- `notify.interactive=discord`/`slack` を選んだ場合、hermes 側へも
+  書き込む（Slack は `slack_*` settings キーにマップされる）:
   - プラグイン settings を serving profile の config.yaml へ
     （`hermes -p <profile> config set` 経由 — snapshot/inbox/
     allowlists/scope 一式）
-  - `DISCORD_BOT_TOKEN` を同 profile の `.env` へ（stdin 経由、
-    argv には載せない）
+  - `DISCORD_BOT_TOKEN`（Slack は `SLACK_BOT_TOKEN`+
+    `SLACK_APP_TOKEN`）を同 profile の `.env` へ（stdin 経由、
+    argv には載せない。既設定済みのトークンは残る）
 
 非対話でも実行できる（CI・再現用）:
 
 ```bash
 MCS_SETUP_PASSWORD=<mcs-pass> TYPESAFE_API_KEY=<key> \
 DISCORD_BOT_TOKEN=<token> \
-python3 mcs/ops/mcs_setup.py init --yes \
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
     --login-id <ID> --notify-target discord:<チャンネルID> \
     --set 'notify.interactive="discord"' \
     --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
@@ -127,12 +154,12 @@ python3 mcs/ops/mcs_setup.py init --yes \
 ### A-4. サービス登録と検証
 
 ```bash
-python3 mcs/ops/mcs_setup.py services   # launchd + hermes cron + gateway
-python3 mcs/ops/mcs_setup.py check      # 必須条件の検証（exit 1 で失敗）
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services   # launchd + hermes cron + gateway
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check      # 必須条件の検証（exit 1 で失敗）
 ```
 
 - `services` — launchd agent 4件（cmd/cmd_int WatchPaths・extract
-  drainer×2）を配置・bootstrap、hermes cron 5件を登録（冪等・
+  drainer×2）を配置・bootstrap、hermes cron 6件を登録（冪等・
   `--dry-run` で確認可。内容差分は reconcile）。`notify.interactive`
   が `discord`/`slack` のとき `hermes gateway install` + `start` で
   gateway 常駐化も行う
@@ -166,11 +193,12 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   だけ届いてスレッド本文・添付が欠落する（2026-09 実機事案）
 - Slack カードを使う場合は `notify.interactive="slack"` +
   `notify.slack` ブロック（`profile`・`application_id`・`team_id`・
-  `channel_id`、**guild_id は不可**）と、プラグイン settings の
-  `slack_adapter_enabled: true` + `slack_team_id`/`slack_application_id`/
-  `slack_channel_id`/`slack_allowed_user_ids`/`slack_profile`/
-  `project_ids`/`data_root` を `hermes config set` で手動設定する
-  （wizard は Discord のみ対応）
+  `channel_id`、**guild_id は不可**）。wizard/init の対応で
+  プラグイン settings（`slack_adapter_enabled: true` +
+  `slack_team_id`/`slack_application_id`/`slack_channel_id`/
+  `slack_allowed_user_ids`/`slack_profile`/`project_ids`/
+  `data_root`）と `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` を serving
+  profile に自動で書き込む — 既設定の値は保持される
 
 ## 3. Path B — スタンドアロン（hermes-agent なし）
 
@@ -217,38 +245,61 @@ mkdir -p ~/.hermes/models
 curl -fL -o ~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf \
   "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
 
-# 常駐サーバ（launchd テンプレートをレンダリングして登録）
-REPO=$(pwd)
-sed -e "s|__LLAMA_BIN__|$(brew --prefix)/bin/llama-server|g" \
-    -e "s|__MODEL__|$HOME/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf|g" \
-    -e "s|__HERMES_HOME__|$HOME/.hermes|g" \
-    "$REPO/deployment/launchagents/ai.mcs.llamaserver.plist" \
-    > ~/Library/LaunchAgents/ai.mcs.llamaserver.plist
-mkdir -p ~/.hermes/logs
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/ai.mcs.llamaserver.plist
+# 常駐サーバ（パスは XML としてエスケープして配置）
+python3 - <<'PYSETUP'
+from pathlib import Path
+import re
+import shutil
+from xml.sax.saxutils import escape
+home = Path.home()
+llama = shutil.which("llama-server")
+if not llama:
+    raise SystemExit("llama-server not found")
+values = {"__LLAMA_BIN__": llama,
+          "__MODEL__": str(home / ".hermes/models/Qwen3.5-9B-Q4_K_M.gguf"),
+          "__HERMES_HOME__": str(home / ".hermes")}
+template = Path("deployment/launchagents/ai.mcs.llamaserver.plist").read_text()
+pattern = "|".join(re.escape(key) for key in values)
+body = re.sub(pattern, lambda match: escape(values[match.group()]), template)
+target = home / "Library/LaunchAgents/ai.mcs.llamaserver.plist"
+target.parent.mkdir(parents=True, exist_ok=True)
+(home / ".hermes/logs").mkdir(parents=True, exist_ok=True)
+target.write_text(body)
+PYSETUP
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/ai.mcs.llamaserver.plist"
 ```
 
 抽出を使わないならこの節はスキップしてよい（`mcs_setup check` が
 LLM endpoint の警告を出すが収集自体は動く）。
 
-### B-4. スケジューリング（launchd + crontab）
+### B-4. スケジューリング（crontab）
 
-`mcs_setup.py services` は launchd agent を配置するが、hermes cron
-登録は hermes CLI 不在のため skip される（`[note] cron: hermes not
-resolvable — skipped`）。主要ジョブは crontab で代替する:
+通知を送らない wrapper を生成し、主要ジョブを crontab で実行する。
+既存の収集ジョブがある場合は、重複して登録せず、その起動経路も確認する:
 
 ```bash
-# wrapper スクリプトをレンダリング（services が ~/.hermes/scripts に配置済み。
-# 手動の場合:）
-REPO=$(pwd); PY=$(command -v python3); DATA=$HOME/.mcs/data
-mkdir -p ~/.mcs/scripts
-for s in mcs_check mcs_deep mcs_llm_catchup; do
-  sed -e "s|__PYTHON__|$PY|g" -e "s|__REPO__|$REPO|g" -e "s|__DATA__|$DATA|g" \
-      "$REPO/deployment/scripts/$s.sh" > ~/.mcs/scripts/$s.sh
-  chmod +x ~/.mcs/scripts/$s.sh
-done
-# mcs_check.sh に --no-notify を足す（通知を送らない運用）:
-sed -i '' 's|--mark-read >>|--mark-read --no-notify >>|' ~/.mcs/scripts/mcs_check.sh
+# スタンドアロン用 wrapper を正本からレンダリングする。
+# shell 引数を引用し、通知を送らない runner の起動に --no-notify を追加する。
+python3 - <<'PYSETUP'
+from pathlib import Path
+import re
+import shlex
+import sys
+repo = Path.cwd()
+home = Path.home()
+values = {"__PYTHON__": sys.executable, "__REPO__": str(repo),
+          "__DATA__": str(home / ".mcs/data")}
+pattern = "|".join(re.escape(key) for key in values)
+out = home / ".mcs/scripts"
+out.mkdir(parents=True, exist_ok=True)
+for name in ("mcs_check", "mcs_deep", "mcs_llm_catchup"):
+    body = (repo / "deployment/scripts" / (name + ".sh")).read_text()
+    body = body.replace("run_check.py", "run_check.py --no-notify")
+    body = re.sub(pattern, lambda match: shlex.quote(values[match.group()]), body)
+    target = out / (name + ".sh")
+    target.write_text(body)
+    target.chmod(0o755)
+PYSETUP
 
 crontab -e
 ```
@@ -261,8 +312,9 @@ crontab -e
 
 `mcs_check.sh` には夜間間引き（22-06時は :00/:20/:40 のみ実行）が
 組み込み済み — 5分 cron のまま貼ればスクリプト側が間引く。
-launchd の extract drainer / cmd watcher は `mcs_setup services` で
-hermes なしでも登録される。
+この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
+併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
+通知を送信し得る。抽出は上記の定期ジョブから実行される。
 
 ### B-5. 動作確認と `check` の読み方
 
@@ -289,8 +341,8 @@ python3 mcs/ops/mcs_setup.py services && python3 mcs/ops/mcs_setup.py check
 ```
 
 `--no-notify` を付けて運用していた場合は wrapper の該当フラグを除き、
-outbox に残った pending は次回 flush で配送される（古いものは
-`notify_max_age_h` で送らない設定も可能）。Discord/Slack アプリの
+outbox に残った pending は次回 flush で配送対象になる。
+`notify_max_age_h` は取り込み時の抑制なので、既存の待機分は送信再開前に確認する。Discord/Slack アプリの
 作成は付録A/B（hermes-agent リポジトリのドキュメント転記）の手順。
 
 ## 4. config.json 設定リファレンス
@@ -329,6 +381,8 @@ outbox に残った pending は次回 flush で配送される（古いものは
 | `signals.self_professions` | list[str] | 自動検出 | 自職種（同上） |
 | `signals.request_targets` | list[str] | なし | 依頼先として数える宛名 |
 | `signals.med_exclude_names` | list[str] | なし | 薬剤判定から除外する語 |
+| `local_llm.url` | str | `http://127.0.0.1:8080/v1/chat/completions` | ローカルLLMのエンドポイント（loopback http のみ — それ以外は `check` が拒否。別ポートの自前サーバを指せる） |
+| `local_llm.model` | str | `Qwen3.5-9B` | モデル名（OpenAI 互換 API の `model` フィールド） |
 | `semantic.mode` | choice | `off` | `off`以外は本文を外部 Jev API へ送信。`shadow`=記録のみ / `enforce`=判定に使用 |
 | `semantic.project_ids` | list[int] | — | 対象プロジェクトID（mode が off 以外では必須） |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
@@ -336,7 +390,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
-| `health.max_missed_runs` | int | `4` | freshness deadline 係数（夜間間引きに合わせ25分相当） |
+| `health.max_missed_runs` | int | `4` | 欠測許容回数。昼5分・夜20分の予定と完了猶予から判定 |
 
 ## 5. 秘密情報の配置
 
@@ -348,7 +402,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 
 ## 6. スケジュール構成（Path A 導入後）
 
-収集ジョブは **hermes cron 5件 + launchd 5件** のハイブリッド:
+収集ジョブは **hermes cron 6件 + launchd 5件** のハイブリッド:
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
@@ -356,6 +410,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 | durable-job drain `--jobs-only` | `7,37 * * * *` | hermes cron |
 | semantic/QC 夜間 drain | `30 22 * * *`（最大55分） | hermes cron |
 | llama-server 再起動 | `0 4 * * *` | hermes cron |
+| 収集ヘルス監視 `health_watch` | `*/5 * * * *` | hermes cron |
 | 更新チェック `mcs_update check` | `10 5 * * *` | hermes cron |
 | 更新復旧 `mcs_recover --if-stale` | 15分間隔 | launchd `org.mcs.recovery` |
 | コマンド取込 `data/cmd/` | WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
@@ -369,7 +424,7 @@ outbox に残った pending は次回 flush で配送される（古いものは
 |---|---|
 | `missing required key: mcs_login_id` / `notify_target` | `init` で再登録（両方とも必須） |
 | `Keychain entry 'mcs-adapter' not found` | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
-| `Keychain entry ... unreadable` | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。頻発なら `security set-keychain-settings ~/Library/Keychains/login.keychain-db` で自動ロック無効化 |
+| `Keychain entry ... unreadable` | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
 | `Chrome binary missing` | Chrome が `/Applications` に無い — `brew install --cask google-chrome` |
 | `local LLM endpoint 127.0.0.1:8080 not reachable` | llama-server 未起動 — Path A-1/§B-3。収集自体は動く（警告） |
 | `llama-server advertises N slots` | `-np` が選択スロット数（2）未満 — plist の `-np 2` を確認 |
