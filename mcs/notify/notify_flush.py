@@ -716,7 +716,12 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         return False
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
-        if outcome.get("error"):
+        if outcome.get("error") == "payload_invalid":
+            # dispatch already quarantined it — a malformed frozen
+            # payload cannot heal, so never re-arm an hourly retry
+            ledger.outbox_hold(ev["event_id"])
+            res["failed"] += 1
+        elif outcome.get("error"):
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
         elif outcome.get("suppressed"):
