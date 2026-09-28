@@ -172,6 +172,14 @@ def test_llm_extract_integrity_aggregates_timings(monkeypatch):
     assert meta["timings"]["predicted_ms"] == 200
 
 
+def test_chat_ignores_unrepresentable_timing():
+    payload = _response('{"summary": "synthetic"}')
+    payload["timings"] = {"prompt_ms": 10 ** 400, "predicted_ms": 10}
+    response = local_llm.chat("prompt", request_fn=_fake_request(payload))
+    assert response["text"] == '{"summary": "synthetic"}'
+    assert response["timings"] == {"predicted_ms": 10}
+
+
 def test_llm_chat_pins_background_slot(monkeypatch):
     """semantic.llm_chat must pin every call to slot 1 (wire id_slot 0)
     so slot 2 stays reserved for real-time traffic."""
@@ -216,7 +224,7 @@ def test_request_slot_rejects_out_of_range(monkeypatch):
     treats out-of-range id_slot as UNPINNED, which could land a
     background call on the real-time slot (T19)."""
     for bad in (str(local_llm.SLOT_COUNT), str(local_llm.SLOT_COUNT + 1),
-                "99"):
+                "99", "9" * 5000):
         monkeypatch.setenv("MCS_LLM_SLOT", bad)
         assert local_llm.request_slot() == local_llm.BACKGROUND_SLOT
 
@@ -286,3 +294,29 @@ def test_semantic_llm_chat_rejects_parseable_length_truncation(
         local_llm, "bounded_request",
         _fake_request(_response('{"facts": []}', finish="length")))
     assert semantic.llm_chat("hello") is None
+
+
+def test_resolve_defaults_and_config_override():
+    assert local_llm.resolve(None) == (local_llm.ENDPOINT,
+                                     local_llm.MODEL)
+    assert local_llm.resolve({}) == (local_llm.ENDPOINT,
+                                    local_llm.MODEL)
+    assert local_llm.resolve({"local_llm": {
+        "url": "http://127.0.0.1:9999/v1/chat/completions",
+        "model": "Other-Model"}}) == (
+        "http://127.0.0.1:9999/v1/chat/completions", "Other-Model")
+    # malformed values keep the pin — a typo can't reroute PHI
+    assert local_llm.resolve({"local_llm": {"url": 7, "model": " "}}) \
+        == (local_llm.ENDPOINT, local_llm.MODEL)
+    assert local_llm.resolve({"local_llm": "junk"}) == \
+        (local_llm.ENDPOINT, local_llm.MODEL)
+
+
+def test_probe_urls_follow_endpoint_authority():
+    models, slots = local_llm.probe_urls(local_llm.ENDPOINT)
+    assert models == "http://127.0.0.1:8080/v1/models"
+    assert slots == "http://127.0.0.1:8080/slots"
+    models, slots = local_llm.probe_urls(
+        "http://localhost:1234/v1/chat/completions")
+    assert models == "http://localhost:1234/v1/models"
+    assert slots == "http://localhost:1234/slots"

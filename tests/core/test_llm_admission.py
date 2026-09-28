@@ -9,6 +9,7 @@ counting pre-send reservations through confirmed terminal retirement.
 import json
 import sqlite3
 from contextlib import suppress
+import threading
 import time
 
 import pytest
@@ -156,8 +157,9 @@ def test_crash_rotates_epoch_and_fences(tmp_path):
     bg = _send(backend, b1, "mcs.extract", "BACKLOG")
     assert bg["resp"]["status"] == 200
     ep1 = b1.epoch()
-    # crash without closing — permits stay live on disk
-    b1.db.close()
+    # the owner exits without retiring the permit; the OS releases its
+    # lifetime lock while the permit stays live on disk
+    b1.close()
     b2 = adm.Broker(path)          # restart → fenced + closed epoch
     backend.broker = b2            # the backend validates against the
                                  # live broker, never a dead handle
@@ -175,6 +177,35 @@ def test_crash_rotates_epoch_and_fences(tmp_path):
     bg2 = _send(backend, b2, "mcs.extract", "BACKLOG")
     assert bg2["resp"]["status"] == 200
     b2.close()
+
+
+def test_new_client_joins_live_epoch_without_fencing(tmp_path):
+    path = str(tmp_path / "adm.db")
+    b1 = adm.Broker(path)
+    b1.open_epoch(lambda: True)
+    bg = b1.acquire("mcs.extract", "BACKLOG")
+    assert bg["admitted"]
+    try:
+        b2 = adm.Broker(path)
+        try:
+            assert b2.epoch() == b1.epoch()
+            assert b2.is_open()
+            rt = b2.acquire("gbrain.query", "RT")
+            assert rt["reason"] == "waiting"
+            assert not b2.overlap()
+        finally:
+            b2.close()
+    finally:
+        b1.close()
+
+    # Once every handle exits, the next owner must fence unfinished
+    # requests before it can admit new work.
+    restarted = adm.Broker(path)
+    try:
+        assert restarted.epoch() == bg["epoch"] + 1
+        assert not restarted.is_open()
+    finally:
+        restarted.close()
 
 
 def test_admitted_at_backfilled_on_old_schema(tmp_path):
@@ -268,6 +299,55 @@ def test_concurrent_arrival_trace_never_overlaps(broker):
     # and the backend log shows strict alternation, never both
     kinds = [c for c, _ in backend.log if c != "REJECTED"]
     assert kinds == ["BACKLOG", "RT", "BACKLOG"]
+
+
+def test_simultaneous_clients_never_reserve_opposite_classes(tmp_path):
+    """Two independent broker connections must decide admission atomically."""
+    path = str(tmp_path / "adm.db")
+    ready = threading.Event()
+    rt_checked = threading.Event()
+    rt_done = threading.Event()
+    results = {}
+
+    def backlog_client():
+        b = adm.Broker(path)
+        try:
+            b.open_epoch(lambda: True)
+            assert ready.wait(2)
+            original = b._occupancy
+
+            def pause_after_rt_check(conn, epoch, cls):
+                count = original(conn, epoch, cls)
+                if cls == "RT" and count == 0:
+                    rt_checked.set()
+                    rt_done.wait(0.5)
+                return count
+
+            b._occupancy = pause_after_rt_check
+            results["bg"] = b.acquire("mcs.extract", "BACKLOG")
+        finally:
+            b.close()
+
+    def rt_client():
+        b = adm.Broker(path)
+        try:
+            ready.set()
+            assert rt_checked.wait(2)
+            results["rt"] = b.acquire("hermes.interactive", "RT")
+            rt_done.set()
+        finally:
+            b.close()
+
+    bg = threading.Thread(target=backlog_client)
+    rt = threading.Thread(target=rt_client)
+    rt.start()
+    bg.start()
+    bg.join(3)
+    rt.join(3)
+    assert not bg.is_alive() and not rt.is_alive()
+    assert results["bg"]["admitted"]
+    assert results["rt"]["admitted"] is False
+    assert results["rt"]["reason"] == "waiting"
 
 
 # ---------- local_llm admitted_chat / admitted_probe_format ----------
@@ -413,6 +493,37 @@ def test_admitted_probe_format_injects_token(admitted_env):
     assert row["state"] == "terminal"
 
 
+@pytest.mark.parametrize("failure,state", [(TimeoutError, "unknown"),
+                                         (ConnectionRefusedError, "terminal")])
+def test_admitted_probe_failure_preserves_backend_uncertainty(admitted_env, failure, state):
+    import local_llm
+
+    def unavailable(*args):
+        raise failure("synthetic")
+
+    assert local_llm.admitted_probe_format(
+        "mcs.extract", local_llm.ENDPOINT, "m", None,
+        request_fn=unavailable) == "plain"
+    broker = _live_broker(admitted_env)
+    row = broker.db.execute("SELECT state,outcome FROM permits").fetchone()
+    assert row["state"] == state
+    assert row["outcome"] != "done"
+    if state == "unknown":
+        assert not broker.acquire("gbrain.query", "RT")["admitted"]
+
+
+def test_admitted_chat_interruption_keeps_permit_unknown(admitted_env):
+    import local_llm
+
+    def interrupted(*args):
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        local_llm.admitted_chat("mcs.extract", "p", request_fn=interrupted)
+    broker = _live_broker(admitted_env)
+    assert broker.db.execute("SELECT state FROM permits").fetchone()[0] == "unknown"
+
+
 # ---------- extract_llm wiring under admission ----------
 
 def test_llm_call_defers_on_admission_verdict(admitted_env, monkeypatch):
@@ -474,6 +585,23 @@ def test_same_class_concurrency_capped_at_slots(tmp_path):
     p4 = b.acquire("mcs.qc", "BACKLOG")   # freed capacity admits
     assert p4["admitted"] is True
     b.close()
+
+
+def test_waiting_rt_promotion_respects_slot_limit(tmp_path):
+    b = adm.Broker(str(tmp_path / "adm.db"), slots=1)
+    try:
+        b.open_epoch(lambda: True)
+        bg = b.acquire("mcs.extract", "BACKLOG")
+        rt1 = b.acquire("hermes.interactive", "RT")
+        rt2 = b.acquire("gbrain.query", "RT")
+        assert rt1["reason"] == rt2["reason"] == "waiting"
+        b.terminal(bg["permit_id"], "done")
+        assert b.poll(rt1["permit_id"])["state"] == "admitted"
+        assert b.poll(rt2["permit_id"])["state"] == "waiting"
+        b.terminal(rt1["permit_id"], "done")
+        assert b.poll(rt2["permit_id"])["state"] == "admitted"
+    finally:
+        b.close()
 
 
 def test_setup_gate_blocks_broker_missing_mcs_routes(

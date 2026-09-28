@@ -1,6 +1,6 @@
 """SQLite ledger for MCS unread capture + history archive.
 
-Schema v5 (reuse-oriented):
+Schema v7 (reuse-oriented):
   runs          : one row per check run (kind: tick | init)
   patients      : per-project fetch state + history_floor (deepest completed
                   cutoff) + history_page (resume cursor for deep imports)
@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -465,7 +466,7 @@ class Ledger:
                 "TEXT NOT NULL DEFAULT 'none'")
 
     def _backfill_v3(self):
-        """Fill derived columns for pre-v3 rows (idempotent, chunked)."""
+        """Idempotently fill derived columns for pre-v3 rows."""
         rows = self.db.execute(
             "SELECT message_id, posted_at, body_html FROM messages "
             "WHERE posted_at_ts IS NULL OR posted_at_ts=0 OR body_text IS NULL").fetchall()
@@ -564,19 +565,19 @@ class Ledger:
               WHERE message_id=? AND state != 'withdrawn'
             """, (m.message_id,))
 
-    def _save_tree(self, m, new_ids: list, now: float):
+    def _save_tree(self, m, new_ids: list, now: float,
+                   project_id: int | None = None):
         """One message + its attachments + replies (with their attachments).
         Replies carry files too — a single shared path keeps them from
         silently dropping."""
-        if self._upsert_message(m):
-            new_ids.append(m.message_id)
-        self._save_attachments(m, now)
-        self._retire_reply_job(m, now)
-        for r in m.replies:
-            if self._upsert_message(r):
-                new_ids.append(r.message_id)
-            self._save_attachments(r, now)
-            self._retire_reply_job(r, now)
+        expected_project = m.project_id if project_id is None else project_id
+        for message in [m, *m.replies]:
+            if message.project_id != expected_project:
+                raise ValueError("message_project_mismatch")
+            if self._upsert_message(message):
+                new_ids.append(message.message_id)
+            self._save_attachments(message, now)
+            self._retire_reply_job(message, now)
 
     def _semantic_generation_snapshot(self, messages) -> dict:
         """Capture touched rows and their thread generation before a batch."""
@@ -720,7 +721,7 @@ class Ledger:
                   now if p.fetch_state == "complete" else None,
                   now, now))
             for m in p.messages:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, p.project_id)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
             # The unread endpoint makes all newly stored posts eligible;
@@ -969,7 +970,7 @@ class Ledger:
                            if semantic or self._has_canonical_projections() else {})
         with self.db:
             for m in msgs:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, project_id)
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
             if project_id:
@@ -1007,7 +1008,7 @@ class Ledger:
                            if semantic or self._has_canonical_projections() else {})
         with self.db:
             for m in replies:
-                self._save_tree(m, new_ids, now)
+                self._save_tree(m, new_ids, now, project_id)
                 # reconcile against the STORED body, not the fetched one:
                 # upsert never downgrades 'full', so a refetch returning
                 # a snippet for an already-full reply must not spawn an
@@ -1041,9 +1042,11 @@ class Ledger:
         to a later 'snippet'."""
         now = time.time()
         chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
-        existed = self.db.execute(
-            "SELECT 1 FROM messages WHERE message_id=?",
-            (m.message_id,)).fetchone() is not None
+        existing = self.db.execute(
+            "SELECT project_id FROM messages WHERE message_id=?",
+            (m.message_id,)).fetchone()
+        if existing is not None and existing["project_id"] != m.project_id:
+            raise ValueError("message_project_mismatch")
         body_text = html_to_text(m.body_html)
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
@@ -1105,7 +1108,7 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
-        return 0 if existed else 1
+        return 0 if existing is not None else 1
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -1328,14 +1331,6 @@ class Ledger:
             "WHERE message_id=? AND state != 'withdrawn' "
             "ORDER BY attachment_id", (message_id,))]
 
-    def _semantic_source_generation(self, project_id: int, root: int) -> str:
-        """Digest the stored thread input used by a semantic seed.
-
-        This is deliberately semantic-specific.  Generic fetch jobs retain
-        their existing revive/reset contract; semantic retries need a stable
-        input generation so replaying the same input cannot silently erase
-        its accumulated attempts.
-        """
     def _semantic_member(self, row) -> dict:
         """Canonical member dict of the thread-input digest contract —
         one shape shared by the per-thread and per-message fingerprints."""
@@ -1837,36 +1832,41 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     half-written snapshot. Returns the published path or None."""
     os.makedirs(dest_dir, mode=0o700, exist_ok=True)
     os.chmod(dest_dir, 0o700)
-    tmp = os.path.join(dest_dir, "snapshot.tmp")
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
-    with suppress(FileNotFoundError):
-        os.unlink(tmp)
-    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
-                          uri=True)
-    dst = sqlite3.connect(tmp)
+    fd, tmp = tempfile.mkstemp(dir=dest_dir, prefix=".snapshot.", suffix=".tmp")
+    os.close(fd)  # private from creation, including throughout the backup
     try:
-        src.backup(dst)
-        with dst:
-            dst.execute("INSERT OR REPLACE INTO snapshot_meta("
-                        "singleton,generation_id,generated_at) "
-                        "VALUES(1,?,?)",
-                        (str(uuid.uuid4()), time.time()))
+        src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
+                              uri=True)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+                with dst:
+                    dst.execute("INSERT OR REPLACE INTO snapshot_meta("
+                                "singleton,generation_id,generated_at) "
+                                "VALUES(1,?,?)",
+                                (str(uuid.uuid4()), time.time()))
+                dst.execute("PRAGMA journal_mode=DELETE")
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        if not valid_mcs_db(tmp):
+            return None
+        with open(tmp, "rb") as snapshot:
+            os.fsync(snapshot.fileno())
+        os.replace(tmp, dest)
+        directory = os.open(dest_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        # A reader keeps its old inode or opens the complete new generation.
+        return dest
     finally:
-        dst.close()
-        src.close()
-    with suppress(sqlite3.DatabaseError):
-        chk = sqlite3.connect(tmp)
-        chk.execute("PRAGMA journal_mode=DELETE")
-        chk.close()
-    if not valid_mcs_db(tmp):
         with suppress(OSError):
             os.unlink(tmp)
-        return None
-    os.chmod(tmp, 0o600)   # PHI copy: tighten before the atomic publish
-    os.replace(tmp, dest)
-    # atomic rename: a consumer mid-open keeps its old inode (still valid),
-    # a consumer opening after sees the new generation — no torn reads.
-    return dest
 
 
 def valid_mcs_db(path: str) -> bool:

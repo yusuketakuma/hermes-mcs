@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import tempfile
@@ -36,7 +37,7 @@ def load_config(path: str = CONF_PATH) -> dict:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
         return raw if isinstance(raw, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 
@@ -56,7 +57,15 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
         with suppress(OSError), open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith(key + "="):
-                    v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    v = line.split("=", 1)[1].strip()
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                        if v[0] == '"':
+                            try:
+                                v = json.loads(v)
+                            except ValueError:
+                                v = v[1:-1]
+                        else:
+                            v = v[1:-1]
                     if v:
                         return v
                     # an emptied `KEY=` line is "not configured" — same
@@ -72,7 +81,7 @@ def atomic_write(path: str, writer, mode: int | None = None,
     the whole old file or the whole new one, and a mid-write crash never
     leaves a torn file behind (tmp is unlinked on failure).  ``writer``
     receives the open text-mode file object."""
-    parent = os.path.dirname(path)
+    parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=parent, prefix=tmp_prefix,
                              suffix=".tmp")
@@ -108,6 +117,7 @@ def atomic_write(path: str, writer, mode: int | None = None,
 _CIRCUIT_TRIP = 3
 _CIRCUIT_BASE_S = 120.0
 _CIRCUIT_MAX_S = 1800.0
+_CIRCUIT_MAX_STREAK = math.ceil(math.log2(_CIRCUIT_MAX_S / _CIRCUIT_BASE_S))
 
 
 def _db_file(ledger) -> str:
@@ -132,8 +142,13 @@ def circuit_open_s(ledger) -> float:
     corrupt state file fails closed-open — it never blocks the lane."""
     import time as _time
     until = _circuit_state(ledger).get("open_until")
-    return max(0.0, until - _time.time()) \
-        if type(until) in (int, float) else 0.0
+    if type(until) not in (int, float):
+        return 0.0
+    try:
+        until = float(until)
+    except OverflowError:
+        return 0.0
+    return max(0.0, until - _time.time()) if math.isfinite(until) else 0.0
 
 
 def circuit_success(ledger) -> None:
@@ -148,10 +163,15 @@ def circuit_failure(ledger) -> None:
     import time as _time
     path = circuit_state_path(ledger)
     state = _circuit_state(ledger)
-    fails = (state.get("failures") or 0) + 1
-    out = {"failures": fails, "streak": state.get("streak") or 0}
+    fails, streak = state.get("failures"), state.get("streak")
+    fails = min(fails, _CIRCUIT_TRIP - 1) \
+        if type(fails) is int and fails >= 0 else 0
+    streak = min(streak, _CIRCUIT_MAX_STREAK) \
+        if type(streak) is int and streak >= 0 else 0
+    fails += 1
+    out = {"failures": fails, "streak": streak}
     if fails >= _CIRCUIT_TRIP:
-        out["streak"] += 1
+        out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
         out["open_until"] = _time.time() + min(
             _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
         out["failures"] = 0
@@ -173,7 +193,8 @@ def disk_free_mb(ledger) -> float | None:
 def disk_floor_mb() -> float:
     """MiB floor under which the LLM lane defers; 0 disables the guard."""
     try:
-        return float(os.environ.get("MCS_DISK_GUARD_MB", "512"))
+        value = float(os.environ.get("MCS_DISK_GUARD_MB", "512"))
+        return value if math.isfinite(value) and value >= 0 else 512.0
     except ValueError:
         return 512.0
 
@@ -220,7 +241,7 @@ def locate_quote_span(body: str, quote: str) -> tuple[int, int] | None:
     quotes with inserted/altered whitespace — the located span is still
     unique and the caller stores body[s:e] verbatim, so span equality
     holds."""
-    if not body or not quote:
+    if not body or not quote or not quote.strip():
         return None
     first = body.find(quote)
     if first >= 0 and body.find(quote, first + 1) < 0:
@@ -246,6 +267,8 @@ def text_chunks(text: str, size: int = 3000) -> list:
     splitting only as a last resort. The concatenation of all chunks is
     the original text — full coverage, never head-only processing
     (§12.3, AT-017)."""
+    if type(size) is not int or size < 1:
+        raise ValueError("chunk_size_must_be_positive_integer")
     if not text:
         return []
     if len(text) <= size:

@@ -37,14 +37,21 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
     an extraction attempt counts as parsed even when its content did
     not survive JSON round-trip. `error_check=False` is for extract_v1,
     which does not mark failures in meta."""
-    parts = []
+    guards = [f"json_valid({art}.meta)"]
+    parts = [f"json_type({art}.meta)='object'"]
     if content:
-        parts.append(f"json_valid({art}.content)")
-    parts.append(f"json_valid({art}.meta)")
+        guards.append(f"json_valid({art}.content)")
+        parts.append(f"json_type({art}.content)='object'")
     if error_check:
         parts.append(f"COALESCE(json_extract({art}.meta,'$.error'),0)=0")
     parts.append(f"json_extract({art}.meta,'$.hash')={msg}.content_hash")
-    return " AND " + " AND ".join(parts)
+    # Legacy message artifacts may omit project_id (the public ledger API
+    # permits it); their globally unique message_id supplies the scope.
+    # An explicitly conflicting project must never supply this patient's facts.
+    return (f" AND ({art}.project_id IS NULL OR {art}.project_id={msg}.project_id)"
+            f" AND {msg}.body_state IS NOT 'deleted'"
+            " AND CASE WHEN " + " AND ".join(guards)
+            + " THEN " + " AND ".join(parts) + " ELSE 0 END")
 
 
 CANONICAL_PROJECTION_KIND = "canonical_projection"
@@ -135,6 +142,8 @@ def qc_v4_source_id(msg: str = "m") -> str:
     return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
             f" WHERE v.kind='{V4_PROJECTION_KIND}'"
             f" AND v.message_id={msg}.message_id"
+            f" AND v.project_id={msg}.project_id"
+            f" AND {msg}.body_state IS NOT 'deleted'"
             f" AND {current_v4_pred('v', f'{msg}.content_hash')}"
             f" AND json_extract(v.meta,'$.extract_version')=4)")
 
@@ -188,12 +197,15 @@ def med_is_patient_current(med) -> bool:
 # contract. `IS NOT 1` matches `not med.get("negated")` because
 # _validate admits only strict booleans (JSON true -> SQLite 1);
 # absent keys on pre-v2 rows read as NULL and pass.
+# Raw JSON strings from json_each are not JSON documents. Guard at the
+# operand so safety does not depend on SQLite predicate evaluation order.
+JSON_OBJECT_SQL = "CASE WHEN je.type='object' THEN je.value ELSE '{}' END"
 MED_PATIENT_CURRENT_SQL = (
-    "json_extract(je.value,'$.negated') IS NOT 1 "
-    "AND json_extract(je.value,'$.unverified') IS NOT 1 "
-    "AND COALESCE(json_extract(je.value,'$.subject'),"
+    f"json_extract({JSON_OBJECT_SQL},'$.negated') IS NOT 1 "
+    f"AND json_extract({JSON_OBJECT_SQL},'$.unverified') IS NOT 1 "
+    f"AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.subject'),"
     "'patient')='patient' "
-    "AND COALESCE(json_extract(je.value,'$.status'),"
+    f"AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.status'),"
     "'current')!='past'")
 
 # Evidence spans reading as capability/feasibility statements rather
@@ -204,7 +216,7 @@ MED_PATIENT_CURRENT_SQL = (
 # different, honestly-labelled signal.
 MED_CAPABILITY_PATTERNS = ("出来ない", "できない", "出来ません", "できません")
 MED_NOT_CAPABILITY_SQL = " AND ".join(
-    f"COALESCE(json_extract(je.value,'$.evidence'),'') NOT LIKE '%{pattern}%'"
+    f"COALESCE(json_extract({JSON_OBJECT_SQL},'$.evidence'),'') NOT LIKE '%{pattern}%'"
     for pattern in MED_CAPABILITY_PATTERNS)
 
 
@@ -219,7 +231,14 @@ def iter_period_ends(content: str):
     """(period_dict, end_date) for each med_periods entry whose 'end'
     parses as YYYY-MM-DD. Undated or unparseable entries are skipped —
     a period that cannot be dated cannot be evaluated."""
-    for p in (json.loads(content).get("med_periods") or []):
+    try:
+        doc = json.loads(content)
+    except (ValueError, TypeError, RecursionError):
+        return
+    periods = doc.get("med_periods") if isinstance(doc, dict) else None
+    if not isinstance(periods, list):
+        return
+    for p in periods:
         if not isinstance(p, dict) or not p.get("end"):
             continue
         try:
@@ -261,7 +280,7 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
               {current_fact_pred('a', 'm')}
               {pred_p}AND EXISTS
                   (SELECT 1 FROM json_each(a.content,'$.meds') je
-                   WHERE json_extract(je.value,'$.action')
+                   WHERE json_extract({JSON_OBJECT_SQL},'$.action')
                        IN ({CHANGE_ACTIONS_SQL})
                      AND {MED_PATIENT_CURRENT_SQL}
                      AND {MED_NOT_CAPABILITY_SQL})

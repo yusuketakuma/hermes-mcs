@@ -88,6 +88,47 @@ def test_snippet_update_keeps_body_and_hash_aligned(tmp_path):
     db.close()
 
 
+def test_message_identity_conflict_rolls_back_batch(tmp_path):
+    db = _ledger(tmp_path)
+    original = _message(body="patient one")
+    original.attachments = [_att("original")]
+    db.save_messages([original])
+    conflicting = _message(body="patient two", project_id=2)
+    conflicting.attachments = [_att("replacement")]
+    with pytest.raises(ValueError, match="message_project_mismatch"):
+        db.save_messages([_message(mid=2, project_id=2), conflicting],
+                         project_id=2, notify={"source": "history"})
+    assert [tuple(row) for row in db.db.execute(
+        "SELECT message_id,project_id,body_html FROM messages")] == [
+            (1, 1, "patient one")]
+    assert [row[0] for row in db.db.execute(
+        "SELECT file_id FROM attachments")] == ["original"]
+    assert db.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 0
+    db.close()
+
+
+@pytest.mark.parametrize("entrypoint", ["patient", "history", "replies", "tree"])
+def test_message_patient_scope_mismatch_rolls_back(tmp_path, entrypoint):
+    db = _ledger(tmp_path)
+    own = _message(mid=1)
+    foreign = _message(mid=2, project_id=2, parent_id=1)
+    with pytest.raises(ValueError, match="message_project_mismatch"):
+        if entrypoint == "patient":
+            patient = _unread_patient(1)
+            patient.messages = [own, foreign]
+            db.save_patient(patient)
+        elif entrypoint == "history":
+            db.save_messages([own, foreign], project_id=1)
+        elif entrypoint == "replies":
+            db.save_thread_replies([own, foreign], project_id=1)
+        else:
+            own.replies = [foreign]
+            db.save_messages([own])
+    assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
+    assert db.db.execute("SELECT count(*) FROM patients").fetchone()[0] == 0
+    db.close()
+
+
 def test_ambiguous_interrupted_migration_preserves_tables(tmp_path):
     path = tmp_path / "ledger.db"
     db = sqlite3.connect(path)
@@ -144,6 +185,34 @@ def test_published_snapshot_is_non_wal_and_readable(tmp_path):
     assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     assert check.execute("SELECT count(*) FROM patients").fetchone()[0] == 1
     check.close()
+
+
+@pytest.mark.parametrize("valid", [False, True])
+def test_snapshot_uses_private_independent_temporary_file(tmp_path, monkeypatch, valid):
+    source = tmp_path / "source.db"
+    ledger.Ledger(str(source)).close()
+    output = tmp_path / "snapshots"
+    output.mkdir()
+    concurrent = output / "snapshot.tmp"
+    concurrent.write_bytes(b"another publisher")
+    published = output / "ledger-snapshot.db"
+    published.write_bytes(b"prior snapshot")
+    validate = ledger.valid_mcs_db
+
+    def inspect(path):
+        assert Path(path) != concurrent
+        assert Path(path).stat().st_mode & 0o777 == 0o600
+        assert validate(path)
+        return valid
+
+    monkeypatch.setattr(ledger, "valid_mcs_db", inspect)
+    result = ledger.publish_snapshot(str(source), str(output))
+    assert result == (str(published) if valid else None)
+    assert concurrent.read_bytes() == b"another publisher"
+    if not valid:
+        assert published.read_bytes() == b"prior snapshot"
+    assert sorted(p.name for p in output.iterdir()) == [
+        "ledger-snapshot.db", "snapshot.tmp"]
 
 
 def test_mcs_db_validation_rejects_empty_sqlite(tmp_path):
@@ -708,6 +777,22 @@ def test_preupdate_backups_in_same_second_keep_both_generations(
     with sqlite3.connect(first) as older, sqlite3.connect(second) as newer:
         assert older.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
         assert newer.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("state", [None, [], {"applied": "corrupt"},
+                                 {"applied": [None]}, {"applied": [], "applying": []},
+                                 {"applied": [{"backup_path": 7}]}])
+def test_corrupt_update_state_never_prunes_recovery_backups(tmp_path, monkeypatch, state):
+    import maintenance
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    saved = backups / "preupdate-synthetic.db"
+    saved.write_bytes(b"recovery point")
+    state_path = tmp_path / "update_state.json"
+    state_path.write_text(json.dumps(state))
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    assert maintenance.prune_preupdate_backups(str(state_path)) == 0
+    assert saved.read_bytes() == b"recovery point"
 
 
 # ---------- F21: resident-writer log rotation ----------

@@ -47,9 +47,11 @@ Design contract:
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 
 CLASSES = ("RT", "BACKLOG")
 
@@ -104,7 +106,35 @@ class Broker:
         # count — beyond it a permit defers ('class_full'), never
         # queues silently past the backend's parallel width
         self.slots = max(1, int(slots))
-        self.db = _connect(path)
+        # A fresh process owns epoch recovery only when no other broker
+        # handle is alive. Shared lifetime locks let other clients join
+        # the current epoch without fencing an in-flight request.
+        self._owner_fd = os.open(path + ".owner.lock",
+                                 os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            try:
+                fcntl.flock(self._owner_fd,
+                            fcntl.LOCK_EX | fcntl.LOCK_NB)
+                recover = True
+            except BlockingIOError:
+                fcntl.flock(self._owner_fd, fcntl.LOCK_SH)
+                recover = False
+            self.db = _connect(path)
+            try:
+                self._initialize_store()
+                if recover:
+                    self._recover()
+                    fcntl.flock(self._owner_fd, fcntl.LOCK_SH)
+            except BaseException:
+                self.db.close()
+                raise
+        except BaseException:
+            os.close(self._owner_fd)
+            raise
+        self._closed = False
+
+    def _initialize_store(self) -> None:
+        """Create or migrate the broker's private durable store."""
         self.db.execute("""
           CREATE TABLE IF NOT EXISTS admission_meta(
             singleton INTEGER PRIMARY KEY CHECK (singleton=1),
@@ -142,7 +172,6 @@ class Broker:
             "CREATE INDEX IF NOT EXISTS permits_epoch_state "
             "ON permits(epoch,state)")
         self.db.commit()
-        self._recover()
 
     # ---------- epoch lifecycle ----------
 
@@ -150,6 +179,23 @@ class Broker:
         return self.db.execute(
             "SELECT epoch,state,rt_waiting FROM admission_meta "
             "WHERE singleton=1").fetchone()
+
+    @contextmanager
+    def _write_tx(self):
+        """Lock the store before reading a state used for admission.
+
+        ``with sqlite3.Connection`` commits writes but does not begin a
+        transaction for a preceding SELECT. Two clients could otherwise
+        both observe an empty opposite class and reserve it.
+        """
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.db.rollback()
+            raise
+        else:
+            self.db.commit()
 
     def _recover(self) -> None:
         """Rotate the epoch when the previous process exited with any
@@ -227,12 +273,12 @@ class Broker:
         if cls != bound:
             return {"admitted": False, "reason": "class_not_bound",
                     "bound_class": bound}
-        meta = self._meta()
-        if meta["state"] != "open":
-            return {"admitted": False, "reason": "epoch_closed",
-                    "epoch": meta["epoch"]}
-        epoch = meta["epoch"]
-        with self.db:
+        with self._write_tx():
+            meta = self._meta()
+            if meta["state"] != "open":
+                return {"admitted": False, "reason": "epoch_closed",
+                        "epoch": meta["epoch"]}
+            epoch = meta["epoch"]
             if cls == "BACKLOG":
                 # an RT waiting or occupying closes BACKLOG admission
                 rt_wait = meta["rt_waiting"]
@@ -294,16 +340,18 @@ class Broker:
         """Promote a waiting RT permit once backlog fully drained.
         Returns the permit's live view; a stale-epoch permit is fenced
         and can never re-admit."""
-        p = self._permit(permit_id)
-        if p is None:
-            return {"state": "unknown_permit"}
-        meta = self._meta()
-        if p["epoch"] != meta["epoch"]:
-            return {"state": "fenced", "epoch": meta["epoch"]}
-        if p["state"] == "waiting":
-            with self.db:
+        with self._write_tx():
+            p = self._permit(permit_id)
+            if p is None:
+                return {"state": "unknown_permit"}
+            meta = self._meta()
+            if p["epoch"] != meta["epoch"]:
+                return {"state": "fenced", "epoch": meta["epoch"]}
+            if p["state"] == "waiting":
                 if self._occupancy(self.db, meta["epoch"],
-                                   "BACKLOG") == 0:
+                                   "BACKLOG") == 0 \
+                        and self._occupancy(self.db, meta["epoch"],
+                                            "RT") < self.slots:
                     self.db.execute(
                         "UPDATE permits SET state='admitted',"
                         " admitted_at=? WHERE permit_id=? AND"
@@ -313,39 +361,38 @@ class Broker:
                         "UPDATE admission_meta SET"
                         " rt_waiting=rt_waiting-1 WHERE singleton=1")
                     p = self._permit(permit_id)
-        return {"state": p["state"], "epoch": p["epoch"],
-                "cls": p["cls"]}
+            return {"state": p["state"], "epoch": p["epoch"],
+                    "cls": p["cls"]}
 
     def sent(self, permit_id: int, request_id: str | None = None) -> dict:
         """Transition admitted→sent and mint the backend token. Only a
         current-epoch admitted (or just-promoted waiting) permit may
         send — a stale or never-admitted permit fails closed."""
         p = self._permit(permit_id)
-        if p is None:
-            return {"sent": False, "reason": "unknown_permit"}
-        meta = self._meta()
-        if p["epoch"] != meta["epoch"]:
-            return {"sent": False, "reason": "stale_epoch"}
-        if p["state"] == "waiting":
-            polled = self.poll(permit_id)
+        if p is not None and p["state"] == "waiting":
+            self.poll(permit_id)
+        with self._write_tx():
             p = self._permit(permit_id)
-            if polled["state"] != "admitted" or p is None:
-                return {"sent": False, "reason": polled["state"]}
-        if p["state"] != "admitted":
-            return {"sent": False, "reason": f"state_{p['state']}"}
-        nonce = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
-        token = f"{meta['epoch']}:{permit_id}:{nonce}"
-        with self.db:
+            if p is None:
+                return {"sent": False, "reason": "unknown_permit"}
+            meta = self._meta()
+            if p["epoch"] != meta["epoch"]:
+                return {"sent": False, "reason": "stale_epoch"}
+            if p["state"] != "admitted":
+                return {"sent": False, "reason": f"state_{p['state']}"}
             # re-verify exclusivity inside the same write tx: an RT
             # token may only exist while no BACKLOG request occupies
             other = "BACKLOG" if p["cls"] == "RT" else "RT"
             if self._occupancy(self.db, meta["epoch"], other):
                 return {"sent": False, "reason": "class_overlap"}
+            nonce = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
+            token = f"{meta['epoch']}:{permit_id}:{nonce}"
             self.db.execute(
                 "UPDATE permits SET state='sent', token=?, request_id="
                 "COALESCE(?,request_id), sent_at=? WHERE permit_id=?",
                 (token, request_id, time.time(), permit_id))
-        return {"sent": True, "token": token, "epoch": meta["epoch"]}
+            return {"sent": True, "token": token,
+                    "epoch": meta["epoch"]}
 
     def token_valid(self, token: str, cls: str,
                     request_id: str | None = None) -> dict:
@@ -386,13 +433,15 @@ class Broker:
         permit leaves its class's occupancy set. ``proof`` is the
         backend-verifiable evidence (the fake backend's completion id;
         in production the broker's verified channel)."""
-        p = self._permit(permit_id)
-        if p is None:
-            return {"terminal": False, "reason": "unknown_permit"}
-        meta = self._meta()
-        if p["epoch"] != meta["epoch"]:
-            return {"terminal": False, "reason": "stale_epoch"}
-        with self.db:
+        with self._write_tx():
+            p = self._permit(permit_id)
+            if p is None:
+                return {"terminal": False, "reason": "unknown_permit"}
+            meta = self._meta()
+            if p["epoch"] != meta["epoch"]:
+                return {"terminal": False, "reason": "stale_epoch"}
+            if p["state"] == "terminal":
+                return {"terminal": True}
             self.db.execute(
                 "UPDATE permits SET state='terminal', outcome=?,"
                 " proof=?, terminal_at=? WHERE permit_id=?",
@@ -401,7 +450,7 @@ class Broker:
                 self.db.execute(
                     "UPDATE admission_meta SET rt_waiting="
                     "rt_waiting-1 WHERE singleton=1")
-        return {"terminal": True}
+            return {"terminal": True}
 
     def _live_permit(self, permit_id: int):
         """(permit, error) — error is the result dict to return when the
@@ -420,13 +469,13 @@ class Broker:
         """A cancel verb is NOT an acknowledgement — the permit moves
         to cancel_pending and keeps occupying its class until a
         confirmed terminal lands."""
-        p, err = self._live_permit(permit_id)
-        if err:
-            return err
-        if p["state"] == "waiting":
-            # never sent — cancelling a waiting intent retires it and
-            # releases the RT-waiting flag immediately
-            with self.db:
+        with self._write_tx():
+            p, err = self._live_permit(permit_id)
+            if err:
+                return err
+            if p["state"] == "waiting":
+                # never sent — cancelling a waiting intent retires it and
+                # releases the RT-waiting flag immediately
                 self.db.execute(
                     "UPDATE permits SET state='terminal',"
                     " outcome='cancelled_waiting', terminal_at=?"
@@ -435,13 +484,12 @@ class Broker:
                     self.db.execute(
                         "UPDATE admission_meta SET rt_waiting="
                         "rt_waiting-1 WHERE singleton=1")
-            return {"ok": True, "state": "terminal"}
-        with self.db:
+                return {"ok": True, "state": "terminal"}
             self.db.execute(
                 "UPDATE permits SET state='cancel_pending'"
                 " WHERE permit_id=? AND state IN"
                 " ('admitted','sent','unknown')", (permit_id,))
-        return {"ok": True, "state": "cancel_pending"}
+            return {"ok": True, "state": "cancel_pending"}
 
     def mark_unknown(self, permit_id: int,
                      reason: str | None = None) -> dict:
@@ -449,14 +497,14 @@ class Broker:
         response) — the permit stays occupied. The class remains
         closed to the other class until reconciled with backend
         evidence."""
-        p, err = self._live_permit(permit_id)
-        if err:
-            return err
-        with self.db:
+        with self._write_tx():
+            p, err = self._live_permit(permit_id)
+            if err:
+                return err
             self.db.execute(
                 "UPDATE permits SET state='unknown', outcome=?"
                 " WHERE permit_id=?", (reason or "unknown", permit_id))
-        return {"ok": True, "state": "unknown"}
+            return {"ok": True, "state": "unknown"}
 
     # ---------- observability ----------
 
@@ -479,4 +527,10 @@ class Broker:
                     if oldest_bg is not None else None)}
 
     def close(self) -> None:
-        self.db.close()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.db.close()
+        finally:
+            os.close(self._owner_fd)
