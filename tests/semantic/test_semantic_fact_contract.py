@@ -195,6 +195,16 @@ def test_facts_doc_cross_reference_validation():
     with pytest.raises(sf.ContractError,
                        match="contract:doc_coverage_complete_with_open"):
         sf.validate_facts_doc(bad)
+    # a non-terminal obligation omitted from open_obligation_ids is
+    # still open — "complete" must not hide it
+    for status in ("open", "ambiguous", "failed"):
+        bad = _doc(obligations=[{"obligation_id": "obl_o3",
+                                 "owner_id": "chk_c1",
+                                 "category": "symptom_state",
+                                 "source": "jev_pre", "status": status}])
+        with pytest.raises(sf.ContractError,
+                           match="contract:doc_coverage_complete_with_open"):
+            sf.validate_facts_doc(bad)
 
 
 def test_corpus_is_synthetic_and_asserts_mandatory_coverage():

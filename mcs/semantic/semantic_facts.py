@@ -566,8 +566,12 @@ def validate_facts_doc(doc: dict) -> dict:
     if any(ref not in obligation_ids
            for ref in coverage["open_obligation_ids"]):
         _fail("doc_coverage_obligation_unknown")
-    if coverage["status"] == "complete" \
-            and coverage["open_obligation_ids"]:
+    if coverage["status"] == "complete" and (
+            coverage["open_obligation_ids"]
+            or any(o["status"] in ("open", "ambiguous", "failed")
+                   for o in obligations)):
+        # a non-terminal obligation omitted from open_obligation_ids
+        # still makes the doc incomplete
         _fail("doc_coverage_complete_with_open")
     return {
         "version": CONTRACT_VERSION,

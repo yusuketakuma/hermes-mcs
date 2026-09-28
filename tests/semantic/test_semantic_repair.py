@@ -167,6 +167,7 @@ def test_repair_unparseable_output_keeps_doc():
     # A dispatched-but-empty repair still produced no merge — the doc
     # stays as the caller's held artifact.
     assert not out["repaired"]
+    assert out["doc"] is doc
 
 
 def test_repair_chunk_with_dropped_items_contributes_nothing():
