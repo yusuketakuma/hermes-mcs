@@ -38,6 +38,23 @@ def atomic_publish_text(path: str, text: str) -> None:
     atomic_write(path, lambda f: f.write(text), tmp_prefix=".pub.")
 
 
+def _publish_backup(tmp: str, dest: str) -> None:
+    """chmod -> fsync -> os.replace -> dir fsync for a verified backup
+    copy — a power loss never leaves a torn rollback point at ``dest``."""
+    os.chmod(tmp, 0o600)
+    fd = os.open(tmp, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, dest)
+    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
@@ -63,8 +80,7 @@ def daily_backup(db_path: str):
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, dest)
+    _publish_backup(tmp, dest)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
         with suppress(OSError):
@@ -95,8 +111,7 @@ def preupdate_backup(db_path: str) -> str:
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, dest)
+    _publish_backup(tmp, dest)
     return dest
 
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import sys
 import time
 from pathlib import Path
@@ -986,3 +987,37 @@ def test_save_messages_notify_all_new_includes_read_posts(tmp_path):
     assert json.loads(row["payload"])["message_ids"] == [1]
     db.close()
     db2.close()
+
+
+@pytest.mark.parametrize("make", ["daily", "preupdate"])
+def test_backup_publish_fsyncs_copy_and_directory(tmp_path, monkeypatch,
+                                                  make):
+    """A verified backup is durable before it becomes a rollback point:
+    the copy is fsynced before os.replace and the directory after."""
+    import maintenance
+    source = tmp_path / "ledger.db"
+    db = ledger.Ledger(str(source))
+    db.ensure_patient(1)
+    db.close()
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        events.append(("fsync", stat.S_ISDIR(os.fstat(fd).st_mode)))
+        real_fsync(fd)
+
+    def replace(a, b):
+        events.append(("replace", None))
+        real_replace(a, b)
+
+    monkeypatch.setattr(maintenance.os, "fsync", fsync)
+    monkeypatch.setattr(maintenance.os, "replace", replace)
+    if make == "daily":
+        maintenance.daily_backup(str(source))
+    else:
+        maintenance.preupdate_backup(str(source))
+    i = events.index(("replace", None))
+    assert ("fsync", False) in events[:i]
+    assert ("fsync", True) in events[i + 1:]

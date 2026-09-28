@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -129,15 +130,36 @@ import local_llm  # noqa: E402
 import semantic_jev as _jev  # noqa: E402
 
 _LIVE_ENDPOINTS = frozenset(
-    {local_llm.ENDPOINT, _jev.JEV_ENDPOINT, _jev.JEV_MODELS_URL}
+    {local_llm.ENDPOINT, _jev.JEV_ENDPOINT, _jev.JEV_MODELS_URL,
+     *local_llm.probe_urls(local_llm.ENDPOINT)}
     | set(_jev.JEV_ALLOWED_ENDPOINTS))
+_LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _live_authority(url):
+    # (loopback, port) of every production endpoint — any path on the
+    # live llama-server/Jev authority (/slots, /v1/models, a localhost
+    # spelling) is as live as the chat endpoint itself
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except (TypeError, ValueError):
+        return None
+    if parts.hostname in _LOOPBACK_NAMES:
+        return ("loopback", port)
+    return (parts.hostname, port)
+
+
+_LIVE_AUTHORITIES = frozenset(
+    a for a in map(_live_authority, _LIVE_ENDPOINTS) if a is not None)
 
 
 def _guarded_http_request(endpoint, *args, **kwargs):
     # Only a real spawn can reach a live endpoint — tests that stub
     # Popen (wire-replay fakes, synthetic workers) never touch the
     # network, so they pass through and exercise the transport contract.
-    if (endpoint in _LIVE_ENDPOINTS
+    if ((endpoint in _LIVE_ENDPOINTS
+         or _live_authority(endpoint) in _LIVE_AUTHORITIES)
             and subprocess.Popen is _guarded_popen):
         raise RuntimeError(
             "live LLM/Jev endpoints are disabled in MCS tests")

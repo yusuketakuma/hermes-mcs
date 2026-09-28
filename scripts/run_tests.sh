@@ -24,7 +24,7 @@ fi
 cd "$repo_root"
 
 if [ "$#" -eq 0 ]; then
-    set -- tests
+    set -- tests integration
 fi
 
 test_home=$(mktemp -d "${TMPDIR:-/tmp}/mcs-test-home.XXXXXX")
