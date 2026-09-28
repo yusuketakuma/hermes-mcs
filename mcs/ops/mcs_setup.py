@@ -1566,11 +1566,18 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
         note(f"agent {label}: bootstrap")
     if dry:
         return True
-    r = _run(["launchctl", "bootstrap", f"gui/{uid}", dst])
-    if r.returncode != 0:
-        note(f"  bootstrap failed: {r.stderr.strip()}")
-        return False
-    return _agent_loaded(label)
+    # launchd may still be tearing down the just-booted-out job ("5:
+    # Input/output error") — retry briefly, then accept a loaded label
+    # (install.sh bootstrap_agent)
+    for _ in range(3):
+        r = _run(["launchctl", "bootstrap", f"gui/{uid}", dst])
+        if r.returncode == 0:
+            return _agent_loaded(label)
+        time.sleep(1)
+    if _agent_loaded(label):
+        return True
+    note(f"  bootstrap failed: {r.stderr.strip()}")
+    return False
 
 
 def _load_manifest() -> dict:
