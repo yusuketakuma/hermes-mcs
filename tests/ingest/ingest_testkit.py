@@ -4,23 +4,8 @@ prefix); sibling files import it via the tests/ sys.path bootstrap."""
 import time
 from datetime import datetime
 
-import ledger
 import mcs_adapter
-
-
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
-
-
-def _message(mid=1, body="body", state="full", project_id=1,
-             parent_id=None, unread=False):
-    return mcs_adapter.Message(
-        message_id=mid, project_id=project_id, parent_id=parent_id,
-        sender_id=1, sender_name="sender", sender_type="user",
-        profession="", organization="", posted_at="2026-09-19T00:00:00+09:00",
-        body_html=body, body_state=state, is_unread=unread,
-        reply_count=0,
-    )
+from extract_testkit import _ledger, _message  # noqa: F401
 
 
 def _unread_patient(pid, name="test patient"):
