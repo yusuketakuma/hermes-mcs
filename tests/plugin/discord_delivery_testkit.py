@@ -45,7 +45,9 @@ def _chunks(n, size=1900):
     return [f"chunk-{i} " + "x" * (size - 8) for i in range(n)]
 
 
-def _manifest(chunks, attachments=None, thread=True):
+def _manifest(chunks, attachments=None, thread=True, prior=None):
+    """``prior`` maps a body part_id to the remote id of the post that
+    already carries that chunk (an update plan's ``prior_remote_id``)."""
     parts = [{"part_id": "card", "kind": "card", "index": 0}]
     idx = 1
     if thread:
@@ -55,10 +57,13 @@ def _manifest(chunks, attachments=None, thread=True):
                           "テスト スレッド".encode()).hexdigest()})
         idx += 1
     for i, c in enumerate(chunks):
-        parts.append({"part_id": f"body:{i + 1:04d}", "kind": "body_part",
-                      "index": idx, "sha256": hashlib.sha256(
-                          c.encode()).hexdigest(),
-                      "bytes": len(c.encode())})
+        part = {"part_id": f"body:{i + 1:04d}", "kind": "body_part",
+                "index": idx, "sha256": hashlib.sha256(
+                    c.encode()).hexdigest(),
+                "bytes": len(c.encode())}
+        if part["part_id"] in (prior or {}):
+            part["prior_remote_id"] = prior[part["part_id"]]
+        parts.append(part)
         idx += 1
     for a in attachments or []:
         parts.append(a)
@@ -66,8 +71,9 @@ def _manifest(chunks, attachments=None, thread=True):
     return parts
 
 
-def _spec(chunks, manifest=None, op="create", thread_id=None):
-    manifest = _manifest(chunks) if manifest is None else manifest
+def _spec(chunks, manifest=None, op="create", thread_id=None, prior=None):
+    manifest = _manifest(chunks, prior=prior) if manifest is None \
+        else manifest
     delivery = {"route_epoch": 1, "correlation": "cd" * 16,
                 "profile": "mcs", "application_id": "1",
                 "channel_id": "42", "guild_id": "7",

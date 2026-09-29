@@ -520,6 +520,79 @@ def test_old_render_parts_do_not_satisfy_new_generation(led):
     assert _part(led, r2["delivery_id"], "thread")["state"] == "pending"
 
 
+def _prior_ids(render):
+    return {p["part_id"]: p["prior_remote_id"]
+            for p in _spec(render)["parts"]["manifest"]
+            if "prior_remote_id" in p}
+
+
+def _deliver_bodies(led, render, remote_id, n):
+    """Deliver the card and every body chunk of one render; `n` keeps the
+    command ids of successive renders apart."""
+    grant = _begin(led, render, n=n)
+    _receipt(led, render, grant["attempt_id"], message_id="m-9", n=n + 1)
+    _part_receipt(led, render, "thread", remote_id="t-1", n=n + 2)
+    for p in _parts(led, render["delivery_id"]):
+        if p["kind"] == "body_part":
+            _part_receipt(led, render, p["part_id"], remote_id=remote_id,
+                          n=n + 3)
+
+
+def test_update_plan_names_the_post_that_carries_each_chunk(led):
+    """The thread body's text changes after the first post (the
+    extraction arrives, a reply joins). The update plan names the message
+    that already carries each chunk, so the worker rewrites it instead of
+    adding a second post beside it."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    assert r1["op"] == "create"
+    assert _prior_ids(r1) == {}            # nothing posted yet
+    _deliver_bodies(led, r1, "msg-1", n=80)
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+    # only a body chunk can be rewritten in place
+    assert all("prior_remote_id" not in p
+               for p in _spec(r2)["parts"]["manifest"]
+               if p["kind"] != "body_part")
+
+
+def test_update_plan_ignores_chunks_that_never_reached_the_thread(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    _begin_and_deliver_card(led, r1)
+    _part_receipt(led, r1, "thread", remote_id="t-1", n=82)
+    _part_receipt(led, r1, "body:0001", result="not_sent", remote_id=None,
+                  error_code="http_500", n=83)
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _prior_ids(r2) == {}
+
+
+def test_update_plan_follows_the_newest_post_of_a_chunk(led):
+    """When a rewrite had to fall back to a fresh post, the next update
+    targets that newer message — never the superseded one."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    _deliver_bodies(led, r1, "msg-1", n=84)
+    _msg(led, 300, parent=100, body="二件目")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    _deliver_bodies(led, r2, "msg-2", n=90)
+    _msg(led, 301, parent=100, body="三件目")
+    _dispatch(led, _intent(led, payload={"message_ids": [301]}))
+    r3 = _latest_render(led)
+    assert r3["op"] == "update"
+    assert _prior_ids(r3) == {"body:0001": "msg-2"}
+
+
 def test_no_second_card_post_semantics(led):
     """Render-level guarantee: body-part failure settles no card part —
     a subsequent tick issues no new create render to rescue the body."""
