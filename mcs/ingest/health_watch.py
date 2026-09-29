@@ -137,7 +137,9 @@ def classify_health(path: str, now: float, deadline_s: int,
     age = now - binding
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
               "overall": overall, "run_status": h.get("run_status"),
-              "run_id": h.get("run_id"), "deadline_s": deadline_s}
+              "run_id": h.get("run_id"), "deadline_s": deadline_s,
+              "disk_low": h.get("disk_low") is True,
+              "disk_free_mb": h.get("disk_free_mb")}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
     # dedup stamp: unread_at only when that age is what made it stale
@@ -166,15 +168,22 @@ def evaluate(home: str = HOME, now: float | None = None,
              cfg: dict | None = None) -> dict:
     """Classify current evidence, apply alert dedup, persist state.
 
-    Dedup key is (status, evidence_at): unread_at when a stale
-    verdict is the unread-collection age, otherwise health_at. An
-    unchanged verdict never re-alerts. ok->ok never alerts even when
-    the file is fresh — a healthy producer keeping cadence is not an
-    event. Alerts fire on: first non-ok observation, every transition
-    INTO a non-ok status, one bad->ok recovery, and an unchanged
-    non-ok state re-alerted after REALERT_S. 'ok' is only produced by
-    a fresh in-deadline file — recovery can never be assumed. State
-    files that predate evidence_at are read via health_at."""
+    Dedup key is (status, evidence_at) for a stale verdict —
+    evidence_at is the unread-collection age or health_at, whichever
+    made it stale — and the status alone otherwise: a fresh file
+    carries a new health_at every tick, so keying on it would re-alert
+    a persistent 'degraded' every 5 minutes. An unchanged verdict
+    never re-alerts. ok->ok never alerts even when the file is fresh —
+    a healthy producer keeping cadence is not an event. Alerts fire
+    on: first non-ok observation, every transition INTO a non-ok
+    status, one bad->ok recovery, and an unchanged non-ok state
+    re-alerted after REALERT_S. 'ok' is only produced by a fresh
+    in-deadline file — recovery can never be assumed. State files
+    that predate evidence_at are read via health_at.
+
+    disk_low has its own dedup: disk_alert fires only when a fresh
+    file flips it (either way); stale/missing/corrupt evidence keeps
+    the last known value."""
     now = time.time() if now is None else now
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
@@ -186,8 +195,11 @@ def evaluate(home: str = HOME, now: float | None = None,
     state = _load_state(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
-    key = (obs["status"], _dedup_stamp(obs))
-    last_key = (last.get("status"), _dedup_stamp(last))
+    key = (obs["status"],
+           _dedup_stamp(obs) if obs["status"] == "stale" else None)
+    last_key = (last.get("status"),
+                _dedup_stamp(last) if last.get("status") == "stale"
+                else None)
     prior_known = bool(last)
     transition = key != last_key
     alerted_at = state.get("alerted_at")
@@ -205,9 +217,15 @@ def evaluate(home: str = HOME, now: float | None = None,
         alert = transition and (obs["status"] != "ok"
                                 or last.get("status") != "ok")
     alert = alert or realert
+    disk_prev = state.get("disk_low") is True
+    disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
+                else disk_prev)
+    disk_alert = disk_low != disk_prev
+    state["disk_low"] = disk_low
 
     report = dict(obs)
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
+                   "disk_low": disk_low, "disk_alert": disk_alert,
                    "watched_at": now})
     state["last"] = {"status": obs["status"],
                      "health_at": obs.get("health_at"),
@@ -242,6 +260,10 @@ def main(argv: list | None = None) -> int:
                   overall=report.get("overall"),
                   health_at=report.get("health_at"),
                   age=age, dl=report["deadline_s"]))
+    if report["disk_alert"]:
+        print("mcs disk: {} (free_mb={})".format(
+            "low" if report["disk_low"] else "recovered",
+            report.get("disk_free_mb")))
     return 0
 
 

@@ -176,6 +176,23 @@ def test_interrupted_backup_retains_last_verified_generation(tmp_path, monkeypat
     assert maintenance.valid_mcs_db(str(backup_dir / "ledger-20260922.db"))
 
 
+
+def test_backup_skipped_when_disk_cannot_hold_two_copies(tmp_path, monkeypatch):
+    source, _ = _build_fixture(tmp_path)
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
+    usage = shutil.disk_usage(tmp_path)
+    need = source.stat().st_size * 2 + 512 * 1024 * 1024
+    monkeypatch.setattr(maintenance.shutil, "disk_usage",
+                        lambda _p: usage._replace(free=need - 1))
+    assert maintenance.daily_backup(str(source)) == "skipped_disk_low"
+    assert list(backup_dir.iterdir()) == []
+    monkeypatch.setattr(maintenance.shutil, "disk_usage",
+                        lambda _p: usage._replace(free=need + 1))
+    assert maintenance.daily_backup(str(source)) is None
+    assert len(list(backup_dir.glob("ledger-*.db"))) == 1
+
 def test_independent_restore_preserves_relations_fts_snapshot_and_attachment_hash(
     tmp_path, monkeypatch
 ):

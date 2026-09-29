@@ -183,13 +183,46 @@ def test_recovery_requires_fresh_observation(tmp_path):
     assert not _eval(tmp_path, 1300.0)["alert"]
 
 
-def test_new_bad_observation_alerts_once_each(tmp_path):
+def test_fresh_degraded_every_tick_dedups_by_status(tmp_path):
     _health_file(tmp_path, {"overall": "degraded", "at": 990})
     assert _eval(tmp_path, 1000.0)["alert"]
-    # next run also degraded but it is a NEW observation -> one alert
-    _health_file(tmp_path, {"overall": "degraded", "at": 1290})
-    assert _eval(tmp_path, 1300.0)["alert"]
-    assert not _eval(tmp_path, 1360.0)["alert"]
+    # every tick writes a new health_at; a persistent degraded state is
+    # one event, not one alert per 5-minute tick
+    for at in (1290, 1590, 1890):
+        _health_file(tmp_path, {"overall": "degraded", "at": at})
+        assert not _eval(tmp_path, at + 10.0)["alert"]
+    # still re-alerted hourly while it persists
+    t = 1000.0 + health_watch.REALERT_S
+    _health_file(tmp_path, {"overall": "degraded", "at": t - 10})
+    assert _eval(tmp_path, t)["alert"]
+    # a different bad status is a transition -> immediate alert
+    _health_file(tmp_path, {"overall": "failed", "at": t + 290})
+    assert _eval(tmp_path, t + 300)["alert"]
+
+
+def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
+    def tick(at, low):
+        _health_file(tmp_path, {"overall": "ok", "at": at,
+                                "disk_low": low, "disk_free_mb": 900})
+        return _eval(tmp_path, at + 10.0)
+
+    assert not tick(990, False)["disk_alert"]
+    r = tick(1290, True)
+    assert r["disk_alert"] and r["disk_low"] and not r["alert"]
+    assert not tick(1590, True)["disk_alert"]       # unchanged: silent
+    # stale evidence keeps the last known value — no flap
+    stale = _eval(tmp_path, 5000.0)
+    assert stale["status"] == "stale" and stale["disk_low"]
+    assert not stale["disk_alert"]
+    r = tick(5100, False)
+    assert r["disk_alert"] and not r["disk_low"]    # recovery once
+    assert not tick(5400, False)["disk_alert"]
+    capsys.readouterr()
+    _health_file(tmp_path, {"overall": "ok", "at": 5690, "disk_low": True,
+                            "disk_free_mb": 800})
+    health_watch.main(["--home", str(tmp_path), "--now", "5700",
+                       "--config", str(tmp_path / "none.json")])
+    assert "mcs disk: low (free_mb=800)" in capsys.readouterr().out
 
 
 

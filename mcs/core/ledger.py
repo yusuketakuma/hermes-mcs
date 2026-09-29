@@ -1295,12 +1295,20 @@ class Ledger:
         """All due history jobs, least-recently-touched first. Every
         defer/retry bumps updated_at, so a job that was just worked moves
         to the back — a repeatedly incomplete patient cannot starve the
-        rest of the queue (Oracle F8)."""
+        rest of the queue (Oracle F8). A history_head with no coverage lag
+        (nothing stored past verified coverage) is a re-certification the
+        backfill re-queues every tick — it goes behind every job that can
+        close a real gap."""
         return self.db.execute("""
-          SELECT * FROM fetch_jobs
+          SELECT * FROM fetch_jobs j
           WHERE kind IN ('history','history_head')
             AND state='pending' AND next_try <= ?
-          ORDER BY updated_at, job_id
+          ORDER BY kind='history_head' AND
+            COALESCE((SELECT MAX(posted_at_ts) FROM messages m
+                      WHERE m.project_id=j.project_id),0)
+            <= COALESCE((SELECT coverage_ts FROM patients p
+                         WHERE p.project_id=j.project_id),0),
+            updated_at, job_id
         """, (time.time(),)).fetchall()
 
     def history_job(self, project_id: int) -> dict | None:

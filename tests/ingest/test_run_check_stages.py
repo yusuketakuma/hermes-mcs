@@ -22,6 +22,13 @@ import run_check
 from ingest_testkit import _ledger, _message, _unread_patient, _att, _msg_at, _iso
 
 
+@pytest.fixture(autouse=True)
+def _no_disk_guard(monkeypatch):
+    # the attachment disk guard reads the real volume — disable it so
+    # these stage tests never depend on the host's free space
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "0")
+
+
 def test_attachment_destination_uses_ledger_identity(tmp_path, monkeypatch):
     seen = []
     adapter = SimpleNamespace(
@@ -56,6 +63,10 @@ def test_backfill_does_not_advance_past_missing_reply():
             return []
 
     class Store:
+        # no prior history_head row (stall probe reads fetch_jobs)
+        db = SimpleNamespace(
+            execute=lambda *a: SimpleNamespace(fetchone=lambda: None))
+
         def frontier_patients(self): return [{"project_id": 1}]
         def high_watermark(self, pid): return 100
         def coverage_ts(self, pid): return 0
@@ -606,7 +617,9 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
                   (now - 1000, now + 500))
     db.db.commit()
     health = run_check._health(db, {"notify": {}, "errors": [], "coverage_gaps": [{}]}, "partial")
-    assert health["overall"] == "degraded" and health["collection"] == "incomplete"
+    # coverage lag alone is information; the held send still degrades
+    assert health["overall"] == "degraded" and health["collection"] == "ok"
+    assert health["coverage_lagging"] == {"count": 1, "max_lag_s": 0}
     assert health["notify"]["held"] == 1
     assert health["notify"]["oldest_age_s"] >= 1000
     assert health["extract_qc_jobs"]["pending"] == 1
@@ -1529,3 +1542,169 @@ def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
     fd = run_check.acquire_run_lock(str(data / "run.lock"))
     assert fd is not None      # the lock was released, not leaked
     os.close(fd)
+
+
+def _pinned_history_adapter(count=32):
+    """Synthetic timeline longer than BACKFILL_MAX_PAGES, newer than the
+    stored head — the bounded backfill cannot certify it."""
+    items = [{"id": mid, "comment": "synthetic post",
+              "created_at": "2026-09-19T01:00:00+09:00"}
+             for mid in range(1, count + 1)]
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            start = (params["page"] - 1) * params["per_page"]
+            return {"messages": items[start:start + params["per_page"]],
+                    "paginate": {"has_next": start + params["per_page"] < len(items)}}
+    return Adapter()
+
+
+def _lagging_patient(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=100)])
+    db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
+    return db
+
+
+def test_coverage_lag_is_information_not_an_error(tmp_path, monkeypatch):
+    db = _lagging_patient(tmp_path)
+    result = {"errors": [], "backfilled": 0, "incomplete": [], "notify": {}}
+    run_check.stage_backfill(_pinned_history_adapter(), db, result,
+                             time.monotonic() + 300, 1)
+    assert result["coverage_gaps"] and result["coverage_gaps"][0]["lag_s"] > 0
+    assert result["errors"] == []
+    assert not result.get("coverage_stalled")
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    health = run_check._health(db, result, "ok")
+    assert health["collection"] == "ok" and health["overall"] == "ok"
+    assert health["coverage_lagging"]["count"] == 1
+    assert health["coverage_lagging"]["max_lag_s"] > 0
+    assert health["coverage_stalled"] == []
+    db.close()
+
+
+@pytest.mark.parametrize("reason", ["failed", "not_advancing"])
+def test_stalled_history_head_escalates_collection(tmp_path, monkeypatch,
+                                                   reason):
+    db = _lagging_patient(tmp_path)
+    adapter = _pinned_history_adapter()
+    run_check.stage_backfill(adapter, db, {"errors": [], "backfilled": 0},
+                             time.monotonic() + 300, 1)
+    if reason == "failed":
+        db.db.execute("UPDATE fetch_jobs SET state='failed' "
+                      "WHERE kind='history_head'")
+    else:
+        db.db.execute("UPDATE fetch_jobs SET updated_at=? "
+                      "WHERE kind='history_head'",
+                      (time.time() - run_check.COVERAGE_STALL_S - 60,))
+    db.db.commit()
+    result = {"errors": [], "backfilled": 0, "incomplete": [], "notify": {}}
+    run_check.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
+    assert result["coverage_stalled"][0]["pid"] == 1
+    assert result["coverage_stalled"][0]["reason"] == reason
+    assert result["errors"] == [f"backfill 1: coverage_stalled_{reason}"]
+    # a failed head is still revived so the walk keeps retrying
+    assert db.job_state("history_head", 1) == "pending"
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    health = run_check._health(db, result, "partial")
+    assert health["collection"] == "incomplete"
+    assert health["overall"] == "degraded"
+    assert health["coverage_stalled"] == [1]
+    db.close()
+
+
+def test_jobs_only_health_carries_last_collection_verdict(tmp_path,
+                                                         monkeypatch):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "HEALTH_FILE",
+                        str(tmp_path / "health.json"))
+    run_check._write_health(db, {"errors": ["project 7: x"], "notify": {},
+                                 "incomplete": [7]}, "partial")
+    run_check._write_health(
+        db, {"errors": [], "notify": {}, "jobs_only": True}, "ok")
+    deep = json.loads((tmp_path / "health.json").read_text())
+    assert deep["collection"] == "incomplete"
+    assert deep["incomplete_projects"] == [7]
+    assert deep["overall"] == "degraded"
+    # the next full tick decides afresh
+    run_check._write_health(db, {"errors": [], "notify": {}}, "ok")
+    tick = json.loads((tmp_path / "health.json").read_text())
+    assert tick["collection"] == "ok" and tick["overall"] == "ok"
+    db.close()
+
+
+def test_health_reports_disk_state(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 1000.0)
+    health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+    assert health["disk_free_mb"] == 1000 and health["disk_low"] is True
+    assert health["overall"] == "ok"      # disk has its own alert path
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 1e6)
+    assert not run_check._health(db, {"errors": [], "notify": {}},
+                                 "ok")["disk_low"]
+    assert run_check._health(db, {"errors": [], "notify": {},
+                                  "backup_skipped": "disk_low"},
+                             "ok")["disk_low"] is True
+    db.close()
+
+
+def _pending_attachments(tmp_path, n=2):
+    db = _ledger(tmp_path)
+    message = _message()
+    message.attachments = [_att(f"file{i}") for i in range(n)]
+    db.save_messages([message])
+    return db
+
+
+def test_attachments_defer_under_disk_pressure(tmp_path, monkeypatch):
+    db = _pending_attachments(tmp_path)
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 1024.0)
+    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    adapter = SimpleNamespace(download=lambda *a: pytest.fail("downloaded"))
+    result = {"errors": []}
+    run_check.stage_attachments(adapter, db, result, time.monotonic() + 100)
+    assert result == {"errors": [], "attachments_deferred": 2}
+    rows = db.db.execute("SELECT state,attempts FROM attachments").fetchall()
+    assert [tuple(r) for r in rows] == [("pending", 0), ("pending", 0)]
+    db.close()
+
+
+def test_enospc_download_keeps_attachment_pending(tmp_path, monkeypatch):
+    import errno
+    import mcs_worker
+    db = _pending_attachments(tmp_path)
+
+    class Full:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self, n): raise OSError(errno.ENOSPC, "synthetic")
+
+    monkeypatch.setattr(mcs_adapter, "no_proxy_opener",
+                        lambda *handlers: SimpleNamespace(
+                            open=lambda req, timeout: Full()))
+    adapter = mcs_adapter.MCSAdapter(worker=lambda payload, timeout, deadline:
+        mcs_worker._execute(dict(payload, timeout=timeout)))
+    adapter._token = "synthetic"
+    monkeypatch.setattr(run_check, "ATTACH_DIR", str(tmp_path))
+    result = {"errors": []}
+    run_check.stage_attachments(adapter, db, result, time.monotonic() + 100)
+    assert result == {"errors": [], "attachments_deferred": 2}
+    rows = db.db.execute("SELECT state,attempts FROM attachments").fetchall()
+    assert [tuple(r) for r in rows] == [("pending", 0), ("pending", 0)]
+    db.close()
+
+
+def test_backup_skip_is_recorded(monkeypatch):
+    import maintenance
+    monkeypatch.setattr(maintenance, "daily_backup",
+                        lambda *a: "skipped_disk_low")
+    monkeypatch.setattr(maintenance, "rotate_log", lambda: None)
+    monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
+    result = {"errors": []}
+    run_check._housekeeping(result)
+    assert result == {"errors": [], "backup_skipped": "disk_low"}
