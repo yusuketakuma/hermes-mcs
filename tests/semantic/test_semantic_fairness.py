@@ -172,6 +172,32 @@ def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch)
     assert semantic_drain.main() == 0
 
 
+def test_drain_cli_output_lines_carry_ts_and_pid(tmp_path, monkeypatch, capsys):
+    """A catchup cut short by a gateway restart is judged afterwards from
+    semantic_drain.log — every batch line and the totals line are stamped."""
+    import os
+    import types
+
+    import ledger
+    import mcs_util
+    monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '60'])
+    monkeypatch.setattr(mcs_util, 'acquire_run_lock',
+                        lambda: os.open(tmp_path / 'lock', os.O_CREAT | os.O_RDWR))
+    monkeypatch.setattr(ledger, 'Ledger', lambda path: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(semantic_drain, 'run_due',
+                        lambda *a, **k: {'done': 2, 'deferred': 0, 'failed': 0, 'left': 0})
+    assert semantic_drain.main() == 0
+    batch, totals = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    for line in (batch, totals):
+        assert line['pid'] == os.getpid() and isinstance(line['ts'], float)
+    assert batch['done'] == 2 and batch['batches'] == 1
+    assert {k: v for k, v in totals.items() if k not in ('ts', 'pid')} == {
+        'done': 2, 'deferred': 0, 'failed': 0, 'batches': 1, 'left': 0,
+        'stopped': 'queue_empty'}
+
+
 @pytest.mark.parametrize('arguments', [
     ['--max-jobs', '0'], ['--max-jobs', '33'], ['--stop-after', 'nan'],
     ['--stop-after', 'inf'], ['--stop-after', '-1'],
