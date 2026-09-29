@@ -9,14 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 import uuid as _uuid_mod
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards

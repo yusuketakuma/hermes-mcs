@@ -3,13 +3,9 @@ jobs, archived-patient handling (Oracle F1-F10, F01-F07), history
 floors, drain fairness."""
 
 import json
-import sys
 import time
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import job_ops
 import ledger

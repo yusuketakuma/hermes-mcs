@@ -6,13 +6,10 @@ Ledger + published snapshot in tmp_path; no network, no live data.
 import json
 import stat
 import sqlite3
-import sys
 import uuid
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import ledger
 import mcs_adapter

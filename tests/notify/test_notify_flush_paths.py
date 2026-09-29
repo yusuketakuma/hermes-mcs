@@ -12,8 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-
 import notify_flush
 import structured_view
 from ingest_testkit import _ledger, _message, _unread_patient

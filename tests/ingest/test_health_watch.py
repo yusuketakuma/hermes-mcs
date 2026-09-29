@@ -8,13 +8,10 @@ observation never re-alerts; recovery requires a FRESH post-failure
 health write, never the watcher's own assumption.
 """
 import json
-import sys
 import time
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import health_watch
 

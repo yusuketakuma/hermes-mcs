@@ -11,8 +11,6 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-
 import extract_llm
 import job_ops
 import ledger
