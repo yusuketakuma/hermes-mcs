@@ -537,6 +537,76 @@ def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
     db.close()
 
 
+def _stub_llm_lane(monkeypatch, busy=False):
+    calls = []
+    monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda deadline: busy)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda ledger, **kw: (
+        calls.append(kw) or {"done": 0, "failed": 0, "left": 0, "pids": []}))
+    return calls
+
+
+@pytest.mark.parametrize(("cap", "limit"), [(90, 1), (240, 3)])
+def test_stage_derive_limits_rows_to_budget(tmp_path, monkeypatch, cap, limit):
+    db = _ledger(tmp_path)
+    calls = _stub_llm_lane(monkeypatch)
+    run_check.stage_derive(db, {"errors": []}, time.monotonic() + 600, {},
+                           llm_budget_cap=cap)
+    assert calls[0]["limit"] == limit and calls[0]["budget_s"] == cap
+    assert calls[0]["oldest_first"] is True
+    db.close()
+
+
+def test_stage_derive_skips_llm_lane_when_pinned_slot_busy(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    calls = _stub_llm_lane(monkeypatch, busy=True)
+    result = {"errors": []}
+    run_check.stage_derive(db, result, time.monotonic() + 600, {})
+    assert calls == []
+    assert result["extract_llm"] == {"done": 0, "failed": 0, "left": -1,
+                                     "pids": [], "skipped_busy": True}
+    db.close()
+
+
+@pytest.mark.parametrize(("cfg", "admitted"), [
+    ({}, None),
+    (None, None),                                   # direct caller: defaults
+    ({"semantic": "typo"}, set()),                  # semantic_config error
+    ({"semantic": {"fact_sourse": "canonical"}}, set()),
+    # gate missing → error → legacy fallback used to open v3 unrestricted
+    ({"semantic": {"fact_source": "canonical"}}, set()),
+])
+def test_stage_derive_legacy_admission_fails_closed(tmp_path, monkeypatch,
+                                                     cfg, admitted):
+    db = _ledger(tmp_path)
+    calls = _stub_llm_lane(monkeypatch)
+    run_check.stage_derive(db, {"errors": []}, time.monotonic() + 600, cfg)
+    assert calls[0]["admitted_ids"] == admitted
+    db.close()
+
+
+@pytest.mark.parametrize(("state", "probe", "expect"), [
+    ({}, {0: True, 1: False}, True),
+    ({}, {0: False, 1: True}, False),
+    ({}, None, False),                               # probe failed
+    ({"_LEND_RT": True}, {0: True, 1: True}, False),
+    ({"_SLOT_OVERRIDE": 0}, {0: True, 1: True}, False),
+])
+def test_pinned_slot_busy(monkeypatch, state, probe, expect):
+    for k, v in state.items():
+        monkeypatch.setattr(extract_llm, k, v)
+    monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
+    monkeypatch.setattr(extract_llm.local_llm, "request_slot", lambda: 0)
+    monkeypatch.setattr(extract_llm, "_slots_busy", lambda deadline: probe)
+    assert extract_llm.pinned_slot_busy() is expect
+
+
+def test_pinned_slot_busy_never_peeks_under_admission(monkeypatch):
+    monkeypatch.setenv("MCS_LLM_ADMISSION", "1")
+    monkeypatch.setattr(extract_llm, "_slots_busy",
+                        lambda deadline: pytest.fail("T20: no /slots peek"))
+    assert extract_llm.pinned_slot_busy() is False
+
+
 def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
