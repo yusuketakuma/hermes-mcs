@@ -15,6 +15,7 @@ import sqlite3
 import time
 
 from mcs_queries import (EXTRACT_FEEDBACK_KIND, JST, current_extract_pred,
+                         current_v4_id,
                          incomplete_reply_roots)
 from mcs_requests import payload_hash, positive
 import structured_view
@@ -516,7 +517,8 @@ def today_jst(now=None) -> str:
 
 def feedback_pending(db, card) -> bool:
     """A ⚠ report still pins a current extraction of this card's
-    messages — the mark clears once a newer extraction replaced it."""
+    messages — the mark clears once a newer extraction replaced it or
+    a v4 read model became the message's current extraction."""
     if card["kind"] != "thread":
         return False
     return db.execute(
@@ -530,6 +532,7 @@ def feedback_pending(db, card) -> bool:
             WHERE h.kind='{EXTRACT_FEEDBACK_KIND}' AND m.project_id=?
               AND (m.message_id=? OR m.parent_id=?)
               {current_extract_pred('a', 'm')}
+              AND {current_v4_id('m')} IS NULL
             LIMIT 1""", (card["project_id"], card["root_message_id"],
                          card["root_message_id"])).fetchone() is not None
 
