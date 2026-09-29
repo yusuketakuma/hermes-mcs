@@ -240,6 +240,40 @@ class Registry:
         if changed:
             self.save()
 
+    @_locked
+    def prune_card_tokens(self, keep: dict) -> None:
+        """Drop the button contexts an in-place update just replaced.
+
+        ``keep`` is the delivered render's token map. A row goes only
+        when it shares that render's card_key, channel and message pin
+        (Slack stamps message_id; Discord rows carry none), has an
+        action the render re-issued, and predates the render's own rows
+        — so result-issued task_status tokens, other cards and any
+        newer render's tokens stay. Only bounds file size: a pruned
+        click falls to the refresh path."""
+        tokens = self._data["tokens"]
+        new = [tokens[t] for t in keep if t in tokens]
+        if not new or not all(type(r.get("at")) in (int, float)
+                              for r in new):
+            return
+        ref = new[0]
+        if not ref.get("card_key") or not ref.get("channel_id"):
+            return
+        actions = {r.get("action") for r in new}
+        cutoff = min(r["at"] for r in new)
+        stale = [t for t, r in tokens.items()
+                 if t not in keep
+                 and r.get("card_key") == ref["card_key"]
+                 and r.get("channel_id") == ref["channel_id"]
+                 and r.get("message_id") == ref.get("message_id")
+                 and r.get("action") in actions
+                 and type(r.get("at")) in (int, float)
+                 and r["at"] < cutoff]
+        for t in stale:
+            del tokens[t]
+        if stale:
+            self.save()
+
     def token(self, token: str) -> dict | None:
         return self._data["tokens"].get(token)
 

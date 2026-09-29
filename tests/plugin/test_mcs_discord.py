@@ -1004,6 +1004,32 @@ def test_action_foreign_thread_denied(world):
     assert denials and denials[0]["reason"] == "chat_not_allowed"
 
 
+def test_confirm_preview_text_per_transport():
+    req = {"title": "件" * 250, "reason": "理" * 450,
+           "assignee": "担当者A", "due_date": "2026-10-01"}
+    tail = f"件名: {'件' * 200}\n理由: {'理' * 400}\n担当: 担当者A\n" \
+           "期限: 2026-10-01"
+    assert text.preview_text("request", req, True) \
+        == "**確認 — 依頼の起票**\n" + tail
+    assert text.preview_text("request", req, False) \
+        == "確認 — 依頼の起票\n" + tail
+    assert text.preview_text(
+        "request", {"title": "t", "reason": "r"}, False) \
+        == "確認 — 依頼の起票\n件名: t\n理由: r"
+    dismiss = {"signal_key": "sig:1", "reason": "r"}
+    assert text.preview_text("dismiss", dismiss, True) \
+        == "**確認 — 候補の却下**\nsignal: `sig:1`\n理由: r"
+    assert text.preview_text("dismiss", dismiss, False) \
+        == "確認 — 候補の却下\nsignal: sig:1\n理由: r"
+
+
+@pytest.mark.parametrize("due,ok", [
+    ("2026-10-01", True), ("2026-02-30", False), ("20261001", False),
+    ("2026-10-1", False), ("", False)])
+def test_valid_due_requires_real_yyyy_mm_dd(due, ok):
+    assert text.valid_due(due) is ok
+
+
 def test_split_body_chunks_bounded():
     body = "\n".join(f"line-{i} " + "x" * 100 for i in range(80))
     chunks = text.split_body(body)
@@ -2197,7 +2223,7 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     assert render["parts_state"] == "incomplete"
 
 
-def test_update_backfills_body_into_legacy_thread(world, monkeypatch):
+def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     """A card whose thread was created before the in-thread body —
     here simulated by a failed body post — gets the text on the next
     update render. Content dedupe keeps further updates silent."""

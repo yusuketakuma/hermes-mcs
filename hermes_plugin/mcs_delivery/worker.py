@@ -14,7 +14,7 @@ a lost response can duplicate a Discord post; Slack strips its retry
 handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
-``_maybe_thread``; everything around them — claims, grants, journals,
+``_perform_part``; everything around them — claims, grants, journals,
 receipts, retries — is shared here. All filesystem work happens via
 ``asyncio.to_thread``; the event loop never blocks on the spec/result
 poll.
@@ -39,6 +39,9 @@ SIGNAL_OFF_RETRY_S = 300.0     # denied_signal_notify_off re-claim backoff
 MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
+EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
+                               # >= 10 min; modal/confirm/followup reads
+                               # check expiry on access anyway)
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
 
@@ -95,6 +98,9 @@ class DeliveryWorker:
     supplies ``_perform`` and any companion-message bookkeeping."""
 
     transport = "discord"   # runner default; transports override
+    # the transport's on-disk layout — every state read (journal view,
+    # scope lock) and write must resolve through this one hook
+    _notify_dirs = staticmethod(paths.notify_dirs)
 
     def __init__(self, *, bot: Any, settings: dict,
                  root: str, reg: registry.Registry,
@@ -102,7 +108,7 @@ class DeliveryWorker:
         self._bot = bot
         self._settings = settings
         self._root = root
-        self._dirs = paths.notify_dirs(root)
+        self._dirs = self._notify_dirs(root)
         self._reg = reg
         self._worker_id = worker_id
         self._log = log
@@ -118,6 +124,7 @@ class DeliveryWorker:
         # delivery_id -> no fresh claim before this time (signals off);
         # in-memory: a restart costs one extra denied begin, bounded
         self._retry_after: dict[str, float] = {}
+        self._next_expire = 0.0               # first tick sweeps at once
 
     # -- scope lock --------------------------------------------------
 
@@ -146,7 +153,7 @@ class DeliveryWorker:
         return True
 
     def _ensure_dirs(self) -> None:
-        paths.ensure_dirs(self._root)
+        paths.ensure_dirs(self._root, self._dirs)
 
     def release_scope_lock(self) -> None:
         if self._lock_fd is not None:
@@ -456,22 +463,16 @@ class DeliveryWorker:
         have committed is unknown (§4)."""
         raise NotImplementedError
 
-    async def _maybe_thread(self, claim: dict, message_id: str) -> None:
-        """Companion-message bookkeeping after a delivered send —
-        transports with no second post-deliver call leave it a no-op."""
-        return
-
     # -- durable render parts (T7) -------------------------------------
 
     async def _deliver_parts(self, claim: dict, message_id: str) -> None:
         """Dependent-part delivery after a settled card send — the
         sealed manifest's thread/body/attachment parts each journal
-        their own started/result/receipt. A spec without a manifest
-        falls back to the legacy companion-thread path."""
+        their own started/result/receipt. The runner seals a manifest
+        into every spec; one without it has no dependent parts."""
         spec = claim["spec"]
         manifest = (spec.get("parts") or {}).get("manifest")
         if not manifest:
-            await self._maybe_thread(claim, message_id)
             return
         ctx = {"card_message_id": message_id, "thread": None,
                "thread_id": spec["delivery"].get("thread_id"),
@@ -601,19 +602,23 @@ class DeliveryWorker:
                       part_id=part["part_id"], kind=part["kind"],
                       result=outcome["result"])
         if part["kind"] == "thread":
-            # the card's thread binding also rides the legacy
+            # Discord: the card's thread binding also rides the legacy
             # thread_receipt envelope — best-effort, because the
-            # journaled part_receipt already carries the truth
-            with suppress(OSError):
-                env2 = envelopes.thread_receipt(
-                    spec["delivery_id"], ctx["card_message_id"],
-                    thread_id=outcome.get("remote_id")
-                    if outcome["result"] == "delivered" else None,
-                    error_code=outcome.get("error_code")
-                    if outcome["result"] != "delivered" else None)
-                await asyncio.to_thread(
-                    envelopes.publish_command,
-                    self._dirs["cmd_int"], env2)
+            # journaled part_receipt already carries the truth (the
+            # runner still needs it to mark an unknown thread 'failed').
+            # Slack skips it: that v1 envelope has no transport/team_id
+            # and the runner can only answer scope_mismatch.
+            if self.transport != "slack":
+                with suppress(OSError):
+                    env2 = envelopes.thread_receipt(
+                        spec["delivery_id"], ctx["card_message_id"],
+                        thread_id=outcome.get("remote_id")
+                        if outcome["result"] == "delivered" else None,
+                        error_code=outcome.get("error_code")
+                        if outcome["result"] != "delivered" else None)
+                    await asyncio.to_thread(
+                        envelopes.publish_command,
+                        self._dirs["cmd_int"], env2)
             if outcome["result"] == "delivered" \
                     and outcome.get("remote_id"):
                 ctx["thread_id"] = str(outcome["remote_id"])
@@ -744,6 +749,11 @@ class DeliveryWorker:
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
                           result=outcome["result"])
+            if spec["op"] == "update" and outcome["result"] == "delivered":
+                # the edit replaced the message's buttons — the old
+                # tokens' context can never be clicked again. Only on a
+                # proven edit: not_sent/unknown leave the old view live.
+                self._reg.prune_card_tokens(spec_mod.token_map(spec))
             claim["phase"] = "settled"
         if claim["phase"] == "settled":
             outcome = claim.get("outcome") or {}
@@ -905,8 +915,12 @@ class DeliveryWorker:
         # tick instead of ~3 full-file rewrites per claim (RC20: the
         # O(n^2) serialization was the delivery bottleneck at 1k cards)
         with self._reg.batch():
-            self._reg.expire(keep={spec["delivery_id"]
-                                   for _, spec in scanned})
+            if now >= self._next_expire:
+                # an O(registry) walk whose every hit rewrites the whole
+                # file — once per EXPIRE_EVERY_S, not every 2s poll
+                self._reg.expire(keep={spec["delivery_id"]
+                                       for _, spec in scanned})
+                self._next_expire = now + EXPIRE_EVERY_S
             resume = []
             spent = None
             for path, spec in scanned:
@@ -960,8 +974,7 @@ class DeliveryWorker:
         """delivery_ids whose card attempt the journal shows started or
         resulted — dependent-part rows excluded."""
         return {str(r.get("delivery_id"))
-                for rows in self._jview.refresh().values()
-                for r in rows
+                for r in journal.all_rows(self._jview.refresh())
                 if r.get("phase") in ("started", "result")
                 and not r.get("part_id")}
 

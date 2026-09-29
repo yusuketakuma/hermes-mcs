@@ -31,8 +31,11 @@ def notify_dirs(root: str) -> dict[str, str]:
             for key, name in SUBDIRS.items()}
 
 
-def ensure_dirs(root: str) -> dict[str, str]:
-    out = notify_dirs(root)
+def ensure_dirs(root: str, dirs: dict[str, str] | None = None
+                ) -> dict[str, str]:
+    """Create the worker-owned state dir; the runner-owned ones must
+    already exist. ``dirs`` lets a transport pass its own layout."""
+    out = notify_dirs(root) if dirs is None else dirs
     os.makedirs(out["state"], mode=0o700, exist_ok=True)
     for key in ("render", "cmd_int", "cmd_results", "flags"):
         # runner-owned dirs must already exist; a missing dir means the
