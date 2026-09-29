@@ -12,15 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from ops_testkit import _load
-
-
-def _git(repo, *args, check=True):
-    r = subprocess.run(["git", "-C", repo, *args],
-                       capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise AssertionError(f"git {' '.join(args)}: {r.stderr}")
-    return r
+from ops_testkit import _git, _load
 
 
 def _make_repo(tmp_path):
