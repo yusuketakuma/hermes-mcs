@@ -7,8 +7,8 @@ from datetime import date
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (body_messages, ja, task_done_text,
-                                 task_list_text)
+from ..mcs_delivery.text import (NO_TASKS_TEXT, body_messages, ja,
+                                 task_done_text, task_list_text)
 from .cards import _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -474,7 +474,7 @@ class Actions:
                                     blocks=_task_blocks(items))
                 else:
                     await self._say(origin["channel_id"], rec["user"],
-                                    "このスレッドのタスクはありません。")
+                                    NO_TASKS_TEXT)
             elif result.get("action") == "task_status" \
                     and result.get("outcome") == "applied":
                 await self._say(origin["channel_id"], rec["user"],

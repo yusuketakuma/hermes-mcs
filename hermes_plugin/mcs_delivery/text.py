@@ -104,6 +104,9 @@ def body_messages(result: dict) -> list:
             for i, c in enumerate(chunks)]
 
 
+NO_TASKS_TEXT = "このスレッドのタスクはありません。"
+
+
 def task_list_text(items: list) -> str:
     """Ephemeral task list — one line per request, status mark first so
     the scan order matches the transition buttons below it."""

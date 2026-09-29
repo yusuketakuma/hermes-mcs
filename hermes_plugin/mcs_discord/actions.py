@@ -685,7 +685,7 @@ class Actions:
                                         ephemeral=True,
                                         view=_task_view(items))
                     else:
-                        await hook.send("このスレッドのタスクはありません。",
+                        await hook.send(text.NO_TASKS_TEXT,
                                         ephemeral=True)
                 elif applied and result.get("action") == "task_status":
                     await hook.send(text.task_done_text(result),
@@ -715,7 +715,7 @@ class Actions:
         items = result.get("tasks") or []
         if not items:
             await self._followup(
-                interaction, "このスレッドのタスクはありません。")
+                interaction, text.NO_TASKS_TEXT)
             return
         await self._followup(interaction, text.task_list_text(items),
                              view=_task_view(items))
