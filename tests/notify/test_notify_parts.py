@@ -449,6 +449,57 @@ def test_downloaded_attachment_is_a_part(led, tmp_path):
     assert not rows
 
 
+def _attachment_render(led, tmp_path, n, sha_bytes=b"synthetic bytes"):
+    f = tmp_path / "note.txt"
+    f.write_bytes(sha_bytes)
+    return f, hashlib.sha256(sha_bytes).hexdigest()
+
+
+def test_update_plan_reuses_the_post_of_an_unchanged_attachment(led, tmp_path):
+    """Update renders re-plan every attachment of the thread; an
+    unchanged file names the message that already carries it so the
+    worker does not upload a second copy on every update."""
+    _seed_thread(led)
+    f, sha = _attachment_render(led, tmp_path, 0)
+    _attach(led, 100, local_path=str(f), sha256=sha, nbytes=f.stat().st_size)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    r1 = _latest_render(led)
+    att = next(p["part_id"] for p in _spec(r1)["parts"]["manifest"]
+               if p["kind"] == "attachment_part")
+    assert _prior_ids(r1) == {}
+    _deliver_bodies(led, r1, "msg-1", n=120)
+    _part_receipt(led, r1, att, remote_id="file-msg-1", n=125)
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _prior_ids(r2)[att] == "file-msg-1"
+
+
+def test_changed_attachment_bytes_are_uploaded_again(led, tmp_path):
+    _seed_thread(led)
+    f, sha = _attachment_render(led, tmp_path, 0)
+    aid = _attach(led, 100, local_path=str(f), sha256=sha,
+                  nbytes=f.stat().st_size)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    r1 = _latest_render(led)
+    att = next(p["part_id"] for p in _spec(r1)["parts"]["manifest"]
+               if p["kind"] == "attachment_part")
+    _deliver_bodies(led, r1, "msg-1", n=130)
+    _part_receipt(led, r1, att, remote_id="file-msg-1", n=135)
+    f.write_bytes(b"re-downloaded different bytes")
+    led.db.execute("UPDATE attachments SET sha256=?, bytes=? "
+                   "WHERE attachment_id=?",
+                   (hashlib.sha256(f.read_bytes()).hexdigest(),
+                    f.stat().st_size, aid))
+    led.db.commit()
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert att not in _prior_ids(r2)
+
+
 def test_unavailable_attachment_disclosed_not_omitted(led):
     _seed_thread(led)
     _attach(led, 100, state="failed", local_path=None, sha256=None,

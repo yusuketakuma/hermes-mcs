@@ -125,6 +125,10 @@ class DeliveryWorker(worker.DeliveryWorker):
                         "error_code": "missing_remote_id"}
             return {"result": "delivered", "remote_id": str(rid)}
         if part["kind"] == "attachment_part":
+            mid = await self._reuse_prior_file(
+                thread, part.get("prior_remote_id"), ctx)
+            if mid is not None:
+                return {"result": "delivered", "remote_id": str(mid)}
             blob = await asyncio.to_thread(
                 paths.read_verified_attachment, part.get("path"), part)
             if blob is None:
@@ -231,6 +235,34 @@ class DeliveryWorker(worker.DeliveryWorker):
             if worker.is_definitive_reject(exc):
                 return None       # the edit did not commit — post afresh
             raise
+        ctx["consumed"].add(msg.id)
+        return msg.id
+
+    async def _reuse_prior_file(self, thread, prior, ctx: dict):
+        """The runner names the message that already carries this exact
+        file (same sealed sha256) from an earlier render. When that
+        message still exists in this thread, was posted by this bot and
+        still holds a file, bind the part to it instead of uploading a
+        second copy. A missing, foreign or already-bound target, or a
+        lookup the API rejected outright, returns None so the file is
+        uploaded as before; any other failure is unknown and
+        propagates — never a blind second upload."""
+        try:
+            pid = int(prior) if prior else None
+        except (TypeError, ValueError):
+            return None
+        me_id = getattr(getattr(self._bot, "user", None), "id", None)
+        if pid is None or me_id is None or pid in ctx["consumed"]:
+            return None
+        try:
+            msg = await thread.fetch_message(pid)
+        except Exception as exc:
+            if worker.is_definitive_reject(exc):
+                return None       # deleted meanwhile — upload afresh
+            raise
+        if getattr(getattr(msg, "author", None), "id", None) != me_id \
+                or not getattr(msg, "attachments", None):
+            return None
         ctx["consumed"].add(msg.id)
         return msg.id
 
