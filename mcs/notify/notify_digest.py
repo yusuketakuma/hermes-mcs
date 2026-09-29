@@ -16,6 +16,7 @@ from datetime import datetime
 import mcs_signals
 import structured_view
 from mcs_queries import JST, coverage_gaps
+from notify_render import plain_notice
 
 KIND = "daily_digest"
 MAX_LIST = 10
@@ -37,8 +38,7 @@ def settings(cfg) -> dict | None:
 
 
 def _plain(text) -> str:
-    t = " ".join(str(text or "").split())[:60]
-    return t.replace("<", "＜").replace(">", "＞").replace("@", "＠")
+    return plain_notice(text, 60)
 
 
 def _ids(pairs, fmt) -> str:
