@@ -538,6 +538,8 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `notify_system_target` | str | なし | 障害・システム通知の送り先（空欄=`notify_target` と同じ） |
 | `notify_max_age_h` | num | なし | この時間より古い未読は通知しない |
 | `hermes_bin` | str | 自動検出 | `hermes` コマンドのパス |
+| `daily_digest.enabled` | bool | `false` | 朝の日次ダイジェスト（件数と ID のみ）を `notify_target` に送る |
+| `daily_digest.hour_jst` | int(0-23) | `8` | 日次ダイジェストを送る時刻（JST。この時刻以降の最初の実行で1日1回） |
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
