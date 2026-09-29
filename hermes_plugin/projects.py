@@ -40,6 +40,17 @@ def _snapshot_projects(path: str) -> frozenset[int] | None:
     return out
 
 
+def static_scope(settings: dict) -> list[int] | None:
+    """The configured project list the runner may count against, or
+    None under ``project_ids_auto`` (every snapshot project is allowed,
+    which the runner's own patients table already bounds)."""
+    if settings.get("project_ids_auto"):
+        return None
+    ids = sorted(p for p in settings.get("project_ids") or ()
+                 if type(p) is int and p > 0)
+    return ids[:1000] or None
+
+
 def project_allowed(settings: dict, project_id) -> bool:
     """True when the project is inside this deployment's scope."""
     if project_id in (settings.get("project_ids") or set()):

@@ -715,7 +715,8 @@ def test_my_tasks_sends_the_name_and_filters_scope(tmp_path):
         body["user"]["name"] = "佐藤 一郎"
         await actions._action(ack, body, action)
         env = command(dirs)
-        assert env["input"] == {"name": "佐藤 一郎"}
+        # the static project scope rides along so runner counts match
+        assert env["input"] == {"name": "佐藤 一郎", "projects": [123]}
         assert validate_int(env) is None
         result(dirs, env["request_id"], request_id=env["request_id"],
                outcome="applied", action="list", list=_list_result([
@@ -743,7 +744,7 @@ def test_my_tasks_prefers_users_info_display_name(tmp_path):
         body, action = click()
         body["user"]["name"] = "sato"
         await actions._action(ack, body, action)
-        assert command(dirs)["input"] == {"name": "佐藤 一郎"}
+        assert command(dirs)["input"]["name"] == "佐藤 一郎"
     asyncio.run(scenario())
 
 
