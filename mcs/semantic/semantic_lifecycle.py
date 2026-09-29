@@ -26,17 +26,9 @@ is written to the ledger and no source text is emitted.
 """
 from __future__ import annotations
 
-import os
 import sqlite3
-import sys
 from contextlib import closing
 from pathlib import Path
-
-# flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
-sys.path.insert(0, os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
-import _mcs_path  # noqa: F401
 
 from mcs_util import loads_dict
 from semantic_evaluation import LIFECYCLE_STAGES, EvaluationError, _dict
