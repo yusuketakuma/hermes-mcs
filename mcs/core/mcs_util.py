@@ -231,6 +231,16 @@ def file_sha256(path) -> str:
     return h.hexdigest()
 
 
+def loads_dict(raw) -> dict | None:
+    """``json.loads(raw)`` when it yields a dict, else None — for stored
+    JSON TEXT columns (not LLM output; that is ``json_object``)."""
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def json_object(text: str) -> dict | None:
     """First `{...}` block in LLM output parsed as a dict — models wrap
     JSON in prose, so the JSON object is located, not assumed.
