@@ -345,16 +345,29 @@ def run_pending(ledger) -> dict:
                                  WHERE kind=? AND message_id IS NOT NULL)
       ORDER BY m.posted_at_ts DESC
     """, (KIND,)).fetchall()
+    return {"done": len(rows), "pids": sorted(_extract_rows(ledger, rows))}
+
+
+_CHUNK = 200   # rows per commit: a RULE_VERSION bump re-extracts ~17k rows,
+               # but the drainer's per-write lock must not wait long
+
+
+def _extract_rows(ledger, rows) -> set:
+    """Insert one extract_v1 artifact per row, committing every _CHUNK
+    rows; a crash keeps committed chunks and the rest stays pending.
+    Returns the touched project ids."""
     pids = set()
-    for r in rows:
-        d = extract_message(r["body_text"], r["posted_at"])
-        ledger.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
-                            project_id=r["project_id"],
-                            message_id=r["message_id"], model="rules-v1",
-                            meta={"hash": r["content_hash"],
-                                  "rule_version": RULE_VERSION})
-        pids.add(r["project_id"])
-    return {"done": len(rows), "pids": sorted(pids)}
+    for i in range(0, len(rows), _CHUNK):
+        with ledger.db:
+            for r in rows[i:i + _CHUNK]:
+                d = extract_message(r["body_text"], r["posted_at"])
+                ledger.artifact_add_tx(
+                    KIND, json.dumps(d, ensure_ascii=False),
+                    project_id=r["project_id"], message_id=r["message_id"],
+                    model="rules-v1", meta={"hash": r["content_hash"],
+                                            "rule_version": RULE_VERSION})
+                pids.add(r["project_id"])
+    return pids
 
 
 def main() -> int:
@@ -404,15 +417,8 @@ def main() -> int:
     if args.limit:
         todo = todo[:args.limit]
 
-    n = 0
-    for r in todo:
-        d = extract_message(r["body_text"], r["posted_at"])
-        led.artifact_add(KIND, json.dumps(d, ensure_ascii=False),
-                       project_id=r["project_id"],
-                       message_id=r["message_id"], model="rules-v1",
-                       meta={"hash": r["content_hash"],
-                             "rule_version": RULE_VERSION})
-        n += 1
+    _extract_rows(led, todo)
+    n = len(todo)
     print(json.dumps({"extracted": n, "skipped_existing": len(done),
                       "total_msgs": len(rows)}, ensure_ascii=False))
 
