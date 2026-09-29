@@ -100,6 +100,13 @@ class SlackCardAdapter:
             self._bot_id = bot if isinstance(bot, str) else ""
         return self._bound
 
+    def authored(self, message) -> bool:
+        """True only for a message this bound bot/app posted — the
+        authorship gate before any reply or file may bind a part. An
+        unbound adapter's empty bot_id never matches."""
+        return bool((self._bot_id and message.get("bot_id") == self._bot_id)
+                    or message.get("app_id") == self._application_id)
+
     def single_attempt(self):
         """Send-safe snapshot of the bound client — shared by the
         delivery worker and the ephemeral-reply path in actions."""
@@ -300,11 +307,8 @@ class DeliveryWorker(_BaseWorker):
                        if m.get("ts") == prior), None)
         if target is None:
             return None
-        ours = (self._sender._bot_id
-                and target.get("bot_id") == self._sender._bot_id) \
-            or target.get("app_id") == self._settings["application_id"]
         sender = self._sender.single_attempt()
-        if not ours or sender is None:
+        if not self._sender.authored(target) or sender is None:
             return None
         try:
             response = await sender.chat_update(
@@ -386,10 +390,7 @@ class DeliveryWorker(_BaseWorker):
             mid = m.get("ts")
             if not isinstance(mid, str) or mid == thread_ts:
                 continue
-            ours = (self._sender._bot_id
-                    and m.get("bot_id") == self._sender._bot_id) \
-                or m.get("app_id") == self._settings["application_id"]
-            if not ours:
+            if not self._sender.authored(m):
                 continue                # not ours — never binds a part
             for f in m.get("files") or []:
                 if not isinstance(f, dict):
@@ -424,10 +425,7 @@ class DeliveryWorker(_BaseWorker):
             if not isinstance(mid, str) or mid == thread_ts \
                     or mid in ctx["consumed"] or m.get("text") != text:
                 continue
-            ours = (self._sender._bot_id
-                    and m.get("bot_id") == self._sender._bot_id) \
-                or m.get("app_id") == self._settings["application_id"]
-            if not ours:
+            if not self._sender.authored(m):
                 continue                # not ours — never binds a part
             ctx["consumed"].add(mid)
             return mid
