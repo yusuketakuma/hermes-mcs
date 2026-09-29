@@ -29,6 +29,7 @@ Safety rules enforced here (post-review):
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 from datetime import datetime
@@ -494,6 +495,13 @@ def _norm_threads(items, project_id: int, parent_id: int) -> list[Message]:
     return [_norm_message(m, project_id, parent_id=parent_id) for m in items]
 
 
+def _disk_kind(e: BaseException) -> str:
+    """'disk_full' for a local out-of-space write, so the caller can
+    defer instead of burning a download attempt; else download_failed."""
+    full = isinstance(e, OSError) and e.errno in (errno.ENOSPC, errno.EDQUOT)
+    return "disk_full" if full else "download_failed"
+
+
 class MCSAdapter:
     def __init__(self, cdp_url: str = "http://127.0.0.1:9333",
                  token_cache: str | None = None, timeout: int = 20, *,
@@ -668,6 +676,9 @@ class MCSAdapter:
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
             f"--user-data-dir={profile_dir}",
             "--no-first-run", "--no-default-browser-check",
+            # the profile must not pull the ~4 GB on-device AI model
+            "--disable-features=OptimizationGuideModelDownloading,"
+            "OptimizationHintsFetching,OptimizationGuideOnDeviceModel",
             f"{BASE}/authentication/login"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(30):
@@ -1339,8 +1350,8 @@ class MCSAdapter:
             fd, tmp = tempfile.mkstemp(prefix=".download-", suffix=".part",
                                        dir=os.path.dirname(dest) or ".")
             os.close(fd)
-        except OSError:
-            raise MCSError("download_failed", retryable=True) from None
+        except OSError as e:
+            raise MCSError(_disk_kind(e), retryable=True) from None
         try:
             result = self._io("download", 60, url=url, token=self._token,
                               partial=tmp)
@@ -1385,7 +1396,7 @@ class MCSAdapter:
             if isinstance(e, urllib.error.HTTPError):
                 raise MCSError("http_error", status=e.code,
                                retryable=e.code in (408, 429) or e.code >= 500) from e
-            raise MCSError("download_failed", retryable=True) from e
+            raise MCSError(_disk_kind(e), retryable=True) from e
 
     # ---------- write (guarded) ----------
 

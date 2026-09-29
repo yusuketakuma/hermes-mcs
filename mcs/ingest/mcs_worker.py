@@ -83,7 +83,7 @@ def bounded_call(payload: dict, *, timeout: float, deadline=None) -> dict:
             return result["value"]
         kind = result.get("kind")
         if kind not in {"http_error", "network_error", "download_failed",
-                        "download_empty", "download_too_large", "no_token",
+                        "disk_full", "download_empty", "download_too_large", "no_token",
                         "url_not_allowed", "bootstrap_error",
                         "deadline_exceeded", "response_too_large"}:
             raise ValueError

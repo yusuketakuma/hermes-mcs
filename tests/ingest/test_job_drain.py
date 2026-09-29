@@ -650,6 +650,26 @@ def test_history_drain_rotates_fairly(tmp_path):
     db.close()
 
 
+
+def test_lagging_history_head_drains_before_lag_free_ones(tmp_path):
+    """A lag-free head is a re-certification the backfill re-queues every
+    tick; a head with stored-but-uncertified messages closes a real gap
+    and must not wait behind it, however recently it was touched."""
+    db = _ledger(tmp_path)
+    for pid in (1, 2):
+        db.ensure_patient(pid)
+        db.save_messages([_message(mid=pid * 100, project_id=pid)])
+    db.set_coverage(1, db.high_watermark(1))          # 1: lag == 0
+    for pid in (1, 2):
+        db.job_add("history_head", pid, payload={
+            "since": 0, "page": 1, "pages": 3, "trickle": False})
+    db.db.execute("UPDATE fetch_jobs SET updated_at=project_id")
+    db.db.commit()
+    assert [r["project_id"] for r in db.history_jobs_due()] == [2, 1]
+    db.set_coverage(2, db.high_watermark(2))          # both lag-free now
+    assert [r["project_id"] for r in db.history_jobs_due()] == [1, 2]
+    db.close()
+
 class _DiscoveryAdapter(mcs_adapter.MCSAdapter):
     def __init__(self, projects=None, kartes=None, fail=False):
         self._projects = projects or []
