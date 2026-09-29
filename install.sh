@@ -348,8 +348,17 @@ dry_run_plan() {
     else plan_line "3/6 plugin" "symlink $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
     if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 llm" "skipped"
     else
-        plan_line "4/6 llm" "model $MODEL_FILE [$(state "$MODEL_FILE")] (~5.7 GB download when new)"
-        plan_line "" "plist $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver when not loaded"
+        # mirror stage 4's order: a hermes-managed agent or a foreign
+        # server on :8080 is kept — no second llama-server is planned
+        if [ -f "$HERMES_LLAMA_PLIST" ]; then
+            plan_line "4/6 llm" "hermes-managed $HERMES_LLAMA_PLIST [exists] is kept (load state checked; no model download, no second server)"
+        elif curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1 \
+                && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; then
+            plan_line "4/6 llm" "a server already answers on :8080 — kept (nothing installed)"
+        else
+            plan_line "4/6 llm" "model $MODEL_FILE [$(state "$MODEL_FILE")] (~5.7 GB download when new)"
+            plan_line "" "plist $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver when not loaded"
+        fi
     fi
     if [ "$SKIP_SERVICES" -eq 1 ]; then plan_line "5/6 services" "skipped (--no-services)"
     else
