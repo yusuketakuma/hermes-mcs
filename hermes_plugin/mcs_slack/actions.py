@@ -10,10 +10,11 @@ from ..mcs_delivery import envelopes, paths, registry
 from ..mcs_delivery.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  ja, modal_fields, preview_text,
                                  search_query, task_list_text, view_answer)
-from .cards import LINK_ACTION, _sections
+from .cards import LINK_ACTION, MENU_ACTION, _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
+_MENU = re.compile("^" + re.escape(MENU_ACTION) + "$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -101,7 +102,14 @@ def origin(body, action, *, team_id, application_id, channel_id,
         return None
     uid = user.get("id")
     ts = message.get("ts")
-    token = action.get("value")
+    if action.get("type") == "static_select":
+        # the compact 操作 menu: the chosen option carries the same token
+        picked = action.get("selected_option")
+        token = picked.get("value") if isinstance(picked, dict) else None
+        expected = MENU_ACTION
+    else:
+        token = action.get("value")
+        expected = "mcs:a:" + str(token)
     if (team.get("id") != team_id
             or body.get("api_app_id") != application_id
             or channel.get("id") != channel_id
@@ -109,7 +117,7 @@ def origin(body, action, *, team_id, application_id, channel_id,
             or uid not in allowed_user_ids
             or not isinstance(ts, str) or not _TS.fullmatch(ts)
             or not isinstance(token, str) or not _TOKEN.fullmatch(token)
-            or action.get("action_id") != "mcs:a:" + token):
+            or action.get("action_id") != expected):
         return None
     return {"transport": "slack", "team_id": team_id,
             "application_id": application_id, "profile": profile,
@@ -133,6 +141,7 @@ class Actions:
         self._active = True
         self._app.action(_ACTION)(self._action)
         self._app.action(_LINK)(self._link)
+        self._app.action(_MENU)(self._action)
         self._app.action(_CONFIRM)(self._confirm)
         self._app.view("mcs:modal")(self._modal)
 

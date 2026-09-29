@@ -108,11 +108,11 @@ def test_slack_footer_never_carries_mention_syntax():
     assert ctx["text"] == "✅ 確認: <@1001>・佐藤"
     assert all("<@U" not in b["elements"][0]["text"]
                for b in blocks if b["type"] == "context")
-    actions = [b for b in blocks if b["type"] == "actions"]
-    link = actions[1]["elements"][0]
-    assert link == {"type": "button", "action_id": slack_cards.LINK_ACTION,
-                    "text": {"type": "plain_text", "text": "🔗 MCSで開く"},
-                    "url": LINK["url"]}
+    # the MCS link is a text link (no full-width button on mobile)
+    links = [b["elements"][0] for b in blocks if b["type"] == "context"
+             and b["elements"][0]["type"] == "mrkdwn"]
+    assert links == [{"type": "mrkdwn",
+                      "text": f"<{LINK['url']}|🔗 MCSで開く>"}]
 
 
 def test_slack_footer_stays_plain_without_mentions():

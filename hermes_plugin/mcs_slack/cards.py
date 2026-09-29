@@ -12,6 +12,12 @@ _BLOCK_MAX = 50
 _FALLBACK = "MCS 確認カード"
 SCHEMA = "mcs-card-render/v2"
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
+MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
+# Buttons kept as buttons on Slack; every other action goes into one
+# select so the card stays a single compact row on mobile, where each
+# button of an actions block is otherwise drawn full width.
+QUICK_ACTIONS = ("ack", "assign")
+_MENU_PLACEHOLDER = "操作を選ぶ…"
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
 
 
@@ -91,29 +97,41 @@ def render(spec, names=None):
             for i in range(0, len(text), _CONTEXT_MAX)
         )
 
+    quick, menu, links = [], [], []
     for row in spec["parts"].get("action_rows") or []:
-        elements = []
         for button in row:
             if len(button["label"]) > 75:
                 raise ValueError("slack_button_label")
             if button.get("ui") == "link":
-                elements.append({
-                    "type": "button", "action_id": LINK_ACTION,
-                    "text": {"type": "plain_text", "text": button["label"]},
-                    "url": button["url"]})
-                continue
-            entry = {
-                "type": "button",
-                "text": {"type": "plain_text", "text": button["label"]},
-                "action_id": "mcs:a:" + button["token"],
-                "value": button["token"],
-            }
-            if button.get("style") in ("primary", "success"):
-                entry["style"] = "primary"
-            elif button.get("style") == "danger":
-                entry["style"] = "danger"
-            elements.append(entry)
+                links.append(button)
+            elif button.get("id") in QUICK_ACTIONS:
+                quick.append(button)
+            else:
+                menu.append(button)
+    elements = []
+    for button in quick:
+        entry = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": button["label"]},
+            "action_id": "mcs:a:" + button["token"],
+            "value": button["token"],
+        }
+        if button.get("style") in ("primary", "success"):
+            entry["style"] = "primary"
+        elements.append(entry)
+    if menu:
+        elements.append({
+            "type": "static_select", "action_id": MENU_ACTION,
+            "placeholder": {"type": "plain_text", "text": _MENU_PLACEHOLDER},
+            "options": [{"text": {"type": "plain_text", "text": b["label"]},
+                         "value": b["token"]} for b in menu]})
+    if elements:
         blocks.append({"type": "actions", "elements": elements})
+    for button in links:
+        # a text link, not a button — it costs no row on mobile
+        label = button["label"].replace("|", "｜").replace(">", "＞")
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"<{button['url']}|{label}>"}]})
     if len(blocks) > _BLOCK_MAX:
         raise ValueError("slack_block_budget")
     return _FALLBACK, blocks
