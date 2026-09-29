@@ -523,8 +523,12 @@ enqueue する。runner は対象が今もその投稿の現行 extract_llm の�
 `extract_feedback_v1` artifact（message_id・artifact_id・hash・field・
 note・actor・at）を追記する（違えば `extraction_changed`）。
 extract_llm の `pending_pred` は「現行抽出を指す報告がある投稿」を
-QC の単発再抽出と並列の条件で1回だけ再び pending にする — 再抽出で
-artifact id が変わると報告は現行を指さなくなり、ループしない。
+QC の単発再抽出と並列の条件で1回だけ再び pending にする（no-signal
+prefilter は適用しない）。再抽出の成功時は新しい結果で、LLM 失敗時は
+報告対象の内容を再発行して、どちらも `meta.human_fix`（`feedback_id`・
+`applied`）付きの新 artifact に置き換える — 報告は現行を指さなくなり、
+ループしない。`human_fix` 行は thin 再試行の対象にもならないので、
+報告1件につき LLM 呼出しは最大1回。
 v4 読取りモデルが現行の投稿には報告ボタンを出さない。読取りは
 `mcs_queries.extract_feedback(db, project_id)`（`current` = まだ再抽出
 されていない）。統計・QC 集計への反映は未実装。

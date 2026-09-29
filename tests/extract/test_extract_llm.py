@@ -2266,3 +2266,81 @@ def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():
     assert extract_llm._llm_call_stats([{"calls": 2}]) == {
         "calls": 2, "prompt_ms": None, "predicted_ms": None, "tokens": None}
     assert extract_llm._llm_call_stats([None, {}]) is None
+
+
+def _seed_human_report(db, body="合成の本文 BT37.5 咳あり", content=None):
+    """A current artifact plus a ⚠ report pinned to it."""
+    db.save_messages([_message(body=body)])
+    aid = db.artifact_add(
+        "extract_llm", json.dumps(content or {
+            "summary": "旧", "symptoms": [{"text": "咳"}],
+            "vitals": {"bt": 37.5}}),
+        project_id=1, message_id=1,
+        meta={"hash": _hash(db),
+              "extract_version": extract_llm.EXTRACT_VERSION})
+    fid = db.artifact_add(
+        "extract_feedback_v1",
+        json.dumps({"message_id": 1, "artifact_id": aid, "field": "meds",
+                    "note": "合成"}),
+        project_id=1, message_id=1, meta={"source_artifact_id": aid})
+    return aid, fid
+
+
+def test_human_report_re_extracts_exactly_once(tmp_path, monkeypatch):
+    """A ⚠ report re-pends the message once: the new result replaces
+    the reported artifact (meta.human_fix) and the next run selects
+    nothing — no LLM call every cycle."""
+    db = _ledger(tmp_path)
+    aid, fid = _seed_human_report(db)
+    calls = []
+    monkeypatch.setattr(
+        extract_llm, "llm_extract",
+        lambda body, **_: calls.append(1) or {
+            "summary": "新", "symptoms": [{"text": "咳"}],
+            "vitals": {"bt": 37.5}})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res["done"] == 1 and len(calls) == 1
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 1 and rows[0]["artifact_id"] != aid
+    assert json.loads(rows[0]["content"])["summary"] == "新"
+    assert json.loads(rows[0]["meta"])["human_fix"] == {
+        "feedback_id": fid, "applied": True}
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res2["selected"] == 0 and len(calls) == 1
+    db.close()
+
+
+def test_human_report_failure_settles(tmp_path, monkeypatch):
+    """A failed report re-extract re-mints the reported content with
+    human_fix.applied=false so the row leaves pending."""
+    db = _ledger(tmp_path)
+    aid, fid = _seed_human_report(db)
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: calls.append(1) or None)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **_: True)
+    extract_llm.run_pending(db, limit=10, budget_s=30)
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 1 and rows[0]["artifact_id"] != aid
+    assert json.loads(rows[0]["content"])["summary"] == "旧"
+    assert json.loads(rows[0]["meta"])["human_fix"] == {
+        "feedback_id": fid, "applied": False}
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res2["selected"] == 0 and len(calls) == 1
+    db.close()
+
+
+def test_human_report_thin_result_is_not_thin_retried(tmp_path,
+                                                     monkeypatch):
+    """The report re-extract is the one extraction for that report — a
+    thin outcome is not re-pended by the thin retry."""
+    db = _ledger(tmp_path)
+    _seed_human_report(db, body="合成の長い本文です。" * 30)
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: calls.append(1)
+                        or {"urgency": "routine"})
+    extract_llm.run_pending(db, limit=10, budget_s=30)
+    res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
+    assert res2["selected"] == 0 and len(calls) == 1
+    db.close()
