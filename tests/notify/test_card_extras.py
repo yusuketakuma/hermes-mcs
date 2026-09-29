@@ -10,6 +10,7 @@ import pytest
 import notify_cards
 import notify_cmds
 import notify_render
+import notify_views
 from notify_testkit import (
     CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render, _msg,
     _receipt, _seed_thread, _settle_bodies, _token_for, led)
@@ -178,7 +179,7 @@ def test_unacked_lists_until_acknowledged(led):
 def test_unacked_leaves_out_old_cards(led):
     spec = _card(led)
     led.db.execute("UPDATE notification_cards SET updated_at=?",
-                   (NOW - notify_render.UNACKED_WINDOW_S - 1,))
+                   (NOW - notify_views.UNACKED_WINDOW_S - 1,))
     led.db.commit()
     assert _click(led, spec, "unacked")["list"]["items"] == []
 
@@ -208,10 +209,10 @@ def test_search_opens_modal_then_answers_hits(led):
 
 def test_search_caps_hits_and_counts_the_rest(led):
     spec = _card(led)
-    for mid in range(110, 110 + notify_render.SEARCH_HITS + 3):
+    for mid in range(110, 110 + notify_views.SEARCH_HITS + 3):
         _msg(led, mid, parent=100, body="定期訪問")
     view = _click(led, spec, "search", {"query": "訪問"})["list"]
-    assert len(view["items"]) == notify_render.SEARCH_HITS
+    assert len(view["items"]) == notify_views.SEARCH_HITS
     assert view["more"] == 3
 
 

@@ -45,9 +45,9 @@ from mcs_queries import current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
-    current_ackers, my_tasks_view, open_tasks, patient_search_view,
-    patient_summary_text, unacked_view)
+    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp)
+from notify_views import (
+    my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
@@ -62,7 +62,6 @@ LIVE_RENDER = ("queued", "sending", "unknown", "held")
 RESEAT_S = 3600           # re-examine a dispatched pending intent hourly
 TOKEN_VIEW_S = 30 * 86400
 TOKEN_WRITE_S = 7 * 86400
-DEFER_S = 86400           # fixed 'hold' duration for v1
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
 RESTORE_MARKER = "restore_pending.json"
@@ -630,16 +629,14 @@ def _action_rows(db, card, content, now, context=None,
     need = {"source_gen": card["source_generation"],
             "manifest_id": content["manifest_id"],
             "ui_rev": card["ui_revision"]}
-    # toggles show state: the label/style is what a glance must tell
-    acked = bool(current_ackers(db, card["card_id"],
-                                card["source_generation"], content["shown"]))
+    # toggles show state: the label/style is what a glance must tell —
+    # the display model already read it for the footer
+    acked = content["toggles"]["acked"]
+    assigned = content["toggles"]["assigned"]
     if kind == "digest":
         ack_label = "✅ このページ確認済み" if acked else "☐ このページを確認"
     else:
         ack_label = "✅ 確認済み" if acked else _ACTIONS["ack"][0]
-    tri = db.execute("SELECT state,owner FROM notification_triage "
-                     "WHERE card_id=?", (card["card_id"],)).fetchone()
-    assigned = bool(tri and tri["state"] == "assigned" and tri["owner"])
 
     def btn(action, params=None, label=None, style=None):
         tok = _mint_token(db, card["card_id"], action, params, need, now)
@@ -648,16 +645,16 @@ def _action_rows(db, card, content, now, context=None,
              "label": label or _ACTIONS[action][0], "token": tok}
         row.append(b)
 
-    btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label,
-        style="success" if acked else None)
-    btn("assign", label="👤 担当中" if assigned else None,
-        style="primary" if assigned else None)
     def flush():
         if row:
             rows.append(list(row))
             row.clear()
 
     # row 1 — state toggles (+ 📄 where no thread carries the body)
+    btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label,
+        style="success" if acked else None)
+    btn("assign", label="👤 担当中" if assigned else None,
+        style="primary" if assigned else None)
     if not in_thread_body:
         # cards with a companion thread show the body inside it on
         # delivery — the 📄 button only remains where no thread can
@@ -671,7 +668,7 @@ def _action_rows(db, card, content, now, context=None,
         # a digest spans projects — a card-level request cannot pin a
         # single source, so the button is only emitted where it can work
         btn("request", {"project_id": pid})
-    if open_tasks(db, card):
+    if content["toggles"]["has_tasks"]:
         # only while the thread has open tasks — the list view is the
         # thread-anchored _thread_tasks (signal/digest cards span
         # messages/projects the requests table does not key on)
@@ -1754,27 +1751,8 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
         return _act_body(db, base, card, tok)
-    if action == "summary":
-        # view-only and live like 📄 — the text is never persisted
-        title, text = patient_summary_text(db, card["project_id"])
-        return {**base, "outcome": "applied", "action": "summary",
-                "title": title, "body": text}
-    if action == "mytasks":
-        view = my_tasks_view(db, (req.get("input") or {}).get("name"), now,
-                             (req.get("input") or {}).get("projects"))
-        return {**base, "outcome": "applied", "action": "list", "list": view}
-    if action == "unacked":
-        view = unacked_view(db, card["transport"], now,
-                            (req.get("input") or {}).get("projects"))
-        return {**base, "outcome": "applied", "action": "list", "list": view}
-    if action == "search":
-        query = (req.get("input") or {}).get("query")
-        if not query:
-            # the click opens the keyword modal; its submit carries input
-            return {**base, "outcome": "applied", "action": action,
-                    "modal": True, "params": {}}
-        view = patient_search_view(db, card["project_id"], query)
-        return {**base, "outcome": "applied", "action": "list", "list": view}
+    if action in ("summary", "mytasks", "unacked", "search"):
+        return _act_view(db, base, card, action, req.get("input") or {}, now)
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -1808,6 +1786,28 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 "form": task_form(db, card)}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
+
+
+def _act_view(db, base, card, action, inputs, now) -> dict:
+    """🧾 / 📋 / 🗂 / 🔎 — live clicker-scoped views (notify_views),
+    recomputed per click; stored receipts drop their text."""
+    if action == "summary":
+        title, text = patient_summary_text(db, card["project_id"])
+        return {**base, "outcome": "applied", "action": "summary",
+                "title": title, "body": text}
+    if action == "search" and not inputs.get("query"):
+        # the click opens the keyword modal; its submit carries input
+        return {**base, "outcome": "applied", "action": action,
+                "modal": True, "params": {}}
+    if action == "mytasks":
+        view = my_tasks_view(db, inputs.get("name"), now,
+                             inputs.get("projects"))
+    elif action == "unacked":
+        view = unacked_view(db, card["transport"], now,
+                            inputs.get("projects"))
+    else:
+        view = patient_search_view(db, card["project_id"], inputs["query"])
+    return {**base, "outcome": "applied", "action": "list", "list": view}
 
 
 def _act_page(db, base, card, tok, tok_params, cfg, now, specs) -> dict:

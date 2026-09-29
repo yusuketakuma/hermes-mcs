@@ -15,6 +15,7 @@ import notify_cards
 import notify_cmds
 import notify_flush
 import notify_render
+import notify_views
 from mcs_queries import JST, extract_feedback
 from notify_testkit import (
     CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render, _msg,
@@ -423,7 +424,7 @@ def test_summary_without_rollup_says_so(led, tmp_path):
     r = _click(led, spec, "summary")
     assert r["outcome"] == "applied" and r["action"] == "summary"
     assert "暫定集約" in r["title"]
-    assert notify_render.SUMMARY_CAVEAT in r["body"]
+    assert notify_views.SUMMARY_CAVEAT in r["body"]
     assert "集約資料がまだありません" in r["body"]
     assert "履歴取得: 未完了（完了記録なし）" in r["body"]
     assert "欠落なしの保証ではありません" in r["body"]

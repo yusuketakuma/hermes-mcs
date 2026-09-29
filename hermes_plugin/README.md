@@ -306,7 +306,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   表示名は Discord では `display_name`、Slack では `users.info` の表示名
   （無ければ氏名、取得できなければペイロードの `user.name`）で、
   担当者欄との照合は runner の
-  `notify_render.assignee_matches()`。
+  `notify_views.assignee_matches()`。
 
 ## インタラクティブカード（mcs_slack）
 

@@ -350,6 +350,21 @@ def staff_directory(db, project_id=None):
             ORDER BY last_seen DESC""", params).fetchall()
 
 
+def feedback_current(h: str = "h") -> str:
+    """EXISTS predicate: the extract_feedback_v1 row ``h`` still pins
+    its message's current extract_llm extraction — no newer extraction
+    replaced it and no v4 read model became current. The card's ⚠ mark
+    and the report listing share this one definition."""
+    return f"""EXISTS (SELECT 1 FROM artifacts a
+                   JOIN messages m ON m.message_id=a.message_id
+                   WHERE a.kind='extract_llm'
+                     AND a.message_id={h}.message_id
+                     AND a.artifact_id=json_extract(
+                       {json_or_null(h + '.content')},'$.artifact_id')
+                     {current_extract_pred('a', 'm')}
+                     AND {current_v4_id('m')} IS NULL)"""
+
+
 def extract_feedback(db, project_id=None, limit=100):
     """Human ⚠ extraction reports, newest first — each pins the
     extract_llm artifact it judged (content: message_id, artifact_id,
@@ -361,15 +376,7 @@ def extract_feedback(db, project_id=None, limit=100):
         where, params = " AND h.project_id=?", [project_id]
     return db.execute(
         f"""SELECT h.artifact_id, h.project_id, h.message_id, h.content,
-                   h.created_at,
-                   EXISTS (SELECT 1 FROM artifacts a
-                           JOIN messages m ON m.message_id=a.message_id
-                           WHERE a.kind='extract_llm'
-                             AND a.message_id=h.message_id
-                             AND a.artifact_id=json_extract(
-                               {json_or_null('h.content')},'$.artifact_id')
-                             {current_extract_pred('a', 'm')}
-                             AND {current_v4_id('m')} IS NULL) AS current
+                   h.created_at, {feedback_current('h')} AS current
             FROM artifacts h WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'{where}
             ORDER BY h.artifact_id DESC LIMIT ?""",
         [*params, limit]).fetchall()
