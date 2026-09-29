@@ -111,6 +111,10 @@ if [ -n "$STUB_CURL_FAIL" ]; then
     case "$*" in *"$STUB_CURL_FAIL"*) exit 6 ;; esac
 fi
 case "$*" in -sSfIL*) exit 0 ;; esac            # preflight HEAD probe
+case "$*" in -fsIL*)                             # remote size probe
+    [ -n "$STUB_MODEL_SIZE" ] && printf 'HTTP/2 200\r\ncontent-length: %s\r\n' "$STUB_MODEL_SIZE"
+    exit 0 ;;
+esac
 if [ -n "$out" ]; then
     if [ -n "$STUB_FAIL_MODEL_ONCE" ] && [ ! -f "$STUB_STATE/model-cut" ]; then
         touch "$STUB_STATE/model-cut"
@@ -717,6 +721,23 @@ def test_model_download_resumes_from_part(tmp_path):
     assert model.read_text() == "stub-model-bytes\n"
     dl = [c for c in _calls(stub_root) if c.startswith("curl") and ".part" in c]
     assert dl and all("-C -" in c and "--retry" in c for c in dl)
+
+
+def test_complete_part_is_not_requested_again(tmp_path):
+    """A .part that already holds every byte (cut between transfer and
+    rename) is renamed, not re-requested — a range past the end answers
+    416 and would fail every re-run."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    models = hermes_home / "models"
+    models.mkdir(parents=True)
+    part = models / "Qwen3.5-9B-Q4_K_M.gguf.part"
+    part.write_text("complete-model")
+    r = _run({**env, "STUB_MODEL_SIZE": str(part.stat().st_size)},
+             hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert (models / "Qwen3.5-9B-Q4_K_M.gguf").read_text() == "complete-model"
+    assert not [c for c in _calls(stub_root)
+                if c.startswith("curl") and "-C -" in c]
 
 
 def test_model_checksum_mismatch_is_fatal(tmp_path):
