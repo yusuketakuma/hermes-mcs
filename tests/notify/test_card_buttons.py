@@ -469,6 +469,24 @@ def _report(led, root, artifact_id, mid=101, field="meds", n=1):
         "reason": "用量が違う"}, CFG, root)
 
 
+def test_report_mark_clears_when_v4_becomes_current(led, tmp_path):
+    _seed_thread(led)
+    aid = _llm_extract(led, 101, {"summary": "s", "requests": []})
+    led.db.commit()
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    assert _report(led, str(tmp_path / "data"), aid)["outcome"] == "applied"
+    card = notify_cards._card_row(led.db, 1)
+    assert notify_render.feedback_pending(led.db, card)
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('semantic_facts_v4',1,101,'{}','v4',?,?)",
+        (json.dumps({"hash": f"{101:064x}", "engine_version": 4}), NOW))
+    led.db.commit()
+    assert not notify_render.feedback_pending(led.db, card)
+    assert extract_feedback(led.db, 1)[0]["current"] == 0
+
+
 def test_report_pins_extraction_repends_once_and_marks_card(led, tmp_path):
     _seed_thread(led)
     aid = _llm_extract(led, 101, {"summary": "s", "requests": []})

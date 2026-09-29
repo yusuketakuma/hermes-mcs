@@ -368,7 +368,8 @@ def extract_feedback(db, project_id=None, limit=100):
                              AND a.message_id=h.message_id
                              AND a.artifact_id=json_extract(
                                {json_or_null('h.content')},'$.artifact_id')
-                             {current_extract_pred('a', 'm')}) AS current
+                             {current_extract_pred('a', 'm')}
+                             AND {current_v4_id('m')} IS NULL) AS current
             FROM artifacts h WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'{where}
             ORDER BY h.artifact_id DESC LIMIT ?""",
         [*params, limit]).fetchall()
