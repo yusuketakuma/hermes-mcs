@@ -123,7 +123,7 @@ C0 の合意事項は CD-1〜CD-10 のほか、次を含む（両文書で同一
 
 **成果物**
 - `docs/external-export-contract.md` の改訂: `part`、receipt、C1 プロファイル、canonical 数値、サイズ、失敗コード表。同文書の「含まないもの」（L133-138）は C3 まで維持する。
-- 参照実装: `_canonical` の数値正規化、`part` の任意項目、`_validate_envelope` の profile・サイズ検査、`parse_receipt`、coverage 拡張（CD-4。`read_model._coverage` と `export_schema` の allowlist）、`message_body`・`patient_coverage` の record 追加と生成（CD-9・CD-10。`export_schema.py` の `_SCHEMAS`/`RECORD_TYPES` と read_model 由来の生成器）。
+- 参照実装: `_canonical` の数値正規化、`part` の任意項目、`_validate_envelope` の profile・サイズ検査、`parse_receipt`、coverage 拡張（CD-4。`read_model._coverage` と `export_schema` の allowlist）、`message_body`・`patient_coverage` の record 追加と生成（CD-9・CD-10。`export_schema.py` の `_SCHEMAS`/`RECORD_TYPES` と read_model 由来の生成器）。`patient_coverage.history_floor` の写像（ledger の NULL/0 → null、-1 → 0、正 → その epoch。窓付き送付時は `max(floor, 窓の開始 epoch)`）、`sender_kind` の写像表を `docs/external-export-contract.md` に置く、`select_records` の `since_days` 窓（CD-6）を含める。
 - fixture、生成器、golden test、`MANIFEST.sha256`。
 - drift guard test: `export_schema` の enum が `semantic_facts.FACT_KINDS` / `WORKFLOW_STATUSES` / `RELATION_TYPES`、`mcs_signals.DETECTORS`、`read_model.EXTRACTION_KINDS` と一致すること（F-4）。現状は 5 系統とも一致を実測したがテストはない。食い違うと `project_record` の ValueError（`export_schema.py:159-161`）で export 全体が止まる。
 - Q6 の判断記録。`docs/dev-records/` に置く場合は `FIX-`・`TEST-` 等の ID 表記を避ける（`ci/mine_gates.py:36-39` が manifest 登録を要求する）。
@@ -172,7 +172,7 @@ A. envelope 層（`ext_contract.py`）:
 - patients が `"all"` 以外だと build が coverage を落とす（:230-235）ので、C1 では `envelope_coverage_missing` で拒否する。
 
 B. 入力選別と分割:
-- `select_records(records, allowed, only_with_facts)`: 未許可 type を落とし、種別ごとの件数を返す（縮小だけ）。`--only-with-facts` は CD-3 の規則で message を落とす（facts 非空・tombstone・`message_body` 持ちは残す）。meta・coverage・patient_coverage・signal・signals_truncated は常に残す。フィルタ後に build するので、`records_sha256` は自然にフィルタ後になる。
+- `select_records(records, allowed, only_with_facts, since_days)`: 未許可 type を落とし、種別ごとの件数を返す（縮小だけ）。`--only-with-facts` は CD-3 の規則で message を落とす（facts 非空・tombstone・`message_body` 持ちは残す）。meta・coverage・patient_coverage・signal・signals_truncated は常に残す。`since_days` を与えたときは `posted_at_ts >= 窓の開始 epoch` の message（とそれを参照する `message_body`）に絞り、窓を適用したときは `patient_coverage.history_floor` に窓の開始を反映する（CD-10）。フィルタ後に build するので、`records_sha256` は自然にフィルタ後になる。
 - `split_envelopes(records, auth, gen_at, max_bytes)`: 共有 records（meta・coverage・patient_coverage・signals_truncated）を各分割に複製し、message / signal を入力順に貪欲充填する（`message_body` は対応する message と同じ part。CD-2）。各分割を `build_envelope` で構築し、実サイズを検査する。単一 record が超過なら `record_too_large`。message / signal が 0 件でも、共有だけの envelope を 1 つ作る。全分割を先に構築し、1 つでも拒否なら journal に触れない。その後に順次 deliver する。
 
 C. receipt と sink:
@@ -267,7 +267,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
   - `endpoint_allowed(url)`: https だけ、host は設定と一致、port は 443 / 省略、userinfo / query / fragment なし、path prefix 固定。`envelope_id` は `_check_id`（:290-293）で 24 hex に限定してから path に埋め込む。
   - `keychain_token(service, run=subprocess.run)`: locked は `token_unavailable`。token は sink 構築時（journal に触る前）に取得する。`_deliver` は `sent` 記録の後に sink を呼ぶ（:513-519）ため、途中で失敗すると偽の held が残る。
 - `GovernedExporter` を最小限リファクタする。`sink.root.resolve()` を `sink.binding()` へ、`_delete_ack` を `sink.delete_ack(eid)` へ変える。`LocalSink` は従来値を返す。
-- endpoint は auth に入れない（同文書 L21 は label だけ）。`config.json` に `ext_export{endpoint,keychain_service}` を新設し、`mcs_setup.CONFIG_RULES`（:101-119）に validator（https 強制）を足す。
+- endpoint は auth に入れない（同文書 L21 は label だけ）。`config.json` の `ext_export` は**単一ブロック**とし、C1 の `{auth, state_dir, outbox, since_days}`（§3 D）に任意キー `endpoint`・`keychain_service` を追加する。`mcs_setup.CONFIG_RULES`（:101-119）に validator（https 強制）を足す。
 - 契約付録（C0 か C3 で合意）: `POST /ext-export/v1/envelopes`（`envelope_id` で冪等）、`GET …/receipts/{id}`、`POST …/envelopes/{id}/delete`（`bounded_http` は DELETE 不可）、`GET …/deletions/{id}`。
 - status の写像: 2xx かつ receipt が journal と一致なら acked。422 かつ rejected receipt なら rejected。2xx でも receipt が不一致・欠落、401 / 403 / 408 / 429 / 5xx、timeout、接続断、3xx はすべて held（journal は `sent` のまま）。自動再送はしない。deliver が held の再送を拒否する挙動（:497-502）と、同文書 L138 のとおり。再送は新しい `auth_id`（→ 新 `envelope_id`）で行う。`reconcile` は GET だけで安全。
 - canonical で 1 MiB 以下を送信前に検査する。受信側 route 上限は canonical 1,048,576 B で固定。wire 膨張（+7〜8%）は送信前検査を約 900,000 B に絞って吸収する（C0 合意事項 (a) と同じ）。`bounded_http` の raw body 対応は保留。
