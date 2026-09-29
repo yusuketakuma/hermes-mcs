@@ -1,6 +1,6 @@
 # zaitaku-calender 接続（C0〜C4）の hermes-mcs 側の詳細計画
 
-[`docs/ROADMAP.md`](../ROADMAP.md) §4 の接続フェーズのうち、**hermes-mcs 側の成果物**を、実装に着手できる粒度まで掘り下げた計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-8）は両文書で共通。
+[`docs/ROADMAP.md`](../ROADMAP.md) §4 の接続フェーズのうち、**hermes-mcs 側の成果物**を、実装に着手できる粒度まで掘り下げた計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-9）は両文書で共通。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
 - 表記: 【実行確認】= 合成入力でローカル実行して確認、【未検証】= 実データ・実機・実 API・相手側実装に触れないと分からない点。
@@ -19,14 +19,14 @@
 | # | 度 | 旧 ROADMAP の記述 | 実コード（実測） | 対応 |
 |---|---|---|---|---|
 | 1 | 高 | coverage / meta / signals_truncated は「取得未完了を『不明』と表示する」入力（§4・完了条件） | `coverage.collection` は patients / messages / deleted / extraction_eligible の 4 個数だけ（`read_model.py:273-302`、`export_schema.py:119-122`）。患者別の `fetch_state`（pending / complete / incomplete: `mcs_adapter.py:333`）・`coverage_ts`・`history_floor`（`ledger.py:304-305,373-375`）はどの record にも出ない。現行 coverage では完了条件（接続）を満たせない | CD-4、Q10 |
-| 2 | 高 | attachment・stat は `fields` で除外する | 除外ではなく**全体拒否**。未許可 type があると `record_type_unauthorized:<type>` で build 失敗（`ext_contract.py:217-218`、`test_ext_contract.py:96-102`）。brain_export の `export.jsonl` は stat と attachment を必ず含む（`brain_export.py:249-251,260-261`）。【実行確認】5 種の auth に raw の `export.jsonl` を渡すと失敗する | C1 に未許可 type の前段除去（縮小だけ、件数を出力）を追加。build の拒否は維持 |
+| 2 | 高 | attachment・stat は `fields` で除外する | 除外ではなく**全体拒否**。未許可 type があると `record_type_unauthorized:<type>` で build 失敗（`ext_contract.py:217-218`、`test_ext_contract.py:96-102`）。brain_export の `export.jsonl` は stat と attachment を必ず含む（`brain_export.py:249-251,260-261`）。【実行確認】6 種の auth に raw の `export.jsonl` を渡すと失敗する | C1 に未許可 type の前段除去（縮小だけ、件数を出力）を追加。build の拒否は維持 |
 | 3 | 高 | 両 repo で `records_sha256` を検証する前提 | `_canonical`（:71-73）は Python の float 表記。【実行確認】`1790000000.0` は Python で `1790000000.0`、JS で `1790000000`。Node で受信側を模して再計算したところ、小数付きの時刻では一致し、整数値の float が 1 つでもあると不一致だった。既存テストの `NOW=1_800_000_000.0`（`test_ext_contract.py:13`）は `NOW-10` も整数値 float なので、流用した fixture はこの罠を埋め込む | CD-1。初回の実送信前に決める |
 | 4 | 中 | journal 状態 held / delete_held / withdrawn（`ext_contract.py:23-26`）、health に held 件数 | journal に `held` は書かれない。結果不明は `sent`（:513）で、`held` は読取り時に許容するだけ（:449-451,:497）。:23-26 は docstring | health は `sent` + `held` を held として数える |
-| 5 | 中 | 受信側が 5 種・meta・coverage を要求する | 参照 receiver `_validate_envelope`（:296-324）は stat・attachment も coverage 欠落も受理する（実行で確認）。5 種と meta / coverage の必須は builder 側だけの規則 | CD-6 |
+| 5 | 中 | 受信側が 6 種・meta・coverage を要求する | 参照 receiver `_validate_envelope`（:296-324）は stat・attachment も coverage 欠落も受理する（実行で確認）。6 種と meta / coverage の必須は builder 側だけの規則 | CD-6 |
 | 6 | 中 | meta を `max_snapshot_age_s` 超過判定に使う（zaitaku 側） | `max_snapshot_age_s` は auth の項目で envelope にない（:258-271）。判定は送信側だけ（:197-200、deliver 時の再構築: :482） | 受信側の鮮度閾値は別途合意（CD-6） |
 | 7 | 中 | 返信の検知は `parent_id` と `pharmacist_request_unanswered` | (a) `--only-with-facts` は facts のない返信 record を落とす。(b) `pharmacist_request_unanswered` は「薬剤師宛の依頼に自組織の投稿がない」検知（`mcs_signals.py:472-523`、:509）で、他職種の返信到着ではない。(c) 削除・編集で facts が消えた message も届かず、受信側に古い staging が残る（`read_model.py:155-158,:209-247`） | CD-3 |
 | 8 | 中 | 分割上限は 1 MiB（UTF-8 の JSON 本文） | 何を測るか未定義。`bounded_http` は本文を既定 separators で再 JSON 化する（`bounded_http.py:100-101`）。実測で canonical より 7〜8% 大きい | 上限は envelope 全体の canonical バイト数と定義（§2 (5)） |
-| 9 | 低 | C1: `fields` の既定を 5 種に | 現在の既定は省略時に全 7 種（:201）。auth を作る CLI はない。既存テストと integration は明示 fields を使う（`test_ext_contract.py:26`、`integration/test_mcs_recovery_narrative.py:742`） | ライブラリ既定は変えず、C1 プロファイルで強制（CD-6） |
+| 9 | 低 | C1: `fields` の既定を 6 種に | 現在の既定は省略時に全 7 種（:201）。auth を作る CLI はない。既存テストと integration は明示 fields を使う（`test_ext_contract.py:26`、`integration/test_mcs_recovery_narrative.py:742`） | ライブラリ既定は変えず、C1 プロファイルで強制（CD-6） |
 | 10 | 低 | C4 のファイルは `notify_flush.py`・`notify_render.py` | 名前の出力は 4 ファイル。`notify_cards.py:1075-1085`（Discord スレッド名）と `semantic/semantic_render.py:194-196,253-256`（要約通知の `【名前】`）が抜けていた | §6 |
 | 11 | 低 | signal の同一性は type + project_id + evidence の sha256 | `med_change_no_followup` は evidence の `med`・`mention_count` が allowlist 外で落ちる（`mcs_signals.py:337-342` 対 `export_schema.py:130-133`）。同じ message_ids に複数の med があると同一性が衝突し、1 件に畳まれる | CD-7 |
 | 12 | 低 | 行番号 | CLI の generated_at は :676-678。`_SCHEMAS` は :116-147（:148 は `RECORD_TYPES`）。「held / delete_held / withdrawn（:23-26）」は docstring で、実定義は :409-411,:449-451 | 文書修正 |
@@ -42,7 +42,7 @@
 
 **設計方針**
 
-(1) C0 で決める契約事項（CD-1〜CD-8。両文書で同一）:
+(1) C0 で決める契約事項（CD-1〜CD-9。両文書で同一）:
 
 | ID | 決めること | 推奨 |
 |---|---|---|
@@ -51,13 +51,14 @@
 | CD-3 | `--only-with-facts` の意味と伝播 | 残す条件は facts 非空、または `body_state=deleted`（tombstone）。受信側は、完全集合が届いた世代で、前世代の staging のうち再掲されないものを「MCS 側で現在は事実なし / 不明」に落とす（削除はしない）。facts のない返信は届かないので、受信側は「返信なし」と表示しない。Q2 = off なら message は 0 件（signal だけ）になる |
 | CD-4 | 取得完全性 | `coverage.collection` に `patients_incomplete`（`fetch_state≠'complete'` の件数、算出不能は null）を追加する（read_model の既存 `suppress` 流儀に合わせる）。患者単位が要るなら新 record 型が必要で、「新型を作らない」方針と衝突するため別判断（Q10）。#3 の `known_gaps` を後で加える余地がある |
 | CD-5 | receipt | 下記 (4)。envelope 単位の all-or-nothing（参照 receiver が最初の不正で全体拒否する挙動と同じ: :304-307）。`rejected` は終端 |
-| CD-6 | C1 プロファイル | fields は 5 種、patients は `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30（Q3 の min(retention, 30) と producer 側を一致させる）、meta・coverage 各 1 件必須、stat・attachment は受信側でも拒否する。producer と receiver の両方で強制し、期待コードを固定する。`max_snapshot_age_s` は送信側だけの検査（§1-6）なので、受信側は `snapshot_generated_at` と受信時刻で自前の鮮度閾値を持ち、超過は拒否でなく「古い」警告として age を常時表示する。受信側閾値の初期案は手渡し 24 時間・マシン送信 1 時間で、C0 で実測して決める提案値 |
+| CD-6 | C1 プロファイル | fields は 6 種（`message_body` を含む）、patients は `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30（Q3 の min(retention, 30) と producer 側を一致させる）、meta・coverage 各 1 件必須、stat・attachment は受信側でも拒否する。producer と receiver の両方で強制し、期待コードを固定する。`max_snapshot_age_s` は送信側だけの検査（§1-6）なので、受信側は `snapshot_generated_at` と受信時刻で自前の鮮度閾値を持ち、超過は拒否でなく「古い」警告として age を常時表示する。受信側閾値の初期案は手渡し 24 時間・マシン送信 1 時間で、C0 で実測して決める提案値 |
 | CD-7 | signal 同一性 | 畳み込みを許容し、両文書に明記する。signal 件数の一致検証はしない |
 | CD-8 | fixture 正本（Q7） | hermes-mcs を正本にする（Python の参照実装から生成するため）。zaitaku-calender へコピーし、両 CI で `MANIFEST.sha256` を検証する。変更は同一変更単位（両文書とも同じ運用） |
+| CD-9 | 本文 record `message_body`（Q1 の決定による契約拡張。2026-09-29・オーナー） | `mcs-read-model/1` の `_SCHEMAS` に新 record 型 `message_body` を追加する: `message_id`（必須。対応する `message` record と同じ世代に置く）・`body_text`（本文の格納表現をそのままの文字列。UTF-8、**8 KiB まで**。超過分は送信側で切詰めて `body_truncated=true`）・`body_format`（格納形式の enum。HTML のまま送り、受信側はテキスト表示に限定する）・`body_sha256`（`body_text` の UTF-8 bytes の sha256。同一入力なら `content_hash` と一致する）・`body_truncated`・`sender_kind`（enum。氏名・個人特定属性は送らない。値集合は fixture で固定する）。`content_omitted=true` の message には付けない。body の編集・削除は `body_sha256` の変化または body の消失として表れ、message の tombstone（`body_state=deleted`）で本文も消える。本文は自由文で PHI を含み得るため、受信側の staging は暗号化・read 監査が必須（zaitaku-calender `docs/adr-external-ingest-v1.md`） |
 
 C0 の前に、次の 2 つの決定が終わっている必要がある: #8-D2（wire の enum 名を改名するか。C0 fixture の固定前なら無償）と、#8 の `prev_content_hash` の要否（固定後は `/2` が必要）。
 
-C0 の合意事項は CD-1〜CD-8 のほか、次を含む（両文書で同一。zaitaku-calender `ROADMAP.md` §4.7）:
+C0 の合意事項は CD-1〜CD-9 のほか、次を含む（両文書で同一。zaitaku-calender `ROADMAP.md` §4.7）:
 - **撤回指示書の形式と認証**: `withdraw()` は `sink.delete` を呼ぶだけで、zaitaku-calender へ運ぶ指示書の形式・認証が未定義。提案は `mcs-ext-withdraw/1`: `envelope_id`・`auth_id`・理由コード（自由文なし）のみ、4 KiB 以下。受信側は未採用 staging を削除して削除 receipt を返す。withdraw が原本より先に届く場合（tombstone を先に置き後着を拒否）と part 分割の一部だけが withdraw された世代の扱いもここで決める。合意までは受信側 C1 の完了条件から外し、管理者による未採用 staging の即時 purge 手順で代替する。
 - **受信側の鮮度閾値**（CD-6）と**サイズ上限の扱い**: 上限は canonical envelope 全体で 1,048,576 B。wire は再 JSON 化で +7〜8% 膨らむため、(a) 送信前検査を約 900,000 B に絞るか、(b) 受信側が生 bytes を扱うかを決める。上限ちょうどの受理と +1 byte の拒否を fixture と route テストに含める。
 - **`source` の対応付け**: message の論理キーの `source` は envelope のフィールドに対応しない。`destination` または `auth_id` へ対応付けるか、受信側の接続ラベルとするかを決める。
@@ -69,16 +70,20 @@ C0 の合意事項は CD-1〜CD-8 のほか、次を含む（両文書で同一�
 - 固定値: `FIXED_NOW=1_790_000_000.5`、generation `gen-c0-0001`、`generated_at=FIXED_NOW-30.25`、auth_id `auth-c0-synth-1`。ID と hash はすべて合成で、`content_hash` は `sha256("SYNTHETIC-C0-<mid>")`。
 - `accepted/`（受理）:
   - `01-basic`: meta、coverage（全構造）、message 1001（同 kind `medication_event` の fact 2 件、fact_id・workflow_status・evidence_ids は別、relation `TRANSITION` 1 件）、message 1002（`parent_id:1001`、fact 1 件）、signal（`pharmacist_request_unanswered`、`evidence.message_ids=[1001]`、`content_omitted:true`）。必須分。
-  - `02-signals-truncated`: 01 に `signals_truncated{total}` を加えた 5 種目の例。
+  - `02-signals-truncated`: 01 に `signals_truncated{total}` を加えた 6 種目の例。
   - `03-heartbeat`: meta と coverage だけ。
   - `04-no-facts`: `facts=[]` で `state:pending` の message。
   - `05-split-1of3`〜`3of3`: 小さい max_bytes で強制した 3 分割。
   - `06-int-valued-float`: `generated_at=1790000000.0`（CD-1 を強制する例）。
+  - `07-message-body`: message 1003 に対応する `message_body`（`body_format`・`sender_kind`・`body_sha256` 一致）を持つ例。
+  - `08-body-truncated`: 8 KiB 超の本文を切詰め `body_truncated=true` とした例。
+  - `09-omitted-no-body`: `content_omitted=true` の message に `message_body` が無い受理例。
 - `rejected/`（拒否。1 欠陥だけで、他の hash・count・id は再計算）:
   - `01` `forbidden_field:statement`（`facts[0].statement`）、`02` `forbidden_field:sender`（message 直下）、`03` `record_field_not_exportable`（`facts[0].future_text`）、`04` 同（`message.memo`）
   - `05` `envelope_integrity_invalid`（`records_sha256` 改ざん）、`06` 同（`record_count`）、`07` 同（`envelope_id`）
   - `08` `snapshot_generation_mixed`、`09` `sink_scope_not_aggregate`、`10` `envelope_fields_invalid`、`11` `envelope_id_invalid`
   - C1 プロファイル分（新規実装が要る。現行の参照実装は受理する）: `12` `record_type_not_accepted:stat`、`13` `envelope_coverage_missing`、`14` `envelope_meta_missing`
+  - `16` `forbidden_field:sender_name`（`message_body` 直下の氏名系キー）、`17` `body_sha256` と `body_text` の不一致（自己整合性違反）、`18` 8 KiB 超なのに `body_truncated` なし（contract violation）
   - `15` `envelope_too_large` は 1 MiB 超になるため生成だけで、コミットしない
   - 01〜11 の期待コードは現行実装に対する実測と一致。
 - `receipts/`: `receive-accepted`、`receive-rejected`、`receive-mismatch-sha`（送信側は held 維持）、`delete-deleted`、`delete-failed`（`deleted:false`）、`bad-unknown-field`（parser 拒否）。
@@ -124,7 +129,7 @@ C0 の合意事項は CD-1〜CD-8 のほか、次を含む（両文書で同一�
 - 共通コマンド（全フェーズ）: `scripts/run_tests.sh tests/ops/ tests/views/test_read_model.py`、CI 範囲の ruff（`make lint`。ローカルは uv 経由）、`python3 scripts/update_readme.py --check`、`python3 ci/gates.py && python3 ci/mine_gates.py --check`。
 - integration の E2E（`test_mcs_recovery_narrative.py:556-575`）は無改変で緑のままであること（ライブラリの既定を変えないため）。
 
-**依存**: zaitaku-calender C0（同時）、Q1・Q2・Q3・Q4・Q6・Q7・Q10、CD-1〜CD-8、#8-D2。
+**依存**: zaitaku-calender C0（同時）、Q2・Q3・Q4・Q7・Q10（Q1 決定済み・Q6 記録済み）、CD-1〜CD-9、#8-D2。
 
 **規模**: M。実作業は S〜M で、合意コストが支配的。
 
@@ -197,13 +202,13 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 **受入条件とテスト（合成のみ。CLI は現状 0 件なので新設）**
 - `--only-with-facts` の後で hash が計算される。未許可 type の除去。tombstone を残す。
 - 分割の各性質: 上限内、meta + coverage が各分割にある、message が排他的で和集合が全件、決定的な id、`part` の整合、単一 record 超過の拒否、0 件で heartbeat。
-- 5 種・meta・coverage の強制（builder と receiver）。
+- 6 種・meta・coverage の強制（builder と receiver）。
 - receipt: 未知キー・型・reasons の形式・合計不一致の拒否、rejected は終端で再送されない、rejected status が acked にならない。
 - HandoffSink: receipt の前は held、投入後に acked、削除 receipt で withdrawn、終端で payload 削除。
 - CLI の一周と旧フラグの互換。health の件数・age・auth 日数・破損 journal。0700 権限。
 - E2E: 合成 ledger に `canonical_projection` の行を直接入れ（`tests/views/test_read_model.py:25-38` の `_artifact` パターン）、`publish_snapshot`、brain_export、deliver（`--only-with-facts --max-bytes 4096`）、receipt、reconcile、withdraw、health の順。ネットワークと Keychain は `tests/conftest.py` のガード（:114-120）下で動く。
 
-**依存**: C0（CD-1〜CD-8。特に CD-1）。本番投入（実データでの最初の envelope 作成）は #4 修復の実施記録と Q6 の判断後だけ。合成での開発とテストは Q6 と切り離して進めてよい。
+**依存**: C0（CD-1〜CD-9。特に CD-1）。本番投入（実データでの最初の envelope 作成）は #4 修復の実施記録と Q6 の判断後だけ（Q6 は記録済み: 2026-09-29）。合成での開発とテストは Q6 と切り離して進めてよい。
 
 **規模**: L。実装約 500 行、テスト約 700 行、文書。
 
@@ -318,7 +323,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 
 ## 実施順
 
-1. **C0 の前提の決定**（コードなし）: Q1〜Q4・Q7・Q10・Q11・Q8(b)（Q6 は判断者と根拠文書の場所の記録のみ）、CD-1〜CD-8 と上記の C0 合意事項、#8-D2。特に CD-1 は初回の実送信前が期限。
+1. **C0 の前提の決定**（コードなし）: Q2〜Q4・Q7・Q10・Q11・Q8(b)（Q1 決定済み・Q6 記録済み）、CD-1〜CD-9 と上記の C0 合意事項、#8-D2。特に CD-1 は初回の実送信前が期限。
 2. **C0**（M）: 参照実装の変更（CD-1・CD-2・CD-4・CD-5・CD-6 の実装）、fixture・golden・MANIFEST、drift guard、文書。zaitaku-calender C0 と同時に進める。
 3. **C1**（L）: G1 → G2 → G3 → G4 → G5 の順。合成環境で完結。本番投入は #4 の実施記録と Q6 の判断後。
 4. **C4**（S）: コードは独立に着手できる。運用開始の判断は zaitaku-calender C2 の実績後。
