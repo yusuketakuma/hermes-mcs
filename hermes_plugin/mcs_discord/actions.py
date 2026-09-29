@@ -92,9 +92,15 @@ def _actor(interaction) -> str:
 
 
 def _role_ids(interaction) -> set[str]:
-    """Guild role ids of the clicking member (empty outside a guild)."""
+    """Guild role ids of the clicking member (empty outside a guild).
+    discord.py lists the @everyone role (id == guild id) first — it is
+    never a grant, so a misconfigured guild id cannot allow everyone.
+    Roles come from the member cache; a member whose roles are not
+    cached has none here and fails closed (user allowlist only)."""
+    everyone = str(getattr(interaction, "guild_id", None))
     return {str(getattr(r, "id", r))
-            for r in getattr(interaction.user, "roles", None) or []}
+            for r in getattr(interaction.user, "roles", None) or []} \
+        - {everyone}
 
 
 def _display_name(interaction) -> str:

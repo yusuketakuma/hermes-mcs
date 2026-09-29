@@ -1967,3 +1967,9 @@ def test_plugin_role_ids_written_only_when_given(monkeypatch):
     sets.clear()
     mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG), _plugin_args())
     assert all(not k.endswith("allowed_role_ids") for _, k, _ in sets)
+    # the guild id is @everyone — refused, never written
+    sets.clear()
+    assert mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco",
+                                         plugin_role_ids="555,g")) is False
+    assert all(not k.endswith("allowed_role_ids") for _, k, _ in sets)
