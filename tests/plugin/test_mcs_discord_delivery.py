@@ -42,10 +42,11 @@ FOREIGN_USER = types.SimpleNamespace(id=9999)
 
 
 class _HistMsg:
-    def __init__(self, mid, content, author=BOT_USER):
+    def __init__(self, mid, content, author=BOT_USER, attachments=()):
         self.id = mid
         self.content = content
         self.author = author        # posts through the fake are ours
+        self.attachments = list(attachments)
         self.edits = 0
         self.edit_fail = None       # exception to raise on edit
 
@@ -63,13 +64,15 @@ class FakeThread:
         self._next = 6000
         self.fail_at = None     # send index to raise on (None = never)
         self.fail_exc = FakeHTTP(500)
+        self.fetch_fail = None  # exception to raise on fetch_message
 
-    async def send(self, content=None, **_kw):
+    async def send(self, content=None, **kw):
         n = len(self.sent)
         if self.fail_at is not None and n == self.fail_at:
             raise self.fail_exc
         self._next += 1
-        self.sent.append(_HistMsg(self._next, content))
+        files = [kw["file"]] if kw.get("file") is not None else []
+        self.sent.append(_HistMsg(self._next, content, attachments=files))
         return self.sent[-1]
 
     async def history(self, limit=None):
@@ -78,6 +81,8 @@ class FakeThread:
             yield m
 
     async def fetch_message(self, mid):
+        if self.fetch_fail is not None:
+            raise self.fetch_fail
         for m in self.sent:
             if m.id == mid:
                 return m
@@ -732,6 +737,75 @@ def test_attachment_part_uploads_verified_file(tmp_path):
     parts = _sent_parts(_state(tmp_path))
     assert parts["attach:0007"]["result"] == "delivered"
     assert parts["attach:0007"]["remote_id"]
+
+
+def _attach_update(tmp_path, prior):
+    """An update render whose attachment part names the message that
+    already carries the same file (``prior_remote_id``)."""
+    blob = b"synthetic-attachment"
+    f = tmp_path / "att.bin"
+    f.write_bytes(blob)
+    att = {"part_id": "attach:0007", "kind": "attachment_part",
+           "index": 0, "attachment_id": 7, "name": "att.bin",
+           "path": str(f), "sha256": hashlib.sha256(blob).hexdigest(),
+           "bytes": len(blob)}
+    if prior is not None:
+        att["prior_remote_id"] = prior
+    w, reg, bot = _mkworker(tmp_path)
+    th = FakeThread(7700)
+    bot.channels[42].threads.append(th)
+    spec = _spec([], op="update", thread_id="7700")
+    att["index"] = len(spec["parts"]["manifest"])
+    spec["parts"]["manifest"].append(att)
+    return w, th, spec
+
+
+def test_update_reuses_the_post_that_already_carries_the_file(tmp_path):
+    """Every update render re-plans the thread's attachments; the file
+    already in the thread is bound again, not uploaded a second time."""
+    w, th, spec = _attach_update(tmp_path, None)
+    th.sent.append(_HistMsg(6100, None, attachments=["att.bin"]))
+    spec["parts"]["manifest"][-1]["prior_remote_id"] = "6100"
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(th.sent) == 1                     # nothing uploaded
+    row = _sent_parts(_state(tmp_path))["attach:0007"]
+    assert row["result"] == "delivered" and row["remote_id"] == "6100"
+
+
+@pytest.mark.parametrize("setup", ["deleted", "foreign", "no_file"])
+def test_unusable_prior_file_post_uploads_afresh(tmp_path, setup):
+    w, th, spec = _attach_update(tmp_path, "6100")
+    if setup == "foreign":
+        th.sent.append(_HistMsg(6100, None, author=FOREIGN_USER,
+                                attachments=["att.bin"]))
+    elif setup == "no_file":
+        th.sent.append(_HistMsg(6100, "本文のみ"))
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    uploads = [m for m in th.sent if m.id != 6100]
+    assert len(uploads) == 1 and uploads[0].attachments
+    row = _sent_parts(_state(tmp_path))["attach:0007"]
+    assert row["result"] == "delivered"
+    assert row["remote_id"] == str(uploads[0].id)
+
+
+def test_unknown_prior_lookup_never_uploads_a_second_copy(tmp_path):
+    w, th, spec = _attach_update(tmp_path, "6100")
+    th.sent.append(_HistMsg(6100, None, attachments=["att.bin"]))
+    th.fetch_fail = FakeHTTP(500)                # may still be there
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(th.sent) == 1
+    assert _sent_parts(_state(tmp_path))["attach:0007"]["result"] \
+        == "unknown"
+
+
+def test_attachment_part_may_name_its_prior_post(tmp_path):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    _, _, update = _attach_update(tmp_path, "6100")
+    spec = _spec([])
+    att = dict(update["parts"]["manifest"][-1],
+               index=len(spec["parts"]["manifest"]))
+    spec["parts"]["manifest"].append(att)
+    spec_mod.validate(_sealed(spec))
 
 
 def test_attachment_part_hash_mismatch_not_sent(tmp_path):
