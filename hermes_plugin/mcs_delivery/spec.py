@@ -186,7 +186,9 @@ def _footer_cost(footer) -> tuple[int, int]:
         if c["type"] == "text":
             if not _text(c.get("text"), MAX_TEXT):
                 _err("footer_too_long")
-            text += len(c["text"]) + 3   # "-# " wrapper
+            # the renderer prefixes EVERY line with "-# " and joins
+            # lines with a newline — one item may hold several lines
+            text += sum(len(ln) + 4 for ln in c["text"].splitlines())
             slots += 1
     return slots, text
 
