@@ -472,7 +472,7 @@ $PY mcs/views/mcs_view.py signals --project 123
   `hour_jst` 以降・当日分が無いときに `kind='daily_digest'` の text intent を
   1件積む。前回の digest 行（`payload.date`/`until`）が「1日1回」の durable
   marker で、窓は前回の `until` から（初回は24h）。本文は enqueue 時に固定
-  （ID と件数のみ・患者名なし）し、送信時は `daily_digest` がオフなら
+  （ID と件数。`include_names` が true のときだけ患者名を ID に添える）し、送信時は `daily_digest` がオフなら
   `StaleSend` で破棄する。取得状況は `mcs_queries.coverage_gaps()`
   （incomplete ルームと理由コード・待機/失敗ジョブ・本文未取得・返信未取得）を
   使い、0件でも欄を出す。確認候補は `signals.notify` がオンのときだけ、

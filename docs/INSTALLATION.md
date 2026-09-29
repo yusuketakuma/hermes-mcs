@@ -541,6 +541,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `hermes_bin` | str | 自動検出 | `hermes` コマンドのパス |
 | `daily_digest.enabled` | bool | `false` | 朝の日次ダイジェスト（件数と ID のみ）を `notify_target` に送る |
 | `daily_digest.hour_jst` | int(0-23) | `8` | 日次ダイジェストを送る時刻（JST。この時刻以降の最初の実行で1日1回） |
+| `daily_digest.include_names` | bool | `false` | 一覧の project ID に患者名を添える（送信先は `notify_target`） |
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |

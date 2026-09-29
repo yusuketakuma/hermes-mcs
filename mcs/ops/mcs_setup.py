@@ -271,6 +271,8 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
             err = _int_range(0, 23)(dd["hour_jst"])
             if err:
                 errors.append(f"daily_digest.hour_jst: {err}")
+        if "include_names" in dd and type(dd["include_names"]) is not bool:
+            errors.append("daily_digest.include_names: must be a boolean")
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
         # a scope block for the transport that is NOT active is stale —
@@ -734,9 +736,12 @@ WIZARD = [
         ("hermes_bin", "opt", None,
          "hermes コマンドのパス（空欄=自動検出）", None),
         ("daily_digest.enabled", "bool", False,
-         "朝の日次ダイジェスト（件数とIDのみ）を notify_target に送る", None),
+         "朝の日次ダイジェスト（件数とID。患者名は include_names で追加）を notify_target に送る", None),
         ("daily_digest.hour_jst", "int", 8,
          "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
+        ("daily_digest.include_names", "bool", False,
+         "日次ダイジェストの一覧に患者名を添える（送信先は notify_target）",
+         _digest_on),
     ]),
     ("収集ポリシー", [
         ("self_posts", "bool", False,
