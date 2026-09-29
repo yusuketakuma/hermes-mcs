@@ -740,6 +740,19 @@ def test_complete_part_is_not_requested_again(tmp_path):
                 if c.startswith("curl") and "-C -" in c]
 
 
+def test_dry_run_plans_no_second_llm_when_hermes_manages_it(tmp_path):
+    """The plan mirrors stage 4: with a hermes-managed agent present it
+    must not announce a model download or a new ai.mcs.llamaserver."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "ai.hermes.llamacpp.plist").write_text("<plist/>")
+    r = _run(env, hermes_home, "--dry-run")
+    plan = r.stdout[r.stdout.index("=== plan"):]
+    assert "hermes-managed" in plan and "is kept" in plan
+    assert "ai.mcs.llamaserver" not in plan
+
+
 def test_model_checksum_mismatch_is_fatal(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run({**env, "MCS_MODEL_SHA256": "0" * 64}, hermes_home)
