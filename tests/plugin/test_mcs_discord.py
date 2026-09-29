@@ -2197,7 +2197,7 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     assert render["parts_state"] == "incomplete"
 
 
-def test_update_backfills_body_into_legacy_thread(world, monkeypatch):
+def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     """A card whose thread was created before the in-thread body —
     here simulated by a failed body post — gets the text on the next
     update render. Content dedupe keeps further updates silent."""
