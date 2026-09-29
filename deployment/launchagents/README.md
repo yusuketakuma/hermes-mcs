@@ -91,8 +91,9 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   なら 1 秒間隔で再照会して空きを待つ（call の deadline まで、deadline
   無しは最大300s）。処理中の slot へ id_slot pin を送ると llama-server が
   prompt cache を処理中 slot に load して `GGML_ASSERT(n <= tokens.size())`
-  で abort するため、使用中の slot 0 へは fallback しない。deadline 到達後
-  は call 自体が送信前に拒否される。`/slots` 照会失敗時のみ slot 0 に
+  で abort するため、使用中の slot 0 へは fallback しない。待ちが時間切れ
+  になると slot を選ばず、その call（format probe 含む）は送信せず deferred
+  として残す（attempt は消費しない）。`/slots` 照会失敗時のみ slot 0 に
   fallback する（サーバ停止中は call も失敗するため stall しない）。
 - `mcs_llm_catchup.sh`（hermes cron・22:30 起動・最大55分）:
   `MCS_LLM_SLOT=1` で `semantic_drain.py --drain` を走らせ、QC/semantic
