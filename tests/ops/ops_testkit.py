@@ -9,14 +9,10 @@ import json
 import os
 import sqlite3
 import subprocess
-import sys
 import time
 import uuid
 from contextlib import suppress
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-import _mcs_path  # noqa: F401
 
 import extract
 import ledger

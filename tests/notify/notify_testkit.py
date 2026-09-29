@@ -6,13 +6,8 @@ sys.path bootstrap."""
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards

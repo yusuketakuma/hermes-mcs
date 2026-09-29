@@ -7,9 +7,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-import _mcs_path  # noqa: F401
 
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds

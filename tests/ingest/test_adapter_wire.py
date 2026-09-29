@@ -16,8 +16,6 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-
 import mcs_adapter
 from ingest_testkit import _message
 

@@ -16,9 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-import _mcs_path  # noqa: F401
 
 import ledger as _ledger
 import notify_cards

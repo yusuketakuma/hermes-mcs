@@ -4,11 +4,7 @@ Covers: summary counts (evaluated/unevaluated/verdicts/pending), the
 flagged list (non-MATCH items, urgency mismatch, unevaluated), and the
 per-message detail with staleness marking.
 """
-import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import pytest
 
