@@ -1807,3 +1807,72 @@ def test_tick_journal_reads_do_not_grow_with_the_journal(tmp_path,
     assert per_tick[0] >= size
     assert max(per_tick[1:]) < size / 10
     assert per_tick[-1] <= 2 * per_tick[1]
+
+
+# ---------- replaced button contexts ----------------------------------------
+
+def _token_world(tmp_path, monkeypatch):
+    """An update spec whose claim-time tokens (t=2000) follow the old
+    render's (t=1000) for the same card, beside another card's token
+    and a result-issued task_status token."""
+    from hermes_plugin.mcs_delivery import registry as registry_mod
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    clock = [1000.0]
+    monkeypatch.setattr(registry_mod, "time", types.SimpleNamespace(
+        time=lambda: clock[0]))
+    w, reg, _ = _mkworker(tmp_path)
+
+    def update(card_key, **buttons):
+        spec = _spec([], manifest=[], op="update")
+        spec["card_key"] = card_key
+        spec["delivery"]["message_id"] = "9001"
+        spec["parts"]["action_rows"] = [
+            [{"id": a, "token": t} for a, t in buttons.items()]]
+        return spec
+
+    card = "v1|thread|1|100"
+    reg.put_tokens(spec_mod.token_map(
+        update(card, ack="old-ack", next="old-next")))
+    reg.put_tokens(spec_mod.token_map(
+        update("v1|thread|1|999", ack="other-ack")))
+    reg.put_tokens({"task-tok": {"action": "task_status", "card_key": card,
+                                 "kind": "thread", "project_id": 1}})
+    clock[0] = 2000.0
+    spec = update(card, ack="new-ack", next="new-next")
+    reg.put_tokens(spec_mod.token_map(spec))       # the claim-time put
+    return w, reg, spec, clock, update
+
+
+@pytest.mark.parametrize("result,pruned", [
+    ("delivered", True), ("not_sent", False), ("unknown", False)])
+def test_delivered_update_prunes_replaced_card_tokens(
+        tmp_path, monkeypatch, result, pruned):
+    """Only a proven in-place edit retires the old view's tokens; other
+    cards, result-issued task tokens and the new ones always stay."""
+    w, reg, spec, _, _ = _token_world(tmp_path, monkeypatch)
+    claim = _claim(spec)
+    claim["phase"] = "result"
+    claim["outcome"] = {"result": result, "message_id": "9001"} \
+        if result == "delivered" else {"result": result, "error_code": "x"}
+    asyncio.run(w._step_claim(claim, allow_parts=False))
+    for t in ("new-ack", "new-next", "other-ack", "task-tok"):
+        assert reg.token(t) is not None
+    assert (reg.token("old-ack") is None) is pruned
+    assert (reg.token("old-next") is None) is pruned
+    # durable, not just in memory
+    assert (Registry(str(_state(tmp_path))).token("old-ack") is None) \
+        is pruned
+
+
+def test_newer_render_tokens_survive_an_older_update_prune(
+        tmp_path, monkeypatch):
+    """A later render's tokens, put after this one's, are never pruned
+    by this render's delivered receipt."""
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    w, reg, spec, clock, update = _token_world(tmp_path, monkeypatch)
+    clock[0] = 3000.0
+    reg.put_tokens(spec_mod.token_map(
+        update(spec["card_key"], ack="newer-ack")))
+    reg.prune_card_tokens(spec_mod.token_map(spec))
+    assert reg.token("newer-ack") is not None
+    assert reg.token("old-ack") is None and reg.token("new-ack")
