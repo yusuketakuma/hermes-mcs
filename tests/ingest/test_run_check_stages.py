@@ -514,6 +514,29 @@ def test_stage_derive_two_lanes(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize("semantic,expected", [
+    ({"mode": "off", "fact_source": "canonical",
+      "fact_source_gate": "g6-v1:abc123"}, set()),
+    ({"mode": "off"}, None),
+])
+def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
+                                               semantic, expected):
+    """canonical mode admits nothing new (fail-closed empty set);
+    otherwise admission is unrestricted (None)."""
+    db = _ledger(tmp_path)
+    seen = {}
+
+    def run_pending(ledger, **kw):
+        seen["admitted"] = kw["admitted_ids"]
+        return {"done": 0, "failed": 0, "left": 0, "pids": []}
+    monkeypatch.setattr(extract_llm, "run_pending", run_pending)
+    result = {"errors": []}
+    run_check.stage_derive(db, result, time.monotonic() + 120,
+                           cfg={"semantic": semantic})
+    assert "admitted" in seen and seen["admitted"] == expected
+    db.close()
+
+
 def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
@@ -753,6 +776,42 @@ def test_self_probe_fetches_and_notifies_own_post(tmp_path):
     payload = json.loads(row["payload"])
     assert payload["source"] == "self"
     assert payload["message_ids"] == [101]
+    db.close()
+
+
+def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
+        tmp_path, monkeypatch):
+    """With self_posts on, the probe runs before backfill: an own post
+    (never unread) on backfill's first page is stored by the probe with a
+    source=self notification instead of silently by backfill."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(90))
+    db.save_messages([_msg_at(100, 90, _iso(1), unread=False)])
+    own = _msg_at(101, 90, _iso(0), unread=False)
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": 101, "is_self_only": True}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    result = {"errors": [], "new_messages": 0, "backfilled": 0}
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    run_check._stage_fetch(Adapter(), db, args, {"self_posts": True},
+                           result, time.monotonic() + 300, 1, False, None)
+
+    assert result["errors"] == []
+    assert result["self_probe_fetched"] == [90]
+    assert result["new_messages"] == 1 and result["backfilled"] == 0
+    rows = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchall()
+    assert [r["kind"] for r in rows] == ["new_messages"]
+    payload = json.loads(rows[0]["payload"])
+    assert payload["source"] == "self" and payload["message_ids"] == [101]
+    # no pending reply job, so backfill still certifies coverage this tick
+    assert db.coverage_ts(90) == db.high_watermark(90)
     db.close()
 
 
@@ -1527,6 +1586,16 @@ def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
     db.close()
 
 
+def test_unread_at_ignores_huge_integer_in_previous_health(tmp_path,
+                                                           monkeypatch):
+    """An oversized integer literal in the previous health.json must
+    read as no value, not raise OverflowError out of health writing."""
+    (tmp_path / "health.json").write_text('{"unread_at": 1' + "0" * 400 + "}")
+    monkeypatch.setattr(run_check, "HEALTH_FILE",
+                        str(tmp_path / "health.json"))
+    assert run_check._unread_at({"jobs_only": True}, "ok", 1.0) is None
+
+
 @pytest.mark.parametrize("cause", ["marker", "code_changed"])
 def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
                                                    cause):
@@ -1708,3 +1777,45 @@ def test_backup_skip_is_recorded(monkeypatch):
     result = {"errors": []}
     run_check._housekeeping(result)
     assert result == {"errors": [], "backup_skipped": "disk_low"}
+
+
+@pytest.mark.parametrize("jobs_only,has_profile,fetched", [
+    (False, True, False),   # tick with a stored profile: no GET
+    (False, False, True),   # tick before the first profile: fetch it
+    (True, True, True),     # deep run always refreshes
+])
+def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
+                                 has_profile, fetched):
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+    db = _ledger(tmp_path)
+    prof = {"sender_id": 1, "name": "synthetic", "professions": [],
+            "organizations": []}
+    if has_profile:
+        with db.db:
+            mcs_signals.record_self_profile(db.db, prof)
+    calls = []
+
+    class Adapter:
+        def self_profile(self):
+            calls.append(1)
+            return prof
+
+    monkeypatch.setattr(run_check, "HOME", str(tmp_path))
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_cards, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands",
+                        lambda *a, **k: None)
+    result = {"errors": []}
+    args = SimpleNamespace(jobs_only=jobs_only, download_files=False)
+    run_check._run_jobs(Adapter(), db, args, {}, result,
+                        time.monotonic() + 300, False, None)
+    assert result["errors"] == []
+    assert bool(calls) is fetched
+    assert mcs_signals._latest_self_profile(db.db)["name"] == "synthetic"
+    db.close()

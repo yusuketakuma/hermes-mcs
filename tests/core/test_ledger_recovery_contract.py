@@ -193,6 +193,68 @@ def test_backup_skipped_when_disk_cannot_hold_two_copies(tmp_path, monkeypatch):
     assert maintenance.daily_backup(str(source)) is None
     assert len(list(backup_dir.glob("ledger-*.db"))) == 1
 
+
+def _counting_validator(monkeypatch):
+    calls: list[str] = []
+    real = maintenance.valid_mcs_db
+
+    def valid(path):
+        calls.append(os.path.basename(path))
+        return real(path)
+    monkeypatch.setattr(maintenance, "valid_mcs_db", valid)
+    return calls
+
+
+def test_same_day_backup_skips_quick_check_while_unchanged(tmp_path,
+                                                           monkeypatch):
+    source, _ = _build_fixture(tmp_path)
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(maintenance.time, "strftime", lambda _f: "20260920")
+    maintenance.daily_backup(str(source))
+    dest = backup_dir / "ledger-20260920.db"
+    assert (backup_dir / "ledger-20260920.db.ok").exists()
+    calls = _counting_validator(monkeypatch)
+    maintenance.daily_backup(str(source))
+    assert calls == []
+    # a changed (here: corrupted) file no longer matches the marker, is
+    # re-validated and replaced by a fresh verified backup (B24)
+    dest.write_bytes(b"not a database" * 100)
+    maintenance.daily_backup(str(source))
+    assert calls[0] == "ledger-20260920.db"
+    assert maintenance.valid_mcs_db(str(dest))
+    calls.clear()
+    maintenance.daily_backup(str(source))
+    assert calls == []
+
+
+def test_backup_without_marker_is_still_validated(tmp_path, monkeypatch):
+    source, _ = _build_fixture(tmp_path)
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(maintenance.time, "strftime", lambda _f: "20260920")
+    maintenance.daily_backup(str(source))
+    (backup_dir / "ledger-20260920.db.ok").unlink()
+    calls = _counting_validator(monkeypatch)
+    maintenance.daily_backup(str(source))
+    assert calls == ["ledger-20260920.db"]
+
+
+def test_backup_rotation_removes_markers(tmp_path, monkeypatch):
+    source, _ = _build_fixture(tmp_path)
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    stamps = iter(f"202609{d:02d}" for d in range(1, 20))
+    monkeypatch.setattr(maintenance.time, "strftime",
+                        lambda _f: next(stamps))
+    for _ in range(maintenance.BACKUP_KEEP + 2):
+        maintenance.daily_backup(str(source))
+    dbs = sorted(p.name for p in backup_dir.glob("ledger-*.db"))
+    oks = sorted(p.name[:-3] for p in backup_dir.glob("ledger-*.db.ok"))
+    assert len(dbs) == maintenance.BACKUP_KEEP
+    assert oks == dbs
+
+
 def test_independent_restore_preserves_relations_fts_snapshot_and_attachment_hash(
     tmp_path, monkeypatch
 ):
