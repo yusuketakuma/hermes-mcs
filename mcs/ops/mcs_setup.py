@@ -1013,6 +1013,17 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         else:
             missing.append(key)
             failed = True
+    # optional Discord role grant for card actions — written only when
+    # given (no prompt: an empty role list is the normal setup)
+    roles = getattr(args, "plugin_role_ids", None)
+    if transport == "discord" and roles:
+        lit = roles if roles.lstrip().startswith("[") else _csv_yaml(roles)
+        if _hermes_config_set(exe, profile,
+                              f"{PLUGIN_SETTINGS}.allowed_role_ids", lit):
+            print("  settings.allowed_role_ids: 設定")
+        else:
+            missing.append("allowed_role_ids")
+            failed = True
     if missing:
         print("  未設定: " + ", ".join(missing) +
               " — 後で `hermes config set "
@@ -2205,6 +2216,9 @@ def main() -> int:
                    help="user ids allowed to operate cards "
                         "(discord: allowed_user_ids / "
                         "slack: slack_allowed_user_ids)")
+    p.add_argument("--plugin-role-ids", metavar="A,B",
+                   help="Discord guild role ids whose members may "
+                        "operate cards (allowed_role_ids; discord only)")
     p.add_argument("--plugin-chat-ids", metavar="A,B",
                    help="Discord channel ids that accept /mcs commands "
                         "(allowed_chat_ids; discord only — slack pins "
