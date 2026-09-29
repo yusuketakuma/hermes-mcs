@@ -21,8 +21,8 @@
   <text x="56" y="198" font-size="9" fill="#b5bac1">バイタル: BP 142/88・脈 76・SpO2 96%</text>
   <text x="56" y="216" font-size="9" fill="#b5bac1">症状: 起立時めまい（転倒なし）</text>
   <text x="56" y="232" font-size="9" fill="#b5bac1">依頼: 次回訪問で残薬を確認</text>
-  <text x="48" y="262" font-size="10" fill="#e6edf3">✅確認  👤担当  ⏸保留</text>
-  <text x="48" y="282" font-size="10" fill="#e6edf3">📝依頼作成  📄本文表示</text>
+  <text x="48" y="262" font-size="10" fill="#e6edf3">✅確認済み  👤担当中</text>
+  <text x="48" y="282" font-size="10" fill="#e6edf3">📝タスク作成  🧾患者サマリー  🔗MCSで開く</text>
   <text x="48" y="310" font-size="9" fill="#6e7681">カード本体は要約と操作だけ</text>
   <text x="48" y="328" font-size="9" fill="#6e7681">📄はスレッド無効時の予備</text>
   <text x="48" y="356" font-size="9" fill="#8b949e">💬 本文・添付 2件 → スレッド配送済み</text>
