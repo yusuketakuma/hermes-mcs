@@ -1527,6 +1527,16 @@ def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
     db.close()
 
 
+def test_unread_at_ignores_huge_integer_in_previous_health(tmp_path,
+                                                           monkeypatch):
+    """An oversized integer literal in the previous health.json must
+    read as no value, not raise OverflowError out of health writing."""
+    (tmp_path / "health.json").write_text('{"unread_at": 1' + "0" * 400 + "}")
+    monkeypatch.setattr(run_check, "HEALTH_FILE",
+                        str(tmp_path / "health.json"))
+    assert run_check._unread_at({"jobs_only": True}, "ok", 1.0) is None
+
+
 @pytest.mark.parametrize("cause", ["marker", "code_changed"])
 def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
                                                    cause):

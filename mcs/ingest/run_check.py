@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger
-from health_watch import HEALTH_REL
+from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
                       disk_floor_mb, load_config)
@@ -110,8 +110,7 @@ def _unread_at(result: dict, status: str, now: float) -> float | None:
             and status not in ("failed", "session_expired"):
         return now
     prev = _prev_health().get("unread_at")
-    return prev if isinstance(prev, int | float) \
-        and not isinstance(prev, bool) and math.isfinite(prev) else None
+    return prev if _finite_number(prev) else None
 
 
 def _free_mb() -> float | None:
