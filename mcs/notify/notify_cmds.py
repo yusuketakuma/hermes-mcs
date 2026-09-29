@@ -24,8 +24,8 @@ import notify_cards
 import notify_transport
 from mcs_requests import canonical, positive, valid_hash, valid_uuid
 
-TRANSPORT_OPS = ("transport_begin", "transport_receipt",
-                 "thread_receipt", "part_receipt")
+_RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
+TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
 NOTIFY_OPS = ("notification", "refresh")
 HUMAN_CMDS = ("request.create", "ops.signal_dismiss")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
@@ -378,16 +378,10 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         pending.append((path, req))
     begins = [p for p in pending
               if p[1].get("op") == "transport_begin"]
-    receipts = [p for p in pending
-                if p[1].get("op") in ("transport_receipt",
-                                      "thread_receipt",
-                                      "part_receipt")]
-    others = [p for p in pending
-              if p[1].get("op") not in ("transport_begin",
-                                        "transport_receipt",
-                                        "thread_receipt",
-                                        "part_receipt")]
+    receipts = [p for p in pending if p[1].get("op") in _RECEIPT_OPS]
+    others = [p for p in pending if p[1].get("op") not in TRANSPORT_OPS]
     done = 0
+    card_actions = False
     for path, req in (begins + receipts + others)[:limit]:
         if deadline is not None and time.monotonic() > deadline:
             result.setdefault("errors", []).append(
@@ -435,11 +429,15 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             os.unlink(path)
         result["commands"] = result.get("commands", 0) + 1
         done += 1
-    if done:
+        if not error and req.get("op") not in TRANSPORT_OPS:
+            card_actions = True
+    if card_actions:
         # applied actions change card content (triage footer, signal
-        # state via request.create / ops.signal_dismiss, settle-side
-        # renders) — re-render drift in THIS drain so a click reflects
-        # in seconds, not at the next tick sweep (§7 op budget).
+        # state via request.create / ops.signal_dismiss) — re-render
+        # drift in THIS drain so a click reflects in seconds, not at
+        # the next tick sweep (§7 op budget). Transport-only drains
+        # skip it: begin/settle/resolve issue their own renders, and
+        # recover + the tick sweep remain the unpublished-spec watchdog.
         try:
             notify_cards.sweep(ledger, cfg)
         except Exception as e:
