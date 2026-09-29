@@ -166,13 +166,11 @@ def _guarded_http_request(endpoint, *args, **kwargs):
     return _ORIG_HTTP_REQUEST(endpoint, *args, **kwargs)
 
 
-# Patch every name a caller can reach: ``bounded_http`` is the canonical
-# implementation (JevClient and local_llm.bounded_request call through
-# it), while ``semantic_jev.bounded_http_request`` is the kept re-export
-# used by older call sites.
+# ``bounded_http`` is the single HTTP worker entry: JevClient and
+# local_llm.bounded_request both call it by module attribute, so patching
+# this one name covers every caller.
 _ORIG_HTTP_REQUEST = bounded_http.bounded_http_request
 _install(bounded_http, "bounded_http_request", _guarded_http_request)
-_install(_jev, "bounded_http_request", _guarded_http_request)
 
 
 # MCS and Chrome use a separate subprocess transport too. Only tests

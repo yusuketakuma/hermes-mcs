@@ -7,7 +7,7 @@ from __future__ import annotations
 import types
 from types import SimpleNamespace
 
-from discord_delivery_testkit import FakeHTTPClient
+from discord_delivery_testkit import FakeHTTP, FakeHTTPClient  # noqa: F401
 
 NOW = 1_790_000_000.0
 MISSING = object()  # discord.py's "argument not passed" sentinel
@@ -23,12 +23,6 @@ SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
 
 
 # ---------- fake discord SDK --------------------------------------------
-
-class FakeHTTP(Exception):
-    def __init__(self, status):
-        super().__init__(f"http {status}")
-        self.status = status
-
 
 def _fake_discord():
     mod = types.ModuleType("discord")

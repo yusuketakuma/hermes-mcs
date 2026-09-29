@@ -4,10 +4,6 @@ extract_llm / extract_qc artifact seeders.  Not a
 test module (no ``test_`` prefix); sibling files import it via the
 tests/ sys.path bootstrap."""
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
 import ledger

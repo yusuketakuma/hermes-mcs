@@ -6,13 +6,9 @@ an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
 """
 import json
-import sys
 import time
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
 import mcs_util
