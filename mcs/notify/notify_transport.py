@@ -318,10 +318,8 @@ def _begin_check(db, req, cfg) -> str | None:
     card = cards._card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
-        signals = cfg.get("signals")
-        if card["kind"] in ("signal", "digest") and not (
-                isinstance(signals, dict)
-                and signals.get("notify") is True):
+        if card["kind"] in ("signal", "digest") \
+                and not cards.signals_notify(cfg):
             return "signal_notify_off"
         if card["delivery_state"] == "revoked" \
                 and render["op"] != "revoke":
@@ -331,8 +329,8 @@ def _begin_check(db, req, cfg) -> str | None:
         if render["op"] != "revoke" and card["source_fp"] is not None \
                 and cards._source_fp(db, card) != card["source_fp"]:
             # the sealed bytes predate a source edit — never post stale
-            # PHI; transient: the drain's sweep reissues from the new
-            # source and cancels this render
+            # PHI; transient: apply_transport_begin reissues from the
+            # new source in the same commit and unlinks this spec
             return "source_changed"
         if cards._unsettled_attempt(db, card["card_id"]):
             return "in_flight"

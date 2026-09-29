@@ -230,9 +230,8 @@ def _signal_notice_text(ledger, payload: dict) -> str:
     Last-moment gates like semantic_notice: the flag may have been
     turned off, or the signal may have resolved while queued —
     both are terminal drops, not retries."""
-    sig_cfg = _config().get("signals")
-    if not (isinstance(sig_cfg, dict)
-            and sig_cfg.get("notify") is True):
+    import notify_cards
+    if not notify_cards.signals_notify(_config()):
         raise _StaleSend("signals_notify_disabled")
     # Member keys: a merged same-post med intent carries
     # signal_keys[]; a legacy/single intent carries signal_key.
