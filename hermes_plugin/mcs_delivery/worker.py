@@ -109,8 +109,10 @@ class DeliveryWorker:
         self._lock_fd = None
         self._stopping = False
         self._segment = 0
-        # per-card part dedupe reads only what was appended since the
-        # last card — a full scan per card was O(n^2) over a burst
+        # every per-tick journal read (part dedupe, resume, spent/started
+        # checks) reads only what was appended since the last one — a
+        # full scan per card was O(n^2) over a burst. Only this worker's
+        # single task refreshes it, never two threads at once.
         self._jview = journal.ScanCache(self._dirs["state"])
         self._rejected: dict[str, str] = {}   # delivery_id -> logged error
         # delivery_id -> no fresh claim before this time (signals off);
@@ -153,11 +155,28 @@ class DeliveryWorker:
             os.close(self._lock_fd)
             self._lock_fd = None
 
+    async def wait_scope_lock(self, timeout: float, give_up) -> bool:
+        """Poll for the scope lock up to ``timeout`` seconds — a dying
+        predecessor releases it within the window, but a live foreign
+        owner is never raced. ``give_up()`` aborts early."""
+        deadline = time.monotonic() + timeout
+        while not self.acquire_scope_lock():
+            if give_up() or time.monotonic() >= deadline:
+                self._log("scope_lock_unavailable")
+                return False
+            await asyncio.sleep(0.25)
+        return True
+
     # -- journal helpers ----------------------------------------------
 
     def _journal(self, phase: str, **fields) -> None:
         journal.append(self._dirs["state"], self._worker_id,
                        {"phase": phase, **fields}, segment=self._segment)
+
+    def _journal_path(self) -> str:
+        """The live segment this worker appends to."""
+        return journal._path(self._dirs["state"], self._worker_id,
+                             self._segment)
 
     # -- journal growth bound ------------------------------------------
 
@@ -179,13 +198,7 @@ class DeliveryWorker:
         # while a restore is pending, its backup may be about to vanish
         # from backups/ and move the horizon forward — the journal is the
         # post-restore reconcile's evidence, so never prune then
-        try:
-            os.lstat(os.path.join(self._root, "restore_pending.json"))
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return 0
-        else:
+        if paths.restore_marker_present(self._root):
             return 0
         horizon = self._restore_horizon()
         if horizon is None:
@@ -213,8 +226,7 @@ class DeliveryWorker:
 
         return journal.compact(
             self._dirs["state"],
-            active=journal._path(self._dirs["state"], self._worker_id,
-                                 self._segment),
+            active=self._journal_path(),
             file_ok=owned, prunable=prunable)
 
     async def maintain_journal(self, *, rotate: bool = False) -> None:
@@ -223,10 +235,8 @@ class DeliveryWorker:
         which predate every restorable backup, are dropped; unknown
         outcomes, unfinished or unreported attempts and anything a claim
         or pending part may still read are kept."""
-        path = journal._path(self._dirs["state"], self._worker_id,
-                             self._segment)
         try:
-            size = os.path.getsize(path)
+            size = os.path.getsize(self._journal_path())
         except OSError:
             size = 0
         if size > JOURNAL_SEGMENT_BYTES:
@@ -252,6 +262,8 @@ class DeliveryWorker:
           scope lock + dead worker prove the send never began)
         - post-HTTP attempts  -> unknown receipt; never resend
         """
+        # a full scan, not the cache: this runs once per start and the
+        # maintain_journal() below invalidates the cache anyway
         records = await asyncio.to_thread(journal.scan,
                                           self._dirs["state"])
         stats = {"receipt_republished": 0, "not_sent": 0, "unknown": 0}
@@ -478,8 +490,7 @@ class DeliveryWorker:
             self._reg.put_parts_done(spec["delivery_id"])
             return
         if records is None:
-            records = await asyncio.to_thread(
-                journal.scan, self._dirs["state"])
+            records = await asyncio.to_thread(self._jview.refresh)
         mid = _card_message_id(records, spec["delivery_id"])
         if not mid:
             # card unproven. A dead, unclaimed delivery_id never gets
@@ -834,8 +845,7 @@ class DeliveryWorker:
         """dead specs whose dependent parts never finished get their
         unjournaled remainder driven once per tick — journal phases
         dedupe everything already proven."""
-        records = await asyncio.to_thread(
-            journal.scan, self._dirs["state"])
+        records = await asyncio.to_thread(self._jview.refresh)
         for spec in resume:
             try:
                 await self._resume_parts(spec, records)
@@ -950,7 +960,7 @@ class DeliveryWorker:
         """delivery_ids whose card attempt the journal shows started or
         resulted — dependent-part rows excluded."""
         return {str(r.get("delivery_id"))
-                for rows in journal.scan(self._dirs["state"]).values()
+                for rows in self._jview.refresh().values()
                 for r in rows
                 if r.get("phase") in ("started", "result")
                 and not r.get("part_id")}
@@ -958,8 +968,7 @@ class DeliveryWorker:
     def _started(self, claim: dict) -> bool:
         """Conservative check — 'granted' phase means journal 'started'
         is either written or imminent; anything else is unknown."""
-        records = journal.scan(self._dirs["state"])
-        rows = records.get(claim["attempt_id"], [])
+        rows = self._jview.refresh().get(claim["attempt_id"], [])
         return any(r.get("phase") == "started" for r in rows)
 
     def stop(self) -> None:

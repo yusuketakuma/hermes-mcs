@@ -34,7 +34,7 @@ import notify_cmds
 
 from hermes_plugin.mcs_delivery import envelopes, registry
 from hermes_plugin.mcs_discord import delivery
-from test_notify_cards import NOW, SETTINGS
+from notify_testkit import NOW, SETTINGS
 
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user",

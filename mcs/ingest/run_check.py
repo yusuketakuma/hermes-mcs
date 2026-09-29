@@ -45,8 +45,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger
+from health_watch import HEALTH_REL
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
-                      HOME, RUN_LOCK, acquire_run_lock, load_config)
+                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
+                      load_config)
 import job_ops
 import maintenance
 import notify_flush
@@ -58,7 +60,7 @@ ATTACH_DIR = os.path.join(HOME, "data", "attachments")
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
-HEALTH_FILE = os.path.join(HOME, "data", "health.json")
+HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
 
 
 def _err_str(e: Exception) -> str:
@@ -232,7 +234,7 @@ def _wait_run_lock(wait_s: float) -> int | None:
         time.sleep(LOCK_POLL_S)
         fd = acquire_run_lock(LOCKFILE)
         if fd is not None:
-            marker = os.path.join(HOME, "data", "update_in_progress.marker")
+            marker = os.path.join(HOME, "data", UPDATE_MARKER_NAME)
             if os.path.exists(marker) or _code_stamp() != _CODE_STAMP:
                 os.close(fd)
                 return None
@@ -347,25 +349,11 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
     notify_max_age_s: unread messages older than this are imported
     without notification (bulk-added patients surface as unread with
     months-old history). Returns the snapshot for downstream stages."""
-    try:
-        snap = adapter.list_unread()
-    except SessionExpired as e:
-        # credential-free recovery: saved-password autofill + submit
-        # click — journaled + notified like every other relogin path
-        state = _attempt_relogin(adapter, ledger, result, "unread", e)
-        if state == "budget_exhausted":
-            raise
-        if state == "ok":
-            try:
-                snap = adapter.list_unread()
-            except SessionExpired as e2:
-                # a session that dies again right after this stage's own
-                # auto_login carries the marker, so _with_relogin does
-                # not spend a second attempt re-running the whole stage
-                raise SessionExpired(
-                    "auto_login=ok_then_expired") from e2
-        else:
-            raise SessionExpired(f"auto_login={state}") from e
+    # credential-free recovery at the failure point; a re-expiry right
+    # after this auto_login carries the marker, so the outer wrapper
+    # does not spend a second attempt re-running the whole stage
+    snap = _with_relogin(adapter, ledger, result, "unread",
+                         adapter.list_unread)
     ledger.db.execute("UPDATE runs SET snapshot_ts=? WHERE run_id=?",
                       (snap.timestamp, run_id))
     ledger.db.commit()

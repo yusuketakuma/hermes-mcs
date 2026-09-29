@@ -51,7 +51,7 @@ def _journal_dirs(dirs: dict) -> list:
     return [dirs[t + "_state"] for t in ("discord", "slack")]
 
 
-def _scan_journals(dirs: dict) -> tuple[dict, bool]:
+def scan_journals(dirs: dict) -> tuple[dict, bool]:
     """attempt_id -> {"rows": [...], "tainted": bool}, across every
     per-worker journal file in both transport state dirs.
 
@@ -436,7 +436,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         return {"v": 1, "at": now, "skipped": "awaiting_consent",
                 "counts": {}, "verdicts": [], "held": [],
                 "events_held": 0}
-    attempts, journal_incomplete = _scan_journals(dirs)
+    attempts, journal_incomplete = scan_journals(dirs)
     holds_before = _hold_rows(db)
     verdicts, held = [], []
     for aid in sorted(attempts):

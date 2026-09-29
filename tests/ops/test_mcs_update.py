@@ -6,7 +6,6 @@ network. No real MCS, Discord, Keychain, or external repo access.
 import json
 import os
 import sqlite3
-from contextlib import suppress
 import subprocess
 import time
 from pathlib import Path
@@ -14,43 +13,9 @@ from pathlib import Path
 import pytest
 
 import mcs_update
-
-
-# ---------------------------------------------------------------- helpers
-
-def _git(repo, *args, check=True):
-    r = subprocess.run(["git", "-C", repo, *args],
-                       capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise AssertionError(f"git {' '.join(args)}: {r.stderr}")
-    return r
-
-
-def _make_repo(tmp_path):
-    """A repo with v1.0.0 (lightweight) and v1.1.0 (annotated) tags."""
-    bare = tmp_path / "remote.git"
-    work = tmp_path / "remote-work"
-    work.mkdir()
-    _git(work, "init", "-q", "-b", "main")
-    _git(work, "config", "user.email", "t@t")
-    _git(work, "config", "user.name", "t")
-    (work / "f.txt").write_text("one")
-    _git(work, "add", ".")
-    _git(work, "commit", "-qm", "c1")
-    _git(work, "tag", "v1.0.0")            # lightweight — no peel line
-    (work / "f.txt").write_text("two")
-    _git(work, "commit", "-qam", "c2")
-    _git(work, "tag", "-a", "v1.1.0", "-m", "release")   # annotated
-    _git(work, "init", "-q", "--bare", str(bare))
-    _git(work, "push", "-q", str(bare), "main",
-         "v1.0.0", "v1.1.0")
-
-    repo = tmp_path / "repo"
-    subprocess.run(["git", "clone", "-q", str(bare), str(repo)],
-                   check=True)
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    return repo, bare
+import mcs_util
+from ops_testkit import (_git, _make_repo, _mk_schema, _receipts_db,
+                         _seed_consent)
 
 
 @pytest.fixture
@@ -101,7 +66,7 @@ def test_state_roundtrip_and_corrupt(updater, tmp_path):
 ])
 def test_corrupt_journal_shapes_are_rejected_by_both_readers(
         updater, tmp_path, monkeypatch, field, value):
-    from test_mcs_recover import _load
+    from ops_testkit import _load
     recovery = _load()
     monkeypatch.setattr(recovery, "STATE_PATH", updater.STATE_PATH)
     state = updater._default_state()
@@ -319,37 +284,6 @@ def test_stale_git_lock_cleanup(updater, tmp_path):
 
 
 # ------------------------------------------------------------ receipts
-
-def _receipts_db(path):
-    con = sqlite3.connect(path)
-    con.execute("""CREATE TABLE IF NOT EXISTS command_receipts(
-      command_id TEXT PRIMARY KEY, payload_hash TEXT, project_id INTEGER,
-      request_id INTEGER,
-      outcome TEXT CHECK(outcome IN ('applied','rejected')),
-      receipt_json TEXT, processed_at REAL)""")
-    return con
-
-
-def _seed_consent(ledger_path, backup_path, cid="cid-consent",
-                  report=None):
-    """Drop an ops.restore_approve receipt bound to the CURRENT loss
-    report into the live DB — the same row the human-approval path
-    commits. Returns the report it was bound to."""
-    if report is None:
-        report = mcs_update._restore_loss_report(backup_path)
-    con = _receipts_db(ledger_path)
-    con.execute(
-        "INSERT OR REPLACE INTO command_receipts VALUES(?,?,NULL,NULL,"
-        "'applied',?,?)",
-        (cid, "h" * 64, json.dumps({
-            "cmd": "ops.restore_approve", "scheduled": True,
-            "command_id": cid, "report_id": report["report_id"],
-            "backup_sha256": report["backup_sha256"],
-            "backup_schema": report["backup_schema"]}), time.time()))
-    con.commit()
-    con.close()
-    return report
-
 
 def _rec(cid, cmd, at, **kw):
     return json.dumps({"cmd": cmd, "scheduled": True,
@@ -869,27 +803,6 @@ def test_rollback_restarts_agents_on_unexpected_error(
 # schema + loss report. An earlier update/rollback approval never
 # substitutes; every writer/sender stays frozen while it waits.
 
-def _mk_schema(path, version, messages=0):
-    """A real Ledger-created DB pinned to `version` — passes the real
-    valid_mcs_db gate, so consent tests exercise the true restore path."""
-    import ledger as _ledger
-    lg = _ledger.Ledger(str(path))
-    lg.db.execute(f"PRAGMA user_version={version}")
-    for i in range(messages):
-        lg.db.execute(
-            "INSERT INTO messages(message_id,project_id,posted_at,"
-            "posted_at_ts,body_html,body_state,content_hash,first_seen)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (i + 1, 1, "2026-01-01", 100 + i, "<b>x</b>", "full",
-             f"h{i}", 1))
-    lg.db.commit()
-    lg.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    lg.db.close()
-    for side in (str(path) + "-wal", str(path) + "-shm"):
-        with suppress(OSError):
-            os.unlink(side)
-
-
 def _schema_bump_world(updater, tmp_path, monkeypatch):
     """applied v1.1.0 entry flagged schema_bump with a real v7 backup;
     live DB sits one schema ahead at v8. Every external boundary is
@@ -1042,18 +955,22 @@ def test_rollback_update_receipt_cannot_satisfy_consent(
         str(tmp_path / "data")) is not None
 
 
-def test_recover_escalates_orphaned_restore_consent(updater, tmp_path,
-                                                    monkeypatch):
+def test_recover_holds_on_orphaned_restore_consent(updater, tmp_path,
+                                                  monkeypatch):
     """restore_consent with a non-rollback applying record is journal
-    corruption — escalate fail-closed rather than classify away the
-    hold (a 'finish' would wedge every send grant forever)."""
+    corruption — never classify away the hold (a 'finish' would wedge
+    every send grant forever) and, as every escalation inside a hold,
+    keep the freeze: no drainer restart, marker kept, no outbox write;
+    the report tells the human (only a human can repair the journal)."""
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)
     monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
-    monkeypatch.setattr(mcs_update, "restart_agents", lambda: [])
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda **k: pytest.fail("hold must not restart"))
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
-                        lambda *a, **k: True)
+                        lambda *a, **k: pytest.fail("no outbox write"))
+    Path(mcs_update.MARKER_PATH).write_text("1")
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     state = updater._default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "t" * 40,
@@ -1064,11 +981,12 @@ def test_recover_escalates_orphaned_restore_consent(updater, tmp_path,
     rc = updater.recover_interrupted()
     assert rc == 1
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
-    assert report["result"] == "escalate"
+    assert report["result"] == "restore_consent_blocked"
     assert "restore_consent" in report["detail"]
+    assert Path(mcs_update.MARKER_PATH).exists()
     # journal preserved for a human — nothing classified away
     after = updater.load_state()
-    assert after["applying"] is not None
+    assert after["applying"] is not None and after["restore_consent"]
 
 
 def test_loss_report_binds_live_state(updater, tmp_path, monkeypatch):
@@ -1108,7 +1026,7 @@ def test_restore_consent_expires_when_existing_message_changes(
 
 @pytest.mark.parametrize("independent", [False, True])
 def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, independent):
-    from test_mcs_recover import _load
+    from ops_testkit import _load
     _repo, live, back, _before, _after, _restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     recovery = _load() if independent else updater
@@ -1275,9 +1193,10 @@ class _FakeLaunchd:
     """launchctl stub: bootstrap exit codes come from `outcomes`; a
     successful bootstrap (or `late_load`) marks the label loaded."""
 
-    def __init__(self, outcomes, late_load=False):
+    def __init__(self, outcomes, late_load=False, loads=True):
         self.outcomes = list(outcomes)
         self.late_load = late_load
+        self.loads = loads
         self.loaded = False
         self.calls = []
 
@@ -1290,7 +1209,7 @@ class _FakeLaunchd:
         elif verb == "bootstrap":
             rc = self.outcomes.pop(0)
             if rc == 0:
-                self.loaded = True
+                self.loaded = self.loads
             else:
                 err = "Bootstrap failed: 5: Input/output error"
                 out = "success"          # misleading output is ignored
@@ -1302,18 +1221,20 @@ class _FakeLaunchd:
         return subprocess.CompletedProcess(argv, rc, out, err)
 
 
-@pytest.mark.parametrize("outcomes,late,problems,boots", [
-    ([5, 0], False, [], 2),
-    ([5, 5, 5], True, [], 3),
-    ([5, 5, 5], False, ["bootstrap_failed:ai.mcs.x"], 3),
+@pytest.mark.parametrize("outcomes,late,problems,boots,loads", [
+    ([5, 0], False, [], 2, True),
+    ([5, 5, 5], True, [], 3, True),
+    ([5, 5, 5], False, ["bootstrap_failed:ai.mcs.x"], 3, True),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ([0], False, ["bootstrap_failed:ai.mcs.x"], 1, False),
 ])
 def test_restart_agents_retries_transient_bootstrap(
-        tmp_path, monkeypatch, outcomes, late, problems, boots):
+        tmp_path, monkeypatch, outcomes, late, problems, boots, loads):
     from types import SimpleNamespace
-    fake = _FakeLaunchd(outcomes, late_load=late)
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
     sleeps = []
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
-    monkeypatch.setattr(mcs_update, "time",
+    monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=sleeps.append))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.x",))
@@ -1324,4 +1245,668 @@ def test_restart_agents_retries_transient_bootstrap(
     assert mcs_update.restart_agents() == problems
     assert fake.calls[0] == "bootout"
     assert fake.calls.count("bootstrap") == boots
-    assert sleeps.count(1) == boots - (not problems and not late)
+    assert sleeps.count(1) == sum(rc != 0 for rc in outcomes)
+
+
+@pytest.mark.parametrize("outcomes,late,loads,problems", [
+    ([5, 0], False, True, []),
+    ([5, 5, 5], True, True, []),
+    ([5, 5, 5], False, True, ["watcher_not_loaded:ai.mcs.w"]),
+    ([0], False, False, ["watcher_not_loaded:ai.mcs.w"]),
+])
+def test_restart_agents_watcher_uses_verified_bootstrap(
+        tmp_path, monkeypatch, outcomes, late, loads, problems):
+    """An unloaded watcher goes through the shared verified bootstrap —
+    its result decides, not a second ad-hoc `print`."""
+    from types import SimpleNamespace
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=loads)
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("ai.mcs.w",))
+    monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
+    assert mcs_update.restart_agents() == problems
+    assert fake.calls == ["print"] + ["bootstrap"] * len(outcomes) + ["print"]
+
+
+# ---------------------------------------- hung / missing launchctl (H4)
+# A launchctl that hangs past T_GIT (TimeoutExpired) or cannot start
+# (FileNotFoundError) for ONE label must be recorded as that label's
+# problem; the loop still reaches every other agent and the marker ends
+# where the spec requires — never an uncaught raise mid-restart.
+
+class _HungLaunchd:
+    """launchctl stub: `verb` for any argv mentioning `label` raises
+    `exc`; everything else behaves (bootstrap loads, print shows pid)."""
+
+    def __init__(self, label, verb, exc):
+        self.label, self.verb, self.exc = label, verb, exc
+        self.loaded = set()
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb, target = argv[1], argv[-1]
+        label = os.path.basename(target).removesuffix(".plist") \
+            if verb == "bootstrap" else target.rsplit("/", 1)[-1]
+        self.calls.append((verb, label))
+        if verb == self.verb and label == self.label:
+            raise self.exc
+        rc, out = 0, ""
+        if verb == "bootout":
+            self.loaded.discard(label)
+        elif verb == "bootstrap":
+            self.loaded.add(label)
+        elif verb == "print":
+            rc = 0 if label in self.loaded else 113
+            out = "\tpid = 4242\n" if rc == 0 else ""
+        return subprocess.CompletedProcess(argv, rc, out, "")
+
+
+_HANG_EXCS = [subprocess.TimeoutExpired(["launchctl"], 30),
+              FileNotFoundError("launchctl")]
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+@pytest.mark.parametrize("label,verb,problems", [
+    ("ai.mcs.a", "bootout", []),
+    ("ai.mcs.a", "bootstrap", ["bootstrap_failed:ai.mcs.a"]),
+    ("ai.mcs.a", "print", ["bootstrap_failed:ai.mcs.a"]),
+    ("local.mcs-w", "print", ["watcher_not_loaded:local.mcs-w"]),
+    ("local.mcs-w", "bootstrap", ["watcher_not_loaded:local.mcs-w"]),
+])
+def test_restart_agents_survives_hung_launchctl(
+        updater, tmp_path, monkeypatch, label, verb, problems, exc):
+    from types import SimpleNamespace
+    fake = _HungLaunchd(label, verb, exc)
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ("local.mcs-w",))
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    assert mcs_update.restart_agents() == problems
+    # the loop went on past the wedged label to every later agent
+    assert ("bootstrap", "ai.mcs.b") in fake.calls
+    assert fake.calls[-1][1] == "local.mcs-w"
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_quiesce_never_takes_unverifiable_stop_as_stopped(
+        updater, monkeypatch, exc):
+    """A hung `print` cannot prove the drainer stopped — quiesce fails
+    closed (drainer_stop_failed) instead of merging under a live one;
+    a hung `bootout` alone is fine once `print` confirms the stop."""
+    from types import SimpleNamespace
+    clock = [1000.0]
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=lambda: clock[0],
+        sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(mcs_update.subprocess, "run",
+                        _HungLaunchd("ai.mcs.a", "bootout", exc))
+    assert mcs_update.quiesce() == ["ai.mcs.a", "ai.mcs.b"]
+    monkeypatch.setattr(mcs_update.subprocess, "run",
+                        _HungLaunchd("ai.mcs.b", "print", exc))
+    with pytest.raises(mcs_update.UpdateError,
+                       match="drainer_stop_failed: ai.mcs.b"):
+        mcs_update.quiesce()
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
+        updater, tmp_path, monkeypatch, exc):
+    """quiesce stops drainer a, then b's stop is unverifiable: rollback
+    must still restart a (H4), report b, consume the receipt and drop
+    the marker — not escape with a raw TimeoutExpired/OSError."""
+    from types import SimpleNamespace
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
+                        lambda **kw: os.open(mcs_update.RUN_LOCK,
+                                             os.O_WRONLY | os.O_CREAT))
+    real_run = subprocess.run
+    fake = _HungLaunchd("ai.mcs.b", "print", exc)
+    fake.loaded = {"ai.mcs.a", "ai.mcs.b"}
+    monkeypatch.setattr(
+        mcs_update.subprocess, "run",
+        lambda argv, *a, **k: (fake if argv[0] == "launchctl"
+                               else real_run)(argv, *a, **k))
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(mcs_update, "_rollback_tree",
+                        lambda e: pytest.fail("must not reset"))
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    state = updater._default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": "t" * 40,
+                         "prev_sha": _git(repo, "rev-parse", "HEAD")
+                         .stdout.strip(), "at": time.time()}]
+    updater.save_state(state)
+    assert updater.rollback("cid-rb") == 1
+    assert ("bootstrap", "ai.mcs.a") in fake.calls   # a brought back
+    assert "ai.mcs.a" in fake.loaded
+    detail = updater.load_state()["executed"]["cid-rb"]["detail"]
+    assert "drainer_stop_failed: ai.mcs.b" in detail
+    assert "bootstrap_failed:ai.mcs.b" in detail
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+@pytest.mark.parametrize("exc", _HANG_EXCS)
+def test_recover_escalates_when_services_reconcile_hangs(
+        updater, tmp_path, monkeypatch, exc):
+    """head == target resume: a hung/missing `mcs_setup services` child
+    escalates (drainers back, marker gone, receipt consumed) instead of
+    escaping recover with drainers still quiesced."""
+    import sys
+    repo, _ = _make_repo(tmp_path)
+    mcs_update.REPO = str(repo)
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    real_run = subprocess.run
+
+    def run(argv, *a, **k):
+        if argv[0] == sys.executable:
+            raise exc
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": head,
+                         "prev_sha": "0" * 40, "command_id": "cid-a",
+                         "at": time.time() - 4000}
+    state["stages"] = [{"stage": "post_merge", "at": time.time() - 3000}]
+    updater.save_state(state)
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    assert updater.recover_interrupted() == 1
+    after = updater.load_state()
+    assert after["executed"]["cid-a"]["result"] == "escalated"
+    assert "services_failed" in after["executed"]["cid-a"]["detail"]
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+
+
+# ------------------------------- git failure inside recover_interrupted
+# _head_sha/_tree_clean/reset/merge --abort raise UpdateError; recover
+# must decide instead of escaping with drainers down and the marker up.
+
+def _hang_git(monkeypatch):
+    real_run = subprocess.run
+
+    def run(argv, *a, **k):
+        if argv[0] == "git":
+            raise subprocess.TimeoutExpired(argv, k.get("timeout"))
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+
+
+def test_recover_git_failure_escalates_outside_consent_hold(
+        updater, tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    restarts, notices = [], []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda: restarts.append(1) or [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                         "prev_sha": "b" * 40, "command_id": "cid-a",
+                         "at": time.time()}
+    state["stages"] = [{"stage": "merge", "at": time.time()}]
+    updater.save_state(state)
+    Path(mcs_update.MARKER_PATH).write_text("1")
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1
+    after = updater.load_state()
+    assert after["executed"]["cid-a"]["result"] == "escalated"
+    assert "git_timeout" in after["executed"]["cid-a"]["detail"]
+    assert after["applying"]["sha"] == "a" * 40   # journal kept: retry
+    assert restarts == [1]
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+    assert notices and "要手動対応" in notices[0]
+
+
+def test_recover_git_failure_keeps_consent_hold_then_converges(
+        updater, tmp_path, monkeypatch):
+    """Inside a restore-consent hold an unmeasurable tree keeps the
+    freeze (drainers down, both markers, receipt pending, no outbox
+    write that would void the loss report) and the next pass converges."""
+    import notify_cards
+    repo, live, back, _b, _a, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    notices = []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    real_run = subprocess.run
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1
+    assert restarts == [] and notices == []
+    assert Path(mcs_update.MARKER_PATH).exists()
+    assert notify_cards.restore_awaiting_consent(
+        str(tmp_path / "data")) is not None
+    state = updater.load_state()
+    assert state["restore_consent"] and state["applying"]["rollback"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    monkeypatch.setattr(mcs_update.subprocess, "run", real_run)
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+        == "rolled_back"
+    assert restarts == [1]
+
+
+# ------------------------------------------ stray check fails closed
+
+@pytest.mark.parametrize("outcome", [
+    subprocess.TimeoutExpired(["pgrep"], 30),
+    FileNotFoundError("pgrep"),
+    subprocess.CompletedProcess(["pgrep"], 3, "", "internal error")])
+def test_quiesce_fails_closed_when_stray_check_unverifiable(
+        updater, monkeypatch, outcome):
+    def run(argv, *a, **k):
+        assert argv[0] == "pgrep"
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    assert mcs_update._stray_drainer_pids() is None
+    with pytest.raises(mcs_update.UpdateError,
+                       match="stray_drainer_unverifiable"):
+        mcs_update.quiesce()
+
+
+def test_stray_check_no_match_is_clean(updater, monkeypatch):
+    monkeypatch.setattr(
+        mcs_update.subprocess, "run",
+        lambda argv, *a, **k: subprocess.CompletedProcess(argv, 1, "", ""))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ())
+    assert mcs_update._stray_drainer_pids() == []
+    assert mcs_update.quiesce() == []
+
+
+# ------------------------------------ bounded restart (T_POST_MERGE)
+
+def test_restart_agents_all_hung_stays_within_budget(
+        updater, tmp_path, monkeypatch):
+    """Every launchctl call hangs until its timeout: restart_agents must
+    finish far enough under T_POST_MERGE that the post-merge child (with
+    services 120s + postcheck) is not killed mid-restart, reporting the
+    labels it never reached."""
+    from types import SimpleNamespace
+    clock = [0.0]
+
+    def advance(s):
+        clock[0] += s
+
+    def run(argv, *a, **k):
+        advance(k["timeout"])
+        raise subprocess.TimeoutExpired(argv, k["timeout"])
+    fake_time = SimpleNamespace(time=lambda: clock[0],
+                                sleep=advance)
+    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+    monkeypatch.setattr(mcs_update, "time", fake_time)
+    monkeypatch.setattr(mcs_util, "time", fake_time)
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS",
+                        ("local.mcs-w", "local.mcs-v"))
+    problems = mcs_update.restart_agents()
+    # worst case: a label started just before the budget runs out costs
+    # 78s more; services 120 + postcheck 206 follow in the same child
+    assert clock[0] <= mcs_update.RESTART_BUDGET_S + 78
+    assert mcs_update.RESTART_BUDGET_S + 78 + 326 < mcs_update.T_POST_MERGE
+    assert problems == ["bootstrap_failed:ai.mcs.a",
+                        "bootstrap_failed:ai.mcs.b",
+                        "watcher_not_loaded:local.mcs-w",
+                        "restart_deadline:local.mcs-v"]
+
+
+# ------------------- apply delegating to recover never bails its journal
+
+def test_apply_never_bails_a_foreign_journal_when_recover_raises(
+        updater, tmp_path, monkeypatch):
+    """A journal that appears between apply's first read and its locked
+    re-read belongs to another run. recover_interrupted raising (e.g.
+    OSError from save_state) must propagate like in rollback(), never
+    reach bail(): the old code _rollback_tree'd that journal unlocked
+    and overwrote it with this apply's failure."""
+    foreign = updater._default_state()
+    foreign["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                           "prev_sha": "b" * 40, "command_id": "other",
+                           "at": time.time()}
+    foreign["stages"] = [{"stage": "merge", "at": time.time()}]
+    real_load = updater.load_state
+    reads = []
+
+    def load_state():
+        reads.append(1)
+        return updater._default_state() if len(reads) == 1 \
+            else real_load()
+    updater.save_state(foreign)
+    before = Path(updater.STATE_PATH).read_bytes()
+    monkeypatch.setattr(mcs_update, "load_state", load_state)
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    rolled, notices = [], []
+    monkeypatch.setattr(mcs_update, "_rollback_tree", rolled.append)
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+
+    def recover():
+        raise OSError("disk full")
+    monkeypatch.setattr(mcs_update, "recover_interrupted", recover)
+    with pytest.raises(OSError, match="disk full"):
+        updater.apply("v1.2.0", None, "mine")
+    assert rolled == [] and notices == []
+    assert Path(updater.STATE_PATH).read_bytes() == before
+    fd = updater.acquire_update_lock()              # released
+    assert fd is not None
+    os.close(fd)
+
+
+# ------------------------------------------ escalation notice dedup
+
+def test_recover_escalation_notifies_once_per_condition(
+        updater, tmp_path, monkeypatch):
+    """Daily check / consent respawn re-run recover on the same stuck
+    journal: one notice per condition, again on change or after
+    ESCALATE_REALERT_S; a failed enqueue is retried next pass."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    monkeypatch.setattr(mcs_update, "restart_agents", lambda **k: [])
+    notices, ok = [], [False]
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or ok[0])
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                         "prev_sha": "b" * 40, "at": time.time()}
+    state["stages"] = [{"stage": "merge", "at": time.time()}]
+    updater.save_state(state)
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1       # enqueue failed
+    ok[0] = True
+    for _ in range(3):
+        assert updater.recover_interrupted() == 1
+    assert len(notices) == 2                        # retry, then quiet
+    state["stages"].append({"stage": "post_merge", "at": time.time()})
+    updater.save_state(state)
+    assert updater.recover_interrupted() == 1
+    assert len(notices) == 3                        # new condition
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    report["notified_at"] -= mcs_update.ESCALATE_REALERT_S
+    Path(mcs_update.REPORT_PATH).write_text(json.dumps(report))
+    assert updater.recover_interrupted() == 1
+    assert len(notices) == 4
+
+
+# ------------- repeated escalation: ensure drainers run, never re-bounce
+
+def test_repeated_escalation_ensures_drainers_instead_of_bouncing(
+        updater, tmp_path, monkeypatch):
+    """Daily check / consent respawn re-escalate the same stuck journal:
+    only the first escalation bounces drainers (bootout+bootstrap); later
+    passes of the same journal + HEAD only ensure they run — the old code
+    bounced healthy drainers on every pass. A changed journal bounces."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    calls = []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda **k: calls.append(k.get("bounce", True))
+                        or [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40,
+                         "prev_sha": "b" * 40, "at": time.time()}
+    state["stages"] = [{"stage": "merge", "at": time.time()}]
+    updater.save_state(state)
+    for _ in range(3):
+        assert updater.recover_interrupted() == 1   # unclassifiable
+    assert calls == [True, False, False]
+    assert not os.path.exists(mcs_update.MARKER_PATH)
+    state["stages"].append({"stage": "post_merge", "at": time.time()})
+    updater.save_state(state)
+    assert updater.recover_interrupted() == 1
+    assert calls[-1] is True                        # new condition
+
+
+def test_resume_retry_bounces_once_then_only_ensures(
+        updater, tmp_path, monkeypatch):
+    """head == target resume whose postcheck keeps failing: the first
+    pass restarts once (not again in its own escalate); later passes
+    only ensure; a pass that had to reset a dirty tree bounces again
+    (the code the drainers run changed)."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    calls = []
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda **k: calls.append(k.get("bounce", True))
+                        or [])
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_postcheck",
+                        lambda s, t: ["version_mismatch"])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: True)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": head,
+                         "prev_sha": "0" * 40, "at": time.time()}
+    state["stages"] = [{"stage": "post_merge", "at": time.time()}]
+    updater.save_state(state)
+    assert updater.recover_interrupted() == 1
+    assert calls == [True, False]
+    assert updater.recover_interrupted() == 1
+    assert calls[2:] == [False, False]
+    (repo / "f.txt").write_text("dirty")
+    assert updater.recover_interrupted() == 1
+    assert calls[4:] == [True, False]
+
+
+class _EnsureLaunchd:
+    """launchctl stub with per-label loaded/running state; labels in
+    `hung` time out on every verb, labels in `inert` load but never
+    get a pid."""
+
+    def __init__(self, loaded=(), running=(), hung=(), inert=()):
+        self.loaded, self.running = set(loaded), set(running)
+        self.hung, self.inert = set(hung), set(inert)
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb, target = argv[1], argv[-1]
+        label = os.path.basename(target).removesuffix(".plist") \
+            if verb == "bootstrap" else target.rsplit("/", 1)[-1]
+        self.calls.append((verb, label))
+        if label in self.hung:
+            raise subprocess.TimeoutExpired(argv, 10)
+        rc, out = 0, ""
+        if verb == "bootout":
+            self.loaded.discard(label)
+            self.running.discard(label)
+        elif verb in ("bootstrap", "kickstart"):
+            if verb == "bootstrap":
+                self.loaded.add(label)
+            if label in self.loaded and label not in self.inert:
+                self.running.add(label)
+        elif verb == "print":
+            rc = 0 if label in self.loaded else 113
+            out = "\tpid = 4242\n" if label in self.running else ""
+        return subprocess.CompletedProcess(argv, rc, out, "")
+
+
+def test_restart_agents_ensure_mode_never_bounces_a_running_drainer(
+        updater, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    fake = _EnsureLaunchd(loaded={"ai.mcs.run", "ai.mcs.stopped"},
+                          running={"ai.mcs.run"}, hung={"ai.mcs.hung"})
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.run", "ai.mcs.stopped", "ai.mcs.gone",
+                         "ai.mcs.hung"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    assert mcs_update.restart_agents(bounce=False) == [
+        "bootstrap_failed:ai.mcs.hung"]
+    assert not any(verb == "bootout" for verb, _ in fake.calls)
+    assert [c for c in fake.calls if c[1] == "ai.mcs.run"] \
+        == [("print", "ai.mcs.run")]                 # left alone
+    assert ("kickstart", "ai.mcs.stopped") in fake.calls
+    assert ("bootstrap", "ai.mcs.stopped") not in fake.calls
+    assert ("bootstrap", "ai.mcs.gone") in fake.calls
+    assert fake.running >= {"ai.mcs.run", "ai.mcs.stopped", "ai.mcs.gone"}
+    # unverifiable is never read as running: a start was attempted
+    assert ("bootstrap", "ai.mcs.hung") in fake.calls
+
+
+def test_restart_agents_slow_drainer_does_not_starve_the_next(
+        updater, tmp_path, monkeypatch):
+    """The 15s pid wait used to overwrite the RESTART_BUDGET_S deadline:
+    one drainer that never came up made every later label
+    restart_deadline without even being started (H4)."""
+    from types import SimpleNamespace
+    fake = _EnsureLaunchd(inert={"ai.mcs.a"})
+    clock = iter(range(0, 10 ** 6))
+    monkeypatch.setattr(mcs_update.subprocess, "run", fake)
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=lambda: next(clock), sleep=lambda s: None))
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=time.time, sleep=lambda s: None))
+    monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
+                        ("ai.mcs.a", "ai.mcs.b"))
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    assert mcs_update.restart_agents() == ["drainer_not_running:ai.mcs.a"]
+    assert "ai.mcs.b" in fake.running
+
+
+# --------- every escalation inside a consent hold keeps the freeze
+
+def _hold_condition(repo, back, before, after, kind):
+    """Apply one non-git escalation condition; returns its undo."""
+    if kind == "merge_head":
+        path = repo / ".git" / "MERGE_HEAD"
+        path.write_text(after + "\n")
+        return path.unlink
+    if kind == "unclassifiable":
+        _git(repo, "commit", "--allow-empty", "-qm", "drift")
+        return lambda: _git(repo, "reset", "-q", "--hard", before)
+    if kind == "head_prev":
+        _git(repo, "reset", "-q", "--hard", after)
+        return lambda: _git(repo, "reset", "-q", "--hard", before)
+    moved = back + ".away"                           # backup_invalid
+    os.rename(back, moved)
+    return lambda: os.rename(moved, back)
+
+
+@pytest.mark.parametrize("kind", ["merge_head", "unclassifiable",
+                                  "head_prev", "backup_gone"])
+def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
+        updater, tmp_path, monkeypatch, kind):
+    """Journal inconsistency / restore failure inside a hold used to
+    escalate: drainers restarted on the newer-schema DB, marker gone,
+    receipt consumed and an outbox notice that voids the consent. Now
+    the freeze holds, and once the condition clears the documented
+    consent receipt still converges to rolled_back."""
+    import notify_cards
+    repo, live, back, before, after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    notices = []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    undo = _hold_condition(repo, back, before, after, kind)
+    live_before = Path(live).read_bytes()
+    for _ in range(2):
+        assert updater.recover_interrupted() == 1
+    assert restarts == [] and notices == []
+    assert Path(live).read_bytes() == live_before
+    assert Path(mcs_update.MARKER_PATH).exists()
+    assert notify_cards.restore_awaiting_consent(
+        str(tmp_path / "data")) is not None
+    state = updater.load_state()
+    assert state["restore_consent"] and state["applying"]["rollback"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    undo()
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+        == "rolled_back"
+    assert _live_version(live) == 7 and restarts == [1]
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_marker_only_hold_survives_git_failure(
+        updater, tmp_path, monkeypatch, unreadable):
+    """A hold entered before holds were journaled has only the
+    awaiting_consent marker: a git failure must still keep the freeze
+    (old code escalated — no restore_consent record) and the hold is
+    recorded in the journal from the marker; the consent converges."""
+    repo, live, back, _b, _a, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    assert updater.rollback("cid-rb") == 2
+    marker = tmp_path / "data" / "restore_pending.json"
+    rid = json.loads(marker.read_text())["report_id"]
+    if unreadable:
+        marker.write_text("{broken")
+    state = updater.load_state()
+    del state["restore_consent"]
+    updater.save_state(state)
+    notices = []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    real_run = subprocess.run
+    _hang_git(monkeypatch)
+    assert updater.recover_interrupted() == 1
+    assert restarts == [] and notices == []
+    assert Path(mcs_update.MARKER_PATH).exists()
+    state = updater.load_state()
+    hold = state["restore_consent"]
+    assert hold["from_marker"] is True
+    assert hold["report_id"] == (None if unreadable else rid)
+    assert "cid-rb" not in state.get("executed", {})
+    assert json.loads(Path(mcs_update.REPORT_PATH).read_text())[
+        "result"] == "restore_consent_blocked"
+    if unreadable:
+        return                  # only a human can repair the marker
+    monkeypatch.setattr(mcs_update.subprocess, "run", real_run)
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert updater.load_state()["executed"]["cid-rb"]["result"] \
+        == "rolled_back"
+
+
+@pytest.mark.parametrize("content", [
+    None, b"", b"{bad", b"[]", b'{"phase": "awaiting_consent", "report_id": "r"}',
+    b'{"phase": "restored"}', b'{"restored_at": 1}', b'{"phase": "other"}'])
+def test_awaiting_consent_marker_matches_notify_cards(tmp_path, monkeypatch,
+                                                     content):
+    """recover reads the hold marker without importing notify_cards (a
+    rolled-back tree may predate it) — same fail-closed verdict."""
+    import notify_cards
+    monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    if content is not None:
+        (tmp_path / "restore_pending.json").write_bytes(content)
+    assert (mcs_update._awaiting_consent_marker() is None) \
+        == (notify_cards.restore_awaiting_consent(str(tmp_path)) is None)

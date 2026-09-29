@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text
+from mcs_util import html_to_text, publish_tmp
 
 
 SCHEMA_VERSION = 7
@@ -1733,6 +1733,16 @@ class Ledger:
             "WHERE event_id=?", (time.time(), event_id))
         self.db.commit()
 
+    def outbox_defer(self, event_id: int, delay: float, commit: bool = True):
+        """Push a still-pending event's next pickup out by ``delay``
+        seconds — no attempt consumed, state unchanged."""
+        now = time.time()
+        self.db.execute(
+            "UPDATE notify_outbox SET next_try=?,updated_at=? "
+            "WHERE event_id=?", (now + delay, now, event_id))
+        if commit:
+            self.db.commit()
+
     def outbox_suppress(self, event_id: int):
         """Terminal drop for events that must never reach Discord —
         e.g. queued before the patient was archived (Oracle F2). Unlike
@@ -1871,14 +1881,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
             src.close()
         if not valid_mcs_db(tmp):
             return None
-        with open(tmp, "rb") as snapshot:
-            os.fsync(snapshot.fileno())
-        os.replace(tmp, dest)
-        directory = os.open(dest_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
         return dest
     finally:

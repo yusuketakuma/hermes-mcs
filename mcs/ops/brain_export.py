@@ -21,6 +21,7 @@ import mcs_signals
 import mcs_view
 import read_model
 from export_schema import project_record
+from mcs_queries import item_unverified
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -210,7 +211,7 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     # (rule rows) reads as confirmed, any other non-False value fails closed
     reqs, cands = [], []
     for r in roll.get("recent_requests") or []:
-        (reqs if r.get("unverified", False) is False else cands).append(r)
+        (cands if item_unverified(r) else reqs).append(r)
     for title, rows in (("open-looking requests", reqs),
                         ("依頼候補（未確認）", cands)):
         if rows:

@@ -1,0 +1,227 @@
+"""Shared synthetic fixtures for the Discord card-worker test family —
+the runner config/settings, a fake ``discord`` SDK module and the fake
+Bot/Channel/Message/Thread objects.  Not a test module (no ``test_``
+prefix); sibling files import it via the tests/ sys.path bootstrap."""
+from __future__ import annotations
+
+import types
+from types import SimpleNamespace
+
+from discord_delivery_testkit import FakeHTTPClient
+
+NOW = 1_790_000_000.0
+MISSING = object()  # discord.py's "argument not passed" sentinel
+CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
+                  "operator": "op-user", "card_thread": True,
+                  "discord": {"profile": "mcs", "application_id": "1",
+                              "guild_id": "7", "channel_id": "42"}},
+       "signals": {"notify": True}}
+SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
+            "guild_id": "7",
+            "allowed_user_ids": {"1001"}, "allowed_chat_ids": {"42"},
+            "project_ids": {1}}
+
+
+# ---------- fake discord SDK --------------------------------------------
+
+class FakeHTTP(Exception):
+    def __init__(self, status):
+        super().__init__(f"http {status}")
+        self.status = status
+
+
+def _fake_discord():
+    mod = types.ModuleType("discord")
+
+    class LayoutView:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    class View(LayoutView):
+        pass
+
+    class TextDisplay:
+        def __init__(self, content):
+            self.content = content
+
+    class ActionRow:
+        def __init__(self):
+            self.children = []
+
+        def add_item(self, item):
+            self.children.append(item)
+
+    class Container:
+        def __init__(self, *children, accent_color=None, **_):
+            self.children = list(children)
+            self.accent_color = accent_color
+
+    class Button:
+        def __init__(self, style=None, label=None, custom_id=None):
+            self.style = style
+            self.label = label
+            self.custom_id = custom_id
+
+    class Modal:
+        def __init__(self, title=None, custom_id=None, timeout=None):
+            self.title = title
+            self.custom_id = custom_id
+            self.children = []
+
+        def add_item(self, item):
+            self.children.append(item)
+
+    class TextInput:
+        def __init__(self, label=None, style=None, custom_id=None,
+                     max_length=None, required=True, **_):
+            self.label = label
+            self.custom_id = custom_id
+            self.value = None
+
+    class Webhook:
+        sent = []
+
+        def __init__(self, ident, token, client):
+            self.ident, self.token, self.client = ident, token, client
+            # partial() hardcodes incoming — production sweep must
+            # flip it to application before ephemeral sends are legal
+            self.type = 1
+
+        @classmethod
+        def partial(cls, ident, token, client=None):
+            return cls(ident, token, client)
+
+        async def send(self, content, ephemeral=False, view=MISSING):
+            # discord.py validation: ephemeral requires an application
+            # webhook; an explicitly-passed view=None is a TypeError
+            if ephemeral and self.type != 3:
+                raise ValueError("ephemeral messages can only be sent "
+                                 "from application webhooks")
+            if view is not MISSING and view is None:
+                raise TypeError("expected view parameter to be of type "
+                                "View, not NoneType")
+            Webhook.sent.append(
+                {"content": content, "ephemeral": ephemeral,
+                 "view": view})
+
+    mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
+                             TextDisplay=TextDisplay, ActionRow=ActionRow,
+                             Container=Container,
+                             Button=Button, Modal=Modal,
+                             TextInput=TextInput)
+    mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
+                                      danger=4)
+    mod.TextStyle = SimpleNamespace(short=1, paragraph=2)
+    mod.WebhookType = SimpleNamespace(incoming=1, channel_follower=2,
+                                      application=3)
+    mod.Webhook = Webhook
+    return mod
+
+
+# ---------- fake discord objects ----------------------------------------
+
+BOT_USER = SimpleNamespace(id=4242)
+
+
+class _HistMsg:
+    _next = 0
+
+    def __init__(self, content, author=BOT_USER):
+        self.content = content
+        self.author = author           # posts through the fake are ours
+        type(self)._next += 1
+        self.id = type(self)._next     # remote message identity —
+                                       # dedupe binds to it, not content
+
+
+class FakeThread:
+    def __init__(self, tid):
+        self.id = tid
+        self.sent = []
+
+    async def send(self, content):
+        self.sent.append(content)
+
+    async def history(self, limit=None):
+        items = self.sent if limit is None else self.sent[-limit:]
+        for c in reversed(items):
+            yield _HistMsg(c)
+
+
+class FakeMessage:
+    def __init__(self, mid, channel=None):
+        self.id = mid
+        self.channel = channel
+        self.view = None
+        self.edits = 0
+        self.deleted = False
+        self.threads = []
+
+    async def edit(self, view=None):
+        if self.deleted:
+            raise FakeHTTP(404)
+        self.view = view
+        self.edits += 1
+
+    async def delete(self):
+        if self.deleted:
+            raise FakeHTTP(404)
+        self.deleted = True
+
+    async def create_thread(self, name=None):
+        t = FakeThread(7700 + len(self.threads))
+        self.threads.append((name, t))
+        bot = getattr(getattr(self, "channel", None), "bot", None)
+        if bot is not None:
+            bot.channels[t.id] = t
+        return t
+
+
+class FakeChannel:
+    def __init__(self, cid):
+        self.id = cid
+        self.sent = []
+        self.messages = {}
+        self._next = 9000
+
+    async def send(self, view=None):
+        self._next += 1
+        m = FakeMessage(self._next, channel=self)
+        m.view = view
+        self.sent.append(m)
+        self.messages[m.id] = m
+        return m
+
+    async def fetch_message(self, mid):
+        m = self.messages.get(int(mid))
+        if m is None:
+            raise FakeHTTP(404)
+        return m
+
+
+class FakeBot:
+    def __init__(self, channel_id=42):
+        self.channels = {channel_id: FakeChannel(channel_id)}
+        self.channels[channel_id].bot = self
+        self.user = BOT_USER
+        self.listeners = []
+        self.http = FakeHTTPClient()     # verified-SDK shape for create POSTs
+
+    def get_channel(self, cid):
+        return self.channels.get(cid)
+
+    async def fetch_channel(self, cid):
+        if cid not in self.channels:
+            raise FakeHTTP(404)
+        return self.channels[cid]
+
+    def add_listener(self, fn, name):
+        self.listeners.append((name, fn))
+
+    def remove_listener(self, fn, name):
+        self.listeners = [x for x in self.listeners
+                          if not (x[0] == name and x[1] == fn)]

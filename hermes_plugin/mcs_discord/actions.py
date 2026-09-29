@@ -543,12 +543,16 @@ class Actions:
             await self._ephemeral(interaction,
                                   "確認した本人のみ確定できます。")
             return
-        denial = self._authorized(
-            interaction, [pending["payload"].get("project_id")])
+        # the actor must stay authorized for either button; project scope
+        # gates only 確定 — a 取消 drops the actor's own preview and
+        # queues nothing, so a project that left scope stays cancellable
+        denial = self._authorized(interaction)
         if denial:
             self._deny_reason(interaction, denial)
             await self._ephemeral(interaction, "権限がありません。")
             return
+        scope_denial = self._authorized(
+            interaction, [pending["payload"].get("project_id")])
         profile = self._settings.get("profile")
         if not _same_origin(pending["origin"],
                             _origin(interaction, profile)):
@@ -556,21 +560,30 @@ class Actions:
                 interaction,
                 "確認を開始した場所と送信元が一致しません。")
             return
-        if pending.get("in_flight"):
+        # decided before the first await: a racing cancel sees in_flight
+        taken = self._reg.take_confirm(confirm_id, suffix == "cancel",
+                                       allowed=scope_denial is None)
+        if taken == "gone":           # expired since the lookup above
+            await self._ephemeral(
+                interaction,
+                "この確認は期限切れです。もう一度操作してください。")
+            return
+        if taken == "denied":
+            self._deny_reason(interaction, scope_denial)
+            await self._ephemeral(interaction, "権限がありません。")
+            return
+        if taken == "busy":
             # a 確定 is queueing this command right now — neither a
             # cancel nor a second confirm may claim a different outcome
             await self._ephemeral(
                 interaction, "この確認は処理中です。結果をお待ちください。")
             return
-        if suffix == "cancel":
-            self._reg.drop_confirm(confirm_id)
+        if taken == "cancelled":
             self._result_log(interaction,
                              pending["payload"].get("cmd"),
                              {"outcome": "cancelled"})
             await self._ephemeral(interaction, "取り消しました。")
             return
-        # taken before the first await: a racing cancel now sees in_flight
-        self._reg.begin_confirm(confirm_id)
         try:
             await interaction.response.defer(ephemeral=True)
         except BaseException:

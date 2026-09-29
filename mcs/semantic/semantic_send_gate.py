@@ -14,7 +14,8 @@ and between chunks (spec §18.4/§22.1):
 - ``semantic_summary_block`` renders the audited summary section
   appended to a raw post (enforce mode only).
 - ``semantic_chunks`` splits a frozen semantic notice while repeating
-  its provenance header/footer on every part.
+  its provenance header/footer on every part (``semantic_chunk_parts``
+  also returns each part's body slice for delivery attribution).
 
 The verdict exceptions (DeferredSend / StaleSend / FreezeSend) are the
 gate's vocabulary; notify_flush catches them to park, suppress, or
@@ -255,7 +256,16 @@ def semantic_render_gate(ledger, ev, initial: tuple, cfg: dict,
 
 
 def semantic_chunks(content: str, max_len: int) -> list[str]:
-    """Split a frozen semantic notice while repeating its provenance.
+    """Split a frozen semantic notice while repeating its provenance."""
+    return semantic_chunk_parts(content, max_len)[0]
+
+
+def semantic_chunk_parts(content: str,
+                         max_len: int) -> tuple[list[str], list[str]]:
+    """``(parts, bodies)``: the sent parts plus the body slice each part
+    carries between its repeated header/marker and footer — the bodies
+    concatenate back to the notice body, so readers attribute lines to
+    parts without re-parsing the rendered text.
 
     ``semantic.render_notice`` already puts the patient, coverage/audit
     labels, and stored MCS URL in the frozen payload. A raw character slice
@@ -328,7 +338,7 @@ def semantic_chunks(content: str, max_len: int) -> list[str]:
         if len(part) > max_len:
             raise ValueError("semantic_chunk_limit")
         out.append(part)
-    return out
+    return out, chunks
 
 
 def semantic_summary_block(ledger, r, cfg: dict) -> str:

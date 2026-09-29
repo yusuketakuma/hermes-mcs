@@ -2,7 +2,7 @@
 import json
 
 import semantic
-from test_mcs_semantic import _cfg, _FakeJev, _llm, _seeded
+from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
 def test_detail_deadline_preserves_pending_assessment(tmp_path, monkeypatch):

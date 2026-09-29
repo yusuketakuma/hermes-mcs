@@ -9,7 +9,7 @@ from ledger import Ledger
 import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
-from test_mcs_semantic import _cfg, _llm, _seeded
+from semantic_testkit import _cfg, _llm, _seeded
 
 
 def _job(tmp_path):
@@ -123,7 +123,7 @@ def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypa
 
 def test_status_reports_oldest_pending_age_without_writes(tmp_path, monkeypatch):
     import semantic
-    from test_mcs_semantic import _seeded
+    from semantic_testkit import _seeded
     db = _seeded(tmp_path)
     try:
         with db.db:
@@ -178,7 +178,7 @@ def test_canonical_readiness_reports_shadow_material(tmp_path):
 
 @pytest.mark.parametrize("failure", [False, True])
 def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch, failure):
-    from test_mcs_semantic import _FakeJev
+    from semantic_testkit import _FakeJev
     db = _seeded(tmp_path)
     client = _FakeJev()
     # controllable clock: the fake LLM spends 2s of wall time per call,
@@ -227,7 +227,7 @@ def test_drain_reports_measured_job_work_and_preserves_off(tmp_path, monkeypatch
 
 def test_real_client_usage_reaches_offline_report_through_worker(tmp_path):
     import semantic_evaluation as evaluation
-    from test_semantic_evaluation import _record, MANIFEST, CRITERIA
+    from semantic_testkit import _record, MANIFEST, CRITERIA
     db = _seeded(tmp_path)
     calls = []
 
@@ -274,7 +274,7 @@ def test_real_client_usage_reaches_offline_report_through_worker(tmp_path):
 
 
 def test_pre_audit_candidate_survives_interruption_and_is_not_replaced(tmp_path, monkeypatch):
-    from test_mcs_semantic import _FakeJev
+    from semantic_testkit import _FakeJev
     db = _seeded(tmp_path)
     original_audit = semantic.audit_claims
 

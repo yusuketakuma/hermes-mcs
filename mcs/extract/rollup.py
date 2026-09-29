@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from ledger import Ledger
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
-                         med_is_patient_current)
+                         med_is_patient_current, item_unverified)
 from mcs_util import acquire_run_lock
 
 HOME = os.path.expanduser("~/.mcs")
@@ -39,6 +39,11 @@ KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
 # rebuilds every row stamped with another version (2: request flag).
+# No bump for 623f1a6 (item_unverified on meds/symptoms): it only differs
+# from the old truthiness test on non-bool flags, and every producer
+# (extract_llm _Validator, semantic_projection) writes a bool or omits it.
+# v1.0.5 rows carry version 1, so 2 already rebuilds them under this code.
+# Rebuilds only rewrite artifacts; no notification reads patient_rollup.
 PERIOD_CHECK_VERSION = 2
 
 
@@ -149,8 +154,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         # readers; any flag other than a literal False fails closed
         requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
                          "at": m["posted_at"], "mid": m["message_id"],
-                         "unverified": rq.get("unverified", False)
-                         is not False}
+                         "unverified": item_unverified(rq)}
                         for rq in _dicts(lm.get("requests")))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
@@ -266,7 +270,7 @@ def _med_states(m, v1: dict, lm: dict, med_state: dict):
             continue
         if name in med_state:
             continue  # newest mention already decided this name
-        if x.get("unverified"):
+        if item_unverified(x):
             med_state[name] = ("unverified", x, m["posted_at"])
         elif x.get("action") == "stop" or x.get("negated") \
                 or x.get("status") == "past":
@@ -303,7 +307,8 @@ def _symptom_ts(m, v1: dict, lm: dict, ts,
         t = s.get("text")
         if not isinstance(t, str) or not t:
             continue
-        if s.get("subject") in ("family", "other") or s.get("unverified"):
+        if s.get("subject") in ("family", "other") \
+                or item_unverified(s):
             continue
         # LLM polarity: a negation newer than a positive mention
         # RESOLVES the symptom — it must cancel v1/rule positives,

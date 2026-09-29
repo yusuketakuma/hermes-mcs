@@ -29,7 +29,10 @@ from __future__ import annotations
 import json
 import os
 import time
+from bisect import bisect_left
 from collections.abc import Mapping
+
+from .paths import atomic_write, fsync_dir
 
 PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
@@ -59,27 +62,16 @@ def append(state_dir: str, worker_id: str, record: dict, *,
     if created:
         # A file fsync alone does not make its new directory entry durable.
         # Losing the journal name must not turn a sent attempt into not_sent.
-        dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(state_dir)
     return path
 
 
 def _scan_file(path: str, out: dict) -> None:
     try:
         with open(path, "rb") as handle:
+            # line by line: rows read before an I/O error still count
             for raw in handle:
-                try:
-                    row = json.loads(raw)
-                except ValueError:
-                    continue  # torn tail line — earlier rows still count
-                if not isinstance(row, dict):
-                    continue
-                aid = row.get("attempt_id")
-                if isinstance(aid, str):
-                    out.setdefault(aid, []).append(row)
+                _parse_rows(raw.rstrip(b"\n"), out)
     except OSError:
         return
 
@@ -100,7 +92,6 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
     Each rewrite is atomic (tmp + fsync + rename + dir fsync), so a crash
     leaves either the old or the new file, never half an attempt.
     """
-    from .paths import atomic_write
     try:
         names = _names(state_dir)
     except OSError:
@@ -150,11 +141,7 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
                              mode=0o600)
             else:
                 os.unlink(path)
-                dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(dfd)
-                finally:
-                    os.close(dfd)
+                fsync_dir(state_dir)
         except OSError:
             continue
         dropped += len(lines) - len(keep)
@@ -174,12 +161,11 @@ def scan(state_dir: str) -> dict[str, list[dict]]:
 
 
 def _parse_rows(data: bytes, out: dict) -> None:
-    # line-for-line what _scan_file keeps from the same bytes
     for raw in data.split(b"\n"):
         try:
             row = json.loads(raw)
         except ValueError:
-            continue
+            continue  # torn tail line — earlier rows still count
         if not isinstance(row, dict):
             continue
         aid = row.get("attempt_id")
@@ -190,23 +176,32 @@ def _parse_rows(data: bytes, out: dict) -> None:
 class _View(Mapping):
     """scan()'s result, assembled lazily from per-file indexes: rows of
     an attempt in sorted-file order, committed lines before the torn
-    tail — the same lists a full scan would return."""
+    tail — the same lists a full scan would return. A snapshot: later
+    refreshes append to the shared per-file lists, so each file keeps
+    only the first ``n`` committed rows it had when the view was made."""
 
     def __init__(self, files: list) -> None:
-        self._files = files      # [(committed index, tail index)] sorted
+        # [(committed rows, aid -> ascending row indexes, n, tail index)]
+        self._files = files
 
     def __getitem__(self, aid: str) -> list[dict]:
-        rows = [r for done, tail in self._files
-                for part in (done, tail) for r in part.get(aid, ())]
+        rows = []
+        for done, index, n, tail in self._files:
+            idx = index.get(aid, ())
+            rows += [done[i] for i in idx[:bisect_left(idx, n)]]
+            rows += tail.get(aid, ())
         if not rows:
             raise KeyError(aid)
         return rows
 
     def __iter__(self):
         seen: dict[str, None] = {}
-        for done, tail in self._files:
-            for part in (done, tail):
-                seen.update(dict.fromkeys(part))
+        for _done, index, n, tail in self._files:
+            for aid, idx in index.items():
+                if idx[0] >= n:
+                    break        # first-seen order: the rest came later
+                seen[aid] = None
+            seen.update(dict.fromkeys(tail))
         return iter(seen)
 
     def __len__(self) -> int:
@@ -223,13 +218,15 @@ class ScanCache:
     longer sits where it was read (a same-name file recreated after an
     unlink). Only newline-terminated lines are committed; the torn tail
     is re-parsed on every refresh, exactly as a full scan would see it.
-    Any OSError drops the cache and returns a full ``scan``.
+    Any OSError drops the cache and returns a full ``scan``. Not
+    thread-safe: one refresh at a time; a returned view stays a valid
+    snapshot across later refreshes.
     """
 
     def __init__(self, state_dir: str) -> None:
         self._dir = state_dir
         # name -> [ino key, committed offset, last committed line,
-        #          committed index, tail index]
+        #          committed rows, aid -> row indexes, tail index]
         self._files: dict[str, list] = {}
 
     def invalidate(self) -> None:
@@ -261,19 +258,27 @@ class ScanCache:
                     if handle.read(len(ent[2])) != ent[2]:
                         ent = None
                 if ent is None:
-                    ent = [key, 0, b"", {}, {}]
+                    ent = [key, 0, b"", [], {}, {}]
                 handle.seek(ent[1])
                 data = handle.read()
             cut = data.rfind(b"\n") + 1
             if cut:
-                _parse_rows(data[:cut], ent[3])
+                new: dict = {}
+                _parse_rows(data[:cut], new)
+                done, index = ent[3], ent[4]
+                # row order within the file is only needed per attempt
+                for aid, rows in new.items():
+                    index.setdefault(aid, []).extend(
+                        range(len(done), len(done) + len(rows)))
+                    done += rows
                 ent[1] += cut
                 ent[2] = data[data.rfind(b"\n", 0, cut - 1) + 1:cut]
-            ent[4] = {}
-            _parse_rows(data[cut:], ent[4])
+            ent[5] = {}
+            _parse_rows(data[cut:], ent[5])
             files[name] = ent
         self._files = files
-        return _View([(ent[3], ent[4]) for ent in files.values()])
+        return _View([(ent[3], ent[4], len(ent[3]), ent[5])
+                      for ent in files.values()])
 
 
 def unfinished(records: dict[str, list[dict]]) -> dict[str, dict]:

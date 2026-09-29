@@ -4,7 +4,6 @@ Loads deployment/recovery/mcs_recover.py by path (it is not on the
 mcs import roots — it must run standalone on a broken repo). Fully
 synthetic temp repos/state; no real services touched.
 """
-import importlib.util
 import json
 import os
 import subprocess
@@ -13,15 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-
-
-def _load():
-    path = (Path(__file__).resolve().parents[2]
-            / "deployment" / "recovery" / "mcs_recover.py")
-    spec = importlib.util.spec_from_file_location("mcs_recover", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+from ops_testkit import _load
 
 
 def _git(repo, *args, check=True):
@@ -736,9 +727,10 @@ class _FakeLaunchd:
     """launchctl stub: bootstrap exit codes come from `outcomes`; a
     successful bootstrap (or `late_load`) marks the label loaded."""
 
-    def __init__(self, outcomes, late_load=False):
+    def __init__(self, outcomes, late_load=False, loads=True):
         self.outcomes = list(outcomes)
         self.late_load = late_load
+        self.loads = loads
         self.loaded = False
         self.calls = []
 
@@ -751,7 +743,7 @@ class _FakeLaunchd:
         elif verb == "bootstrap":
             rc = self.outcomes.pop(0)
             if rc == 0:
-                self.loaded = True
+                self.loaded = self.loads
             else:
                 err = "Bootstrap failed: 5: Input/output error"
                 out = "success"          # misleading output is ignored
@@ -767,11 +759,13 @@ class _FakeLaunchd:
     ([5, 0], False, [], 2),
     ([5, 5, 5], True, [], 3),
     ([5, 5, 5], False, ["ai.mcs.x"], 3),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ([0], False, ["ai.mcs.x"], 1),
 ])
 def test_restart_drainers_retries_transient_bootstrap(
         rec, tmp_path, monkeypatch, outcomes, late, problems, boots):
     from types import SimpleNamespace
-    fake = _FakeLaunchd(outcomes, late_load=late)
+    fake = _FakeLaunchd(outcomes, late_load=late, loads=outcomes != [0])
     sleeps = []
     clock = iter(range(0, 10 ** 6, 5))
     monkeypatch.setattr(rec.subprocess, "run", fake)
@@ -784,4 +778,302 @@ def test_restart_drainers_retries_transient_bootstrap(
     assert rec._restart_drainers() == problems
     assert fake.calls[0] == "bootout"
     assert fake.calls.count("bootstrap") == boots
-    assert sleeps.count(1) == boots - (not problems and not late)
+    assert sleeps.count(1) == sum(rc != 0 for rc in outcomes)
+
+
+# ------------------- consent hold survives a git failure (= mcs_update)
+
+@pytest.mark.parametrize("failing", ["rev-parse", "status"])
+def test_git_failure_inside_consent_hold_keeps_the_freeze(
+        rec, tmp_path, monkeypatch, failing):
+    """The watchdog's own hold is journaled (restore_consent); a later
+    pass whose git fails keeps drainers down, both markers, 'applying'
+    and the receipt, reports restore_consent_blocked and never touches
+    the ledger — the old code escalated: drainers up, marker gone."""
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    restarts, notices = [], []
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda: restarts.append(1) or [])
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    Path(rec.MARKER_PATH).write_text("1")
+    assert rec.recover() == 0                       # held
+    hold = json.loads(Path(rec.STATE_PATH).read_text())["restore_consent"]
+    marker_path = tmp_path / "data" / "restore_pending.json"
+    assert hold["report_id"] == json.loads(
+        marker_path.read_text())["report_id"]
+    live_before = live.read_bytes()
+    original_git = rec._git
+
+    def broken(args, timeout=rec.T_GIT):
+        if args[0] == failing:
+            return None                             # hung / unspawnable
+        return original_git(args, timeout)
+    monkeypatch.setattr(rec, "_git", broken)
+    for _ in range(2):
+        assert rec.recover() == 1
+    assert restarts == []
+    assert Path(rec.MARKER_PATH).exists()
+    assert json.loads(marker_path.read_text())["phase"] == "awaiting_consent"
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    assert state["applying"]["rollback"] and state["restore_consent"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    assert live.read_bytes() == live_before         # digest intact
+    assert len(notices) == 1                        # hermes send, deduped
+
+
+def test_git_failure_outside_hold_still_escalates(rec, tmp_path,
+                                                  monkeypatch):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(_applying(prev, stage="merge"), f)
+    Path(rec.MARKER_PATH).write_text("1")
+    monkeypatch.setattr(rec, "_git", lambda args, timeout=rec.T_GIT: None)
+    assert rec.recover() == 1
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "escalate"
+    assert report["detail"] == "git unverifiable: rev-parse HEAD"
+    assert not Path(rec.MARKER_PATH).exists()
+
+
+# ------------------------------------------ escalation notice dedup
+
+def test_escalation_notifies_once_per_condition(rec, tmp_path,
+                                               monkeypatch):
+    """Every watchdog pass re-escalates the same stuck journal: notify
+    the first time, again only on a changed condition or after
+    ESCALATE_REALERT_S — never on each 900s pass."""
+    _make_repo(tmp_path)
+    notices = []
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    state = _applying("0" * 40, stage="merge")      # unclassifiable
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    for _ in range(3):
+        assert rec.recover() == 1
+    assert len(notices) == 1
+    # a different report in between (state change) re-arms the alert
+    rec._report("restore_consent_pending", "x")
+    assert rec.recover() == 1
+    assert len(notices) == 2
+    # changed journal = new condition
+    state["applying"]["tag"] = "v1.2.0"
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    assert rec.recover() == 1
+    assert len(notices) == 3
+    # unchanged but past the re-alert interval
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    report["notified_at"] -= rec.ESCALATE_REALERT_S
+    Path(rec.REPORT_PATH).write_text(json.dumps(report))
+    assert rec.recover() == 1
+    assert len(notices) == 4
+    assert rec.recover() == 1
+    assert len(notices) == 4
+
+
+def test_alert_key_matches_updater():
+    """Both tools dedup against one recovery_report.json."""
+    import mcs_update
+    recovery = _load()
+    state = _applying("p" * 40)
+    for detail in ("git unverifiable: git_timeout: rev-parse",
+                   "unclassifiable repo state — HEAD=abc",
+                   "resume incomplete: a,b"):
+        assert recovery._alert_key(state, detail) \
+            == mcs_update._alert_key(state, detail)
+    assert recovery.ESCALATE_REALERT_S == mcs_update.ESCALATE_REALERT_S
+
+
+# ---------- repeated escalation ensures drainers (= mcs_update)
+
+def test_repeated_escalation_ensures_drainers_instead_of_bouncing(
+        rec, tmp_path, monkeypatch):
+    """The 900s watchdog re-escalates the same stuck journal: bounce
+    only the first time, later passes only ensure drainers run (the old
+    code bootout+bootstrapped healthy drainers every pass)."""
+    _make_repo(tmp_path)
+    calls = []
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda **k: calls.append(k.get("bounce", True))
+                        or [])
+    state = _applying("0" * 40, stage="merge")      # unclassifiable
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    for _ in range(3):
+        assert rec.recover() == 1
+    assert calls == [True, False, False]
+    state["applying"]["tag"] = "v1.2.0"
+    with open(rec.STATE_PATH, "w") as f:
+        json.dump(state, f)
+    assert rec.recover() == 1
+    assert calls[-1] is True
+
+
+class _EnsureLaunchd:
+    """launchctl stub with per-label loaded/running state; `hung`
+    labels time out on every verb."""
+
+    def __init__(self, loaded=(), running=(), hung=()):
+        self.loaded, self.running = set(loaded), set(running)
+        self.hung = set(hung)
+        self.calls = []
+
+    def __call__(self, argv, *args, **kwargs):
+        verb, target = argv[1], argv[-1]
+        label = os.path.basename(target)[:-6] \
+            if verb == "bootstrap" else target.rsplit("/", 1)[-1]
+        self.calls.append((verb, label))
+        if label in self.hung:
+            raise subprocess.TimeoutExpired(argv, 30)
+        rc, out = 0, ""
+        if verb == "bootout":
+            self.loaded.discard(label)
+            self.running.discard(label)
+        elif verb in ("bootstrap", "kickstart"):
+            if verb == "bootstrap":
+                self.loaded.add(label)
+            if label in self.loaded:
+                self.running.add(label)
+        elif verb == "print":
+            rc = 0 if label in self.loaded else 113
+            out = "\tpid = 4242\n" if label in self.running else ""
+        return subprocess.CompletedProcess(argv, rc, out, "")
+
+
+def test_restart_drainers_ensure_mode_never_bounces_a_running_drainer(
+        rec, tmp_path, monkeypatch):
+    fake = _EnsureLaunchd(loaded={"ai.mcs.run", "ai.mcs.stopped"},
+                          running={"ai.mcs.run"}, hung={"ai.mcs.hung"})
+    monkeypatch.setattr(rec.subprocess, "run", fake)
+    monkeypatch.setattr(rec.time, "sleep", lambda s: None)
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    labels = ("ai.mcs.run", "ai.mcs.stopped", "ai.mcs.gone", "ai.mcs.hung")
+    for label in labels:
+        (agents / (label + ".plist")).write_text("<plist/>")
+    monkeypatch.setattr(rec, "RESIDENT_LABELS", labels)
+    clock = iter(range(0, 10 ** 6))
+    monkeypatch.setattr(rec.time, "time", lambda: next(clock))
+    assert rec._restart_drainers(bounce=False) == ["ai.mcs.hung"]
+    assert not any(verb == "bootout" for verb, _ in fake.calls)
+    assert [c for c in fake.calls if c[1] == "ai.mcs.run"] \
+        == [("print", "ai.mcs.run")]
+    assert ("kickstart", "ai.mcs.stopped") in fake.calls
+    assert ("bootstrap", "ai.mcs.stopped") not in fake.calls
+    assert ("bootstrap", "ai.mcs.gone") in fake.calls
+    assert ("bootstrap", "ai.mcs.hung") in fake.calls   # fail closed
+
+
+def test_drainers_key_matches_updater():
+    import mcs_update
+    recovery = _load()
+    state = _applying("p" * 40)
+    for head in ("h" * 40, "", None):
+        assert recovery._drainers_key(state, head) \
+            == mcs_update._drainers_key(state, head)
+
+
+# ------ every escalation inside a consent hold keeps the freeze
+
+def _held_world(rec, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"
+    back = tmp_path / "data" / "backup.db"
+    _mk_db(live, 8)
+    _mk_db(back, 7)
+    _rollback_state(rec, tmp_path, str(back))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
+    restarts, notices = [], []
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda **k: restarts.append(k) or [])
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    Path(rec.MARKER_PATH).write_text("1")
+    assert rec.recover() == 0                       # held
+    return live, back, restarts, notices
+
+
+def _assert_frozen(rec, tmp_path, live, live_before, restarts):
+    assert restarts == []
+    assert Path(rec.MARKER_PATH).exists()
+    marker = tmp_path / "data" / "restore_pending.json"
+    assert json.loads(marker.read_text())["phase"] == "awaiting_consent"
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    assert state["applying"]["rollback"] and state["restore_consent"]
+    assert "cid-rb" not in state.get("executed", {})
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    assert live.read_bytes() == live_before
+
+
+@pytest.mark.parametrize("kind", ["merge_head", "unclassifiable",
+                                  "backup_gone"])
+def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
+        rec, tmp_path, monkeypatch, kind):
+    """Journal inconsistency / restore failure inside a hold used to
+    escalate (drainers up on the newer-schema DB, marker gone, receipt
+    consumed). Now the freeze holds with one deduped `hermes send`, and
+    once the condition clears the consent receipt converges."""
+    live, back, restarts, notices = _held_world(rec, tmp_path,
+                                                monkeypatch)
+    repo = tmp_path / "repo"
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    if kind == "merge_head":
+        (repo / ".git" / "MERGE_HEAD").write_text(head + "\n")
+        undo = (repo / ".git" / "MERGE_HEAD").unlink
+    elif kind == "unclassifiable":
+        _git(repo, "commit", "--allow-empty", "-qm", "drift")
+        undo = lambda: _git(repo, "reset", "-q", "--hard", head)  # noqa: E731
+    else:
+        os.rename(back, str(back) + ".away")
+        undo = lambda: os.rename(str(back) + ".away", back)  # noqa: E731
+    live_before = live.read_bytes()
+    for _ in range(2):
+        assert rec.recover() == 1
+    _assert_frozen(rec, tmp_path, live, live_before, restarts)
+    assert len(notices) == 1                        # hermes send, deduped
+    undo()
+    _consent(rec, live, back)
+    assert rec.recover() == 0
+    assert rec._db_version(str(live)) == 7
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+    assert "restore_consent" not in state
+    assert len(restarts) == 1
+
+
+def test_marker_only_hold_survives_git_failure(rec, tmp_path,
+                                               monkeypatch):
+    """A hold entered by a watchdog that did not journal it has only
+    the awaiting_consent marker: a git failure keeps the freeze (old
+    code escalated), the hold is recorded from the marker, and consent
+    still converges."""
+    live, back, restarts, notices = _held_world(rec, tmp_path,
+                                                monkeypatch)
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    rid = state.pop("restore_consent")["report_id"]
+    Path(rec.STATE_PATH).write_text(json.dumps(state))
+    live_before = live.read_bytes()
+    original_git = rec._git
+
+    def broken(args, timeout=rec.T_GIT):
+        return None if args[0] == "rev-parse" else original_git(args,
+                                                                timeout)
+    monkeypatch.setattr(rec, "_git", broken)
+    assert rec.recover() == 1
+    _assert_frozen(rec, tmp_path, live, live_before, restarts)
+    hold = json.loads(Path(rec.STATE_PATH).read_text())["restore_consent"]
+    assert hold["from_marker"] is True and hold["report_id"] == rid
+    monkeypatch.setattr(rec, "_git", original_git)
+    _consent(rec, live, back)
+    assert rec.recover() == 0
+    state = json.loads(Path(rec.STATE_PATH).read_text())
+    assert state["executed"]["cid-rb"]["result"] == "rolled_back"

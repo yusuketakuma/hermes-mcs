@@ -186,8 +186,9 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                  AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
              END
     """, (enabled or off,)).fetchall()
+    metas = [json.loads(r["meta"]) for r in rows]
     current_ids = set()
-    if enabled and any(json.loads(r["meta"]).get("invalidated") for r in rows):
+    if enabled and any(meta.get("invalidated") for meta in metas):
         from mcs_queries import current_projection_id, current_v4_id
         # Evaluate the normal reader predicates against a prospective snapshot,
         # without exposing any row before source/policy and PASS checks succeed.
@@ -211,8 +212,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
         """)}
     bundles, expired, revived, projects = {}, [], [], set()
     local_model = None
-    for row in rows:
-        meta = json.loads(row["meta"])
+    for row, meta in zip(rows, metas):
         key = (row["project_id"], row["parent_id"] or row["message_id"])
         # OFF remains a permanent, config-read-free revocation. Unknown
         # historical invalidations are excluded above and never acquire a reason.
@@ -231,8 +231,8 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                 if not meta.get("invalidated"):
                     continue
                 if row["artifact_id"] in current_ids:
-                    from semantic_v4 import _reproject_doc
-                    doc, _ = _reproject_doc(ledger, row["message_id"], meta)
+                    from semantic_v4 import reproject_doc
+                    doc, _ = reproject_doc(ledger, row["message_id"], meta)
                     if doc is not None:
                         revived.append((row["artifact_id"],))
                         projects.add(row["project_id"])

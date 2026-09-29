@@ -1205,10 +1205,7 @@ def _shipped_g6_criteria() -> tuple[dict, str]:
     import semantic_evaluation
     with open(G6_CRITERIA_PATH, encoding="utf-8") as f:
         criteria = semantic_evaluation.validate_criteria(json.load(f))
-    digest = hashlib.sha256(json.dumps(
-        criteria, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-    return criteria, digest
+    return criteria, semantic_evaluation.criteria_sha256(criteria)
 
 
 def cmd_fact_source(args) -> int:
@@ -1566,18 +1563,14 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
         note(f"agent {label}: bootstrap")
     if dry:
         return True
-    # launchd may still be tearing down the just-booted-out job ("5:
-    # Input/output error") — retry briefly, then accept a loaded label
-    # (install.sh bootstrap_agent)
-    for _ in range(3):
-        r = _run(["launchctl", "bootstrap", f"gui/{uid}", dst])
-        if r.returncode == 0:
-            return _agent_loaded(label)
-        time.sleep(1)
-    if _agent_loaded(label):
-        return True
-    note(f"  bootstrap failed: {r.stderr.strip()}")
-    return False
+    # imported here, not at module top: an older-generation mcs_update
+    # (mid update/rollback) lazily imports this module against its own
+    # already-loaded mcs_util, which may predate launchd_bootstrap
+    from mcs_util import launchd_bootstrap
+    err = launchd_bootstrap(label, dst, _run)
+    if err:
+        note(f"  bootstrap failed: {err}")
+    return err is None
 
 
 def _load_manifest() -> dict:
@@ -1680,16 +1673,20 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
     return problems
 
 
-def _sync_cron(prev, hermes, manifest, note, dry) -> int:
+def _sync_cron(prev, hermes, manifest, note,
+               dry) -> tuple[int, bool]:
     """Stage 3: hermes cron jobs — create missing, edit drifted,
     remove owned-but-undesired; an unparseable list fails CLOSED
     (M1): 'unverifiable' is NOT 'no jobs', and creating on that
-    assumption produces duplicates."""
+    assumption produces duplicates. Returns (problems,
+    persist_ownership): the latter is True when a verified create must
+    be saved even though problems were raised."""
+    persist = False
     entries = _cron_list(hermes)
     if entries is None:
         note("cron: list unparseable — unverifiable, "
              "no cron mutations performed")
-        return 1
+        return 1, persist
     problems = 0
     mutated = False
     created: list[str] = []
@@ -1708,7 +1705,7 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
     if dups:
         note("cron: duplicate owned scripts — resolve job IDs manually "
              f"({', '.join(dups)}), then re-run services")
-        return 1
+        return 1, persist
     owned_scripts = desired_scripts | {
         c.get("script") for c in prev.get("cron", [])
         if isinstance(c, dict) and c.get("script")}
@@ -1796,12 +1793,12 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
             note("cron: post-change state unverifiable or not exactly one "
                  "job per script — re-run services")
             problems += 1
-        left: list[str] = []
-        for entry in after or []:
-            script = entry.get("script")
-            if isinstance(script, str) and script in owned_scripts \
-                    and script not in desired_scripts and script not in left:
-                left.append(script)
+        # owned-but-undesired jobs still live after the change
+        survivors = [e for e in after or []
+                     if isinstance(e.get("script"), str)
+                     and e["script"] in owned_scripts
+                     and e["script"] not in desired_scripts]
+        left = list(dict.fromkeys(e["script"] for e in survivors))
         if left:
             note("cron: undesired job still present after remove ("
                  + ", ".join(left) + ")")
@@ -1819,20 +1816,17 @@ def _sync_cron(prev, hermes, manifest, note, dry) -> int:
                             and c.get("script") not in present)]
                 have = {c.get("script") for c in manifest["cron"]
                         if isinstance(c, dict)}
-                for entry in after:
-                    script = entry.get("script")
-                    if (isinstance(script, str)
-                            and script in owned_scripts
-                            and script not in desired_scripts
-                            and script not in have):
+                for entry in survivors:
+                    script = entry["script"]
+                    if script not in have:
                         manifest["cron"].append({
                             "name": entry.get("name"),
                             "id": entry.get("id"),
                             "schedule": entry.get("schedule"),
                             "script": script})
                         have.add(script)
-                manifest["_persist_cron_ownership"] = True
-    return problems
+                persist = True
+    return problems, persist
 
 
 def _sync_gateway(cfg, hermes, note, dry) -> int:
@@ -1895,6 +1889,7 @@ def cmd_services(args) -> int:
     subs = {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
             "DATA": os.path.join(HOME, "data")}
     problems = 0
+    persist_partial = False
     prev = _load_manifest()
     manifest = {"v": 1, "at": time.time(), "scripts": [],
                 "agents": [], "cron": []}
@@ -1911,14 +1906,15 @@ def cmd_services(args) -> int:
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
         problems += 1
     else:
-        problems += _sync_cron(prev, hermes, manifest, note, dry)
+        cron_problems, persist_partial = _sync_cron(
+            prev, hermes, manifest, note, dry)
+        problems += cron_problems
         problems += _sync_gateway(cfg, hermes, note, dry)
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6).
     # A partial cron failure still persists verified creates plus
     # surviving owned jobs; an unverified create does not set the flag.
-    persist_partial = bool(manifest.pop("_persist_cron_ownership", False))
     if not dry and (not problems or persist_partial):
         try:
             _save_manifest(manifest)

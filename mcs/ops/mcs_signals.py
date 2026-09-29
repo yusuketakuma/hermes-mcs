@@ -27,13 +27,14 @@ import re
 import time
 from datetime import datetime
 
-from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S, JST,
+from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
+                         FACT_KINDS_SQL, ITEM_CONFIRMED_SQL, JST,
                          JSON_OBJECT_SQL, MED_NOT_CAPABILITY_SQL, MED_PATIENT_CURRENT_SQL,
                          TRANSITION_EVENTS_SQL, current_fact_pred,
                          iter_period_ends, json_or_null,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
-                         transition_cooccurrences)
+                         item_unverified, transition_cooccurrences)
 from structured_view import latest_artifact
 
 ARTIFACT_KIND = "signal_v1"
@@ -278,7 +279,7 @@ def _med_followup(db, now, th, sig_cfg):
                 JOIN messages m ON m.message_id=a.message_id
                 JOIN patients p ON p.project_id=m.project_id
                 JOIN json_each({json_or_null('a.content')},'$.meds') je
-                WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+                WHERE a.kind IN ({FACT_KINDS_SQL})
                   {current_fact_pred()}
                   AND m.posted_at_ts IS NOT NULL
                   AND m.posted_at_ts >= ?
@@ -486,13 +487,13 @@ def _pharmacist_request(db, now, th, sig_cfg):
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
             JOIN json_each({json_or_null('a.content')},'$.requests') je
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
               AND m.posted_at_ts <= ?
               AND COALESCE(p.is_archived,0)=0
-              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.unverified'),0)!=1
+              AND {ITEM_CONFIRMED_SQL}
               AND ({PHARM_TARGET_SQL}
                    {tgt_pred})
             ORDER BY m.project_id, m.message_id""",
@@ -536,12 +537,12 @@ def _rx_request_visibility(db, now, th, sig_cfg):
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
             JOIN json_each({json_or_null('a.content')},'$.requests') je
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
-              AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.unverified'),0)!=1
+              AND {ITEM_CONFIRMED_SQL}
               AND NOT ({PHARM_TARGET_SQL})
               AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.to'),'')
                   NOT IN ('','不明'{extra})
@@ -626,7 +627,7 @@ def _adherence_concern(db, now, th, sig_cfg):
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
             JOIN json_each({json_or_null('a.content')},'$.meds') je
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
@@ -702,7 +703,7 @@ def _discharge_notice(db, now, th, sig_cfg):
             JOIN patients p ON p.project_id=d.project_id
             JOIN artifacts da ON da.message_id=d.message_id
             JOIN json_each({json_or_null('da.content')},'$.events') ev
-            WHERE da.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE da.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred('da', 'd')}
               AND ev.value IN ({TRANSITION_EVENTS_SQL})
               AND d.posted_at_ts >= ?
@@ -737,7 +738,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
-            WHERE a.kind IN ('extract_llm','canonical_projection','semantic_facts_v4')
+            WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
@@ -766,7 +767,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
             continue
         symps = [s["text"].strip() for s in symptom_items
                  if isinstance(s, dict) and not s.get("negated")
-                 and not s.get("unverified")
+                 and not item_unverified(s)
                  and s.get("status") in ("new", "ongoing")
                  and s.get("subject", "patient") in ("patient", None)
                  and isinstance(s.get("text"), str) and s["text"].strip()]

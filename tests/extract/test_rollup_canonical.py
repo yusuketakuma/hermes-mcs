@@ -125,7 +125,7 @@ def test_invalid_rollup_schedule_is_rebuilt(db, field, value):
 
 
 @pytest.mark.parametrize("flag", [True, "false", 0, None, "yes"])
-def test_rollup_keeps_request_unverified_flag(db, flag):
+def test_rollup_keeps_item_unverified_flag(db, flag):
     """Unverified requests keep their flag through the rollup; anything
     but a literal False (or a missing key) fails closed (todo 15)."""
     _add(db, 1, "canonical_projection",

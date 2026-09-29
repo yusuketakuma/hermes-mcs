@@ -2,7 +2,7 @@
 import time
 
 import semantic
-from test_mcs_semantic import _cfg, _FakeJev, _llm, _seeded
+from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
 def test_classification_only_does_not_generate_summary_or_loops(tmp_path):

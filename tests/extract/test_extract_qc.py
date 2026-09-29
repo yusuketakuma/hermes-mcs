@@ -15,20 +15,8 @@ import extract_llm
 import semantic
 import semantic_drain
 import semantic_jev as jev
-from extract_testkit import _hash, _ledger, _message
-from test_mcs_semantic import _FakeJev
-
-
-def _v2_artifact(db, mid, chash, content=None, project_id=1):
-    return db.artifact_add(
-        "extract_llm",
-        json.dumps(content or {"meds": [{"name": "プレドニン",
-                                         "action": "stop",
-                                         "subject": "patient"}],
-                               "urgency": "routine"}),
-        project_id=project_id, message_id=mid,
-        meta={"hash": chash,
-              "extract_version": extract_llm.EXTRACT_VERSION})
+from extract_testkit import _hash, _ledger, _message, _qc_job, _v2_artifact
+from semantic_testkit import _FakeJev
 
 
 def _cfg(**kw):
@@ -39,12 +27,6 @@ def _cfg(**kw):
                          "project_ids": None}}
     base["semantic"].update(kw)
     return base
-
-
-def _qc_job(db, mid=1):
-    return db.db.execute(
-        "SELECT * FROM fetch_jobs WHERE kind='extract_qc' AND message_id=?",
-        (mid,)).fetchone()
 
 
 def _qc_artifact(db, mid=1):
@@ -545,7 +527,7 @@ def test_write_result_records_status_transition(tmp_path):
 def test_semantic_jobs_outrank_qc_backfill(tmp_path):
     """Both kinds pending & ineligible -> the semantic job is claimed
     before the QC backfill inside the same max_jobs window."""
-    from test_mcs_semantic import _llm
+    from semantic_testkit import _llm
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))

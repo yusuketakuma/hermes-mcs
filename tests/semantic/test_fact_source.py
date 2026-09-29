@@ -145,7 +145,7 @@ def _cmd_cfg(tmp_path, monkeypatch, cfg):
 def _shipped_criteria_identity():
     """(version, criteria_sha256) as the real scorer stamps them when run
     against the shipped G6 criteria file (synthetic record)."""
-    from test_semantic_evaluation import MANIFEST, _record
+    from semantic_testkit import MANIFEST, _record
     criteria = json.loads((Path(__file__).resolve().parents[2] / "evaluation"
                            / "g6-criteria-v1.json").read_text())
     report = evaluation.evaluate_records([_record("human")], MANIFEST,

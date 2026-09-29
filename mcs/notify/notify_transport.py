@@ -869,7 +869,7 @@ def _journal_contradiction(ledger, req) -> str | None:
     root = cards.data_root(ledger)
     try:
         cards.ensure_dirs(root)
-        attempts, incomplete = notify_reconcile._scan_journals(
+        attempts, incomplete = notify_reconcile.scan_journals(
             cards.notify_dirs(root))
     except OSError:
         return "journal_unverifiable"

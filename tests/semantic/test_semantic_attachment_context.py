@@ -1,6 +1,6 @@
 """Fixed bundles retain attachment identity without exposing signed URLs."""
 import semantic
-from test_mcs_semantic import _llm, _seeded
+from semantic_testkit import _llm, _seeded
 
 
 def test_attachment_revision_is_bound_and_unparsed_content_is_explicit(tmp_path):

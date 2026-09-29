@@ -71,6 +71,7 @@ KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
 STALE_S = 1800
+ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
 GIT_LOCK_MIN_AGE_S = 600
 T_GIT = 30
 
@@ -160,18 +161,87 @@ def _save_state(state):
         raise
 
 
-def _report(result, detail):
+def _report(result, detail, **extra):
     try:
         fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rpt.",
                                    suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"result": result, "detail": detail,
-                       "at": time.time()}, f)
+            json.dump(dict({"result": result, "detail": detail,
+                            "at": time.time()}, **extra), f)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, REPORT_PATH)
     except OSError:
         pass
+
+
+def _alert_key(state, detail):
+    """Copy of mcs_update._alert_key — keep identical so both tools
+    dedup against the same recovery_report.json."""
+    reason = re.split(r"[:—(]", detail, maxsplit=1)[0].strip()
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), reason],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _alert_due(result, key, now):
+    """Copy of mcs_update._alert_due: suppress only the same (result,
+    key) notified < ESCALATE_REALERT_S ago; anything else alerts."""
+    last = _last_report()
+    at = last.get("notified_at")
+    if (last.get("result"), last.get("alert_key")) == (result, key) \
+            and type(at) in (int, float) \
+            and 0 <= now - at < ESCALATE_REALERT_S:
+        return False, at
+    return True, now
+
+
+def _last_report():
+    try:
+        with open(REPORT_PATH, encoding="utf-8") as f:
+            last = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return last if isinstance(last, dict) else {}
+
+
+def _drainers_key(state, head):
+    """Copy of mcs_update._drainers_key — keep identical: the journal +
+    HEAD drainers were last (re)started for; the same key on a later
+    pass only ensures they run instead of bouncing them again."""
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), head or None],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _awaiting_consent():
+    """Standalone copy of notify_cards.restore_awaiting_consent: the
+    restore_pending marker in phase awaiting_consent — or unreadable,
+    which holds too (fail closed). None otherwise."""
+    path = os.path.join(DATA, "restore_pending.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"unreadable": True} if os.path.lexists(path) else None
+    except (OSError, ValueError, RecursionError):
+        return {"unreadable": True}
+    if not isinstance(data, dict) or not (
+            data.get("phase") in ("restored", "awaiting_consent")
+            or ("phase" not in data and "restored_at" in data)):
+        return {"unreadable": True}
+    return data if data.get("phase") == "awaiting_consent" else None
+
+
+def _report_alert(result, state, detail, text, **extra):
+    """Report + deduped human notice. _notify is `hermes send` directly
+    (not notify_outbox — the ledger is untouched)."""
+    key = _alert_key(state, detail)
+    notify, notified_at = _alert_due(result, key, time.time())
+    _report(result, detail, alert_key=key, notified_at=notified_at,
+            **extra)
+    if notify:
+        _notify(text)
 
 
 def _try_lock(path):
@@ -215,26 +285,43 @@ def _agent_pid(label):
 
 
 def _bootstrap_agent(label, plist):
-    """install.sh bootstrap_agent: launchd may still be tearing down a
-    just-booted-out job ("5: Input/output error") — retry briefly, then
-    accept a label that is loaded now."""
+    """Standalone copy of mcs_util.launchd_bootstrap (this file runs
+    outside the repo under system python3 — keep the semantics in
+    sync): retry any failed bootstrap up to 3x (launchd may still be
+    tearing down a just-booted-out job, "5: Input/output error"); an
+    exit 0 is not proof — success is the label answering `print`."""
     for _ in range(3):
         r = _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
         if r is not None and r.returncode == 0:
-            return True
+            break
         time.sleep(1)
     r = _launchctl(["print", f"gui/{os.getuid()}/{label}"])
     return r is not None and r.returncode == 0
 
 
-def _restart_drainers():
+def _restart_drainers(bounce=True):
+    """bounce=False = mcs_update.restart_agents(bounce=False): leave a
+    running drainer alone; start one not running, not loaded or
+    unverifiable (hung print — fail closed) via bootstrap unless loaded,
+    then `kickstart` without -k (never kills a running job)."""
     problems = []
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
-        _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
-        if os.path.exists(plist) and not _bootstrap_agent(label, plist):
+        target = f"gui/{os.getuid()}/{label}"
+        if bounce:
+            _launchctl(["bootout", target])
+        elif _agent_pid(label):
+            continue                        # running — never bounce it
+        else:
+            r = _launchctl(["print", target])
+            if r is not None and r.returncode == 0:
+                plist = None                # loaded: kickstart only
+        if plist and os.path.exists(plist) \
+                and not _bootstrap_agent(label, plist):
             problems.append(label)
             continue
+        if not bounce:
+            _launchctl(["kickstart", target])
         deadline = time.time() + 15
         while time.time() < deadline:
             if _agent_pid(label):
@@ -596,7 +683,21 @@ def _replace_database(backup_path, expected_sha, before_replace):
             pass
 
 
-def _restore_db(backup_path):
+def _record_hold(state, report, backup_path):
+    """Journal the hold like mcs_update._consent_hold (same record) — a
+    later pass of either tool then sees state['restore_consent'] and
+    keeps the freeze on a git failure instead of escalating."""
+    state["restore_consent"] = {
+        "report_id": report["report_id"], "backup_path": backup_path,
+        "backup_sha256": report["backup_sha256"],
+        "backup_schema": report["backup_schema"],
+        "intervening_messages": report["intervening_messages"],
+        "external_effect_rows": report["external_effect_rows"],
+        "at": time.time()}
+    _save_state(state)
+
+
+def _restore_db(backup_path, on_hold=None):
     """Restore only when the live schema differs, with a verified staged copy.
     Checkpoint the live DB before replacement to preserve committed WAL data.
     Returns an error string for the caller to escalate, or None on a
@@ -659,6 +760,11 @@ def _restore_db(backup_path):
     except OSError as e:
         return f"restore_marker_failed: {e}"
     if _consent_for(report) is None:
+        if on_hold is not None:
+            # a failed journal write propagates (as mcs_update's
+            # _consent_hold): an escalate here would restart drainers
+            # on the unrestored newer-schema DB
+            on_hold(report)
         return "restore_consent_pending:" + report["report_id"]
     try:
         _replace_database(backup_path, report["backup_sha256"],
@@ -707,24 +813,77 @@ def recover(if_stale=False):
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
+        rollback_shaped = bool(applying and applying.get("rollback")
+                               and applying.get("backup_path"))
+        if not state.get("restore_consent") and rollback_shaped:
+            marker = _awaiting_consent()
+            if marker is not None:
+                # = mcs_update: a hold without its journal record
+                # (entered by an older watchdog, or a crash between the
+                # marker and _record_hold) — record it so every later
+                # pass of either tool keeps the freeze
+                state["restore_consent"] = {
+                    "report_id": marker.get("report_id"),
+                    "backup_path": applying["backup_path"],
+                    "from_marker": True, "at": time.time()}
+                _save_state(state)
+        prior_drainers = _last_report().get("drainers_key")
+        head = None                         # measured below
+        tree_reset = False
+        restarted = False
+
+        def held():
+            return bool(state.get("restore_consent")) \
+                or _awaiting_consent() is not None
+
+        def drainers(dkey):
+            # = mcs_update.recover_interrupted.drainers: bounce once per
+            # journal + HEAD (or after this pass reset the tree); later
+            # passes of the same condition only ensure they run
+            nonlocal restarted
+            bounce = not restarted and (tree_reset
+                                        or prior_drainers != dkey)
+            restarted = True
+            return _restart_drainers() if bounce \
+                else _restart_drainers(bounce=False)
 
         def escalate(detail):
+            # Canonical policy: mcs_update.recover_interrupted's
+            # escalate — keep the two in sync. Inside a restore-consent
+            # hold (journal record, or the awaiting_consent marker when
+            # the record is missing; an invalid record holds too) the
+            # DB may still be the newer schema: never restart drainers,
+            # keep both markers, 'applying' and the receipt, and never
+            # write notify_outbox (it is in the loss report's digest —
+            # a write voids the pending consent). Report + a direct
+            # `hermes send` (bypasses the ledger) only; next pass retries.
+            if held():
+                _report_alert("restore_consent_blocked", state,
+                              detail[:240]
+                              + " — hold kept, retried next pass",
+                              "[MCS] 復元承認待ちの保留中に復旧を進め"
+                              "られません（保留は維持・自動再試行・"
+                              f"要確認）: {detail}")
+                return 1
             cid = (applying or {}).get("command_id")
             if cid:
                 state.setdefault("executed", {})[cid] = {
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 _save_state(state)
-            _report("escalate", detail)
-            _restart_drainers()
+            dkey = _drainers_key(state, head)
+            _report_alert("escalate", state, detail,
+                          "[MCS] 更新の中断復旧ができません"
+                          f"（要手動対応）: {detail}",
+                          drainers_key=dkey)
+            drainers(dkey)
             _remove_marker()
-            _notify("[MCS] 更新の中断復旧ができません"
-                    f"（要手動対応）: {detail}")
             return 1
 
-        if state.get("restore_consent") and not (
-                applying and applying.get("rollback")
-                and applying.get("backup_path")):
+        def git_failed(what):
+            return escalate("git unverifiable: " + what)
+
+        if held() and not rollback_shaped:
             # A held schema-bump DB replace must reach _restore_db
             # again via the head==target rollback branch — any other
             # journal shape is corruption; fail closed rather than
@@ -732,7 +891,7 @@ def recover(if_stale=False):
             return escalate("restore_consent without a rollback "
                             "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
-            if state.get("restore_consent"):
+            if held():
                 # rollback's tree reset completed before the consent
                 # hold — a MERGE_HEAD here is drift
                 return escalate("restore_consent with MERGE_HEAD — "
@@ -766,16 +925,27 @@ def recover(if_stale=False):
             return 0
 
         head = _head()
+        if not head:
+            return git_failed("rev-parse HEAD")
         clean = _clean()
         if clean is None:
-            return escalate("git status failed")
+            return git_failed("status")
         if head == target:
             if not clean:
-                _git_out(["reset", "--hard", target])
-                if _clean() is not True:
+                tree_reset = True
+                r = _git(["reset", "--hard", target])
+                if r is None or r.returncode != 0:
+                    return git_failed("reset --hard")
+                clean = _clean()
+                if clean is None:
+                    return git_failed("status")
+                if not clean:
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
-                err = _restore_db(applying["backup_path"])
+                err = _restore_db(applying["backup_path"],
+                                  on_hold=lambda report: _record_hold(
+                                      state, report,
+                                      applying["backup_path"]))
                 if err and err.startswith("restore_consent_pending:"):
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, 'applying' stays — each watchdog
@@ -785,10 +955,14 @@ def recover(if_stale=False):
                     return 0
                 if err:
                     return escalate("rollback db restore: " + err)
+                # DB at the backup schema, marker left awaiting_consent:
+                # the hold is over — later failures escalate normally
+                if state.pop("restore_consent", None) is not None:
+                    _save_state(state)
             problems = _reconcile_membership(
                 applying.get("manifest_snapshot")
                 or state.get("manifest_snapshot"))
-            problems += _restart_drainers()
+            problems += drainers(_drainers_key(state, head))
             if problems:
                 return escalate("resume incomplete: "
                                 + ",".join(problems))
@@ -818,7 +992,7 @@ def recover(if_stale=False):
                 _restart_gateway()
             return 0
         if prev and head == prev:
-            if state.get("restore_consent"):
+            if held():
                 # a held restore resolves ONLY through the head==target
                 # rollback branch; landing here means the journal
                 # drifted — escalate, never 'finish' into a wedge

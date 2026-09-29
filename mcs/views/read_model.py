@@ -113,7 +113,7 @@ def _kind_state(rows, content_hash: str, *, engine_version=None) -> dict:
             "last_error": saw_error, "current_meta": current_meta}
 
 
-def _message_records(db, scope: str, project_id, limit):
+def _message_records(db, scope: str, project_id):
     """One provenance record per message — the derived-row view."""
     params = []
     where = ""
@@ -127,11 +127,6 @@ def _message_records(db, scope: str, project_id, limit):
       FROM messages m {where} ORDER BY m.message_id
     """
     rows = db.execute(sql, params).fetchall()
-    total = len(rows)
-    truncated = False
-    if limit is not None and len(rows) > limit:
-        rows = rows[:limit]
-        truncated = True
     # One batched artifacts scan per ~500 messages replaces the
     # per-message query (N+1). Chunking stays under SQLite's host-variable
     # ceiling; kind remains the leading term so idx_artifacts_kind_msg
@@ -173,7 +168,7 @@ def _message_records(db, scope: str, project_id, limit):
         rec["facts"] = facts
         rec["relations"] = relations
         records.append(rec)
-    return records, total, truncated
+    return records
 
 
 def _kind_map(art_rows, content_hash) -> dict:
@@ -319,12 +314,12 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         raise ValueError("read_model_scope_invalid")
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError("bad_limit")
-    records, total, truncated = _message_records(
-        db, scope, project_id, limit)
     # coverage describes the whole scope like `total` does — never just
     # the page `limit` cut
-    counted = (_message_records(db, scope, project_id, None)[0]
-               if truncated else records)
+    counted = _message_records(db, scope, project_id)
+    total = len(counted)
+    truncated = limit is not None and total > limit
+    records = counted[:limit] if truncated else counted
     attachments = _attachments(db, scope, project_id)
     return {
         "contract": CONTRACT,

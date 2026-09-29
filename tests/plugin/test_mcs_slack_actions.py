@@ -342,3 +342,191 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
         assert reg.confirm(confirm_id) is None
     asyncio.run(scenario())
+
+
+async def _to_confirm(actions, app, dirs, project_id):
+    body, action = click()
+    await actions._action(ack, body, action)
+    env = command(dirs)
+    modal_id = app.client.views[0]["view"]["private_metadata"]
+    view_body, view = submitted(modal_id, title="合成依頼", reason="合成理由",
+                                assignee="", due_date="")
+    await actions._modal(ack, view_body, view)
+    result(dirs, env["request_id"], request_id=env["request_id"],
+           outcome="applied", modal=True, params={"project_id": project_id})
+    await actions.sweep_followups()
+    return body, app.client.messages[-1]["blocks"][1]["elements"]
+
+
+def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(
+        tmp_path):
+    """A payload project leaving scope after the preview blocks 確定
+    (権限がありません) without marking it in flight; 取消 still succeeds."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(
+            tmp_path, kind="request", project_ids=frozenset({123, 999}))
+        body, (confirm_action, cancel_action) = await _to_confirm(
+            actions, app, dirs, 999)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        actions._settings["project_ids"] = frozenset({123})
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        assert [m["text"] for m in app.client.messages[before:]] == [
+            "権限がありません。"]
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+        assert not reg.confirm(confirm_id).get("in_flight")
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
+
+
+def test_confirm_expiring_before_take_never_publishes(tmp_path):
+    """TTL lapsing between the lookup and the take must not queue the
+    command from the stale lookup."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        real = actions._pinned
+
+        def lapse(*args):
+            reg._data["pending_confirms"][confirm_id]["expires"] = 0
+            return real(*args)
+        actions._pinned = lapse
+        await actions._confirm(ack, body, confirm_action)
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+        assert reg.confirm(confirm_id) is None
+    asyncio.run(scenario())
+
+
+def test_card_project_out_of_scope_after_preview_still_cancellable(
+        tmp_path):
+    """The card's own project leaving scope must not strand the preview:
+    取消 needs only the actor's card pin, 確定 answers 権限がありません."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, cancel_action) = await _to_confirm(
+            actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        actions._settings["project_ids"] = frozenset({999})
+        await actions._confirm(ack, body, confirm_action)
+        assert app.client.messages[-1]["text"] == "権限がありません。"
+        assert not reg.confirm(confirm_id).get("in_flight")
+        foreign, _ = click(user="U_FOREIGN")
+        before = len(app.client.messages)
+        await actions._confirm(ack, foreign, cancel_action)
+        assert len(app.client.messages) == before
+        assert reg.confirm(confirm_id) is not None
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+    asyncio.run(scenario())
+
+
+EXPIRED = "この確認は期限切れです。もう一度操作してください。"
+
+
+def _refusal(tmp_path, spoil, *, clicker="U_OPERATOR", channel="C_SYNTHETIC"):
+    """Drive a request to its preview, spoil it, click 確定 as `clicker`
+    from `channel`; return the new ephemerals and the queued-file count."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        actions._settings["allowed_user_ids"] = {"U_OPERATOR", "U_OTHER"}
+        _, (confirm_action, _) = await _to_confirm(actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        spoil(reg, confirm_id)
+        body, _ = click(user=clicker)
+        body["channel"]["id"] = channel
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        return (app.client.messages[before:],
+                len(list(Path(dirs["cmd_int"]).glob("*.json"))),
+                reg.confirm(confirm_id))
+    return asyncio.run(scenario())
+
+
+def test_confirm_refusals_answer_only_the_clicker(tmp_path):
+    """Each refused 確定 answers the clicking allowed user with fixed
+    Discord wording — ephemeral in the configured channel, no preview
+    content — and queues nothing."""
+    def expire(reg, cid):
+        reg._data["pending_confirms"][cid]["expires"] = 0
+
+    def drop_token(reg, _cid):
+        reg._data["tokens"].pop(TOKEN)
+
+    def keep(*_):
+        pass
+    cases = [
+        ("expired", expire, {}, EXPIRED, False),
+        ("token_gone", drop_token, {}, EXPIRED, True),
+        ("other_user", keep, {"clicker": "U_OTHER"},
+         "確認した本人のみ確定できます。", True),
+        ("channel", keep, {"channel": "C_OTHER"},
+         "確認を開始した場所と送信元が一致しません。", True),
+    ]
+    for name, spoil, kw, text, pending in cases:
+        (tmp_path / name).mkdir()
+        msgs, queued, rec = _refusal(tmp_path / name, spoil, **kw)
+        clicker = kw.get("clicker", "U_OPERATOR")
+        assert [(m["user"], m["channel"], m["text"]) for m in msgs] == [
+            (clicker, "C_SYNTHETIC", text)], name
+        assert all("blocks" not in m and "合成" not in m["text"]
+                   for m in msgs), name
+        assert queued == 1, name              # only the notification env
+        assert (rec is not None) is pending, name
+        assert not (rec or {}).get("in_flight"), name
+
+
+def test_confirm_from_unverified_user_stays_silent(tmp_path):
+    msgs, queued, rec = _refusal(tmp_path, lambda *_: None,
+                                 clicker="U_FOREIGN")
+    assert msgs == [] and queued == 1 and rec is not None
+
+
+def test_confirm_gone_at_take_tells_the_clicker(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        real = actions._pinned
+
+        def lapse(*args):
+            reg._data["pending_confirms"][confirm_id]["expires"] = 0
+            return real(*args)
+        actions._pinned = lapse
+        await actions._confirm(ack, body, confirm_action)
+        assert app.client.messages[-1]["text"] == EXPIRED
+        assert app.client.messages[-1]["user"] == "U_OPERATOR"
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+    asyncio.run(scenario())
+
+
+def test_modal_refusals_answer_only_the_submitter(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        actions._settings["allowed_user_ids"] = {"U_OPERATOR", "U_OTHER"}
+        await actions._action(ack, *click())
+        modal_id = app.client.views[0]["view"]["private_metadata"]
+        fields = {"title": "合成依頼", "reason": "合成理由",
+                  "assignee": "", "due_date": ""}
+        for user, mid, text in (
+                ("U_FOREIGN", modal_id, None),
+                ("U_OTHER", modal_id, "操作した本人のみ送信できます。"),
+                ("U_OPERATOR", "0" * 16,
+                 "この入力フォームは期限切れです。もう一度操作してください。")):
+            before = len(app.client.messages)
+            await actions._modal(ack, *submitted(mid, user=user, **fields))
+            got = [(m["user"], m["text"])
+                   for m in app.client.messages[before:]]
+            assert got == ([] if text is None else [(user, text)])
+        actions._settings["project_ids"] = frozenset({999})
+        await actions._modal(ack, *submitted(modal_id, **fields))
+        assert app.client.messages[-1]["text"] == "権限がありません。"
+        assert not reg.followups()
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+    asyncio.run(scenario())

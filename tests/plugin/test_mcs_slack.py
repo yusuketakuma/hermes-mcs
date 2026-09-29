@@ -17,10 +17,11 @@ from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
 import notify_reconcile
-from test_mcs_slack_cards import _spec
-from test_notify_slack import (
-    NOW, SLACK, SCOPE, _dispatch, _intent, _latest_render, _seed_thread,
+from notify_testkit import (
+    NOW, _dispatch, _intent, _latest_render, _seed_thread,
 )
+from slack_card_testkit import _spec
+from slack_testkit import SCOPE, SLACK, FakeClient, _granted_card, _mkworld
 
 
 @pytest.fixture(autouse=True)
@@ -35,96 +36,6 @@ def isolated_slack_ledger(tmp_path):
     instance = ledger.Ledger(str(root / "ledger.db"))
     yield instance
     instance.close()
-
-
-class FakeClient:
-    def __init__(self, *, team="T_SYNTHETIC", retries=None, uploads=True):
-        self.retry_handlers = [] if retries is None else retries
-        self.team = team
-        self.calls = []
-        self.ephemeral_calls = []
-        self.send_retry_handlers = []
-        self.failure: Exception | None = None
-        self.thread_failure: Exception | None = None
-        # indexes into thread_posts that must fail exactly once
-        self.thread_fail_at: set[int] = set()
-        self.thread_posts = []
-        self.replies: dict[str, list] = {}
-        # upload edge — uploads=False models an SDK without
-        # files_upload_v2 (instance attr so the single_attempt copy
-        # inherits the capability exactly)
-        self.upload_calls = []
-        self.upload_fail_at: set[int] = set()
-        self.upload_failure: Exception | None = None
-        self._fid_n = 0
-        if uploads:
-            self.files_upload_v2 = self._files_upload_v2
-        self.bot_id = "B_SYNTHETIC"
-        self._ts_n = 1
-
-    def _next_ts(self):
-        self._ts_n += 1
-        return f"1790000000.{self._ts_n:06d}"
-
-    async def auth_test(self):
-        self.calls.append(("auth_test", {}))
-        return {"ok": True, "team_id": self.team, "bot_id": self.bot_id,
-                "user_id": "U_BOT"}
-
-    async def chat_postMessage(self, **kwargs):
-        self.calls.append(("create", kwargs))
-        self.send_retry_handlers.append(self.retry_handlers)
-        if self.failure is not None:
-            raise self.failure
-        if "thread_ts" in kwargs:
-            if len(self.thread_posts) in self.thread_fail_at:
-                self.thread_fail_at.discard(len(self.thread_posts))
-                raise self.thread_failure or TimeoutError("synthetic")
-            ts = self._next_ts()
-            self.thread_posts.append(kwargs)
-            self.replies.setdefault(kwargs["thread_ts"], []).append(
-                {"ts": ts, "text": kwargs["text"],
-                 "bot_id": self.bot_id})
-            return {"ok": True, "channel": kwargs["channel"], "ts": ts}
-        return {"ok": True, "channel": kwargs["channel"],
-                "ts": "1790000000.000001"}
-
-    async def _files_upload_v2(self, **kwargs):
-        self.calls.append(("files_upload_v2", kwargs))
-        self.send_retry_handlers.append(self.retry_handlers)
-        if len(self.upload_calls) in self.upload_fail_at:
-            self.upload_fail_at.discard(len(self.upload_calls))
-            raise self.upload_failure or TimeoutError("synthetic")
-        self.upload_calls.append(kwargs)
-        self._fid_n += 1
-        blob = kwargs.get("file") or b""
-        entry = {"id": f"F_SYNTHETIC_{self._fid_n:04d}",
-                 "name": kwargs.get("filename"),
-                 "size": len(blob),
-                 "sha256": hashlib.sha256(blob).hexdigest()}
-        ts = self._next_ts()
-        self.replies.setdefault(kwargs["thread_ts"], []).append(
-            {"ts": ts, "bot_id": self.bot_id, "files": [entry]})
-        return {"ok": True, "files": [entry]}
-
-    async def conversations_replies(self, **kwargs):
-        self.calls.append(("replies", kwargs))
-        root = kwargs["ts"]
-        msgs = [{"ts": root, "text": "<card>", "bot_id": self.bot_id}]
-        msgs += list(self.replies.get(root, []))
-        return {"ok": True, "messages": msgs}
-
-    async def chat_update(self, **kwargs):
-        self.calls.append(("update", kwargs))
-        return {"ok": True, "channel": kwargs["channel"], "ts": kwargs["ts"]}
-
-    async def chat_delete(self, **kwargs):
-        self.calls.append(("delete", kwargs))
-        return {"ok": True}
-
-    async def chat_postEphemeral(self, **kwargs):
-        self.ephemeral_calls.append(kwargs)
-        return {"ok": True}
 
 
 def _adapter(client):
@@ -569,48 +480,12 @@ class FakeSlackError(Exception):
                                         data={"ok": False, "error": error})
 
 
-def _mkworld(led, team=SCOPE["team_id"], channel=SCOPE["channel_id"],
-             uploads=True):
-    """Dispatch a slack render and wire the worker boundary."""
-    root = Path(runner_cards.data_root(led))
-    runner_cards.publish_flags(SLACK, str(root))
-    dirs = slack_paths.ensure_dirs(str(root))
-    reg = registry.Registry(dirs["state"], scope=SCOPE)
-    client = FakeClient(team=team, uploads=uploads)
-    sender = SlackCardAdapter(
-        SimpleNamespace(client=client),
-        team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
-        channel_id=SCOPE["channel_id"], profile=SCOPE["profile"],
-        allowed_user_ids={"U_SYNTHETIC"})
-    worker = DeliveryWorker(
-        sender=sender, settings=SCOPE, root=str(root),
-        reg=reg, worker_id=registry.new_worker_id(),
-        log=lambda *_args, **_kw: None)
-    return SimpleNamespace(root=root, dirs=dirs, reg=reg,
-                           client=client, sender=sender, worker=worker)
-
-
 def _big_body(led, chars=4200):
     """Force a multi-part body — two 1900-char chunks can't suffice."""
     led.db.execute(
         "UPDATE messages SET body_text=? WHERE message_id=100",
         ("SYNTHETIC-THREAD-BODY " + "x" * chars,))
     led.db.commit()
-
-
-async def _granted_card(w, led, root):
-    """tick -> grant -> tick — card delivered, parts driven."""
-    assert await w._sender.bind()
-    w.acquire_scope_lock()
-    try:
-        await w.tick()
-        result = {"errors": []}
-        runner_cmds.drain_int_commands(led, result, SLACK, str(root))
-        await w.tick()
-        runner_cmds.drain_int_commands(
-            led, {"errors": []}, SLACK, str(root))
-    finally:
-        w.release_scope_lock()
 
 
 def test_slack_thread_parts_post_under_bound_root_only(led):

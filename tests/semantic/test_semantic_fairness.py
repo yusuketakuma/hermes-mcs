@@ -17,8 +17,7 @@ import pytest
 import semantic
 import semantic_drain
 from semantic_observe import observe
-from test_mcs_semantic import (_cfg, _FakeJev, _ledger, _llm, _message,
-                               _patient)
+from semantic_testkit import _cfg, _FakeJev, _ledger, _llm, _message, _patient
 
 
 def _job(db, mid, eligible=False, pid=1):

@@ -14,7 +14,7 @@ import _mcs_path  # noqa: F401
 import mcs_queries
 import mcs_requests
 
-from test_mcs_features import _create, _source, _snapshot
+from ops_testkit import _create, _source, _snapshot
 
 
 def _staff_msg(db, mid, pid, sender, org, prof="薬剤師"):

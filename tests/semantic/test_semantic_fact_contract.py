@@ -7,6 +7,7 @@ import pytest
 
 import semantic_evaluation as evaluation
 import semantic_facts as sf
+from semantic_testkit import v2_fact
 
 
 CORPUS = Path(__file__).resolve().parents[2] / "evaluation" / \
@@ -44,19 +45,11 @@ def _doc(facts=None, relations=None, obligations=None, coverage=None):
 
 
 def _fact(**overrides):
-    fact = {
-        "fact_id": "fact_x", "kind": "medication_event",
-        "subject": "patient:proj-a", "actor": "sender:s1",
-        "statement": "アムロジピン開始", "polarity": "affirmed",
-        "epistemic": "asserted", "workflow_status": "ordered",
-        "event_time": "本日", "valid_time": "unknown",
-        "evidence_ids": [], "obligation_ids": [],
-        "importance": "T1", "provenance": "local_llm",
-        "validation_status": "unverified",
-        "action": "start",
-    }
-    fact.update(overrides)
-    return fact
+    return v2_fact(overrides.pop("fact_id", "fact_x"), **{
+        "subject": "patient:proj-a", "statement": "アムロジピン開始",
+        "workflow_status": "ordered", "event_time": "本日",
+        "validation_status": "unverified", "action": "start",
+        **overrides})
 
 
 def test_ids_are_deterministic_across_retries_and_chunk_layout():
