@@ -240,6 +240,13 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
                           (ev["event_id"],)).fetchone()[0] == "accepted"
     assert _drain(led, receipt)["applied"]
+    # pending durable parts keep the settled spec on disk for resume —
+    # GC only reclaims it once every part reaches a terminal state
+    assert cards.gc(led, now=NOW)["spec_files"] == 0
+    _settle_parts(led, render)
+    assert cards.gc(led, now=NOW)["spec_files"] == 1
+    assert not path.exists()
+    # the action's update is issued once the create's parts have landed
     ack = _token_for(spec, "ack")
     action = {"version": 2, "transport": "slack", "op": "notification",
               "command_id": ack + ":" + "c" * 16, "actor": ACTOR,
@@ -248,12 +255,6 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     update = _latest_render(led)
     assert update["op"] == "update" and update["transport"] == "slack"
     assert json.loads(update["spec_json"])["delivery"]["message_id"] == receipt["message_id"]
-    # pending durable parts keep the settled spec on disk for resume —
-    # GC only reclaims it once every part reaches a terminal state
-    assert cards.gc(led, now=NOW)["spec_files"] == 0
-    _settle_parts(led, render)
-    assert cards.gc(led, now=NOW)["spec_files"] == 1
-    assert not path.exists()
     assert (root / "slack_render" / (update["delivery_id"] + ".json")).exists()
 
 

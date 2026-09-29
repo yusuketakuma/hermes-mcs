@@ -1,7 +1,7 @@
 import json
 import notify_cards
 import notify_render
-from notify_testkit import (led, _seed_thread, _extract, _dispatch, _intent, _card, _latest_render, _begin, _receipt, _notif, _token_for, CFG, NOW)
+from notify_testkit import (led, _settle_bodies, _seed_thread, _extract, _dispatch, _intent, _card, _latest_render, _begin, _receipt, _notif, _token_for, CFG, NOW)
 
 
 __all__ = ["led"]
@@ -13,6 +13,7 @@ def test_changed_extraction_refreshes_display_and_source(led):
     render = _latest_render(led)
     attempt = _begin(led, render)
     _receipt(led, render, attempt["attempt_id"], message_id="mid-1")
+    _settle_bodies(led, render)
     before = _card(led)
     _extract(led, 100, {"summary": "合成の訂正済み要約"}, kind="extract_llm")
     assert notify_render._source_fp(led.db, before) != before["source_fp"]

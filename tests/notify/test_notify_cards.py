@@ -21,6 +21,7 @@ import notify_render
 import notify_transport
 import notify_cmds
 from notify_testkit import (
+    _settle_bodies,
     CFG, NOW, ORIGIN, SCOPE, _begin, _card, _dispatch, _extract, _intent,
     _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
     _signal_row, _token_for, _uuid, led,
@@ -305,6 +306,7 @@ def _delivered_card(led, tmp_path, cfg=CFG):
     render = _deliverable(led, tmp_path, cfg=cfg)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    _settle_bodies(led, render)
     spec = json.loads(
         (tmp_path / "data" / "discord_render"
          / (render["delivery_id"] + ".json")).read_text())
@@ -1220,6 +1222,7 @@ def _deliver_update(led, tmp_path, message_id="m-9"):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id=message_id)
+    _settle_bodies(led, render)
     _msg(led, 103, 1, parent=100)          # drift -> update render
     notify_cards.sweep(led, CFG)
     nxt = _latest_render(led)
@@ -1507,6 +1510,7 @@ def test_message_gone_unbind_clears_thread(led, tmp_path):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    _settle_bodies(led, render)
     r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
@@ -1537,6 +1541,7 @@ def test_failed_thread_keeps_body_button(led, tmp_path):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    _settle_bodies(led, render)
     r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
@@ -1561,6 +1566,7 @@ def test_created_thread_update_carries_body_not_button(led, tmp_path):
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    _settle_bodies(led, render)
     r = notify_transport.apply_thread_receipt(led, {
         "version": 1, "op": "thread_receipt", "command_id": _uuid(5),
         "delivery_id": render["delivery_id"], "message_id": "m-9",
@@ -1633,6 +1639,7 @@ def _deliver_card(led, cfg=CFG):
     r = _latest_render(led)
     _begin(led, r)
     _receipt(led, r, f"{1:016x}", message_id="m-1")
+    _settle_bodies(led, r)
     return r
 
 
@@ -1665,6 +1672,7 @@ def test_sweep_detects_signal_lifecycle(led):
     assert _card(led)["kind"] == "signal"
     _begin(led, r0)
     _receipt(led, r0, f"{1:016x}", message_id="m-1")
+    _settle_bodies(led, r0)
 
     # resolved — the evaluator's terminal transition
     _signal_row(led, "sig-1", state="resolved")
@@ -1800,6 +1808,7 @@ def test_new_intent_with_unchanged_card_eventually_completes(led, tmp_path, phas
         _begin(led, render)
     if phase == 'delivered':
         _receipt(led, render, f'{1:016x}')
+        _settle_bodies(led, render)
     # A later batch may cover a message already present on the thread card.
     event = _intent(led, payload={'message_ids': [101]})
     _dispatch(led, event)
@@ -1807,10 +1816,14 @@ def test_new_intent_with_unchanged_card_eventually_completes(led, tmp_path, phas
         _begin(led, render)
     if phase != 'delivered':
         _receipt(led, render, f'{1:016x}')
+        _settle_bodies(led, render)
+        # the covering update waits for the parts; a later sweep issues it
+        notify_cards.sweep(led, CFG, now=NOW + 1)
     latest = _latest_render(led)
     if latest['state'] == 'queued':
         _begin(led, latest, n=2)
         _receipt(led, latest, f'{2:016x}', n=10)
+        _settle_bodies(led, latest)
     assert led.db.execute('SELECT state FROM notify_outbox WHERE event_id=?',
                           (event['event_id'],)).fetchone()['state'] == 'accepted'
 
@@ -1823,6 +1836,7 @@ def test_bounded_sweep_visits_unchanged_cards_fairly(led, tmp_path):
     second = _latest_render(led, 2)
     _begin(led, second, n=2)
     _receipt(led, second, f'{2:016x}', message_id='m-2', n=10)
+    _settle_bodies(led, second)
     led.db.execute("UPDATE messages SET body_text='変更',content_hash=? WHERE message_id=200",
                    ('f' * 64,))
     led.db.commit()
@@ -2065,6 +2079,7 @@ def test_success_resets_consecutive_resend_budget(led, tmp_path):
     render = _latest_render(led)
     _begin(led, render, n=450)
     _receipt(led, render, f'{450:016x}')
+    _settle_bodies(led, render)
     led.db.execute("UPDATE messages SET body_text='追記',content_hash=? WHERE message_id=100",
                    ('e' * 64,))
     led.db.commit()
