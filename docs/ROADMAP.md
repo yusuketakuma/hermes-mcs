@@ -148,7 +148,7 @@ C0 の合意事項は CD-1〜CD-10 のほか、次を含む（両文書で同一
 | **C1 手渡し取込（未採用 staging）** | `ext_contract.main()` の subcommand 化（deliver / reconcile / withdraw / health / handoff / link-hints）、`select_records`（前段除去と `--only-with-facts`）、`split_envelopes`（1 MiB）、`HandoffSink`（自己 ack しない）、`rejected` 終端と `_valid_ack` の status 検査（F-3）、health。E2E は合成 ledger で完結 | C0、CD-1。**本番投入は #4 の実施記録と Q6 の判断後だけ**。合成での開発・テストは切り離して進めてよい | L |
 | **C2 採用導線** | 契約改訂（`mcs-ext-auth/2`、`scope` の第 3 値）と Q9 の承認が前提。**承認されるまで hermes-mcs 側の成果物なし**。型付き値の正本は #15 | zaitaku-calender C2、Q9。zaitaku-calender C2 は hermes-mcs C2 を待たない | L |
 | **C3 マシン送信（任意）** | `ext_transport.py`（`HttpsSink`、endpoint policy、Keychain token）。実行は手動のまま。自動再送はしない | Q6・Q8、契約付録、C1 | M |
-| **C4 hermes-mcs 通知の縮退（任意）** | `notify.show_patient_names`（既定 true）。名前の出力は 4 ファイル（`notify_render.py`、`notify_cards.py`、`notify_flush.py`、`semantic/semantic_render.py`）。日次 digest の Work Queue 代替を再評価（Q5） | zaitaku-calender C2 の運用実績、Q5 | S |
+| **C4 hermes-mcs 通知の縮退（任意）** | `notify.show_patient_names`（既定 true）。名前の出力は 5 ファイル（`notify_render.py`、`notify_views.py`、`notify_cards.py`、`notify_flush.py`、`semantic/semantic_render.py`）。日次 digest の Work Queue 代替を再評価（Q5） | zaitaku-calender C2 の運用実績、Q5 | S |
 
 共通ルール:
 - 実行は手動のみ。tick に組み込まない（`docs/external-export-contract.md:136`）。
