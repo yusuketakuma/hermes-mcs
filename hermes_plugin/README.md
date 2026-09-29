@@ -267,7 +267,9 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   スタッフ一覧 `station_staff_v1`、無ければ自局名で投稿した送信者）で、
   plugin は台帳を読まない。候補があれば選択肢（Discord は Label+Select、
   Slack は static_select）＋手入力欄、無ければ手入力のみ（既定値は押した人の
-  表示名）。入力欄の定義は `mcs_delivery/text.py` の `modal_fields()` に
+  表示名）。任意の `理由` 欄が空なら `text.TASK_REASON`
+  （「通知カードからタスク作成」）を `reason` にし、preview には常に
+  理由行を出す。入力欄の定義は `mcs_delivery/text.py` の `modal_fields()` に
   両 transport 共通でまとめてある。`確定` が command を
   書込み中に押された `取消`／二度目の `確定` は「処理中」と答え、取り消したとは
   報告しない（書込み失敗時は確認が再び有効になる）。

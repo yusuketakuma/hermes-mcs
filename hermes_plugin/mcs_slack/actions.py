@@ -21,6 +21,10 @@ _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
 _MODAL_ACTIONS = ("request", "dismiss", "report", "search")
+# block ids of modals opened by a worker that predates pending
+# field_ids — text.task_attrs / dismiss_attrs still accept these keys
+_LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
+                  "dismiss": ("reason",)}
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
           "mytasks", "unacked", "search")
@@ -342,7 +346,8 @@ class Actions:
             return
         values = view.get("state", {}).get("values", {})
         fields = {}
-        for name in pending.get("field_ids") or ():
+        for name in pending.get("field_ids") \
+                or _LEGACY_FIELDS.get(pending["action"], ()):
             got = (values.get(name) or {}).get(name) or {}
             picked = got.get("selected_option")
             fields[name] = (picked.get("value") if isinstance(picked, dict)

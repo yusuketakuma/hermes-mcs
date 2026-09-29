@@ -1011,14 +1011,15 @@ def test_action_foreign_thread_denied(world):
 def test_confirm_preview_text_per_transport():
     req = {"title": "件" * 250, "reason": "理" * 450,
            "assignee": "担当者A", "due_date": "2026-10-01"}
-    tail = f"内容: {'件' * 200}\n担当: 担当者A\n期限: 2026-10-01"
+    tail = (f"内容: {'件' * 200}\n担当: 担当者A\n期限: 2026-10-01\n"
+            f"理由: {'理' * 400}")
     assert text.preview_text("request", req, True) \
         == "**確認 — タスク作成**\n" + tail
     assert text.preview_text("request", req, False) \
         == "確認 — タスク作成\n" + tail
     assert text.preview_text(
         "request", {"title": "t", "reason": "r"}, False) \
-        == "確認 — タスク作成\n内容: t"
+        == "確認 — タスク作成\n内容: t\n理由: r"
     report = {"field": "meds", "reason": "用量が違う"}
     assert text.preview_text("report", report, False).startswith(
         "確認 — 抽出の誤り報告\n箇所: 薬\nメモ: 用量が違う")
@@ -2735,7 +2736,8 @@ def test_task_modal_roster_prefill_confirm_and_footer(world):
     asyncio.run(world.interact(act, ix))
     modal = ix.response.modal
     assert modal.title == "タスク作成"
-    task, pick, typed, due = modal.children
+    task, pick, typed, due, reason = modal.children
+    assert (reason.custom_id, reason.required) == ("reason", False)
     assert (task.custom_id, task.default, task.required) == (
         "task", "残薬を確認", True)
     assert pick.text == "担当者（一覧から）"
@@ -2766,6 +2768,7 @@ def test_task_modal_roster_prefill_confirm_and_footer(world):
     modal_id = ix2.response.modal.custom_id[len("mcs:m:"):]
     preview = submit("2026-10-01")
     assert preview["content"].startswith("**確認 — タスク作成**\n内容: 残薬を確認")
+    assert preview["content"].endswith("\n理由: 通知カードからタスク作成")
     cid = next(b.custom_id for b in preview["view"].items
                if not b.custom_id.endswith(":cancel"))
     confirm = FakeInteraction(cid, message_id=msg.id)

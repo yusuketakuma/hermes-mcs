@@ -160,6 +160,10 @@ def modal_fields(action: str, form: dict | None = None,
                         "default": clicker[:120]})
         out.append({"id": "due_date", "label": "期限 YYYY-MM-DD（任意）",
                     "required": False, "max": 10, "default": ""})
+        # the human gate records why — empty falls back to TASK_REASON
+        out.append({"id": "reason", "label": "理由（任意）",
+                    "required": False, "multiline": True, "max": 2000,
+                    "default": ""})
         return out
     if action == "report":
         return [{"id": "field", "label": "誤っている箇所", "required": True,
@@ -301,7 +305,7 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
         out += f"\n担当: {payload['assignee'][:120]}"
     if payload.get("due_date"):
         out += f"\n期限: {payload['due_date']}"
-    return out
+    return out + f"\n理由: {payload['reason'][:400]}"
 
 
 def task_list_text(items: list) -> str:

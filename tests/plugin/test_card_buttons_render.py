@@ -134,13 +134,16 @@ def test_slack_mention_ids_reads_footer_only():
 
 def test_task_fields_with_and_without_roster():
     bare = text.modal_fields("request", None, "佐藤")
-    assert [f["id"] for f in bare] == ["task", "assignee", "due_date"]
+    assert [f["id"] for f in bare] == ["task", "assignee", "due_date",
+                                       "reason"]
+    assert bare[-1]["required"] is False and bare[-1]["default"] == ""
     assert bare[1]["default"] == "佐藤" and bare[0]["default"] == ""
     roster = text.modal_fields(
         "request", {"hint": "残薬確認", "staff": ["佐藤（みどり薬局）",
                                                "x" * 76]}, "佐藤")
+    # Discord modals hold at most 5 components
     assert [f["id"] for f in roster] == ["task", "assignee_pick",
-                                        "assignee", "due_date"]
+                                        "assignee", "due_date", "reason"]
     assert roster[0]["default"] == "残薬確認"
     # an over-long name can never become an option (Slack 75 chars)
     assert roster[1]["options"] == [("佐藤（みどり薬局）", "佐藤（みどり薬局）")]
@@ -156,6 +159,8 @@ def test_task_fields_with_and_without_roster():
      {"title": "t", "assignee": "手入力", "reason": text.TASK_REASON}),
     ({"task": "t", "due_date": "2026-10-01"},
      {"title": "t", "due_date": "2026-10-01", "reason": text.TASK_REASON}),
+    ({"task": "t", "reason": " 家族から依頼 "},
+     {"title": "t", "reason": "家族から依頼"}),
     # an old 依頼 form submitted across a restart still validates
     ({"title": "旧件名", "reason": "旧理由"},
      {"title": "旧件名", "reason": "旧理由"}),

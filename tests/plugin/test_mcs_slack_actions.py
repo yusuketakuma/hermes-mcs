@@ -573,7 +573,7 @@ def test_task_modal_offers_roster_and_prefill(tmp_path):
         assert view["title"]["text"] == "タスク作成"
         blocks = {b["block_id"]: b for b in view["blocks"]}
         assert list(blocks) == ["task", "assignee_pick", "assignee",
-                                "due_date"]
+                                "due_date", "reason"]
         assert blocks["task"]["element"]["initial_value"] == "残薬を確認"
         assert blocks["task"]["optional"] is False
         pick = blocks["assignee_pick"]["element"]
@@ -596,6 +596,8 @@ def test_task_modal_offers_roster_and_prefill(tmp_path):
         await actions.sweep_followups()
         confirm_id = app.client.messages[-1]["blocks"][1]["elements"][0][
             "action_id"].split(":")[2]
+        assert "理由: 通知カードからタスク作成" in \
+            app.client.messages[-1]["blocks"][0]["text"]["text"]
         payload = reg.confirm(confirm_id)["payload"]
         assert payload["cmd"] == "request.create"
         assert (payload["title"], payload["assignee"], payload["due_date"],
@@ -613,7 +615,7 @@ def test_task_modal_without_roster_defaults_to_clicker(tmp_path):
         await actions._action(ack, body, action)     # runner slow: no form
         blocks = {b["block_id"]: b
                   for b in app.client.views[0]["view"]["blocks"]}
-        assert list(blocks) == ["task", "assignee", "due_date"]
+        assert list(blocks) == ["task", "assignee", "due_date", "reason"]
         assert "initial_value" not in blocks["task"]["element"]
         assert blocks["assignee"]["element"]["initial_value"] == "佐藤 一郎"
     asyncio.run(scenario())
@@ -790,5 +792,36 @@ def test_dismiss_modal_sends_reason_code(tmp_path):
         payload = reg.confirm(confirm_id)["payload"]
         assert (payload["reason_code"], payload["reason"]) == (
             "already_handled", "対応済み")
+        assert validate_human(payload) is None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("kind,fields,params,expect", [
+    ("request", {"title": "旧件名", "reason": "旧理由", "assignee": "",
+                 "due_date": ""}, {"project_id": 123},
+     {"title": "旧件名", "reason": "旧理由"}),
+    ("dismiss", {"reason": "旧理由"}, {"signal_key": "synthetic-key"},
+     {"reason": "旧理由"}),
+])
+def test_modal_opened_before_upgrade_still_submits(tmp_path, kind, fields,
+                                                   params, expect):
+    """A pending modal written by the previous worker has no field_ids —
+    its legacy block ids are still read."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind=kind)
+        await actions._action(ack, *click())
+        env = command(dirs)
+        modal_id = app.client.views[0]["view"]["private_metadata"]
+        pending = reg.modal(modal_id)
+        pending.pop("field_ids")
+        reg.put_modal(modal_id, pending)
+        await actions._modal(ack, *submitted(modal_id, **fields))
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", modal=True, params=params)
+        await actions.sweep_followups()
+        confirm_id = app.client.messages[-1]["blocks"][1]["elements"][0][
+            "action_id"].split(":")[2]
+        payload = reg.confirm(confirm_id)["payload"]
+        assert {k: payload[k] for k in expect} == expect
         assert validate_human(payload) is None
     asyncio.run(scenario())
