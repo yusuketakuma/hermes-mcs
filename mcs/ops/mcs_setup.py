@@ -19,7 +19,8 @@ secret resolution, gateway supervision) report as warnings vs errors.
 Exit 1 on any error so it can gate automation.
 
   python3 mcs/ops/mcs_setup.py init [--login-id ID ...]
-  python3 mcs/ops/mcs_setup.py check
+  python3 mcs/ops/mcs_setup.py check    # blockers summarized last
+  python3 mcs/ops/mcs_setup.py doctor   # check + interpreter/launchd facts
 
 Secrets are never accepted as argv flags (they would persist in shell
 history and `ps`): export MCS_SETUP_PASSWORD / TYPESAFE_API_KEY /
@@ -288,12 +289,13 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def _hermes_exe(cfg: dict) -> str:
-    """config hermes_bin -> PATH -> the standard user-local install."""
+def _hermes_exe(cfg: dict, path: str | None = None) -> str:
+    """config hermes_bin -> PATH (or `path`) -> the standard user-local
+    install."""
     exe = cfg.get("hermes_bin")
     if isinstance(exe, str) and exe.strip():
         return exe.strip()
-    return shutil.which("hermes") \
+    return shutil.which("hermes", os.F_OK | os.X_OK, path) \
         or os.path.expanduser("~/.local/bin/hermes")
 
 
@@ -1048,7 +1050,51 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     return not failed
 
 
+def _config_problem() -> str | None:
+    """None when config.json is absent or a JSON object, else why not.
+    load_config() maps both cases to {} — a command that REWRITES the
+    file must not treat a broken one as empty (it would silently drop
+    every setting)."""
+    try:
+        with open(CONF_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError) as e:
+        return f"{type(e).__name__}: {e}"
+    return None if isinstance(raw, dict) else \
+        f"top level is {type(raw).__name__}, not an object"
+
+
+def _guard_config(yes: bool) -> bool:
+    """False = stop, nothing written: config.json exists but is not a
+    readable JSON object. With --yes it is moved aside to
+    config.json.corrupt-<ts> (0600, bytes kept) and setup continues
+    from defaults."""
+    why = _config_problem()
+    if why is None:
+        return True
+    if not yes:
+        print(f"config: {CONF_PATH} is unreadable or invalid ({why}) — "
+              "nothing written. Fix it by hand, or re-run `mcs_setup.py "
+              "init --yes` to move it aside and start from defaults")
+        return False
+    base = f"{CONF_PATH}.corrupt-{time.strftime('%Y%m%dT%H%M%S')}"
+    dst, n = base, 0
+    while os.path.lexists(dst):
+        n += 1
+        dst = f"{base}.{n}"
+    os.rename(CONF_PATH, dst)
+    with suppress(OSError):
+        os.chmod(dst, 0o600)
+    print(f"config: {CONF_PATH} was unreadable or invalid ({why}) — "
+          f"moved to {dst}; continuing from defaults")
+    return True
+
+
 def cmd_init(args) -> int:
+    if not _guard_config(args.yes):
+        return 1
     cfg = load_config()
     def pick(flag, key):
         # flag wins, else the existing value is kept — the wizard's req
@@ -1217,6 +1263,8 @@ def cmd_fact_source(args) -> int:
     foreign-criteria reports can never mint the token, and the written
     config is validated fail-closed before it lands.
     """
+    if not _guard_config(False):
+        return 1
     cfg = load_config()
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
@@ -1440,18 +1488,50 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
 
 def cmd_check(args) -> int:
     cfg = load_config()
-    errors, warnings = validate_config(cfg)
+    # blocker priority: what every scheduled job runs on, then the
+    # config itself, then machine probes, then deployment drift
+    e0, w0 = check_runtime(cfg)
+    why = _config_problem()
+    if why:
+        e0 = e0 + [f"{CONF_PATH} is unreadable or invalid ({why}) — "
+                   "every setting reads as unset; fix it by hand or run "
+                   "`mcs_setup.py init --yes` to move it aside"]
+    e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = _script_drift()
-    errors += e2 + e3
-    warnings += w2 + w3 + _queue_warnings(cfg)
+    errors = e0 + e1 + e2 + e3
+    warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
     for w in warnings:
         print(f"  warn : {w}")
     for e in errors:
         print(f"  error: {e}")
+    if errors:
+        print(f"blockers ({len(errors)}) — fix in this order:")
+        for i, e in enumerate(errors, 1):
+            m = re.search(r"`([^`]+)`", e)
+            fix = m.group(1) if m else (
+                "mcs_setup.py init" if e in e1 else "see the error above")
+            print(f"  {i}. {e.split(' — ')[0]}\n     fix: {fix}")
     print("check: " + ("FAIL" if errors else "OK")
           + f" ({len(errors)} errors, {len(warnings)} warnings)")
     return 1 if errors else 0
+
+
+def cmd_doctor(args) -> int:
+    """`check` plus the environment facts a bug report needs."""
+    cfg = load_config()
+    print(f"python   : {sys.executable} ({sys.version.split()[0]})")
+    print(f"services : {HERMES_PY} "
+          f"({_hermes_py_problem() or 'ok'})")
+    print(f"hermes   : {_hermes_exe(cfg)} "
+          f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
+    print(f"repo     : {REPO_ROOT}")
+    print(f"config   : {CONF_PATH}")
+    if sys.platform == "darwin":
+        for label in AGENT_LABELS + [RECOVERY_LABEL, *LLAMA_LABELS]:
+            state = "loaded" if _agent_loaded(label) else "not loaded"
+            print(f"launchd  : {label} {state}")
+    return cmd_check(args)
 
 
 # ---- scheduled services (launchd + hermes cron) -----------------------
@@ -1486,6 +1566,101 @@ AGENT_LABELS = WATCHER_LABELS + RESIDENT_LABELS
 # install.sh-owned labels that must never enter MCS ownership (S5).
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 MANIFEST_PATH = os.path.join(HOME, "data", "service_manifest.json")
+# the PATH every cron wrapper exports (deployment/scripts/*.sh) — launchd
+# and hermes cron never see the login shell's PATH
+LAUNCHD_PATH = os.pathsep.join([os.path.expanduser("~/.local/bin"),
+                                "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+RECOVERY_DIR = os.path.expanduser("~/.mcs-recovery")
+RECOVERY_LABEL = "org.mcs.recovery"
+# whichever is loaded serves :8080 (see llamacpp_restart_if_idle.sh)
+LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
+
+
+def _hermes_py_problem() -> str | None:
+    """None when HERMES_PY — the interpreter every rendered wrapper and
+    agent runs on — is an executable Python >= 3.10."""
+    if not (os.path.isfile(HERMES_PY) and os.access(HERMES_PY, os.X_OK)):
+        return f"interpreter {HERMES_PY} is missing or not executable"
+    r = _run([HERMES_PY, "-c",
+              "import sys; sys.exit(sys.version_info < (3, 10))"],
+             timeout=20)
+    if r.returncode != 0:
+        return (f"interpreter {HERMES_PY} is not a working Python >= 3.10 "
+                f"(rc={r.returncode})")
+    return None
+
+
+def _install_fix(stage: str) -> str:
+    return f"re-run `{os.path.join(REPO_ROOT, 'install.sh')}` ({stage})"
+
+
+def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
+    """What the scheduled jobs run on: the services interpreter, hermes
+    as launchd resolves it, the update-recovery watchdog and the
+    llama-server agent."""
+    errors, warnings = [], []
+    why = _hermes_py_problem()
+    if why:
+        errors.append(f"{why} — cron wrappers and launchd agents cannot "
+                      "start; " + _install_fix(
+                          "stage 2 rebuilds the hermes-agent venv")
+                      + ", then `mcs_setup.py services`")
+    exe = _hermes_exe(cfg)
+    if _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
+        errors.append(
+            f"hermes resolves here ({exe}) but not on the launchd PATH "
+            f"({LAUNCHD_PATH}) — scheduled jobs cannot send; "
+            f"`ln -s {shlex.quote(exe)} ~/.local/bin/hermes` (or "
+            "init --set hermes_bin=...)")
+    if sys.platform != "darwin":
+        return errors, warnings
+    uid = os.getuid()
+    if _run(["launchctl", "print", f"gui/{uid}"],
+            timeout=10).returncode != 0:
+        return errors, warnings   # check_environment already warns
+    tool = os.path.join(RECOVERY_DIR, "mcs_recover.py")
+    plist = os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
+    fix = _install_fix("stage 6 installs the recovery tool + watchdog")
+    try:
+        deployed = Path(tool).read_bytes()
+    except OSError:
+        deployed = None
+    if deployed is None or not os.path.exists(plist):
+        warnings.append(f"update recovery watchdog ({RECOVERY_LABEL}) not "
+                        f"installed — a broken update cannot self-heal; "
+                        + fix)
+    else:
+        with suppress(OSError):
+            if deployed != Path(REPO_ROOT, "deployment", "recovery",
+                                "mcs_recover.py").read_bytes():
+                warnings.append(f"{tool} differs from the repo copy — "
+                                + fix)
+        try:
+            recorded = Path(RECOVERY_DIR, "repo_path").read_text(
+                encoding="utf-8").strip()
+        except OSError:
+            recorded = HOME   # mcs_recover.py's own fallback
+        if os.path.realpath(recorded) != os.path.realpath(REPO_ROOT):
+            warnings.append(f"recovery watchdog recovers {recorded}, not "
+                            f"this checkout {REPO_ROOT} — " + fix)
+        if not _agent_loaded(RECOVERY_LABEL):
+            errors.append(f"LaunchAgent {RECOVERY_LABEL} installed but not "
+                          f"loaded — `launchctl bootstrap gui/{uid} "
+                          f"{plist}`")
+    if not any(_agent_loaded(lb) for lb in LLAMA_LABELS):
+        installed = [lb for lb in LLAMA_LABELS if os.path.exists(
+            os.path.join(AGENTS_DIR, f"{lb}.plist"))]
+        if installed:
+            lp = os.path.join(AGENTS_DIR, f"{installed[0]}.plist")
+            errors.append(f"LaunchAgent {installed[0]} installed but not "
+                          "loaded — the local LLM is down; "
+                          f"`launchctl bootstrap gui/{uid} {lp}`")
+        else:
+            warnings.append(
+                "no llama-server LaunchAgent (" + " / ".join(LLAMA_LABELS)
+                + ") — fine for a self-managed server on local_llm.url; "
+                "otherwise " + _install_fix("stage 4"))
+    return errors, warnings
 
 
 def _render_template(text: str, subs: dict) -> str:
@@ -1945,6 +2120,14 @@ def cmd_services(args) -> int:
     def note(msg):
         print(("  [dry] " if dry else "  ") + msg)
 
+    why = _hermes_py_problem()
+    if why:
+        # every wrapper/plist is rendered with __PYTHON__=HERMES_PY — a
+        # missing interpreter would make each job fail at every run
+        print(f"services: {why} — nothing rendered; "
+              + _install_fix("stage 2 rebuilds the hermes-agent venv")
+              + ", then re-run services")
+        return 1
     _sync_scripts(subs, manifest, note, dry)
     problems += _sync_agents(subs, prev, manifest, note, dry)
 
@@ -1976,8 +2159,20 @@ def cmd_services(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("init", help="provision config/env/keychain — "
-                                    "interactive run walks every setting")
+    p = sub.add_parser(
+        "init", help="provision config/env/keychain — "
+                     "interactive run walks every setting",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="non-interactive example (secrets via environment):\n"
+               "  MCS_SETUP_PASSWORD=... python3 mcs/ops/mcs_setup.py init "
+               "--yes \\\n"
+               "    --login-id you@example.com --notify-target slack:#mcs "
+               "\\\n"
+               "    --set self_posts=true "
+               "--set 'notify.interactive=\"discord\"'\n"
+               "--set values are JSON (strings need inner quotes); a "
+               "config.json that is\nnot valid JSON stops init — --yes "
+               "moves it to config.json.corrupt-<ts> first.")
     p.add_argument("--login-id")
     p.add_argument("--notify-target",
                    help="hermes send target for notifications "
@@ -2044,6 +2239,9 @@ def main() -> int:
     p.set_defaults(fn=cmd_services, yes=True)
     p = sub.add_parser("check", help="validate required conditions")
     p.set_defaults(fn=cmd_check, yes=True)
+    p = sub.add_parser("doctor", help="check + environment facts "
+                                      "(interpreters, repo, launchd state)")
+    p.set_defaults(fn=cmd_doctor, yes=True)
     args = ap.parse_args()
     return args.fn(args)
 
