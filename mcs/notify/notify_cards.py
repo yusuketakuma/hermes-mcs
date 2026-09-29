@@ -46,7 +46,8 @@ from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
-    current_ackers, open_tasks, patient_summary_text)
+    current_ackers, my_tasks_view, open_tasks, patient_search_view,
+    patient_summary_text, unacked_view)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
@@ -258,13 +259,22 @@ _ACTIONS = {
     "dismiss": ("🚫 却下", "danger", "write"),
     "prev":    ("◀ 前へ", "secondary", "view"),
     "next":    ("次へ ▶", "secondary", "view"),
+    "mytasks": ("📋 自分のタスク", "secondary", "view"),
+    "unacked": ("🗂 未確認一覧", "secondary", "view"),
+    "search":  ("🔎 この患者を検索", "secondary", "view"),
     # minted only inside a tasks view — never a card button; the plugin
     # supplies its own labels from the view's transitions
     "task_status": ("", "secondary", "write"),
 }
 _WRITE_ACTIONS = frozenset(
     a for a, (_, _, cls) in _ACTIONS.items() if cls == "write")
+# recomputed on every click — a replayed command_id never returns the
+# stored receipt for these
+_LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
+                         "mytasks", "unacked", "search"})
 
+MAX_COMPONENTS = 40           # the worker's per-card component ceiling
+                              # (hermes_plugin spec.MAX_COMPONENTS)
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
 TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
@@ -682,6 +692,16 @@ def _action_rows(db, card, content, now, context=None,
             btn("prev", {"page": content["page"] - 1})
         if content["page"] + 1 < content["pages"]:
             btn("next", {"page": content["page"] + 1})
+    flush()
+    # row 4 — clicker-scoped lists (ephemeral answers). Optional: only
+    # as many as the worker's component ceiling still allows — a spec
+    # over budget is rejected whole and the card would not render at all
+    used = (sum(c["type"] != "meta" for c in content["containers"])
+            + sum(f["type"] == "text" for f in content["footer"])
+            + sum(len(r) + 1 for r in rows))
+    extras = ["mytasks", "unacked"] + (["search"] if positive(pid) else [])
+    for action in extras[:max(0, MAX_COMPONENTS - used - 1)]:
+        btn(action)
     flush()
     return rows
 
@@ -1663,7 +1683,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
             # the 📝 form's prefill/staff list is the same kind of live
             # view data — recomputed per click, never persisted
             kept = {k: v for k, v in receipt.items()
-                    if k not in ("body", "form")}
+                    if k not in ("body", "form", "list")}
             db.execute(
                 "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                 (command_id, digest, receipt.get("project_id"),
@@ -1724,8 +1744,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 and _source_fp(db, card) != card["source_fp"])):
         return {**base, "outcome": "rejected", "error": "stale_source",
                 "hint": "refresh"}
-    if replay is not None and action not in (
-            "body", "summary", "request", "dismiss", "report"):
+    if replay is not None and action not in _LIVE_VIEWS:
         return replay
     if action in ("prev", "next"):
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
@@ -1736,6 +1755,20 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         title, text = patient_summary_text(db, card["project_id"])
         return {**base, "outcome": "applied", "action": "summary",
                 "title": title, "body": text}
+    if action == "mytasks":
+        view = my_tasks_view(db, (req.get("input") or {}).get("name"), now)
+        return {**base, "outcome": "applied", "action": "list", "list": view}
+    if action == "unacked":
+        view = unacked_view(db, card["transport"], now)
+        return {**base, "outcome": "applied", "action": "list", "list": view}
+    if action == "search":
+        query = (req.get("input") or {}).get("query")
+        if not query:
+            # the click opens the keyword modal; its submit carries input
+            return {**base, "outcome": "applied", "action": action,
+                    "modal": True, "params": {}}
+        view = patient_search_view(db, card["project_id"], query)
+        return {**base, "outcome": "applied", "action": "list", "list": view}
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same

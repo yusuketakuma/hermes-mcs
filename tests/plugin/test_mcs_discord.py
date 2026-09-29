@@ -2847,3 +2847,109 @@ def test_old_defer_button_answers_retired(world):
     assert ix.followup.sent[-1]["content"] == text.ERR_JA["action_retired"]
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notification_triage").fetchone()[0] == 0
+
+
+# ---------- 📋 / 🗂 / 🔎 / 🚫 reason code ------------------------------------
+
+def _task(world, title, assignee, pid=1, due=None):
+    world.led.db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,assignee,due_date,status,revision,created_at,updated_at) "
+        "VALUES(?,100,?,?,?,?,'open',1,?,?)",
+        (pid, "0" * 64, title, assignee, due, NOW, NOW))
+    world.led.db.commit()
+
+
+def test_my_tasks_uses_display_name_and_project_scope(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    _task(world, "残薬確認", "山田 花子（みどり薬局）", due="2026-01-01")
+    _task(world, "範囲外の件", "山田 花子", pid=2)
+    _task(world, "他人の件", "佐藤")
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'mytasks')}",
+                         message_id=bot.channels[42].sent[0].id)
+    ix.user = SimpleNamespace(id=1001, display_name="山田 花子")
+    asyncio.run(world.interact(act, ix))
+    out = "\n".join(m["content"] for m in ix.followup.sent)
+    assert all(m["ephemeral"] for m in ix.followup.sent)
+    assert "📋 自分のタスク（担当: 山田 花子）" in out
+    assert "⚠ 期限切れ" in out and "残薬確認" in out
+    # project 2 is outside this deployment's scope; 佐藤 is not the clicker
+    assert "範囲外の件" not in out and "他人の件" not in out
+
+
+def test_unacked_list_links_the_card(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'unacked')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    out = "\n".join(m["content"] for m in ix.followup.sent)
+    assert "■ 患者A" in out and "未確認" in out
+    assert f"https://discord.com/channels/7/42/{msg.id}" in out
+    assert "作業が済んだかどうかは表しません" in out
+
+
+def test_search_modal_answers_hits_ephemeral(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'search')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    modal = ix.response.modal
+    assert modal.title == "この患者を検索"
+    modal_id = modal.custom_id[len("mcs:m:"):]
+    s = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, components=[
+        {"components": [{"custom_id": "query", "value": "本文"}]}])
+    asyncio.run(world.interact(act, s))
+    out = "\n".join(m["content"] for m in s.followup.sent)
+    assert all(m["ephemeral"] for m in s.followup.sent)
+    assert "「本文」の検索結果" in out and "2件（新しい順）" in out
+    assert "まだ取得していない範囲は検索されません" in out
+    # another member cannot submit the clicker's form
+    s2 = FakeInteraction(f"mcs:m:{modal_id}", user_id=2002,
+                         message_id=msg.id, components=[])
+    asyncio.run(world.interact(act, s2))
+    assert "検索結果" not in (s2.response.message or {}).get("content", "")
+
+
+def test_dismiss_reason_code_select_reaches_the_ledger(world):
+    world.seed(mids=(100,))
+    world.signal("sig-1", mids=[100])
+    world.dispatch(kind="signal", pid=1,
+                   payload={"signal_keys": ["sig-1"], "project_id": 1,
+                            "type": "med_followup"})
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'dismiss')}",
+                         message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    code, note = ix.response.modal.children
+    assert [o.value for o in code.component.options] == [
+        "false_positive", "already_handled", "duplicate", "out_of_scope",
+        "other"]
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    submit = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id,
+                             components=[
+        {"component": {"custom_id": "reason_code", "values": ["duplicate"]}},
+        {"components": [{"custom_id": "note", "value": ""}]}])
+    asyncio.run(world.interact(act, submit))
+    preview = submit.followup.sent[-1]
+    assert "区分: 重複" in preview["content"]
+    cid = next(b.custom_id for b in preview["view"].items
+               if not b.custom_id.endswith(":cancel"))
+    asyncio.run(world.interact(act, FakeInteraction(cid, message_id=msg.id)))
+    row = json.loads(world.led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='signal_v1' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
+    assert (row["state"], row["dismiss_reason_code"], row["dismiss_reason"]) \
+        == ("dismissed", "duplicate", "重複")

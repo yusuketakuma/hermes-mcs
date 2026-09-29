@@ -153,16 +153,25 @@ def thread_receipt(delivery_id: str, message_id: str,
 
 # ---------- interaction envelopes -----------------------------------
 
-def notification(token: str, actor: str, origin: dict) -> dict:
+def notification(token: str, actor: str, origin: dict,
+                 inputs: dict | None = None) -> dict:
     """command_id = <token>:<actor_hash> — the runner's (token, actor)
-    idempotency key, stable across retries of the same click."""
+    idempotency key, stable across retries of the same click. A view
+    click with typed input (🔎 keyword, 📋 display name) folds the input
+    into the hash: a different input is a different command, never a
+    command_id_conflict against the earlier receipt."""
     slack = origin.get("transport") == "slack"
-    return {"version": 2 if slack else 1,
-            **({"transport": "slack"} if slack else {}),
-            "op": "notification",
-            "command_id": f"{token}:{actor_hash(actor)}",
-            "request_id": str(uuid.uuid4()),
-            "actor": actor, "token": token, "origin": origin}
+    env = {"version": 2 if slack else 1,
+           **({"transport": "slack"} if slack else {}),
+           "op": "notification",
+           "command_id": f"{token}:{actor_hash(actor)}",
+           "request_id": str(uuid.uuid4()),
+           "actor": actor, "token": token, "origin": origin}
+    if inputs:
+        env["input"] = inputs
+        env["command_id"] = (
+            f"{token}:{actor_hash(actor + chr(10) + canonical(inputs).decode())}")
+    return env
 
 
 def refresh(actor: str, origin: dict,
@@ -211,14 +220,17 @@ def extract_feedback(actor: str, context: dict, field: str, reason: str,
 
 
 def signal_dismiss(actor: str, context: dict, signal_key: str,
-                   reason: str,
+                   reason: str, reason_code: str | None = None,
                    command_id: str | None = None) -> dict:
     """expected_signal_artifact_id pins the artifact the render showed —
     if the signal moved since, the runner answers signal_changed."""
     sig = context["signals"][signal_key]
-    return {"version": 1, "cmd": "ops.signal_dismiss",
-            "command_id": command_id or str(uuid.uuid4()),
-            "actor": actor, "human_confirmed": True,
-            "project_id": sig["project_id"],
-            "signal_key": signal_key, "reason": reason,
-            "expected_signal_artifact_id": sig["artifact_id"]}
+    env = {"version": 1, "cmd": "ops.signal_dismiss",
+           "command_id": command_id or str(uuid.uuid4()),
+           "actor": actor, "human_confirmed": True,
+           "project_id": sig["project_id"],
+           "signal_key": signal_key, "reason": reason,
+           "expected_signal_artifact_id": sig["artifact_id"]}
+    if reason_code:
+        env["reason_code"] = reason_code
+    return env

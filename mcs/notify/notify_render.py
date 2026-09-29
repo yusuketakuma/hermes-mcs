@@ -671,3 +671,178 @@ def _footer(db, card, shown, generation) -> list:
 def _content_fp(content: dict) -> str:
     return payload_hash({"c": content["containers"], "f": content["footer"],
                 "s": content["shown"], "p": content["page"]})
+
+
+# ---------- ephemeral list views (📋 / 🗂 / 🔎) ----------------------------
+# Each returns {"title", "head", "items", "more", "empty", "notes"}: items
+# carry their project_id so the plugin drops projects outside its scope
+# before rendering (the runner does not know the plugin's project list).
+
+LIST_FETCH = 60            # items handed to the plugin; the rest -> more
+SEARCH_HITS = 10
+_NOT_DONE_NOTE = ("※ 表示は記録された状態です。記録が見つからないことは"
+                  "対応がなかったことを意味しません。")
+
+
+def _norm_name(text) -> str:
+    return "".join(str(text or "").split())
+
+
+def assignee_matches(assignee, name) -> bool:
+    """The clicker's display name against a stored assignee — the same
+    rule the 📝 modal uses to preselect the clicker: the name itself or
+    ``name（station）`` from the staff roster, whitespace-insensitive."""
+    who = _norm_name(name)
+    stored = _norm_name(assignee)
+    return bool(who) and (stored == who or stored.split("（", 1)[0] == who)
+
+
+def _limit(items) -> tuple:
+    return items[:LIST_FETCH], max(0, len(items) - LIST_FETCH)
+
+
+def my_tasks_view(db, name, now=None) -> dict:
+    """📋 open/in-progress requests whose assignee is the clicker's
+    display name — overdue first, then by due date, undated last."""
+    today = today_jst(now)
+    notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と"
+             "一致するタスクだけを表示します。手入力の別表記・略称のタスクは"
+             "含まれません。", _NOT_DONE_NOTE]
+    out = {"title": f"📋 自分のタスク（担当: {_inline(name, 40) or '不明'}）",
+           "head": [], "items": [], "more": 0, "notes": notes,
+           "empty": "該当するタスクはありません。"}
+    if not _norm_name(name):
+        out["empty"] = "表示名を取得できないため、担当タスクを特定できません。"
+        return out
+    rows = [r for r in db.execute(
+        "SELECT request_id,project_id,title,assignee,due_date,status "
+        "FROM requests WHERE status IN ('open','in_progress') "
+        "ORDER BY request_id").fetchall()
+        if assignee_matches(r["assignee"], name)]
+
+    def overdue(r):
+        return bool(r["due_date"] and r["due_date"] < today)
+
+    rows.sort(key=lambda r: (not overdue(r), r["due_date"] is None,
+                             r["due_date"] or "", r["request_id"]))
+    out["head"] = [f"未完了 {len(rows)}件（うち期限切れ "
+                   f"{sum(map(overdue, rows))}件）"]
+    items = []
+    for r in rows:
+        line = (f"・{'⚠ 期限切れ ' if overdue(r) else ''}#{r['request_id']} "
+                f"{_inline(r['title'], 60)}")
+        if r["due_date"]:
+            line += f" — 期限 {r['due_date']}"
+        if r["status"] == "in_progress":
+            line += " — ⏳対応中"
+        line += " — " + (_inline(_patient_name(db, r["project_id"]), 30)
+                         or f"project {r['project_id']}")
+        items.append({"project_id": r["project_id"], "text": line})
+    out["items"], out["more"] = _limit(items)
+    return out
+
+
+def _discord_link(card) -> str | None:
+    if card["transport"] != "discord" or not card["message_id"] \
+            or not card["channel_id"]:
+        return None
+    return ("https://discord.com/channels/"
+            f"{card['guild_id'] or '@me'}/{card['channel_id']}/"
+            f"{card['message_id']}")
+
+
+UNACKED_WINDOW_S = 7 * 86400
+
+
+def unacked_view(db, transport, now=None) -> dict:
+    """🗂 delivered thread/signal cards updated within the window whose
+    current content carries no live acknowledgement, grouped by patient
+    (oldest card's patient first), oldest first; assigned-but-unconfirmed
+    cards are marked. Digest cards span projects and are left out."""
+    from datetime import datetime
+    from mcs_adapter import project_url
+    now = time.time() if now is None else now
+    rows = db.execute(
+        """SELECT c.*, t.owner FROM notification_cards c
+           LEFT JOIN notification_triage t
+             ON t.card_id=c.card_id AND t.state='assigned'
+           WHERE c.kind IN ('thread','signal') AND c.transport=?
+             AND c.message_id IS NOT NULL AND c.project_id IS NOT NULL
+             AND c.delivery_state NOT IN ('revoked','message_deleted')
+             AND c.updated_at>=?
+             AND NOT EXISTS (
+               SELECT 1 FROM notification_acknowledgements a
+               JOIN notification_view_manifests m
+                 ON m.manifest_id=a.manifest_id
+               WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
+                 AND m.source_generation=c.source_generation
+                 AND m.shown=(SELECT shown FROM notification_view_manifests
+                              WHERE card_id=c.card_id
+                              ORDER BY manifest_id DESC LIMIT 1))
+           ORDER BY c.created_at, c.card_id""",
+        (transport, now - UNACKED_WINDOW_S)).fetchall()
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault(r["project_id"], []).append(r)
+    items = []
+    for pid, cards in groups.items():
+        group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
+        for c in cards:
+            at = datetime.fromtimestamp(c["created_at"], JST)
+            kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 確認候補"
+            line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
+            if c["owner"]:
+                line += f"（担当中: {actor_label(c['owner'])}）"
+            line += f"\n  MCS: {project_url(pid)}"
+            link = _discord_link(c)
+            if link:
+                line += f"\n  カード: {link}"
+            items.append({"project_id": pid, "group": group, "text": line})
+    assigned = sum(1 for r in rows if r["owner"])
+    out = {"title": "🗂 未確認一覧（直近7日に更新されたカード）",
+           "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）"],
+           "empty": "未確認のカードはありません。",
+           "notes": ["※「確認」ボタンの記録の有無です。作業が済んだかどうかは"
+                     "表しません。", _NOT_DONE_NOTE]}
+    out["items"], out["more"] = _limit(items)
+    return out
+
+
+def _snippet(text, term, width=40) -> str:
+    flat = " ".join(str(text or "").split())
+    at = flat.lower().find(term.lower())
+    start = max(0, at - width // 2)
+    end = start + width + len(term)
+    return (("…" if start else "") + _inline(flat[start:end], end - start + 1)
+            + ("…" if end < len(flat) else ""))
+
+
+def patient_search_view(db, project_id, query) -> dict:
+    """🔎 stored messages of one project containing every whitespace-
+    separated term, newest first. Substring match over whitespace-
+    stripped text — the same rule as the ``mcs_view`` search; the FTS5
+    index's unicode61 tokenizer cannot split Japanese into words."""
+    from mcs_adapter import project_url
+    terms = [t for t in str(query or "").split() if t][:5]
+    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
+           "WHERE project_id=? AND body_state='full'")
+    args: list = [project_id]
+    for t in terms:
+        sql += (" AND instr(lower(replace(replace(body_text,' ',''),'　','')),"
+                "lower(?))>0")
+        args.append(t)
+    rows = db.execute(sql + " ORDER BY posted_at_ts DESC, message_id DESC",
+                      args).fetchall() if terms else []
+    items = [{"project_id": project_id,
+              "text": f"・{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} "
+                      f"{_inline(r['profession'], 20) or '職種不明'}: "
+                      f"{_snippet(r['body_text'], terms[0])}"}
+             for r in rows[:SEARCH_HITS]]
+    return {"title": f"🔎 {name} — 「{_inline(query, 40)}」の検索結果",
+            "head": [f"{len(rows)}件（新しい順）— MCS: "
+                     f"{project_url(project_id)}"],
+            "items": items, "more": max(0, len(rows) - SEARCH_HITS),
+            "empty": "取得済みの投稿に一致するものはありません。",
+            "notes": ["※ 取得済みの投稿だけが対象です。まだ取得していない範囲は"
+                      "検索されません。", _coverage_line(db, project_id)]}

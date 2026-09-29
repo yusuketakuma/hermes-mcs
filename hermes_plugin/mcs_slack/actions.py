@@ -7,10 +7,11 @@ import time
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (MODAL_TITLES, NO_TASKS_TEXT, body_messages,
-                                 feedback_attrs, ja, modal_fields,
-                                 preview_text, task_attrs, task_done_text,
-                                 task_list_text)
+from ..mcs_delivery.text import (MODAL_TITLES, NO_TASKS_TEXT, SEARCH_EMPTY,
+                                 body_messages, dismiss_attrs,
+                                 feedback_attrs, ja, list_messages,
+                                 modal_fields, preview_text, search_query,
+                                 task_attrs, task_done_text, task_list_text)
 from .cards import LINK_ACTION, _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -19,9 +20,10 @@ _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
-_MODAL_ACTIONS = ("request", "dismiss", "report")
+_MODAL_ACTIONS = ("request", "dismiss", "report", "search")
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
-          "dismiss", "tasks", "task_status", "summary", "report")
+          "dismiss", "tasks", "task_status", "summary", "report",
+          "mytasks", "unacked", "search")
 RESULT_POLL_S = 0.25
 # the 📝 modal waits this long for the runner's form (prefill + roster)
 # before opening — trigger_id lives ~3s; a slow drain opens without it
@@ -254,7 +256,12 @@ class Actions:
         if kind not in _KINDS:
             await self._say(origin["channel_id"], user, "操作できません。")
             return
-        env = envelopes.notification(token, actor, origin)
+        clicker = body["user"].get("name") or body["user"].get(
+            "username") or ""
+        env = envelopes.notification(
+            token, actor, origin,
+            {"name": clicker[:120]} if kind == "mytasks" and clicker
+            else None)
         try:
             await self._publish(env)
         except (OSError, ValueError):
@@ -271,8 +278,6 @@ class Actions:
                     await self._say(origin["channel_id"], user, ja(result))
                     return
                 form = (result or {}).get("form")
-            clicker = body["user"].get("name") or body["user"].get(
-                "username") or ""
             defs = modal_fields(kind, form, clicker)
             modal_id = registry.new_modal_id()
             self._reg.put_modal(modal_id, {
@@ -333,6 +338,27 @@ class Actions:
             picked = got.get("selected_option")
             fields[name] = (picked.get("value") if isinstance(picked, dict)
                             else got.get("value")) or ""
+        if pending["action"] == "search":
+            # 🔎 no preview — the keyword rides the card token as a view
+            # click and the hits come back through the followup sweep
+            self._reg.drop_modal(modal_id)
+            query = search_query(fields)
+            if query is None:
+                await self._say(origin["channel_id"], user, SEARCH_EMPTY)
+                return
+            env = envelopes.notification(pending["token"], actor, origin,
+                                         {"query": query})
+            try:
+                await self._publish(env)
+            except (OSError, ValueError):
+                await self._say(origin["channel_id"], user, "送信に失敗しました。")
+                return
+            self._reg.put_followup(env["command_id"], {
+                "kind": "action", "request_id": env["request_id"],
+                "origin": origin, "actor": actor, "token": pending["token"],
+                "user": user})
+            await self.sweep_followups()
+            return
         pending["fields"] = fields
         pending["modal_id"] = modal_id
         self._reg.put_modal(modal_id, pending)
@@ -356,15 +382,15 @@ class Actions:
             return envelopes.extract_feedback(pending["actor"], context,
                                               *got)
         if pending["action"] == "dismiss":
-            reason = (fields.get("reason") or "").strip()
-            if not reason or len(reason) > 2000:
+            got = dismiss_attrs(fields)
+            if isinstance(got, str):
                 return None
             key = params.get("signal_key")
             if not isinstance(key, str) \
                     or key not in (context.get("signals") or {}):
                 return None
             return envelopes.signal_dismiss(pending["actor"], context,
-                                            key, reason)
+                                            key, *got)
         project = params.get("project_id") or context.get("project_id")
         attrs = task_attrs(fields)
         if isinstance(attrs, str) \
@@ -532,6 +558,12 @@ class Actions:
                 else:
                     await self._say(origin["channel_id"], rec["user"],
                                     NO_TASKS_TEXT)
+            elif result.get("action") == "list" \
+                    and result.get("outcome") == "applied":
+                for message in list_messages(
+                        result, lambda pid: projects.project_allowed(
+                            self._settings, pid)):
+                    await self._say(origin["channel_id"], rec["user"], message)
             elif result.get("action") == "task_status" \
                     and result.get("outcome") == "applied":
                 await self._say(origin["channel_id"], rec["user"],
