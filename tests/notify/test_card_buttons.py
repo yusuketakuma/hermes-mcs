@@ -688,3 +688,24 @@ def test_urgency_badge_names_its_source(led):
              if c["type"] == "text"]
     assert any("・緊急度: 高（AI抽出）" in t for t in texts)
     assert any("・緊急語を含む（機械照合）" in t for t in texts)
+
+
+def test_urgency_reads_the_same_artifact_as_the_body(led):
+    """Once v4 is the message's current extraction, the badge follows
+    it — never a superseded extract_llm the body no longer shows."""
+    import structured_view
+    _seed_thread(led, mids=(100,))
+    _llm_extract(led, 100, {"urgency": "high", "summary": "旧"})
+    v4 = led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('semantic_facts_v4',1,100,?,'v4',?,?)",
+        (json.dumps({"summary": "新"}),
+         json.dumps({"hash": f"{100:064x}", "engine_version": 4}), NOW))
+    led.db.commit()
+    assert structured_view.latest_fact_artifact(led.db, 100)["summary"] \
+        == "新"
+    assert structured_view.message_urgency(led.db, 100) is None
+    led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                   (json.dumps({"urgency": "high"}), v4.lastrowid))
+    led.db.commit()
+    assert structured_view.message_urgency(led.db, 100) == "llm"
