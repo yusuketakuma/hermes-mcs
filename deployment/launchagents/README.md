@@ -115,11 +115,18 @@ slot を広告した場合は `mcs_setup check` がエラーとして報告し�
 `service_manifest.json` の `llm_slots` に selected/rollback/plist
 整合が記録される。llama-server のフラグは
 `-c 65536 -np 2 --spec-type ngram-simple -fa on -ctk q4_0 -ctv q4_0
--ub 512 --cache-ram 1024`（per-slot 32768）— 同梱テンプレート
-`ai.mcs.llamaserver.plist` の実値で、実機の hermes 管理ラベル
-`ai.hermes.llamacpp` も同じ構成で稼働する（install.sh は既存の
-hermes 管理 agent を検出してテンプレート導入を skip するため、実機の
-常駐ラベルは `ai.hermes.llamacpp` のまま）。`-c 49152` は
+-ub 512 --cache-ram 0`（per-slot 32768）— 同梱テンプレート
+`ai.mcs.llamaserver.plist` の実値。実機の常駐ラベルは hermes 管理の
+`ai.hermes.llamacpp` のまま（install.sh は既存の hermes 管理 agent を
+検出してテンプレート導入を skip する）で、2026-09-29 時点の実機は
+`-c 32768` で稼働し、`--cache-ram 0` だけを揃えた。
+`--cache-ram 0`（prompt cache 無効）は llama.cpp b11146 の不具合回避:
+id_slot 指定のリクエストが処理中の slot に届くと、defer より前に
+prompt cache の save/load がその slot の状態を差し替え、hybrid
+（Qwen3.5）の ngram draft 棄却時に `GGML_ASSERT(n <= tokens.size())`
+（server-common.cpp:654）で abort する（2026-09-28〜29 に3回）。
+全リクエストが slot を pin する運用では cache は実質使われないため、
+無効化による性能差は小さい。`-c 49152` は
 prompt cache が slot context を埋め尽くして実行中 task が cancel
 される退行が実測されたため差し戻し（2026-09-23）。
 

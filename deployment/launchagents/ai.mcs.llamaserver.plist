@@ -17,7 +17,7 @@
     <string>-ctk</string><string>q4_0</string>
     <string>-ctv</string><string>q4_0</string>
     <string>-ub</string><string>512</string>
-    <string>--cache-ram</string><string>1024</string>
+    <string>--cache-ram</string><string>0</string>
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
