@@ -8,10 +8,12 @@ a lost file is rebuilt from the snapshot — never invented.
 """
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
 import secrets
+import threading
 import time
 
 from . import paths
@@ -73,6 +75,17 @@ def _expired(value, *, ttl: float = 0, now: float | None = None) -> bool:
         return True
 
 
+def _locked(method):
+    """Serialize a Registry method on the instance lock — workers call
+    mutators via asyncio.to_thread while save() serializes on the loop,
+    and json.dumps over a dict another thread resizes raises."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class _RegistryBatch:
     """Context manager returned by Registry.batch — defers save() calls
     and flushes once on exit."""
@@ -99,8 +112,10 @@ class Registry:
             if scope is not None else "registry.json")
         self._batch_depth = 0
         self._dirty = False
+        self._lock = threading.RLock()     # re-entrant: mutators call save()
         self.reload()
 
+    @_locked
     def reload(self) -> None:
         """Read after acquiring the send lock, before accepting interactions."""
         try:
@@ -159,6 +174,7 @@ class Registry:
         replays work the transport layer already idempotents."""
         return _RegistryBatch(self)
 
+    @_locked
     def save(self, *, immediate: bool = False) -> None:
         if self._batch_depth and not immediate:
             self._dirty = True
@@ -171,6 +187,7 @@ class Registry:
 
     # -- claims ----------------------------------------------------
 
+    @_locked
     def claim(self, delivery_id: str, record: dict) -> None:
         self._data["claims"][delivery_id] = record
         self.save()
@@ -178,11 +195,13 @@ class Registry:
     def claimed(self, delivery_id: str) -> dict | None:
         return self._data["claims"].get(delivery_id)
 
+    @_locked
     def drop_claim(self, delivery_id: str) -> None:
         if self._data["claims"].pop(delivery_id, None) is not None:
             self.save()
         self.mark_dead(delivery_id)
 
+    @_locked
     def release_claim(self, delivery_id: str) -> None:
         """Drop WITHOUT a dead tombstone — for transient denials where
         the spec stays legitimately claimable (e.g. interactive_off)."""
@@ -191,6 +210,7 @@ class Registry:
 
     # a dropped claim is final: every render mints a fresh delivery_id,
     # so re-claiming the same spec file can only churn denied begins
+    @_locked
     def mark_dead(self, delivery_id: str) -> None:
         self._data["dead"][str(delivery_id)] = time.time()
         self.save()
@@ -198,11 +218,13 @@ class Registry:
     def is_dead(self, delivery_id: str) -> bool:
         return str(delivery_id) in self._data["dead"]
 
+    @_locked
     def claims(self) -> dict:
-        return self._data["claims"]
+        return dict(self._data["claims"])
 
     # -- token context (spec action_rows capture) ------------------
 
+    @_locked
     def put_tokens(self, token_map: dict) -> None:
         """Store each button's render context by token.
         Stamped 'at' so expired runner tokens don't accumulate — the
@@ -223,11 +245,13 @@ class Registry:
 
     # -- pending modal / confirm flows -----------------------------
 
+    @_locked
     def put_modal(self, modal_id: str, record: dict) -> None:
         self._data["pending_modals"][modal_id] = {
             **record, "expires": time.time() + CONFIRM_TTL_S}
         self.save(immediate=True)
 
+    @_locked
     def modal(self, modal_id: str) -> dict | None:
         rec = self._data["pending_modals"].get(modal_id)
         if rec is not None and _expired(rec.get("expires")):
@@ -236,15 +260,18 @@ class Registry:
             return None
         return rec
 
+    @_locked
     def drop_modal(self, modal_id: str) -> None:
         if self._data["pending_modals"].pop(modal_id, None) is not None:
             self.save(immediate=True)
 
+    @_locked
     def put_confirm(self, confirm_id: str, record: dict) -> None:
         self._data["pending_confirms"][confirm_id] = {
             **record, "expires": time.time() + CONFIRM_TTL_S}
         self.save(immediate=True)
 
+    @_locked
     def confirm(self, confirm_id: str) -> dict | None:
         rec = self._data["pending_confirms"].get(confirm_id)
         if rec is not None and _expired(rec.get("expires")):
@@ -253,6 +280,7 @@ class Registry:
             return None
         return rec
 
+    @_locked
     def drop_confirm(self, confirm_id: str) -> None:
         if self._data["pending_confirms"].pop(confirm_id,
                                               None) is not None:
@@ -267,6 +295,7 @@ class Registry:
     # by every transport: gone -> busy -> cancel -> denied -> taken.
     # ``allowed`` is the caller's late scope recheck; it gates only the
     # 確定 path, so an out-of-scope confirm can still be cancelled.
+    @_locked
     def take_confirm(self, confirm_id: str, cancel: bool, *,
                      allowed: bool = True) -> str:
         rec = self.confirm(confirm_id)
@@ -283,6 +312,7 @@ class Registry:
         self.save(immediate=True)
         return "taken"
 
+    @_locked
     def end_confirm(self, confirm_id: str) -> None:
         """Publish failed before the command was queued — the user may retry."""
         rec = self._data["pending_confirms"].get(confirm_id)
@@ -291,11 +321,13 @@ class Registry:
 
     # -- followups --------------------------------------------------
 
+    @_locked
     def put_followup(self, command_id: str, record: dict) -> None:
         self._data["followups"][command_id] = {
             **record, "expires": time.time() + FOLLOWUP_TTL_S}
         self.save(immediate=True)
 
+    @_locked
     def followup(self, command_id: str) -> dict | None:
         rec = self._data["followups"].get(command_id)
         if rec is not None and _expired(rec.get("expires")):
@@ -304,10 +336,12 @@ class Registry:
             return None
         return rec
 
+    @_locked
     def drop_followup(self, command_id: str) -> None:
         if self._data["followups"].pop(command_id, None) is not None:
             self.save(immediate=True)
 
+    @_locked
     def followups(self) -> dict:
         return dict(self._data["followups"])
 
@@ -322,6 +356,7 @@ class Registry:
             return None                     # negative entries age out
         return rec
 
+    @_locked
     def put_capability(self, scope_key: str, ok: bool) -> None:
         self._data["capabilities"][scope_key] = {
             "ok": ok, "at": time.time()}
@@ -334,16 +369,19 @@ class Registry:
         evidence — resume scans can skip it entirely."""
         return self._data["parts"].get(str(delivery_id)) == "done"
 
+    @_locked
     def put_parts_done(self, delivery_id: str) -> None:
         if self._data["parts"].get(str(delivery_id)) != "done":
             self._data["parts"][str(delivery_id)] = "done"
             self.save()
 
+    @_locked
     def done_parts(self) -> set:
         return {k for k, v in self._data["parts"].items() if v == "done"}
 
     # -- sweep -------------------------------------------------------
 
+    @_locked
     def expire(self, *, keep: set | frozenset = frozenset()) -> None:
         """Drop dead followups/modals/confirms — the 14-minute Discord
         ceiling means a followup older than that can never send.

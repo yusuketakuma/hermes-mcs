@@ -1689,6 +1689,52 @@ def test_sweep_detects_signal_lifecycle(led):
     assert r["render_rev"] == r0["render_rev"] + 3
 
 
+def test_signals_notify_off_cancels_queued_signal_render(led):
+    """signals.notify=false: a queued signal render is cancelled and
+    unbound instead of sitting live forever (begin denies it with a
+    non-final signal_notify_off), no new render is issued while off, and
+    re-enabling issues a fresh render with a new delivery_id."""
+    _patient(led)
+    _signal_row(led, "sig-off")
+    _dispatch(led, _intent(led, kind="signal",
+                           payload={"signal_keys": ["sig-off"],
+                                    "project_id": 1}))
+    r0 = _latest_render(led)
+    assert r0["state"] == "queued"
+    off = {"notify": CFG["notify"], "signals": {"notify": False}}
+
+    notify_cards.sweep(led, off, now=NOW + 1)
+    r = _latest_render(led)
+    assert r["delivery_id"] == r0["delivery_id"]
+    assert r["state"] == "cancelled"
+    assert led.db.execute(
+        "SELECT COUNT(*) c FROM notification_intent_cards "
+        "WHERE delivery_id IS NOT NULL").fetchone()["c"] == 0
+
+    # drift while off still issues nothing
+    _signal_row(led, "sig-off", state="resolved")
+    led.db.commit()
+    notify_cards.sweep(led, off, now=NOW + 2)
+    assert _latest_render(led)["delivery_id"] == r0["delivery_id"]
+
+    notify_cards.sweep(led, CFG, now=NOW + 3)
+    r1 = _latest_render(led)
+    assert r1["delivery_id"] != r0["delivery_id"]
+    assert r1["state"] == "queued"
+    assert r1["render_rev"] == r0["render_rev"] + 1
+    assert _begin(led, r1)["granted"] is True
+
+
+def test_signals_notify_off_leaves_thread_cards_alone(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r0 = _latest_render(led)
+    notify_cards.sweep(led, {"notify": CFG["notify"],
+                             "signals": {"notify": False}}, now=NOW + 1)
+    assert _latest_render(led)["state"] == "queued"
+    assert _latest_render(led)["delivery_id"] == r0["delivery_id"]
+
+
 def test_sweep_defer_until_reopens_card(led):
     """RC19 — a deferred triage flips back to open at defer_until and
     the footer change re-renders the card."""
