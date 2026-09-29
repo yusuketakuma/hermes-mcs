@@ -206,6 +206,9 @@ class Ledger:
           created_at REAL, updated_at REAL,
           UNIQUE(kind, project_id, message_id));
         """)
+        had_fts = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='messages_fts'"
+        ).fetchone() is not None
         try:
             self.db.execute("""
               CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
@@ -213,7 +216,8 @@ class Ledger:
             self._fts = True
         except sqlite3.OperationalError:
             self._fts = False
-        self._migrate()   # adds v3 columns first — indexes/triggers depend on them
+        # adds v3 columns first — indexes/triggers depend on them
+        self._migrate(fts_created=self._fts and not had_fts)
         self.db.executescript("""
           CREATE INDEX IF NOT EXISTS idx_messages_project_time
             ON messages(project_id, posted_at_ts);
@@ -256,8 +260,12 @@ class Ledger:
             if st.strip():
                 self.db.execute(st)
 
-    def _migrate(self):
-        """Normalize a supported pre-existing db without lossy recovery."""
+    def _migrate(self, fts_created: bool = False):
+        """Normalize a supported pre-existing db without lossy recovery.
+        The v3 backfill runs only on an upgrade (old user_version) or
+        when this open created messages_fts — e.g. a DB written by a
+        Python without FTS5 — since current writers fill the derived
+        columns and triggers keep the index in sync."""
         def cols(t):
             return {r[1] for r in
                     self.db.execute(f"PRAGMA table_info({t})")}
@@ -288,7 +296,8 @@ class Ledger:
         except Exception:
             self.db.rollback()
             raise
-        self._backfill_v3()
+        if old_version < SCHEMA_VERSION or fts_created:
+            self._backfill_v3()
 
     def _migrate_body(self, cols, old_version: int):
         c = cols("patients")

@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger
-from health_watch import HEALTH_REL
+from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
                       disk_floor_mb, load_config)
@@ -110,8 +110,7 @@ def _unread_at(result: dict, status: str, now: float) -> float | None:
             and status not in ("failed", "session_expired"):
         return now
     prev = _prev_health().get("unread_at")
-    return prev if isinstance(prev, int | float) \
-        and not isinstance(prev, bool) and math.isfinite(prev) else None
+    return prev if _finite_number(prev) else None
 
 
 def _free_mb() -> float | None:
@@ -735,13 +734,14 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
-    """extract_v1 (instant rules) -> extract_llm (v3) -> rollups.
+    """extract_v1 (instant rules) -> extract_llm (v4) -> rollups.
 
     Two lanes, one lineage: the rule pass is pure-pattern and instant —
     it keeps real-time analysis at ingest speed so notifications and
-    signals never wait on the LLM queue. The v3 pass then folds the
-    same rule output in as prompt hints and mints the extract_v1
-    artifact itself, so v1+v2 work happens inside the v3 pass too."""
+    signals never wait on the LLM queue. The extract_llm pass
+    (mcs/extract/v4, EXTRACT_VERSION=4) then folds the same rule output
+    in as prompt hints and mints the extract_v1 artifact itself when
+    the rule pass has not."""
     try:
         import extract
         ex = extract.run_pending(ledger)
@@ -752,26 +752,17 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     try:
         import extract_llm
-        # T18: under the v4 engine (fact_source=canonical) the legacy
-        # v3 extractor admits NOTHING new. Conversion manifests schedule
-        # v4 jobs; they never reopen v3. Outside canonical mode admission
-        # is unchanged.
-        admitted = None
+        # T18: under fact_source=canonical conversion manifests schedule
+        # semantic v4 jobs, so this tick lane admits NOTHING new
+        # (fail-closed empty set). Outside canonical mode admission is
+        # unrestricted.
         try:
             import semantic_policy
             scfg = semantic_policy.semantic_config(cfg or {})[0]
             canonical_mode = scfg.get("fact_source") == "canonical"
         except Exception:
             canonical_mode = False  # config unreadable → legacy behavior
-        if canonical_mode:
-            try:
-                import semantic_v4
-                admitted = semantic_v4.active_legacy_admissions(ledger)
-            except Exception:
-                # canonical mode defaults v3 admission to ZERO — a
-                # manifest read error must fail CLOSED, not open the
-                # legacy engine to unrestricted new inference
-                admitted = set()
+        admitted = set() if canonical_mode else None
         remain = (deadline - time.monotonic()) - 45
         result["extract_llm"] = (
             extract_llm.run_pending(
@@ -960,8 +951,8 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
 
 def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                  sem_on, notify_max_age_s):
-    """Priority fetch work — unread, optional backfill and self-post
-    probes — skipped entirely by --jobs-only runs."""
+    """Priority fetch work — unread, optional self-post probes, then
+    backfill — skipped entirely by --jobs-only runs."""
     if args.jobs_only:
         result["jobs_only"] = True
         return
@@ -969,19 +960,22 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                   stage_unread, adapter, ledger, args, result, deadline,
                   run_id, semantic=sem_on,
                   notify_max_age_s=notify_max_age_s)
-    if not args.no_backfill:
-        _with_relogin(adapter, ledger, result, "backfill",
-                      stage_backfill, adapter, ledger, result, deadline,
-                      run_id, semantic=sem_on,
-                      notify_max_age_s=notify_max_age_s)
     self_posts = cfg.get("self_posts", False)
     if type(self_posts) is not bool:
         result["errors"].append("config: self_posts_invalid")
         self_posts = False
+    # probe BEFORE backfill: backfill notifies unread rows only, so an
+    # own / other-read post on its first pages would be stored silently
+    # and the probe would then see the latest id as already stored
     if self_posts:
         _with_relogin(adapter, ledger, result, "self_probe",
                       stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
+                      notify_max_age_s=notify_max_age_s)
+    if not args.no_backfill:
+        _with_relogin(adapter, ledger, result, "backfill",
+                      stage_backfill, adapter, ledger, result, deadline,
+                      run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
 
 
@@ -1064,13 +1058,17 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
 
     # own identity: name/professions/stations from MCS, persisted
     # as the signal engine's default self (config overrides). Never
-    # fails the run — an unusable profile is a logged warning.
+    # fails the run — an unusable profile is a logged warning. The
+    # profile rarely changes: refresh it on deep (--jobs-only) runs, and
+    # on a tick only until the first artifact exists.
     try:
         import mcs_signals
-        prof = adapter.self_profile()
-        with ledger.db:
-            if mcs_signals.record_self_profile(ledger.db, prof):
-                result["self_profile"] = "updated"
+        if args.jobs_only \
+                or not mcs_signals._latest_self_profile(ledger.db):
+            prof = adapter.self_profile()
+            with ledger.db:
+                if mcs_signals.record_self_profile(ledger.db, prof):
+                    result["self_profile"] = "updated"
     except Exception as e:
         result["errors"].append(f"self_profile: {type(e).__name__}")
 
