@@ -1941,3 +1941,18 @@ def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,
     assert calls == []
     assert not (tmp_path / "scripts").exists()
     assert "nothing rendered" in capsys.readouterr().out
+
+
+def test_plugin_role_ids_written_only_when_given(monkeypatch):
+    """--plugin-role-ids lands as allowed_role_ids (a YAML list) for a
+    Discord scope; without the flag nothing is written or reported
+    missing — roles are optional."""
+    sets = _plugin_env(monkeypatch)
+    mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco",
+                                         plugin_role_ids="555,556"))
+    assert ("cco", f"{mcs_setup.PLUGIN_SETTINGS}.allowed_role_ids",
+            '["555", "556"]') in sets
+    sets.clear()
+    mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG), _plugin_args())
+    assert all(not k.endswith("allowed_role_ids") for _, k, _ in sets)
