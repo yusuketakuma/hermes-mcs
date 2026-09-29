@@ -113,8 +113,10 @@ def _kind_state(rows, content_hash: str, *, engine_version=None) -> dict:
             "last_error": saw_error, "current_meta": current_meta}
 
 
-def _message_records(db, scope: str, project_id):
-    """One provenance record per message — the derived-row view."""
+def _message_records(db, project_id):
+    """One provenance record per message — the derived-row view — as
+    (record, by_kind, art_rows); facts/relations are filled by the
+    caller only for the records it returns (a `limit` page)."""
     params = []
     where = ""
     if project_id is not None:
@@ -164,10 +166,7 @@ def _message_records(db, scope: str, project_id):
                "extraction_eligible": bool(msg["eligible"]),
                "state": _record_state(msg, by_kind),
                "extraction": by_kind}
-        facts, relations = _fact_relations(by_kind, art_rows, scope)
-        rec["facts"] = facts
-        rec["relations"] = relations
-        records.append(rec)
+        records.append((rec, by_kind, art_rows))
     return records
 
 
@@ -316,16 +315,21 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         raise ValueError("bad_limit")
     # coverage describes the whole scope like `total` does — never just
     # the page `limit` cut
-    counted = _message_records(db, scope, project_id)
+    counted = _message_records(db, project_id)
     total = len(counted)
     truncated = limit is not None and total > limit
-    records = counted[:limit] if truncated else counted
+    records = []
+    for rec, by_kind, art_rows in (counted[:limit] if truncated else counted):
+        rec["facts"], rec["relations"] = _fact_relations(
+            by_kind, art_rows, scope)
+        records.append(rec)
     attachments = _attachments(db, scope, project_id)
     return {
         "contract": CONTRACT,
         "snapshot": _snapshot_meta(db),
         "scope": scope,
-        "coverage": _coverage(db, counted, attachments, project_id),
+        "coverage": _coverage(db, [c[0] for c in counted], attachments,
+                              project_id),
         "attachments": attachments,
         "records": records,
         "total": total,
