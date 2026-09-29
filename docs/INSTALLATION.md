@@ -242,7 +242,7 @@ DISCORD_BOT_TOKEN=<token> \
   中身はそのまま）へ退避して既定値から作り直す
 - `init` は終了時に `check` を自動実行し、その結果を終了コードにする
 
-設定キー全一覧は §4 を参照。
+設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`off`/`shadow`/`enforce`）で指定できる。
 
 ### A-4. サービス登録と検証
 
@@ -648,6 +648,24 @@ outbox に残った pending は次回 flush で配送対象になる。
 |---|---|
 | `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` を確認。`manual_required`/`keychain_locked` は上記 Keychain 節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
 | カードだけ届きスレッド本文が無い | gateway が旧 plugin を保持 — `hermes gateway restart`（§A-6） |
+
+### セッション失効・Keychain 状態の読み方
+
+README「導入方法」から移設（文言は同じ。段落を項目に分けた）。
+
+- セッション切れは tick 内の失敗点で `auto_login` が1回試行され、成功すれば
+  その run のまま再開する。結果は通知に出る — 成功なら `session_recovered`
+  (`run N: <stage>: ...`)、失敗なら従来どおり `session_expired` で detail に
+  `auto_login=<state>` が付く。run log の `relogin_attempts` に試行記録が残る。
+- `keychain_locked` は「エントリはあるが login
+  keychain がロック中で読めない」状態 — `security unlock-keychain` または
+  GUI ログインで解除してから次回 run を待てばよい(エントリ再登録は不要)。
+- `~/.mcs/.env` の `MCS_PASSWORD` はリブート直後のロック中にも効く
+  フォールバック(`mcs_setup init` が Keychain と併記する; 平文のため
+  FileVault/物理セキュリティ前提)。頻発する場合はログイン状態と Keychain の
+  読み取り可否を確認し、自動ロックを収集失敗の回避策として無条件に解除しない。
+- `manual_required` はエントリ未登録かつ .env 未設定、またはフォーム非検出
+  — `mcs_setup init` で再登録する。
 
 ## 付録A: Discord 接続設定（hermes-agent リポジトリより転記）
 

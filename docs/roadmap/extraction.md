@@ -17,7 +17,7 @@
 1. **§3-15 は既存実装を書いていなかった**。本文由来の labs 抽出は extract v4 で実装済み: `extract_llm.py:95`（プロンプト）、`:293-303`（schema）、`:789-826`（`_Validator.labs`）、`rollup.py:137-141,183-184`（`recent_labs`）、`structured_view.py:195-208,336-337`（「検査:」行）、`semantic_qc.py:22`（QC 対象に labs）、テスト `tests/extract/test_extract_llm.py:2061-2118`。旧版の「#9 依存」（添付依存）は本文由来の検査値には無関係。実際にないのは、v1 ルール・日付・基準範囲・bench・値と evidence の突合・unverified の扱い（下記 #15）。
 2. **§3-11 の引用が弱かった**。`zaitaku-calender docs/operations.md:151` は 2026-09-05 時点の snapshot で、`:142` に「現在値として使用しない」とある。G-OPS-2 の定義は `docs/plans/implementation-plan.md:140,202`。利用条件の根拠は `docs/operations-common-master.md:111`（SSK の一般利用条件は無断使用・転載を制限）。`:113` の運営者「問題なし」は他薬局への配信・再配布の件で、根拠 URL もなく、hermes-mcs のローカル利用の許諾ではない。
    「YJ に体系を合わせる」も正確ではない。zaitaku 側の `code_system` は `ssk`（9 桁数字）と `yj`（12 桁 `[0-9A-Z]`）の 2 種だけ（`migrations/0028_master_drug_identifier_assertions.sql:17,24-25`）。YJ だけでは製品・有効期間が一意でない（`docs/operations-common-master.md:190`）。名前照合では製品レベル ID を返せない。
-3. **§3-16 は「ローカル」の中身が未整理だった**。実機の llama-server は vision 不可。添付の実体は 14 日で削除され（`maintenance.py:25,164-230`）、`pruned` は終端で再取得経路がない（`ledger.py:1657-1662` は `state='pending'` だけ）。`docs/lifecycle-spec.md:171` の「再 DL 可」は未実装の可能性がある。過去添付の OCR は §3-4 の補完とは別実装が要る。
+3. **§3-16 は「ローカル」の中身が未整理だった**。実機の llama-server は vision 不可。添付の実体は 14 日で削除され（`maintenance.py:25,164-230`）、`pruned` は終端で再取得経路がない（`ledger.py:1657-1662` は `state='pending'` だけ）。`docs/lifecycle-spec.md:194` の「再 DL 可」は未実装の可能性がある。過去添付の OCR は §3-4 の補完とは別実装が要る。
 4. **§4 C2「型付き値（vital_lab 等）」の出所が未定義だった**。semantic 層の `vital_lab` は statement / quantity の自由文字列だけ（`semantic_facts.py:372-410`）。legacy 投影は labs / vitals を出さない（`semantic_projection.py:174-270`）。canonical 有効時は読み側が extract_llm を隠す（`mcs_queries.py:167-186`）。C2 の型付き値の正本は #15 の型付き labs にすべきで、C2 の「依存」に §3-15 が必要。
 5. 軽微: dev-records の O03「添付 OCR 未実装」（`docs/dev-records/review-20260923.md:82-83`）は ROADMAP の ID 体系にない。
 
@@ -33,8 +33,8 @@
 - semantic: FACT_KINDS に `medication_event` / `medication_exposure`（`semantic_facts.py:28-33`）。`validate_fact` は固定キーで薬剤 ID の欄がない（`:372-410`）。正規化は NFKC + casefold だけ（`:127-128`）。legacy 投影の name は最長カタカナ / 英数トークンで、特定不能は「処方薬」（`semantic_projection.py:50-57,209-232`）。v1 hint は `medication_exposure` 化（`semantic_extraction.py:827-832`）。
 - 読み側は `$.meds[].name` の表層一致で動く。優先順位は v4 > canonical > extract_llm（`mcs_queries.py:167-186`）。rollup `_med_states`（`rollup.py:255-293`）、stats `st_meds`（`mcs_stats.py:378-404`）・`st_med_mentions`（:407-422。`needs` に drug_map: :721-724、notes に「未実装」: :401-402）、signals は (room, 表層名) のエピソード（`mcs_signals.py:250-329`）、structured_view は「薬剤候補（未確認）」の規約（`structured_view.py:293`）、brain_export（`brain_export.py:201-205`）、semantic relation は表層トークンで同一実体を判定（`semantic_relations.py:43,78-87`）。
 - export: `_STATS.meds` は `action_totals` / `distinct_names`（整数）だけ（`export_schema.py:96-100`）。`_FACT` に薬剤欄なし（:107-115）。`read_model._fact_relations` は 5 キーだけをコピー（`read_model.py:229-240`）。stat は C1 で送らない。契約は aggregate 限定（`docs/external-export-contract.md:22,117,137`）。
-- 辞書・コード・アルゴリズムはリポジトリにない（`README.md:505`、`docs/DEVELOPMENT.md:335-336` が未整備を明記）。
-- 拘束: stdlib のみ（`ci/gates.py:96-129`）。ruff target は py310（`pyproject.toml:2`）。CCO / plugin は snapshot だけを読む（`README.md:124`、`deployment/README.md`）ので、リーダー側で辞書ファイルを読める保証がない。
+- 辞書・コード・アルゴリズムはリポジトリにない（`docs/USER_GUIDE.md:362`、`docs/DEVELOPMENT.md:341-342` が未整備を明記）。
+- 拘束: stdlib のみ（`ci/gates.py:96-129`）。ruff target は py310（`pyproject.toml:2`）。CCO / plugin は snapshot だけを読む（`docs/DEVELOPMENT.md:593-594`、`deployment/README.md`）ので、リーダー側で辞書ファイルを読める保証がない。
 
 **設計方針**
 1. **保存先は派生 artifact `med_ref`（新 kind。schema 変更なし。artifacts は汎用: `ledger.py:192-196`）**。writer 側で message 単位に生成する。
@@ -60,7 +60,7 @@
 - `mcs/extract/drug_map.py`（世代横断のモジュールなので `extract/` 直下。ライブラリだけで `Ledger(` を直接 open しないため `LEDGER_WRITERS` への追加は不要）。
 - tick の配線、`rollup.py` / `mcs_stats.py` / `brain_export.py` の注釈、バージョン更新。
 - `tests/extract/test_drug_map.py`（合成辞書は Python 定数。架空名）、`tests/views/test_mcs_stats.py` 追記、export の回帰テスト。
-- `README.md:505` と `docs/DEVELOPMENT.md:335-336` の更新、`scripts/update_readme.py` 実行。
+- `docs/USER_GUIDE.md:362` と `docs/DEVELOPMENT.md:341-342` の更新、`scripts/update_readme.py` 実行。
 - コミットグループ案: ① fold / split / 辞書ロード ② `med_ref` の導出と tick の配線 ③ rollup / stats / brain_export の注釈と version bump ④ docs。
 
 **受入条件とテスト（合成のみ）**
@@ -94,7 +94,7 @@
   - 表示先: `structured_lines` → `notify_flush.py:367`、`notify_render.py:149-163` → Discord/Slack。
   - rollup `recent_labs` は name キー・最新のみ・上限 15・`at` は投稿日時で測定日ではない（`rollup.py:85,137-141,183-184`）。読み手はない（brain_export は vitals / meds だけ: `brain_export.py:192-205`）。
 - semantic: `vital_lab` は必須カテゴリ（`semantic_facts.py:38-42,54`）だが、値は文字列だけ。legacy 投影に labs / vitals はなく、canonical_facts に statement が載るだけ（`semantic_projection.py:174-270,282-325`）。canonical / v4 が現行だと型付き labs / vitals が読み側から消え、「バイタル・検査｜statement」の自由文だけが残る（`mcs_queries.py:167-186`、`structured_view.py:127-151`）。canonical の有効化ゲートは 2026-09-23 時点で未設定（`docs/dev-records/continuation-20260923.md:1115`）。現在の設定値は【未確認】。v1 hint は vitals → vital_lab に変換するが、証拠引用が `str(value)` で曖昧（`semantic_extraction.py:835-838`）。
-- QC: Jev（外部 API・既定 OFF: `README.md:145-152`、`SECURITY.md:28`）。対象順は vitals, meds, symptoms, labs, events、上限 16 件の round-robin（`semantic_qc.py:21-22,123-130`）。質問文は labs で汎用（:149-154）。順序は `tests/views/test_qc_view.py:131-145`、`tests/extract/test_extract_qc.py:596-606` で固定。
+- QC: Jev（外部 API・既定 OFF: `SECURITY.md:79-86`、`SECURITY.md:28`）。対象順は vitals, meds, symptoms, labs, events、上限 16 件の round-robin（`semantic_qc.py:21-22,123-130`）。質問文は labs で汎用（:149-154）。順序は `tests/views/test_qc_view.py:131-145`、`tests/extract/test_extract_qc.py:596-606` で固定。
 - bench: `extract_bench._score_case` は labs の採点なし（`extract_bench.py:120-200`）。`evaluation/extract_cases.json` は 21 件で labs の期待は 0 件。既存コーパスは FROZEN（`extract_bench.py:4-6`、corpus_sha256 比較 :324-327）。
 - zaitaku の測定値語彙: `measurement_type ∈ {height, weight, egfr, creatinine, ast, alt, other}`、value は 10 進文字列 ≥0（20 桁以内）、unit 必須、`measured_on` 必須（`src/validation/patient/patient-clinical-profile.ts:20-22,133-152`）。hermes-mcs の vitals に weight / height はない（`extract_llm.py:407`）。
 
@@ -113,7 +113,7 @@
   - 優先順位は既存規約（`structured_view.py:14-25`）。LLM が labs を出したら LLM 優先、なければルール結果を「検査候補（未確認）」とする。
   - rollup `recent_labs` は analyte キー・測定日優先で直近 N（提案 3）。時系列ビュー化しない。`PERIOD_CHECK_VERSION` を更新する。
   - OCR 文字混同（HbAIc / HbAlc、Sp02）は lexicon で吸収する（`A[1lI]c`、`Sp[O0]2`）。
-- **D. LLM schema 拡張（date / ref）**: **EXTRACT_VERSION は上げない**。上げると全件再抽出（:1614-1629,2103-2141）、QC 再投入（Jev 予算）、chunk checkpoint 失効（:1819,1859,1888）が起きる。旧世代の再処理で backlog が増える旨は `docs/dev-records/review-20260923.md:76-77`。日付・基準範囲はルール（B）で取る。LLM に取らせるなら thin 再抽出方式（`_thin_pending_sql`: :1578-1599）で「検査の手掛かりのある投稿だけ」を 1 回再 pending にする。extract_llm から新モジュールを import する場合は `_LOADED_SOURCE_DIGESTS`（:63-66）に追加し、常駐 drainer を再起動する（`deployment/launchagents/README.md:83-95`）。
+- **D. LLM schema 拡張（date / ref）**: **EXTRACT_VERSION は上げない**。上げると全件再抽出（:1614-1629,2103-2141）、QC 再投入（Jev 予算）、chunk checkpoint 失効（:1819,1859,1888）が起きる。旧世代の再処理で backlog が増える旨は `docs/dev-records/review-20260923.md:76-77`。日付・基準範囲はルール（B）で取る。LLM に取らせるなら thin 再抽出方式（`_thin_pending_sql`: :1578-1599）で「検査の手掛かりのある投稿だけ」を 1 回再 pending にする。extract_llm から新モジュールを import する場合は `_LOADED_SOURCE_DIGESTS`（:63-66）に追加し、常駐 drainer を再起動する（`deployment/launchagents/README.md:95-112`）。
 - **E. 添付由来**は #16 の OCR テキストに B のルールを適用する（LLM なし）。#16 の後。
 
 **成果物**
@@ -148,8 +148,8 @@
 **現状**
 - 保存: `attachments` テーブル（`ledger.py:173-178`、追加列 :349-354）。MCS API は url / name だけで MIME を持たない（`mcs_adapter.py:294-298,423-437`）。実体は `data/attachments/<attachment_id>`（拡張子なし。ディレクトリ 0700: `run_check.py:59,624,1142-1143`）。DL は許可ホストだけ・64MiB 上限・`.part` → rename（`mcs_adapter.py:54-59,1334-1391`）。「隔離」の実体は failed 状態 + 試行上限 + .part 清掃（`ledger.py:43-45,1614-1649`）で、ファイル種別の検査やマルウェア隔離はない。tick では `--download-files` 時だけ `stage_attachments`（`run_check.py:616-641,941`）。
 - 保持: 14 日で実体削除 → `pruned`（`maintenance.py:25,164-230`）。`pruned` は終端で再取得経路なし。`withdrawn` は次回 prune まで実体が残る（:200）。
-- 抽出側: 添付は未解析（`README.md:238`、`SECURITY.md:44`、O03）。v1 は本文の「写真|画像|添付」で `media_ref` を立てるだけ（`extract.py:171-172`）。semantic は添付メタを bundle に載せ（`semantic_store.py:86-101`）、「添付内容は解析していません」と限定する（`semantic_llm.py:287-289`）。`attachments_complete` は設定元がなく常に True（`semantic_extraction.py:1122-1123`）。
-- 既存の外部露出: 通知設定時は添付の実体が Discord 等へ転送される（`README.md:100-101`、`notify_flush.py:583-611`）。Jev（外部）は semantic / QC 有効時に本文を送る（`README.md:145-152`）。OCR テキストをそこへ流さないこと。
+- 抽出側: 添付は未解析（`SECURITY.md:54`、`SECURITY.md:44`、O03）。v1 は本文の「写真|画像|添付」で `media_ref` を立てるだけ（`extract.py:171-172`）。semantic は添付メタを bundle に載せ（`semantic_store.py:86-101`）、「添付内容は解析していません」と限定する（`semantic_llm.py:287-289`）。`attachments_complete` は設定元がなく常に True（`semantic_extraction.py:1122-1123`）。
+- 既存の外部露出: 通知設定時は添付の実体が Discord 等へ転送される（`SECURITY.md:26`、`notify_flush.py:583-611`）。Jev（外部）は semantic / QC 有効時に本文を送る（`SECURITY.md:79-86`）。OCR テキストをそこへ流さないこと。
 - ローカル LLM は text 専用: `local_llm.chat` は `messages[].content` が str（`local_llm.py:373-379`）、`_validate_chat_args` は prompt を str に限定（:339-343）。実機の llama-server に対する `GET /props`（loopback。本文は送っていない）で `modalities.vision=false`、total_slots=2、n_ctx=32768/slot、Qwen3.5-9B-Q4_K_M を確認した。plist に `--mmproj` はない（`deployment/launchagents/ai.mcs.llamaserver.plist:6-20`）。`~/.hermes/models` は 0.8B と 9B の gguf だけで mmproj もない。モデル系列は VLM 可能でも未ロード。mmproj の入手可否とメモリ余裕は【未検証】。デコードは 3〜5 t/s（`extract_llm.py:55-58`）で、VLM の長い出力は 1 枚数分になり、2 slot の抽出 drainer を塞ぐ。
 - 受付境界: `DEFAULT_ROUTES`（`llm_admission.py:60-75`）は mcs.extract / semantic / qc / bench=BACKLOG。`MCS_LLM_ADMISSION` 有効時は未登録ルートが恒久拒否され、`mcs_setup check` が検査する（`mcs_setup.py:534-556`）。既定 OFF（`local_llm.py:114-120`）。
 - OCR / vision の実装はリポジトリに存在しない。
@@ -178,7 +178,7 @@
 **成果物**
 - `attach_ocr.py`、`run_check` の配線、`mcs_queries.py` に `current_ocr_pred`、`mcs_view` の表示、gates、tests。
 - 実機 smoke 手順（手動スクリプト + `docs/dev-records`）。調査時の probe 手順を流用できる。
-- `README.md:238` と `SECURITY.md:44` の更新、`update_readme.py`。
+- `SECURITY.md:54` と `SECURITY.md:44` の更新、`update_readme.py`。
 - コミットグループ案: ① magic sniff + runner + 契約検証（stub）② artifact / pending / current / tombstone ③ tick 配線 + gate ④ 分類 ⑤ 表示 / docs。
 
 **受入条件とテスト（合成のみ）**

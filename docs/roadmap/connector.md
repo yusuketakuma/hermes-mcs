@@ -275,7 +275,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 やらないこと（YAGNI）: 自動リトライ、スケジューラ、mTLS（Q8 次第）、token を `.env` へ複写。
 
 **成果物**
-- `ext_transport.py`、config validator、契約付録。`SECURITY.md`・README の送信先一覧の更新（現状は `SECURITY.md:20` 付近の Jev・通知先の記述だけ）。同文書の「含まないもの」章（L133-138）の改訂。README 再生成（新 mcs モジュール分）。`ext_contract.py` の `_mcs_path` ブートストラップ（`ext_transport` が `bounded_http` / `mcs_util` を import するため、`brain_export.py:14-18` と同じ 2 行）。
+- `ext_transport.py`、config validator、契約付録。`SECURITY.md`（「人工知能（AI）の使用箇所と情報の行き先」）と README の行き先要約の更新（現状は `SECURITY.md:20` 付近の Jev・通知先の記述だけ）。同文書の「含まないもの」章（L133-138）の改訂。README 再生成（新 mcs モジュール分）。`ext_contract.py` の `_mcs_path` ブートストラップ（`ext_transport` が `bounded_http` / `mcs_util` を import するため、`brain_export.py:14-18` と同じ 2 行）。
 
 **受入条件とテスト（合成のみ）**
 - fake `post_fn` で各 status の写像を確認し、`calls==1` で二重送信がないこと（held の後の deliver も送らない）。
