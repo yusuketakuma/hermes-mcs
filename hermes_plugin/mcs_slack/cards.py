@@ -15,17 +15,24 @@ LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
 
 
-def _mrkdwn(text):
-    """Footer text as mrkdwn: runner-made <@U…> mentions render as the
-    member's name; everything else is escaped so no other text can form
-    a link, mention or broadcast."""
-    def esc(t):
-        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    out, last = [], 0
-    for m in _MENTION.finditer(text):
-        out += [esc(text[last:m.start()]), m.group(0)]
-        last = m.end()
-    return "".join(out) + esc(text[last:])
+MEMBER_LABEL = "メンバー"
+
+
+def mention_ids(spec) -> set:
+    """Slack user ids the runner named as <@U…> in the footer."""
+    return {m.group(0)[2:-1]
+            for item in (spec.get("parts") or {}).get("footer") or []
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+            for m in _MENTION.finditer(item["text"])}
+
+
+def _names(text, names):
+    """Slack has no allowed_mentions: a live <@U…> in a re-posted card
+    notifies the member. Runner mentions become the member's display
+    name (``names``, looked up by the worker) or a neutral label, and
+    the footer is sent as plain_text so nothing can form a mention."""
+    return _MENTION.sub(
+        lambda m: (names or {}).get(m.group(0)[2:-1]) or MEMBER_LABEL, text)
 
 
 def validate(spec):
@@ -52,7 +59,7 @@ def _sections(text):
     ]
 
 
-def render(spec):
+def render(spec, names=None):
     """Render visible containers/footer without serializing private context."""
     validate(spec)
     blocks = []
@@ -72,16 +79,14 @@ def render(spec):
             text = f"引用: {text}"
         blocks.extend(_sections(text))
 
-    names = spec["parts"].get("mentions") == "silent"
+    silent = spec["parts"].get("mentions") == "silent"
     for item in spec["parts"].get("footer") or []:
         if item["type"] != "text":
             continue
-        text = item["text"]
-        if names:
-            text = _mrkdwn(text)
+        text = _names(item["text"], names) if silent else item["text"]
         blocks.extend(
             {"type": "context",
-             "elements": [{"type": "mrkdwn" if names else "plain_text",
+             "elements": [{"type": "plain_text",
                            "text": text[i:i + _CONTEXT_MAX]}]}
             for i in range(0, len(text), _CONTEXT_MAX)
         )

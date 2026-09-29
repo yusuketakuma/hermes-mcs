@@ -82,6 +82,41 @@ def test_native_client_posts_updates_and_deletes_card():
     asyncio.run(scenario())
 
 
+def test_card_footer_mentions_post_as_names_never_as_mentions():
+    """Slack has no allowed_mentions: the adapter swaps runner <@U…>
+    for users.info display names (cached), or a neutral label when the
+    lookup fails (e.g. missing users:read scope)."""
+    def mention_spec():
+        spec = json.loads(json.dumps(_spec()))
+        spec["parts"]["footer"] = [{"type": "text",
+                                    "text": "✅ 確認: <@U0OP>・<@U0X>"}]
+        spec["parts"]["mentions"] = "silent"
+        return spec
+
+    async def scenario():
+        client = FakeClient()
+        looked = []
+
+        async def users_info(user):
+            looked.append(user)
+            if user == "U0X":
+                raise RuntimeError("missing_scope")
+            return {"ok": True, "user": {"real_name": "本名",
+                                         "profile": {"display_name": "佐藤"}}}
+        client.users_info = users_info
+        adapter = _adapter(client)
+        assert await adapter.bind()
+        for _ in range(2):
+            assert (await adapter.perform(mention_spec()))["result"] \
+                == "delivered"
+        payload = json.dumps(client.calls[1][1], ensure_ascii=False)
+        assert "<@" not in payload and "mrkdwn" not in payload
+        assert "✅ 確認: 佐藤・メンバー" in payload
+        assert sorted(looked) == ["U0OP", "U0X"]   # cached
+
+    asyncio.run(scenario())
+
+
 def test_retrying_native_client_sends_once_without_shared_mutation():
     async def scenario():
         retries = [object()]

@@ -253,9 +253,10 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   押し直すと取消・担当解除になる（古い表示での二度押しは吸収）。フッターの
   人名は `<@id>` メンション。Discord はカードの送信・編集・スレッド本文の
   すべてを `allowed_mentions=none` で送るので名前表示のみで通知は鳴らない。
-  Slack はメンションを含むフッターだけ mrkdwn にし、`<@U…>` 以外の文字は
-  エスケープする（Slack は編集では通知しないが、カードの再投稿時には
-  通知されうる）。`🔗 MCSで開く` は token を持たない URL ボタン
+  Slack には allowed_mentions が無いので、worker が `<@U…>` を
+  `users.info` の表示名（取得できない・`users:read` scope が無い場合は
+  「メンバー」）に置き換え、フッターを plain_text で送る — Slack の
+  カードはメンション構文を一切含まず、再投稿でも通知は鳴らない。`🔗 MCSで開く` は token を持たない URL ボタン
   （Slack はクリック通知を ack するだけ）。
 - `📝 タスク作成`/`🚫 却下`/`⚠ 抽出の誤りを報告` は runner が返す pin 済み
   params + render context から `request.create` / `ops.signal_dismiss` /

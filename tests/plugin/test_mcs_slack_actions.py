@@ -726,6 +726,24 @@ def test_my_tasks_sends_the_name_and_filters_scope(tmp_path):
     asyncio.run(scenario())
 
 
+def test_my_tasks_prefers_users_info_display_name(tmp_path):
+    """body.user.name is the legacy handle — 📋 matches on the
+    users.info display name when the lookup works."""
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path, kind="mytasks")
+
+        async def users_info(user):
+            return {"ok": True, "user": {
+                "name": "sato", "profile": {"display_name": "",
+                                            "real_name": "佐藤 一郎"}}}
+        app.client.users_info = users_info
+        body, action = click()
+        body["user"]["name"] = "sato"
+        await actions._action(ack, body, action)
+        assert command(dirs)["input"] == {"name": "佐藤 一郎"}
+    asyncio.run(scenario())
+
+
 def test_search_modal_submits_query_as_view_click(tmp_path):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path, kind="search")

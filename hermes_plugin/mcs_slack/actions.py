@@ -199,6 +199,15 @@ class Actions:
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
 
+    async def _clicker_name(self, user) -> str:
+        """The clicker's Slack display/real name (users.info, cached by
+        the adapter) for 📋 matching and the 📝 assignee default — the
+        payload's user.name is the legacy handle, used only when the
+        lookup is unavailable (e.g. no users:read scope)."""
+        lookup = getattr(self._sender, "display_name", None)
+        name = await lookup(user["id"]) if lookup else None
+        return name or user.get("name") or user.get("username") or ""
+
     async def _publish(self, envelope):
         await asyncio.to_thread(envelopes.publish_command,
                                 self._dirs["cmd_int"], envelope)
@@ -256,8 +265,8 @@ class Actions:
         if kind not in _KINDS:
             await self._say(origin["channel_id"], user, "操作できません。")
             return
-        clicker = body["user"].get("name") or body["user"].get(
-            "username") or ""
+        clicker = await self._clicker_name(body["user"]) \
+            if kind in ("mytasks", "request") else ""
         env = envelopes.notification(
             token, actor, origin,
             {"name": clicker[:120]} if kind == "mytasks" and clicker
