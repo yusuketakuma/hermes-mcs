@@ -1072,20 +1072,25 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
             with ledger.db:
                 if mcs_signals.record_self_profile(ledger.db, prof):
                     result["self_profile"] = "updated"
-            # the own station roster (task assignee choices) follows the
-            # profile's cadence; a failure keeps the stored roster
-            try:
-                staff = adapter.station_staffs(prof.get("stations") or [])
-                if staff:
-                    with ledger.db:
-                        if mcs_signals.record_station_staff(ledger.db,
-                                                            staff):
-                            result["station_staff"] = "updated"
-            except Exception as e:
-                result["errors"].append(
-                    f"station_staff: {type(e).__name__}")
+            _refresh_station_staff(adapter, ledger, prof, result)
     except Exception as e:
         result["errors"].append(f"self_profile: {type(e).__name__}")
+
+
+def _refresh_station_staff(adapter, ledger, prof, result):
+    """The own station roster (task assignee choices) follows the
+    profile's cadence. Optional data: a failure keeps the stored roster
+    and is reported as ``result["station_staff"]`` — never in
+    ``errors``, so it cannot degrade health on every jobs-only run."""
+    import mcs_signals
+    try:
+        staff = adapter.station_staffs(prof.get("stations") or [])
+        if staff:
+            with ledger.db:
+                if mcs_signals.record_station_staff(ledger.db, staff):
+                    result["station_staff"] = "updated"
+    except Exception as e:
+        result["station_staff"] = f"failed: {type(e).__name__}"
 
 
 def _notify_max_age_s(cfg, result):
