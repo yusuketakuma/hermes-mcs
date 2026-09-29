@@ -28,7 +28,7 @@
 - `preupdate-*` は別 prefix（`maintenance.py:80-104`）で、update_state 未参照のものは日次で削除される（:107-141）。
 - `valid_mcs_db` は `mcs/core/ledger.py:1892-1970`、`publish_snapshot` は :1856-1889。旧 ROADMAP の `:1858-1900` は両者の途中で不正確だった。
 - 暗号化・オフサイトの実装はない。`rg -n 'encrypt|decrypt|cipher|aes|restore_drill' mcs scripts deployment hermes_plugin integration ci tests` は 0 件。旧 ROADMAP の `rg 'encrypt\|restore_drill'` は ripgrep では `\|` がリテラルなので 0 件は当然で、根拠になっていなかった。
-- 制限は明文化済み: `README.md:241-242`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md:164-177`。
+- 制限は明文化済み: `SECURITY.md:57-58`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md:164-177`。
 - 規模: 2026-09-23 の記録で約 76MB・189 患者・15,398 メッセージ（`docs/dev-records/continuation-20260923.md:224`）。現在値は【未確認】。暗号化・転送のコストは小さい。
 - 外部プロセスの前例: `security`（`mcs_adapter.py:720-722`、`mcs_setup.py:587-630`）、`launchctl`（`mcs_util.py:351-373`）、`git`、`hermes`（`notify_flush.py:64-66,654`）。`gate_stdlib_only`（`ci/gates.py:96-122`）が見るのは Python の import だけで、core の subprocess は禁止されていない（禁止は plugin の subprocess: `ci/gates.py:174-`）。
 - 【実行確認】OS 同梱の `/usr/bin/openssl` は LibreSSL 3.3.6、PATH 先頭の Homebrew は OpenSSL 3.6.4。cron wrapper は PATH を `$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin` に固定する（`deployment/scripts/mcs_check.sh:7-8`）ので、実行時は LibreSSL になる。
@@ -56,7 +56,7 @@
 **成果物**
 - 新規: `mcs/ops/mcs_backup.py`（`keygen` / `offsite` / `verify` / `drill` / `restore` / `status`）、`deployment/scripts/mcs_offsite.sh`、`tests/ops/test_mcs_backup.py`。
 - 変更: `mcs/core/maintenance.py`（ハッシュ・原子コピー・世代 prune の補助）、`mcs/ops/mcs_setup.py`（`CONFIG_RULES` に `backup` 追加、`_validate_backup`、`check` の probe、`_keychain_store` の service 引数化）、`mcs/ingest/run_check.py`（health）、`deployment/launchagents/README.md`、`tests/meta/test_deployment_scripts.py`。
-- 文書: `README.md:241`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md`、`docs/INSTALLATION.md`、`docs/DEVELOPMENT.md`（`scripts/update_readme.py` で再生成）。
+- 文書: `SECURITY.md:57-58`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md`、`docs/INSTALLATION.md`、`docs/DEVELOPMENT.md`（`scripts/update_readme.py` で再生成）。
 - `AGENTS.md`: OS 同梱 `/usr/bin/openssl` を許可する 1 行の例外（#1-D4 の承認が前提）。
 
 **受入条件とテスト（合成のみ）**

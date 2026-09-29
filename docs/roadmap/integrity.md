@@ -182,7 +182,7 @@ PRAGMA foreign_key_check; PRAGMA quick_check;
 名称:
 - `possibly_deleted`（`rollup.py:211-216`）は、`updated_seen` が「先頭メッセージの `updated_seen` − 21 日」より古い先頭 20 件。削除の証拠ではなく、tombstone（`body_state='deleted'`）も区別しない。reconcile が一巡していない履歴や NULL の旧行（`or 0`）も入る。挙動のテストがない（fixture の `[]` だけ: `tests/ops/test_brain_export.py:93,235`）。
 - `current_med_period`（`rollup.py:142-145,186,220-268`）は、extract_v1 の規則正規表現による日付範囲のうち、start ≤ 当日 ≤ end かつ前後 16 字に 予定 | 検討 がない最初の 1 件。どの薬かは不明で、後続の「中止」で取り消されない（`med_state` とは独立）。
-- 露出面: `brain_export.py:197-199,227-228`、`README.md:83,456-458`、`docs/DEVELOPMENT.md:202-203`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
+- 露出面: `brain_export.py:197-199,227-228`、`docs/USER_GUIDE.md:72,312-314`、`docs/DEVELOPMENT.md:202-203`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
 - 接続側: `message` の allowlist は `export_schema.py:137-147`、`_BASE` の contract enum は :105。同一性は `type+project_id+message_id+content_hash`（ROADMAP §4）で、編集は新 identity になる。現状でも stale と新 hash で表現できる（`read_model.py:68-113,193-206`）。signal の note は「確定ではありません」と書くが（`mcs_signals.py:405-426`）、集約スコープでは出ないため、`rx_period_expiry` / `pharmacist_request_unanswered` / `med_change_no_followup` は enum 名だけが届く。
 
 **設計方針**
@@ -212,13 +212,13 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 
 (2) read-model: 変更しないのを推奨する。変更するなら、C0 の fixture 固定前に `prev_content_hash`（hash だけ）を allowlist へ追加する。receiver は未知キーを拒否するため、固定後は `/2` が必要。同一 `(project_id, message_id)` で新 generation・別 hash が来たら旧 identity を supersede する、という規則を C0 契約に明記する。
 
-(3) 命名: `current_med_period` → `med_period_candidate`、`possibly_deleted` → `unrefreshed_message_ids`（提案名）。brain_export の見出しと注記に「規則抽出・未確認」「削除の証拠ではない（tombstone は `coverage.collection.deleted`）」を入れる。README と DEVELOPMENT を直す。`PERIOD_CHECK_VERSION` を 2 → 3 にする（`rollup.py:47`）。旧キーを持つ rollup は一度 tick で再構築される（`run_check.py:709-710`。全患者を 1 tick で再構築するコストは【未検証】）。brain_export は移行期に新旧キーの両方を読む。`possibly_deleted` の挙動テストを新設する（現状なし）。
+(3) 命名: `current_med_period` → `med_period_candidate`、`possibly_deleted` → `unrefreshed_message_ids`（提案名）。brain_export の見出しと注記に「規則抽出・未確認」「削除の証拠ではない（tombstone は `coverage.collection.deleted`）」を入れる。USER_GUIDE と DEVELOPMENT を直す。`PERIOD_CHECK_VERSION` を 2 → 3 にする（`rollup.py:47`）。旧キーを持つ rollup は一度 tick で再構築される（`run_check.py:709-710`。全患者を 1 tick で再構築するコストは【未検証】）。brain_export は移行期に新旧キーの両方を読む。`possibly_deleted` の挙動テストを新設する（現状なし）。
 
 (4) wire の enum（#8-D2）: A = enum 名を維持し、契約文書に「意味と caveat」の表を置き、C0 fixture に honesty ラベルを付ける。B = C0 前に改名する（例 `rx_period_expiry` → `rx_period_mention_expiry`）。C0 が未固定の今なら無償。
 
 **成果物**
 - `ledger.py`（DDL + 約 20 行）と `tests/core/test_message_revisions.py`。
-- `rollup.py` と `brain_export.py` の改名、docs（README、DEVELOPMENT、CHANGELOG）、`possibly_deleted` の新テスト。
+- `rollup.py` と `brain_export.py` の改名、docs（USER_GUIDE、DEVELOPMENT、CHANGELOG）、`possibly_deleted` の新テスト。
 - (4) は `docs/external-export-contract.md` への semantics 表。
 
 **受入条件とテスト（合成のみ）**
@@ -259,14 +259,14 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 - 既存の安全網は日次 backup と `quick_check`（`maintenance.py:47-77`、`ledger.py:1892+`、7 世代）。
 
 **設計方針**
-- `mcs_setup.py:383` の `check_environment` に probe を追加する（in-process と、HERMES_PY が別なら subprocess）。`README.md:633` の実行は HERMES_PY で、Makefile の `setup-check` は ambient python になるため、両方を見る。
+- `mcs_setup.py:383` の `check_environment` に probe を追加する（in-process と、HERMES_PY が別なら subprocess）。`docs/INSTALLATION.md:159` の実行は HERMES_PY で、Makefile の `setup-check` は ambient python になるため、両方を見る。
 - 判定は `v >= (3,51,3) or (3,50,7) <= v < (3,51,0) or (3,44,6) <= v < (3,45,0)`。重大度は **warn**（sqlite.org が緊急でないとしているため）。
 - 古い場合の是正: (1) runtime を更新する（hermes 更新、または fixed 版の Python）。(2) resident agent を再起動する（`mcs_setup.py services`）。(3) 再度 `check`。
 - 暫定対応: 日次 backup の quick_check に頼る。手動の `sqlite3` CLI で live DB に書かない（`-readonly` だけ）。DELETE journal への退避は最終手段（writer と reader が競合し、停止時だけ変更可なので、オーナー判断）。
 - watchdog は stdlib だけ・system Python で動く独立性が要件のため、差し替えず「restore 時だけ rw」として記録する。
 
 **成果物**
-- `wal_reset_safe()` と `_sqlite_probe()`、`check_environment` への追記（約 30 行）。`tests/ops/test_mcs_setup.py` への追加。`docs/INSTALLATION.md` に SQLite 要件の行、README の check 節、`CHANGELOG.md`。
+- `wal_reset_safe()` と `_sqlite_probe()`、`check_environment` への追記（約 30 行）。`tests/ops/test_mcs_setup.py` への追加。`docs/INSTALLATION.md` に SQLite 要件の行と check 節（A-4）、`CHANGELOG.md`。
 
 **受入条件とテスト（合成のみ）**
 - 15 ケースの表: (3,51,2) F、(3,51,3) T、(3,50,6) F、(3,50,7) T、(3,44,5) F、(3,44,6) T、(3,45,0) F ほか。
