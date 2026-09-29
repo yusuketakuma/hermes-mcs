@@ -544,7 +544,7 @@ $PY mcs/views/mcs_view.py receipt --project 123 --command-id UUID --payload-hash
 ## 検証
 
 ```bash
-scripts/run_tests.sh                  # tests/ 全件 (一時HOME・一時DB+スタブのみ)
+scripts/run_tests.sh                  # tests/ + integration/ の合成テスト全件 (test_hermes_* は hermes-agent が無ければ収集対象外。一時HOME・一時DB+スタブのみ)
 make lint                            # CIと同じ範囲・ruff設定
 ```
 
