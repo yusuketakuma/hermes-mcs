@@ -817,20 +817,27 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
     if not start:
         ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
     post_files = files
+
+    def gate(i, payload) -> bool:
+        """Last-moment pre-chunk gate, re-evaluated before a retry."""
+        if ev["kind"] == "semantic_notice":
+            _semantic_gate(ledger, ev, payload,
+                           in_progress=bool(start or i))
+            return True
+        return not render_state or _base_render_gate_ok(
+            ledger, ev, render_state, bool(start or i), res)
+
     for i in range(start, len(chunks)):
         if deadline is not None and time.monotonic() >= deadline:
             return False
+        payload = None
         if ev["kind"] == "semantic_notice":
             try:
                 payload = json.loads(ev["payload"])
             except (json.JSONDecodeError, TypeError) as e:
                 raise ValueError("payload_invalid") from e
-            _semantic_gate(ledger, ev, payload,
-                           in_progress=bool(start or i))
-        elif render_state:
-            if not _base_render_gate_ok(ledger, ev, render_state,
-                                        bool(start or i), res):
-                return True
+        if not gate(i, payload):
+            return True
         # files ride the FIRST post only; on resume (start>0) they
         # were already delivered with chunk 0. A usage rejection
         # of the file-bearing send (exit 2 — never a delivery
@@ -846,13 +853,8 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             if i != 0 or not post_files:
                 raise
             post_files = None
-            if ev["kind"] == "semantic_notice":
-                _semantic_gate(ledger, ev, payload,
-                               in_progress=bool(start or i))
-            elif render_state:
-                if not _base_render_gate_ok(ledger, ev, render_state,
-                                            bool(start or i), res):
-                    return True
+            if not gate(i, payload):
+                return True
             _send_marked(ledger, ev, i, sent_ids, fingerprint,
                          argv, chunks[i], None, deadline)
         sent_ids.append(str(i + 1))
