@@ -189,7 +189,11 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
 カード操作の認可は `allowed_user_ids` **または** `allowed_role_ids`
 （押した人の guild ロールのいずれか）＋ `allowed_chat_ids` ＋ project。
 `allowed_role_ids` は `/mcs` コマンドと install 全体の承認には効かない。
-`mcs_setup.py init --plugin-role-ids 111,222` で書き込める。許可されない
+`mcs_setup.py init --plugin-role-ids 111,222` で書き込める。guild ID と
+同じ値は @everyone ロールなので、init は拒否し、worker も認可に使わない
+（設定・クリック時の両方で除外）。ロールは member キャッシュから読むため、
+ロールが取れないメンバーはロール付与なしとして扱う（fail closed —
+`allowed_user_ids` だけで判定）。許可されない
 クリックには本人だけに「権限がありません。」を返す（無応答にしない）。
 
 `data_root` には runner が管理する `discord_render/` `discord_state/` `flags/`

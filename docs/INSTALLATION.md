@@ -317,7 +317,8 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   `python3 mcs/ops/mcs_setup.py init --plugin-role-ids <role id>[,<role id>]`
   （または `hermes -p <profile> config set
   plugins.entries.mcs-discord-commands.settings.allowed_role_ids
-  '["<role id>"]'`）。ユーザー単位なら `allowed_user_ids` に列挙する。
+  '["<role id>"]'`）。guild ID（@everyone ロール）は指定できない。
+  ロールを取得できないメンバーは許可されない（fail closed）。ユーザー単位なら `allowed_user_ids` に列挙する。
   いずれも設定後に `hermes gateway restart`。Slack は
   `slack_allowed_user_ids` に複数の member ID を列挙する
 - Slack カードを使う場合は `notify.interactive="slack"` +

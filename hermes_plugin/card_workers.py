@@ -34,14 +34,16 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     # cards like an allowed user (invalid/absent -> no role grants)
     roles = _config_ids(ctx.get_config("allowed_role_ids", None),
                         projects=False) or frozenset()
+    guild_id = (ctx.get_config("guild_id", None) or "").strip() or None
+    # the guild id is the @everyone role — never a grant
+    roles = frozenset(r for r in roles if str(r) != guild_id)
     return {**settings, "data_root": data_root.strip(),
             "allowed_role_ids": roles,
             "profile": ctx.get_config("profile", None)
             or getattr(ctx, "profile_name", None) or "default",
             "application_id": str(application_id).strip(),
             "channel_id": channel_id.strip(),
-            "guild_id": (ctx.get_config("guild_id", None) or "").strip()
-            or None}
+            "guild_id": guild_id}
 
 
 def _event_logger(name: str):

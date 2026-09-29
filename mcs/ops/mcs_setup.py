@@ -1035,8 +1035,18 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     roles = getattr(args, "plugin_role_ids", None)
     if transport == "discord" and roles:
         lit = roles if roles.lstrip().startswith("[") else _csv_yaml(roles)
-        if _hermes_config_set(exe, profile,
-                              f"{PLUGIN_SETTINGS}.allowed_role_ids", lit):
+        try:
+            role_ids = {str(r).strip() for r in json.loads(lit)}
+        except (ValueError, TypeError):
+            role_ids = set()
+        if nd.get("guild_id") and str(nd["guild_id"]) in role_ids:
+            # the guild id IS the @everyone role — every member would pass
+            print("  settings.allowed_role_ids: guild_id（@everyone ロール）"
+                  "は指定できません")
+            missing.append("allowed_role_ids")
+            failed = True
+        elif _hermes_config_set(exe, profile,
+                                f"{PLUGIN_SETTINGS}.allowed_role_ids", lit):
             print("  settings.allowed_role_ids: 設定")
         else:
             missing.append("allowed_role_ids")

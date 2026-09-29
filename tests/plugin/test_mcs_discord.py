@@ -2710,6 +2710,15 @@ def test_role_member_can_click_and_others_are_told(world):
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notification_acknowledgements"
     ).fetchone()[0] == 0
+    # the guild id is the @everyone role every member holds — a config
+    # that lists it never grants anyone
+    act._settings = {**SETTINGS, "allowed_role_ids": {"7"}}
+    everyone = FakeInteraction(f"mcs:a:{world.token(spec, 'ack')}",
+                               user_id=3005, message_id=msg.id)
+    everyone.user = SimpleNamespace(id=3005, roles=[SimpleNamespace(id=7)])
+    asyncio.run(world.interact(act, everyone))
+    assert everyone.response.message["content"] == "権限がありません。"
+    act._settings = {**SETTINGS, "allowed_role_ids": {"555"}}
     # a pending followup keeps the role it was authorized by — and
     # loses it when the role leaves allowed_role_ids
     rec = {"actor": "discord:3003", "roles": ["555"], "origin": {
