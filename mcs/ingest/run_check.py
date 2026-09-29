@@ -1107,6 +1107,13 @@ def _deliver(ledger, args, cfg, result, deadline):
     """Committed sends first — notify outbox flush, live-card sweep and
     card gc — ahead of any new semantic analysis (§19.1)."""
     import notify_cards
+    import notify_digest
+    try:
+        # 🌅 queued even under --no-notify; the next flush sends it
+        if notify_digest.maybe_enqueue(ledger, cfg):
+            result["daily_digest"] = 1
+    except Exception as e:
+        result["errors"].append(f"daily_digest: {type(e).__name__}")
     if not args.no_notify:
         try:
             # ⏰ due/overdue task reminders join this tick's flush

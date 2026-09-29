@@ -304,7 +304,13 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
-    if ev["kind"] in ("update_notice", "task_reminder"):
+    if ev["kind"] == "daily_digest":
+        # frozen at enqueue (ids and counts only); turning the digest
+        # off drops a still-queued one instead of sending it late
+        import notify_digest
+        if notify_digest.settings(_config()) is None:
+            raise _StaleSend("daily_digest_disabled")
+    if ev["kind"] in ("update_notice", "task_reminder", "daily_digest"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.
         text = payload.get("text")

@@ -18,6 +18,17 @@ def test_minimal_valid_config():
     assert errors == []
 
 
+def test_daily_digest_block_is_typed():
+    base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs"}
+    errors, warnings = mcs_setup.validate_config(
+        {**base, "daily_digest": {"enabled": True, "hour_jst": 8}})
+    assert errors == [] and warnings == []
+    errors, _ = mcs_setup.validate_config(
+        {**base, "daily_digest": {"enabled": "yes", "hour_jst": 24}})
+    assert errors == ["daily_digest.enabled: must be a boolean",
+                      "daily_digest.hour_jst: must be an integer in [0,23]"]
+
+
 @pytest.mark.parametrize("value", [float("inf"), float("nan"), 10 ** 400])
 def test_unbounded_numeric_config_is_rejected(value):
     errors, _ = mcs_setup.validate_config({
