@@ -553,7 +553,8 @@ def guard(ledger, token: JobToken, *, deadline: float,
 
 
 __all__ = [
-    "JobToken", "RuntimeBudget", "RuntimeGuardError", "RuntimeOff",
+    "JobToken", "LLMNotSent", "RuntimeBudget", "RuntimeGuardError",
+    "RuntimeOff",
     "RuntimeStale", "bind_jev", "config_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
