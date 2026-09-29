@@ -1760,10 +1760,12 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return {**base, "outcome": "applied", "action": "summary",
                 "title": title, "body": text}
     if action == "mytasks":
-        view = my_tasks_view(db, (req.get("input") or {}).get("name"), now)
+        view = my_tasks_view(db, (req.get("input") or {}).get("name"), now,
+                             (req.get("input") or {}).get("projects"))
         return {**base, "outcome": "applied", "action": "list", "list": view}
     if action == "unacked":
-        view = unacked_view(db, card["transport"], now)
+        view = unacked_view(db, card["transport"], now,
+                            (req.get("input") or {}).get("projects"))
         return {**base, "outcome": "applied", "action": "list", "list": view}
     if action == "search":
         query = (req.get("input") or {}).get("query")

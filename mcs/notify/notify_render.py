@@ -703,9 +703,19 @@ def _limit(items) -> tuple:
     return items[:LIST_FETCH], max(0, len(items) - LIST_FETCH)
 
 
-def my_tasks_view(db, name, now=None) -> dict:
+def _in_scope(rows, projects) -> list:
+    """Rows inside the plugin's project scope (None = unscoped) — the
+    head counts must never include projects the plugin hides."""
+    if projects is None:
+        return list(rows)
+    allowed = set(projects)
+    return [r for r in rows if r["project_id"] in allowed]
+
+
+def my_tasks_view(db, name, now=None, projects=None) -> dict:
     """📋 open/in-progress requests whose assignee is the clicker's
-    display name — overdue first, then by due date, undated last."""
+    display name — overdue first, then by due date, undated last.
+    ``projects`` limits rows (and counts) to the plugin's scope."""
     today = today_jst(now)
     notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と"
              "一致するタスクだけを表示します。手入力の別表記・略称のタスクは"
@@ -716,10 +726,10 @@ def my_tasks_view(db, name, now=None) -> dict:
     if not _norm_name(name):
         out["empty"] = "表示名を取得できないため、担当タスクを特定できません。"
         return out
-    rows = [r for r in db.execute(
+    rows = [r for r in _in_scope(db.execute(
         "SELECT request_id,project_id,title,assignee,due_date,status "
         "FROM requests WHERE status IN ('open','in_progress') "
-        "ORDER BY request_id").fetchall()
+        "ORDER BY request_id").fetchall(), projects)
         if assignee_matches(r["assignee"], name)]
 
     def overdue(r):
@@ -756,7 +766,7 @@ def _discord_link(card) -> str | None:
 UNACKED_WINDOW_S = 7 * 86400
 
 
-def unacked_view(db, transport, now=None) -> dict:
+def unacked_view(db, transport, now=None, projects=None) -> dict:
     """🗂 delivered thread/signal cards updated within the window whose
     current content carries no live acknowledgement, grouped by patient
     (oldest card's patient first), oldest first; assigned-but-unconfirmed
@@ -783,6 +793,7 @@ def unacked_view(db, transport, now=None) -> dict:
                               ORDER BY manifest_id DESC LIMIT 1))
            ORDER BY c.created_at, c.card_id""",
         (transport, now - UNACKED_WINDOW_S)).fetchall()
+    rows = _in_scope(rows, projects)
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)

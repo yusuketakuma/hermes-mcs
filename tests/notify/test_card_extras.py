@@ -117,6 +117,30 @@ def test_my_tasks_matches_display_name_overdue_first(led):
     assert all("list" not in s for s in stored)
 
 
+def test_list_counts_respect_the_plugin_project_scope(led):
+    """Head counts cover only the projects the plugin may show — the
+    plugin's static project list rides in input.projects."""
+    spec = _card(led)
+    led.db.execute("INSERT INTO patients(project_id,patient_name,"
+                   "is_archived) VALUES(2,'患者B',0)")
+    _request(led, "範囲内", "山田", "2026-01-01")
+    _request(led, "範囲外", "山田", "2026-01-01", pid=2)
+    view = _click(led, spec, "mytasks",
+                  {"name": "山田", "projects": [1]})["list"]
+    assert view["head"] == ["未完了 1件（うち期限切れ 1件）"]
+    assert [i["project_id"] for i in view["items"]] == [1]
+    assert _click(led, spec, "mytasks", {"name": "山田"})["list"]["head"] \
+        == ["未完了 2件（うち期限切れ 2件）"]
+    view = _click(led, spec, "unacked", {"projects": [2]})["list"]
+    assert view["head"] == ["未確認 0件（うち担当者あり 0件）"]
+    for bad in ({"projects": []}, {"projects": ["1"]}, {"projects": [0]},
+                {"projects": 1}, {"projects": [1] * 1001}):
+        req = {"version": 1, "op": "notification", "command_id": "x:y",
+               "actor": A, "token": "a" * 32, "input": bad,
+               "origin": dict(ORIGIN, message_id="m-9")}
+        assert notify_cmds.validate_int(req) is not None
+
+
 def test_my_tasks_without_name_says_why(led):
     spec = _card(led)
     _request(led, "件", "山田")

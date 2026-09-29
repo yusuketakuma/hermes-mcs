@@ -153,13 +153,23 @@ def _origin(v, slack=False) -> bool:
         and _opt_text(v.get("profile"), 200)
 
 
+SCOPE_MAX = 1000
+
+
 def _input(v) -> bool:
-    """Typed input of a view click — the 🔎 keyword or the clicker's
-    display name for 📋. The plugin folds it into the command_id suffix
-    so a new input never collides with an earlier receipt."""
-    return isinstance(v, dict) and bool(v) \
-        and v.keys() <= {"query", "name"} \
-        and all(_text(x, 120) for x in v.values())
+    """Typed input of a view click — the 🔎 keyword, the clicker's
+    display name for 📋, and ``projects`` (the plugin's static project
+    scope for 📋/🗂 counts). The plugin folds it into the command_id
+    suffix so a new input never collides with an earlier receipt."""
+    if not isinstance(v, dict) or not v \
+            or v.keys() - {"query", "name", "projects"}:
+        return False
+    scope = v.get("projects")
+    if scope is not None and not (
+            isinstance(scope, list) and 0 < len(scope) <= SCOPE_MAX
+            and all(type(p) is int and 0 < p < 2 ** 63 for p in scope)):
+        return False
+    return all(_text(x, 120) for k, x in v.items() if k != "projects")
 
 
 def validate_int(req) -> str | None:

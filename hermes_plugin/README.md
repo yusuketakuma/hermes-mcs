@@ -285,11 +285,14 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   （ephemeral 応答のみ、状態を変えない）。runner は `action:"list"` と
   `list`（`title`/`head`/`items[{project_id, group?, text}]`/`more`/`empty`/
   `notes`）を返し、plugin は `items` を `project_ids`（`project_ids_auto`）で
-  絞ってから `text.list_messages()` で 15 件＋「他N件」に整形する。runner は
-  plugin の project scope を知らないため、この絞り込みは plugin の責務。
+  絞ってから `text.list_messages()` で 15 件＋「他N件」に整形する。
+  見出しの件数が範囲外の project を数えないよう、📋・🗂 のクリックは
+  静的な `project_ids`（`project_ids_auto` のときは送らない）を
+  `input.projects` で渡し、runner はその範囲で数えて返す（plugin 側の
+  絞り込みは多重防御として残す）。
   入力を伴うクリックは notification envelope の任意フィールド `input`
   （`{"name"}` = 📋 の押した人の表示名、`{"query"}` = 🔎 のキーワード、各
-  120 字以内）で渡し、`command_id` の後半を actor＋input のハッシュにする
+  120 字以内。`{"projects"}` = 正の整数の配列、1000 件以内）で渡し、`command_id` の後半を actor＋input のハッシュにする
   （入力が変わっても前回の receipt と衝突しない）。🔎 はクリックで検索
   モーダルを開き、送信で同じ card token を `input.query` 付きで再送する
   （preview/確認なし。待ち時間を超えた結果は他の view 操作と同じく

@@ -339,10 +339,14 @@ class Actions:
 
         # everything else: type-6 defer, then the notification command
         await interaction.response.defer()
+        inputs = {}
         name = _display_name(interaction)[:120]
-        env = envelopes.notification(
-            token, actor, origin,
-            {"name": name} if action == "mytasks" and name else None)
+        if action == "mytasks" and name:
+            inputs["name"] = name
+        scope = projects.static_scope(self._settings)
+        if action in ("mytasks", "unacked") and scope:
+            inputs["projects"] = scope
+        env = envelopes.notification(token, actor, origin, inputs or None)
         cid = env["request_id"]
         result, published = await self._dispatch_notification(
             interaction, env)

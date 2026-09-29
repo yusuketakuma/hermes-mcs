@@ -271,10 +271,13 @@ class Actions:
             return
         clicker = await self._clicker_name(body["user"]) \
             if kind in ("mytasks", "request") else ""
-        env = envelopes.notification(
-            token, actor, origin,
-            {"name": clicker[:120]} if kind == "mytasks" and clicker
-            else None)
+        inputs = {}
+        if kind == "mytasks" and clicker:
+            inputs["name"] = clicker[:120]
+        scope = projects.static_scope(self._settings)
+        if kind in ("mytasks", "unacked") and scope:
+            inputs["projects"] = scope
+        env = envelopes.notification(token, actor, origin, inputs or None)
         try:
             await self._publish(env)
         except (OSError, ValueError):
