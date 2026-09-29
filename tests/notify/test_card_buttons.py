@@ -172,6 +172,13 @@ def test_assign_toggle_takeover_and_release(led, tmp_path):
     assert "👤 担当: <@1001>" in _footer(spec2)
     # double tap on the old face: still assigned, nothing new rendered
     assert _click(led, spec1, "assign", now=NOW + 2)["absorbed"] is True
+    # another member on the face that predates A's assignment does not
+    # silently take over — stale, refresh
+    r = _click(led, spec1, "assign", actor=B, now=NOW + 2)
+    assert (r["outcome"], r["error"], r["hint"]) == (
+        "rejected", "stale_ui", "refresh")
+    assert led.db.execute("SELECT owner FROM notification_triage"
+                          ).fetchone()[0] == A
 
     _deliver(led)
     r = _click(led, spec2, "assign", actor=B, now=NOW + 3)   # takeover
