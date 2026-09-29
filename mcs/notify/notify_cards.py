@@ -884,6 +884,22 @@ def _render_gates(db, card_id, cfg):
     return card
 
 
+def _parts_in_flight(db, latest) -> bool:
+    """The card message itself is delivered but thread body chunks or
+    attachments of that render are still pending. An update names the posts that
+    already carry each part (``prior_remote_id``) — issued before those
+    receipts land it would know none and post every chunk and file a
+    second time — so it waits for the parts to settle and a later sweep
+    issues it. A render that never reached the wire (queued) is not
+    waited on, and neither are create/revoke renders."""
+    if latest is None or latest["state"] != "delivered":
+        return False
+    return db.execute(
+        "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
+        "AND kind IN ('body_part','attachment_part') AND state='pending' "
+        "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
+
+
 def _generation_drift(card, content) -> dict:
     """Source/presentation fingerprint diff — the first observation
     seeds each baseline without a generation bump."""
@@ -1108,6 +1124,8 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     op = _render_op(card)
     if op is None:
         return None
+    if op == "update" and _parts_in_flight(db, latest):
+        return None                        # a later sweep issues it
     rev = (latest["render_rev"] + 1) if latest is not None else 1
     _cancel_open_renders(db, card_id, now)
     spec = _build_spec(db, card, content, gens, op, rev, cfg, now)

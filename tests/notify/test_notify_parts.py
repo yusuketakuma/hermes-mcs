@@ -644,6 +644,62 @@ def test_update_plan_follows_the_newest_post_of_a_chunk(led):
     assert _prior_ids(r3) == {"body:0001": "msg-2"}
 
 
+def test_update_waits_until_the_previous_parts_have_landed(led):
+    """Production race: the card receipt lands, the source changes (the
+    extraction arrives) and the update is planned before the body chunk's
+    own receipt — so it named no earlier post and the chunk went out a
+    second time. The update now waits for the parts, then names the post."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    grant = _begin(led, r1, n=140)
+    _receipt(led, r1, grant["attempt_id"], message_id="m-9", n=141)
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    assert _latest_render(led)["delivery_id"] == r1["delivery_id"]
+    _part_receipt(led, r1, "thread", remote_id="t-1", n=142)
+    _part_receipt(led, r1, "body:0001", remote_id="msg-1", n=143)
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+
+
+def test_sweep_issues_the_held_update_once_the_parts_land(led):
+    """The deferred update needs no new event: a source change seen while
+    the parts were in flight is issued by a later sweep."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    grant = _begin(led, r1, n=160)
+    _receipt(led, r1, grant["attempt_id"], message_id="m-9", n=161)
+    led.db.execute("UPDATE messages SET body_text=?, content_hash=? "
+                   "WHERE message_id=100", ("編集後の本文", "hash-edited"))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert _latest_render(led)["delivery_id"] == r1["delivery_id"]
+    _part_receipt(led, r1, "thread", remote_id="t-1", n=162)
+    _part_receipt(led, r1, "body:0001", remote_id="msg-1", n=163)
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+
+
+def test_a_failed_part_does_not_hold_the_next_render(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    grant = _begin(led, r1, n=150)
+    _receipt(led, r1, grant["attempt_id"], message_id="m-9", n=151)
+    _part_receipt(led, r1, "thread", remote_id="t-1", n=152)
+    _part_receipt(led, r1, "body:0001", result="not_sent", remote_id=None,
+                  error_code="http_500", n=153)
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    assert _latest_render(led)["op"] == "update"
+
+
 def test_no_second_card_post_semantics(led):
     """Render-level guarantee: body-part failure settles no card part —
     a subsequent tick issues no new create render to rescue the body."""

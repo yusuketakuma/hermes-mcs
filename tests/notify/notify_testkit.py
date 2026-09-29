@@ -106,6 +106,17 @@ def _begin(led, render, n=1, worker="bb" * 8, cfg=CFG):
         **SCOPE}, cfg, now=NOW)
 
 
+def _settle_bodies(led, render):
+    """The companion-thread body chunks and attachments of a delivered
+    render land — an update waits while they are still pending."""
+    led.db.execute(
+        "UPDATE notification_render_parts SET state='delivered',"
+        "remote_id=COALESCE(remote_id,'r-'||part_id) WHERE delivery_id=? "
+        "AND kind IN ('body_part','attachment_part') AND state='pending'",
+        (render["delivery_id"],))
+    led.db.commit()
+
+
 def _receipt(led, render, attempt_id, result="delivered",
              message_id="m-1", error_code=None, n=9):
     req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(n),
