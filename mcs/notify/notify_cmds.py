@@ -6,7 +6,8 @@ read -> validate -> dispatch -> publish a result file under
 data/cmd_results/ -> consume. Transport begins establish durable grants
 before receipts settle them; interactions run after these dependencies.
 
-Human commands (request.create / ops.signal_dismiss) are forwarded to
+Human commands (request.create / ops.signal_dismiss /
+ops.extract_feedback) are forwarded to
 the existing mcs_requests.apply_command with tighter requirements than
 the data/cmd path (reason mandatory; the dismissal must pin the
 artifact it saw) — the card UX can never weaken the human gate.
@@ -27,7 +28,7 @@ from mcs_requests import canonical, positive, valid_hash, valid_uuid
 _RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
 TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
 NOTIFY_OPS = ("notification", "refresh")
-HUMAN_CMDS = ("request.create", "ops.signal_dismiss")
+HUMAN_CMDS = ("request.create", "ops.signal_dismiss", "ops.extract_feedback")
 _VALID_OPS = frozenset(TRANSPORT_OPS) | frozenset(NOTIFY_OPS)
 
 _TOKEN_COMMAND_ID = re.compile(r"^[0-9a-f]{32}:[0-9a-f]{16}$")
@@ -315,7 +316,17 @@ def dispatch(ledger, req, cfg, root, now=None):
         if error:
             return {"outcome": "rejected", "error": error,
                     "command_id": req.get("command_id")}
-        return mcs_requests.apply_command(ledger, req)
+        out = mcs_requests.apply_command(ledger, req)
+        if out.get("outcome") == "applied" \
+                and req.get("cmd") in ("request.create",
+                                       "ops.extract_feedback"):
+            # the anchored card's footer lists open tasks / the ⚠ mark —
+            # re-render that card now; the drain's bounded sweep may not
+            # reach it among many live cards
+            notify_cards.rerender_message_cards(
+                ledger, cfg, req["project_id"],
+                req.get("source_message_id") or req.get("message_id"))
+        return out
     return {"outcome": "rejected", "error": "unknown_op"}
 
 

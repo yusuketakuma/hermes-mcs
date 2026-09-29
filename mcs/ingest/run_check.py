@@ -1072,6 +1072,18 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
             with ledger.db:
                 if mcs_signals.record_self_profile(ledger.db, prof):
                     result["self_profile"] = "updated"
+            # the own station roster (task assignee choices) follows the
+            # profile's cadence; a failure keeps the stored roster
+            try:
+                staff = adapter.station_staffs(prof.get("stations") or [])
+                if staff:
+                    with ledger.db:
+                        if mcs_signals.record_station_staff(ledger.db,
+                                                            staff):
+                            result["station_staff"] = "updated"
+            except Exception as e:
+                result["errors"].append(
+                    f"station_staff: {type(e).__name__}")
     except Exception as e:
         result["errors"].append(f"self_profile: {type(e).__name__}")
 
@@ -1094,12 +1106,19 @@ def _notify_max_age_s(cfg, result):
 def _deliver(ledger, args, cfg, result, deadline):
     """Committed sends first — notify outbox flush, live-card sweep and
     card gc — ahead of any new semantic analysis (§19.1)."""
+    import notify_cards
     if not args.no_notify:
+        try:
+            # ⏰ due/overdue task reminders join this tick's flush
+            n = notify_cards.task_reminders(ledger, cfg)
+            if n:
+                result["task_reminders"] = n
+        except Exception as e:
+            result["errors"].append(f"task_reminders: {type(e).__name__}")
         try:
             result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception as e:
             result["errors"].append(f"notify: {type(e).__name__}")
-    import notify_cards
     try:
         # live-card sweep: edits/deletes, signal resolves, archive
         # revokes, deferral expiry, stuck spec repair — bounded

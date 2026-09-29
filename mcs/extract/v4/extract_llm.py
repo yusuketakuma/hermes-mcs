@@ -36,7 +36,8 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
 from ledger import Ledger
-from mcs_queries import (current_extract_pred, current_qc_pred,
+from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
+                         current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_success, disk_floor_mb, disk_free_mb,
@@ -1624,12 +1625,28 @@ def _thin_retry_content(ledger, row) -> str | None:
     return source["content"] if source is not None else None
 
 
+def _human_flagged_sql(val: str = "h.artifact_id") -> str:
+    """A human ⚠ report (extract_feedback_v1, card button) pinned to the
+    message's CURRENT extract artifact re-pends it for exactly one
+    re-extract — the replacement artifact carries a new id, so the
+    report no longer pins the current row and the loop ends. Parallel
+    to the QC single-retry, never gated by it."""
+    return f"""SELECT {val} FROM artifacts h
+        JOIN artifacts c ON c.artifact_id=json_extract(
+               {json_or_null('h.content')},'$.artifact_id')
+        WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'
+          AND h.message_id=m.message_id
+          AND c.kind='{KIND}' AND c.message_id=m.message_id
+          {current_extract_pred('c')}
+        ORDER BY h.artifact_id DESC LIMIT 1"""
+
+
 def pending_pred() -> str:
     """Shared body-current extraction and quality-retry eligibility."""
     return f"""m.body_text IS NOT NULL AND m.body_text != ''
         AND (m.body_state IS NULL OR m.body_state='full')
         AND {current_v4_id()} IS NULL
-        AND NOT EXISTS (SELECT 1 FROM artifacts f
+        AND ((NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}
                           AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
@@ -1639,7 +1656,8 @@ def pending_pred() -> str:
                           {current_extract_pred()}
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
              OR EXISTS ({_qc_flagged_sql(val="1")})
-             OR EXISTS ({_thin_pending_sql()}))"""
+             OR EXISTS ({_thin_pending_sql()})))
+             OR EXISTS ({_human_flagged_sql(val="1")}))"""
 
 
 # Exactly the verdicts _qc_feedback turns into notes — a looser SQL
@@ -2171,6 +2189,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
              m.parent_id, m.posted_at, m.posted_at_ts,
              ({_qc_flagged_sql()}) AS qc_src,
              ({_thin_pending_sql()}) AS thin_src,
+             ({_human_flagged_sql()}) AS human_src,
              MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
       FROM messages m
       LEFT JOIN artifacts e ON e.message_id=m.message_id AND e.kind=?
@@ -2226,6 +2245,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
         if prefilter and qc is None and not r["thin_src"] \
+                and not r["human_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable
             # marker + v1 coverage instead of burning an LLM call

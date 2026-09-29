@@ -89,14 +89,6 @@ def _send_argv(cfg: dict, target: str) -> list[str]:
     return argv
 
 
-def _urgency(ledger, mid: int) -> str | None:
-    for kind in ("extract_llm", "extract_v1"):
-        d = structured_view.latest_artifact(ledger.db, kind, mid)
-        if d and d.get("urgency") == "high":
-            return "high"
-    return None
-
-
 def _attachments_map(ledger, mids: list[int]) -> dict:
     """message_id -> attachment rows (all states) for 📎 markers + files."""
     if not mids:
@@ -312,7 +304,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
-    if ev["kind"] == "update_notice":
+    if ev["kind"] in ("update_notice", "task_reminder"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.
         text = payload.get("text")
@@ -365,7 +357,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
              skipped: dict) -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"])
-    urg = _urgency(ledger, r["message_id"])
+    urg = structured_view.message_urgency(ledger.db, r["message_id"])
     body = html_to_text(r["body_html"])
     cap = 500 if s_lines else 600
     if len(body) > cap:
@@ -374,7 +366,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     meta = " / ".join(x for x in (r["profession"], r["organization"]) if x)
     parent = " (返信)" if r["parent_id"] and not indent else ""
     state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
-    warn = " ⚠️" if urg == "high" else ""
+    warn = " ⚠️" if urg else ""
     head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
             f"{parent}{state}{warn}\n"
             f"{indent}{who}{f' ({meta})' if meta else ''} — "

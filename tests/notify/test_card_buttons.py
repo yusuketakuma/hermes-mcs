@@ -1,0 +1,563 @@
+"""Card buttons as state toggles, member names, tasks, summary, ⚠
+report and ⏰ reminders — runner side. Synthetic temp ledger only."""
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime
+
+import pytest
+
+import extract_llm
+import ledger as _ledger
+import mcs_signals
+import notify_cards
+import notify_cmds
+import notify_flush
+import notify_render
+from mcs_queries import JST, extract_feedback
+from notify_testkit import (
+    CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render, _msg,
+    _patient, _receipt, _seed_thread, _settle_bodies, _signal_row,
+    _token_for, led)
+
+__all__ = ["led"]
+
+CFG_OFF = {"notify": {**CFG["notify"], "interactive": "off"},
+           "signals": CFG["signals"]}
+A, B = "discord:1001", "discord:2002"
+SLACK_ACTOR = "slack:T0SYN:U0SYN1"
+
+
+@pytest.fixture(autouse=True)
+def _pin_wall_clock(monkeypatch):
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+
+
+def _spec(led, card_id=1):
+    return json.loads(_latest_render(led, card_id)["spec_json"])
+
+
+def _button(spec, action):
+    return next(b for row in spec["parts"]["action_rows"] for b in row
+                if b["id"] == action)
+
+
+def _ids(spec):
+    return [b["id"] for row in spec["parts"]["action_rows"] for b in row]
+
+
+def _footer(spec):
+    return "\n".join(f.get("text", "") for f in spec["parts"]["footer"])
+
+
+_N = iter(range(1, 10_000))
+
+
+def _deliver(led):
+    """Land the latest render (card + body parts) so the next action
+    re-renders as an update."""
+    r = _latest_render(led)
+    n = next(_N)
+    _begin(led, r, n=n)
+    _receipt(led, r, f"{n:016x}", message_id="m-9", n=5000 + n)
+    _settle_bodies(led, r)
+
+
+def _card(led, tmp_path):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    return _spec(led)
+
+
+def _click(led, spec, action, actor=A, now=NOW, token=None):
+    tok = token or _token_for(spec, action)
+    return notify_cards.apply_notification(led, {
+        "version": 1, "op": "notification",
+        "command_id": f"{tok}:{next(_N):016x}", "actor": actor,
+        "token": tok, "origin": dict(ORIGIN, message_id="m-9")},
+        CFG, now=now)
+
+
+# ---------- ☐/✅ 確認 ------------------------------------------------------
+
+def test_ack_toggles_label_footer_and_withdraws(led, tmp_path):
+    spec1 = _card(led, tmp_path)
+    ack = _button(spec1, "ack")
+    assert (ack["label"], ack["style"]) == ("☐ 確認", "secondary")
+    assert "✅" not in _footer(spec1)
+
+    r = _click(led, spec1, "ack", now=NOW + 1)
+    assert r["outcome"] == "applied" and r["delivery_id"]
+    spec2 = _spec(led)
+    ack = _button(spec2, "ack")
+    assert (ack["label"], ack["style"]) == ("✅ 確認済み", "success")
+    assert "✅ 確認: <@1001>" in _footer(spec2)
+    # footer names are mentions — the worker must send them silently
+    assert spec2["parts"]["mentions"] == "silent"
+    assert "mentions" not in spec1["parts"]
+
+    # a double tap on the stale face never withdraws the fresh ack
+    again = _click(led, spec1, "ack", now=NOW + 2)
+    assert again["absorbed"] is True
+    assert _latest_render(led)["delivery_id"] == r["delivery_id"]
+
+    # another member confirms too — both are listed, by name
+    _deliver(led)
+    _click(led, spec2, "ack", actor=SLACK_ACTOR, now=NOW + 3)
+    spec3 = _spec(led)
+    assert "✅ 確認: <@1001>・<@U0SYN1>" in _footer(spec3)
+
+    # the first member taps ✅ 確認済み again: only their ack is withdrawn
+    _deliver(led)
+    out = _click(led, spec3, "ack", now=NOW + 4)
+    assert out["withdrawn"] is True
+    spec4 = _spec(led)
+    assert "✅ 確認: <@U0SYN1>" in _footer(spec4)
+    assert _button(spec4, "ack")["label"] == "✅ 確認済み"
+    rows = led.db.execute(
+        "SELECT actor, withdrawn_at FROM notification_acknowledgements "
+        "ORDER BY ack_id").fetchall()
+    # the audit row stays — withdrawn, not deleted
+    assert [(r["actor"], r["withdrawn_at"]) for r in rows] == [
+        (A, NOW + 4), (SLACK_ACTOR, None)]
+
+    _deliver(led)
+    _click(led, spec4, "ack", actor=SLACK_ACTOR, now=NOW + 5)
+    spec5 = _spec(led)
+    assert _button(spec5, "ack")["label"] == "☐ 確認"
+    assert "✅" not in _footer(spec5)
+
+
+def test_new_content_starts_unconfirmed(led, tmp_path):
+    spec1 = _card(led, tmp_path)
+    _click(led, spec1, "ack", now=NOW + 1)
+    _deliver(led)
+    assert _button(_spec(led), "ack")["label"] == "✅ 確認済み"
+    _msg(led, 102, 1, parent=100, body="新しい返信")
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    spec = _spec(led)
+    assert _button(spec, "ack")["label"] == "☐ 確認"
+    assert "✅" not in _footer(spec)
+
+
+def test_digest_ack_label_follows_toggle(led):
+    _patient(led, 2)
+    _msg(led, 200, 2)
+    _signal_row(led, "sig-d", pid=2, mids=[200])
+    _dispatch(led, _intent(led, kind="signal", pid=None, payload={
+        "digest": True, "signal_keys": ["sig-d"]}))
+    _deliver(led)
+    spec = _spec(led)
+    assert spec["kind"] == "digest"
+    assert _button(spec, "ack")["label"] == "☐ このページを確認"
+    # a digest spans projects: no MCS link, no single-patient summary
+    assert not {"link", "summary", "request"} & set(_ids(spec))
+    _click(led, spec, "ack", now=NOW + 1)
+    assert _button(_spec(led), "ack")["label"] == "✅ このページ確認済み"
+
+
+# ---------- 👤 担当 --------------------------------------------------------
+
+def test_assign_toggle_takeover_and_release(led, tmp_path):
+    spec1 = _card(led, tmp_path)
+    b = _button(spec1, "assign")
+    assert (b["label"], b["style"]) == ("👤 担当する", "secondary")
+
+    _click(led, spec1, "assign", now=NOW + 1)
+    spec2 = _spec(led)
+    b = _button(spec2, "assign")
+    assert (b["label"], b["style"]) == ("👤 担当中", "primary")
+    assert "👤 担当: <@1001>" in _footer(spec2)
+    # double tap on the old face: still assigned, nothing new rendered
+    assert _click(led, spec1, "assign", now=NOW + 2)["absorbed"] is True
+
+    _deliver(led)
+    r = _click(led, spec2, "assign", actor=B, now=NOW + 3)   # takeover
+    assert r["owner"] == B
+    spec3 = _spec(led)
+    assert "👤 担当: <@2002>" in _footer(spec3)
+    assert _button(spec3, "assign")["label"] == "👤 担当中"
+
+    _deliver(led)
+    r = _click(led, spec3, "assign", actor=B, now=NOW + 4)   # release
+    assert r["released"] is True and r["owner"] is None
+    spec4 = _spec(led)
+    assert _button(spec4, "assign")["label"] == "👤 担当する"
+    assert "👤" not in _footer(spec4)
+    tri = led.db.execute("SELECT * FROM notification_triage").fetchone()
+    assert tri["state"] == "open" and tri["owner"] is None
+
+
+@pytest.mark.parametrize("actor,label", [
+    ("discord:3922000000000001", "<@3922000000000001>"),
+    ("slack:T123:U0AB12CD", "<@U0AB12CD>"),
+    ("slack:U0AB12CD", notify_render.UNKNOWN_ACTOR),     # no team part
+    ("nurse-1", notify_render.UNKNOWN_ACTOR),
+    ("discord:<@everyone>", notify_render.UNKNOWN_ACTOR),
+    (None, notify_render.UNKNOWN_ACTOR),
+])
+def test_actor_label_never_renders_raw_ids(actor, label):
+    assert notify_render.actor_label(actor) == label
+
+
+def test_stored_legacy_owner_renders_as_mention(led, tmp_path):
+    """Triage rows written before this change hold the same actor
+    strings — they render as names with no migration."""
+    _card(led, tmp_path)
+    led.db.execute(
+        "INSERT INTO notification_triage(card_id,owner,state,revision,"
+        "last_actor,updated_at) VALUES(1,'discord:3922000000000001',"
+        "'assigned',1,'discord:3922000000000001',?)", (NOW,))
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    footer = _footer(_spec(led))
+    assert "👤 担当: <@3922000000000001>" in footer
+    assert "discord:" not in footer
+
+
+def test_withdrawn_at_migration_is_additive_and_idempotent(tmp_path):
+    path = tmp_path / "ledger.db"
+    _ledger.Ledger(str(path)).close()
+    db = sqlite3.connect(path)
+    db.execute("ALTER TABLE notification_acknowledgements "
+               "DROP COLUMN withdrawn_at")           # a pre-change DB
+    db.commit()
+    db.close()
+    for _ in range(2):
+        led2 = _ledger.Ledger(str(path))
+        cols = {r[1] for r in led2.db.execute(
+            "PRAGMA table_info(notification_acknowledgements)")}
+        led2.close()
+        assert "withdrawn_at" in cols
+
+
+# ---------- layout / 🔗 link ----------------------------------------------
+
+def test_button_rows_layout_and_link(led, tmp_path):
+    spec = _card(led, tmp_path)
+    rows = [[b["id"] for b in row] for row in spec["parts"]["action_rows"]]
+    # card_thread on: 📄 lives in the thread; no task yet -> no ☑;
+    # no extract_llm result -> no ⚠
+    assert rows == [["ack", "assign"], ["request", "summary"], ["link"]]
+    link = _button(spec, "link")
+    assert link == {"id": "link", "ui": "link", "label": "🔗 MCSで開く",
+                    "url": "https://www.medical-care.net/projects/medical/1"}
+    assert "defer" not in _ids(spec)
+    assert all(len(row) <= 5 for row in rows) and len(rows) <= 5
+
+
+# ---------- 📝 tasks in the footer / ☑ ------------------------------------
+
+def _request(led, src_mid=100, title="残薬確認", status="open",
+             assignee=None, due=None):
+    rid = led.db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,assignee,due_date,status,revision,created_at,updated_at) "
+        "VALUES(1,?,?,?,?,?,?,1,?,?)",
+        (src_mid, f"{src_mid:064x}", title, assignee, due, status, NOW,
+         NOW)).lastrowid
+    led.db.commit()
+    return rid
+
+
+def test_footer_lists_open_tasks_and_tasks_button(led, tmp_path):
+    _card(led, tmp_path)
+    today = notify_render.today_jst(NOW)
+    _request(led, title="期限切れの確認", assignee="山田（みどり薬局）",
+             due="2020-01-01")
+    _request(led, src_mid=101, title="<@999> 返信の件", due=today)
+    _request(led, title="三件目")
+    _request(led, title="四件目")
+    _request(led, title="完了済み", status="done")
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    spec = _spec(led)
+    tasks_item = next(f["text"] for f in spec["parts"]["footer"]
+                      if f.get("text", "").count("📝") >= 2)
+    lines = tasks_item.splitlines()
+    assert lines[0] == ("⚠ 期限切れ 📝 期限切れの確認 — 担当 山田（みどり薬局）"
+                        " — 期限 2020-01-01")
+    # typed text can never form a mention
+    assert lines[1] == f"📝 ＜@999＞ 返信の件 — 期限 {today}"
+    assert lines[2] == "📝 三件目" and lines[3] == "📝 他1件"
+    assert "完了済み" not in tasks_item
+    assert _button(spec, "tasks")["label"] == "☑ タスク完了"
+    assert "mentions" not in spec["parts"]       # no member names shown
+
+    led.db.execute("UPDATE requests SET status='done'")
+    led.db.commit()
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    spec = _spec(led)
+    assert "tasks" not in _ids(spec) and "📝" not in _footer(spec)
+
+
+def test_task_status_rerenders_the_card(led, tmp_path):
+    spec = _card(led, tmp_path)
+    _request(led, title="対応する")
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    _deliver(led)
+    spec = _spec(led)
+    r = _click(led, spec, "tasks", now=NOW + 2)
+    done = r["tasks"][0]["transitions"]["done"]["token"]
+    out = notify_cards.apply_notification(led, {
+        "version": 1, "op": "notification",
+        "command_id": f"{done}:{'cd' * 8}", "actor": A, "token": done,
+        "origin": dict(ORIGIN, message_id="eph-1")}, CFG, now=NOW + 3)
+    assert out["status"] == "done" and out["delivery_id"]
+    spec = _spec(led)
+    assert "tasks" not in _ids(spec) and "📝" not in _footer(spec)
+
+
+def test_request_create_rerenders_anchored_card(led, tmp_path):
+    _card(led, tmp_path)
+    before = _latest_render(led)["render_rev"]
+    root = str(tmp_path / "data")
+    out = notify_cmds.dispatch(led, {
+        "version": 1, "cmd": "request.create",
+        "command_id": "11111111-2222-4333-8444-555555555555",
+        "actor": A, "human_confirmed": True, "project_id": 1,
+        "source_message_id": 101, "source_hash": f"{101:064x}",
+        "title": "服薬状況を確認", "reason": "通知カードからタスク作成",
+        "assignee": "山田", "due_date": "2026-10-01"}, CFG, root)
+    assert out["outcome"] == "applied"
+    render = _latest_render(led)
+    assert render["render_rev"] == before + 1
+    footer = _footer(json.loads(render["spec_json"]))
+    assert "📝 服薬状況を確認 — 担当 山田 — 期限 2026-10-01" in footer
+
+
+# ---------- 📝 form: prefill + assignee roster ----------------------------
+
+def _llm_extract(led, mid, content, version=True):
+    h = led.db.execute("SELECT content_hash FROM messages WHERE "
+                       "message_id=?", (mid,)).fetchone()[0]
+    meta = {"hash": h}
+    if version:
+        meta["extract_version"] = extract_llm.EXTRACT_VERSION
+    return led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('extract_llm',1,?,?,'test',?,?)",
+        (mid, json.dumps(content, ensure_ascii=False), json.dumps(meta),
+         NOW)).lastrowid
+
+
+def test_request_click_returns_prefill_and_roster_never_persisted(
+        led, tmp_path):
+    _seed_thread(led)
+    _llm_extract(led, 100, {"requests": [
+        {"action": "残薬を  確認して\n報告", "to": "薬剤師"}]})
+    with led.db:
+        mcs_signals.record_station_staff(led.db, [
+            {"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"},
+            {"staff_id": 2, "name": "佐藤 一郎", "station": "みどり薬局"},
+            {"staff_id": 3, "name": "山田 花子", "station": "みどり薬局"}])
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    spec = _spec(led)
+    assert _button(spec, "request")["label"] == "📝 タスク作成"
+    r = _click(led, spec, "request")
+    assert r["modal"] is True
+    assert r["form"] == {"hint": "残薬を 確認して 報告",
+                         "staff": ["山田 花子（みどり薬局）",
+                                   "佐藤 一郎（みどり薬局）"]}
+    stored = led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id "
+        "LIKE ?", (spec["parts"]["action_rows"][1][0]["token"] + ":%",)
+    ).fetchone()["receipt_json"]
+    assert "form" not in json.loads(stored) and "残薬" not in stored
+
+
+def test_roster_falls_back_to_own_station_senders(led):
+    _patient(led, 1)
+    _msg(led, 100, sender="佐藤 一郎", org="みどり薬局, 別の薬局")
+    _msg(led, 101, sender="訪問 看護", org="あおば訪問看護")
+    _msg(led, 102, sender="佐藤 一郎", org="みどり薬局, 別の薬局")
+    assert notify_cards.assignee_choices(led.db) == []    # no identity
+    with led.db:
+        mcs_signals.record_self_profile(led.db, {
+            "sender_id": 9, "name": "薬局 太郎", "professions": [],
+            "organizations": ["みどり薬局"]})
+    assert notify_cards.assignee_choices(led.db) == [
+        "薬局 太郎（みどり薬局）", "佐藤 一郎（みどり薬局）"]
+
+
+def test_roster_replace_on_change(led):
+    staff = [{"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"}]
+    with led.db:
+        assert mcs_signals.record_station_staff(led.db, staff) is True
+        assert mcs_signals.record_station_staff(led.db, staff) is False
+    assert mcs_signals.latest_station_staff(led.db) == staff
+
+
+# ---------- 🧾 summary -----------------------------------------------------
+
+def test_summary_without_rollup_says_so(led, tmp_path):
+    spec = _card(led, tmp_path)
+    r = _click(led, spec, "summary")
+    assert r["outcome"] == "applied" and r["action"] == "summary"
+    assert "暫定集約" in r["title"]
+    assert notify_render.SUMMARY_CAVEAT in r["body"]
+    assert "集約資料がまだありません" in r["body"]
+    assert "履歴取得: 未完了（完了記録なし）" in r["body"]
+    assert "欠落なしの保証ではありません" in r["body"]
+    assert "■ 未完了タスク: なし" in r["body"]
+    stored = led.db.execute(
+        "SELECT receipt_json FROM command_receipts").fetchall()[-1][0]
+    assert "集約資料" not in stored and "body" not in json.loads(stored)
+
+
+def test_summary_with_rollup_and_coverage(led, tmp_path):
+    spec = _card(led, tmp_path)
+    led.db.execute("UPDATE patients SET history_floor=-1,"
+                   "fetch_state='incomplete',fetch_reason='network_error'")
+    led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,model,meta,"
+        "created_at) VALUES('patient_rollup',1,?,'rules-v1','{}',?)",
+        (json.dumps({"medications": [
+            {"name": "アムロジピン", "dose": "5mg", "freq": "1日1回",
+             "last": "2026-09-20"}],
+            "current_med_period": {"start": "2026-09-01",
+                                   "end": "2026-09-28"},
+            "latest_vitals": {"at": "2026-09-22", "sbp": 128, "dbp": 70,
+                              "bt": 36.5},
+            "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
+    _request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
+    body = _click(led, spec, "summary")["body"]
+    assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
+            "／返信の取得未完了1件") in body
+    assert "処方期間（抽出表現）: 2026-09-01〜2026-09-28" in body
+    assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
+    assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
+    assert "■ 次回予定（抽出表現）: 10/3 訪問" in body
+    assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
+
+
+# ---------- ⚠ extraction report --------------------------------------------
+
+def _pending_ids(led):
+    return {r[0] for r in led.db.execute(
+        f"SELECT m.message_id FROM messages m WHERE {extract_llm.pending_pred()}")}
+
+
+def _report(led, root, artifact_id, mid=101, field="meds", n=1):
+    return notify_cmds.dispatch(led, {
+        "version": 1, "cmd": "ops.extract_feedback",
+        "command_id": f"22222222-3333-4444-8555-{n:012d}",
+        "actor": A, "human_confirmed": True, "project_id": 1,
+        "message_id": mid, "artifact_id": artifact_id, "field": field,
+        "reason": "用量が違う"}, CFG, root)
+
+
+def test_report_pins_extraction_repends_once_and_marks_card(led, tmp_path):
+    _seed_thread(led)
+    aid = _llm_extract(led, 101, {"summary": "s", "requests": []})
+    led.db.commit()
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    spec = _spec(led)
+    assert spec["parts"]["context"]["extract_ref"] == {
+        "message_id": 101, "artifact_id": aid,
+        "content_hash": f"{101:064x}"}
+    assert _button(spec, "report")["label"] == "⚠ 抽出の誤りを報告"
+    assert _click(led, spec, "report")["modal"] is True
+    assert 101 not in _pending_ids(led)
+
+    root = str(tmp_path / "data")
+    assert _report(led, root, aid)["outcome"] == "applied"
+    rows = extract_feedback(led.db, 1)
+    content = json.loads(rows[0]["content"])
+    assert (content["artifact_id"], content["field"], content["note"],
+            content["actor"]) == (aid, "meds", "用量が違う", A)
+    assert rows[0]["current"] == 1
+    assert 101 in _pending_ids(led)                     # one re-extract
+    assert "⚠ 誤り報告あり" in _footer(_spec(led))       # re-rendered now
+
+    # the re-extraction replaces the artifact: report settles, mark goes
+    led.db.execute("DELETE FROM artifacts WHERE artifact_id=?", (aid,))
+    _llm_extract(led, 101, {"summary": "s2", "requests": []})
+    led.db.commit()
+    assert 101 not in _pending_ids(led)
+    assert extract_feedback(led.db, 1)[0]["current"] == 0
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert "誤り報告" not in _footer(_spec(led))
+    # a report on the superseded artifact is refused
+    stale = _report(led, root, aid, n=2)
+    assert stale["outcome"] == "rejected" \
+        and stale["error"] == "extraction_changed"
+
+
+def test_report_command_validation(led, tmp_path):
+    root = str(tmp_path / "data")
+    _seed_thread(led)
+    for field, err in (("bogus", "bad_field"),):
+        out = _report(led, root, 1, field=field, n=3)
+        assert out["error"] == err
+    out = notify_cmds.dispatch(led, {
+        "version": 1, "cmd": "ops.extract_feedback",
+        "command_id": "22222222-3333-4444-8555-000000000009",
+        "actor": A, "human_confirmed": True, "project_id": 1,
+        "message_id": 101, "artifact_id": 1, "field": "meds"}, CFG, root)
+    assert out["outcome"] == "rejected"               # reason is required
+
+
+# ---------- ⏰ reminders ---------------------------------------------------
+
+def _at(day, hour):
+    return datetime.fromisoformat(f"{day}T{hour:02d}:00:00").replace(
+        tzinfo=JST).timestamp()
+
+
+def test_due_and_overdue_reminders_fire_once(led, tmp_path):
+    _card(led, tmp_path)
+    due = _request(led, title="今日の確認", assignee="山田", due="2026-10-01")
+    late = _request(led, src_mid=101, title="<@1> 昨日の件",
+                    due="2026-09-30")
+    _request(led, title="期限なし")
+    _request(led, title="完了", due="2026-09-01", status="done")
+    morning = _at("2026-10-01", 9)
+    assert notify_cards.task_reminders(led, CFG_OFF, now=morning) == 0
+    assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 23)) == 0
+    assert notify_cards.task_reminders(led, CFG, now=morning) == 2
+    assert notify_cards.task_reminders(led, CFG, now=morning + 60) == 0
+    events = led.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='task_reminder' "
+        "ORDER BY event_id").fetchall()
+    texts = [notify_flush._format_event(led, e)[0] for e in events]
+    assert texts == [
+        "⚠ 期限切れ（期限 2026-09-30） — 患者A: ＜＠1＞ 昨日の件 — 担当 未設定",
+        "⏰ 期限リマインド（本日 2026-10-01） — 患者A: 今日の確認 — 担当 山田"]
+    assert all(e["route"] == "text" for e in events)
+    # the next day the due-day task gets its one overdue reminder
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-10-02", 9)) == 1
+    stages = led.db.execute(
+        "SELECT request_id, stage FROM notification_task_reminders "
+        "ORDER BY request_id, stage").fetchall()
+    assert [tuple(r) for r in stages] == [
+        (due, "due"), (due, "overdue"), (late, "overdue")]
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-10-03", 9)) == 0
+
+
+# ---------- urgency badge -------------------------------------------------
+
+def test_urgency_badge_names_its_source(led):
+    import structured_view
+    _seed_thread(led, mids=(100, 101, 102))
+    _llm_extract(led, 100, {"urgency": "high", "summary": "至急"})
+    h = f"{101:064x}"
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('extract_v1',1,101,?,'rules',?,?)",
+        (json.dumps({"urgency": "high"}), json.dumps({"hash": h}), NOW))
+    led.db.commit()
+    assert structured_view.message_urgency(led.db, 100) == "llm"
+    assert structured_view.message_urgency(led.db, 101) == "rule"
+    assert structured_view.message_urgency(led.db, 102) is None
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
+    texts = [c["text"] for c in _spec(led)["parts"]["containers"]
+             if c["type"] == "text"]
+    assert any("・緊急度: 高（AI抽出）" in t for t in texts)
+    assert any("・緊急語を含む（機械照合）" in t for t in texts)

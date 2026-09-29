@@ -1095,6 +1095,9 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
         def self_profile(self):
             return {}
 
+        def station_staffs(self, stations):
+            return []
+
     data = tmp_path / "data"
     data.mkdir()
     config = tmp_path / "config.json"
@@ -1395,6 +1398,9 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         def self_profile(self):
             return {}
 
+        def station_staffs(self, stations):
+            return []
+
     adapter = Adapter()
     data = tmp_path / "data"
     data.mkdir()
@@ -1510,6 +1516,9 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
 
         def self_profile(self):
             return {}
+
+        def station_staffs(self, stations):
+            return []
 
     adapter = Adapter()
     data = tmp_path / "data"
@@ -1870,6 +1879,9 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
             calls.append(1)
             return prof
 
+        def station_staffs(self, stations):
+            return []
+
     monkeypatch.setattr(run_check, "HOME", str(tmp_path))
     for name in ("drain_commands", "seed_discovery", "run_discovery",
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
@@ -1886,4 +1898,56 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
     assert result["errors"] == []
     assert bool(calls) is fetched
     assert mcs_signals._latest_self_profile(db.db)["name"] == "synthetic"
+    db.close()
+
+
+def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
+    """The own-station roster is fetched right after the self profile
+    and stored replace-on-change; a failure only adds an error code."""
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+    db = _ledger(tmp_path)
+    prof = {"sender_id": 1, "name": "synthetic", "professions": [],
+            "organizations": ["みどり薬局"],
+            "stations": [{"id": 7, "name": "みどり薬局"}]}
+    roster = [{"staff_id": 3, "name": "佐藤 一郎", "professions": [],
+               "station": "みどり薬局", "is_self": False}]
+    seen = []
+
+    class Adapter:
+        fail = False
+
+        def self_profile(self):
+            return prof
+
+        def station_staffs(self, stations):
+            seen.append(stations)
+            if self.fail:
+                raise RuntimeError("synthetic")
+            return roster
+
+    monkeypatch.setattr(run_check, "HOME", str(tmp_path))
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_cards, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands",
+                        lambda *a, **k: None)
+    args = SimpleNamespace(jobs_only=True, download_files=False)
+    result = {"errors": []}
+    run_check._run_jobs(Adapter(), db, args, {}, result,
+                        time.monotonic() + 300, False, None)
+    assert seen == [prof["stations"]]
+    assert result["station_staff"] == "updated" and result["errors"] == []
+    assert mcs_signals.latest_station_staff(db.db) == roster
+    failing = Adapter()
+    failing.fail = True
+    result = {"errors": []}
+    run_check._run_jobs(failing, db, args, {}, result,
+                        time.monotonic() + 300, False, None)
+    assert result["errors"] == ["station_staff: RuntimeError"]
+    assert mcs_signals.latest_station_staff(db.db) == roster
     db.close()

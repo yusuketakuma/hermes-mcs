@@ -69,14 +69,16 @@ def _fake_discord():
             self.accent_color = accent_color
 
     class Button:
-        def __init__(self, style=None, label=None, custom_id=None):
+        def __init__(self, style=None, label=None, custom_id=None,
+                     url=None):
             self.custom_id = custom_id
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, TextDisplay=TextDisplay,
                              ActionRow=ActionRow, Container=Container,
                              Button=Button)
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2,
-                                      success=3, danger=4)
+                                      success=3, danger=4, link=5)
+    mod.AllowedMentions = SimpleNamespace(none=lambda: "no-pings")
     return mod
 
 
@@ -91,7 +93,7 @@ class FakeChannel:
         self.sent = []
         self._next = 9000
 
-    async def send(self, view=None):
+    async def send(self, view=None, allowed_mentions=None):
         self._next += 1
         m = FakeMessage(self._next)
         self.sent.append(m)

@@ -136,6 +136,25 @@ def _v_signal_dismiss(req: dict, base: set) -> str | None:
     return None
 
 
+# ⚠ report target parts (card modal select) — stored verbatim
+EXTRACT_FEEDBACK_FIELDS = ("summary", "meds", "symptoms", "requests",
+                           "vitals", "other")
+
+
+def _v_extract_feedback(req: dict, base: set) -> str | None:
+    if req.keys() - (base | {"message_id", "artifact_id", "field",
+                             "reason"}):
+        return "unknown_field"
+    if not positive(req.get("message_id")) \
+            or not positive(req.get("artifact_id")):
+        return "bad_extract_ref"
+    if req.get("field") not in EXTRACT_FEEDBACK_FIELDS:
+        return "bad_field"
+    if not _text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
 def _v_signal_policy(req: dict, base: set) -> str | None:
     if req.keys() - (base | {"policy", "reason"}):
         return "unknown_field"
@@ -226,6 +245,7 @@ _OPS_VALIDATORS = {
     "ops.resume": _v_pause_resume,
     "ops.adopt_summary": _v_adopt_summary,
     "ops.signal_dismiss": _v_signal_dismiss,
+    "ops.extract_feedback": _v_extract_feedback,
     "ops.signal_policy": _v_signal_policy,
     "ops.refstat_approve": _v_refstat_approve,
     "ops.restore_approve": _v_restore_approve,
@@ -538,6 +558,40 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
                   "signal_type": content.get("type")}
 
 
+def _apply_extract_feedback_tx(db, req: dict, now: float) \
+        -> tuple[str | None, dict]:
+    """Human ⚠ report on one extraction: an append-only
+    extract_feedback_v1 artifact pinned to the extract_llm artifact the
+    card showed. Only a report on the message's CURRENT extraction is
+    accepted — it re-pends that message for exactly one re-extract
+    (extract_llm pending_pred); the new artifact id ends the loop."""
+    from mcs_queries import EXTRACT_FEEDBACK_KIND, current_extract_pred
+    row = db.execute(
+        f"""SELECT a.artifact_id, m.content_hash FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            WHERE a.artifact_id=? AND a.kind='extract_llm'
+              AND a.message_id=? AND m.project_id=?
+              {current_extract_pred('a', 'm')}""",
+        (req["artifact_id"], req["message_id"],
+         req["project_id"])).fetchone()
+    if row is None:
+        return "extraction_changed", {"message_id": req["message_id"]}
+    content = {"message_id": req["message_id"],
+               "artifact_id": req["artifact_id"],
+               "hash": row["content_hash"], "field": req["field"],
+               "note": req["reason"], "actor": req["actor"], "at": now,
+               "command_id": req["command_id"]}
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES(?,?,?,?,?,?,?)",
+        (EXTRACT_FEEDBACK_KIND, req["project_id"], req["message_id"],
+         json.dumps(content, ensure_ascii=False), "human",
+         json.dumps({"source_artifact_id": req["artifact_id"],
+                     "hash": row["content_hash"],
+                     "command_id": req["command_id"]}), now))
+    return None, {"message_id": req["message_id"], "field": req["field"]}
+
+
 def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     """Human-approved threshold override for the signal evaluator.
     Appends a signal_policy_v1 artifact (latest wins, full audit trail);
@@ -816,6 +870,8 @@ def apply_tx(db, req: dict, now: float | None = None, *,
         return _apply_signal_dismiss_tx(db, req, current)
     if req["cmd"] == "ops.signal_policy":
         return _apply_signal_policy_tx(db, req, current)
+    if req["cmd"] == "ops.extract_feedback":
+        return _apply_extract_feedback_tx(db, req, current)
     if req["cmd"] == "ops.refstat_approve":
         return _apply_refstat_approve_tx(db, req, current, filesystem_changes)
     if req["cmd"] == "ops.restore_approve":
