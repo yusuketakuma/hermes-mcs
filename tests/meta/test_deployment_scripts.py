@@ -71,3 +71,40 @@ def test_check_night_filter_is_a_window_not_an_exact_minute(tmp_path):
         subprocess.run(["bash", str(runner)], env={"HOME": str(tmp_path)},
                        capture_output=True, timeout=30)
         assert log.exists() is ran, (hour, minute)
+
+
+def test_check_incomplete_alert_names_its_cause(tmp_path):
+    """collection=incomplete names unread gaps and stalled backfills
+    separately and never prints an empty project list; ok is silent."""
+    import json
+    import subprocess
+    import sys
+    body = (SCRIPTS / "mcs_check.sh").read_text(encoding="utf-8")
+    runner = tmp_path / "runner.sh"
+    runner.write_text(body.replace("__DATA__", str(tmp_path))
+                      .replace("__REPO__", str(tmp_path))
+                      .replace("__PYTHON__", str(tmp_path / "py")))
+    # run_check stub exits 0; the health heredoc runs on a real python
+    (tmp_path / "py").write_text(
+        f'#!/bin/sh\n[ "$1" = "-" ] && exec {sys.executable} "$@"\nexit 0\n')
+    (tmp_path / "py").chmod(0o755)
+    bindir = tmp_path / ".local" / "bin"
+    bindir.mkdir(parents=True)
+    (bindir / "date").write_text(
+        "#!/bin/sh\ncase \"$1\" in\n  +%H) echo 12 ;;\n  +%M) echo 00 ;;\n"
+        "  *) /bin/date \"$@\" ;;\nesac\n")
+    (bindir / "date").chmod(0o755)
+    for health, want in (
+            ({"collection": "incomplete", "incomplete_projects": [7],
+              "coverage_stalled": []},
+             "mcs check: collection incomplete — projects 7\n"),
+            ({"collection": "incomplete", "incomplete_projects": [],
+              "coverage_stalled": [12, 34]},
+             "mcs check: collection incomplete — stalled=12,34\n"),
+            ({"collection": "ok", "incomplete_projects": [],
+              "coverage_stalled": []}, "")):
+        (tmp_path / "health.json").write_text(json.dumps(health))
+        out = subprocess.run(["bash", str(runner)],
+                             env={"HOME": str(tmp_path)},
+                             capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0 and out.stdout == want, health

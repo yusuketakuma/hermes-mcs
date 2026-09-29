@@ -933,12 +933,7 @@ def _render_needed(db, card, latest, gens, cfg, now, force) -> bool:
         # a not-yet-sent render whose content is already stale is
         # cancelled — a sending/unknown render keeps its attempt's
         # exclusivity instead (guarded above)
-        db.execute("UPDATE notification_renders SET state='cancelled',"
-                   "updated_at=? WHERE delivery_id=?",
-                   (now, latest["delivery_id"]))
-        db.execute("UPDATE notification_intent_cards SET delivery_id=NULL,"
-                   "required_render_rev=0 WHERE delivery_id=?",
-                   (latest["delivery_id"],))
+        _cancel_render(db, latest["delivery_id"], now)
         live = False
     if live:
         return False                       # in-flight render is current
@@ -978,18 +973,21 @@ def _render_op(card) -> str | None:
                              # ghost
 
 
+def _cancel_render(db, delivery_id, now):
+    """Cancel one render and unbind the intents it was carrying."""
+    db.execute("UPDATE notification_renders SET state='cancelled',"
+               "updated_at=? WHERE delivery_id=?", (now, delivery_id))
+    db.execute("UPDATE notification_intent_cards SET delivery_id=NULL,"
+               "required_render_rev=0 WHERE delivery_id=?", (delivery_id,))
+
+
 def _cancel_open_renders(db, card_id, now):
     """Cancel any leftover open renders of this card (defensive; the
     guards above mean at most stale queued/held rows can exist)."""
     for r in db.execute(
             "SELECT delivery_id FROM notification_renders WHERE card_id=?"
             " AND state IN ('queued','held')", (card_id,)).fetchall():
-        db.execute("UPDATE notification_renders SET state='cancelled',"
-                   "updated_at=? WHERE delivery_id=?",
-                   (now, r["delivery_id"]))
-        db.execute("UPDATE notification_intent_cards SET delivery_id=NULL,"
-                   "required_render_rev=0 WHERE delivery_id=?",
-                   (r["delivery_id"],))
+        _cancel_render(db, r["delivery_id"], now)
 
 
 def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
@@ -1039,7 +1037,8 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # the same card_thread switch: its posted ts is the thread root, so
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
-    in_thread_body = (notify_cfg(cfg).get("card_thread") is True
+    thread_on = notify_cfg(cfg).get("card_thread") is True
+    in_thread_body = (thread_on
                       and card["thread_state"] not in ("failed", "deleted"))
     spec["parts"] = {
         "containers": content["containers"],
@@ -1051,10 +1050,10 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "page": content["page"], "pages": content["pages"],
         "context": context,
     }
-    if notify_cfg(cfg).get("card_thread") is True and card["kind"] != "digest":
-        spec["parts"]["thread_name"] = _thread_name(db, card)
-    elif notify_cfg(cfg).get("card_thread") is True:
-        spec["parts"]["thread_name"] = _digest_thread_name(content)
+    if thread_on:
+        spec["parts"]["thread_name"] = (_digest_thread_name()
+                                        if card["kind"] == "digest"
+                                        else _thread_name(db, card))
     # the body travels inside the spec as individually journaled
     # durable parts — the card stays a summary surface while the
     # thread carries the untruncated shown-set text (T7)
@@ -1147,7 +1146,7 @@ def _thread_name(db, card) -> str:
     return title if len(title) <= 100 else title[:99] + "…"
 
 
-def _digest_thread_name(content) -> str:
+def _digest_thread_name() -> str:
     return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
 
 
@@ -1884,16 +1883,7 @@ def revoke_card(db, card_id, now) -> None:
         return
     # a queued-but-unsent render must not linger claimable — a worker
     # picking it up would post a card for an archived/dead unit
-    for r in db.execute(
-            "SELECT delivery_id FROM notification_renders "
-            "WHERE card_id=? AND state IN ('queued','held')",
-            (card_id,)).fetchall():
-        db.execute("UPDATE notification_renders SET state='cancelled',"
-                   "updated_at=? WHERE delivery_id=?",
-                   (now, r["delivery_id"]))
-        db.execute("UPDATE notification_intent_cards SET delivery_id=NULL,"
-                   "required_render_rev=0 WHERE delivery_id=?",
-                   (r["delivery_id"],))
+    _cancel_open_renders(db, card_id, now)
     db.execute(
         "UPDATE notification_intent_cards SET state='suppressed' "
         "WHERE card_id=? AND state='pending'", (card_id,))
