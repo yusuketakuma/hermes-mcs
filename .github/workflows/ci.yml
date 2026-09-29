@@ -21,9 +21,11 @@ jobs:
         with:
           python-version: "3.13"
       - name: ruff
-        run: pip install "ruff==0.16.8" && ruff check mcs/ tests/ hermes_plugin/ integration/ ci/ scripts/ deployment/ conftest.py
+        # lint scope lives in the Makefile (LINT_PATHS); keep the pin equal to
+        # the Makefile RUFF pin
+        run: pip install "ruff==0.16.8" && make lint
       - name: pytest
-        run: pip install "pytest==9.1.1" && scripts/run_tests.sh -x -q
+        run: pip install "pytest==9.1.1" && scripts/run_tests.sh -x
       - name: check generated docs on PR
         if: github.event_name == 'pull_request'
         run: |
