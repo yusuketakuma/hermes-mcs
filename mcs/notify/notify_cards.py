@@ -288,6 +288,11 @@ def interactive_enabled(cfg: dict) -> bool:
     return notify_cfg(cfg).get("interactive") in ("discord", "slack")
 
 
+def signals_notify(cfg: dict) -> bool:
+    signals = (cfg or {}).get("signals")
+    return isinstance(signals, dict) and signals.get("notify") is True
+
+
 def active_transport(cfg) -> str:
     return "slack" if notify_cfg(cfg).get("interactive") == "slack" else "discord"
 
@@ -1078,6 +1083,13 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     card = _render_gates(db, card_id, cfg)
     if card is None:
         return None
+    if card["kind"] in ("signal", "digest") and not signals_notify(cfg):
+        # begin denies these anyway (signal_notify_off, not final), so a
+        # queued render would sit live forever and block re-issue once
+        # notify is back on — cancel it so re-enabling issues a fresh
+        # delivery_id instead
+        _cancel_open_renders(db, card_id, now)
+        return None
     content = _card_content(db, card)
     gens = _generation_drift(card, content)
     latest = db.execute(
@@ -1331,10 +1343,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
         batch = db.execute(
             "SELECT * FROM notification_intent_batches "
             "WHERE event_id=?", (event_id,)).fetchone()
-        signals = cfg.get("signals")
-        if row["kind"] == "signal" and not (
-                isinstance(signals, dict)
-                and signals.get("notify") is True):
+        if row["kind"] == "signal" and not signals_notify(cfg):
             if batch is None:
                 db.execute(
                     "UPDATE notify_outbox SET state='suppressed',"
