@@ -285,6 +285,32 @@ def list_messages(result: dict, allowed, markdown: bool = True) -> list:
     return split_body("\n".join(lines))
 
 
+def view_answer(result: dict | None, allowed,
+                markdown: bool = True) -> list | None:
+    """An applied view click's ephemeral answer as ``[(text, tasks)]``
+    — ``tasks`` is the task list whose transition buttons ride that
+    message (the caller registers ``result["token_ctx"]`` first), else
+    None. Returns None when the result is no view answer (a write
+    click, a rejection, a modal open): each transport then answers
+    with ``ja(result)`` or stays silent. Shared by the live interaction
+    path and the delayed followup sweep of every transport."""
+    if not result or result.get("outcome") != "applied" \
+            or result.get("modal"):
+        return None
+    action = result.get("action")
+    if action in ("body", "summary") and result.get("body"):
+        return [(m, None) for m in body_messages(result)]
+    if action == "tasks":
+        items = result.get("tasks") or []
+        return ([(task_list_text(items), items)] if items
+                else [(NO_TASKS_TEXT, None)])
+    if action == "list":
+        return [(m, None) for m in list_messages(result, allowed, markdown)]
+    if action == "task_status":
+        return [(task_done_text(result), None)]
+    return None
+
+
 def preview_text(action: str, payload: dict, markdown: bool) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
     Discord markdown (bold heading, code-quoted signal) or Slack plain

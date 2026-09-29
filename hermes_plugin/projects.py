@@ -51,6 +51,19 @@ def static_scope(settings: dict) -> list[int] | None:
     return ids[:1000] or None
 
 
+def view_inputs(settings: dict, action: str, clicker: str) -> dict | None:
+    """Typed input of a 📋/🗂 click: the clicker's display name (📋
+    matching) and this deployment's static project scope (list/count
+    bound). None for every other action or when nothing applies."""
+    inputs = {}
+    if action == "mytasks" and clicker:
+        inputs["name"] = clicker[:120]
+    scope = static_scope(settings)
+    if action in ("mytasks", "unacked") and scope:
+        inputs["projects"] = scope
+    return inputs or None
+
+
 def project_allowed(settings: dict, project_id) -> bool:
     """True when the project is inside this deployment's scope."""
     if project_id in (settings.get("project_ids") or set()):

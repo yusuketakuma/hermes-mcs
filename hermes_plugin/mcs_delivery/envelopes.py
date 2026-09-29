@@ -16,6 +16,7 @@ import json
 import os
 import uuid
 
+from . import text
 from .paths import atomic_write, safe_name
 
 MAX_COMMAND_BYTES = 16384
@@ -234,3 +235,40 @@ def signal_dismiss(actor: str, context: dict, signal_key: str,
     if reason_code:
         env["reason_code"] = reason_code
     return env
+
+
+def human_payload(action: str, actor: str, context: dict, params: dict,
+                  fields: dict):
+    """The confirmable human command of a 📝/🚫/⚠ modal submit, built
+    from the render-pinned ``context``, the runner-stored token
+    ``params`` and the typed ``fields`` — the envelope dict, or a JA
+    error string. User input never picks the target."""
+    if action == "report":
+        got = text.feedback_attrs(fields)
+        if isinstance(got, str):
+            return got
+        if not isinstance(context.get("extract_ref"), dict) \
+                or not context.get("project_id"):
+            return "報告対象の抽出結果を特定できません。"
+        return extract_feedback(actor, context, *got)
+    if action == "dismiss":
+        got = text.dismiss_attrs(fields)
+        if isinstance(got, str):
+            return got
+        key = params.get("signal_key")
+        if not isinstance(key, str) \
+                or key not in (context.get("signals") or {}):
+            return "対象シグナルを特定できません。"
+        return signal_dismiss(actor, context, key, *got)
+    # request.create — the runner-stored project_id wins over the spec
+    # context; source pinning stays render-side
+    context = {**context, "project_id": params.get("project_id")
+               or context.get("project_id")}
+    if not context.get("source_message_id") \
+            or not context.get("source_hash") \
+            or not context.get("project_id"):
+        return "起票対象の投稿を特定できません。"
+    attrs = text.task_attrs(fields)
+    if isinstance(attrs, str):
+        return attrs
+    return request_create(actor, context, attrs)
