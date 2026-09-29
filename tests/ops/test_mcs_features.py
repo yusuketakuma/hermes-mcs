@@ -155,6 +155,8 @@ def test_unknown_time_and_real_epoch_zero_survive_reopen(tmp_path):
     view.close()
     with db.db:
         db.db.execute("UPDATE messages SET posted_at_ts=0 WHERE message_id=4")  # Legacy invalid-date encoding.
+        # only pre-v3 writers produced it; the upgrade open normalizes it
+        db.db.execute("PRAGMA user_version=2")
     db.close()
     db = ledger.Ledger(str(tmp_path / "source.db"))
     assert db.db.execute("SELECT posted_at_ts FROM messages WHERE message_id=4").fetchone()[0] is None
