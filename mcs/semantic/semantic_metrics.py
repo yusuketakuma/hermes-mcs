@@ -1,19 +1,14 @@
 """Semantic audit history and coverage for the current generation."""
 from __future__ import annotations
 
-import json
-
+from mcs_util import loads_dict
 from semantic_policy import (KIND_AUDIT, KIND_SUMMARY, policy_fingerprint,
                              semantic_config)
 from semantic_store import _current, thread_bundle
 
 
 def _object(raw) -> dict:
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    return loads_dict(raw) or {}
 
 
 def audit_history(ledger) -> dict:
