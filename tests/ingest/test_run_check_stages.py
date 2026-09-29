@@ -1903,7 +1903,8 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
 
 def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     """The own-station roster is fetched right after the self profile
-    and stored replace-on-change; a failure only adds an error code."""
+    and stored replace-on-change; a failure keeps the stored roster and
+    is reported outside errors."""
     import mcs_signals
     import notify_cards
     import notify_cmds
@@ -1948,6 +1949,8 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     result = {"errors": []}
     run_check._run_jobs(failing, db, args, {}, result,
                         time.monotonic() + 300, False, None)
-    assert result["errors"] == ["station_staff: RuntimeError"]
+    # optional roster data: reported, never a health-degrading error
+    assert result["errors"] == []
+    assert result["station_staff"] == "failed: RuntimeError"
     assert mcs_signals.latest_station_staff(db.db) == roster
     db.close()

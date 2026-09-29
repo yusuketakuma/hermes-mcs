@@ -47,8 +47,9 @@
   `allowed_role_ids` と `mcs_setup.py init --plugin-role-ids`
 - **自局スタッフ一覧の取得** — `/users/self` の所属局について
   `GET /stations/{id}/staffs` を自己プロフィールと同じ頻度で読み、
-  `station_staff_v1` artifact に保存（変化時のみ追記。失敗は
-  `station_staff:` エラーを記録するだけで tick は止めない）
+  `station_staff_v1` artifact に保存（変化時のみ追記。失敗は run 結果の
+  `station_staff: "failed: <型>"` に残すだけで、errors・health には
+  影響しない）
 - **カードの4行目（view・押した本人にだけ表示）** — `📋 自分のタスク`
   （押した人の表示名が担当者欄と一致する未完了タスクを全患者分、期限切れ
   を先頭に）、`🗂 未確認一覧`（直近7日に更新され今の内容に確認が付いて

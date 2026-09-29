@@ -450,7 +450,8 @@ $PY mcs/views/mcs_view.py signals --project 123
   `{staff_id, name, professions, station, is_self}` を
   `station_staff_v1` artifact に記録する（変化時のみ追記）。スタッフ名は
   投稿の送信者名と同様にローカル台帳にだけ保存される。失敗は
-  `station_staff: <型>` をエラーに記録するだけで既存の一覧を保つ。
+  run 結果の `station_staff: "failed: <型>"` として記録し（`errors` には
+  入れないので health を degraded にしない）、既存の一覧を保つ。
   通知カードの `📝 タスク作成` の担当者候補（`notify_cards.assignee_choices()`、
   最大25件）はこの一覧を使い、無ければ自局名で投稿した送信者で代替する。
 - カードの view 一覧（4行目）: `📋 自分のタスク` は
