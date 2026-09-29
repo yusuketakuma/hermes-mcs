@@ -1,5 +1,115 @@
 # Changelog
 
+## [1.0.6] — 2026-09-29
+
+v1.0.5 の独立レビュー指摘への修正（3 wave）と、その後の全体
+リファクタリング・未解決事項の解消。未確認フラグの fail-closed
+統一、Discord/Slack の確定・取消規則の一本化、配送 journal の
+差分読み、そして更新・復旧経路（mcs_update / 独立 watchdog）が
+launchctl・git・pgrep の異常や restore 同意待ちの最中でも
+drainer を止めたまま放置せず、同意を無効化しないよう強化した
+（v1.0.5 から 109 コミット・199 ファイル）。`hermes_plugin/` と
+`deployment/recovery/` に変更があるため、gateway 再起動と
+watchdog の再配置が必要。
+
+### 動作が変わるもの
+
+- **未確認フラグ（`unverified`）を fail-closed に統一** — 依頼・
+  症状・薬の各項目は、フラグが欠落または literal false の時だけ
+  確認済みとして扱う。従来は signals の SQL が JSON true だけを
+  除外し、症状・薬の判定は truthiness だったため、`0`・`null`・
+  `"true"` などが確認済みの根拠として候補化されていた
+  （`ITEM_CONFIRMED_SQL` / `item_unverified`）。未確認の依頼は
+  rollup・brain export・表示で確認済みと混ざらない
+- **確定・取消の判定を registry に一本化** — Discord と Slack が
+  `Registry.take_confirm` で一度に判定する。本人の認可は両ボタン
+  で確認し、project scope は「確定」だけを制限（scope 外になった
+  preview も本人は取り消せる）。確認の TTL が lookup と take の間
+  で切れた場合に、古い payload のままコマンドを投入していた
+  問題も解消
+- **Slack の拒否応答を Discord と同じ文言に** — 期限切れ・他人の
+  クリック・チャンネル不一致・カード token 消失・scope 外の確定に、
+  クリックした本人だけへ ephemeral で返す（未検証の送信元は
+  従来どおり無応答）
+- **launchd bootstrap は `launchctl print` で検証して成功とする** —
+  setup・update・独立 watchdog・install.sh の全経路で、exit 0
+  だけを成功扱いにしない（`mcs_util.launchd_bootstrap`）
+- **更新経路の launchctl 待ち時間に上限** — 1 呼出し 10 秒
+  （`T_LAUNCHCTL`）、再起動全体 120 秒（`RESTART_BUDGET_S`）。
+  launchd が固まっても post-merge 子プロセスの 600 秒上限内
+  （最悪約 524 秒）に収まり、正常な更新が kill → rollback されない
+- **restore 同意待ち（consent hold）はあらゆる escalate で維持** —
+  git 失敗・MERGE_HEAD 残存・判別不能な repo 状態などでも、hold 中は
+  drainer を止めたまま marker と受領記録を残し
+  `restore_consent_blocked` を報告する（outbox に書かないので
+  承認対象の loss report は変わらない）。journal に記録のない hold
+  も restore marker から検出して記録し直す
+- **escalate 通知は条件ごとに 1 回** — 同じ journal・同じ原因では
+  再通知せず、状態変化時または 6 時間経過で再通知。hold 外の
+  再 escalate は drainer を bounce せず、止まっているものだけ起動する
+- **lifecycle の verified 判定を公開 gate と同じ規則に** — 最新の
+  fact audit だけを見る（`semantic_v4.fact_audit_verdict`）。古い
+  PASS まで遡って verified と数えることはない
+- **health watch** — ok→ok では通知せず、回復時に 1 回だけ通知。
+  stale アラートは stale の根拠で重複排除する
+- **canonical 昇格を出荷済み G6 基準で gate** — install は失敗した
+  stage で停止し、cron の収束を検証する
+
+### 修正した問題
+
+- **配送（hermes_plugin）** — tick ごとの journal 全件走査を
+  差分読みに置換（1 tick の読み取りが約 1MB で増え続けていたのを
+  一定に）し、保持中の view が後の refresh で書き換わる潜在不具合を
+  修正。巻き戻った配送の fence、変化した source 上で拒否された
+  begin のカード即時再発行、配送済み本文の破棄、signal 通知 off
+  時の render claim、旧世代 worker が知らない feature を持つ spec
+  の保留、Discord 作成 POST の single-shot 化（429 後の SDK
+  再試行は許可）
+- **semantic** — stale な canonical 行の再 projection、
+  fact_source 往復後の projection 復活、壊れた artifact JSON /
+  stage metadata への耐性、open obligation 上で PASS を公開しない、
+  LLM 要求が未送信なら job を defer、LLM 保留中の Jev 予算消費の
+  抑止、送信時 chunking に対する部分 receipt の証明
+- **抽出** — 完了訪問を「予定通り」として報告、O2 流量・不整脈を
+  vitals や訪問として誤読しない（`RULE_VERSION` 6）、イベント
+  手がかりのある本文を低信号 prefilter から除外、根拠のない依頼
+  本文の長さ制限、backoff 比較の時計を書込み側と統一
+- **収集** — run 単位の relogin 予算を run 境界でも適用、有効
+  session 下の 403 は要求単位の拒否として扱う、drain lock 競合中も
+  未読 tick を継続
+- **運用** — 更新復旧が system Python・任意の checkout から収束、
+  install.sh の再実行耐性、バックアップの fsync、consent hold の
+  順序、不要 cron job の削除検証、`apply()` が他の run の journal
+  をロックなしで rollback しない、pgrep 失敗を「残存なし」と
+  扱わない、`restart_agents` の pid 待ちが全体期限を上書きしない
+- **表示** — 表示中の世代と食い違う view 統計、未確認の依頼を
+  確認済みとして描画しない
+
+### 内部構造・開発者向け
+
+- **重複実装の共通化** — fact binding・projection 現行判定・
+  object meta ガード・scope lock 待ち・restore marker / dir fsync・
+  relogin・publish・criteria hash などを 1 か所に集約（挙動不変）
+- **テスト共通 helper（testkit）** — semantic・views・notify・
+  plugin・ops の testkit を新設し、テストモジュール間の import を
+  0 に。`test_extract_llm_v2.py` を `test_extract_llm.py` に改名
+- **docs/ROADMAP.md** — 機能候補 v2（PR #1）
+
+### アップグレード時の注意
+
+- **`hermes gateway restart` が必要** — `hermes_plugin/` を変更
+- **独立 watchdog の再配置が必要** — 自動更新は
+  `~/.mcs-recovery` を更新しない。repo の checkout で
+  `./install.sh --no-brew --no-llm --no-plugin --no-services`
+  を実行する（旧版は `mcs_recover.py.prev` に退避される）
+- **ルール抽出の再実行** — `RULE_VERSION` 6 への bump により
+  通常の stale 経路で再抽出される
+- **semantic evaluation の schema が v3 に** —
+  `semantic-evaluation/v3`
+- **rollup は再計算しない** — `PERIOD_CHECK_VERSION` は 2 の
+  まま（変更点は producer が書かない非 bool フラグにしか影響
+  しないため）
+
 ## [1.0.5] — 2026-09-28
 
 抽出パイプラインの精度改善（本文中の裏付けを必須化したイベント
