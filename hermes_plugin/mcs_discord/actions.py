@@ -31,7 +31,6 @@ RESULT_POLL_S = 0.5
 RESULT_WAIT_S = 20.0          # interactive ops budget (plan §7: p95<=6s)
 MODAL_OPEN_WAIT_S = 1.5       # send_modal initial-response ceiling ~3s
 HUMAN_WAIT_S = 25.0           # human command drains can queue behind tick
-_MODAL_ACTIONS = ("request", "dismiss", "report", "search")
 
 
 def _task_view(items: list):
@@ -290,7 +289,7 @@ class Actions:
             await self._ephemeral(interaction, "権限がありません。")
             return
 
-        if action in _MODAL_ACTIONS:
+        if action in text.MODAL_ACTIONS:
             await self._open_modal(interaction, token, action, actor,
                                    origin, ctx)
             return

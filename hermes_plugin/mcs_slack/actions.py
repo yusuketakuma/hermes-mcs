@@ -7,9 +7,9 @@ import time
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (MODAL_TITLES, SEARCH_EMPTY, ja,
-                                 modal_fields, preview_text, search_query,
-                                 task_list_text, view_answer)
+from ..mcs_delivery.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
+                                 ja, modal_fields, preview_text,
+                                 search_query, task_list_text, view_answer)
 from .cards import LINK_ACTION, _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -18,7 +18,6 @@ _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
-_MODAL_ACTIONS = ("request", "dismiss", "report", "search")
 # block ids of modals opened by a worker that predates pending
 # field_ids — text.task_attrs / dismiss_attrs still accept these keys
 _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
@@ -279,7 +278,7 @@ class Actions:
         except (OSError, ValueError):
             await self._say(origin["channel_id"], user, "送信に失敗しました。")
             return
-        if kind in _MODAL_ACTIONS:
+        if kind in MODAL_ACTIONS:
             await self._open_modal(body, env, token, actor, origin, ctx,
                                    kind, clicker)
             return
