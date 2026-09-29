@@ -1741,3 +1741,45 @@ def test_backup_skip_is_recorded(monkeypatch):
     result = {"errors": []}
     run_check._housekeeping(result)
     assert result == {"errors": [], "backup_skipped": "disk_low"}
+
+
+@pytest.mark.parametrize("jobs_only,has_profile,fetched", [
+    (False, True, False),   # tick with a stored profile: no GET
+    (False, False, True),   # tick before the first profile: fetch it
+    (True, True, True),     # deep run always refreshes
+])
+def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
+                                 has_profile, fetched):
+    import mcs_signals
+    import notify_cards
+    import notify_cmds
+    db = _ledger(tmp_path)
+    prof = {"sender_id": 1, "name": "synthetic", "professions": [],
+            "organizations": []}
+    if has_profile:
+        with db.db:
+            mcs_signals.record_self_profile(db.db, prof)
+    calls = []
+
+    class Adapter:
+        def self_profile(self):
+            calls.append(1)
+            return prof
+
+    monkeypatch.setattr(run_check, "HOME", str(tmp_path))
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
+                 "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_cards, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands",
+                        lambda *a, **k: None)
+    result = {"errors": []}
+    args = SimpleNamespace(jobs_only=jobs_only, download_files=False)
+    run_check._run_jobs(Adapter(), db, args, {}, result,
+                        time.monotonic() + 300, False, None)
+    assert result["errors"] == []
+    assert bool(calls) is fetched
+    assert mcs_signals._latest_self_profile(db.db)["name"] == "synthetic"
+    db.close()

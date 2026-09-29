@@ -1055,13 +1055,17 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
 
     # own identity: name/professions/stations from MCS, persisted
     # as the signal engine's default self (config overrides). Never
-    # fails the run — an unusable profile is a logged warning.
+    # fails the run — an unusable profile is a logged warning. The
+    # profile rarely changes: refresh it on deep (--jobs-only) runs, and
+    # on a tick only until the first artifact exists.
     try:
         import mcs_signals
-        prof = adapter.self_profile()
-        with ledger.db:
-            if mcs_signals.record_self_profile(ledger.db, prof):
-                result["self_profile"] = "updated"
+        if args.jobs_only \
+                or not mcs_signals._latest_self_profile(ledger.db):
+            prof = adapter.self_profile()
+            with ledger.db:
+                if mcs_signals.record_self_profile(ledger.db, prof):
+                    result["self_profile"] = "updated"
     except Exception as e:
         result["errors"].append(f"self_profile: {type(e).__name__}")
 
