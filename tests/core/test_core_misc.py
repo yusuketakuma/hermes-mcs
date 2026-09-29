@@ -1021,3 +1021,52 @@ def test_backup_publish_fsyncs_copy_and_directory(tmp_path, monkeypatch,
     i = events.index(("replace", None))
     assert ("fsync", False) in events[:i]
     assert ("fsync", True) in events[i + 1:]
+
+
+def _pre_v3_rows(tmp_path, version, drop_fts=False):
+    """A synthetic DB whose message lacks the v3 derived columns and FTS
+    row, stamped at ``version``."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1, body="synthetic phrase")])
+    db.db.execute("UPDATE messages SET posted_at_ts=NULL, body_text=NULL")
+    if drop_fts:
+        db.db.executescript("DROP TRIGGER messages_ai; DROP TRIGGER messages_au;"
+                            " DROP TABLE messages_fts;")
+    else:
+        db.db.execute("DELETE FROM messages_fts")
+    db.db.execute(f"PRAGMA user_version={version}")
+    db.db.commit()
+    db.close()
+
+
+def _fts_count(db):
+    return db.db.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
+
+
+def test_upgrade_open_backfills_v3_columns_and_fts(tmp_path):
+    _pre_v3_rows(tmp_path, 2)
+    db = _ledger(tmp_path)
+    row = db.db.execute(
+        "SELECT posted_at_ts, body_text FROM messages").fetchone()
+    assert row["posted_at_ts"] and row["body_text"] == "synthetic phrase"
+    assert _fts_count(db) == 1
+    db.close()
+
+
+def test_current_version_open_skips_v3_backfill(tmp_path, monkeypatch):
+    _ledger(tmp_path).close()
+    calls = []
+    monkeypatch.setattr(ledger.Ledger, "_backfill_v3",
+                        lambda self: calls.append(1))
+    _ledger(tmp_path).close()
+    assert calls == []
+
+
+def test_current_version_open_fills_newly_created_fts(tmp_path):
+    """A DB written without FTS5 keeps user_version current; the first
+    FTS5-capable open must still index its existing rows."""
+    _pre_v3_rows(tmp_path, ledger.SCHEMA_VERSION, drop_fts=True)
+    db = _ledger(tmp_path)
+    assert _fts_count(db) == 1
+    db.close()
