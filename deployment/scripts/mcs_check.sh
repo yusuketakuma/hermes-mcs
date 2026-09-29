@@ -39,8 +39,13 @@ try:
 except Exception:
     sys.exit(0)
 if h.get("collection") == "incomplete":
-    print("mcs check: collection incomplete — projects "
-          + ",".join(str(p) for p in h.get("incomplete_projects", [])))
+    # name the cause: unread-fetch gaps and/or stalled history_head
+    # backfills; an empty list is never printed
+    why = [label + ",".join(str(p) for p in pids)
+           for label, pids in (("projects ", h.get("incomplete_projects")),
+                               ("stalled=", h.get("coverage_stalled")))
+           if pids]
+    print("mcs check: collection incomplete — " + " ".join(why))
 PYEOF
 fi
 exit "$rc"
