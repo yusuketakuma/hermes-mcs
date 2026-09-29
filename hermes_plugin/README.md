@@ -18,7 +18,10 @@ Loop候補の採用も既存requestのpreview/confirmを使う。
 
 MCS checkout全体を読める配置で、対象Hermes profileの`plugins/mcs-discord-commands`を
 この`hermes_plugin`ディレクトリへのsymlinkにする。pluginだけをコピーすると
-隣の`mcs/`を参照できない。snapshotは公開済みread-only copy、inboxは既存の限定
+隣の`mcs/`を参照できない。既定profile（`~/.hermes`）へのsymlinkと
+`hermes plugins enable mcs-discord-commands`は`./install.sh`のstage 3が行う
+（checkoutを移動したら新しい場所で再実行。別checkoutを指す既存linkは
+`--force-repo`指定時だけ張り替える）。snapshotは公開済みread-only copy、inboxは既存の限定
 書込ディレクトリを指定する。原本DB・backup・credentialsは公開しない。
 
 設定例（値は合成値。実際の許可scopeへ置き換える）：

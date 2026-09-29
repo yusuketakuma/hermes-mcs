@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased]
+
+新規導入を専門知識なしで進められるよう、`install.sh` に読取り専用の
+事前チェックと計画表示を加え、途中で止まった導入が再実行で収束する
+ようにした。`mcs_setup` は定期ジョブの実行基盤まで検証し、直す順番を
+示す。導入文書（INSTALLATION・SETUP_AGENT・README）を実装に合わせて
+更新した。
+
+### 追加
+
+- **`./install.sh --preflight`（別名 `--check-only`）** — 前提条件を
+  読取り専用で確認し `OK`/`WARN`/`NG` と直し方（`fix:`）を表示。
+  NG があれば exit 1。何も書き込まない
+- **`./install.sh --dry-run`** — preflight に加え、各ステージが作成・
+  変更するものを表示。何も書き込まない
+- **`./install.sh --force-repo`** — 別の checkout から導入済みの環境
+  （plugin symlink・`~/.mcs-recovery/repo_path`・services）をこの
+  checkout に切り替える。指定しなければ停止する
+- **`mcs_setup.py doctor`** — インタプリタ・`hermes` の解決先（launchd
+  PATH 含む）・repo・各 launchd agent のロード状態を表示してから
+  `check` を実行
+- **`MCS_MODEL_SHA256`**（任意）— 設定するとモデル DL 後に sha256 を照合
+- 導入完了時に `Installed. Summary:` と、次に実行するコマンド（venv
+  インタプリタのフルパス付き）を表示
+
+### 動作が変わるもの
+
+- **install.sh はステージ失敗で停止する** — brew 以外も含め全ステージが
+  失敗時に非 0 で止まり、後続ステージを実行しない。再実行すると中断した
+  clone/checkout・venv・pip install・モデル DL（`.part` から再開）が
+  続きから収束する
+- **install.sh は root / sudo 実行を拒否**、`-` で始まる未知の引数は
+  exit 2
+- **`hermes` が PATH にあっても `~/.hermes/hermes-agent/venv` を作る** —
+  services が全ジョブをこのインタプリタで起動するため
+- 新規作成ファイルは所有者のみ読み書き可（`umask 077`）
+- llama-server plist の内容変更を検出し、サーバ応答中は再読込を保留して
+  コマンドを案内、無応答なら再読込する
+- **`mcs_setup.py check` の検証追加** — services 用インタプリタ
+  （`~/.hermes/hermes-agent/venv/bin/python`）、launchd PATH での
+  `hermes` 解決、復旧 watchdog `org.mcs.recovery`（導入・repo 版との差分・
+  `repo_path`・ロード状態）、llama-server agent のロード状態。末尾に
+  `blockers (N) — fix in this order:` を表示
+- **`mcs_setup.py init` は壊れた `config.json` で停止** — `--yes` のときだけ
+  `config.json.corrupt-<日時>` へ退避して既定値から続行
+- **`mcs_setup.py services` は services 用インタプリタが無ければ何も
+  描画せず exit 1**
+- `init --help` に非対話実行の例を表示
+- `llamacpp_restart_if_idle.sh` は llama-server の launchd agent が
+  ロードされていなければ skip して exit 0、`kickstart` 失敗時は非 0
+
+### 文書
+
+- INSTALLATION.md 冒頭に「最短手順」、§7 に preflight / install.sh /
+  check のメッセージ別対処表。Path B の `python3` を `python3.13` に、
+  Path A の後続コマンドを venv インタプリタに統一（新規 Mac の
+  `python3` は 3.9 系で `mcs_setup` が動かない）。checkout の移動と
+  `~/.mcs-recovery/repo_path` を追記（§A-7）
+- ジョブ一覧表を `deployment/launchagents/README.md` に一本化
+
 ## [1.0.6] — 2026-09-29
 
 v1.0.5 の独立レビュー指摘への修正（3 wave）と、その後の全体

@@ -45,7 +45,7 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 ```
 GitHub Releases (tag) ──検出──> mcs_update.py 📋
                                      │
-./install.sh → brew/hermes/plugin/llm/services   [導入]
+./install.sh → brew/hermes/plugin/llm/services/recovery   [導入]
 mcs_setup.py init → config.json / Keychain / .env / hermes plugin settings
 mcs_setup.py services → ~/Library/LaunchAgents/* + ~/.hermes/scripts/* + cron
 mcs_setup.py check → 検証ゲート
@@ -62,7 +62,7 @@ mcs_setup.py check → 検証ゲート
   update_in_progress.marker📋  quiesce 中の補助 launcher 沈黙フラグ
   service_manifest.json📋 services が管理した script/agent/cron の配置・登録内容
 ~/.mcs/.env                          MCS_PASSWORD・TYPESAFE_API_KEY
-~/.mcs-recovery/mcs_recover.py📋     repo 外の凍結復旧プログラム（+.prev）
+~/.mcs-recovery/mcs_recover.py📋     repo 外の凍結復旧プログラム（+.prev。復旧対象 checkout は同 dir の repo_path）
 ~/.hermes/.env                       DISCORD_BOT_TOKEN 等
 Keychain 'mcs-adapter'               MCS パスワード
 ```
@@ -75,16 +75,28 @@ Keychain 'mcs-adapter'               MCS パスワード
 
 ## 4. 初期インストール仕様 ✅
 
-入口は `./install.sh` 1本（冪等・再実行安全）。
+入口は `./install.sh` 1本（冪等・再実行安全）。`--preflight`
+（別名 `--check-only`）は読取り専用の前提チェック（OK/WARN/NG +
+`fix:`、NG があれば exit 1）、`--dry-run` はそれに各段の計画表示を
+加える（どちらも書込みなし）。root 実行は拒否、未知オプションは
+exit 2、別 checkout からの既存導入（`~/.mcs-recovery/repo_path`・
+plugin symlink）への上書きは `--force-repo` 指定時のみ。
+
+いずれかの段が失敗すると install 全体が非 0 で停止し、後続段は
+実行しない。再実行で完了済みは skip、中断分（clone/checkout・venv・
+pip install・モデル DL の `.part`）は続きから収束する。
 
 | 段 | 内容 | 失敗時 |
 |---|---|---|
-| brew | git/python@3.13/uv/llama.cpp/Chrome(cask) | warn → 手動案内 |
-| hermes | pin commit clone + venv + `~/.local/bin/hermes` shim | 中断 |
-| plugin | `~/.hermes/plugins/` symlink + `plugins enable` | warn |
-| LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip。else モデル DL + `ai.mcs.llamaserver` bootstrap | warn |
-| services | `mcs_setup.py services` へ委譲 | warn |
-| recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `org.mcs.recovery` launchd watchdog bootstrap | warn |
+| brew | git/python@3.13/uv/llama.cpp/Chrome(cask) | 停止（brew 不在・導入失敗） |
+| hermes | pin commit clone + venv（`hermes` が PATH にあっても作成）+ `~/.local/bin/hermes` shim | 停止 |
+| plugin | `~/.hermes/plugins/` symlink + `plugins enable` | 停止 |
+| LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip（hermes 管理 agent が未ロードなら warn で bootstrap 案内）。else モデル DL（再開可・任意 `MCS_MODEL_SHA256` 照合）+ `ai.mcs.llamaserver` bootstrap。plist 変更時は応答中なら warn で再読込を保留 | 停止 |
+| services | `~/.mcs/data{,/cmd,/cmd_int}` 作成 + `mcs_setup.py services` へ委譲 | 停止 |
+| recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
+
+新規作成物は `umask 077`（所有者のみ）。完了時に `Installed. Summary:`
+と次のコマンド（venv インタプリタのフルパス付き）を表示する。
 
 残る1ステップ `mcs_setup.py init`（対話ウィザード）:
 
@@ -104,8 +116,19 @@ script 名で dedup 登録（現行5件 + 📋`mcs_update`）→
 `install`+`start`。📋manifest 記録・reconcile・atomic render は
 更新仕様で追加。
 
-`check`（exit 1 で失敗）: config 型検証・Keychain・Chrome・LLM・
-トークン解決・launchd 4件・gateway supervised（discord 時）。
+`services` は services 用インタプリタ
+（`~/.hermes/hermes-agent/venv/bin/python`）が無ければ何も描画せず
+exit 1。
+
+`check`（exit 1 で失敗）: 実行基盤（services 用インタプリタ・
+launchd PATH での `hermes` 解決・`org.mcs.recovery` の導入/drift/
+`repo_path`/ロード・llama-server agent のロード）→ config 型検証 →
+Keychain・Chrome・LLM・トークン解決・launchd 4件・gateway
+supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾に
+`blockers (N) — fix in this order` を出す。`doctor` は環境の事実
+（インタプリタ・hermes 解決先・repo・launchd 状態）を出してから
+`check` を実行する。`init` は壊れた config.json では停止し、
+`--yes` 時のみ `config.json.corrupt-<ts>` へ退避して続行する。
 
 ## 5. 更新仕様 📋
 
