@@ -1,12 +1,8 @@
 """Shared fixtures for the split ingestion suite — ledger handle and
 ``mcs_adapter`` record factories.  Not a test module (no ``test_``
 prefix); sibling files import it via the tests/ sys.path bootstrap."""
-import sys
 import time
 from datetime import datetime
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import ledger
 import mcs_adapter

@@ -10,12 +10,9 @@ attachment paths as real directives.
 import sys
 import json
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import notify_flush
 import structured_view

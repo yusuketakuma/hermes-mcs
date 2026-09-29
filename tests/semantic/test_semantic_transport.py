@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import socket
-import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import conftest as test_guard
 import semantic_jev as jev

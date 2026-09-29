@@ -4,13 +4,6 @@ materialize the link only when it is unambiguous. Synthetic rows +
 temp DBs only."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ops"))
-import _mcs_path  # noqa: F401
-
 import mcs_queries
 import mcs_requests
 

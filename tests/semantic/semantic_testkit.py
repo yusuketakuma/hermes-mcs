@@ -4,12 +4,8 @@ drain drivers, evaluation records and semantic-facts/v2 ``fact``/``doc``
 builders.  Not a test module (no ``test_`` prefix); sibling files import
 it via the tests/ sys.path bootstrap."""
 import json
-import sys
 import time
-from pathlib import Path
 from types import SimpleNamespace
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import ledger
 import mcs_adapter

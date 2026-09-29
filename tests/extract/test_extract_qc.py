@@ -5,11 +5,7 @@ through the shared run_due path, annotate-only verdict artifacts, and
 fail-open behavior for every Jev failure class.
 """
 import json
-import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
 import semantic

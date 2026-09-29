@@ -24,15 +24,11 @@ Coverage map (spec MCS-REFACTOR-FIRST-20260920 AT ids):
 """
 import datetime
 import json
-import sys
 import time
 import urllib.error
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import ledger
 import mcs_adapter

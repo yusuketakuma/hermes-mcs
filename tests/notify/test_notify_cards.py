@@ -7,13 +7,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
-import _mcs_path  # noqa: F401
 
 import notify_cards
 import notify_reconcile

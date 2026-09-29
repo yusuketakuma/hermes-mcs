@@ -1,14 +1,10 @@
 """Semantic ingestion revisions preserve coverage without reviving unchanged jobs."""
 
 import json
-import sys
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import ledger
 import mcs_adapter

@@ -7,15 +7,11 @@ consumer filters that keep negated / other-person / historical mentions
 out of "current" surfaces.
 """
 import json
-import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import extract_llm
 import mcs_signals
