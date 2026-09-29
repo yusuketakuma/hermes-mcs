@@ -117,6 +117,7 @@ CONFIG_RULES = {
     "update":                (False, _dict),
     "local_llm":             (False, _dict),
     "health":                (False, _dict),
+    "daily_digest":          (False, _dict),
 }
 
 
@@ -262,6 +263,14 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 errors.append(f"signals.digest_interval_h: {err}")
         if "tiers" in sig and not isinstance(sig["tiers"], dict):
             errors.append("signals.tiers: must be an object")
+    dd = cfg.get("daily_digest")
+    if isinstance(dd, dict):
+        if "enabled" in dd and type(dd["enabled"]) is not bool:
+            errors.append("daily_digest.enabled: must be a boolean")
+        if "hour_jst" in dd:
+            err = _int_range(0, 23)(dd["hour_jst"])
+            if err:
+                errors.append(f"daily_digest.hour_jst: {err}")
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
         # a scope block for the transport that is NOT active is stale —
@@ -672,6 +681,10 @@ def _signals_on(cfg):
     return (cfg.get("signals") or {}).get("notify") is True
 
 
+def _digest_on(cfg):
+    return (cfg.get("daily_digest") or {}).get("enabled") is True
+
+
 def _semantic_on(cfg):
     m = (cfg.get("semantic") or {}).get("mode", "off")
     return m != "off"
@@ -720,6 +733,10 @@ WIZARD = [
          "この時間より古い未読は通知しない（時間・空欄=制限なし）", None),
         ("hermes_bin", "opt", None,
          "hermes コマンドのパス（空欄=自動検出）", None),
+        ("daily_digest.enabled", "bool", False,
+         "朝の日次ダイジェスト（件数とIDのみ）を notify_target に送る", None),
+        ("daily_digest.hour_jst", "int", 8,
+         "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
     ]),
     ("収集ポリシー", [
         ("self_posts", "bool", False,

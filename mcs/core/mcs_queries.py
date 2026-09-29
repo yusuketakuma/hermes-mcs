@@ -384,6 +384,31 @@ def incomplete_reply_roots(db, project_id) -> int:
     """, (project_id,)).fetchone()[0]
 
 
+def coverage_gaps(db) -> dict:
+    """Ledger-wide fetch coverage as RECORDED — rooms marked incomplete
+    (with their reason code), waiting/failed fetch jobs by kind, stored
+    messages without a full body, thread roots missing replies. Empty
+    lists/zeros mean nothing was recorded as incomplete, never that the
+    history is gapless. Archived rooms are left out."""
+    live = "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0"
+    rooms = [(r["project_id"], r["fetch_reason"] or "unrecorded")
+             for r in db.execute(
+                 "SELECT project_id, fetch_reason FROM patients "
+                 "WHERE fetch_state='incomplete' AND COALESCE(is_archived,0)=0 "
+                 "ORDER BY project_id")]
+    jobs = {r["kind"]: r["n"] for r in db.execute(
+        f"SELECT kind, count(*) n FROM fetch_jobs WHERE state IN "
+        f"('pending','failed') AND project_id IN ({live}) GROUP BY kind "
+        "ORDER BY kind")}
+    partial = db.execute(
+        f"SELECT count(*) FROM messages WHERE COALESCE(body_state,'') NOT IN "
+        f"('full','deleted') AND project_id IN ({live})").fetchone()[0]
+    reply_gaps = sum(incomplete_reply_roots(db, r["project_id"])
+                     for r in db.execute(live))
+    return {"incomplete_rooms": rooms, "jobs": jobs,
+            "partial_bodies": partial, "reply_gaps": reply_gaps}
+
+
 def resolve_staff(db, name, project_id=None):
     """Canonical ``name（facility）`` for a free-text staff reference.
 
