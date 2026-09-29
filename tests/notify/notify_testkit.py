@@ -5,12 +5,14 @@ module (no ``test_`` prefix); sibling files import it via the tests/
 sys.path bootstrap."""
 from __future__ import annotations
 
+import itertools
 import json
 
 import pytest
 
 import ledger as _ledger
 import notify_cards
+import notify_cmds
 import notify_transport
 
 NOW = 1_790_000_000.0
@@ -163,3 +165,82 @@ def _extract(led, mid, content, kind="extract_v1", stale=False):
         "model,meta,created_at) VALUES(?,?,?,?,'test',?,?)",
         (kind, 1, mid, body, json.dumps(meta), NOW))
     led.db.commit()
+
+
+# ---------- delivered-card drivers (card button / view tests) ----------
+
+CLICKER = "discord:1001"
+_SEQ = itertools.count(1)
+
+
+@pytest.fixture
+def pinned_clock(monkeypatch):
+    """Wall-clock reads inside notify_cards (footer dates, reminders)
+    see NOW — use via ``pytestmark = pytest.mark.usefixtures(...)``."""
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+
+
+def _spec(led, card_id=1):
+    """The latest render's spec of a card."""
+    return json.loads(_latest_render(led, card_id)["spec_json"])
+
+
+def _deliver(led):
+    """Land the latest render (card + body parts) so the next action
+    re-renders as an update."""
+    r = _latest_render(led)
+    n = next(_SEQ)
+    _begin(led, r, n=n)
+    _receipt(led, r, f"{n:016x}", message_id="m-9", n=5000 + n)
+    _settle_bodies(led, r)
+
+
+def _delivered_card(led):
+    """A seeded thread card, dispatched and delivered — its spec."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    return _spec(led)
+
+
+def _click(led, spec, action, inputs=None, *, actor=CLICKER, now=NOW,
+           token=None):
+    """One card-button click on the delivered card (message m-9); the
+    envelope must pass the cmd_int validator first."""
+    tok = token or _token_for(spec, action)
+    req = {"version": 1, "op": "notification",
+           "command_id": f"{tok}:{next(_SEQ):016x}", "actor": actor,
+           "token": tok, "origin": dict(ORIGIN, message_id="m-9")}
+    if inputs:
+        req["input"] = inputs
+    assert notify_cmds.validate_int(req) is None
+    return notify_cards.apply_notification(led, req, CFG, now=now)
+
+
+def _add_request(led, title="残薬確認", assignee=None, due=None, *,
+                 status="open", pid=1, src_mid=100):
+    rid = led.db.execute(
+        "INSERT INTO requests(project_id,source_message_id,source_hash,"
+        "title,assignee,due_date,status,revision,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,1,?,?)",
+        (pid, src_mid, f"{src_mid:064x}", title, assignee, due, status,
+         NOW, NOW)).lastrowid
+    led.db.commit()
+    return rid
+
+
+def _llm_extract(led, mid, content, version=True):
+    """A current extract_llm artifact of message ``mid`` (project 1)."""
+    import extract_llm
+    h = led.db.execute("SELECT content_hash FROM messages WHERE "
+                       "message_id=?", (mid,)).fetchone()[0]
+    meta = {"hash": h}
+    if version:
+        meta["extract_version"] = extract_llm.EXTRACT_VERSION
+    aid = led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('extract_llm',1,?,?,'test',?,?)",
+        (mid, json.dumps(content, ensure_ascii=False), json.dumps(meta),
+         NOW)).lastrowid
+    led.db.commit()
+    return aid

@@ -34,6 +34,7 @@ from hermes_plugin.mcs_delivery import spec as spec_mod
 from hermes_plugin.mcs_delivery import worker as worker_mod
 from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
                                        delivery, tasks)
+from notify_testkit import _add_request, _llm_extract
 from discord_testkit import (
     CFG, MISSING, NOW, SETTINGS, FakeBot, FakeHTTP, FakeMessage, FakeThread,
     _fake_discord,
@@ -2729,18 +2730,11 @@ def test_role_member_can_click_and_others_are_told(world):
     assert act._followup_authorized(rec) is False
 
 
-def _llm(world, mid, content):
-    return world.led.db.execute(
-        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
-        "meta,created_at) VALUES('extract_llm',1,?,?,'test',?,?)",
-        (mid, json.dumps(content, ensure_ascii=False),
-         json.dumps({"hash": f"{mid:064x}"}), NOW)).lastrowid
-
-
 def test_task_modal_roster_prefill_confirm_and_footer(world):
     import mcs_signals
     world.seed()
-    _llm(world, 100, {"requests": [{"action": "残薬を確認", "to": None}]})
+    _llm_extract(world.led, 100,
+                 {"requests": [{"action": "残薬を確認", "to": None}]})
     with world.led.db:
         mcs_signals.record_station_staff(world.led.db, [
             {"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"},
@@ -2819,7 +2813,7 @@ def test_summary_click_answers_ephemeral(world):
 
 def test_report_modal_records_feedback(world):
     world.seed()
-    aid = _llm(world, 101, {"summary": "s"})
+    aid = _llm_extract(world.led, 101, {"summary": "s"})
     world.led.db.commit()
     world.dispatch()
     worker, reg, bot, spec = _delivered(world)
@@ -2873,22 +2867,14 @@ def test_old_defer_button_answers_retired(world):
 
 # ---------- 📋 / 🗂 / 🔎 / 🚫 reason code ------------------------------------
 
-def _task(world, title, assignee, pid=1, due=None):
-    world.led.db.execute(
-        "INSERT INTO requests(project_id,source_message_id,source_hash,"
-        "title,assignee,due_date,status,revision,created_at,updated_at) "
-        "VALUES(?,100,?,?,?,?,'open',1,?,?)",
-        (pid, "0" * 64, title, assignee, due, NOW, NOW))
-    world.led.db.commit()
-
-
 def test_my_tasks_uses_display_name_and_project_scope(world):
     world.seed()
     world.dispatch()
     worker, reg, bot, spec = _delivered(world)
-    _task(world, "残薬確認", "山田 花子（みどり薬局）", due="2026-01-01")
-    _task(world, "範囲外の件", "山田 花子", pid=2)
-    _task(world, "他人の件", "佐藤")
+    _add_request(world.led, "残薬確認", "山田 花子（みどり薬局）",
+                 "2026-01-01")
+    _add_request(world.led, "範囲外の件", "山田 花子", pid=2)
+    _add_request(world.led, "他人の件", "佐藤")
     act = world.mkactions(reg, bot)
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'mytasks')}",
                          message_id=bot.channels[42].sent[0].id)
