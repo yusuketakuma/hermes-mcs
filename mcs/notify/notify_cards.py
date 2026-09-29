@@ -235,13 +235,17 @@ CREATE TABLE IF NOT EXISTS notification_restore_holds(
   release_command_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_nholds_active
   ON notification_restore_holds(card_id, released_at);
--- ⏰ one reminder per task and stage — the durable once-only marker
+-- ⏰ one reminder per task, stage and due date — the durable once-only
+-- marker (a changed due date re-arms). event_id NULL = recorded without
+-- sending (first-activation baseline), and request_id 0 / 'baseline' marks
+-- that the baseline ran.
 CREATE TABLE IF NOT EXISTS notification_task_reminders(
   request_id INTEGER NOT NULL,
-  stage TEXT NOT NULL CHECK(stage IN ('due','overdue')),
+  stage TEXT NOT NULL CHECK(stage IN ('due','overdue','baseline')),
+  due_date TEXT NOT NULL,
   event_id INTEGER,
   created_at REAL NOT NULL,
-  PRIMARY KEY(request_id, stage));
+  PRIMARY KEY(request_id, stage, due_date));
 """
 
 # card action vocabulary -> (label, discord style, class). ack/assign
@@ -2105,31 +2109,30 @@ def rerender_message_cards(ledger, cfg, project_id, message_id,
 # reminders post inside this JST hour window only — a due-day reminder
 # at 3 a.m. helps nobody; the next tick in the window sends it
 REMINDER_HOURS = (8, 21)
+# a few per tick — reminders share notify_flush's per-tick budget with
+# new-message notices and must never delay them
+REMINDER_LIMIT = 3
 
 
-def task_reminders(ledger, cfg, now=None, limit=50) -> int:
-    """⏰ due-day and ⚠ overdue reminders for open tasks created from a
-    live thread card: one notify_outbox text notice per task and stage
-    (the notification_task_reminders row is the once-only marker, set in
-    the same transaction). A task already past due when first seen gets
-    only the overdue reminder. Off with the interactive switch and
-    outside REMINDER_HOURS."""
+def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
+    """⏰ due-day and ⚠ overdue reminders for open tasks linked to a live
+    thread card: one notify_outbox text notice per (task, stage,
+    due_date) — the notification_task_reminders row is the once-only
+    marker, set in the same transaction, so changing a due date re-arms.
+    A task already past due when first seen gets only the overdue
+    reminder. The first run with the interactive switch on records every
+    already-overdue task without sending (baseline) — only tasks that
+    fall due afterwards are announced. Off with the interactive switch
+    and outside REMINDER_HOURS; at most ``limit`` per call."""
     if not interactive_enabled(cfg):
         return 0
     from datetime import datetime
     from mcs_queries import JST
     now = time.time() if now is None else now
     local = datetime.fromtimestamp(now, JST)
-    if not REMINDER_HOURS[0] <= local.hour < REMINDER_HOURS[1]:
-        return 0
     today = local.date().isoformat()
     db = _db(ledger)
-    sent = 0
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        rows = db.execute(
-            """SELECT r.request_id, r.project_id, r.title, r.assignee,
-                      r.due_date FROM requests r
+    pending = """FROM requests r
                JOIN messages m ON m.message_id=r.source_message_id
                 AND m.project_id=r.project_id
                WHERE r.status IN ('open','in_progress')
@@ -2138,12 +2141,35 @@ def task_reminders(ledger, cfg, now=None, limit=50) -> int:
                      WHERE c.kind='thread' AND c.project_id=r.project_id
                        AND c.transport=? AND c.delivery_state!='revoked'
                        AND c.root_message_id IN (m.message_id, m.parent_id))
-                 AND NOT EXISTS (SELECT 1 FROM notification_task_reminders t
+                 AND NOT EXISTS (SELECT 1
+                     FROM notification_task_reminders t
                      WHERE t.request_id=r.request_id
+                       AND t.due_date=r.due_date
                        AND t.stage=CASE WHEN r.due_date=? THEN 'due'
-                                        ELSE 'overdue' END)
+                                        ELSE 'overdue' END)"""
+    args = (today, active_transport(cfg), today)
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT 1 FROM notification_task_reminders"
+                      " WHERE stage='baseline'").fetchone() is None:
+            db.execute(
+                "INSERT INTO notification_task_reminders(request_id,"
+                "stage,due_date,event_id,created_at) SELECT r.request_id,"
+                f"'overdue',r.due_date,NULL,? {pending}"
+                " AND r.due_date<?", (now, *args, today))
+            db.execute(
+                "INSERT INTO notification_task_reminders VALUES"
+                "(0,'baseline',?,NULL,?)", (today, now))
+    if not REMINDER_HOURS[0] <= local.hour < REMINDER_HOURS[1]:
+        return 0
+    sent = 0
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            f"""SELECT r.request_id, r.project_id, r.title, r.assignee,
+                      r.due_date {pending}
                ORDER BY r.due_date, r.request_id LIMIT ?""",
-            (today, active_transport(cfg), today, limit)).fetchall()
+            (*args, limit)).fetchall()
         for r in rows:
             stage = "due" if r["due_date"] == today else "overdue"
             head = (f"⏰ 期限リマインド（本日 {r['due_date']}）" if stage == "due"
@@ -2157,9 +2183,9 @@ def task_reminders(ledger, cfg, now=None, limit=50) -> int:
                 {"text": text, "request_id": r["request_id"],
                  "stage": stage})
             db.execute(
-                "INSERT INTO notification_task_reminders("
-                "request_id,stage,event_id,created_at) VALUES(?,?,?,?)",
-                (r["request_id"], stage, eid, now))
+                "INSERT INTO notification_task_reminders(request_id,"
+                "stage,due_date,event_id,created_at) VALUES(?,?,?,?,?)",
+                (r["request_id"], stage, r["due_date"], eid, now))
             sent += 1
     return sent
 

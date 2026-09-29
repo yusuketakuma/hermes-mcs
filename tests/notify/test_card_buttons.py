@@ -512,6 +512,9 @@ def _at(day, hour):
 
 def test_due_and_overdue_reminders_fire_once(led, tmp_path):
     _card(led, tmp_path)
+    # activation baseline before any task exists
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-09-20", 9)) == 0
     due = _request(led, title="今日の確認", assignee="山田", due="2026-10-01")
     late = _request(led, src_mid=101, title="<@1> 昨日の件",
                     due="2026-09-30")
@@ -535,11 +538,48 @@ def test_due_and_overdue_reminders_fire_once(led, tmp_path):
         led, CFG, now=_at("2026-10-02", 9)) == 1
     stages = led.db.execute(
         "SELECT request_id, stage FROM notification_task_reminders "
-        "ORDER BY request_id, stage").fetchall()
+        "WHERE request_id>0 ORDER BY request_id, stage").fetchall()
     assert [tuple(r) for r in stages] == [
         (due, "due"), (due, "overdue"), (late, "overdue")]
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-10-03", 9)) == 0
+
+
+def test_first_activation_baselines_old_overdue_tasks(led, tmp_path):
+    """Tasks already overdue when reminders first run are recorded, not
+    announced — only tasks that fall due afterwards are sent."""
+    _card(led, tmp_path)
+    old = _request(led, title="古い期限切れ", due="2026-09-01")
+    today = _request(led, title="本日", due="2026-10-01")
+    # the baseline runs even outside the posting hours
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-10-01", 23)) == 0
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-10-02", 9)) == 1       # today's → overdue
+    sent = [r["request_id"] for r in led.db.execute(
+        "SELECT request_id FROM notification_task_reminders"
+        " WHERE event_id IS NOT NULL")]
+    assert sent == [today] and old != today
+
+
+def test_reminders_capped_per_tick_and_rearmed_by_due_change(led, tmp_path):
+    _card(led, tmp_path)
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-09-20", 9)) == 0       # baseline
+    ids = [_request(led, title=f"t{i}", due="2026-10-01") for i in range(5)]
+    morning = _at("2026-10-01", 9)
+    assert notify_cards.task_reminders(led, CFG, now=morning) \
+        == notify_cards.REMINDER_LIMIT == 3
+    assert notify_cards.task_reminders(led, CFG, now=morning + 300) == 2
+    assert notify_cards.task_reminders(led, CFG, now=morning + 600) == 0
+    # moving the due date re-arms the task (the rest are done)
+    led.db.execute("UPDATE requests SET status='done' WHERE request_id!=?",
+                   (ids[0],))
+    led.db.execute("UPDATE requests SET due_date='2026-10-03'"
+                   " WHERE request_id=?", (ids[0],))
+    led.db.commit()
+    assert notify_cards.task_reminders(
+        led, CFG, now=_at("2026-10-03", 9)) == 1
 
 
 # ---------- urgency badge -------------------------------------------------
