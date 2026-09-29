@@ -39,6 +39,20 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
             or None}
 
 
+def _event_logger(name: str):
+    """The worker's structured log sink: '<name> <event> <json>'."""
+    import logging
+    log = logging.getLogger(f"hermes.plugin.{name}")
+
+    fmt = name + " %s %s"      # record.msg stays '<name> %s %s'
+
+    def _event(event: str, **fields: Any) -> None:
+        log.info(fmt, event,
+                 json.dumps(fields, ensure_ascii=False,
+                            sort_keys=True, default=str))
+    return _event
+
+
 def make_discord_factory(ctx):
     def factory(native, adapter):
         """Bound at connect() per Bot instance — registers the
@@ -47,16 +61,9 @@ def make_discord_factory(ctx):
         settings = _interactive_settings(ctx, native)
         if settings is None:
             return None
-        import logging
-        log = logging.getLogger("hermes.plugin.mcs_discord")
-
-        def _event(event: str, **fields: Any) -> None:
-            log.info("mcs_discord %s %s", event,
-                     json.dumps(fields, ensure_ascii=False,
-                                sort_keys=True, default=str))
         from .mcs_discord.tasks import Supervisor
-        supervisor = Supervisor(ctx=ctx, bot=native,
-                                settings=settings, log=_event)
+        supervisor = Supervisor(ctx=ctx, bot=native, settings=settings,
+                                log=_event_logger("mcs_discord"))
         supervisor.start()
         return supervisor
     return factory
@@ -109,16 +116,10 @@ def make_slack_factory(ctx):
         if flags.get("interactive") is not True \
                 or flags.get("transport") != "slack":
             return None
-        import logging
-        log = logging.getLogger("hermes.plugin.mcs_slack")
-
-        def _event(event: str, **fields: Any) -> None:
-            log.info("mcs_slack %s %s", event,
-                     json.dumps(fields, ensure_ascii=False,
-                                sort_keys=True, default=str))
         from .mcs_slack.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
-                                settings=settings, log=_event)
+                                settings=settings,
+                                log=_event_logger("mcs_slack"))
         supervisor.start()
         return supervisor
     return factory

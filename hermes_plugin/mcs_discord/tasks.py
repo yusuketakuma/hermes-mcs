@@ -51,8 +51,7 @@ class Supervisor:
         self._settings = settings
         self._log = log
         self._root = paths.data_root(settings)
-        paths.ensure_dirs(self._root)
-        self._dirs = paths.notify_dirs(self._root)
+        self._dirs = paths.ensure_dirs(self._root)
         self._reg = registry.Registry(self._dirs["state"], scope=settings)
         self._worker_id = registry.new_worker_id()
         self._worker = delivery.DeliveryWorker(

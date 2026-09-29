@@ -3,18 +3,17 @@
 The durable claim -> transport_begin -> grant -> send ->
 transport_receipt loop lives in ``mcs_delivery.worker``; this subclass
 supplies only the Discord operations the neutral loop calls into:
-channel/message sends and edits, revoke deletes, the card's
-companion-thread body post, and the durable per-part deliveries a
+channel/message sends and edits, revoke deletes, and the durable
+per-part deliveries (companion thread, body chunks, attachments) a
 sealed manifest plans.
 """
 from __future__ import annotations
 
 import asyncio
 import io
-from collections import Counter
 from functools import partial
 
-from ..mcs_delivery import envelopes, paths, registry, text, worker
+from ..mcs_delivery import paths, registry, worker
 from . import cards
 
 # Discord delete of an already-gone message achieves the revoke goal.
@@ -148,9 +147,8 @@ class DeliveryWorker(worker.DeliveryWorker):
     async def _thread_part(self, claim: dict, part: dict,
                            ctx: dict) -> dict:
         """Create the companion thread (create/notice) or verify the
-        bound one is still live (update backfill). The capability cache
-        mirrors the legacy path: only an authorization-class reject is
-        a scope verdict — a per-message 4xx (gone, already-threaded,
+        bound one is still live (update backfill). Only an
+        authorization-class reject is cached as a scope verdict — a per-message 4xx (gone, already-threaded,
         bad name) says nothing about thread capability."""
         spec = claim["spec"]
         delivery = spec["delivery"]
@@ -210,15 +208,12 @@ class DeliveryWorker(worker.DeliveryWorker):
             return m.id
         return None
 
-    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict):
-        """Edit this bot's earlier post of the same chunk in place and
-        return its id. Only a message this bot authored in this thread
-        can be rewritten — a missing, foreign or already-bound target,
-        or an edit the API rejected outright (deleted post, archived
-        thread), returns None so the caller posts a new chunk exactly as
-        before. An edit is idempotent, so unlike a POST it needs no
-        single-shot guard; a crash after the edit is re-bound by
-        ``_remote_match``. Any other failure is unknown and propagates."""
+    async def _own_prior(self, thread, prior, ctx: dict):
+        """The runner-named earlier message, only when it still exists
+        in this thread, this bot authored it and no part bound it yet.
+        A missing, foreign or consumed target — or a lookup the API
+        rejected outright — is None; any other failure is unknown and
+        propagates."""
         try:
             pid = int(prior) if prior else None
         except (TypeError, ValueError):
@@ -228,8 +223,27 @@ class DeliveryWorker(worker.DeliveryWorker):
             return None
         try:
             msg = await thread.fetch_message(pid)
-            if getattr(getattr(msg, "author", None), "id", None) != me_id:
-                return None
+        except Exception as exc:
+            if worker.is_definitive_reject(exc):
+                return None       # deleted meanwhile — post afresh
+            raise
+        if getattr(getattr(msg, "author", None), "id", None) != me_id:
+            return None
+        return msg
+
+    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict):
+        """Edit this bot's earlier post of the same chunk in place and
+        return its id. Only a message this bot authored in this thread
+        can be rewritten — a missing, foreign or already-bound target,
+        or an edit the API rejected outright (deleted post, archived
+        thread), returns None so the caller posts a new chunk exactly as
+        before. An edit is idempotent, so unlike a POST it needs no
+        single-shot guard; a crash after the edit is re-bound by
+        ``_remote_match``. Any other failure is unknown and propagates."""
+        msg = await self._own_prior(thread, prior, ctx)
+        if msg is None:
+            return None
+        try:
             await msg.edit(content=text)
         except Exception as exc:
             if worker.is_definitive_reject(exc):
@@ -243,134 +257,10 @@ class DeliveryWorker(worker.DeliveryWorker):
         file (same sealed sha256) from an earlier render. When that
         message still exists in this thread, was posted by this bot and
         still holds a file, bind the part to it instead of uploading a
-        second copy. A missing, foreign or already-bound target, or a
-        lookup the API rejected outright, returns None so the file is
-        uploaded as before; any other failure is unknown and
-        propagates — never a blind second upload."""
-        try:
-            pid = int(prior) if prior else None
-        except (TypeError, ValueError):
-            return None
-        me_id = getattr(getattr(self._bot, "user", None), "id", None)
-        if pid is None or me_id is None or pid in ctx["consumed"]:
-            return None
-        try:
-            msg = await thread.fetch_message(pid)
-        except Exception as exc:
-            if worker.is_definitive_reject(exc):
-                return None       # deleted meanwhile — upload afresh
-            raise
-        if getattr(getattr(msg, "author", None), "id", None) != me_id \
-                or not getattr(msg, "attachments", None):
+        second copy; otherwise None and the file is uploaded as before
+        (never a blind second upload on an unknown lookup failure)."""
+        msg = await self._own_prior(thread, prior, ctx)
+        if msg is None or not getattr(msg, "attachments", None):
             return None
         ctx["consumed"].add(msg.id)
         return msg.id
-
-    async def _maybe_thread(self, claim: dict, message_id: str) -> None:
-        """Card companion thread — separated from the body send; a
-        thread failure never resends the card itself (plan §3)."""
-        spec = claim["spec"]
-        if spec["delivery"].get("thread_id"):
-            # update on a card whose thread predates the in-thread
-            # body — backfill whatever chunks are missing, once
-            if spec["op"] == "update" \
-                    and spec["parts"].get("thread_body"):
-                await self._thread_backfill(spec)
-            return
-        name = (spec["parts"].get("thread_name")
-                if spec["op"] in ("create", "notice") else None)
-        if not name:
-            return
-        scope_key = registry.scope_key(self.scope())
-        cap = self._reg.capability(scope_key)
-        if cap is not None and cap.get("ok") is False:
-            return                                 # negative-cached
-        thread = None
-        try:
-            channel = await self._channel(spec["delivery"]["channel_id"])
-            sent_message = await channel.fetch_message(int(message_id))
-            try:
-                thread = await cards.single_post(self._bot, partial(
-                    sent_message.create_thread, name=name))
-            except Exception as create_exc:
-                # same already-exists recovery as _thread_part — the
-                # thread a previous attempt or older worker left under
-                # this card message satisfies the create goal
-                thread = getattr(sent_message, "thread", None)
-                if thread is None:
-                    try:
-                        thread = await self._channel(
-                            str(sent_message.id))
-                    except Exception:
-                        raise create_exc from None
-            self._reg.put_capability(scope_key, True)
-            env = envelopes.thread_receipt(
-                spec["delivery_id"], message_id,
-                thread_id=str(thread.id))
-        except Exception as exc:
-            if getattr(exc, "status", None) in CAPABILITY_REJECT:
-                self._reg.put_capability(scope_key, False)
-            env = envelopes.thread_receipt(
-                spec["delivery_id"], message_id,
-                error_code=worker.err_code(exc))
-        await asyncio.to_thread(
-            envelopes.publish_command, self._dirs["cmd_int"], env)
-        await self._thread_body(spec, thread)
-
-    async def _thread_backfill(self, spec: dict) -> None:
-        """Threads created before the in-thread body hold no text —
-        the next update render posts it there. Best-effort like the
-        create path: failures only log."""
-        try:
-            thread = await self._channel(spec["delivery"]["thread_id"])
-        except Exception as exc:
-            self._log("thread_body_failed", error=type(exc).__name__)
-            return
-        await self._thread_body(spec, thread, dedupe=True)
-
-    async def _thread_body(self, spec: dict, thread,
-                           dedupe: bool = False) -> None:
-        """Full text lands inside the companion thread — the card
-        itself stays a summary surface. Best-effort by design: the
-        thread (and its receipt) is already settled, so a chunk send
-        failure only logs; it must not re-enter the delivery path.
-        `dedupe` content-matches against recent history so re-renders
-        of an already-populated thread — or a partial earlier post —
-        never duplicate chunks."""
-        if thread is None:
-            return
-        body = str(spec["parts"].get("thread_body") or "")
-        chunks = [c for c in text.split_body(body) if c.strip()]
-        if not chunks:
-            return
-        if dedupe:
-            try:
-                posted = Counter(
-                    [m.content async for m in thread.history(limit=100)])
-            except Exception as exc:
-                self._log("thread_body_failed",
-                          error=type(exc).__name__)
-                return
-            missing = []
-            for chunk in chunks:
-                if posted[chunk]:
-                    posted[chunk] -= 1
-                else:
-                    missing.append(chunk)
-            chunks = missing
-            if not chunks:
-                self._log("thread_body_skipped", reason="already_posted")
-                return
-        sent = 0
-        for chunk in chunks:
-            try:
-                await cards.single_post(
-                    self._bot, partial(thread.send, chunk))
-                sent += 1
-            except Exception as exc:
-                self._log("thread_body_failed",
-                          error=type(exc).__name__,
-                          chunks_sent=sent)
-                return
-        self._log("thread_body_posted",
-                  thread_id=str(thread.id), chunks=sent)

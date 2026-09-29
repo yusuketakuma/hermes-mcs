@@ -104,6 +104,38 @@ def body_messages(result: dict) -> list:
             for i, c in enumerate(chunks)]
 
 
+NO_TASKS_TEXT = "このスレッドのタスクはありません。"
+
+
+def valid_due(due: str) -> bool:
+    """A due date must be a real calendar day spelled YYYY-MM-DD —
+    the round trip rejects every other ISO spelling."""
+    from datetime import date
+    try:
+        return date.fromisoformat(due).isoformat() == due
+    except ValueError:
+        return False
+
+
+def preview_text(action: str, payload: dict, markdown: bool) -> str:
+    """The human-confirm preview of a request/dismiss payload — Discord
+    markdown (bold heading, code-quoted signal) or Slack plain text."""
+    bold = "**" if markdown else ""
+    if action == "dismiss":
+        key = payload["signal_key"]
+        return (f"{bold}確認 — 候補の却下{bold}\n"
+                f"signal: {f'`{key}`' if markdown else key}\n"
+                f"理由: {payload['reason'][:400]}")
+    out = (f"{bold}確認 — 依頼の起票{bold}\n"
+           f"件名: {payload['title'][:200]}\n"
+           f"理由: {payload['reason'][:400]}")
+    if payload.get("assignee"):
+        out += f"\n担当: {payload['assignee'][:120]}"
+    if payload.get("due_date"):
+        out += f"\n期限: {payload['due_date']}"
+    return out
+
+
 def task_list_text(items: list) -> str:
     """Ephemeral task list — one line per request, status mark first so
     the scan order matches the transition buttons below it."""
