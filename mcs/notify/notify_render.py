@@ -581,7 +581,7 @@ def patient_summary_text(db, project_id) -> tuple:
         vline = (structured_view._vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
         lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
-                             else "バイタル: 記録なし"))
+                             else "抽出されたバイタルなし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
     tasks = db.execute(
