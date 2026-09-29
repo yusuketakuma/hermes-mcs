@@ -238,12 +238,13 @@ class DeliveryWorker(_BaseWorker):
             if text is None:
                 return {"result": "not_sent",
                         "error_code": "body_part_missing"}
-            return await self._body_part(spec, text, ctx)
+            return await self._body_part(spec, text, ctx, part)
         if part["kind"] == "attachment_part":
             return await self._attachment_part(spec, part, ctx)
         return {"result": "not_sent", "error_code": "unsupported_part"}
 
-    async def _body_part(self, spec: dict, text: str, ctx: dict) -> dict:
+    async def _body_part(self, spec: dict, text: str, ctx: dict,
+                         part: dict | None = None) -> dict:
         """Post one sealed chunk inside the card's thread. The send only
         ever targets thread_ts=the bound root ts — a body part can never
         fall back to a top-level channel message."""
@@ -258,6 +259,13 @@ class DeliveryWorker(_BaseWorker):
             mid = await self._remote_match(thread_ts, text, ctx)
             if mid is not None:
                 return {"result": "delivered", "remote_id": mid}
+            # the chunk's text changed since it was first posted (the
+            # extraction arrived, a reply joined): rewrite that reply so
+            # the thread keeps one post per chunk
+            edited = await self._rewrite_prior(
+                thread_ts, (part or {}).get("prior_remote_id"), text, ctx)
+            if edited is not None:
+                return edited
         sender = self._sender.single_attempt()
         if sender is None:
             return {"result": "not_sent",
@@ -279,6 +287,46 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "unknown",
                     "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": ts}
+
+    async def _rewrite_prior(self, thread_ts: str, prior, text: str,
+                             ctx: dict):
+        """chat.update this bot's earlier reply of the same chunk and
+        return the delivered outcome, or None so the caller posts fresh
+        exactly as before (no prior, target gone, foreign or already
+        bound, or an update Slack rejected outright). Only a reply
+        provably authored by this bot/app in this thread is rewritten.
+        An update is idempotent, so it needs no single-shot guard; a
+        crash after it is re-bound by ``_remote_match``. Any other
+        failure is unknown and is never followed by a second post."""
+        if not isinstance(prior, str) or not _TS.fullmatch(prior) \
+                or prior == thread_ts or prior in ctx["consumed"]:
+            return None
+        if ctx.get("history") is None:
+            ctx["history"] = await self._replies(thread_ts)
+        target = next((m for m in ctx["history"]
+                       if m.get("ts") == prior), None)
+        if target is None:
+            return None
+        ours = (self._sender._bot_id
+                and target.get("bot_id") == self._sender._bot_id) \
+            or target.get("app_id") == self._settings["application_id"]
+        sender = self._sender.single_attempt()
+        if not ours or sender is None:
+            return None
+        try:
+            response = await sender.chat_update(
+                channel=self._settings["channel_id"], ts=prior, text=text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            out = _failed(exc, "body_part", thread_ts)
+            # a rejected update never committed — post the chunk afresh
+            return None if out["result"] == "not_sent" else out
+        data = _payload(response)
+        if data.get("ok") is not True or data.get("ts") != prior:
+            return {"result": "unknown", "error_code": "bad_slack_response"}
+        ctx["consumed"].add(prior)
+        return {"result": "delivered", "remote_id": prior}
 
     async def _attachment_part(self, spec: dict, part: dict,
                                ctx: dict) -> dict:

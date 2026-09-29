@@ -107,6 +107,14 @@ class DeliveryWorker(worker.DeliveryWorker):
                 if mid is not None:
                     return {"result": "delivered",
                             "remote_id": str(mid)}
+                # the chunk's text changed since it was first posted
+                # (the extraction arrived, a reply joined): rewrite that
+                # post so the thread keeps one post per chunk
+                mid = await self._rewrite_prior(
+                    thread, part.get("prior_remote_id"), body, ctx)
+                if mid is not None:
+                    return {"result": "delivered",
+                            "remote_id": str(mid)}
             sent = await cards.single_post(
                 self._bot, partial(thread.send, body))
             rid = getattr(sent, "id", None)
@@ -197,6 +205,34 @@ class DeliveryWorker(worker.DeliveryWorker):
             ctx["consumed"].add(m.id)
             return m.id
         return None
+
+    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict):
+        """Edit this bot's earlier post of the same chunk in place and
+        return its id. Only a message this bot authored in this thread
+        can be rewritten — a missing, foreign or already-bound target,
+        or an edit the API rejected outright (deleted post, archived
+        thread), returns None so the caller posts a new chunk exactly as
+        before. An edit is idempotent, so unlike a POST it needs no
+        single-shot guard; a crash after the edit is re-bound by
+        ``_remote_match``. Any other failure is unknown and propagates."""
+        try:
+            pid = int(prior) if prior else None
+        except (TypeError, ValueError):
+            return None
+        me_id = getattr(getattr(self._bot, "user", None), "id", None)
+        if pid is None or me_id is None or pid in ctx["consumed"]:
+            return None
+        try:
+            msg = await thread.fetch_message(pid)
+            if getattr(getattr(msg, "author", None), "id", None) != me_id:
+                return None
+            await msg.edit(content=text)
+        except Exception as exc:
+            if worker.is_definitive_reject(exc):
+                return None       # the edit did not commit — post afresh
+            raise
+        ctx["consumed"].add(msg.id)
+        return msg.id
 
     async def _maybe_thread(self, claim: dict, message_id: str) -> None:
         """Card companion thread — separated from the body send; a

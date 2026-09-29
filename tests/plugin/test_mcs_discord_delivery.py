@@ -46,6 +46,14 @@ class _HistMsg:
         self.id = mid
         self.content = content
         self.author = author        # posts through the fake are ours
+        self.edits = 0
+        self.edit_fail = None       # exception to raise on edit
+
+    async def edit(self, content=None, **_kw):
+        if self.edit_fail is not None:
+            raise self.edit_fail
+        self.content = content
+        self.edits += 1
 
 
 class FakeThread:
@@ -68,6 +76,12 @@ class FakeThread:
         items = self.sent if limit is None else self.sent[-limit:]
         for m in reversed(items):
             yield m
+
+    async def fetch_message(self, mid):
+        for m in self.sent:
+            if m.id == mid:
+                return m
+        raise FakeHTTP(404)
 
 
 class FakeMessage:
@@ -544,6 +558,130 @@ def test_remote_match_never_binds_foreign_content(tmp_path):
         assert row["remote_id"] == str(th.sent[1 + i].id)
 
 
+# ---------- in-place rewrite of a changed chunk ------------------------------
+
+def _prior_thread(tmp_path, old_texts):
+    """A companion thread the create render already filled: one bot post
+    per old chunk text, oldest first."""
+    w, reg, bot = _mkworker(tmp_path)
+    th = FakeThread(7700)
+    bot.channels[42].threads.append(th)
+    for t in old_texts:
+        asyncio.run(th.send(t))
+    return w, bot, th
+
+
+def _update_spec(chunks, th, prior_idx):
+    """An update spec whose chunk i names thread post prior_idx[i]."""
+    prior = {f"body:{i + 1:04d}": str(th.sent[j].id)
+             for i, j in prior_idx.items()}
+    return _spec(chunks, op="update", thread_id="7700", prior=prior)
+
+
+def test_update_rewrites_the_earlier_post_of_a_changed_chunk(tmp_path):
+    """The chunk's text changed after its first post (the extraction
+    arrived): the update edits that post — one post per chunk, the same
+    remote id, never a second copy beside it."""
+    w, bot, th = _prior_thread(tmp_path, ["記録 (構造化なし)"])
+    new = ["記録 (構造化なし)\n📋 構造化 …"]
+    spec = _update_spec(new, th, {0: 0})
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert [m.content for m in th.sent] == new
+    assert th.sent[0].edits == 1
+    row = _sent_parts(_state(tmp_path))["body:0001"]
+    assert row["result"] == "delivered"
+    assert row["remote_id"] == str(th.sent[0].id)
+
+
+def test_unchanged_chunk_is_bound_without_an_edit(tmp_path):
+    w, bot, th = _prior_thread(tmp_path, ["同じ本文"])
+    spec = _update_spec(["同じ本文"], th, {0: 0})
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(th.sent) == 1 and th.sent[0].edits == 0
+    row = _sent_parts(_state(tmp_path))["body:0001"]
+    assert row["remote_id"] == str(th.sent[0].id)
+
+
+def test_rewrite_of_a_deleted_post_falls_back_to_a_new_post(tmp_path):
+    w, bot, th = _prior_thread(tmp_path, [])
+    spec = _spec(["新しい本文"], op="update", thread_id="7700",
+                 prior={"body:0001": "6001"})     # nobody holds 6001
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert [m.content for m in th.sent] == ["新しい本文"]
+    row = _sent_parts(_state(tmp_path))["body:0001"]
+    assert row["result"] == "delivered"
+    assert row["remote_id"] == str(th.sent[0].id)
+
+
+def test_rewrite_never_edits_a_foreign_message(tmp_path):
+    w, reg, bot = _mkworker(tmp_path)
+    th = FakeThread(7700)
+    bot.channels[42].threads.append(th)
+    th.sent.append(_HistMsg(7001, "他人の投稿", author=FOREIGN_USER))
+    spec = _spec(["新しい本文"], op="update", thread_id="7700",
+                 prior={"body:0001": "7001"})
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert th.sent[0].content == "他人の投稿" and th.sent[0].edits == 0
+    assert th.sent[1].content == "新しい本文"
+    row = _sent_parts(_state(tmp_path))["body:0001"]
+    assert row["remote_id"] == str(th.sent[1].id)
+
+
+@pytest.mark.parametrize("status", [400, 403])
+def test_rejected_edit_falls_back_to_a_new_post(tmp_path, status):
+    """An edit the API refuses outright (an archived thread answers 400)
+    never committed, so the chunk is posted afresh — the behaviour
+    before in-place rewrites, and no worse."""
+    w, bot, th = _prior_thread(tmp_path, ["旧"])
+    th.sent[0].edit_fail = FakeHTTP(status)
+    spec = _update_spec(["新"], th, {0: 0})
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert [m.content for m in th.sent] == ["旧", "新"]
+    row = _sent_parts(_state(tmp_path))["body:0001"]
+    assert row["result"] == "delivered"
+    assert row["remote_id"] == str(th.sent[1].id)
+
+
+def test_unknown_edit_outcome_never_posts_a_second_copy(tmp_path):
+    w, bot, th = _prior_thread(tmp_path, ["旧"])
+    th.sent[0].edit_fail = FakeHTTP(500)      # may or may not have landed
+    spec = _update_spec(["新"], th, {0: 0})
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(th.sent) == 1
+    assert _sent_parts(_state(tmp_path))["body:0001"]["result"] == "unknown"
+
+
+def test_one_post_is_rewritten_for_only_one_chunk(tmp_path):
+    w, bot, th = _prior_thread(tmp_path, ["旧"])
+    spec = _update_spec(["新1", "新2"], th, {0: 0, 1: 0})   # both name it
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert [m.content for m in th.sent] == ["新1", "新2"]
+    assert th.sent[0].edits == 1
+    parts = _sent_parts(_state(tmp_path))
+    assert parts["body:0001"]["remote_id"] == str(th.sent[0].id)
+    assert parts["body:0002"]["remote_id"] == str(th.sent[1].id)
+
+
+def test_rewrite_survives_a_crash_between_edit_and_result(tmp_path):
+    """A rerun after the edit landed but before its result was journaled
+    finds the new text already remote and binds to it — no second edit,
+    no second post."""
+    w, bot, th = _prior_thread(tmp_path, ["旧"])
+    spec = _update_spec(["新"], th, {0: 0})
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["part_id"] == "body:0001")
+
+    def ctx():
+        return {"card_message_id": "9001", "thread": None,
+                "thread_id": "7700", "history": None, "consumed": set()}
+
+    first = asyncio.run(w._perform_part(_claim(spec), part, ctx()))
+    again = asyncio.run(w._perform_part(_claim(spec), part, ctx()))
+    want = {"result": "delivered", "remote_id": str(th.sent[0].id)}
+    assert first == again == want
+    assert len(th.sent) == 1 and th.sent[0].edits == 1
+
+
 def test_second_attachment_failure_leaves_incomplete(tmp_path):
     """The second file's upload vanishing mid-wire is unknown — the
     first file's delivered receipt stands, no part resends."""
@@ -924,6 +1062,24 @@ def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
     assert not list((tmp_path / "discord_render").glob("*.claimed"))
     assert logs == [("spec_rejected", {"delivery_id": DELIVERY_ID,
                                        "error": reason})]
+
+
+@pytest.mark.parametrize("part_id,prior", [
+    ("thread", "6001"),          # only a body chunk can be rewritten
+    ("body:0001", ""),           # …and it names the earlier post
+    ("body:0001", 6001),         # …by its transport id, which is text
+    ("body:0001", "6" * 65),
+])
+def test_prior_remote_id_is_valid_only_as_a_body_chunk_post_id(part_id,
+                                                               prior):
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    spec_mod.validate(_sealed(_spec(_chunks(2),
+                                    prior={"body:0002": "6001"})))
+    bad = _sealed(_spec(_chunks(2)))
+    next(p for p in bad["parts"]["manifest"]
+         if p["part_id"] == part_id)["prior_remote_id"] = prior
+    with pytest.raises(ValueError, match="bad_prior_remote_id"):
+        spec_mod.validate(bad)
 
 
 # ---------- transient begin denials (signal notify) -------------------------

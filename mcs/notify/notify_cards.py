@@ -739,10 +739,30 @@ def _thread_plan_ids(db, card, shown) -> list:
          card["project_id"])) if r["message_id"] in wanted]
 
 
+def _prior_body_ids(db, card) -> dict:
+    """part_id -> remote message id of the newest delivered body chunk
+    among this card's earlier renders. A chunk's text changes after the
+    first post (the extraction result arrives, a reply joins the
+    thread); the plan names the message that carried it so the worker
+    rewrites that post instead of adding a second one beside it."""
+    out: dict = {}
+    for r in db.execute(
+            """SELECT p.part_id, p.remote_id
+               FROM notification_render_parts p
+               JOIN notification_renders r ON r.delivery_id=p.delivery_id
+               WHERE r.card_id=? AND p.kind='body_part'
+                 AND p.state='delivered' AND p.remote_id IS NOT NULL
+               ORDER BY r.render_rev, p.idx""", (card["card_id"],)):
+        out[r["part_id"]] = str(r["remote_id"])
+    return out
+
+
 def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
-    every covered attachment as individually journaled parts."""
+    every covered attachment as individually journaled parts. An update
+    names, per body chunk, the message that already carries it
+    (``prior_remote_id``) so an edited chunk stays one post."""
     parts = spec["parts"]
     card_payload = canonical({"containers": parts["containers"],
                               "footer": parts["footer"],
@@ -772,11 +792,15 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
         attachments = attachments[:MAX_PARTS - 3 - len(chunks)]
         chunks.append(_TRUNCATED_PART)
     parts["thread_body_parts"] = chunks
+    prior = _prior_body_ids(db, card) if spec["op"] == "update" else {}
     for i, chunk in enumerate(chunks):
-        manifest.append({"part_id": f"body:{i + 1:04d}",
-                         "kind": "body_part", "index": idx,
-                         "sha256": _sha_text(chunk),
-                         "bytes": len(chunk.encode("utf-8"))})
+        entry = {"part_id": f"body:{i + 1:04d}",
+                 "kind": "body_part", "index": idx,
+                 "sha256": _sha_text(chunk),
+                 "bytes": len(chunk.encode("utf-8"))}
+        if entry["part_id"] in prior:
+            entry["prior_remote_id"] = prior[entry["part_id"]]
+        manifest.append(entry)
         idx += 1
     for a in attachments:
         entry = {"part_id": f"attach:{a['attachment_id']:04d}",

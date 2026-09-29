@@ -672,6 +672,108 @@ def test_slack_update_binds_own_reply_foreign_never_binds(led):
     assert w.client.thread_posts[-1]["text"] == chunk
 
 
+# ---------- in-place rewrite of a changed chunk ------------------------------
+
+ROOT_TS = "1790000000.000001"
+
+
+def _rewrite_world(led):
+    """A delivered thread card holding its first body reply, plus the
+    update spec a later render carries for that thread."""
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    spec = {**json.loads(_latest_render(led)["spec_json"]), "op": "update"}
+    return w, spec, w.client.replies[ROOT_TS]
+
+
+def _rewrite(w, spec, text, prior, part_id="body:0001", ctx=None):
+    ctx = ctx or {"thread_id": ROOT_TS, "history": None, "consumed": set()}
+    part = {"part_id": part_id, "kind": "body_part",
+            "prior_remote_id": prior}
+    return asyncio.run(w.worker._body_part(spec, text, ctx, part))
+
+
+def _updates(w):
+    return [kw for kind, kw in w.client.calls if kind == "update"]
+
+
+def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
+    """The chunk's text changed after its first post (the extraction
+    arrived): the update rewrites that reply — one reply per chunk, the
+    same ts, never a second copy beside it."""
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    out = _rewrite(w, spec, "変更後の本文", our_ts)
+    assert out == {"result": "delivered", "remote_id": our_ts}
+    assert len(w.client.thread_posts) == posted
+    assert _updates(w) == [{"channel": SCOPE["channel_id"], "ts": our_ts,
+                            "text": "変更後の本文"}]
+    assert replies[0]["text"] == "変更後の本文"
+
+
+def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
+    w, spec, replies = _rewrite_world(led)
+    posted = len(w.client.thread_posts)
+    replies.append({"ts": "1790000000.000099", "text": "他人",
+                    "user": "U_FOREIGN"})
+    priors = ["1790000000.000099",      # someone else's reply
+              "1790000000.000555",      # not in the thread
+              ROOT_TS,                  # the card itself
+              "not-a-ts"]
+    for i, prior in enumerate(priors):
+        out = _rewrite(w, spec, f"変更後 {i}", prior)
+        assert out["result"] == "delivered" and out["remote_id"] != prior
+    assert not _updates(w)
+    assert len(w.client.thread_posts) == posted + len(priors)
+
+
+@pytest.mark.parametrize("error", ["message_not_found",
+                                   "cant_update_message"])
+def test_slack_rejected_update_falls_back_to_a_new_reply(led, error):
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    w.client.update_failure = FakeSlackError(200, error)
+    out = _rewrite(w, spec, "変更後の本文", our_ts)
+    assert out["result"] == "delivered" and out["remote_id"] != our_ts
+    assert len(w.client.thread_posts) == posted + 1
+    assert w.client.thread_posts[-1]["text"] == "変更後の本文"
+
+
+def test_slack_unknown_update_outcome_never_posts_a_second_reply(led):
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    w.client.update_failure = TimeoutError("synthetic")   # may have landed
+    out = _rewrite(w, spec, "変更後の本文", our_ts)
+    assert out["result"] == "unknown"
+    assert len(w.client.thread_posts) == posted
+
+
+def test_slack_one_reply_is_rewritten_for_only_one_chunk(led):
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
+    first = _rewrite(w, spec, "新1", our_ts, ctx=ctx)
+    second = _rewrite(w, spec, "新2", our_ts, "body:0002", ctx=ctx)
+    assert first["remote_id"] == our_ts
+    assert second["result"] == "delivered" and second["remote_id"] != our_ts
+    assert len(w.client.thread_posts) == posted + 1
+
+
+def test_slack_rewrite_survives_a_crash_between_update_and_result(led):
+    """A rerun after the update landed but before its result was
+    journaled finds the new text already remote and binds to it — no
+    second update, no second reply."""
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    first = _rewrite(w, spec, "変更後の本文", our_ts)
+    again = _rewrite(w, spec, "変更後の本文", our_ts)     # fresh ctx
+    assert first == again == {"result": "delivered", "remote_id": our_ts}
+    assert len(_updates(w)) == 1
+    assert len(w.client.thread_posts) == posted
+
+
 def _attach(led, tmp_path, mid=100, name="syn.bin",
             blob=b"synthetic-bytes", state="downloaded"):
     """Seed a real on-disk file as a downloaded attachment on a shown

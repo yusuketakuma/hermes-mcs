@@ -37,6 +37,7 @@ class FakeClient:
         self.thread_failure: Exception | None = None
         # indexes into thread_posts that must fail exactly once
         self.thread_fail_at: set[int] = set()
+        self.update_failure: Exception | None = None
         self.thread_posts = []
         self.replies: dict[str, list] = {}
         # upload edge — uploads=False models an SDK without
@@ -49,11 +50,13 @@ class FakeClient:
         if uploads:
             self.files_upload_v2 = self._files_upload_v2
         self.bot_id = "B_SYNTHETIC"
-        self._ts_n = 1
+        # one counter shared with the single_attempt() copies the worker
+        # posts through — Slack ts values are unique per message
+        self._ts_n = [1]
 
     def _next_ts(self):
-        self._ts_n += 1
-        return f"1790000000.{self._ts_n:06d}"
+        self._ts_n[0] += 1
+        return f"1790000000.{self._ts_n[0]:06d}"
 
     async def auth_test(self):
         self.calls.append(("auth_test", {}))
@@ -105,6 +108,12 @@ class FakeClient:
 
     async def chat_update(self, **kwargs):
         self.calls.append(("update", kwargs))
+        if self.update_failure is not None:
+            raise self.update_failure
+        for msgs in self.replies.values():      # reply text follows the edit
+            for m in msgs:
+                if m["ts"] == kwargs["ts"] and "text" in kwargs:
+                    m["text"] = kwargs["text"]
         return {"ok": True, "channel": kwargs["channel"], "ts": kwargs["ts"]}
 
     async def chat_delete(self, **kwargs):

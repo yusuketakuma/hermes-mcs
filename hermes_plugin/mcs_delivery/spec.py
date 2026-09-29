@@ -67,7 +67,7 @@ PARTS_KEYS = frozenset({
     "page", "pages", "thread_name", "thread_body_parts", "manifest"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable"})
+    "attachment_id", "path", "unavailable", "prior_remote_id"})
 
 STYLES = {"primary": 1, "secondary": 2, "success": 3, "danger": 4}
 _CONTAINER_TYPES = ("heading", "text", "field", "quote", "meta")
@@ -288,6 +288,11 @@ def _validate_manifest(manifest) -> None:
                 and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
+        if "prior_remote_id" in p and (
+                kind != "body_part" or not _text(p["prior_remote_id"], 64)):
+            # only a body chunk can be rewritten in place, and it names
+            # the earlier post by its transport id
+            _err("bad_prior_remote_id")
         if kind == "card" and i != 0:
             _err("bad_card_part")
         if kind == "thread":
