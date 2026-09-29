@@ -1742,6 +1742,10 @@ def test_tick_journal_reads_match_full_scan_across_rotation(
     # resume loop holds one while its own sends append rows
     for view, full in views:
         assert {aid: view[aid] for aid in view} == full
+        # the flat walk yields exactly the snapshot's rows, once each
+        flat = sorted(json.dumps(r, sort_keys=True) for r in view.rows())
+        assert flat == sorted(json.dumps(r, sort_keys=True)
+                              for rows in full.values() for r in rows)
 
 
 def _count_journal_reads(monkeypatch):

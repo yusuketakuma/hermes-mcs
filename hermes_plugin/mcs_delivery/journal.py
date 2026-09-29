@@ -31,6 +31,7 @@ import os
 import time
 from bisect import bisect_left
 from collections.abc import Mapping
+from itertools import islice
 
 from .paths import atomic_write, fsync_dir
 
@@ -208,6 +209,21 @@ class _View(Mapping):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
+
+    def rows(self):
+        """Every row once, file by file — for whole-journal questions
+        that need no per-attempt grouping (one pass, not aids x files)."""
+        for done, _index, n, tail in self._files:
+            yield from islice(done, n)
+            for rows in tail.values():
+                yield from rows
+
+
+def all_rows(records):
+    """Every row of a scan result — a cached view walks its files."""
+    if isinstance(records, _View):
+        return records.rows()
+    return (r for rows in records.values() for r in rows)
 
 
 class ScanCache:

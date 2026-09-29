@@ -974,8 +974,7 @@ class DeliveryWorker:
         """delivery_ids whose card attempt the journal shows started or
         resulted — dependent-part rows excluded."""
         return {str(r.get("delivery_id"))
-                for rows in self._jview.refresh().values()
-                for r in rows
+                for r in journal.all_rows(self._jview.refresh())
                 if r.get("phase") in ("started", "result")
                 and not r.get("part_id")}
 
