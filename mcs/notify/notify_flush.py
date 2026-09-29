@@ -744,7 +744,14 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
             ledger.outbox_hold(ev["event_id"])
             res["failed"] += 1
         elif outcome.get("error"):
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+            # a sealed intent whose transport/scope no longer matches the
+            # config never heals on its own — quarantine like the
+            # exception path instead of failing hourly forever
+            if ev["attempts"] >= 4:
+                ledger.outbox_hold(ev["event_id"])
+            else:
+                ledger.outbox_mark(ev["event_id"], "failed",
+                                   retry_in=3600)
             res["failed"] += 1
         elif outcome.get("suppressed"):
             res["suppressed"] += 1
