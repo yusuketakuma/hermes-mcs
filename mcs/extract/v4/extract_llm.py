@@ -374,7 +374,7 @@ _PROBE_RETRY_S = 600
 _NEXT_FMT = {"schema": "object", "object": "plain"}
 
 
-def _probe_format(deadline: float | None = None) -> str:
+def _probe_format(deadline: float | None = None) -> str | None:
     """Detect the best response_format the server accepts, via the
     shared loopback adapter.  Fallback order: json_schema -> json_object
     -> plain; acceptance requires a parseable JSON object reply — a 200
@@ -396,10 +396,15 @@ def _probe_format(deadline: float | None = None) -> str:
             slot=_choose_slot(deadline=deadline),
             verify=lambda text: json_object(text) is not None)
     else:
+        slot = _choose_slot(deadline=deadline)
+        if slot is None:
+            # no idle slot in time — keep the current mode (None when
+            # unprobed: _llm_call defers) and re-probe on the next call
+            return _FMT_MODE
         _FMT_MODE = local_llm.probe_format(
             ENDPOINT, MODEL, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(deadline=deadline),
+            slot=slot,
             verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -1008,6 +1013,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
     fmt = _probe_format(deadline=deadline)
+    if fmt is None:
+        return _DEFERRED   # no idle slot to probe on — nothing sent
     # resolve per call so a config.json local_llm.url/model change
     # takes effect without a code edit; patched constants still win
     endpoint, model = local_llm.resolve(load_config())
@@ -1041,11 +1048,16 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
+            slot = _choose_slot(deadline=deadline)
+            if slot is None:
+                # both slots stayed busy — pinning one aborts
+                # llama-server; defer without burning an attempt
+                return _DEFERRED
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
-                extra_payload={"id_slot": _choose_slot(deadline=deadline)},
+                extra_payload={"id_slot": slot},
                 request_fn=_opener_request, error_out=err_out)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or (deadline is not None
@@ -1736,12 +1748,38 @@ _SLOT_OVERRIDE = None  # --slot: pin this process to a specific id_slot
 _LEND_RT = False       # --lend-rt: borrow the RT slot when it is idle
 
 
-def _choose_slot(deadline: float | None = None) -> int:
+def _slots_busy(deadline: float | None) -> dict | None:
+    """/slots -> {id: is_processing}, or None when the probe fails."""
+    try:
+        base = ENDPOINT.split("/v1/")[0]
+        status, _headers, raw = _opener_request(
+            base + "/slots", "GET", None, 2, deadline)
+        if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+            return None
+        return {s.get("id"): bool(s.get("is_processing"))
+                for s in json.loads(raw.decode("utf-8"))}
+    except Exception:
+        return None
+
+
+_LEND_WAIT_S = 300.0   # --lend-rt: longest wait for an idle slot when
+                       # the caller has no deadline
+_LEND_POLL_S = 1.0
+
+
+def _choose_slot(deadline: float | None = None) -> int | None:
     """Wire id_slot for the next call. With --lend-rt the drainer asks
     /slots each call and rides the real-time slot while it is idle —
     an RT request arriving mid-call queues behind at most that one
-    call (~tens of seconds). A probe failure or a busy RT slot falls
-    back to the background slot; --slot always wins over both."""
+    call (~tens of seconds). Otherwise it takes the background slot
+    only once that slot is idle too: a pinned request landing on a
+    BUSY slot makes llama-server load prompt cache into it and abort
+    (GGML_ASSERT n <= tokens.size()), so while both slots are busy it
+    re-polls until one frees; if the wait runs out (deadline, or
+    _LEND_WAIT_S without one) it returns None and the caller defers
+    without sending — a busy slot is never pinned. Only a failed probe
+    falls back to the background slot — the server is down and the
+    call fails anyway. --slot always wins over all of it."""
     if _SLOT_OVERRIDE is not None:
         # a stale/invalid override must not go unpinned on the wire —
         # bound it to the selected count exactly like --slot parsing
@@ -1755,27 +1793,32 @@ def _choose_slot(deadline: float | None = None) -> int:
         # sample was never an authorization anyway
         return local_llm.request_slot()
     if _LEND_RT:
-        try:
-            base = ENDPOINT.split("/v1/")[0]
-            status, _headers, raw = _opener_request(
-                base + "/slots", "GET", None, 2, deadline)
-            if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-                return local_llm.request_slot()
-            slots = json.loads(raw.decode("utf-8"))
-            rt = next((s for s in slots
-                       if s.get("id") == local_llm.REALTIME_SLOT), None)
-            if rt is not None and not rt.get("is_processing"):
+        bg = local_llm.request_slot()
+        until = time.monotonic() + _LEND_WAIT_S
+        if deadline is not None:
+            until = min(until, deadline)
+        while True:
+            busy = _slots_busy(deadline)
+            if busy is None:
+                break
+            if busy.get(local_llm.REALTIME_SLOT) is False:
                 return local_llm.REALTIME_SLOT
-        except Exception:
-            pass
+            if busy.get(bg) is False:
+                return bg
+            if time.monotonic() + _LEND_POLL_S >= until:
+                return None
+            time.sleep(_LEND_POLL_S)
     return local_llm.request_slot()
 
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
                          # lease only costs bounded duplicate inference
 
-_BATCH_K = 4                     # context-free bodies per batched call —
-                                 # K=8 needs ~500s, over TIMEOUT=300
+_BATCH_K = 0                     # --batch default: off. Measured net
+                                 # negative (Sep 2026): K=4 accepted 46%,
+                                 # rejects re-run single — 50s per
+                                 # accepted item vs 27.7s single. K=8
+                                 # needs ~500s, over TIMEOUT=300
 _BATCH_MAX_TOKENS = MAX_TOKENS * 3   # K outputs share one envelope;
                                      # v4 fields raise per-item output
 
@@ -2042,8 +2085,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     checkpoints, or multi-chunk bodies always run single; items the
     batch omits or fails per-item validation get an in-run single
     retry, so a bad group never buries a good row. Off by default —
-    production callers (drainer CLI, the tick's derive stage) opt in
-    explicitly so the single-call path stays the reference behavior."""
+    production callers (drainer CLI, the tick's derive stage) pass
+    _BATCH_K, itself 0 since batching measured net negative; --batch K
+    remains for explicit use."""
     if type(limit) is not int or limit < 1:
         raise ValueError("extract_limit_invalid")
     deadline = time.monotonic() + budget_s
@@ -2141,9 +2185,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
           limit or 20)).fetchall()
     if adm_post is not None:
         rows = [r for r in rows if r["message_id"] in adm_post]
-    done = failed = deferred = 0
+    done = failed = deferred = lock_lost = 0
     done_pids = set()
     endpoint_down = False
+    # finished results whose per-write lock wait timed out (the tick
+    # holds the run lock for minutes) — written before returning
+    pending_writes: list = []
     # thread contexts + any durable chunk checkpoints are loaded on the
     # calling thread — worker threads never touch the sqlite handle
     jobs = []
@@ -2202,8 +2249,40 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v))), chunks_out
 
+    def _commit(r, d, ctx, integrity, qc):
+        """Persist one validated result — the caller holds the lock."""
+        nonlocal done, deferred
+        # QC-flagged/thin rows already hold a current artifact —
+        # replacing it is the point of the feedback pass.
+        if qc is None and not r["thin_src"] \
+                and _current(ledger, r["message_id"], r["content_hash"]):
+            return
+        if not _replace_current(ledger, r,
+                                json.dumps(d, ensure_ascii=False),
+                                ctx=ctx is not None,
+                                integrity=integrity,
+                                qc_fix=({"qc": qc["qc"],
+                                         "applied": True}
+                                        if qc else None),
+                                extra_meta=(
+                                    {"thin_retried": True}
+                                    if r["thin_src"]
+                                    else None)):
+            deferred += 1
+            return
+        # the whole body is now covered — checkpoints for
+        # it are dead weight (F14)
+        ledger.db.execute(
+            "DELETE FROM artifacts"
+            " WHERE kind='extract_llm_chunk'"
+            " AND message_id=?", (r["message_id"],))
+        ledger.db.commit()
+        done += 1
+        done_pids.add(r["project_id"])
+
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
-        nonlocal done, failed, deferred, endpoint_down
+        nonlocal done, failed, deferred, endpoint_down, lock_lost
+        keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
                 deferred += 1
@@ -2276,35 +2355,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     d = prior
             d["_model"] = MODEL
             with lock(per_write_lock) as held:
-                # QC-flagged/thin rows already hold a current artifact —
-                # replacing it is the point of the feedback pass.
-                if held and (qc is not None or r["thin_src"]
-                             or not _current(ledger, r["message_id"],
-                                             r["content_hash"])):
-                    if not _replace_current(ledger, r,
-                                            json.dumps(d, ensure_ascii=False),
-                                            ctx=ctx is not None,
-                                            integrity=integrity,
-                                            qc_fix=({"qc": qc["qc"],
-                                                     "applied": True}
-                                                    if qc else None),
-                                            extra_meta=(
-                                                {"thin_retried": True}
-                                                if r["thin_src"]
-                                                else None)):
-                        deferred += 1
-                        return
-                    # the whole body is now covered — checkpoints for
-                    # it are dead weight (F14)
-                    ledger.db.execute(
-                        "DELETE FROM artifacts"
-                        " WHERE kind='extract_llm_chunk'"
-                        " AND message_id=?", (r["message_id"],))
-                    ledger.db.commit()
-                    done += 1
-                    done_pids.add(r["project_id"])
+                if held:
+                    _commit(r, d, ctx, integrity, qc)
+                    return
+            # never discard a paid-for result: keep it (and its lease)
+            # for one more lock attempt before run_pending returns
+            lock_lost += 1
+            keep_lease = True
+            pending_writes.append((r, d, ctx, integrity, qc, lease))
         finally:
-            _release(ledger, r, lease)
+            if not keep_lease:
+                _release(ledger, r, lease)
 
     # stability gates before any claim: an open circuit breaker (dead
     # endpoint) or a nearly-full volume skips the LLM lane entirely —
@@ -2490,6 +2551,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
+        if pending_writes:
+            with lock(per_write_lock) as held:
+                for r, d, ctx, integrity, qc, lease in pending_writes:
+                    # still lock-bound, or the body changed/lease lapsed
+                    # while we waited: the row stays pending for the
+                    # next run — deferred, no attempt burned
+                    if held and _owns_current_source(ledger, r, lease):
+                        _commit(r, d, ctx, integrity, qc)
+                    else:
+                        deferred += 1
     finally:
         try:
             _flush_checkpoints()
@@ -2534,7 +2605,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         llm_calls["tokens"] = None
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
-            "skipped": skipped,
+            "skipped": skipped, "lock_lost": lock_lost,
             "circuit_open_s": round(circuit_s) or None,
             "disk_free_mb": round(free_mb) if free_mb is not None
                             else None,
@@ -2685,7 +2756,8 @@ def main() -> int:
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
-                print(json.dumps(r, ensure_ascii=False), flush=True)
+                print(json.dumps({**r, "ts": time.time()}, ensure_ascii=False),
+                      flush=True)
                 if r["left"] == 0 or (
                         r["done"] == 0 and r["failed"] == 0
                         and r.get("selected", 0) == 0):
