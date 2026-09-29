@@ -500,7 +500,8 @@ $PY mcs/views/mcs_view.py signals --project 123
   `bad_reason_code`。未指定の旧コマンドはそのまま受理）。カードの
   `🚫 却下` は選択式でこれを付ける。集計は読取り専用の
   `mcs_signals.dismiss_reason_counts(db)`（型別・理由コード別の件数、
-  コードの無い旧行は `unclassified`。actor・自由文は出さない）。却下は
+  コードの無い旧行は `unclassified`。actor・自由文は出さない）で、
+  `mcs_view.py signals` の `dismissals` に出る。却下は
   ラベルであり誤検知の証明ではない（「対応済み」で却下された真陽性もある）。
 - 閾値の人承認変更: `mcs_view.py control signal_policy --confirm-human` に
   `{"project_id":…, "policy":{"req_age_days":14,…}, "reason":"…"}` を渡すと
@@ -532,7 +533,9 @@ prefilter は適用しない）。再抽出の成功時は新しい結果で、L
 報告1件につき LLM 呼出しは最大1回。
 v4 読取りモデルが現行の投稿には報告ボタンを出さない。読取りは
 `mcs_queries.extract_feedback(db, project_id)`（`current` = まだ再抽出
-されていない）。統計・QC 集計への反映は未実装。
+されておらず、v4 も現行でない）で、`mcs_view.py qc --project N` の
+`extract_feedback`（message_id・artifact_id・field・current・created_at の
+新しい順20件。メモ・actor は出さない）に出る。統計への反映は未実装。
 
 ### 人が確認して依頼を登録・更新
 

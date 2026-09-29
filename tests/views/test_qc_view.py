@@ -49,6 +49,48 @@ def test_summary_and_flagged_list(tmp_path):
         db.close()
 
 
+def test_qc_view_lists_extraction_reports_without_notes(tmp_path):
+    import json
+    db = _seeded(tmp_path)
+    try:
+        aid = db.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE "
+                            "kind='extract_llm' AND message_id=2").fetchone()[0]
+        db.artifact_add("extract_feedback_v1", json.dumps({
+            "message_id": 2, "artifact_id": aid, "field": "meds",
+            "note": "合成メモ", "actor": "discord:1"}),
+            project_id=1, message_id=2, meta={})
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+        finally:
+            view.close()
+        assert [(r["message_id"], r["field"], r["current"])
+                for r in out["extract_feedback"]] == [(2, "meds", True)]
+        assert "合成メモ" not in json.dumps(out, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def test_signals_view_counts_dismissal_reasons(tmp_path):
+    import json
+    db = _seeded(tmp_path)
+    try:
+        for code in ("duplicate", "duplicate", None):
+            db.artifact_add("signal_v1", json.dumps(
+                {"type": "med_followup", "state": "dismissed",
+                 **({"dismiss_reason_code": code} if code else {})}),
+                project_id=1, meta={"key": "k"})
+        view = _view(db, tmp_path)
+        try:
+            out = view.signals({})
+        finally:
+            view.close()
+        assert out["dismissals"] == {
+            "med_followup": {"duplicate": 2, "unclassified": 1}}
+    finally:
+        db.close()
+
+
 def test_per_message_detail_marks_stale(tmp_path):
     db = _seeded(tmp_path)
     try:

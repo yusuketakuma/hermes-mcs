@@ -377,8 +377,25 @@ class View:
             "pending": "対象内の現行抽出に対するQC未実施件数（キュー済みを含む）",
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
+            "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
+                                "current=1 はまだ再抽出されていない報告",
         }
-        return {**page, "summary": summary, "legend": legend}
+        from mcs_queries import extract_feedback
+        reports = []
+        for r in extract_feedback(self.db, pid, limit=20):
+            try:
+                c = json.loads(r["content"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                c = {}
+            c = c if isinstance(c, dict) else {}
+            # ids, field and state only — the note/actor stay in the ledger
+            reports.append({"message_id": r["message_id"],
+                            "artifact_id": c.get("artifact_id"),
+                            "field": c.get("field"),
+                            "current": bool(r["current"]),
+                            "created_at": r["created_at"]})
+        return {**page, "summary": summary, "legend": legend,
+                "extract_feedback": reports}
 
     def _requests(self, pid, request_id, status, limit, cursor):
         if status is not None and status not in requests.STATUSES:
@@ -753,7 +770,12 @@ class View:
                 "snapshot_age_s": max(0, time.time() - self.meta["generated_at"]),
                 "warnings": WARNINGS,
                 "candidates": result,
+                # 🚫 dismissals per type and reason code (all projects);
+                # counts only — no actor or free text
+                "dismissals": mcs_signals.dismiss_reason_counts(self.db),
                 "note": "候補は原記録の人による確認を求める提示です。"
+                        "却下件数は人が付けた区分で、候補が誤りだった"
+                        "ことの証明ではありません。"
                         "記録の欠如は対応の欠如を意味しません。"
                         "検出対象は本文取得済みかつ抽出済みの記録に限り"
                         "ます — 未抽出・未取得の記録は候補に現れません。"

@@ -68,8 +68,9 @@
 - **却下理由の選択式化** — `🚫 却下` は理由（誤検知 / 対応済み / 重複 /
   対象外 / その他）を選び、任意でメモ。`ops.signal_dismiss` に任意の
   `reason_code` を追加し dismissed 行に `dismiss_reason_code` として保存
-  （未指定の旧コマンドもそのまま受理）。読取り集計
-  `mcs_signals.dismiss_reason_counts()`
+  （未指定の旧コマンドもそのまま受理）。型別・理由コード別の件数は
+  `mcs_view.py signals` の `dismissals`、⚠ 報告の一覧は
+  `mcs_view.py qc --project N` の `extract_feedback`
 
 ### 動作が変わるもの
 
@@ -83,11 +84,18 @@
   （列追加は起動時の冪等 migration）
 - **Slack のカード操作で許可外のユーザーが押すと「権限がありません。」を
   本人に返す**（従来は無応答）
-- **plugin の更新後は `hermes gateway restart` が必要** — リンクボタン・
-  人名表示を含むカードは旧 worker では保留される（再起動後に配送）。
+- **Slack カードのフッターはメンション構文を使わない** — 確認者・担当者は
+  `users.info` の表示名（`users:read`。取得できなければ「メンバー」）の
+  文字列で、再投稿でも通知は鳴らない。📋 の照合と 📝 の担当者既定値も
+  同じ表示名を使う
+- **plugin の更新後は `hermes gateway restart` が必要** — project を持つ
+  thread/signal カードはほぼすべて `🔗 MCSで開く`（リンクボタン）や人名表示を
+  含むため、再起動まで旧 worker に保留される（再起動後に配送）。確認者・
+  担当者のいる既存カードはフッター形式の変更で1回だけ再描画される（通知なし）。
   4行目のボタン（📋 / 🗂 / 🔎）は再起動まで正しく動かない（旧 worker は
   一覧を表示できない）。却下フォームは旧 worker では従来の自由記述のまま
-- **cmd_int の notification envelope に任意の `input`**（`name` / `query`）
+- **cmd_int の notification envelope に任意の `input`**（`name` / `query` /
+  `projects`）
   を追加。runner 側の検証は `bad_input` で拒否する
 - **install.sh はステージ失敗で停止する** — brew 以外も含め全ステージが
   失敗時に非 0 で止まり、後続ステージを実行しない。再実行すると中断した
