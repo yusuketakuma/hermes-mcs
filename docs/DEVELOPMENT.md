@@ -155,6 +155,11 @@
   成功すれば同じ run のまま再開 (`relogin_attempts` が run log に残る)。
   結果は通知される: 成功→`session_recovered`、失敗→`session_expired`
   (`auto_login=<state>` 付き、手動再ログイン要)。いずれも1時間 throttle。
+- 稼働 checkout 更新後の同期: cron wrapper（`~/.hermes/scripts/*.sh`）は
+  `deployment/scripts/` の render 済みコピーで、checkout 更新だけでは変わらない。
+  更新後は `mcs_setup.py services` を実行する。`mcs_setup.py check` は
+  配備済み wrapper と現行 render の差分（drift）を error で報告する
+- OpenWiki 等の生成ツールは稼働 checkout で実行しない（別 worktree を使う）
 
 ## 履歴取込 (init_data.py)
 
