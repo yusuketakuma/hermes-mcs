@@ -271,7 +271,7 @@ def _med_followup(db, now, th, sig_cfg):
     self_pred, self_params = _self_author_pred(orgs)
     excludes = _med_excludes(sig_cfg)
     rows = db.execute(
-        f"""WITH med_msgs AS (
+        f"""WITH med_msgs AS MATERIALIZED (
                 SELECT m.project_id AS pid, m.message_id AS mid,
                        m.posted_at_ts AS ts,
                        TRIM(json_extract({JSON_OBJECT_SQL},'$.name')) AS med
