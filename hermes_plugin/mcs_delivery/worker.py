@@ -39,6 +39,9 @@ SIGNAL_OFF_RETRY_S = 300.0     # denied_signal_notify_off re-claim backoff
 MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
+EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
+                               # >= 10 min; modal/confirm/followup reads
+                               # check expiry on access anyway)
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
 
@@ -121,6 +124,7 @@ class DeliveryWorker:
         # delivery_id -> no fresh claim before this time (signals off);
         # in-memory: a restart costs one extra denied begin, bounded
         self._retry_after: dict[str, float] = {}
+        self._next_expire = 0.0               # first tick sweeps at once
 
     # -- scope lock --------------------------------------------------
 
@@ -911,8 +915,12 @@ class DeliveryWorker:
         # tick instead of ~3 full-file rewrites per claim (RC20: the
         # O(n^2) serialization was the delivery bottleneck at 1k cards)
         with self._reg.batch():
-            self._reg.expire(keep={spec["delivery_id"]
-                                   for _, spec in scanned})
+            if now >= self._next_expire:
+                # an O(registry) walk whose every hit rewrites the whole
+                # file — once per EXPIRE_EVERY_S, not every 2s poll
+                self._reg.expire(keep={spec["delivery_id"]
+                                       for _, spec in scanned})
+                self._next_expire = now + EXPIRE_EVERY_S
             resume = []
             spent = None
             for path, spec in scanned:
