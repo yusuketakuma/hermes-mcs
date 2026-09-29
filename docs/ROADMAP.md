@@ -1,7 +1,7 @@
 # hermes-mcs ロードマップ
 
 改訂日: 2026-09-29（v1.0.6 / `f947042` 時点。詳細計画を追加）
-対になる文書: zaitaku-calender `ROADMAP.md`。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q10）、契約決定の番号（CD-1〜CD-8）、契約版は両文書で共通。
+対になる文書: zaitaku-calender `ROADMAP.md`。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約決定の番号（CD-1〜CD-8）、契約版は両文書で共通。片方の C0/Q/CD 見出し行だけを変えた場合は C0 を完了扱いにしない。
 旧版（Oracle レビュー統合版、機能候補 v2 30 項目）は git 履歴（`git show f947042:docs/ROADMAP.md`）を参照。変更の詳細は `CHANGELOG.md`。
 
 **本書は索引**。項目ごとの実装計画（目的・現状の根拠・設計方針・成果物・受入条件・依存・規模・オーナー判断）は `docs/roadmap/` にある。
@@ -32,13 +32,13 @@
 |---|---|---|
 | MCS からの取得・欠落の検知・原本アーカイブ | 正本（`mcs/ingest/`、`mcs/core/ledger.py`） | 持たない |
 | MCS 本文・添付の抽出（薬剤言及・症状・検査値・OCR） | 担当。出力は候補のみ（`mcs/extract/`、`mcs/semantic/`） | 抽出しない（LLM による事実生成・OCR による自動確定は OUT） |
-| MCS 新着・緊急連絡のリアルタイム通知 | 担当（Discord/Slack。`mcs/notify/`（`notify_flush.py` 等）、シグナルの即時配信への昇格は `mcs/ops/mcs_signals.py:1043-1060`） | 外部リマインダーは追加しない |
+| MCS 新着・緊急連絡のリアルタイム通知 | 担当（Discord/Slack。`mcs/notify/`（`notify_flush.py` 等）、即時配信への昇格判定は `mcs/ops/mcs_signals.py` の `_urgency_high`（:1043 付近）と呼び出し側（:1194・:1260・:1277。昇格行の詳細は未確認）。通知の正は hermes の即時通知） | 外部リマインダーは追加しない |
 | 患者・処方・臨床プロファイル・ケアチームの正本 | 持たない | 正本 |
 | 予定・訪問・フォロー・引継ぎ・Work Queue・報告書・算定候補 | 持たない（依頼台帳は既存機能の範囲で凍結） | 正本 |
 | 外部患者 ID ⇔ 内部患者の対応付け | project_id を送るだけ | 人が確定する append-only の対応表 |
 | 取込データの採用 | しない | 薬剤師が既存画面で記録（出典付き） |
-| 受領確認 | 既存の `GovernedExporter.reconcile` で held→acked（照合元を receipt ファイルに拡張） | 受領 receipt を返す（形式は C0 で固定） |
-| 撤回 | 既存の `GovernedExporter.withdraw` で削除指示を送り、削除 receipt で照合 | 未採用 staging を削除して削除 receipt を返す。採用済み記録は残し出典の失効を表示 |
+| 受領確認 | `GovernedExporter.reconcile` は `LocalSink` 前提。receipt ファイルで照合するには C1 で `HandoffSink`・`parse_receipt` を追加し、`_valid_ack` の status 未検査（F-3）を直す | 受領 receipt を返す（形式は CD-5 を採用するか C0 で合意） |
+| 撤回 | `withdraw` は `sink.delete` を呼ぶだけで zaitaku に運ぶ指示書の形式が無い（C0 で合意。`docs/roadmap/connector.md` §2）。削除 receipt で照合 | 未採用 staging を削除して削除 receipt を返す。採用済み記録は残し出典の失効を表示 |
 | MCS への書き戻し | しない | しない（SCP-07） |
 | 逆方向（zaitaku-calender → hermes-mcs）のデータ | 受け取らない（receipt を除く） | 返さない（receipt を除く） |
 
@@ -115,10 +115,11 @@
 - `coverage`・`signals_truncated` は「未取込・取得未完了を『不明』と表示する」ための入力。ただし現行の `coverage.collection` は patients / messages / deleted / extraction_eligible の 4 個数だけで、患者別の取得状態は出ない（CD-4、Q10）。`auth.patients` を患者リストに絞ると、この 2 種は envelope から除かれる（`ext_contract.py:230-235`）ので、C1 は `patients:"all"` にする。
 
 **同一性キー（C0 で合意。両文書で同じ文言）**:
-- `message`: item の粒度は message 単位で、`facts[]` は配列のまま保持する。同一性 = `type`＋`project_id`＋`message_id`＋`content_hash`。同じ kind の fact が 1 message に複数あってもよい（`facts: [_FACT]`、`export_schema.py:137-146`）。
-- `signal`: 同一性 = `signal_type`＋`project_id`＋`evidence` の正規化 JSON の sha256。`detected_at` は属性として持ち、キーに含めない（signal には message_id・content_hash がなく、evidence 内の id は任意: `export_schema.py:123-135`）。同じ message_ids に複数の med があると同一性が衝突し 1 件に畳まれる（CD-7）。
+- `message`: 論理キー = (`organization_id`, `source`, `project_id`, `message_id`)。**`content_hash` は同一性に含めない**（含めると編集のたびに別行となり旧版が残り、supersede・撤回が壊れる。migration 後は forward-only で直せない）。`content_hash` と payload hash（facts・relations・extraction・state の canonical hash）は**変化検知**にだけ使う。`content_hash` は wire で任意（`null` あり: `export_schema.py:137-142`）で、NULL を含む列は UNIQUE キーに入れない（明示的な `'null'` 値へ正規化するか C0 で必須化を求める）。item の粒度は message 単位で、`facts[]` は配列のまま保持する。同じ kind の fact が 1 message に複数あってもよい（`facts: [_FACT]`、`export_schema.py:137-146`）。同じ論理キーで payload hash が異なる場合、より新しい `snapshot_generated_at` の行を current とし、旧行は受信側で `superseded_by` で結んで残す。遅れて届いた古い世代は current にならない。
+- `signal`: 同一性 = `signal_type`＋`project_id`＋evidence の正規化 JSON の sha256。`detected_at` は属性として持ち、キーに含めない（signal には message_id・content_hash がなく、evidence 内の id は任意: `export_schema.py:123-135`）。evidence は任意で allowlist 外のキー（`med` 等）が落ち、同じ `message_ids` の複数 med は 1 件に畳まれる（CD-7）。件数一致は検証しない。signal は世代ごとの断面で、受信側では完全な世代（`signals_truncated` なし）に載らなくなったら「MCS 側で現在は検出されていない」と表示し、削除も「解決」扱いもしない。`signals_truncated` の世代では消滅か切詰めか判別できないので「不明」。
 - `meta`・`coverage`・`signals_truncated`: envelope ごとの状態として 1 件ずつ保存し、同一性は `envelope_id`。
 - `fact_id` は文言で変わるため参照用にとどめる（`mcs/semantic/semantic_facts.py:185-205`）。
+- `source` は envelope のどのフィールドにも対応しない（`ext_contract.py:258-271`）。C0 で `destination` または `auth_id` へ対応付けるか、zaitaku 側の接続ラベルとするかを決める。
 
 ### C0 で決める契約事項（CD-1〜CD-8。両文書で同一）
 
@@ -126,20 +127,22 @@
 
 | ID | 決めること | 推奨 |
 |---|---|---|
-| CD-1 | 数値の canonical 表記と受信側の hash 検証 | RFC 8785（JCS）互換にする。Python は整数値 float を `1790000000.0`、JS は `1790000000` と出力するため、受信側が再計算すると整数値 float を含む envelope で `records_sha256` が一致しない（【実行確認】）。**初回の実送信前が期限** |
+| CD-1 | 数値の canonical 表記と受信側の hash 検証 | RFC 8785（JCS）互換にする。規則は「整数値は整数表記（-0 も 0）、非整数は ECMAScript の数値表記、指数表記・NaN・Infinity・safe integer 範囲外は拒否」。Python は整数値 float を `1790000000.0`、JS は `1790000000` と出力するため、受信側が再計算すると整数値 float を含む envelope で `records_sha256` が一致しない（【実行確認】）。**初回の実送信前が期限** |
 | CD-2 | 分割集合の表現 | 各分割に meta・coverage・signals_truncated を複製し、message / signal を排他的に分配。任意項目 `part:{index,count}` を追加。受信側は集合が揃うまで「不完全」と表示 |
 | CD-3 | `--only-with-facts` の意味と伝播 | 残す条件は facts 非空か tombstone。受信側は完全集合が届いた世代で、再掲されない前世代の staging を「MCS 側で現在は事実なし / 不明」に落とす。facts のない返信は届かないので、受信側は「返信なし」と表示しない |
 | CD-4 | 取得完全性 | `coverage.collection` に `patients_incomplete`（`fetch_state≠'complete'` の件数）を追加。患者単位は新 record 型が要るため別判断（Q10） |
 | CD-5 | receipt | `mcs-ext-receipt/1`。envelope 単位の all-or-nothing、`rejected` は終端。採用件数・採用 / 却下は入れない |
-| CD-6 | C1 プロファイル | fields 5 種、patients `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30、meta・coverage 必須、stat・attachment は受信側でも拒否。producer と receiver の両方で強制 |
+| CD-6 | C1 プロファイル | fields 5 種、patients `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30、meta・coverage 必須、stat・attachment は受信側でも拒否。producer と receiver の両方で強制。受信側は `snapshot_generated_at` と受信時刻で自前の鮮度閾値を持ち、超過は拒否でなく「古い」警告として age を常時表示する（初期案: 手渡し 24 時間・マシン送信 1 時間。手渡し運用は ≤3600 の保証がないため常時拒否になり得る。C0 で実測して決める提案値） |
 | CD-7 | signal 同一性 | 畳み込みを許容し明記。signal 件数の一致検証はしない |
 | CD-8 | fixture 正本（Q7） | hermes-mcs を正本にし、zaitaku-calender へコピー。両 CI で `MANIFEST.sha256` を検証 |
+
+C0 の合意事項は CD-1〜CD-8 のほか、次を含む（両文書で同一。zaitaku-calender `ROADMAP.md` §4.7）: 受け入れ record 型（5 種）、同一性キー（上記）、拒否コード表、**撤回指示書の形式と認証**（`mcs-ext-withdraw/1` 提案: `envelope_id`・`auth_id`・理由コードのみ、4 KiB 以下、自由文なし。withdraw が原本より先に届く場合と part 分割の一部だけが withdraw された世代の扱いも決める）、受信側の鮮度閾値（CD-6 参照）、サイズ上限の扱い（上限ちょうどの受理と wire 膨張の余裕。`docs/roadmap/connector.md` §2 (5)）、`source` の対応付け（同一性キー参照）。
 
 ### フェーズ（hermes-mcs 側の成果物）
 
 | フェーズ | hermes-mcs 側の成果物 | 依存 | 規模 |
 |---|---|---|---|
-| **C0 契約合意（両 repo 共同）** | CD-1〜CD-8 の合意。旧 #25（iCal）を廃止して本接続に置換。参照実装の変更（数値正規化・`part`・profile・`parse_receipt`・coverage 拡張）、合成 fixture 一式（受理 6・拒否 11+3・receipt 6）と `MANIFEST.sha256`、drift guard（F-4）。**完了条件に Q6 の判断記録を含める** | zaitaku-calender C0（同時）、#8-D2（wire enum の改名）、Q1〜Q4・Q6・Q7・Q10 | M |
+| **C0 契約合意（両 repo 共同）** | CD-1〜CD-8 と C0 合意事項（撤回指示書・受信側鮮度閾値・サイズ上限・`source` 対応付け・`content_hash` の null 取扱い）の合意。旧 #25（iCal）を廃止して本接続に置換。参照実装の変更（数値正規化・`part`・profile・`parse_receipt`・coverage 拡張）、合成 fixture 一式（受理 6・拒否 11+3・receipt 6）と `MANIFEST.sha256`、drift guard（F-4）。**完了条件に Q6 の判断記録を含める** | zaitaku-calender C0（同時）、#8-D2（wire enum の改名）、Q1〜Q4・Q7・Q10・Q11・Q8(b)（Q6 は記録のみ） | M |
 | **C1 手渡し取込（未採用 staging）** | `ext_contract.main()` の subcommand 化（deliver / reconcile / withdraw / health）、`select_records`（前段除去と `--only-with-facts`）、`split_envelopes`（1 MiB）、`HandoffSink`（自己 ack しない）、`rejected` 終端と `_valid_ack` の status 検査（F-3）、health。E2E は合成 ledger で完結 | C0、CD-1。**本番投入は #4 の実施記録と Q6 の判断後だけ**。合成での開発・テストは切り離して進めてよい | L |
 | **C2 採用導線** | 契約改訂（`mcs-ext-auth/2`、`scope` の第 3 値）と Q9 の承認が前提。**承認されるまで hermes-mcs 側の成果物なし**。型付き値の正本は #15 | zaitaku-calender C2、Q9。zaitaku-calender C2 は hermes-mcs C2 を待たない | L |
 | **C3 マシン送信（任意）** | `ext_transport.py`（`HttpsSink`、endpoint policy、Keychain token）。実行は手動のまま。自動再送はしない | Q6・Q8、契約付録、C1 | M |
@@ -196,7 +199,7 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 
 ### Phase 0 — 判断と測定（コードなし。今すぐ）
 
-- **判断**（§9 の「決める時点」が Phase 0 のもの）: `#1-D1〜D6`（FileVault の有効化を含む）、`#9-D1〜D3`、`#8-D2`（wire enum の改名。C0 の fixture 固定前なら無償）、`#10-D1〜D2`、Q1〜Q4・Q6・Q7・Q10、CD-1〜CD-8、`#12-D5`（F-2 の扱い）。
+- **判断**（§9 の「決める時点」が Phase 0 のもの）: `#1-D1〜D6`（FileVault の有効化を含む）、`#9-D1〜D3`、`#8-D2`（wire enum の改名。C0 の fixture 固定前なら無償）、`#10-D1〜D2`、Q1〜Q4・Q7・Q10・Q11・Q8(b)（Q6 は判断者と根拠文書の場所の記録のみ）、CD-1〜CD-8 と C0 合意事項（撤回指示書・受信側鮮度閾値・サイズ上限・`source` 対応付け・`content_hash` の null 取扱い）、`#12-D5`（F-2 の扱い）。
 - **測定**（オーナーが snapshot に対して実行。実データの集計になるので調査側では未実行）: `runs` の所要時間分布（#5）、text 経路の held 件数（#6）、`ledger_audit` の初回（#7 Step 0）、現在の DB サイズ（#1）。
 - 目安: 実装は不要。Phase 1 の着手前提を揃える。
 
@@ -236,7 +239,7 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 
 ### 接続（zaitaku-calender と共通の番号）
 
-決める時点: C0 で Q1・Q2・Q3・Q4・Q6・Q7・Q10、C2 までに Q5・Q9、C3 前に Q8。
+決める時点: **C0 で Q1・Q2・Q3・Q4・Q7・Q10・Q11 の決定と Q8(b)。Q6 は判断者・根拠文書の場所の記録のみ**（判断内容の確定は zaitaku-calender `ROADMAP.md` §10.3 の本番投入ゲート。合成 fixture の開発は Q6 未決でも進めてよい）。C2 までに Q5・Q9、C3 前に Q8(a)。
 
 1. 本文なしで足りるか（MCS で原文を開いて確認する運用）。本文が要るなら `docs/external-export-contract.md` の改訂という別判断。
 2. semantic 層（`semantic_facts_v4` または `canonical_projection`）を常時動かすか。動かさない場合 facts は空。message の存在・状態、coverage、signal は届く。
@@ -245,9 +248,11 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 5. Work Queue に「未確認の staging 行あり」を導出コードとして足すか（zaitaku-calender `docs/plans/implementation-plan.md:318` との両立）。C4 の digest 代替の可否もこれに従う。
 6. MCS から取得したデータを別システムへ転送・保存することが許されるか。根拠は zaitaku-calender `docs/domain-model-decision.md` の外部連携条項（接続先 ID と確認済み内部 ID の明示対応: L182、双方向連携の事前契約: L206）、MCS 利用規約、患者同意、院内規程。SHR-10／SCP-07（zaitaku-calender `docs/specs/visit-report-spec-v1.md:637, 82`）は「MCS への書き戻しをしない」ことの根拠としてだけ使う。**決まるまで C1 の本番投入（実データによる最初の envelope 作成と zaitaku-calender 本番へのアップロード）以降に進まない**。合成 fixture による開発・テストは進めてよい。
 7. fixture の正本をどちらに置くか（CD-8 の推奨: hermes-mcs を正本に、zaitaku-calender へコピーし `MANIFEST.sha256` で一致確認）。
-8. C3 の構成（D1 直接 binding か RPC か、mTLS 必須か。`bounded_http` は Bearer 固定で mTLS・Cloudflare Access 系ヘッダに未対応）と、zaitaku-calender の P0（G-OPS-3、G-ON-1 など）より先に接続へ着手するか。
+8. (a) C3 の構成（D1 直接 binding か RPC か、mTLS 必須か（`bounded_http` は Bearer 固定で mTLS・Cloudflare Access 系ヘッダに未対応）、専用 Worker の権限を書込みのみに絞るか、Access service token かアプリ層 Bearer か。zaitaku-calender `ROADMAP.md` §4.9）。(b) zaitaku-calender の P0（G-OPS-3、G-ON-1 など）より先に接続へ着手するか。(b) は C0/C1 の着手順序を左右するので **C0 で決める**。
 9. 型付き値（allergy・ADE・vital_lab の値）の送付を認めるか。認める場合は `docs/external-export-contract.md` の detail 禁止条項（L22・L137）の改訂とオーナーの明示承認が要る。hermes-mcs C2 の前提。
 10. 患者単位の取得完全性（「この患者は取得未完了」）を zaitaku-calender へ送るか。送る場合は新 record 型（allowlist の変更、`mcs-ext-auth/2` 相当）が要る。送らない場合、C1 で表示できるのは全体の未完了件数（`patients_incomplete`、CD-4）だけ。
+11. 人が MCS のルームを開いて `project_id` から患者を特定する導線。テナント設定の MCS ベース URL から `project_id` 単位のリンクを組み立てる案。message 単位の直リンクは未確認。
+12. 真正性: 署名（`mcs-ext-export/2`、Worker secret の HMAC 等）が要るか。契約改訂とオーナー承認が要る。決まるまで zaitaku-calender C1 は人が真正性を担保し、画面に upload 者と source を表示する（zaitaku-calender `ROADMAP.md` §4.1）。
 
 ### 項目別（詳細は各詳細計画の「オーナー判断・リスク」）
 
