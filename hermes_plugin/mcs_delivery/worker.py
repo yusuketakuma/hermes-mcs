@@ -598,19 +598,23 @@ class DeliveryWorker:
                       part_id=part["part_id"], kind=part["kind"],
                       result=outcome["result"])
         if part["kind"] == "thread":
-            # the card's thread binding also rides the legacy
+            # Discord: the card's thread binding also rides the legacy
             # thread_receipt envelope — best-effort, because the
-            # journaled part_receipt already carries the truth
-            with suppress(OSError):
-                env2 = envelopes.thread_receipt(
-                    spec["delivery_id"], ctx["card_message_id"],
-                    thread_id=outcome.get("remote_id")
-                    if outcome["result"] == "delivered" else None,
-                    error_code=outcome.get("error_code")
-                    if outcome["result"] != "delivered" else None)
-                await asyncio.to_thread(
-                    envelopes.publish_command,
-                    self._dirs["cmd_int"], env2)
+            # journaled part_receipt already carries the truth (the
+            # runner still needs it to mark an unknown thread 'failed').
+            # Slack skips it: that v1 envelope has no transport/team_id
+            # and the runner can only answer scope_mismatch.
+            if self.transport != "slack":
+                with suppress(OSError):
+                    env2 = envelopes.thread_receipt(
+                        spec["delivery_id"], ctx["card_message_id"],
+                        thread_id=outcome.get("remote_id")
+                        if outcome["result"] == "delivered" else None,
+                        error_code=outcome.get("error_code")
+                        if outcome["result"] != "delivered" else None)
+                    await asyncio.to_thread(
+                        envelopes.publish_command,
+                        self._dirs["cmd_int"], env2)
             if outcome["result"] == "delivered" \
                     and outcome.get("remote_id"):
                 ctx["thread_id"] = str(outcome["remote_id"])
