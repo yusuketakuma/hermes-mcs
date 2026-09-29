@@ -337,6 +337,39 @@ def test_done_bookkeeping_restarts_gateway(rec, tmp_path, gateway_restarts):
     assert len(gateway_restarts) == 1
 
 
+def test_gateway_restart_oserror_keeps_bookkeeping(rec, tmp_path,
+                                                  monkeypatch):
+    _make_repo(tmp_path)
+    state = {"v": 1, "applying": None,
+             "stages": [{"stage": "done", "at": time.time() - 4000}],
+             "applied": [{"plugin_changed": True, "command_id": "cid-done"}]}
+    rec._save_state(state)
+
+    def broken_popen(args, **kwargs):
+        raise OSError("launchctl missing")
+    monkeypatch.setattr(rec.subprocess, "Popen", broken_popen)
+    assert rec.recover() == 0
+    after = rec._load_state()
+    assert after["executed"]["cid-done"]["result"] == "applied"
+    assert after["stages"] == []
+
+
+@pytest.mark.parametrize("content", [
+    None, b"", b"{bad", b"[]", b'{"phase": "awaiting_consent", "report_id": "r"}',
+    b'{"phase": "restored"}', b'{"restored_at": 1}', b'{"phase": "other"}'])
+def test_awaiting_consent_matches_notify_cards(tmp_path, monkeypatch,
+                                               content):
+    """The standalone hold-marker check keeps notify_cards' fail-closed
+    verdict — the writer freeze depends on both agreeing."""
+    import notify_cards
+    mod = _load()
+    monkeypatch.setattr(mod, "DATA", str(tmp_path))
+    if content is not None:
+        (tmp_path / "restore_pending.json").write_bytes(content)
+    assert (mod._awaiting_consent() is None) \
+        == (notify_cards.restore_awaiting_consent(str(tmp_path)) is None)
+
+
 def test_membership_reconcile_removes_undesired_agents(rec, tmp_path,
                                                        monkeypatch):
     agents = tmp_path / "agents"
