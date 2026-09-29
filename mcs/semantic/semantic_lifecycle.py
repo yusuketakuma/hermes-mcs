@@ -123,7 +123,6 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
                rendered: list | None, lines: dict,
                cfg: dict[str, str] | None = None) -> tuple[list | None, str]:
     import notify_flush
-    from notify_flush import _delivery_fingerprint, _target
     from semantic_send_gate import semantic_chunk_parts
     if rendered is None:
         # nothing observed as rendered: a delivered fact ID could only be
@@ -160,9 +159,9 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
             return None, "notice_receipt_unprovable"
         partial = row["state"] != "accepted" or prefix < len(chunks)
         if partial:
-            target = _target(cfg or {}, "semantic_notice")
+            target = notify_flush._target(cfg or {}, "semantic_notice")
             if (not isinstance(fingerprint, str) or target is None
-                    or fingerprint != _delivery_fingerprint(
+                    or fingerprint != notify_flush._delivery_fingerprint(
                         target, chunks, [])):
                 return None, "notice_receipt_unprovable"
         joined = "".join(bodies)
