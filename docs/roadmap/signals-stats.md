@@ -170,8 +170,8 @@
 - `_med_followup`（`mcs_signals.py:250-340`）: エピソード = (room, 空白正規化した薬表記)（:332）。「後続」は room の**任意の後続投稿**か依頼登録（:307-321）。窓は `followup_days`=7、対象 90 日、変更は `ops.signal_policy` だけ（`THRESHOLDS` :62-74）。【実行確認】変更言及の 9 日後（窓外）に同薬の観察言及（action none）を置いても open のまま。これが「閉じる側」の具体的な FP。
 - 関連検知: `symptom_after_med_change` は同一投稿内の結合だけ（:729-787）。`transition_reconciliation` は discharge / transfer と薬変更の ±14 日共起（:431-459、`mcs_queries.py:282-325`）。
 - 統計側 `st_med_change_followup`（`mcs_stats.py:513-562`）が同じ窓ロジックを独立実装している。signal と stat は同一述語であるべき（`mcs_queries.py` の docstring）。
-- episode 用の artifact / table は存在しない。`open_loop_aging.needs` に名前があるだけ（`mcs_stats.py:732-734`）。README は interaction_links だけに言及（`README.md:504-506`）。adapter が保存する参照情報は `parent_id` と `reply_count` だけ（`mcs_adapter.py:439-485`）。
-- 旧 ROADMAP の訂正: (1) 旧 v2 #16 は #3 drug_map 依存だが、新 #14 は依存を落としている。薬名は表記ゆれ未統合（`mcs_stats.py:378-380`）。(2) `open_loop_aging.needs=[interaction_links, episode_links]` は #14 と #17 を結合しているが、コード docstring（:585-587）と README は interaction_links だけが必要と述べている。needs を分離する。(3) 「誤検知の削減」を測るラベルがない（#19 が前提）。
+- episode 用の artifact / table は存在しない。`open_loop_aging.needs` に名前があるだけ（`mcs_stats.py:732-734`）。USER_GUIDE は interaction_links だけに言及（`docs/USER_GUIDE.md:361-363`）。adapter が保存する参照情報は `parent_id` と `reply_count` だけ（`mcs_adapter.py:439-485`）。
+- 旧 ROADMAP の訂正: (1) 旧 v2 #16 は #3 drug_map 依存だが、新 #14 は依存を落としている。薬名は表記ゆれ未統合（`mcs_stats.py:378-380`）。(2) `open_loop_aging.needs=[interaction_links, episode_links]` は #14 と #17 を結合しているが、コード docstring（:585-587）と USER_GUIDE は interaction_links だけが必要と述べている。needs を分離する。(3) 「誤検知の削減」を測るラベルがない（#19 が前提）。
 
 **設計方針**
 - 定義: エピソード = (project_id, 薬キー)。薬キーは現行 = 表記正規化、#11 後は成分 ID。観察 = 最新の変更言及より後の同薬言及（action none 含む、誰の投稿でも自施設含む、`med_is_patient_current` を適用）。
@@ -183,7 +183,7 @@
   2. 人手監査: suppressed の全件（または 30 件以上）を原記録（`mcs_view thread/evidence`）で確認する。**偽リンク（未フォローなのに閉じた）が 0/N** を on の条件にする。結果は件数だけ dev-records に残す。
   3. 事後: #19 の型別却下率（理由コード = 誤検知 / 対応済み）と再 open 率の前後比較。n と区間を併記し、因果は断定しない。
   4. 過去再生: `evaluate(ledger, cfg, now=…)`（:851-856 は now 引数あり）を台帳コピーに対し複数の now で走らせる。本番 DB は不変。
-- 対象外: `symptom_after_med` の cross-post 結合（README / docstring のとおり FP を増やす）、`transition_reconciliation` の絞り込み。
+- 対象外: `symptom_after_med` の cross-post 結合（USER_GUIDE / docstring のとおり FP を増やす）、`transition_reconciliation` の絞り込み。
 
 **成果物**: `mcs_queries.later_med_observations(db, pid, med_key, after_ts, until_ts)`、`mcs_signals.py`（`_med_followup`・`THRESHOLDS`・resolved の resolution・evaluate の戻り）、`st_med_change_followup` の追随、tests、`DEVELOPMENT.md`、監査手順の dev-record 雛形。
 
@@ -222,10 +222,10 @@
   - 第 2 版 `request_response`: extract_llm の requests（confirmed だけ、宛先不明は除外）の後続 room 投稿を「応答候補」とする。`_pharmacist_request` の SQL を共有関数に抽出して再利用し、重複実装しない。mention は対象外。
 - 個人データを出さない: 出力は職種群ペア × {n, median, p90（nearest-rank）, 未応答数, 年齢バケット}だけ。`sender_id`・名前・organization は出力にもキーにも使わない。n < k（既定 5）のセルは値を伏せて `small_cell` と表示する。未応答一覧は (project_id, message_id) だけ。allowlist に追加しない（第 1 版）。ローカル出力だけ。
 - 職種正規化: profession を `", "` で分割し、`stats.profession_map`（config。既定 = 恒等、未対応 =「その他」）で群化する。自施設は `_self_sets` で判定する。
-- 第 1 版は新 stat `interaction_latency`（T2）を追加し、`open_loop_aging` には触らない（export 結合を避ける）。第 2 版で `text_candidates` を実値化し、allowlist 拡張・テスト更新・README 更新を同一変更で行う。
+- 第 1 版は新 stat `interaction_latency`（T2）を追加し、`open_loop_aging` には触らない（export 結合を避ける）。第 2 版で `text_candidates` を実値化し、allowlist 拡張・テスト更新・README/USER_GUIDE 更新を同一変更で行う。
 - 限界を出力に明示する: thread 返信だけが確定リンク。room の新規投稿での回答は候補。返信なし ≠ 未対応。
 
-**成果物**: `mcs_queries.py`（`thread_reply_pairs`、`requests_awaiting_response`）、`mcs_stats.py`（`st_interaction_latency`、needs 修正、後続で `text_candidates`）、`profession_map`（config・`mcs_setup` 検証・`INSTALLATION.md`）、第 2 版だけ `export_schema.py`、tests/views、README「まだ取れないもの」の更新。
+**成果物**: `mcs_queries.py`（`thread_reply_pairs`、`requests_awaiting_response`）、`mcs_stats.py`（`st_interaction_latency`、needs 修正、後続で `text_candidates`）、`profession_map`（config・`mcs_setup` 検証・`INSTALLATION.md`）、第 2 版だけ `export_schema.py`、tests/views、USER_GUIDE「まだ取れないもの」の更新。
 
 **受入条件とテスト（合成のみ）**
 - root + reply の latency が正確（同職種 / 異職種 / 複数職種の 3 パターン）。reply なし root の未応答判定。incomplete reply root は「不明」で未応答に数えない。
@@ -253,7 +253,7 @@
 - 既存 stat（すべて snapshot 読取専用・ID のみ・分母付き `_ratio`: :40-44）: `workload`（:282-313）は曜日 × 時間帯（weekday_day = 平日 08-18 JST、weekday_night、weekend で、祝日は未考慮）。`doc_burden`（:316-344）は送信者集中 top1 / 5 / 10 と HHI（送信者 ID は出力しない）。`professions`（:264-279）、`patient_activity`（:233-261）、`open_loop_aging`（:584-640）。
 - **`comm_concentration` は stat ではなく signal**（`mcs_signals.py:343-361`）。REGISTRY は 16 stat でそれを含まない（`mcs_stats.py:710-746`）。
 - `workload` / `doc_burden` / `professions` はどの PRESETS にも入らず（:748-754）、allowlist にもない。【実行確認】REGISTRY − `_STATS` = professions, workload, doc_burden, canonical_facts, card_parts。preset に入れると brain_export が失敗する（`export_schema.py:172`）。
-- 定期実行: repo のスケジューラに stat / brain_export ジョブはない（`mcs_setup.py:1473-1480` の `CRON_JOBS` は 6 件、`deployment/launchagents/README.md:5-15`）。「定期出力」は新規。前例は `brain_export.py`（Markdown + jsonl、保持 62 日）。
+- 定期実行: repo のスケジューラに stat / brain_export ジョブはない（`mcs_setup.py:1473-1480` の `CRON_JOBS` は 6 件、`deployment/launchagents/README.md:5-19`）。「定期出力」は新規。前例は `brain_export.py`（Markdown + jsonl、保持 62 日）。
 - 取得未完了の集約はない: `read_model._coverage`（`read_model.py:273-303`）は抽出状態と添付だけ。`mcs_view status`（`mcs_view.py:175-235`）は room 単位で `gapless_verified:false`、`exact_missing_ranges:null`。`st_data_quality`（`mcs_stats.py:128-191`）は fetched / parsed / timed の 3 段だけ。範囲別の集約はない。
 - 旧 ROADMAP の訂正: (1) `comm_concentration` は stat でなく signal（旧 v2 #27 の記述の引継ぎ）。(2) 「既存統計の定期出力」ではなく、定期出力の仕組みごと新規。(3) 取得未完了の集約 stat がない。
 

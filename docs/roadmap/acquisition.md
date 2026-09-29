@@ -16,7 +16,7 @@
    - `docs/dev-records/` に置く記録は `.md` / `.json` のみ（`gate_records_isolation` :357）。`FIX-`・`BUG-`・`INCIDENT-`・`AUDIT-`・`EVAL-`・`TEST-` 接頭辞の ID を書くと `ci/gates-coverage.json` への登録が要る（`ci/mine_gates.py`）。
    - 帰結: #1 の drill と #4 の plan は `Ledger()` を使わず、`valid_mcs_db` と読み取り専用接続だけで作る。
 3. **restore の本体は実装済み**。`mcs_update._restore_db`（`mcs/ops/mcs_update.py`）、`_replace_database`、`_restore_loss_report`、`notify_reconcile.reconcile_after_restore`（`mcs/notify/notify_reconcile.py`）がある。合成の復元検証もテストとして存在する（`tests/core/test_ledger_recovery_contract.py`: 件数・親子・FTS・添付 hash・snapshot 閲覧）。欠けているのは、オフサイト媒体からの取得と復号、運用者が実行して記録を残す drill だけ。
-4. **journal 圧縮の保証範囲が #1 と #6 に効く**。`hermes_plugin/mcs_delivery/worker.py:183-230` は `data/backups/*.db` の最古 mtime−1 日より古い journal 行だけを捨てる。`hermes_plugin/README.md:208-211` は「`data/backups` 外の複製から restore する運用は保証の対象外」と明記している。オフサイトから 7 日より古い世代を戻すと、配送の照合証拠が失われうる。
+4. **journal 圧縮の保証範囲が #1 と #6 に効く**。`hermes_plugin/mcs_delivery/worker.py:183-230` は `data/backups/*.db` の最古 mtime−1 日より古い journal 行だけを捨てる。`hermes_plugin/README.md:211-214` は「`data/backups` 外の複製から restore する運用は保証の対象外」と明記している。オフサイトから 7 日より古い世代を戻すと、配送の照合証拠が失われうる。
 5. **`restore_pending` マーカーが止めるのは card の grant だけ**（`mcs/notify/notify_transport.py:183-188`）。text 経路の `notify_flush.flush()` は参照しない（`mcs/notify/notify_flush.py:932-976`）。
 
 ## #1 暗号化オフサイトバックアップと復元訓練
@@ -28,7 +28,7 @@
 - `preupdate-*` は別 prefix（`maintenance.py:80-104`）で、update_state 未参照のものは日次で削除される（:107-141）。
 - `valid_mcs_db` は `mcs/core/ledger.py:1892-1970`、`publish_snapshot` は :1856-1889。旧 ROADMAP の `:1858-1900` は両者の途中で不正確だった。
 - 暗号化・オフサイトの実装はない。`rg -n 'encrypt|decrypt|cipher|aes|restore_drill' mcs scripts deployment hermes_plugin integration ci tests` は 0 件。旧 ROADMAP の `rg 'encrypt\|restore_drill'` は ripgrep では `\|` がリテラルなので 0 件は当然で、根拠になっていなかった。
-- 制限は明文化済み: `README.md:241-242`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md:164-177`。
+- 制限は明文化済み: `SECURITY.md:57-58`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md:187-200`。
 - 規模: 2026-09-23 の記録で約 76MB・189 患者・15,398 メッセージ（`docs/dev-records/continuation-20260923.md:224`）。現在値は【未確認】。暗号化・転送のコストは小さい。
 - 外部プロセスの前例: `security`（`mcs_adapter.py:720-722`、`mcs_setup.py:587-630`）、`launchctl`（`mcs_util.py:351-373`）、`git`、`hermes`（`notify_flush.py:64-66,654`）。`gate_stdlib_only`（`ci/gates.py:96-122`）が見るのは Python の import だけで、core の subprocess は禁止されていない（禁止は plugin の subprocess: `ci/gates.py:174-`）。
 - 【実行確認】OS 同梱の `/usr/bin/openssl` は LibreSSL 3.3.6、PATH 先頭の Homebrew は OpenSSL 3.6.4。cron wrapper は PATH を `$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin` に固定する（`deployment/scripts/mcs_check.sh:7-8`）ので、実行時は LibreSSL になる。
@@ -51,12 +51,12 @@
   - 再収集できない `requests` と `command_receipts` の件数は必ず人手で確認する。
   - `quick_check` だけでは不足なので `integrity_check` を足す。記録は `data/drills/*.json` と手書きの `docs/dev-records/*.md`（件数・hash・所要時間だけ。PHI は書かない）。
   - drill は自動 verify（Keychain の鍵）と、四半期の人手 drill（エスクロー鍵を手入力）の二段にする。後者だけがエスクローの正しさを証明する。
-- **実機復元（新端末）**: 既存の `data/ledger.db` があれば拒否する（`docs/lifecycle-spec.md:177`「原本上書きは人手のみ」）。配置後に `notify_cards.mark_restored(DATA, by="manual")`（`notify_cards.py:351-364`）で送信 hold を掛ける。再収集分の再通知を避けるため、初回 tick 前に `notify_max_age_h`（`ledger.py:773-794`）を絞る。`--no-notify` は送信を止めるだけで outbox への登録は止めない（`run_check.py:1006,1118` のみで参照）。添付本体は保存対象外（14 日で prune: `maintenance.py:25`）。
+- **実機復元（新端末）**: 既存の `data/ledger.db` があれば拒否する（`docs/lifecycle-spec.md:200`「原本上書きは人手のみ」）。配置後に `notify_cards.mark_restored(DATA, by="manual")`（`notify_cards.py:351-364`）で送信 hold を掛ける。再収集分の再通知を避けるため、初回 tick 前に `notify_max_age_h`（`ledger.py:773-794`）を絞る。`--no-notify` は送信を止めるだけで outbox への登録は止めない（`run_check.py:1006,1118` のみで参照）。添付本体は保存対象外（14 日で prune: `maintenance.py:25`）。
 
 **成果物**
 - 新規: `mcs/ops/mcs_backup.py`（`keygen` / `offsite` / `verify` / `drill` / `restore` / `status`）、`deployment/scripts/mcs_offsite.sh`、`tests/ops/test_mcs_backup.py`。
 - 変更: `mcs/core/maintenance.py`（ハッシュ・原子コピー・世代 prune の補助）、`mcs/ops/mcs_setup.py`（`CONFIG_RULES` に `backup` 追加、`_validate_backup`、`check` の probe、`_keychain_store` の service 引数化）、`mcs/ingest/run_check.py`（health）、`deployment/launchagents/README.md`、`tests/meta/test_deployment_scripts.py`。
-- 文書: `README.md:241`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md`、`docs/INSTALLATION.md`、`docs/DEVELOPMENT.md`（`scripts/update_readme.py` で再生成）。
+- 文書: `SECURITY.md:57-58`、`SECURITY.md:44-47`、`docs/lifecycle-spec.md`、`docs/INSTALLATION.md`、`docs/DEVELOPMENT.md`（`scripts/update_readme.py` で再生成）。
 - `AGENTS.md`: OS 同梱 `/usr/bin/openssl` を許可する 1 行の例外（#1-D4 の承認が前提）。
 
 **受入条件とテスト（合成のみ）**
@@ -100,7 +100,7 @@
 - `fetch_latest`（`mcs_adapter.py:1289`）は `keep_read_status` を付けない。既読の副作用がないことの実証記録は、リポジトリ内で見つけられなかった【要確認。`self_posts=true` で毎 tick 呼ぶ】。
 - thread 応答に `paginate` キーがないときは「単一ページ」扱い（`mcs_adapter.py:1040-1046`）。履歴・未読が `paginate` 欠損を SchemaError にするのと非対称で、これを固定するテストはない。
 - `reply_count` に tombstone が含まれるかも未確認。`merge_full_replies` は削除済み返信を「取得済」に数える（`mcs/ingest/job_ops.py:281-289`）が、view の `incomplete_reply_roots` は `body_state='full'` だけを数える（`mcs/views/mcs_view.py:201-205`）。二者の扱いが食い違う。
-- `docs/DEVELOPMENT.md:269` は「pinned 順・返信ページング等は未検証」と明記している。
+- `docs/DEVELOPMENT.md:275` は「pinned 順・返信ページング等は未検証」と明記している。
 - 旧 ROADMAP の評価: 「合成 fixture で固定」は方向として妥当。ただし固定する対象の多く（履歴・thread の pagination 挙動）は既に inline stub で固定済み。未着手なのは fixture の資産化、request 側のパラメータ検証、`keep_read_status` の全経路検証、未確認の契約の記録。
 
 **設計方針**
@@ -113,7 +113,7 @@
 
 **成果物**
 - 新規: `tests/ingest/fixtures/mcs_wire/*.json`（約 12 件）、`tests/ingest/wire_replay.py`、`tests/ingest/test_wire_contract.py`、`scripts/mcs_wire_probe.py`（任意）。
-- 変更（任意）: `mcs/ingest/mcs_adapter.py`（thread の `paginate` 欠損を厳格化する場合だけ）、`docs/DEVELOPMENT.md:269`（検証状況の記述）。
+- 変更（任意）: `mcs/ingest/mcs_adapter.py`（thread の `paginate` 欠損を厳格化する場合だけ）、`docs/DEVELOPMENT.md:275`（検証状況の記述）。
 
 **受入条件とテスト（合成のみ）**
 - 全 message 取得経路（未読・履歴・thread・thread window）で `keep_read_status=1` が付くことを ReplayWorker で固定する。`fetch_history` に `sort=pinned` が付くことも固定する。
@@ -143,7 +143,7 @@
   3. 親の `reply_count` と保存済み full 返信の差（view で導出のみ: `mcs/views/mcs_view.py:201-205`）。
   4. run 単位の `runs.error`（`ledger.py:508-512` で 500 文字、最大 8 件連結: `run_check.py:1084-1087`）。
   5. 患者単位の `patients.fetch_reason`（未読経路だけが更新する最新 1 件: `run_check.py:377-410`）。
-- `fetch_jobs` に理由の列はない。**`mcs_view` の status は全 job グループの `reason` を `not_recorded` に固定している**（`mcs_view.py:210-211`、`docs/DEVELOPMENT.md:267` も同趣旨）。
+- `fetch_jobs` に理由の列はない。**`mcs_view` の status は全 job グループの `reason` を `not_recorded` に固定している**（`mcs_view.py:210-211`、`docs/DEVELOPMENT.md:273` も同趣旨）。
 - 再試行の会計は `job_retry(max_attempts=8)`（`ledger.py:1273-1286`）。上限で `failed` になるが、理由は残らない。`failed` の返信 job は floor 認証を止めない（`pending_reply_jobs` は pending だけを数える: `ledger.py:1534-1543`）。つまり取れなかった返信があっても floor が確定しうる。
 - 実際に出る理由: adapter は `network_error`・`http_error`・`forbidden`（`mcs_adapter.py:902`）・`session_expired`・`schema_error`・`deadline_exceeded`・`pages_exceeded`・`thread_incomplete`（:1068）・`no_token`・`bad_snapshot_ts`・`mark_result_unknown`（:1423）・`download_*`・`url_not_allowed`・`response_too_large`（`mcs_worker.py`）を出す。患者側では `parent_body_incomplete`（`run_check.py:378`）・`replies_missing`（:407）、job 側では `replies_missing`（`job_ops.py:421`）・`window_stalled`（:541）。
 - view の語彙 `REASONS`（`mcs_view.py:23-29`）との食い違い: 未使用の `body_incomplete` が入っている一方、`parent_body_incomplete`・`forbidden`・`download_empty`・`mark_result_unknown` は入っておらず `other_error` として表示される。
@@ -166,7 +166,7 @@
 - floor との関係（#3-D1）: 恒久欠落があっても floor を確定させるが、status に `known_gaps` 件数を併記し、C1 の coverage では「不明」として扱う。厳しくすると floor が永久に付かず、deep import が止まる。
 
 **成果物**
-- 変更: `mcs/core/ledger.py`（migration、`job_retry` 系、`job_add` 系）、`mcs/ingest/job_ops.py`（分類の書込）、`mcs/views/mcs_view.py`（status）、`docs/DEVELOPMENT.md:267`。新規ファイルなし（テストは既存ファイルへ追加）。
+- 変更: `mcs/core/ledger.py`（migration、`job_retry` 系、`job_add` 系）、`mcs/ingest/job_ops.py`（分類の書込）、`mcs/views/mcs_view.py`（status）、`docs/DEVELOPMENT.md:273`。新規ファイルなし（テストは既存ファイルへ追加）。
 
 **受入条件とテスト（合成のみ）**
 - `tests/ingest/test_job_drain.py` の流儀（偽 adapter が `MCSError(kind, status=...)` を投げる）で確認する。各 kind が `fetch_jobs.error` に記録される。恒久系は 1 回で `failed`、一時系は 8 回で `failed`。`SessionExpired` は attempt 非消費。成功時と revive 時に `error` が消える。
@@ -294,7 +294,7 @@
   2. text 経路で hold された event に、**解決手段も一覧も理由の記録もない**。`_hold_event`（:504-567）は理由を持たない。view は件数だけ（`run_check.py:121-124,165-169`）。`ops.card_resolve` は card 専用。hold は health を `degraded` にし続ける。
   3. text 経路の対象には alert 系（`session_expired`・`session_recovered`・`run_failed`・`update_notice` など: `notify_flush.py:74-78`）が含まれる。これらが不確実で hold されると、異常を知らせる通知自体が黙る。alert は「重複しても良い」側が安全。
   4. **restore 後**、text 経路は `restore_pending` に縛られない（前提 5）。復元で巻き戻った DB の pending event がそのまま再送されうる。加えて、再収集された投稿が新規扱いで再通知される（`--no-notify` は送信だけを止める: `run_check.py:1006,1118`）。
-  5. Hermes/SDK 内部の再 POST による重複は core からは防げない（`hermes_plugin/mcs_delivery/worker.py:10-14`、`hermes_plugin/README.md:193-204`。作成系 POST は card 経路だけ単発化）。
+  5. Hermes/SDK 内部の再 POST による重複は core からは防げない（`hermes_plugin/mcs_delivery/worker.py:10-14`、`hermes_plugin/README.md:196-207`。作成系 POST は card 経路だけ単発化）。
 - 再利用できる既存の hold / reconcile パターン: `outbox_progress(sending)` の write-ahead、`_hold_event` の「未送信が証明できる場合だけの救済」、`notification_restore_holds` と `ops.card_resolve`（operator の証拠付き resolve）、`GovernedExporter` の held / acked / delete_held と `reconcile`（`mcs/ops/ext_contract.py:555-600`）。
 - 実際に held が発生しているかは未確認（実データ）。オーナーが snapshot に対して `SELECT kind,COUNT(*) FROM notify_outbox WHERE state='failed' AND next_try IS NULL GROUP BY kind;` を確認する。ゼロなら resolver は後回しでよい（実需が出てから）。
 
