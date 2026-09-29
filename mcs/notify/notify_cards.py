@@ -45,7 +45,8 @@ from mcs_queries import current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp)
+    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
+    plain_notice)
 from notify_views import (
     my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
@@ -2200,10 +2201,7 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
 
 
 def _plain(text) -> str:
-    """Frozen notice text — one line, no mention/broadcast syntax."""
-    t = " ".join(str(text or "").split())[:200]
-    return (t.replace("<", "＜").replace(">", "＞")
-            .replace("@", "＠"))
+    return plain_notice(text, 200)
 
 
 # ---------- sweep / GC / watchdog / health ----------

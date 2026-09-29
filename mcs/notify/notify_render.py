@@ -530,6 +530,13 @@ def feedback_pending(db, card) -> bool:
                          card["root_message_id"])).fetchone() is not None
 
 
+def plain_notice(text, cap) -> str:
+    """Frozen outbox-notice text (⏰ reminders, 🌅 digest) — one line,
+    at most ``cap`` characters, no mention/broadcast syntax."""
+    t = " ".join(str(text or "").split())[:cap]
+    return t.replace("<", "＜").replace(">", "＞").replace("@", "＠")
+
+
 def _inline(text, cap) -> str:
     """Free text (typed by staff) shown on one footer line — no line
     breaks and no ``<``/``>`` so it can never form a mention/broadcast."""
