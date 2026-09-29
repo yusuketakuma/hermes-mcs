@@ -47,17 +47,16 @@ def test_choose_slot_lend_idle(monkeypatch):
     assert extract_llm._choose_slot() == local_llm.REALTIME_SLOT
 
 
-def test_choose_slot_lend_busy_falls_back_at_deadline(monkeypatch):
+def test_choose_slot_lend_busy_gives_no_slot_at_deadline(monkeypatch):
     """Both slots busy: the chooser re-polls until the deadline (see
-    test_lane_slot_and_lock) — at an expired deadline it falls back,
-    and the call is refused before the wire anyway."""
+    test_lane_slot_and_lock) — at an expired deadline it returns None
+    rather than pin a busy slot; the caller defers."""
     _set_state(monkeypatch, lend=True)
     slots = [{"id": local_llm.BACKGROUND_SLOT, "is_processing": True},
              {"id": local_llm.REALTIME_SLOT, "is_processing": True}]
     monkeypatch.setattr(extract_llm, "_opener_request",
                         lambda *a, **k: (200, {}, json.dumps(slots).encode()))
-    assert extract_llm._choose_slot(deadline=0.0) \
-        == local_llm.BACKGROUND_SLOT
+    assert extract_llm._choose_slot(deadline=0.0) is None
 
 
 def test_choose_slot_lend_probe_failure_falls_back(monkeypatch):

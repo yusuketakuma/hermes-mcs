@@ -42,21 +42,53 @@ def test_lend_both_busy_waits_then_takes_idle_rt(monkeypatch):
     assert extract_llm._choose_slot() == RT
 
 
-def test_lend_never_pins_busy_background_before_deadline(monkeypatch):
-    """Both slots stay busy: the chooser keeps polling up to the
-    deadline — it never hands back slot 0 while slot 0 is busy with
-    time left (that pin is what aborts llama-server)."""
-    seen, sleeps = _lend(monkeypatch, [{BG: True, RT: True}])
+def _busy_clock(monkeypatch, sleeps):
     clock = [1000.0]
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: (sleeps.append(s),
                                    clock.__setitem__(0, clock[0] + s)))
-    extract_llm._choose_slot(deadline=1030.0)
-    # returned only once the deadline was reached — the call is then
-    # refused before it reaches the wire
-    assert clock[0] + extract_llm._LEND_POLL_S >= 1030.0
+    return clock
+
+
+def test_lend_both_busy_until_deadline_returns_no_slot(monkeypatch):
+    """Both slots stay busy: the chooser polls up to the deadline and
+    then returns None — never a busy slot (that pin is what aborts
+    llama-server), not even with under a poll interval left."""
+    seen, sleeps = _lend(monkeypatch, [{BG: True, RT: True}])
+    _busy_clock(monkeypatch, sleeps)
+    assert extract_llm._choose_slot(deadline=1030.0) is None
     assert len(seen) >= 29
+
+
+def test_lend_both_busy_without_deadline_gives_up_after_wait(monkeypatch):
+    seen, sleeps = _lend(monkeypatch, [{BG: True, RT: True}])
+    _busy_clock(monkeypatch, sleeps)
+    assert extract_llm._choose_slot() is None
+    assert sum(sleeps) <= extract_llm._LEND_WAIT_S
+
+
+def test_lend_both_busy_llm_call_defers_without_sending(monkeypatch):
+    """_llm_call through both paths (format probe and chat): with no
+    idle slot, nothing reaches /chat/completions and the call defers
+    (the row stays pending, no attempt burned)."""
+    _lend(monkeypatch, [{BG: True, RT: True}])
+    sent = []
+    slots_req = extract_llm._opener_request
+
+    def req(url, *a, **k):
+        if "/chat/completions" in url:
+            sent.append(url)
+        return slots_req(url, *a, **k)
+
+    monkeypatch.setattr(extract_llm, "_opener_request", req)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    _busy_clock(monkeypatch, [])
+    for mode in (None, "object"):   # unprobed -> probe path; probed -> chat
+        monkeypatch.setattr(extract_llm, "_FMT_MODE", mode)
+        assert extract_llm._llm_call("合成", deadline=1030.0) \
+            is extract_llm._DEFERRED
+    assert sent == []
 
 
 def test_lend_probe_failure_keeps_background_fallback(monkeypatch):

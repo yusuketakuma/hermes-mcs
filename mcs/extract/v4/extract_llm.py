@@ -374,7 +374,7 @@ _PROBE_RETRY_S = 600
 _NEXT_FMT = {"schema": "object", "object": "plain"}
 
 
-def _probe_format(deadline: float | None = None) -> str:
+def _probe_format(deadline: float | None = None) -> str | None:
     """Detect the best response_format the server accepts, via the
     shared loopback adapter.  Fallback order: json_schema -> json_object
     -> plain; acceptance requires a parseable JSON object reply — a 200
@@ -396,10 +396,15 @@ def _probe_format(deadline: float | None = None) -> str:
             slot=_choose_slot(deadline=deadline),
             verify=lambda text: json_object(text) is not None)
     else:
+        slot = _choose_slot(deadline=deadline)
+        if slot is None:
+            # no idle slot in time — keep the current mode (None when
+            # unprobed: _llm_call defers) and re-probe on the next call
+            return _FMT_MODE
         _FMT_MODE = local_llm.probe_format(
             ENDPOINT, MODEL, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(deadline=deadline),
+            slot=slot,
             verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -1008,6 +1013,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
     fmt = _probe_format(deadline=deadline)
+    if fmt is None:
+        return _DEFERRED   # no idle slot to probe on — nothing sent
     # resolve per call so a config.json local_llm.url/model change
     # takes effect without a code edit; patched constants still win
     endpoint, model = local_llm.resolve(load_config())
@@ -1041,11 +1048,16 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
+            slot = _choose_slot(deadline=deadline)
+            if slot is None:
+                # both slots stayed busy — pinning one aborts
+                # llama-server; defer without burning an attempt
+                return _DEFERRED
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
-                extra_payload={"id_slot": _choose_slot(deadline=deadline)},
+                extra_payload={"id_slot": slot},
                 request_fn=_opener_request, error_out=err_out)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or (deadline is not None
@@ -1755,7 +1767,7 @@ _LEND_WAIT_S = 300.0   # --lend-rt: longest wait for an idle slot when
 _LEND_POLL_S = 1.0
 
 
-def _choose_slot(deadline: float | None = None) -> int:
+def _choose_slot(deadline: float | None = None) -> int | None:
     """Wire id_slot for the next call. With --lend-rt the drainer asks
     /slots each call and rides the real-time slot while it is idle —
     an RT request arriving mid-call queues behind at most that one
@@ -1763,10 +1775,11 @@ def _choose_slot(deadline: float | None = None) -> int:
     only once that slot is idle too: a pinned request landing on a
     BUSY slot makes llama-server load prompt cache into it and abort
     (GGML_ASSERT n <= tokens.size()), so while both slots are busy it
-    re-polls until one frees or the deadline passes (the call is then
-    refused before it reaches the wire). A failed probe falls back to
-    the background slot — the server is down and the call fails
-    anyway. --slot always wins over all of it."""
+    re-polls until one frees; if the wait runs out (deadline, or
+    _LEND_WAIT_S without one) it returns None and the caller defers
+    without sending — a busy slot is never pinned. Only a failed probe
+    falls back to the background slot — the server is down and the
+    call fails anyway. --slot always wins over all of it."""
     if _SLOT_OVERRIDE is not None:
         # a stale/invalid override must not go unpinned on the wire —
         # bound it to the selected count exactly like --slot parsing
@@ -1793,7 +1806,7 @@ def _choose_slot(deadline: float | None = None) -> int:
             if busy.get(bg) is False:
                 return bg
             if time.monotonic() + _LEND_POLL_S >= until:
-                break
+                return None
             time.sleep(_LEND_POLL_S)
     return local_llm.request_slot()
 
