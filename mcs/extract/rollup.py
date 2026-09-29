@@ -332,9 +332,31 @@ def msgs_by_ts(msgs, ts: float) -> str:
 
 def rebuild(ledger, project_id: int) -> int:
     """Atomic replace — a crash between delete and insert must not leave
-    a patient with NO rollup (Oracle B22)."""
+    a patient with NO rollup (Oracle B22). An unchanged rebuild (all
+    but generated_at equal) writes nothing and returns the existing id."""
     d = build_rollup(ledger, project_id)
+    # compare in JSON space (tuples→lists, int keys→str) like the stored row
+    new = json.loads(json.dumps(d, ensure_ascii=False))
+    new.pop("generated_at", None)
     with ledger.db:
+        # read + decide inside the write txn: a concurrent DELETE
+        # (semantic_store / ledger / semantic_v4) just means no match → INSERT
+        old = ledger.db.execute(
+            "SELECT artifact_id, content, meta FROM artifacts"
+            " WHERE kind=? AND project_id=?", (KIND, project_id)).fetchall()
+        if len(old) == 1:
+            try:
+                oc, om = json.loads(old[0]["content"]), json.loads(
+                    old[0]["meta"])
+            except (TypeError, ValueError):
+                oc = om = None
+            if isinstance(oc, dict) and isinstance(om, dict):
+                oc.pop("generated_at", None)
+                if (oc == new and om.get("period_check_version")
+                        == PERIOD_CHECK_VERSION
+                        and om.get("next_med_period_check")
+                        == d.get("_next_med_period_check")):
+                    return old[0]["artifact_id"]
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND project_id=?",
             (KIND, project_id))

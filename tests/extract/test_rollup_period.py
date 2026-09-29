@@ -73,3 +73,64 @@ def test_period_boundary_rebuilds_without_a_new_message(db, monkeypatch):
     assert rollup.dirty_projects(db) == [1]
     rollup.rebuild(db, 1)
     assert "current_med_period" not in rollup.build_rollup(db, 1)
+
+
+def _rollup_rows(db):
+    return db.db.execute(
+        "SELECT artifact_id, content, meta FROM artifacts WHERE kind=?"
+        " AND project_id=1", (rollup.KIND,)).fetchall()
+
+
+def test_unchanged_rebuild_writes_nothing(db, monkeypatch):
+    now = [datetime(2026, 9, 20, 12, tzinfo=JST).timestamp()]
+    monkeypatch.setattr(rollup.time, "time", lambda: now[0])
+    _add_period(db, 1, {"raw": "9/1-9/30", "start": "2026-09-01",
+                        "end": "2026-09-30"})
+    aid = rollup.rebuild(db, 1)
+    before = [tuple(r) for r in _rollup_rows(db)]
+    now[0] += 60
+    assert rollup.rebuild(db, 1) == aid
+    assert [tuple(r) for r in _rollup_rows(db)] == before
+
+    # a new message changes the content → rewritten
+    db.save_messages([_message(mid=5, body="合成の追加投稿",
+                               posted_at="2026-09-20T10:00:00+09:00")])
+    assert rollup.rebuild(db, 1) != aid
+    assert len(_rollup_rows(db)) == 1
+
+
+@pytest.mark.parametrize("meta_patch", [
+    {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1},
+    {"next_med_period_check": 1.0},   # stale/expired stamp
+])
+def test_meta_mismatch_forces_rewrite(db, monkeypatch, meta_patch):
+    monkeypatch.setattr(rollup.time, "time",
+                        lambda: datetime(2026, 9, 20, 12, tzinfo=JST).timestamp())
+    _add_period(db, 1, {"raw": "9/1-9/30", "start": "2026-09-01",
+                        "end": "2026-09-30"})
+    aid = rollup.rebuild(db, 1)
+    meta = json.loads(_rollup_rows(db)[0]["meta"])
+    meta.update(meta_patch)
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                      (json.dumps(meta), aid))
+    assert rollup.rebuild(db, 1) != aid
+    assert json.loads(_rollup_rows(db)[0]["meta"])["period_check_version"] \
+        == rollup.PERIOD_CHECK_VERSION
+
+
+def test_concurrent_delete_before_rebuild_reinserts(db, monkeypatch):
+    _add_period(db, 1, {"raw": "9/1-9/30"})
+    rollup.rebuild(db, 1)
+    real = rollup.build_rollup
+
+    def build_then_delete(ledger, pid):
+        d = real(ledger, pid)
+        with ledger.db:   # another writer drops the rollup mid-rebuild
+            ledger.db.execute("DELETE FROM artifacts WHERE kind=?",
+                              (rollup.KIND,))
+        return d
+
+    monkeypatch.setattr(rollup, "build_rollup", build_then_delete)
+    rollup.rebuild(db, 1)
+    assert len(_rollup_rows(db)) == 1
