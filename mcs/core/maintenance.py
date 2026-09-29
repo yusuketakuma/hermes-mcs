@@ -38,10 +38,25 @@ def atomic_publish_text(path: str, text: str) -> None:
     atomic_write(path, lambda f: f.write(text), tmp_prefix=".pub.")
 
 
-def _publish_backup(tmp: str, dest: str) -> None:
-    """chmod -> fsync -> os.replace -> dir fsync for a verified backup
-    copy — a power loss never leaves a torn rollback point at ``dest``."""
-    publish_tmp(tmp, dest, mode=0o600)
+def _stat_sig(path: str) -> str | None:
+    """size + mtime_ns signature of ``path``; None when unreadable."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return f"{st.st_size} {st.st_mtime_ns}"
+
+
+def _verified_unchanged(dest: str) -> bool:
+    """True when ``dest`` still matches the signature recorded right
+    after it was verified and published — lets a run skip re-running
+    quick_check over an unchanged same-day backup."""
+    try:
+        with open(dest + ".ok", encoding="utf-8") as f:
+            marker = f.read().strip()
+    except (OSError, ValueError):
+        return False
+    return bool(marker) and marker == _stat_sig(dest)
 
 
 def daily_backup(db_path: str):
@@ -54,7 +69,10 @@ def daily_backup(db_path: str):
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
     stamp = time.strftime("%Y%m%d")
     dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
-    if valid_mcs_db(dest):
+    # the .ok marker (size+mtime_ns at publish time) skips the full
+    # quick_check while the verified file is untouched; any change or a
+    # missing marker falls back to validation (B24)
+    if _verified_unchanged(dest) or valid_mcs_db(dest):
         return
     need_mb = os.path.getsize(db_path) * 2 / (1024 * 1024) + disk_floor_mb()
     if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < need_mb:
@@ -74,11 +92,18 @@ def daily_backup(db_path: str):
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
-    _publish_backup(tmp, dest)
+    # chmod -> fsync -> os.replace -> dir fsync: a power loss never
+    # leaves a torn rollback point at dest
+    publish_tmp(tmp, dest, mode=0o600)
+    sig = _stat_sig(dest)
+    if sig:
+        with suppress(OSError):   # marker is only a fast path
+            atomic_write(dest + ".ok", lambda f: f.write(sig), mode=0o600)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
-        with suppress(OSError):
-            os.unlink(old)
+        for path in (old, old + ".ok"):
+            with suppress(OSError):
+                os.unlink(path)
     prune_preupdate_backups()
 
 
@@ -105,7 +130,7 @@ def preupdate_backup(db_path: str) -> str:
     if not valid_mcs_db(tmp):
         os.unlink(tmp)
         raise MaintenanceError("backup_verify_failed")
-    _publish_backup(tmp, dest)
+    publish_tmp(tmp, dest, mode=0o600)
     return dest
 
 
