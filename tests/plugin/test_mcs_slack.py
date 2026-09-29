@@ -322,8 +322,9 @@ def test_receipt_survives_unflushed_registry_with_usable_buttons(led):
         assert phases.index("started") < phases.index("result") \
             < phases.index("receipt")
         result = {"errors": []}
+        # card receipt + thread + body part receipts (no thread_receipt)
         assert runner_cmds.drain_int_commands(
-            led, result, SLACK, str(root)) == n_body + 3
+            led, result, SLACK, str(root)) == n_body + 2
         assert not result["errors"]
         worker.release_scope_lock()
 
@@ -430,11 +431,11 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
             await worker.tick()
             assert [kind for kind, _ in client.calls] == [
                 "auth_test"] + ["create"] * (1 + n_body)
-            # card settle + every part receipt (+ the legacy
-            # thread_receipt twin) drains in one pass
+            # card settle + every part receipt drains in one pass — no
+            # legacy thread_receipt twin (it could only scope_mismatch)
             result = {"errors": []}
             assert runner_cmds.drain_int_commands(
-                led, result, SLACK, str(root)) == n_body + 3
+                led, result, SLACK, str(root)) == n_body + 2
             assert not result["errors"]
             await worker.tick()
         finally:
