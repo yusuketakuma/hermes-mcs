@@ -12,7 +12,7 @@ from ..mcs_delivery.worker import DeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import render, validate
-from .paths import ensure_dirs, notify_dirs
+from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -169,12 +169,12 @@ class DeliveryWorker(_BaseWorker):
     """Reuse the durable claim/journal/receipt loop with Slack-only edges."""
 
     transport = "slack"
+    _notify_dirs = staticmethod(notify_dirs)
 
     def __init__(self, *, sender, settings, root, reg, worker_id, log):
         super().__init__(bot=sender, settings=settings, root=root,
                          reg=reg, worker_id=worker_id, log=log)
         self._sender = sender
-        self._dirs = notify_dirs(root)
 
     def scope(self):
         return {key: self._settings[key] for key in
@@ -184,9 +184,6 @@ class DeliveryWorker(_BaseWorker):
     def _ours(self, delivery):
         return all(delivery.get(key) == value
                    for key, value in self.scope().items())
-
-    def _ensure_dirs(self):
-        ensure_dirs(self._root)
 
     def _validate_spec(self, spec):
         validate(spec)
