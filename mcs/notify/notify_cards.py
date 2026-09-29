@@ -1955,6 +1955,12 @@ def _act_assign(db, base, card, tok, actor, cfg, now, specs) -> dict:
         new_render = _issue_render(db, card["card_id"], cfg, now, specs)
         return {**base, "outcome": "applied", "action": "assign",
                 "owner": None, "released": True, "delivery_id": new_render}
+    if tri and tri["owner"] != actor \
+            and (tri["updated_at"] or 0) > tok["created_at"]:
+        # the owner changed after this face was minted — a takeover must
+        # be intentional, from a face that shows the current owner
+        return {**base, "outcome": "rejected", "error": "stale_ui",
+                "hint": "refresh"}
     # unassigned, or another member takes over
     db.execute(
         """INSERT INTO notification_triage(
