@@ -1,10 +1,24 @@
 # hermes-mcs ロードマップ
 
-改訂日: 2026-09-29（v1.0.6 / `f947042` 時点）
-対になる文書: zaitaku-calender `ROADMAP.md`。本改訂と同時に作成し、両文書を同じ変更単位で追加する（2026-09-29 時点で zaitaku-calender の main・作業ツリーのどちらにも `ROADMAP.md` はまだない）。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q9）、契約版は両文書で共通。
-旧版（Oracle レビュー統合版、機能候補 v2 30 項目）は git 履歴（`git show f947042:docs/ROADMAP.md`）を参照。変更の詳細は `CHANGELOG.md` を参照。
+改訂日: 2026-09-29（v1.0.6 / `f947042` 時点。詳細計画を追加）
+対になる文書: zaitaku-calender `ROADMAP.md`。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q10）、契約決定の番号（CD-1〜CD-8）、契約版は両文書で共通。
+旧版（Oracle レビュー統合版、機能候補 v2 30 項目）は git 履歴（`git show f947042:docs/ROADMAP.md`）を参照。変更の詳細は `CHANGELOG.md`。
 
-**ID の扱い**: 旧版にある ID は A1-x/B1-x/C1-x、懸念 C01〜C07、機能候補 v2 の #1〜#30 だけ。本書の「旧版の出典」列にある「優先順位 N」は、旧版「機能候補の優先順位（基盤修正完了後）」の N 番目を指す（旧版では番号 prefix なし）。本書では新しい ID を振らない。
+**本書は索引**。項目ごとの実装計画（目的・現状の根拠・設計方針・成果物・受入条件・依存・規模・オーナー判断）は `docs/roadmap/` にある。
+
+| 領域 | 項目 | 詳細計画 |
+|---|---|---|
+| 取得・アーカイブ | #1〜#6 | [`roadmap/acquisition.md`](roadmap/acquisition.md) |
+| 整合性・命名・運用前提 | #7〜#10 | [`roadmap/integrity.md`](roadmap/integrity.md) |
+| 抽出 | #11・#15・#16 | [`roadmap/extraction.md`](roadmap/extraction.md) |
+| シグナル・統計 | #12〜#14・#17〜#19 | [`roadmap/signals-stats.md`](roadmap/signals-stats.md) |
+| zaitaku-calender 接続 | C0〜C4（hermes-mcs 側） | [`roadmap/connector.md`](roadmap/connector.md) |
+
+**ID の扱い**: 項目は §4 の番号（#1〜#19）で呼ぶ。旧版にある ID は A1-x / B1-x / C1-x、懸念 C01〜C07、機能候補 v2 の #1〜#30 で、「旧版の出典」列の「優先順位 N」は旧版「機能候補の優先順位（基盤修正完了後）」の N 番目を指す。本書で新設する ID は次の 4 種。
+- `F-n`: 先に直す既存不具合・ガード（§3）。
+- `#N-Dk`: 項目 N のオーナー判断（§9）。
+- `CD-n`: C0 で決める契約事項（§5）。
+- `Q1〜Q10`: 接続のオーナー判断（§9。両文書で共通）。
 
 ## 1. 位置づけ
 
@@ -34,123 +48,260 @@
 
 - **Phase A 安全境界と起動**: keep_read_status の全経路注入、mark_as_read 応答の厳密検証、login origin 固定、通知先 fallback 廃止、redirect 拒否・proxy 無効、fresh DB 起動、migration 原子化、段階別 status（A1-1〜A2-3）。閲覧（`mcs/views/mcs_view.py`）と依頼台帳（`mcs/ops/mcs_requests.py:15-35`）も追加済み。
 - **Phase B 取得完全性**: `coverage_ts`、MessageBatch、返信欠落と reply job、has_new_replies、history_floor、`fetch_jobs` 耐久キュー、返信添付、同一 tx 化、deadline 伝播、添付の隔離（B1-1〜B3-1）。
-- **Phase C 復旧性・派生データ**: backup の quick_check と原子置換（C1-1。`mcs/core/maintenance.py:48`、`mcs/core/ledger.py:1858-1900`）、stale 判定、LLM 出力検証、backoff、rollup 修正、分割通知の progress 検証（C2-1〜C3-1）。
+- **Phase C 復旧性・派生データ**: backup の quick_check と原子置換（C1-1。`mcs/core/maintenance.py:47-77`、`mcs/core/ledger.py:1856-1970`）、stale 判定、LLM 出力検証、backoff、rollup 修正、分割通知の progress 検証（C2-1〜C3-1）。
 - **CCO 分離（A3）**: 読み取り専用 snapshot、`LedgerReader`、`publish_snapshot`、`generation_id`。接続の出典（どの世代の事実か）に使う。
-- **外部出力契約の骨格**: `GovernedExporter` の deliver・`reconcile`（`mcs/ops/ext_contract.py:555`）・`withdraw`（同 :601）と journal 状態 held/delete_held/withdrawn（同 :23-26）は実装済み。CLI（同 :660-687）は `--auth/--records/--state/--sink` の deliver だけを公開し、sink は `LocalSink`（同 :327）のみ。
+- **更新・復旧経路の強化（v1.0.6）**: launchd bootstrap の `launchctl print` 検証、更新経路の launchctl 時間上限、consent hold をあらゆる escalate で維持、escalate 通知の重複抑止、Discord/Slack の確定・取消の一本化（詳細は `CHANGELOG.md` の 1.0.6）。
+- **外部出力契約の骨格**: `GovernedExporter` の deliver・`reconcile`（`mcs/ops/ext_contract.py:555`）・`withdraw`（同 :601）は実装済み。journal に `held` は書かれず、結果不明は `sent` として残る（`held` は読取り時に許容するだけ: 同 :449-451,:513）。CLI（同 :660-687）は `--auth/--records/--state/--sink` の deliver だけを公開し、sink は `LocalSink`（同 :327）のみ。
 - **その他の完了**: 2026-09-19 追加検証（paginate 例外境界、schema_error、thread_incomplete、mark_result_unknown）、discovery job（C02）、proxy 非継承（C04）、添付保存名（C05、今後保存するもの）、mark_as_read の定期実行（2026-09-23 承認。旧版 優先順位 9）。
 
-## 3. hermes-mcs の今後（優先度順）
+## 3. 先に直す既存不具合とガード
 
-| 順 | 項目 | 旧版の出典 | 内容 |
-|---|---|---|---|
-| 1 | 暗号化オフサイトバックアップと復元訓練 | v2 #30、Phase C C1-2、優先順位 1、追加検証「残件の優先順」（復元訓練） | 原本アーカイブの復旧点を確保。コード上に暗号化・復元訓練の実装はない（`mcs/`・`scripts/`・`deployment/` を `rg 'encrypt\|restore_drill'` で 0 件）。`CHANGELOG.md` の restore は更新復旧（mcs_update）の話で DB 復元訓練とは別物 |
-| 2 | MCS API 取得契約の fixture 化 | 懸念 C01、追加検証「残件の優先順」（pinned 順序と thread 契約） | `sort=pinned` の順序、thread pagination、paginate 欠損を合成 fixture で固定 |
-| 3 | 取得不能返信の分類 | 追加検証「残件の優先順」 | 欠落の理由を区別して記録する |
-| 4 | 既存データの修復 | 旧版「既存データの修復順」節 | 独立 backup → A 系 → coverage/import job → 通知なし再照合（GET のみ）→ 返信・添付の補完 → hash/artifact 再生成 → rollup 再構築。history_floor は無条件に信用しない。**実施記録を残す。C1 の本番投入の前提条件** |
-| 5 | 通信中の deadline | 追加検証「残件の優先順」 | 収集 tick の耐久性 |
-| 6 | 通知受付直後のクラッシュ時の重複 | 追加検証「残件の優先順」 | 結果不明は照合に回す（C1 の held/reconcile と同じ原則） |
-| 7 | FK/CHECK の導入 | 懸念 C06、追加検証「残件の優先順」（FK 導入） | 整合性監査の後に追加。`REFERENCES` は `mcs/notify/notify_cards.py` の通知系テーブルにだけある（13 箇所）。`mcs/core/ledger.py:122` で `PRAGMA foreign_keys=ON` だが、中核テーブルに FK はない |
-| 8 | 編集履歴と命名 | 懸念 C07 | full→full で編集履歴が残らない。`current_med_period`／`possibly_deleted` を保証の強さに合わせて弱める（接続先で「確定」と誤読させない） |
-| 9 | SQLite runtime 版の確認 | 懸念（SQLite runtime 版確認。旧版に ID なし） | WAL-reset 修正版（3.51.3+/3.44.6/3.50.7） |
-| 10 | 独立実装レビュー（1 回） | 追加検証末尾「Oracle 実装レビューは未完了」 | v1.0.6 を対象に範囲を取り直す。不要と判断したら廃止 |
-| 11 | 薬剤名正規化（drug_map） | v2 #3、優先順位 3 | 言及→候補まで。hermes-mcs 内部の正規化にとどめ、zaitaku-calender への依存・受け渡しは持たない。識別子の**体系だけ**を zaitaku-calender と合わせる（YJ コードなど）。マスター本体は zaitaku-calender から持ち出さない（医薬品 release は利用条件の承認が要る外部ゲート G-OPS-2。zaitaku-calender `docs/operations.md:151`）。独自に入手する場合は一次資料の利用条件を確認してオーナーが承認する。テスト用の辞書は完全合成のみ。自動確定はしない |
-| 12 | 緊急度エスカレーション | v2 #18、優先順位 6 | 既存の昇格処理（`mcs/ops/mcs_signals.py:1043-1060`）の延長 |
-| 13 | 日次 digest | v2 #1 | 範囲は MCS の新着、取得の未完了・失敗、urgency、open シグナル、未読の多職種連絡。**旧 #1 の「直近 72h の要約」は含めない**（件数と一覧まで。文章要約はしない）。期限・予定・依頼は含めない |
-| 14 | 変更エピソードの紐付け | v2 #16 | MCS 投稿間の参照（変更の言及→観察の言及）。目的は誤検知の削減 |
-| 15 | 検査値の抽出 | v2 #10 | 抽出のみ。時系列ビューは廃止（§6） |
-| 16 | 添付 OCR と分類（ローカル） | v2 #9、優先順位 5 | 結果は未確定の候補 |
-| 17 | 職種間やり取りの構造と応答時間の可視化 | v2 #20 | `interaction_links` を整備し、相談→回答の応答時間・未応答滞留を hermes-mcs 内部統計として可視化する。`st_open_loop_aging`（`mcs/views/mcs_stats.py:583-635`）は現在 formal requests だけを集計し、本文由来の候補は `text_candidates: unavailable`（同 :627-628）。`interaction_links` 整備後にここを埋める。本文由来候補は依頼台帳に書き込まない表示のみなので、台帳の凍結とは衝突しない |
-| 18 | 業務負荷レポートと集計 | v2 #27、優先順位 7（集計部分） | 既存統計（doc_burden/workload/comm_concentration）の定期出力。旧 優先順位 7 の「高度集計（取得未完了範囲の明示付き）」をここに統合し、取得未完了の範囲を必ず併記する（PDF 報告書部分は zaitaku-calender へ移管、§5） |
-| 19 | シグナル精度のフィードバック | v2 #28 | hermes-mcs 内部の人手ラベル（却下理由・採用率・再 open 率）だけで評価する。zaitaku-calender での採用・却下の取得は逆方向のデータ流（臨床判断由来の PHI）であり、双方向連携の契約（zaitaku-calender `docs/domain-model-decision.md:206`）と別承認が要るため C0〜C4 の範囲外（§6・§7） |
+詳細計画の調査で見つかった、本番の出力や運用に関わる既存の問題。いずれも本書の作成時点では未修正。
 
-## 4. zaitaku-calender との接続
+| ID | 内容 | 影響 | 対応 | 規模 |
+|---|---|---|---|---|
+| F-1 | **未確認の検査値がカードに確定表示される**。`structured_view._lab_line`（`mcs/views/structured_view.py:195-208`）が `unverified` を見ない。薬・症状・依頼は見ている。【実行確認】値が自分の evidence と矛盾する場合も、evidence がない場合も「検査:」行に出る | Discord/Slack のカードと text 通知に、根拠のない検査値が確定として出る | #15-A（値と evidence の突合、読み側で「検査候補（未確認）」に分離） | S |
+| F-2 | **ルール抽出が否定表現でも緊急度 high にする**。`_URGENT` の部分一致（`mcs/extract/v1/extract.py:48,304-306`）。【実行確認】「急ぎではありません」「緊急の対応は不要です」「明日すぐに連絡します」がすべて high | 第一報の警告表示（`notify_flush.py:267-270`）と signal の即時配信への昇格（`mcs_signals.py:1043-1058,1190-1197`）が、緊急でない投稿で起きる | #12a（出所ラベル）と #12-D5（ルール由来を同格に扱うか）。ルール側の否定ガードは #12c（RULE_VERSION の bump を伴う） | S（表示）/ M（12c） |
+| F-3 | **外部出力の receipt が `status` を無視して acked にする**。`ext_contract._valid_ack`（:546-553）は id・sha・records・acked_at だけを見る。`status:"rejected"` でも acked になる | 手動・未運用のため潜在。C1 で receipt を扱う前に直す | C1 の G3（`parse_receipt` と `_valid_ack` の status 検査） | S |
+| F-4 | **PRESETS / DETECTORS と export allowlist の整合を検証するテストがない**。食い違うと `brain_export.run` 全体が `stat_not_exportable` / `aggregate_field_type_invalid` で失敗する（`export_schema.py:159-161,172`） | 新しい stat / signal 型を足すたびに、export 全体が止まるリスク | 共通ガードテスト（drift guard。C0 の成果物と共通） | S |
 
-契約: 送付単位 `mcs-ext-export/1`、認可 `mcs-ext-auth/1`、record 型 `mcs-read-model/1`（`mcs/ops/ext_contract.py:43-44`、`mcs/ops/export_schema.py:106-148`）。本文・statement・evidence 引用・送信者・患者名・病名は、`export_schema.py` の record ごとの allowlist（`_SCHEMAS`、同 :116-148。未知キーは拒否）によって構造的に送れない。`FORBIDDEN_KEYS`（`ext_contract.py:46-52`）は、よくある本文系キーを早く見つけるための診断用拒否リストにすぎない。スキーマを変える場合（C2 を含む）は allowlist の変更として扱い、レビュー対象とする。
+コード外の運用リスク（実装計画ではなく判断事項）: **この Mac は FileVault Off・Time Machine の保存先なし**（2026-09-29 確認）。原本 DB と日次バックアップは同一ディスク上の平文だけで、端末の故障・盗難で復旧点が残らない。#1 と同時に判断する（`#1-D6`）。
 
-**受け入れる record 型（両文書で共通）**: `meta`・`coverage`・`message`・`signal`・`signals_truncated`。`attachment`・`stat` は C1 では送らない（`mcs-ext-auth/1` の `fields` で除外。`fields` を省略すると全 7 種が許可される: `ext_contract.py:201`）。
-- `meta` は snapshot 時刻・世代の入力で、zaitaku-calender の snapshot 時刻表示と `max_snapshot_age_s` 超過判定に使う（`ext_contract.py:197-199`、CLI は generated_at を meta record から取る: 同 :678-679）。
-- `coverage`・`signals_truncated` は「未取込・取得未完了を『不明』と表示する」ための入力。`auth.patients` を患者リストに絞ると、この 2 種は envelope から除かれる（`ext_contract.py:230-235`）。C0 で「C1 は `patients: "all"`」とするか、「coverage のない envelope は zaitaku-calender 側で全範囲を『不明』と扱う」かを決める。
+## 4. 項目一覧（#1〜#19）
+
+規模: S = 半日〜1 日、M = 2〜4 日、L = 1 週間以上（実装 + テスト + docs。運用での測定は別）。「旧版の出典」は旧 ROADMAP の項目名・ID。
+
+| # | 項目 | 旧版の出典 | 規模 | 主な依存 | 要点 |
+|---|---|---|---|---|---|
+| 1 | 暗号化オフサイトバックアップと復元訓練 | v2 #30、Phase C C1-2、優先順位 1 | L（1a M / 1b S / 1c S） | #1-D1〜D6 | 検証済みの復旧点を暗号化して端末外へ。復元の本体は実装済みで、欠けているのはオフサイトの取得と復号、drill と記録。OS 同梱の `/usr/bin/openssl` + HMAC |
+| 2 | MCS API 取得契約の fixture 化 | 懸念 C01、追加検証「残件の優先順」 | S〜M | なし | ReplayWorker + 完全合成の fixture、`keep_read_status` の全経路（thread 取得は未固定）、順序に依存しないことのプロパティテスト |
+| 3 | 取得不能返信の分類 | 追加検証「残件の優先順」 | M | #2 | `fetch_jobs.error` に理由を記録（添付の前例）。`mcs_view` の `not_recorded` 固定を解消。`known_gaps` を併記 |
+| 4 | 既存データの修復 | 旧版「既存データの修復順」 | M + 運用 | #1a、#3、#5、#8-M1 | 読取り専用の `plan`、実施記録（`record` / `finalize`）、reconcile の完了記録。**C1 の本番投入の前提** |
+| 5 | 通信中の deadline | 追加検証「残件の優先順」 | M（下限だけなら S） | — | MCS / LLM の通信経路は実装済み。残りは `hermes send` の最小予算、非通信ステージの上限、プロセス全体の watchdog |
+| 6 | 通知受付直後のクラッシュ時の重複 | 追加検証「残件の優先順」 | S〜M | #5 の下限 | text 経路の重複対策は実装済み（write-ahead marker）。残りは restore ゲート、hold の理由、種別ごとの配送方針 |
+| 7 | FK/CHECK の導入 | 懸念 C06 | S / M / L | #9、監査 | 監査 → version 据え置きの guard trigger → 任意で real FK。中核表の FK は設計上不可のものが多い |
+| 8 | 編集履歴と命名 | 懸念 C07 | S〜M | C0 の前 | `message_revisions`（hash chain、本文なし）、rollup 2 キーの改名、wire enum の判断 |
+| 9 | SQLite runtime 版の確認 | 懸念（SQLite 版。旧版に ID なし） | S | — | `mcs_setup check` に probe。hermes の Python は 3.53.1 で安全、system の `/usr/bin/python3`（watchdog）は 3.51.0 で影響範囲 |
+| 10 | 独立実装レビュー | 追加検証末尾 | M | — | 全体レビューは廃止。v1.0.6 の末尾 18 コミット（update / recovery / confirm ゲート）に絞った 1 回 |
+| 11 | 薬剤名正規化（drug_map） | v2 #3、優先順位 3 | M | #11-D1 | 派生 artifact `med_ref`（成分候補、注釈だけ）。辞書は `data/` に置き、repo に入れない。`mcs-read-model/1` は不変 |
+| 12 | 緊急度エスカレーション | v2 #18、優先順位 6 | 12a S / 12b M | 12b は #13 の後 | 12a: 緊急度の表示（F-2）。12b: 後追い判明・未確認の再通知（shadow → on）。新 signal 型・メンションは作らない |
+| 13 | 日次 digest | v2 #1 | M | #12b と直列 | text route、件数と一覧（ID のみ）、取得状況を常時開示、既定 off。既存 signals digest と併存 |
+| 14 | 変更エピソードの紐付け | v2 #16 | L | #11、#19 | `med_change_no_followup` の誤検知を閉じる方向だけで減らす。shadow → 人手監査 → on |
+| 15 | 検査値の抽出 | v2 #10 | A S / B M / C M | #11 の `fold` | A: 既存 labs の安全化（F-1）。B: ルール labs（RULE_VERSION 7）。C: 正規化。時系列ビューは作らない |
+| 16 | 添付 OCR と分類（ローカル） | v2 #9、優先順位 5 | L | #16-D1〜D4 | macOS Vision（osascript）+ sandbox で新規添付だけ。結果は未確認候補で、通知・export・Jev に出さない |
+| 17 | 職種間やり取りの構造と応答時間 | v2 #20 | M（v2 L） | — | 永続テーブルなしの導出。職種群 × {n, 中央値, p90, 未応答数}。小セル抑制。個人データなし |
+| 18 | 業務負荷レポートと集計 | v2 #27、優先順位 7（集計部分） | M | #13 | `coverage_gaps` stat + 週次・月次レポート。取得未完了範囲を必ず併記。定期出力の仕組みは新規 |
+| 19 | シグナル精度のフィードバック | v2 #28 | M | — | ラベル基盤（resolution の原因、`reason_code`）と `st_signal_feedback`。内部だけ。検知条件への自動フィードバックはしない |
+
+### 調査で分かった旧記述の誤り（各詳細計画に根拠）
+
+- #1: 根拠コマンド `rg 'encrypt\|restore_drill'` は ripgrep では `\|` がリテラルで、0 件は当然だった（正規表現に直しても 0 件で結論は同じ）。
+- #6: 「重複」は text 経路では既に対策済み（write-ahead marker。旧 F19）。
+- #5: 通信経路（MCS / LLM）の deadline は実装済み。
+- #12: 「否定 / 時制は v4 で対応済」は LLM レーンだけ。ルール抽出は否定を見ない（F-2）。
+- #15: 本文由来の labs 抽出は v4 で実装済み。ないのは、値の突合・unverified の扱い・ルール labs・日付・基準範囲・bench。
+- #18: `comm_concentration` は stat ではなく signal。`workload` / `doc_burden` / `professions` はどの preset にも入らず、定期出力の仕組みもない。
+- #8: `current_med_period` / `possibly_deleted` は外部出力に出ていない。接続に出るのは `signal_type` の enum 名。
+- #17: `text_candidates` を埋めると export allowlist で brain_export が全体失敗する。
+- #7: SQLite 3.53 以降は `ALTER … ADD CONSTRAINT CHECK` が可（FOREIGN KEY は不可）。ただし system の 3.51.0 は不可で、配備が混在する。
+
+## 5. zaitaku-calender との接続
+
+契約: 送付単位 `mcs-ext-export/1`、認可 `mcs-ext-auth/1`、record 型 `mcs-read-model/1`（`mcs/ops/ext_contract.py:43-44`、`mcs/ops/export_schema.py:106-148`）。本文・statement・evidence 引用・送信者・患者名・病名は、`export_schema.py` の record ごとの allowlist（`_SCHEMAS`、:116-147。未知キーは拒否）によって構造的に送れない。`FORBIDDEN_KEYS`（`ext_contract.py:46-52`）は、よくある本文系キーを早く見つけるための診断用拒否リストにすぎない。スキーマを変える場合（C2 を含む）は allowlist の変更として扱い、レビュー対象とする。
+
+**受け入れる record 型（両文書で共通）**: `meta`・`coverage`・`message`・`signal`・`signals_truncated`。`attachment`・`stat` は C1 では送らない。
+- `fields` から外すと**除外ではなく build 全体が拒否される**（`record_type_unauthorized:<type>`: `ext_contract.py:217-218`）。brain_export の `export.jsonl` は stat と attachment を必ず含むので、C1 は前段で未許可 type を除去する（件数を出力）。ライブラリの既定（省略時は全 7 種: :201）は変えず、C1 プロファイル（CD-6）で強制する。
+- `meta` は snapshot 時刻・世代の入力。`max_snapshot_age_s` は auth の項目で envelope にない（:258-271）ので、受信側の鮮度閾値は別途合意する（CD-6）。
+- `coverage`・`signals_truncated` は「未取込・取得未完了を『不明』と表示する」ための入力。ただし現行の `coverage.collection` は patients / messages / deleted / extraction_eligible の 4 個数だけで、患者別の取得状態は出ない（CD-4、Q10）。`auth.patients` を患者リストに絞ると、この 2 種は envelope から除かれる（`ext_contract.py:230-235`）ので、C1 は `patients:"all"` にする。
 
 **同一性キー（C0 で合意。両文書で同じ文言）**:
 - `message`: item の粒度は message 単位で、`facts[]` は配列のまま保持する。同一性 = `type`＋`project_id`＋`message_id`＋`content_hash`。同じ kind の fact が 1 message に複数あってもよい（`facts: [_FACT]`、`export_schema.py:137-146`）。
-- `signal`: 同一性 = `signal_type`＋`project_id`＋`evidence` の正規化 JSON の sha256。`detected_at` は属性として持ち、キーに含めない（signal には message_id・content_hash がなく、evidence 内の id は任意: `export_schema.py:123-135`）。
+- `signal`: 同一性 = `signal_type`＋`project_id`＋`evidence` の正規化 JSON の sha256。`detected_at` は属性として持ち、キーに含めない（signal には message_id・content_hash がなく、evidence 内の id は任意: `export_schema.py:123-135`）。同じ message_ids に複数の med があると同一性が衝突し 1 件に畳まれる（CD-7）。
 - `meta`・`coverage`・`signals_truncated`: envelope ごとの状態として 1 件ずつ保存し、同一性は `envelope_id`。
 - `fact_id` は文言で変わるため参照用にとどめる（`mcs/semantic/semantic_facts.py:185-205`）。
 
-**未決事項を決める時点（両文書で同じ文）**: C0 で決める Q＝Q1・Q2・Q3・Q4・Q6・Q7、C2 までに Q5・Q9、C3 前に Q8。
+### C0 で決める契約事項（CD-1〜CD-8。両文書で同一）
 
-| フェーズ | hermes-mcs 側の成果物 | 依存 |
+詳細と根拠は [`roadmap/connector.md`](roadmap/connector.md) §2。
+
+| ID | 決めること | 推奨 |
 |---|---|---|
-| **C0 契約合意（両 repo 共同）** | 旧 #25（iCal）を廃止して本接続に置換。受け入れ record 型・同一性キー・受領/削除 receipt の JSON 形式・分割上限（1 MiB = 1,048,576 バイト、UTF-8 の JSON 本文）を合意。合成 fixture 1 組（受理: meta・coverage・message（同じ kind の fact 2 件を含む）・signal、拒否: 禁止キー・未知フィールド・hash 不一致、receipt 例）と sha256 を固定。**完了条件に Q6 のオーナー判断の記録を含める** | zaitaku-calender C0（同時に実施） |
-| **C1 手渡し取込（未採用 staging）** | `ext_contract.main()`（`mcs/ops/ext_contract.py:660-687`）に: `--only-with-facts` 前段フィルタ（`records_sha256` はフィルタ後に計算。coverage・meta は常に残す）、1,048,576 バイト以下への envelope 分割（各分割に meta・coverage をどう付けるかは C0 で決定）、`fields` の既定を C0 合意の 5 種にし meta・coverage を欠く envelope は作らない。既存の `GovernedExporter.withdraw/reconcile`（`ext_contract.py:555, 601`）を CLI サブコマンドとして露出し、照合元を `LocalSink` から zaitaku-calender の受領/削除 receipt ファイルに拡張。health に held 件数と認可の残り日数。返信の検知は新しい record 型を作らず、`message.parent_id` と `pharmacist_request_unanswered` 等の既存 signal で表す（`export_schema.py:124-127, 137`）。`tests/ops/` の合成テスト、`scripts/update_readme.py` | C0。本番投入（実データでの最初の envelope 作成）は §3-4 修復の実施記録と Q6 の判断後のみ。合成 fixture による開発・テストは Q6 と切り離して進めてよい |
-| **C2 採用導線** | **`docs/external-export-contract.md` の改訂（`scope` は `aggregate` 固定で `detail` は無条件拒否: L22、aggregate の定義: L117、「No detail-scope export path, under any authorization.」: L137）とオーナーの明示承認が前提。改訂されるまで hermes-mcs 側の C2 成果物はなし**。改訂された場合のみ `mcs-ext-auth/2` で型付き値（allergy・ADE・vital_lab の数値・単位・日付）を allowlist の変更として投影する。原文は送らない | zaitaku-calender C2、Q9（契約改訂）。zaitaku-calender C2 は hermes-mcs C2 を待たない |
-| **C3 マシン送信（任意）** | HttpsSink（stdlib urllib、redirect 拒否、proxy なし、token は Keychain から取り argv に出さない）。実行は手動のまま | Q6 の決定、Q8、契約上の endpoint・receipt 照会仕様（C0 または C3 で合意する契約付録）。相手フェーズへの相互依存は持たない |
-| **C4 hermes-mcs 通知の縮退（任意）** | Discord/Slack カードから患者名を外し通知だけにする（`mcs/notify/notify_flush.py`、`notify_render.py`）。§3-13 日次 digest を zaitaku-calender の Work Queue で代替できるか再評価（代替に Work Queue の変更が要る場合は Q5 の決定に従う） | zaitaku-calender C2 の運用実績、Q5 |
+| CD-1 | 数値の canonical 表記と受信側の hash 検証 | RFC 8785（JCS）互換にする。Python は整数値 float を `1790000000.0`、JS は `1790000000` と出力するため、受信側が再計算すると整数値 float を含む envelope で `records_sha256` が一致しない（【実行確認】）。**初回の実送信前が期限** |
+| CD-2 | 分割集合の表現 | 各分割に meta・coverage・signals_truncated を複製し、message / signal を排他的に分配。任意項目 `part:{index,count}` を追加。受信側は集合が揃うまで「不完全」と表示 |
+| CD-3 | `--only-with-facts` の意味と伝播 | 残す条件は facts 非空か tombstone。受信側は完全集合が届いた世代で、再掲されない前世代の staging を「MCS 側で現在は事実なし / 不明」に落とす。facts のない返信は届かないので、受信側は「返信なし」と表示しない |
+| CD-4 | 取得完全性 | `coverage.collection` に `patients_incomplete`（`fetch_state≠'complete'` の件数）を追加。患者単位は新 record 型が要るため別判断（Q10） |
+| CD-5 | receipt | `mcs-ext-receipt/1`。envelope 単位の all-or-nothing、`rejected` は終端。採用件数・採用 / 却下は入れない |
+| CD-6 | C1 プロファイル | fields 5 種、patients `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30、meta・coverage 必須、stat・attachment は受信側でも拒否。producer と receiver の両方で強制 |
+| CD-7 | signal 同一性 | 畳み込みを許容し明記。signal 件数の一致検証はしない |
+| CD-8 | fixture 正本（Q7） | hermes-mcs を正本にし、zaitaku-calender へコピー。両 CI で `MANIFEST.sha256` を検証 |
+
+### フェーズ（hermes-mcs 側の成果物）
+
+| フェーズ | hermes-mcs 側の成果物 | 依存 | 規模 |
+|---|---|---|---|
+| **C0 契約合意（両 repo 共同）** | CD-1〜CD-8 の合意。旧 #25（iCal）を廃止して本接続に置換。参照実装の変更（数値正規化・`part`・profile・`parse_receipt`・coverage 拡張）、合成 fixture 一式（受理 6・拒否 11+3・receipt 6）と `MANIFEST.sha256`、drift guard（F-4）。**完了条件に Q6 の判断記録を含める** | zaitaku-calender C0（同時）、#8-D2（wire enum の改名）、Q1〜Q4・Q6・Q7・Q10 | M |
+| **C1 手渡し取込（未採用 staging）** | `ext_contract.main()` の subcommand 化（deliver / reconcile / withdraw / health）、`select_records`（前段除去と `--only-with-facts`）、`split_envelopes`（1 MiB）、`HandoffSink`（自己 ack しない）、`rejected` 終端と `_valid_ack` の status 検査（F-3）、health。E2E は合成 ledger で完結 | C0、CD-1。**本番投入は #4 の実施記録と Q6 の判断後だけ**。合成での開発・テストは切り離して進めてよい | L |
+| **C2 採用導線** | 契約改訂（`mcs-ext-auth/2`、`scope` の第 3 値）と Q9 の承認が前提。**承認されるまで hermes-mcs 側の成果物なし**。型付き値の正本は #15 | zaitaku-calender C2、Q9。zaitaku-calender C2 は hermes-mcs C2 を待たない | L |
+| **C3 マシン送信（任意）** | `ext_transport.py`（`HttpsSink`、endpoint policy、Keychain token）。実行は手動のまま。自動再送はしない | Q6・Q8、契約付録、C1 | M |
+| **C4 hermes-mcs 通知の縮退（任意）** | `notify.show_patient_names`（既定 true）。名前の出力は 4 ファイル（`notify_render.py`、`notify_cards.py`、`notify_flush.py`、`semantic/semantic_render.py`）。日次 digest の Work Queue 代替を再評価（Q5） | zaitaku-calender C2 の運用実績、Q5 | S |
 
 共通ルール:
 - 実行は手動のみ。tick に組み込まない（`docs/external-export-contract.md:136`）。
 - 結果不明は held のまま receipt と照合する。自動再送しない。
 - 同一性は上記「同一性キー」に従う。
 - `facts[]` は semantic 層の current な成果物（`semantic_facts_v4`、なければ `canonical_projection`）があるときだけ埋まる（`mcs/views/read_model.py:209-218`）。`canonical_projection` も semantic 層の artifact で、`config.json` の `semantic` 設定によるゲートがある（`mcs/semantic/semantic.py:1-15`）。facts が空でも、message の存在・状態（`content_hash`・`body_state`・extraction 状態・`parent_id`）、coverage、signal は届く。
+- 返信の検知は新しい record 型を作らず、`message.parent_id` と既存 signal で表す。ただし `pharmacist_request_unanswered` は「薬剤師宛の依頼に自組織の投稿がない」検知で、他職種の返信到着ではない（`mcs_signals.py:472-523`）。
 
-## 5. zaitaku-calender へ移す・既に実装済みの機能
+## 6. zaitaku-calender へ移す・既に実装済みの機能
 
 hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先順位 N。
 
 | 旧版の出典 | 項目 | 扱い | 根拠（zaitaku-calender） |
 |---|---|---|---|
-| 優先順位 2、v2 #2 | 依頼 lifecycle・Discord 完結 | **Discord 完結は廃止**（zaitaku-calender の `src` に Discord への参照はない）。依頼・期限・再開は zaitaku-calender の follow-up/handoff と Work Queue で扱う（担当は患者の担当薬剤師。follow-up event に担当者の列はない）。hermes-mcs の依頼台帳は、担当・期限・状態が既存（`mcs/ops/mcs_requests.py:15-24`、検証付き編集は同 :99-111）。新しい lifecycle 機能（ack 状態・Discord 完結・返信の自動検知による状態変更）は追加しない。既存の `request_overdue`/`request_aging` signal（`mcs/ops/mcs_signals.py:790-791`）と `st_open_loop_aging`（`mcs/views/mcs_stats.py:583-635`）は凍結台帳の範囲で維持する（廃止する場合は別途判断）。MCS スレッドの返信は §4 C1 のとおり `message.parent_id` と既存 signal で渡す | `src/worker/routes/visits/visits.ts:83-101`、`migrations/0065_visit_follow_up_events.sql:15-45`、`src/shared/domain/work-items.ts:12-17` |
-| 優先順位 7（PDF 部分）、v2 #4 | PDF 報告書・訪問報告ドラフト | 訪問ごとの報告書・PDF は実装済み。**月次まとめは zaitaku-calender G-RPT-1（P1、設計 gate 待ちで未着手）**。hermes-mcs はドラフト生成をしない。集計部分は §3-18 | `src/worker/routes/reports/reports.ts:34-36`、`src/shared/reports/*`、`docs/plans/implementation-plan.md:153, 244-269` |
+| 優先順位 2、v2 #2 | 依頼 lifecycle・Discord 完結 | **Discord 完結は廃止**（zaitaku-calender の `src` に Discord への参照はない）。依頼・期限・再開は zaitaku-calender の follow-up/handoff と Work Queue で扱う（担当は患者の担当薬剤師。follow-up event に担当者の列はない）。hermes-mcs の依頼台帳は、担当・期限・状態が既存（`mcs/ops/mcs_requests.py:15-24`、検証付き編集は同 :99-111）。新しい lifecycle 機能（ack 状態・Discord 完結・返信の自動検知による状態変更）は追加しない。既存の `request_overdue`/`request_aging` signal（`mcs/ops/mcs_signals.py:790-791`）と `st_open_loop_aging`（`mcs/views/mcs_stats.py:584-640`）は凍結台帳の範囲で維持する（廃止する場合は別途判断）。MCS スレッドの返信は §5 のとおり `message.parent_id` と既存 signal で渡す | `src/worker/routes/visits/visits.ts:83-101`、`migrations/0065_visit_follow_up_events.sql:15-45`、`src/shared/domain/work-items.ts:12-17` |
+| 優先順位 7（PDF 部分）、v2 #4 | PDF 報告書・訪問報告ドラフト | 訪問ごとの報告書・PDF は実装済み。**月次まとめは zaitaku-calender G-RPT-1（P1、設計 gate 待ちで未着手）**。hermes-mcs はドラフト生成をしない。集計部分は #18 | `src/worker/routes/reports/reports.ts:34-36`、`src/shared/reports/*`、`docs/plans/implementation-plan.md:153, 244-269` |
 | v2 #6 | 確認済み現行薬リスト | 実装済み（処方正本） | `src/worker/routes/prescriptions/*` |
 | v2 #22 | 引継ぎサマリ | 訪問単位の引継ぎ記録は実装済み。**患者の現状・注意点・未解決事項を 1 ページにまとめるサマリは未実装**（必要なら G-BCP-1 の持ち出しリストと合わせて zaitaku-calender で検討） | `src/app/features/resources/VisitHandoffPanel.tsx:32-34`、`docs/plans/implementation-plan.md:145, 207` |
-| v2 #24 | 複数薬剤師対応 | 担当の割り当て（`assigned_pharmacist_id`）と役割ベースの権限は実装済み。**職員別の不在・代理は G-SCH-2（P1、未着手）**。hermes-mcs 側の通知ルーティング・個人別ダイジェストは §6 で廃止 | `src/shared/authorization-policy.ts`、`src/shared/domain/work-items.ts:17`、`docs/plans/implementation-plan.md:147` |
+| v2 #24 | 複数薬剤師対応 | 担当の割り当て（`assigned_pharmacist_id`）と役割ベースの権限は実装済み。**職員別の不在・代理は G-SCH-2（P1、未着手）**。hermes-mcs 側の通知ルーティング・個人別ダイジェストは §7 で廃止 | `src/shared/authorization-policy.ts`、`src/shared/domain/work-items.ts:17`、`docs/plans/implementation-plan.md:147` |
 | v2 #26 | 算定・報告提出状況 | 一部実装済み（訪問単位の残務 `billing_confirmation_pending`・`care_manager_report_pending`・`physician_report_pending`）。**月次の追跡は G-BILL-2（P2、未着手）。算定要件未達（回数上限）の判定は OUT** | `src/shared/domain/work-items.ts:12-14`、`docs/plans/implementation-plan.md:156, 318` |
 | v2 #5, #11, #12, #14, #15, #17 | トレーシングレポート、腎機能用量、相互作用、疑義照会台帳、リコンシリエーション、アドヒアランス介入 | zaitaku-calender の候補。hermes-mcs は既存抽出で得られる言及を C1 の facts として渡すだけ | zaitaku-calender `ROADMAP.md` §5 |
 | v2 #19 | 終末期の麻薬準備・変化点検知 | 麻薬の準備は zaitaku-calender G-NAR-1（P3）。hermes-mcs は専用の変化点検知を作らない。eol は既に `extract_llm` の events にある（`mcs/extract/v4/extract_llm.py:92`）。read-model の fact kind（`care_event` 等）として eol を区別して渡せるかは C0 で確認し、渡せない場合は新しい record 型を作らない | zaitaku-calender `ROADMAP.md` §5、`docs/plans/implementation-plan.md:160` |
 | v2 #8, #13 | 訪問前ブリーフ、症状×副作用照合 | 接続で扱う（C1/C2）。`next_planned` を予定の根拠にしない | `src/app/features/visit-workspace/VisitClinicalReferences.tsx` |
-| v2 #21 | 関係職種ディレクトリ | **接続では扱わない**。送信者は allowlist にない（`export_schema.py:116-148`）ため送れず、read-model に職種・組織の record もない。zaitaku-calender の既存 care-team 手入力で吸収する | `PatientCareTeamPanel.tsx`、`src/worker/routes/patients/patients.ts:86-88` |
+| v2 #21 | 関係職種ディレクトリ | **接続では扱わない**。送信者は allowlist にない（`export_schema.py:116-147`）ため送れず、read-model に職種・組織の record もない。zaitaku-calender の既存 care-team 手入力で吸収する | `PatientCareTeamPanel.tsx`、`src/worker/routes/patients/patients.ts:86-88` |
 
 既存機能の扱い:
 - **Discord/Slack カード**: MCS 取得通知として維持する（チャネル単位の既存配送のまま）。患者名の除去は C4。
 - **signals（11 種）**: MCS 内部のシグナルとして維持し、C1 で `signal` record として渡す（`export_schema.py:123-128`）。
 - **依頼台帳（`mcs/ops/mcs_requests.py`）**: 既存機能（担当・期限・状態・人承認ゲート `--confirm-human`・`reason`・receipt）のまま凍結。新しい lifecycle 機能は追加しない。
 
-## 6. 見直し・廃止した項目
+## 7. 見直し・廃止した項目
 
 | 旧版の出典 | 項目 | 理由 |
 |---|---|---|
 | 優先順位 4、v2 #23 | Markdown timeline・読み取り専用 Web UI | UI は zaitaku-calender にある。PHI の表示面と認証境界を増やさない |
-| v2 #10（時系列ビュー部分） | 検査値の時系列ビュー | 同上。hermes-mcs は抽出のみ（§3-15）。zaitaku-calender でも候補にしない（zaitaku-calender `ROADMAP.md` §5） |
+| v2 #10（時系列ビュー部分） | 検査値の時系列ビュー | 同上。hermes-mcs は抽出のみ（#15）。zaitaku-calender でも候補にしない（zaitaku-calender `ROADMAP.md` §5） |
 | 優先順位 8 | 複数端末への snapshot 配布 | PHI の置き場所が増えるだけ |
 | v2 #7 | MCS 返信ドラフト | 取得の範囲外。LLM による臨床文生成になる |
-| v2 #24（hermes-mcs 側） | 通知の担当者別ルーティング・個人別ダイジェスト・担当不在時の代理 | 担当と不在の正本は zaitaku-calender（G-SCH-2）。hermes-mcs はチャネル単位の既存通知を維持し、担当者別の配送は作らない（オーナー確認: §7） |
-| 優先順位 2、v2 #2（Discord 完結） | カードボタン⇄依頼台帳の完全連動 | 依頼の正本は zaitaku-calender（§5） |
+| v2 #24（hermes-mcs 側） | 通知の担当者別ルーティング・個人別ダイジェスト・担当不在時の代理 | 担当と不在の正本は zaitaku-calender（G-SCH-2）。hermes-mcs はチャネル単位の既存通知を維持し、担当者別の配送は作らない（オーナー確認: §9） |
+| 優先順位 2、v2 #2（Discord 完結） | カードボタン⇄依頼台帳の完全連動 | 依頼の正本は zaitaku-calender（§6） |
 | v2 #25 | iCal 出力 | 接続（C0〜C4）に置換 |
 | v2 #29 | FHIR JP Core 出力 | 廃止（hermes-mcs でも zaitaku-calender でも作らない）。zaitaku-calender の G-EXT-1 は取込 adapter で FHIR 出力ではない（`docs/plans/implementation-plan.md:162`） |
 | v2 #28 の双方向化 | zaitaku-calender での採用・却下を hermes-mcs へ戻す | 逆方向の PHI の流れ。双方向連携の契約（zaitaku-calender `docs/domain-model-decision.md:206`）と別承認が要る。再開する場合は両文書で新フェーズとして合意 |
 | 旧「並び順の考え方」 | 報告書・薬剤師動線を上位にする前提 | 役割分担で不成立。取得完全性 → 抽出品質 → 接続の順に変更 |
+| 旧 #10 の全体レビュー | 独立実装レビュー（全体） | 前提（2026-09-19 時点の修正）が陳腐化し、既存レビューが複数ある。縮小版（末尾 18 コミット）に置換（#10） |
 
-## 7. 懸念・未決事項（オーナー判断）
+## 8. 実施計画（フェーズ別）
 
-旧版から引き継ぐもの:
-- C01／C06／C07／SQLite 版は §3 に残す。確定した不具合ではなく要検証。
-- 本番の再取込・既存 floor の変更は未実施（旧版 2026-09-19 追加検証）。
-- 独立実装レビュー（§3-10）を再実施するか。
-- §6 の v2 #24（担当者別ルーティング等の廃止）を確定するか。
+依存の判定根拠と衝突マトリクスは §10 と各詳細計画にある。番号は §4 の項目、`F-n` は §3、`C0〜C4` は §5。
 
-接続（zaitaku-calender と共通の番号。決める時点: C0 で Q1・Q2・Q3・Q4・Q6・Q7、C2 までに Q5・Q9、C3 前に Q8）:
+### Phase 0 — 判断と測定（コードなし。今すぐ）
+
+- **判断**（§9 の「決める時点」が Phase 0 のもの）: `#1-D1〜D6`（FileVault の有効化を含む）、`#9-D1〜D3`、`#8-D2`（wire enum の改名。C0 の fixture 固定前なら無償）、`#10-D1〜D2`、Q1〜Q4・Q6・Q7・Q10、CD-1〜CD-8、`#12-D5`（F-2 の扱い）。
+- **測定**（オーナーが snapshot に対して実行。実データの集計になるので調査側では未実行）: `runs` の所要時間分布（#5）、text 経路の held 件数（#6）、`ledger_audit` の初回（#7 Step 0）、現在の DB サイズ（#1）。
+- 目安: 実装は不要。Phase 1 の着手前提を揃える。
+
+### Phase 1 — 先に直す・小さく安全（並行可・本番影響小）
+
+- F-1（#15-A）、F-4（drift guard）、#9（SQLite probe）、#5 の送信下限 + #6 の restore ゲートの共通部分（S）、#2（fixture / ReplayWorker）。
+- #19（ラベル基盤）‖ #12a（緊急度の表示。F-2）。`mcs_signals.py` を両方が触るのでマージ順に注意。
+- #8-M1 + 命名（**#4 の再照合と C1 の本番より前**に入れる。先に入れないと最初の編集が痕跡なく消える）。
+- C0（参照実装 + fixture）を zaitaku-calender C0 と同時に。#10 縮小レビューは並行（コード変更なし）。
+- 完了の目安: 既存の誤表示（F-1・F-2）が是正され、以降の測定基盤（#2・#19）と契約の固定（C0）が揃う。
+
+### Phase 2 — 復旧性と通知の土台
+
+- #1a（`offsite` + `verify`）‖ #3（返信の分類）。触るファイルが分離している。
+- #6 の残り（hold の理由、種別ごとの配送方針、resolver は実需確認後）→ #13（日次 digest。`mcs_coverage` の軽量版）。`notify_flush.py` / `run_check.py` / `CONFIG_RULES` が共通なので直列。
+- #11 stage 1（合成辞書で先行）‖ #15-B/C の準備（RULE_VERSION 7 の窓を #4 と合わせる）。
+- #7 Step 0 の 1 回目の結果を受けて Step 1 の要否を判断。
+
+### Phase 3 — 運用の耐久性と接続の実装
+
+- #5 の残り（非通信ステージの上限・health・watchdog）。
+- #12b（shadow）。#13 のマージ後。
+- #18（`coverage_gaps` の範囲版 + レポート + cron）。#1b / #1c（cron・health・文書・初回の実機 drill）。#7 Step 1（guard trigger。shadow → enforce）。
+- **C1（L）**: G1 → G2 → G3 → G4 → G5。合成環境で完結する。
+
+### Phase 4 — 本番投入と前提の完了
+
+- **#4 修復**（`plan` → 実行 → 記録）: #1a・#3・#5・#8-M1 が揃ってから。RULE_VERSION 7（#15-B）は同じ窓で 1 回にまとめる。
+- **C1 の本番投入**: #4 の実施記録と Q6 の判断後だけ。#10 の縮小レビューが完了していること。
+- #17 第 1 版、#12b の shadow → on の判定、#16 stage 1（承認後）、C4。
+
+### Phase 5 — 任意・後段
+
+- #14（#11 の完了と #19 のラベルが十分に貯まってから）、#16 stage 2/3、#15-D/E、#17 第 2 版、C3、#7 Step 2、C2（Q9 の承認後だけ。着手を勧めない）。
+
+## 9. オーナー判断一覧
+
+### 接続（zaitaku-calender と共通の番号）
+
+決める時点: C0 で Q1・Q2・Q3・Q4・Q6・Q7・Q10、C2 までに Q5・Q9、C3 前に Q8。
+
 1. 本文なしで足りるか（MCS で原文を開いて確認する運用）。本文が要るなら `docs/external-export-contract.md` の改訂という別判断。
 2. semantic 層（`semantic_facts_v4` または `canonical_projection`）を常時動かすか。動かさない場合 facts は空。message の存在・状態、coverage、signal は届く。
-3. kind×project_id の PHI としての扱いと保持期限。zaitaku-calender の PHI 保持契約（取込 source artifact は作成から最大 30 日: zaitaku-calender `docs/domain-model-decision.md:53`）の範囲内で決める（保持 = min(envelope の `retention_days`, 30 日)）。
+3. kind×project_id の PHI としての扱いと保持期限。zaitaku-calender の PHI 保持契約（取込 source artifact は作成から最大 30 日: zaitaku-calender `docs/domain-model-decision.md:53`）の範囲内で決める（保持 = min(envelope の `retention_days`, 30 日)）。`content_hash` は本文 HTML の sha256 で、短文・定型文は推測可能（`mcs/core/ledger.py:1055`）。
 4. 患者対応付けと採用を pharmacist に限るか、clerk にも許すか。
 5. Work Queue に「未確認の staging 行あり」を導出コードとして足すか（zaitaku-calender `docs/plans/implementation-plan.md:318` との両立）。C4 の digest 代替の可否もこれに従う。
 6. MCS から取得したデータを別システムへ転送・保存することが許されるか。根拠は zaitaku-calender `docs/domain-model-decision.md` の外部連携条項（接続先 ID と確認済み内部 ID の明示対応: L182、双方向連携の事前契約: L206）、MCS 利用規約、患者同意、院内規程。SHR-10／SCP-07（zaitaku-calender `docs/specs/visit-report-spec-v1.md:637, 82`）は「MCS への書き戻しをしない」ことの根拠としてだけ使う。**決まるまで C1 の本番投入（実データによる最初の envelope 作成と zaitaku-calender 本番へのアップロード）以降に進まない**。合成 fixture による開発・テストは進めてよい。
-7. fixture の正本をどちらに置くか（片方に置いてコピー、または両方に置き hash で一致確認）。
-8. C3 の構成（D1 直接 binding か RPC か、mTLS 必須か）と、zaitaku-calender の P0（G-OPS-3、G-ON-1 など）より先に接続へ着手するか。
+7. fixture の正本をどちらに置くか（CD-8 の推奨: hermes-mcs を正本に、zaitaku-calender へコピーし `MANIFEST.sha256` で一致確認）。
+8. C3 の構成（D1 直接 binding か RPC か、mTLS 必須か。`bounded_http` は Bearer 固定で mTLS・Cloudflare Access 系ヘッダに未対応）と、zaitaku-calender の P0（G-OPS-3、G-ON-1 など）より先に接続へ着手するか。
 9. 型付き値（allergy・ADE・vital_lab の値）の送付を認めるか。認める場合は `docs/external-export-contract.md` の detail 禁止条項（L22・L137）の改訂とオーナーの明示承認が要る。hermes-mcs C2 の前提。
+10. 患者単位の取得完全性（「この患者は取得未完了」）を zaitaku-calender へ送るか。送る場合は新 record 型（allowlist の変更、`mcs-ext-auth/2` 相当）が要る。送らない場合、C1 で表示できるのは全体の未完了件数（`patients_incomplete`、CD-4）だけ。
 
-## 8. 完了条件
+### 項目別（詳細は各詳細計画の「オーナー判断・リスク」）
+
+| ID | 判断内容 | 決める時点 |
+|---|---|---|
+| #1-D1〜D6 | 医療情報の外部保存の許可 / オフサイト先 / 鍵エスクロー / OS 同梱 openssl を新しい外部依存に含めるか / 世代と RPO / **FileVault の有効化** | D1・D6 は今すぐ。他は #1a の着手前 |
+| #2-D1 | thread の `paginate` 欠損を fail-closed にするか | #2 の実装時 |
+| #3-D1 | 恒久欠落があっても floor を確定させるか（`known_gaps` 併記が前提） | #3 の実装前 |
+| #4-D1〜D3 | 疑わしい floor の扱い / MCS への GET 負荷 / 記録・sign-off の担当 | #4 の実行前 |
+| #5-D1〜D2 | watchdog の採否と猶予 / `publish_snapshot` の頻度 | #5 の手順 5 の前 |
+| #6-D1〜D2 | at-least-once にする種別 / 既存の held の扱い | #6 の実装前 |
+| #7-D1〜D3 | real FK（Step 2）を許容するか / 旧違反の扱い / 実 DB の監査の実行と記録範囲 | Step 1 の前 |
+| #8-D1〜D2 | 本文保持の可否と範囲 / wire enum の改名（A 維持 / B 改名） | D2 は C0 の fixture 固定前 |
+| #9-D1〜D3 | warn か error か / runtime 更新の時期 / system python 3.51.0 の容認 | 今すぐ |
+| #10-D1〜D2 | 縮小レビューの採否 / reviewer の系統と席 | C1 本番投入の前 |
+| #11-D1〜D5 | 辞書の出所と利用条件 / stage 1 のみか集約まで / YJ 等コード保持 / stats の新指標を C2 で出すか / alias の保守者 | D1 は先行。他は stage 1 の前 |
+| #12-D1〜D5 | 対象を LLM のみか / after_min・repeat_min・max_repeats / 専用チャネル / 本文抜粋 / **ルール由来の警告表示を弱めるか（F-2）** | D5 は今すぐ。他は 12b の前 |
+| #13-D1〜D5 | 患者名 / 「未読の多職種連絡」の定義 / 送信時刻・休日・空日 / signals digest との統合 / 維持コスト | #13 の前 |
+| #14-D1〜D3 | 閉じる条件 / 窓外でも閉じてよいか / on の判定基準 | #14 の shadow 前 |
+| #15-D1〜D5 | `recent_labs` の保持数 / weight・height / 型付き値を C2 で出すか / RULE_VERSION bump の時期 / Jev QC の適用範囲 | D4 は #4 と合わせて。他は B / C の前 |
+| #16-D1〜D4 | 対象範囲 / OCR テキストの保持・表示範囲 / macOS 標準機能の subprocess 利用の承認 / `pruned` の扱い | 着手前 |
+| #17-D1〜D3 | 小セル閾値 k と職種群 / `text_candidates` を出すか / 職種 map | 第 1 版の前 |
+| #18-D1〜D5 | 読者と配信先 / 週次・月次の切り方 / 休日 / 自施設と全体の分割 / 保持期間 | #18 の前 |
+| #19-D1〜D4 | 理由語彙 / digest 型の却下 UI / ack を採用に数えるか / n の下限 | #19 の前 |
+| C4-D1〜D2 | 縮退の範囲（名前のみ / 投稿者名も / 本文・要約も）/ 既定値 | C4 の前 |
+| CD-1〜CD-8 | §5 の契約事項 | C0（CD-1 は初回の実送信前が期限） |
+
+旧版から引き継ぐ判断:
+- 独立実装レビュー（#10）を、縮小版で行うか。
+- §7 の v2 #24（担当者別ルーティング等の廃止）を確定するか。
+- 本番の再取込・既存 floor の変更は未実施（旧版 2026-09-19 追加検証）。#4 で扱う。
+
+## 10. 実施上の共通事項
+
+- **完了時の共通チェック**: `scripts/run_tests.sh tests/<領域>/`（`integration/` は必要な対象を同 runner に指定）、CI と同じ範囲の ruff（`make lint`）、`python3 scripts/update_readme.py --check`、`python3 ci/gates.py`、`python3 ci/mine_gates.py --check`。新規の `mcs/**/*.py` または `tests/**/test_*.py` は `docs/DEVELOPMENT.md` の生成表を変えるので、`scripts/update_readme.py` の再実行が必要（CI の PR 検査が drift を落とす）。
+- **書込み位置**: 新規に `Ledger(` を開けるのは `ci/gates.py:23` の `LEDGER_WRITERS` だけ。書込みを伴う新機能は run_check の tick が持つ `ledger` を引数で受ける関数にする。監査・plan・drill・レポートは読取り専用接続（`mode=ro`）で作る。
+- **実機に触れない**: テストは一時 DB + stub と完全合成の fixture だけ。実 MCS・Discord・Keychain・原本 DB・ローカル LLM・Jev に触れる確認（プローブ・実機 drill・実 DB の監査）は、オーナー実行かオーナーの明示承認の下で行う。
+- **配備の作法**: `hermes_plugin/` を変えたら `hermes gateway restart`、watchdog（`deployment/recovery/mcs_recover.py`）を変えたら `./install.sh --no-brew --no-llm --no-plugin --no-services`。`deployment/` の変更だけでは実機に適用されない。
+- **衝突マトリクス**（同じファイルを複数項目が触る。直列でマージする）:
+
+| ファイル / 領域 | 触る項目 | 順序 |
+|---|---|---|
+| `mcs/core/ledger.py`（加法 migration。version 据え置き） | #8-M1（`message_revisions`、`_upsert_message`）、#3（`fetch_jobs.error`）、#6（`hold_reason`）、#7 Step 1（guard trigger） | #8-M1 → #3 → #6 → #7 Step 1 |
+| `mcs/notify/notify_flush.py` / `mcs/ingest/run_check.py` / `mcs_setup.CONFIG_RULES` | #5 の下限、#6、#13、#12b、#5 の残り、#1b | #5 下限 + #6 の共通部分 → #6 の残り → #13 → #12b → #5 の残り |
+| `mcs/views/mcs_stats.py`（REGISTRY と生成 docs） | #11 stage 1、#17、#18、#19 | 直列 |
+| `mcs/ops/mcs_signals.py`（`evaluate`） | #12a（述語置換）、#19、#14 | #12a と #19 はマージ順に注意 → #14 |
+| `mcs/ops/ext_contract.py` / `export_schema.py` / `read_model.py` | C0〜C3、F-3・F-4、#8 の `prev_content_hash`（採用時） | フェーズ順。#11・#15・#16 は allowlist を変えない |
+| `mcs/extract/v1/extract.py`（`RULE_VERSION`） | #15-B、#12c | 全 v1 が再生成されるので 1 回にまとめ、#4 の再生成窓と合わせる |
+| `mcs/extract/rollup.py`（`PERIOD_CHECK_VERSION` 2→3） | #8 の命名、#11 stage 1 | 同一リリースで 1 回の bump にまとめる |
+| `mcs/ops/mcs_setup.py`（`check_environment`・`CRON_JOBS`） | #1、#9、#13、#12b、#17、#18 | 直列 |
+
+## 11. 完了条件
 
 - 取りこぼし・未完了・失敗を正しく記録し、再実行と復元で回復できること（旧版から維持。「もっと賢く要約できる」ことは条件にしない）。
-- 復元訓練を 1 回以上実施し、記録が残っていること。§3-4 修復の実施記録があること。
-- 接続: 取得未完了の範囲を zaitaku-calender 側でも「記録なし」ではなく「不明」と表示できること（入力は C1 で必ず送る `coverage`・`meta`・`signals_truncated`）。本文を送る経路が存在しないこと。結果不明の送付と撤回が held／delete_held として残り、receipt で照合できること。Q6 の判断記録が C1 の本番投入より前にあること。
+- 復元訓練を 1 回以上実施し、記録が残っていること（人手 drill でエスクロー鍵の正しさを確認）。#4 修復の実施記録があること。
+- 既存の誤表示（F-1・F-2）が是正され、回帰テストがあること。
+- 接続: 取得未完了を zaitaku-calender 側で「記録なし」ではなく「不明」と表示できること。C1 の入力は `coverage`（`patients_incomplete`: CD-4）・`meta`・`signals_truncated`。患者単位の表示は Q10 の判断次第。本文を送る経路が存在しないこと。結果不明の送付と撤回が `sent`（held）／`delete_held` として残り、receipt で照合できること。Q6 の判断記録が C1 の本番投入より前にあること。
