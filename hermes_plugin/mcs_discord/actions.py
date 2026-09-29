@@ -89,6 +89,18 @@ def _actor(interaction) -> str:
     return f"discord:{interaction.user.id}"
 
 
+def _role_ids(interaction) -> set[str]:
+    """Guild role ids of the clicking member (empty outside a guild)."""
+    return {str(getattr(r, "id", r))
+            for r in getattr(interaction.user, "roles", None) or []}
+
+
+def _display_name(interaction) -> str:
+    user = interaction.user
+    name = getattr(user, "display_name", None) or getattr(user, "name", "")
+    return name.strip() if isinstance(name, str) else ""
+
+
 def _same_origin(pinned: dict, current: dict,
                  strict_message: bool = False) -> bool:
     """Re-auth at every stage: the interaction must still come from the
@@ -138,7 +150,8 @@ class Actions:
         chats = {str(c) for c in s.get("allowed_chat_ids") or set()}
         uid = str(interaction.user.id)
         cid, _ = _authorizing_channel(interaction)
-        if not users or uid not in {str(u) for u in users}:
+        if uid not in {str(u) for u in users} \
+                and not self._allowed_roles(_role_ids(interaction)):
             return "user_not_allowed"
         if not chats or (cid not in chats and str(interaction.channel_id) not in chats):
             return "chat_not_allowed"
@@ -149,6 +162,14 @@ class Actions:
                 if not projects.project_allowed(s, pid):
                     return "project_not_allowed"
         return None
+
+    def _allowed_roles(self, role_ids) -> set[str]:
+        """The clicker's roles that allowed_role_ids authorizes — a
+        member holding any of them passes the user gate; every other
+        check (channel, project) still applies."""
+        allowed = {str(r) for r in self._settings.get("allowed_role_ids")
+                   or ()}
+        return allowed & {str(r) for r in role_ids or ()}
 
     def _deny_reason(self, interaction, denial: str) -> None:
         """The user only sees 「権限がありません。」— the reason stays
@@ -260,7 +281,7 @@ class Actions:
             await self._ephemeral(interaction, "権限がありません。")
             return
 
-        if action in ("request", "dismiss"):
+        if action in ("request", "dismiss", "report"):
             # modal-open clicks answer with send_modal — no defer, and
             # the initial response must land inside Discord's ~3s. The
             # token is applied first (plan flow) within a short window;
@@ -285,7 +306,9 @@ class Actions:
                 await self._ephemeral(interaction, text.ja(result))
                 return
             modal_id = registry.new_modal_id()
-            modal = self._build_modal(action, modal_id)
+            modal = self._build_modal(
+                action, modal_id, (result or {}).get("form"),
+                _display_name(interaction))
             if modal is None:
                 await self._ephemeral(interaction,
                                       "このカードではその操作を実行できません。")
@@ -326,13 +349,16 @@ class Actions:
                 "application_id": str(interaction.application_id),
                 "token": interaction.token,
                 "kind": "action", "request_id": cid,
-                "actor": actor, "origin": origin, "project_ids": pids})
+                "actor": actor, "origin": origin, "project_ids": pids,
+                "roles": sorted(self._allowed_roles(
+                    _role_ids(interaction)))})
             await self._followup(interaction,
                                  "処理を受け付けました。結果は反映後に表示されます。")
             return
         outcome = result.get("outcome")
         if outcome == "applied" and not result.get("modal"):
-            if result.get("action") == "body" and result.get("body"):
+            if result.get("action") in ("body", "summary") \
+                    and result.get("body"):
                 await self._send_body(interaction, result)
             elif result.get("action") == "tasks":
                 await self._send_tasks(interaction, result)
@@ -344,38 +370,35 @@ class Actions:
 
     # -- modal ------------------------------------------------------------
 
-    def _build_modal(self, action: str, modal_id: str):
+    def _build_modal(self, action: str, modal_id: str,
+                     form: dict | None = None, clicker: str = ""):
+        """The shared modal definition (text.modal_fields) as a Discord
+        modal — a select rides a Label (discord.py >= 2.6)."""
         import discord
 
-        if action == "request":
-            modal = discord.ui.Modal(title="依頼を起票",
-                                     custom_id=f"{MODAL_PREFIX}{modal_id}")
-            modal.title_input = discord.ui.TextInput(
-                label="件名", style=discord.TextStyle.short,
-                custom_id="title", max_length=1000, required=True)
-            modal.reason_input = discord.ui.TextInput(
-                label="理由・依頼内容", style=discord.TextStyle.paragraph,
-                custom_id="reason", max_length=2000, required=True)
-            modal.assignee_input = discord.ui.TextInput(
-                label="担当者（任意）", style=discord.TextStyle.short,
-                custom_id="assignee", max_length=120, required=False)
-            modal.due_input = discord.ui.TextInput(
-                label="期限 YYYY-MM-DD（任意）",
-                style=discord.TextStyle.short, custom_id="due_date",
-                max_length=10, required=False)
-            for item in (modal.title_input, modal.reason_input,
-                         modal.assignee_input, modal.due_input):
-                modal.add_item(item)
-            return modal
-        if action == "dismiss":
-            modal = discord.ui.Modal(title="候補を却下",
-                                     custom_id=f"{MODAL_PREFIX}{modal_id}")
-            modal.reason_input = discord.ui.TextInput(
-                label="却下理由", style=discord.TextStyle.paragraph,
-                custom_id="reason", max_length=2000, required=True)
-            modal.add_item(modal.reason_input)
-            return modal
-        return None
+        fields = text.modal_fields(action, form, clicker)
+        if not fields:
+            return None
+        modal = discord.ui.Modal(title=text.MODAL_TITLES[action],
+                                 custom_id=f"{MODAL_PREFIX}{modal_id}")
+        for f in fields:
+            if f.get("options"):
+                select = discord.ui.Select(
+                    custom_id=f["id"], required=f["required"],
+                    min_values=1 if f["required"] else 0, max_values=1,
+                    options=[discord.SelectOption(
+                        label=lab, value=val, default=val == f["default"])
+                        for val, lab in f["options"]])
+                modal.add_item(discord.ui.Label(text=f["label"],
+                                                component=select))
+                continue
+            kw = {"default": f["default"]} if f.get("default") else {}
+            modal.add_item(discord.ui.TextInput(
+                label=f["label"], custom_id=f["id"],
+                style=(discord.TextStyle.paragraph if f.get("multiline")
+                       else discord.TextStyle.short),
+                max_length=f["max"], required=f["required"], **kw))
+        return modal
 
     async def _on_modal(self, interaction, modal_id: str) -> None:
         pending = self._reg.modal(modal_id)
@@ -444,26 +467,39 @@ class Actions:
                                  preview, confirm_id)
 
     def _modal_fields(self, interaction) -> dict:
-        """discord.py exposes submitted values via interaction.data —
-        components list of action rows each holding one text input."""
+        """discord.py exposes submitted values via interaction.data — a
+        text input sits in an action row (``components``), a select in
+        a Label (``component``, chosen ``values``)."""
         out = {}
         data = getattr(interaction, "data", None) or {}
         for row in data.get("components") or []:
-            for comp in row.get("components") or []:
-                value = comp.get("value")
+            comps = list(row.get("components") or [])
+            if isinstance(row.get("component"), dict):
+                comps.append(row["component"])
+            for comp in comps:
                 cid = comp.get("custom_id") or ""
-                if value is not None:
-                    out[cid] = value
+                if comp.get("value") is not None:
+                    out[cid] = comp["value"]
+                elif isinstance(comp.get("values"), list):
+                    out[cid] = (comp["values"] or [""])[0]
         return out
 
     def _build_payload(self, action: str, actor: str, context: dict,
                        params: dict, fields: dict):
         """Human-command payload from render-pinned context + modal
         input. Returns the envelope dict or an error string."""
-        reason = (fields.get("reason") or "").strip()
-        if not reason:
-            return "理由の入力が必要です。"
+        if action == "report":
+            got = text.feedback_attrs(fields)
+            if isinstance(got, str):
+                return got
+            if not isinstance(context.get("extract_ref"), dict) \
+                    or not context.get("project_id"):
+                return "報告対象の抽出結果を特定できません。"
+            return envelopes.extract_feedback(actor, context, *got)
         if action == "dismiss":
+            reason = (fields.get("reason") or "").strip()
+            if not reason:
+                return "理由の入力が必要です。"
             key = (params.get("signal_key")
                    or next(iter((context.get("signals")
                                  or {"": None}).keys())))
@@ -480,18 +516,10 @@ class Actions:
                 or not context.get("source_hash") \
                 or not context.get("project_id"):
             return "起票対象の投稿を特定できません。"
-        title = (fields.get("title") or "").strip()
-        if not title:
-            return "件名の入力が必要です。"
-        due = (fields.get("due_date") or "").strip()
-        if due and not text.valid_due(due):
-            return "期限は YYYY-MM-DD 形式で入力してください。"
-        f = {"title": title, "reason": reason}
-        if (fields.get("assignee") or "").strip():
-            f["assignee"] = fields["assignee"].strip()
-        if due:
-            f["due_date"] = due
-        return envelopes.request_create(actor, context, f)
+        attrs = text.task_attrs(fields)
+        if isinstance(attrs, str):
+            return attrs
+        return envelopes.request_create(actor, context, attrs)
 
     async def _send_preview(self, interaction, action: str,
                             payload: dict, confirm_id: str) -> None:
@@ -599,7 +627,8 @@ class Actions:
             "token": interaction.token, "kind": "human",
             "project_id": payload.get("project_id"), "actor": actor,
             "origin": pending["origin"],
-            "project_ids": [payload.get("project_id")]})
+            "project_ids": [payload.get("project_id")],
+            "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
@@ -614,7 +643,11 @@ class Actions:
         pids = record.get("project_ids")
         s = self._settings
         users = {f"discord:{u}" for u in s.get("allowed_user_ids") or []}
-        if (record.get("actor") not in users or not isinstance(origin, dict)
+        # a role-authorized clicker's roles were recorded at click time;
+        # the CURRENT allowed_role_ids must still cover one of them
+        if ((record.get("actor") not in users
+             and not self._allowed_roles(record.get("roles")))
+                or not isinstance(origin, dict)
                 or not isinstance(pids, list) or not pids
                 or record.get("application_id") != s.get("application_id")):
             return False
@@ -650,7 +683,8 @@ class Actions:
                 # (ValueError) unless the local type reflects that
                 hook.type = discord.WebhookType.application
                 applied = result.get("outcome") == "applied"
-                if applied and result.get("action") == "body" and result.get("body"):
+                if applied and result.get("action") in ("body", "summary") \
+                        and result.get("body"):
                     # a body click that outlived the wait window still
                     # owes the full text — generic text.ja would report
                     # "反映しました" and never deliver it

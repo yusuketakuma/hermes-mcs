@@ -30,7 +30,12 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     settings = _settings(ctx)
     if settings is None:
         return None
+    # optional: members holding any of these guild roles may operate
+    # cards like an allowed user (invalid/absent -> no role grants)
+    roles = _config_ids(ctx.get_config("allowed_role_ids", None),
+                        projects=False) or frozenset()
     return {**settings, "data_root": data_root.strip(),
+            "allowed_role_ids": roles,
             "profile": ctx.get_config("profile", None)
             or getattr(ctx, "profile_name", None) or "default",
             "application_id": str(application_id).strip(),

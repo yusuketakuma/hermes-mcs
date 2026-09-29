@@ -39,9 +39,11 @@ _ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
 _SDK_MEMBERS = {
     "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
     "ui.Modal", "ui.TextInput", "ui.View", "ui.Container",
-    "File",
+    "ui.Label", "ui.Select", "SelectOption",
+    "File", "AllowedMentions.none",
     "ButtonStyle", "ButtonStyle.success", "ButtonStyle.secondary",
-    "ButtonStyle.primary", "TextStyle.short", "TextStyle.paragraph",
+    "ButtonStyle.primary", "ButtonStyle.link",
+    "TextStyle.short", "TextStyle.paragraph",
     "Webhook.partial", "WebhookType.application",
 }
 

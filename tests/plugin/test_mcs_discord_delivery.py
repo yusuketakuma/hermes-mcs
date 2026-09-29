@@ -29,6 +29,8 @@ class _FakeFile:
 
 
 _discord.File = _FakeFile
+_discord.AllowedMentions = types.SimpleNamespace(
+    none=lambda: "no-pings")        # cards.no_pings()
 
 
 @pytest.fixture(autouse=True)

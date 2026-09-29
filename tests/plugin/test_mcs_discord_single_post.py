@@ -23,6 +23,8 @@ from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
 
 _discord = types.ModuleType("discord")          # send_attachment's File
 _discord.File = lambda path, filename=None: (path, filename)
+_discord.AllowedMentions = types.SimpleNamespace(
+    none=lambda: "no-pings")        # cards.no_pings()
 
 SUPPRESSED = "discordretrysuppressed"           # worker.err_code of the guard
 

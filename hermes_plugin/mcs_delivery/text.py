@@ -26,6 +26,8 @@ ERR_JA = {
     "command_id_conflict": "同じIDで内容の異なる要求が検出されました。",
     "bad_page": "そのページは存在しません。",
     "reason_required": "理由の入力が必要です。",
+    "action_retired": "保留ボタンは廃止されました。カードを最新の表示に更新します。",
+    "extraction_changed": "抽出結果が更新されたため報告できません。最新のカードでやり直してください。",
 }
 
 
@@ -117,18 +119,119 @@ def valid_due(due: str) -> bool:
         return False
 
 
+# ⚠ report target parts — values match mcs_operations
+# EXTRACT_FEEDBACK_FIELDS
+FEEDBACK_FIELDS = (("summary", "要約"), ("meds", "薬"), ("symptoms", "症状"),
+                   ("requests", "依頼"), ("vitals", "バイタル"),
+                   ("other", "その他"))
+TASK_REASON = "通知カードからタスク作成"
+STAFF_OPTIONS = 25
+
+
+def modal_fields(action: str, form: dict | None = None,
+                 clicker: str = "") -> list:
+    """Transport-neutral modal definition — each transport renders these
+    as Discord inputs/selects or Slack input blocks. A field with
+    ``options`` [(value, label)] is a single select; others are text.
+
+    📝 assignee: the runner-sent roster (``form["staff"]``) becomes a
+    select plus a free-text 'other' field; without a roster the free
+    text defaults to the clicker's display name. The roster source is
+    the runner's assignee_choices() — swap it there, not here."""
+    form = form or {}
+    if action == "request":
+        out = [{"id": "task", "label": "タスク内容", "required": True,
+                "multiline": True, "max": 1000,
+                "default": str(form.get("hint") or "")[:1000]}]
+        staff = [s for s in form.get("staff") or []
+                 if isinstance(s, str) and 0 < len(s) <= 75][:STAFF_OPTIONS]
+        if staff:
+            mine = next((s for s in staff if clicker and (
+                s == clicker or s.startswith(clicker + "（"))), None)
+            out.append({"id": "assignee_pick", "label": "担当者（一覧から）",
+                        "required": False,
+                        "options": [(s, s) for s in staff],
+                        "default": mine})
+            out.append({"id": "assignee", "label": "担当者（その他・手入力）",
+                        "required": False, "max": 120, "default": ""})
+        else:
+            out.append({"id": "assignee", "label": "担当者（任意）",
+                        "required": False, "max": 120,
+                        "default": clicker[:120]})
+        out.append({"id": "due_date", "label": "期限 YYYY-MM-DD（任意）",
+                    "required": False, "max": 10, "default": ""})
+        return out
+    if action == "report":
+        return [{"id": "field", "label": "誤っている箇所", "required": True,
+                 "options": list(FEEDBACK_FIELDS), "default": None},
+                {"id": "note", "label": "メモ（任意）", "required": False,
+                 "multiline": True, "max": 500, "default": ""}]
+    if action == "dismiss":
+        return [{"id": "reason", "label": "却下理由", "required": True,
+                 "multiline": True, "max": 2000, "default": ""}]
+    return []
+
+
+MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
+                "report": "抽出の誤りを報告"}
+
+
+def task_attrs(fields: dict):
+    """📝 modal values -> request.create attrs, or an error string.
+    A typed assignee wins over the list pick. The old 依頼 form's
+    title/reason keys still validate (a modal open across a restart)."""
+    title = (fields.get("task") or fields.get("title") or "").strip()
+    if not title:
+        return "タスク内容の入力が必要です。"
+    if len(title) > 1000:
+        return "タスク内容は1000文字以内で入力してください。"
+    assignee = ((fields.get("assignee") or "").strip()
+                or (fields.get("assignee_pick") or "").strip())
+    if len(assignee) > 120:
+        return "担当者は120文字以内で入力してください。"
+    due = (fields.get("due_date") or "").strip()
+    if due and not valid_due(due):
+        return "期限は YYYY-MM-DD 形式で入力してください。"
+    reason = (fields.get("reason") or "").strip() or TASK_REASON
+    if len(reason) > 2000:
+        return "理由は2000文字以内で入力してください。"
+    attrs = {"title": title, "reason": reason}
+    if assignee:
+        attrs["assignee"] = assignee
+    if due:
+        attrs["due_date"] = due
+    return attrs
+
+
+def feedback_attrs(fields: dict):
+    """⚠ modal values -> (field, reason) or an error string."""
+    field = (fields.get("field") or "").strip()
+    labels = dict(FEEDBACK_FIELDS)
+    if field not in labels:
+        return "誤っている箇所を選択してください。"
+    note = (fields.get("note") or "").strip()
+    if len(note) > 500:
+        return "メモは500文字以内で入力してください。"
+    return field, note or f"抽出の誤り報告（{labels[field]}）"
+
+
 def preview_text(action: str, payload: dict, markdown: bool) -> str:
-    """The human-confirm preview of a request/dismiss payload — Discord
-    markdown (bold heading, code-quoted signal) or Slack plain text."""
+    """The human-confirm preview of a task/dismiss/report payload —
+    Discord markdown (bold heading, code-quoted signal) or Slack plain
+    text."""
     bold = "**" if markdown else ""
     if action == "dismiss":
         key = payload["signal_key"]
         return (f"{bold}確認 — 候補の却下{bold}\n"
                 f"signal: {f'`{key}`' if markdown else key}\n"
                 f"理由: {payload['reason'][:400]}")
-    out = (f"{bold}確認 — 依頼の起票{bold}\n"
-           f"件名: {payload['title'][:200]}\n"
-           f"理由: {payload['reason'][:400]}")
+    if action == "report":
+        return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
+                f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
+                f"メモ: {payload['reason'][:400]}\n"
+                "確定すると、この投稿の構造化抽出を1回だけ再実行します。")
+    out = (f"{bold}確認 — タスク作成{bold}\n"
+           f"内容: {payload['title'][:200]}")
     if payload.get("assignee"):
         out += f"\n担当: {payload['assignee'][:120]}"
     if payload.get("due_date"):

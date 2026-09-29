@@ -181,7 +181,16 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
         application_id: "<discord app id>"
         channel_id: "<配送先 channel id>"
         guild_id: "<guild id>"       # scope が guild を pin する場合
+        # 任意: このロールを持つメンバーもカードを操作できる
+        # （channel・project の確認はユーザー許可と同じ）
+        allowed_role_ids: ["<guild role id>"]
 ```
+
+カード操作の認可は `allowed_user_ids` **または** `allowed_role_ids`
+（押した人の guild ロールのいずれか）＋ `allowed_chat_ids` ＋ project。
+`allowed_role_ids` は `/mcs` コマンドと install 全体の承認には効かない。
+`mcs_setup.py init --plugin-role-ids 111,222` で書き込める。許可されない
+クリックには本人だけに「権限がありません。」を返す（無応答にしない）。
 
 `data_root` には runner が管理する `discord_render/` `discord_state/` `flags/`
 `cmd_int/` `cmd_results/` が必要。**この機能は gateway 常駐が前提** — Hermes の
@@ -239,9 +248,26 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   （modal submit では message も）は各段階で再検証する。
   通知操作の `command_id` は重複適用を防ぐ固定 ID、`request_id` はクリック／
   フォーム送信ごとの応答 ID。過去の結果ファイルを今回の承認や本文閲覧に使わない。
-- `依頼`/`却下` は runner が返す pin 済み params + render context から
-  `request.create` / `ops.signal_dismiss` を組み立て、preview → 本人確認
-  → enqueue の順で、既存の human_confirmed ゲートを通す。`確定` が command を
+- ボタンは状態表示を兼ねる（`☐ 確認`⇄`✅ 確認済み`、`👤 担当する`⇄
+  `👤 担当中`）。ラベル・スタイルは runner が render ごとに決め、同じ操作を
+  押し直すと取消・担当解除になる（古い表示での二度押しは吸収）。フッターの
+  人名は `<@id>` メンション。Discord はカードの送信・編集・スレッド本文の
+  すべてを `allowed_mentions=none` で送るので名前表示のみで通知は鳴らない。
+  Slack はメンションを含むフッターだけ mrkdwn にし、`<@U…>` 以外の文字は
+  エスケープする（Slack は編集では通知しないが、カードの再投稿時には
+  通知されうる）。`🔗 MCSで開く` は token を持たない URL ボタン
+  （Slack はクリック通知を ack するだけ）。
+- `📝 タスク作成`/`🚫 却下`/`⚠ 抽出の誤りを報告` は runner が返す pin 済み
+  params + render context から `request.create` / `ops.signal_dismiss` /
+  `ops.extract_feedback` を組み立て、preview → 本人確認
+  → enqueue の順で、既存の human_confirmed ゲートを通す。📝 のフォームは
+  クリック結果の `form`（抽出済み依頼の下書き・担当者候補）で作る。
+  担当者候補は runner の `notify_cards.assignee_choices()`（MCS の自局
+  スタッフ一覧 `station_staff_v1`、無ければ自局名で投稿した送信者）で、
+  plugin は台帳を読まない。候補があれば選択肢（Discord は Label+Select、
+  Slack は static_select）＋手入力欄、無ければ手入力のみ（既定値は押した人の
+  表示名）。入力欄の定義は `mcs_delivery/text.py` の `modal_fields()` に
+  両 transport 共通でまとめてある。`確定` が command を
   書込み中に押された `取消`／二度目の `確定` は「処理中」と答え、取り消したとは
   報告しない（書込み失敗時は確認が再び有効になる）。
   project scope は `確定` だけを制限する: preview 後に project が scope 外に

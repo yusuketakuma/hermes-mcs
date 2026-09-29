@@ -4,8 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from hermes_plugin.mcs_delivery import paths as shared_paths
 from hermes_plugin.mcs_delivery import registry
+from hermes_plugin.mcs_slack import actions as slack_actions
 from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
 from hermes_plugin.mcs_slack.paths import notify_dirs
@@ -51,6 +54,13 @@ class App:
 
 async def ack():
     return None
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_wait(monkeypatch):
+    # the 📝 modal polls once for the runner's form; tests publish any
+    # result up front, so no polling window is needed
+    monkeypatch.setattr(slack_actions, "MODAL_OPEN_WAIT_S", 0.0)
 
 
 def fixture(tmp_path, *, kind="body", project_ids=frozenset({123})):
@@ -199,7 +209,7 @@ def test_request_requires_preview_and_explicit_same_user_confirm(tmp_path):
         assert len(app.client.views) == 1
         modal_id = app.client.views[0]["view"]["private_metadata"]
         view_body, view = submitted(
-            modal_id, title="合成依頼", reason="合成理由",
+            modal_id, task="合成依頼",
             assignee="", due_date="")
         await actions._modal(ack, view_body, view)
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
@@ -349,7 +359,7 @@ async def _to_confirm(actions, app, dirs, project_id):
     await actions._action(ack, body, action)
     env = command(dirs)
     modal_id = app.client.views[0]["view"]["private_metadata"]
-    view_body, view = submitted(modal_id, title="合成依頼", reason="合成理由",
+    view_body, view = submitted(modal_id, task="合成依頼",
                                 assignee="", due_date="")
     await actions._modal(ack, view_body, view)
     result(dirs, env["request_id"], request_id=env["request_id"],
@@ -529,4 +539,159 @@ def test_modal_refusals_answer_only_the_submitter(tmp_path):
         assert app.client.messages[-1]["text"] == "権限がありません。"
         assert not reg.followups()
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+    asyncio.run(scenario())
+
+
+# ---------- card buttons: task form, denial, report, summary, link -------
+
+def _set_ctx(reg, kind, **extra):
+    reg.put_tokens({TOKEN: {
+        "action": kind, "team_id": SCOPE["team_id"],
+        "channel_id": SCOPE["channel_id"], "message_id": TS,
+        "project_id": 123, "context": {
+            "project_id": 123, "source_message_id": 456,
+            "source_hash": "a" * 64, **extra}}})
+
+
+def test_task_modal_offers_roster_and_prefill(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+
+        async def runner_form(request_id, timeout):
+            return {"request_id": request_id, "outcome": "applied",
+                    "modal": True, "params": {"project_id": 123},
+                    "form": {"hint": "残薬を確認",
+                             "staff": ["山田 花子（みどり薬局）",
+                                       "佐藤 一郎（みどり薬局）"]}}
+        actions._wait_result = runner_form
+        body, action = click()
+        body["user"]["name"] = "佐藤 一郎"
+        await actions._action(ack, body, action)
+        view = app.client.views[0]["view"]
+        assert view["title"]["text"] == "タスク作成"
+        blocks = {b["block_id"]: b for b in view["blocks"]}
+        assert list(blocks) == ["task", "assignee_pick", "assignee",
+                                "due_date"]
+        assert blocks["task"]["element"]["initial_value"] == "残薬を確認"
+        assert blocks["task"]["optional"] is False
+        pick = blocks["assignee_pick"]["element"]
+        assert pick["type"] == "static_select"
+        assert [o["value"] for o in pick["options"]] == [
+            "山田 花子（みどり薬局）", "佐藤 一郎（みどり薬局）"]
+        # the clicker is preselected
+        assert pick["initial_option"]["value"] == "佐藤 一郎（みどり薬局）"
+
+        env = command(dirs)
+        modal_id = view["private_metadata"]
+        view_body, submitted_view = submitted(
+            modal_id, task="残薬を確認", assignee="", due_date="2026-10-01")
+        submitted_view["state"]["values"]["assignee_pick"] = {
+            "assignee_pick": {"selected_option": {
+                "value": "山田 花子（みどり薬局）"}}}
+        await actions._modal(ack, view_body, submitted_view)
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", modal=True, params={"project_id": 123})
+        await actions.sweep_followups()
+        confirm_id = app.client.messages[-1]["blocks"][1]["elements"][0][
+            "action_id"].split(":")[2]
+        payload = reg.confirm(confirm_id)["payload"]
+        assert payload["cmd"] == "request.create"
+        assert (payload["title"], payload["assignee"], payload["due_date"],
+                payload["reason"]) == ("残薬を確認", "山田 花子（みどり薬局）",
+                                       "2026-10-01", "通知カードからタスク作成")
+        assert validate_human(payload) is None
+    asyncio.run(scenario())
+
+
+def test_task_modal_without_roster_defaults_to_clicker(tmp_path):
+    async def scenario():
+        actions, app, _, _ = fixture(tmp_path, kind="request")
+        body, action = click()
+        body["user"]["name"] = "佐藤 一郎"
+        await actions._action(ack, body, action)     # runner slow: no form
+        blocks = {b["block_id"]: b
+                  for b in app.client.views[0]["view"]["blocks"]}
+        assert list(blocks) == ["task", "assignee", "due_date"]
+        assert "initial_value" not in blocks["task"]["element"]
+        assert blocks["assignee"]["element"]["initial_value"] == "佐藤 一郎"
+    asyncio.run(scenario())
+
+
+def test_denied_member_click_is_answered(tmp_path):
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path, kind="ack")
+        await actions._action(ack, *click(user="U_STAFF2"))
+        assert [(m["user"], m["text"]) for m in app.client.messages] == [
+            ("U_STAFF2", "権限がありません。")]
+        # another workspace stays silent — nothing unverified earns a post
+        await actions._action(ack, *click(user="U_STAFF2", team="T_OTHER"))
+        assert len(app.client.messages) == 1
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+        # several allowed members all work
+        actions._settings["allowed_user_ids"] = {"U_OPERATOR", "U_STAFF2"}
+        actions._sender._allowed_user_ids = frozenset(
+            actions._settings["allowed_user_ids"])
+        await actions._action(ack, *click(user="U_STAFF2"))
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 1
+    asyncio.run(scenario())
+
+
+def test_report_modal_builds_feedback_command(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="report")
+        _set_ctx(reg, "report", extract_ref={
+            "message_id": 456, "artifact_id": 77, "content_hash": "a" * 64})
+        await actions._action(ack, *click())
+        view = app.client.views[0]["view"]
+        assert view["title"]["text"] == "抽出の誤りを報告"
+        field = view["blocks"][0]["element"]
+        assert field["type"] == "static_select"
+        assert [o["value"] for o in field["options"]] == [
+            "summary", "meds", "symptoms", "requests", "vitals", "other"]
+        env = command(dirs)
+        body, submitted_view = submitted(view["private_metadata"],
+                                         note="用量が違う")
+        submitted_view["state"]["values"]["field"] = {
+            "field": {"selected_option": {"value": "meds"}}}
+        await actions._modal(ack, body, submitted_view)
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", modal=True, params={})
+        await actions.sweep_followups()
+        confirm_id = app.client.messages[-1]["blocks"][1]["elements"][0][
+            "action_id"].split(":")[2]
+        payload = reg.confirm(confirm_id)["payload"]
+        assert {k: payload[k] for k in ("cmd", "project_id", "message_id",
+                                        "artifact_id", "field", "reason")} \
+            == {"cmd": "ops.extract_feedback", "project_id": 123,
+                "message_id": 456, "artifact_id": 77, "field": "meds",
+                "reason": "用量が違う"}
+        assert validate_human(payload) is None
+        assert validate_int(payload) is None
+    asyncio.run(scenario())
+
+
+def test_summary_reaches_only_the_clicker(tmp_path):
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path, kind="summary")
+        await actions._action(ack, *click())
+        env = command(dirs)
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="summary", title="🧾 サマリー",
+               body="※ 暫定集約\n■ 未完了タスク: なし")
+        await actions.sweep_followups()
+        assert [m["user"] for m in app.client.messages] == ["U_OPERATOR"]
+        assert "暫定集約" in app.client.messages[0]["text"]
+    asyncio.run(scenario())
+
+
+def test_link_button_click_is_only_acked(tmp_path):
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path)
+        acked = []
+
+        async def record():
+            acked.append(1)
+        await app.actions["^mcs:link$"](record, *click())
+        assert acked == [1] and app.client.messages == []
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
     asyncio.run(scenario())

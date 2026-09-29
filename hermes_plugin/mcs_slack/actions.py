@@ -3,25 +3,54 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (NO_TASKS_TEXT, body_messages, ja,
-                                 preview_text, task_done_text,
-                                 task_list_text, valid_due)
-from .cards import _sections
+from ..mcs_delivery.text import (MODAL_TITLES, NO_TASKS_TEXT, body_messages,
+                                 feedback_attrs, ja, modal_fields,
+                                 preview_text, task_attrs, task_done_text,
+                                 task_list_text)
+from .cards import LINK_ACTION, _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
+_LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
-_FIELDS = {
-    "request": (("title", "件名", False), ("reason", "理由・依頼内容", True),
-                ("assignee", "担当者（任意）", False),
-                ("due_date", "期限 YYYY-MM-DD（任意）", False)),
-    "dismiss": (("reason", "却下理由", True),),
-}
+_MODAL_ACTIONS = ("request", "dismiss", "report")
+_KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
+          "dismiss", "tasks", "task_status", "summary", "report")
+RESULT_POLL_S = 0.25
+# the 📝 modal waits this long for the runner's form (prefill + roster)
+# before opening — trigger_id lives ~3s; a slow drain opens without it
+MODAL_OPEN_WAIT_S = 1.5
+
+
+def _modal_blocks(fields):
+    """Shared modal fields (text.modal_fields) as Slack input blocks."""
+    blocks = []
+    for f in fields:
+        if f.get("options"):
+            options = [{"text": {"type": "plain_text", "text": label},
+                        "value": value} for value, label in f["options"]]
+            element = {"type": "static_select", "action_id": f["id"],
+                       "options": options}
+            chosen = [o for o in options if o["value"] == f["default"]]
+            if chosen:
+                element["initial_option"] = chosen[0]
+        else:
+            element = {"type": "plain_text_input", "action_id": f["id"],
+                       "multiline": bool(f.get("multiline")),
+                       "max_length": f["max"]}
+            if f.get("default"):
+                element["initial_value"] = f["default"]
+        blocks.append({"type": "input", "block_id": f["id"],
+                       "optional": not f["required"],
+                       "label": {"type": "plain_text", "text": f["label"]},
+                       "element": element})
+    return blocks
 
 
 def _task_blocks(items):
@@ -98,6 +127,7 @@ class Actions:
         """Attach native Bolt handlers after scope lock and workspace bind."""
         self._active = True
         self._app.action(_ACTION)(self._action)
+        self._app.action(_LINK)(self._link)
         self._app.action(_CONFIRM)(self._confirm)
         self._app.view("mcs:modal")(self._modal)
 
@@ -171,12 +201,47 @@ class Actions:
         await asyncio.to_thread(envelopes.publish_command,
                                 self._dirs["cmd_int"], envelope)
 
+    async def _link(self, ack, body, action):
+        """🔗 URL buttons open in the client; Slack still posts the
+        click, which only needs its ack."""
+        await ack()
+
+    def _denied_member(self, body):
+        """A card click from this workspace/app/channel by a user
+        outside slack_allowed_user_ids — answered, never silently
+        dropped. Anything else unverified stays silent."""
+        team = body.get("team") or {}
+        user = body.get("user") or {}
+        channel = body.get("channel") or {}
+        uid = user.get("id")
+        return (self._active and isinstance(uid, str)
+                and team.get("id") == self._settings["team_id"]
+                and body.get("api_app_id") == self._settings["application_id"]
+                and channel.get("id") == self._settings["channel_id"]
+                and uid not in self._settings["allowed_user_ids"])
+
+    async def _wait_result(self, request_id, timeout):
+        """Poll for the runner's result — always looks at least once."""
+        deadline = time.monotonic() + timeout
+        while True:
+            result = await asyncio.to_thread(
+                paths.read_result, self._dirs["cmd_results"], request_id)
+            if result is not None \
+                    and result.get("request_id") == request_id:
+                return result
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(RESULT_POLL_S)
+
     async def _action(self, ack, body, action):
         await ack()
         if not self._active:
             return
         origin = self._sender.action_origin(body, action)
         if origin is None:
+            if self._denied_member(body):
+                await self._say(self._settings["channel_id"],
+                                body["user"]["id"], "権限がありません。")
             return
         token = origin.pop("token")
         actor = origin.pop("actor")
@@ -186,8 +251,7 @@ class Actions:
             await self._say(origin["channel_id"], user, "権限がありません。")
             return
         kind = ctx["action"]
-        if kind not in ("ack", "assign", "defer", "body", "prev", "next",
-                        "request", "dismiss", "tasks", "task_status"):
+        if kind not in _KINDS:
             await self._say(origin["channel_id"], user, "操作できません。")
             return
         env = envelopes.notification(token, actor, origin)
@@ -196,19 +260,27 @@ class Actions:
         except (OSError, ValueError):
             await self._say(origin["channel_id"], user, "送信に失敗しました。")
             return
-        if kind in _FIELDS:
+        if kind in _MODAL_ACTIONS:
+            form = None
+            if kind == "request":
+                result = await self._wait_result(env["request_id"],
+                                                 MODAL_OPEN_WAIT_S)
+                if result is not None and not (
+                        result.get("outcome") == "applied"
+                        and result.get("modal")):
+                    await self._say(origin["channel_id"], user, ja(result))
+                    return
+                form = (result or {}).get("form")
+            clicker = body["user"].get("name") or body["user"].get(
+                "username") or ""
+            defs = modal_fields(kind, form, clicker)
             modal_id = registry.new_modal_id()
             self._reg.put_modal(modal_id, {
                 "token": token, "actor": actor, "origin": origin,
                 "action": kind, "request_id": env["request_id"],
-                "context": ctx.get("context") or {}, "user": user})
-            fields = [{"type": "input", "block_id": name,
-                       "optional": name in ("assignee", "due_date"),
-                       "label": {"type": "plain_text", "text": label},
-                       "element": {"type": "plain_text_input",
-                                   "action_id": name,
-                                   "multiline": multiline}}
-                      for name, label, multiline in _FIELDS[kind]]
+                "context": ctx.get("context") or {}, "user": user,
+                "field_ids": [f["id"] for f in defs]})
+            fields = _modal_blocks(defs)
             try:
                 client = self._client()
                 if client is None:
@@ -218,8 +290,7 @@ class Actions:
                     view={"type": "modal", "callback_id": "mcs:modal",
                           "private_metadata": modal_id,
                           "title": {"type": "plain_text",
-                                    "text": "依頼を起票" if kind == "request"
-                                    else "候補を却下"},
+                                    "text": MODAL_TITLES[kind]},
                           "submit": {"type": "plain_text", "text": "確認へ"},
                           "close": {"type": "plain_text", "text": "取消"},
                           "blocks": fields})
@@ -257,9 +328,11 @@ class Actions:
             return
         values = view.get("state", {}).get("values", {})
         fields = {}
-        for name, _, _ in _FIELDS[pending["action"]]:
-            fields[name] = ((values.get(name) or {}).get(name) or {}).get(
-                "value") or ""
+        for name in pending.get("field_ids") or ():
+            got = (values.get(name) or {}).get(name) or {}
+            picked = got.get("selected_option")
+            fields[name] = (picked.get("value") if isinstance(picked, dict)
+                            else got.get("value")) or ""
         pending["fields"] = fields
         pending["modal_id"] = modal_id
         self._reg.put_modal(modal_id, pending)
@@ -274,10 +347,18 @@ class Actions:
         fields = pending["fields"]
         context = pending["context"]
         params = result.get("params") or {}
-        reason = fields["reason"].strip()
-        if not reason or len(reason) > 2000:
-            return None
+        if pending["action"] == "report":
+            got = feedback_attrs(fields)
+            if isinstance(got, str) \
+                    or not isinstance(context.get("extract_ref"), dict) \
+                    or not context.get("project_id"):
+                return None
+            return envelopes.extract_feedback(pending["actor"], context,
+                                              *got)
         if pending["action"] == "dismiss":
+            reason = (fields.get("reason") or "").strip()
+            if not reason or len(reason) > 2000:
+                return None
             key = params.get("signal_key")
             if not isinstance(key, str) \
                     or key not in (context.get("signals") or {}):
@@ -285,22 +366,11 @@ class Actions:
             return envelopes.signal_dismiss(pending["actor"], context,
                                             key, reason)
         project = params.get("project_id") or context.get("project_id")
-        title = fields["title"].strip()
-        due = fields["due_date"].strip()
-        if not title or len(title) > 1000 \
+        attrs = task_attrs(fields)
+        if isinstance(attrs, str) \
                 or not context.get("source_message_id") \
                 or not context.get("source_hash") or not project:
             return None
-        if due and not valid_due(due):
-            return None
-        attrs = {"title": title, "reason": reason}
-        assignee = fields["assignee"].strip()
-        if len(assignee) > 120:
-            return None
-        if assignee:
-            attrs["assignee"] = assignee
-        if due:
-            attrs["due_date"] = due
         return envelopes.request_create(
             pending["actor"], {**context, "project_id": project}, attrs)
 
@@ -444,7 +514,7 @@ class Actions:
                 else:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
-            elif result.get("action") == "body" \
+            elif result.get("action") in ("body", "summary") \
                     and result.get("outcome") == "applied":
                 for message in body_messages(result):
                     await self._say(origin["channel_id"], rec["user"], message)

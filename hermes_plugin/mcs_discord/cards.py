@@ -82,14 +82,22 @@ def build_view(spec: dict):
             continue                       # correlation — not displayed
         else:
             lines.append(c["text"])
-    lines.extend(f"-# {c['text']}"
+    # every footer line gets the subtext prefix — one footer item may
+    # hold several lines (the open-task list)
+    lines.extend(f"-# {ln}"
                  for c in spec["parts"].get("footer") or []
-                 if c.get("type") == "text")
+                 if c.get("type") == "text"
+                 for ln in c["text"].splitlines())
     children = [discord.ui.TextDisplay(chunk)
                 for chunk in _text_chunks(lines)]
     for row in spec["parts"].get("action_rows") or []:
         ar = discord.ui.ActionRow()
         for b in row:
+            if b.get("ui") == "link":
+                ar.add_item(discord.ui.Button(
+                    style=discord.ButtonStyle.link, label=b["label"],
+                    url=b["url"]))
+                continue
             btn = discord.ui.Button(
                 style=getattr(discord.ButtonStyle,
                               b.get("style", "secondary")),
@@ -106,13 +114,22 @@ def build_view(spec: dict):
     return view
 
 
+def no_pings():
+    """allowed_mentions for every card-side send/edit: footer names are
+    <@id> mentions that must render as names and never notify anyone
+    (nor may message text ever reach @everyone/roles)."""
+    import discord  # SDK required only inside the handler boundary
+    return discord.AllowedMentions.none()
+
+
 async def send_attachment(target, path: str | BinaryIO, name: str):
     """File upload for a durable attachment part — kept here so
     delivery.py stays SDK-free (only cards/actions may import
     discord.py, and only inside functions)."""
     import discord  # SDK required only inside the handler boundary
     return await target.send(
-        file=discord.File(path, filename=name))
+        file=discord.File(path, filename=name),
+        allowed_mentions=discord.AllowedMentions.none())
 
 
 class RetryPolicyUnknown(RuntimeError):

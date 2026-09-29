@@ -1,6 +1,8 @@
 """Convert validated MCS display parts to Slack Block Kit."""
 from __future__ import annotations
 
+import re
+
 from ..mcs_delivery.spec import validate as validate_v1
 
 _SECTION_MAX = 3000
@@ -9,6 +11,21 @@ _CONTEXT_MAX = 2000
 _BLOCK_MAX = 50
 _FALLBACK = "MCS 確認カード"
 SCHEMA = "mcs-card-render/v2"
+LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
+_MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
+
+
+def _mrkdwn(text):
+    """Footer text as mrkdwn: runner-made <@U…> mentions render as the
+    member's name; everything else is escaped so no other text can form
+    a link, mention or broadcast."""
+    def esc(t):
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    out, last = [], 0
+    for m in _MENTION.finditer(text):
+        out += [esc(text[last:m.start()]), m.group(0)]
+        last = m.end()
+    return "".join(out) + esc(text[last:])
 
 
 def validate(spec):
@@ -55,13 +72,16 @@ def render(spec):
             text = f"引用: {text}"
         blocks.extend(_sections(text))
 
+    names = spec["parts"].get("mentions") == "silent"
     for item in spec["parts"].get("footer") or []:
         if item["type"] != "text":
             continue
         text = item["text"]
+        if names:
+            text = _mrkdwn(text)
         blocks.extend(
             {"type": "context",
-             "elements": [{"type": "plain_text",
+             "elements": [{"type": "mrkdwn" if names else "plain_text",
                            "text": text[i:i + _CONTEXT_MAX]}]}
             for i in range(0, len(text), _CONTEXT_MAX)
         )
@@ -71,6 +91,12 @@ def render(spec):
         for button in row:
             if len(button["label"]) > 75:
                 raise ValueError("slack_button_label")
+            if button.get("ui") == "link":
+                elements.append({
+                    "type": "button", "action_id": LINK_ACTION,
+                    "text": {"type": "plain_text", "text": button["label"]},
+                    "url": button["url"]})
+                continue
             entry = {
                 "type": "button",
                 "text": {"type": "plain_text", "text": button["label"]},
