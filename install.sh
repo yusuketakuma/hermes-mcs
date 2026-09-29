@@ -610,10 +610,23 @@ else
         else
             printf '  downloading model (~5.7 GB, resumable): %s\n' "$MODEL_FILE"
             mkdir -p "$MODEL_DIR"
-            # .part is kept on failure so the next run resumes (-C -)
-            curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
-                    -o "$MODEL_FILE.part" "$MODEL_URL" \
-                || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
+            # .part is kept on failure so the next run resumes (-C -).
+            # A .part that already holds every byte (interrupted between
+            # the transfer and the rename) is not re-requested: a range
+            # past the end answers 416 and would fail every re-run.
+            _have=0; _want=""
+            if [ -f "$MODEL_FILE.part" ]; then
+                _have="$(wc -c < "$MODEL_FILE.part" | tr -d ' ')"
+                _want="$(curl -fsIL --retry 3 "$MODEL_URL" 2>/dev/null \
+                    | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')"
+            fi
+            if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+                printf '  partial file already complete (%s bytes)\n' "$_have"
+            else
+                curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
+                        -o "$MODEL_FILE.part" "$MODEL_URL" \
+                    || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
+            fi
             if [ -n "$MODEL_SHA256" ]; then
                 _got="$(shasum -a 256 "$MODEL_FILE.part" | awk '{print $1}')"
                 if [ "$_got" != "$MODEL_SHA256" ]; then
