@@ -297,7 +297,8 @@ def test_dismiss_cancel_never_writes_human_command(tmp_path):
         await actions._action(ack, body, action)
         env = command(dirs)
         modal_id = app.client.views[0]["view"]["private_metadata"]
-        view_body, view = submitted(modal_id, reason="合成却下理由")
+        view_body, view = submitted(modal_id, reason_code="false_positive",
+                                    note="合成却下理由")
         await actions._modal(ack, view_body, view)
         result(dirs, env["request_id"], request_id=env["request_id"],
                outcome="applied", modal=True,
@@ -318,7 +319,8 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
         await actions._action(ack, body, action)
         env = command(dirs)
         modal_id = app.client.views[0]["view"]["private_metadata"]
-        view_body, view = submitted(modal_id, reason="合成却下理由")
+        view_body, view = submitted(modal_id, reason_code="false_positive",
+                                    note="合成却下理由")
         await actions._modal(ack, view_body, view)
         result(dirs, env["request_id"], request_id=env["request_id"],
                outcome="applied", modal=True,
@@ -694,4 +696,81 @@ def test_link_button_click_is_only_acked(tmp_path):
         await app.actions["^mcs:link$"](record, *click())
         assert acked == [1] and app.client.messages == []
         assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
+
+
+# ---------- 📋 / 🔎 / 🚫 reason code --------------------------------------
+
+def _list_result(items):
+    return {"title": "📋 自分のタスク（担当: 佐藤 一郎）", "head": ["未完了"],
+            "items": items, "more": 0, "empty": "なし", "notes": ["※ 注記"]}
+
+
+def test_my_tasks_sends_the_name_and_filters_scope(tmp_path):
+    async def scenario():
+        actions, app, _, dirs = fixture(tmp_path, kind="mytasks")
+        body, action = click()
+        body["user"]["name"] = "佐藤 一郎"
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        assert env["input"] == {"name": "佐藤 一郎"}
+        assert validate_int(env) is None
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="list", list=_list_result([
+                   {"project_id": 123, "text": "・#1 範囲内"},
+                   {"project_id": 999, "text": "・#2 範囲外"}]))
+        await actions.sweep_followups()
+        text_ = "\n".join(m["text"] for m in app.client.messages)
+        assert [m["user"] for m in app.client.messages] == ["U_OPERATOR"]
+        assert "範囲内" in text_ and "範囲外" not in text_
+    asyncio.run(scenario())
+
+
+def test_search_modal_submits_query_as_view_click(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="search")
+        await actions._action(ack, *click())
+        view = app.client.views[0]["view"]
+        assert view["title"]["text"] == "この患者を検索"
+        first = command(dirs)
+        Path(dirs["cmd_int"], shared_paths.safe_name(first["command_id"])
+             + ".json").unlink()
+        view_body, submitted_view = submitted(view["private_metadata"],
+                                              query=" 発熱  咳 ")
+        await actions._modal(ack, view_body, submitted_view)
+        env = command(dirs)
+        assert env["input"] == {"query": "発熱 咳"}
+        assert env["token"] == TOKEN and validate_int(env) is None
+        assert env["command_id"] != first["command_id"]
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="list", list=_list_result(
+                   [{"project_id": 123, "text": "・09-24 看護師: 発熱あり"}]))
+        await actions.sweep_followups()
+        assert "発熱あり" in app.client.messages[-1]["text"]
+        assert reg.modal(view["private_metadata"]) is None
+    asyncio.run(scenario())
+
+
+def test_dismiss_modal_sends_reason_code(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="dismiss")
+        await actions._action(ack, *click())
+        view = app.client.views[0]["view"]
+        assert [b["block_id"] for b in view["blocks"]] == ["reason_code",
+                                                           "note"]
+        env = command(dirs)
+        body, submitted_view = submitted(view["private_metadata"], note="")
+        submitted_view["state"]["values"]["reason_code"] = {
+            "reason_code": {"selected_option": {"value": "already_handled"}}}
+        await actions._modal(ack, body, submitted_view)
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", modal=True,
+               params={"signal_key": "synthetic-key"})
+        await actions.sweep_followups()
+        confirm_id = app.client.messages[-1]["blocks"][1]["elements"][0][
+            "action_id"].split(":")[2]
+        payload = reg.confirm(confirm_id)["payload"]
+        assert (payload["reason_code"], payload["reason"]) == (
+            "already_handled", "対応済み")
+        assert validate_human(payload) is None
     asyncio.run(scenario())

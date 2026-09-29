@@ -281,7 +281,7 @@ class Actions:
             await self._ephemeral(interaction, "権限がありません。")
             return
 
-        if action in ("request", "dismiss", "report"):
+        if action in ("request", "dismiss", "report", "search"):
             # modal-open clicks answer with send_modal — no defer, and
             # the initial response must land inside Discord's ~3s. The
             # token is applied first (plan flow) within a short window;
@@ -337,7 +337,10 @@ class Actions:
 
         # everything else: type-6 defer, then the notification command
         await interaction.response.defer()
-        env = envelopes.notification(token, actor, origin)
+        name = _display_name(interaction)[:120]
+        env = envelopes.notification(
+            token, actor, origin,
+            {"name": name} if action == "mytasks" and name else None)
         cid = env["request_id"]
         result, published = await self._dispatch_notification(
             interaction, env)
@@ -362,6 +365,8 @@ class Actions:
                 await self._send_body(interaction, result)
             elif result.get("action") == "tasks":
                 await self._send_tasks(interaction, result)
+            elif result.get("action") == "list":
+                await self._send_list(interaction, result)
             elif result.get("action") == "task_status":
                 await self._followup(interaction, text.task_done_text(result))
             # silent ack — the card re-renders through the pipeline
@@ -429,6 +434,9 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
+        if pending["action"] == "search":
+            await self._search(interaction, modal_id, pending)
+            return
 
         # the token authorizes the modal flow — apply it now so the
         # runner's stored params, not our cache, drive the preview
@@ -466,6 +474,31 @@ class Actions:
         await self._send_preview(interaction, pending["action"],
                                  preview, confirm_id)
 
+    async def _search(self, interaction, modal_id: str,
+                      pending: dict) -> None:
+        """🔎 submit: the keyword rides the same card token as a view
+        click — no preview/confirm, the runner answers with the hits."""
+        query = text.search_query(self._modal_fields(interaction))
+        if query is None:
+            await self._followup(interaction, text.SEARCH_EMPTY)
+            return
+        env = envelopes.notification(pending["token"], pending["actor"],
+                                     pending["origin"], {"query": query})
+        result, published = await self._dispatch_notification(
+            interaction, env)
+        if not published:
+            return
+        if result is None:
+            await self._followup(interaction, text.ja(result))
+            return
+        self._reg.drop_modal(modal_id)
+        self._result_log(interaction, "search", result)
+        if result.get("outcome") == "applied" \
+                and result.get("action") == "list":
+            await self._send_list(interaction, result)
+        else:
+            await self._followup(interaction, text.ja(result))
+
     def _modal_fields(self, interaction) -> dict:
         """discord.py exposes submitted values via interaction.data — a
         text input sits in an action row (``components``), a select in
@@ -497,16 +530,15 @@ class Actions:
                 return "報告対象の抽出結果を特定できません。"
             return envelopes.extract_feedback(actor, context, *got)
         if action == "dismiss":
-            reason = (fields.get("reason") or "").strip()
-            if not reason:
-                return "理由の入力が必要です。"
+            got = text.dismiss_attrs(fields)
+            if isinstance(got, str):
+                return got
             key = (params.get("signal_key")
                    or next(iter((context.get("signals")
                                  or {"": None}).keys())))
             if not key or key not in (context.get("signals") or {}):
                 return "対象シグナルを特定できません。"
-            return envelopes.signal_dismiss(
-                actor, context, key, reason)
+            return envelopes.signal_dismiss(actor, context, key, *got)
         # request.create — the runner-stored project_id (params) wins
         # over the spec context; source pinning stays render-side
         context = {**context,
@@ -706,6 +738,9 @@ class Actions:
                     else:
                         await hook.send(text.NO_TASKS_TEXT,
                                         ephemeral=True)
+                elif applied and result.get("action") == "list":
+                    for msg in text.list_messages(result, self._allowed_pid):
+                        await hook.send(msg, ephemeral=True)
                 elif applied and result.get("action") == "task_status":
                     await hook.send(text.task_done_text(result),
                                     ephemeral=True)
@@ -738,6 +773,14 @@ class Actions:
             return
         await self._followup(interaction, text.task_list_text(items),
                              view=_task_view(items))
+
+    def _allowed_pid(self, project_id) -> bool:
+        return projects.project_allowed(self._settings, project_id)
+
+    async def _send_list(self, interaction, result: dict) -> None:
+        """📋 / 🗂 / 🔎 answer — project-scope filtered, ephemeral."""
+        for msg in text.list_messages(result, self._allowed_pid):
+            await self._followup(interaction, msg)
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:

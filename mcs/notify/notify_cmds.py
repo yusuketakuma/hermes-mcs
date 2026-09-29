@@ -153,6 +153,15 @@ def _origin(v, slack=False) -> bool:
         and _opt_text(v.get("profile"), 200)
 
 
+def _input(v) -> bool:
+    """Typed input of a view click — the 🔎 keyword or the clicker's
+    display name for 📋. The plugin folds it into the command_id suffix
+    so a new input never collides with an earlier receipt."""
+    return isinstance(v, dict) and bool(v) \
+        and v.keys() <= {"query", "name"} \
+        and all(_text(x, 120) for x in v.values())
+
+
 def validate_int(req) -> str | None:
     """cmd_int envelope validation — per op, since notification commands
     use a composite '<token>:<actor_hash>' command_id that the common
@@ -195,10 +204,12 @@ def validate_int(req) -> str | None:
 
 def _val_notification(req, cid, slack: bool) -> str | None:
     if _fields(req, {"version", "op", "command_id", "actor",
-                     "token", "origin", "request_id"}):
+                     "token", "origin", "request_id", "input"}):
         return "unknown_field"
     if "request_id" in req and not valid_uuid(req["request_id"]):
         return "bad_request_id"
+    if "input" in req and not _input(req["input"]):
+        return "bad_input"
     if not isinstance(cid, str) or not _TOKEN_COMMAND_ID.fullmatch(cid):
         return "bad_command_id"
     if not _text(req.get("actor"), 120):

@@ -167,13 +167,22 @@ def modal_fields(action: str, form: dict | None = None,
                 {"id": "note", "label": "メモ（任意）", "required": False,
                  "multiline": True, "max": 500, "default": ""}]
     if action == "dismiss":
-        return [{"id": "reason", "label": "却下理由", "required": True,
+        return [{"id": "reason_code", "label": "却下理由", "required": True,
+                 "options": list(DISMISS_REASONS), "default": None},
+                {"id": "note", "label": "メモ（任意）", "required": False,
                  "multiline": True, "max": 2000, "default": ""}]
+    if action == "search":
+        return [{"id": "query", "label": "キーワード（空白区切りで AND）",
+                 "required": True, "max": 100, "default": ""}]
     return []
 
 
 MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
-                "report": "抽出の誤りを報告"}
+                "report": "抽出の誤りを報告", "search": "この患者を検索"}
+# 🚫 reason codes — values match mcs_operations DISMISS_REASON_CODES
+DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応済み"),
+                   ("duplicate", "重複"), ("out_of_scope", "対象外"),
+                   ("other", "その他"))
 
 
 def task_attrs(fields: dict):
@@ -215,6 +224,60 @@ def feedback_attrs(fields: dict):
     return field, note or f"抽出の誤り報告（{labels[field]}）"
 
 
+def dismiss_attrs(fields: dict):
+    """🚫 modal values -> (reason, reason_code) or an error string. A
+    modal opened before the upgrade still submits the old free-text
+    ``reason`` alone — accepted without a code."""
+    labels = dict(DISMISS_REASONS)
+    code = (fields.get("reason_code") or "").strip()
+    note = (fields.get("note") or fields.get("reason") or "").strip()
+    if len(note) > 2000:
+        return "理由は2000文字以内で入力してください。"
+    if code:
+        if code not in labels:
+            return "却下理由を選択してください。"
+        return note or labels[code], code
+    if "reason_code" in fields:
+        return "却下理由を選択してください。"
+    return (note, None) if note else "理由の入力が必要です。"
+
+
+SEARCH_EMPTY = "キーワードを入力してください。"
+
+
+def search_query(fields: dict) -> str | None:
+    """🔎 modal value -> normalized keyword, or None when blank."""
+    return " ".join((fields.get("query") or "").split())[:100] or None
+
+
+LIST_SHOW = 15             # ephemeral rows before 「他N件」
+
+
+def list_messages(result: dict, allowed) -> list:
+    """A runner list view (📋 / 🗂 / 🔎) as ephemeral messages. Items of
+    projects outside this deployment's scope (``allowed(pid)`` false)
+    are dropped before counting; the rest is capped with 「他N件」 (the
+    runner's own overflow ``more`` is counted in, unfiltered)."""
+    view = result.get("list") or {}
+    items = [i for i in view.get("items") or []
+             if isinstance(i, dict) and allowed(i.get("project_id"))]
+    lines = [f"**{view.get('title') or '一覧'}**"]
+    lines += [str(x) for x in view.get("head") or []]
+    group = None
+    for i in items[:LIST_SHOW]:
+        if i.get("group") and i["group"] != group:
+            group = i["group"]
+            lines.append(f"■ {group}")
+        lines.append(str(i.get("text") or ""))
+    if not items:
+        lines.append(str(view.get("empty") or "該当なし"))
+    rest = len(items) - min(len(items), LIST_SHOW) + int(view.get("more") or 0)
+    if rest > 0:
+        lines.append(f"他{rest}件")
+    lines += [str(x) for x in view.get("notes") or []]
+    return split_body("\n".join(lines))
+
+
 def preview_text(action: str, payload: dict, markdown: bool) -> str:
     """The human-confirm preview of a task/dismiss/report payload —
     Discord markdown (bold heading, code-quoted signal) or Slack plain
@@ -222,9 +285,11 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
     bold = "**" if markdown else ""
     if action == "dismiss":
         key = payload["signal_key"]
+        code = dict(DISMISS_REASONS).get(payload.get("reason_code"))
         return (f"{bold}確認 — 候補の却下{bold}\n"
                 f"signal: {f'`{key}`' if markdown else key}\n"
-                f"理由: {payload['reason'][:400]}")
+                + (f"区分: {code}\n" if code else "")
+                + f"理由: {payload['reason'][:400]}")
     if action == "report":
         return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"

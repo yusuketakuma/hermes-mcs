@@ -170,3 +170,76 @@ def test_feedback_attrs():
         == ("vitals", "抽出の誤り報告（バイタル）")
     assert text.feedback_attrs({"field": "x"}) \
         == "誤っている箇所を選択してください。"
+
+
+# ---------- 🚫 reason codes / 🔎 / list views ------------------------------
+
+def test_dismiss_reasons_match_the_runner_vocabulary():
+    import mcs_operations
+    assert tuple(v for v, _ in text.DISMISS_REASONS) \
+        == mcs_operations.DISMISS_REASON_CODES
+    fields = text.modal_fields("dismiss")
+    assert [f["id"] for f in fields] == ["reason_code", "note"]
+    assert fields[0]["required"] and fields[0]["options"]
+
+
+@pytest.mark.parametrize("fields,expect", [
+    ({"reason_code": "duplicate", "note": " 同じ件 "}, ("同じ件", "duplicate")),
+    ({"reason_code": "false_positive", "note": ""}, ("誤検知", "false_positive")),
+    ({"reason_code": "", "note": "x"}, "却下理由を選択してください。"),
+    ({"reason_code": "nope"}, "却下理由を選択してください。"),
+    # a modal opened before the upgrade: free text only, no code
+    ({"reason": "旧理由"}, ("旧理由", None)),
+    ({"reason": ""}, "理由の入力が必要です。"),
+])
+def test_dismiss_attrs(fields, expect):
+    assert text.dismiss_attrs(fields) == expect
+
+
+def test_dismiss_preview_names_the_code():
+    ctx = {"signals": {"k": {"project_id": 1, "artifact_id": 2}}}
+    env = envelopes.signal_dismiss("discord:1", ctx, "k", "誤検知",
+                                   "false_positive")
+    assert env["reason_code"] == "false_positive"
+    assert "区分: 誤検知" in text.preview_text("dismiss", env, True)
+    old = envelopes.signal_dismiss("discord:1", ctx, "k", "理由")
+    assert "reason_code" not in old
+    assert "区分" not in text.preview_text("dismiss", old, False)
+
+
+def test_input_folds_into_command_id_and_validates():
+    import notify_cmds
+    origin = {"application_id": "1", "channel_id": "42", "message_id": "9"}
+    plain = envelopes.notification("a" * 32, "discord:1", origin)
+    q1 = envelopes.notification("a" * 32, "discord:1", origin,
+                                {"query": "発熱"})
+    q2 = envelopes.notification("a" * 32, "discord:1", origin,
+                                {"query": "咳"})
+    assert "input" not in plain
+    assert len({plain["command_id"], q1["command_id"], q2["command_id"]}) == 3
+    for env in (plain, q1, q2):
+        assert notify_cmds.validate_int(env) is None
+
+
+def test_search_query_normalizes():
+    assert text.search_query({"query": "  発熱　 咳 "}) == "発熱 咳"
+    assert text.search_query({"query": "  "}) is None
+    assert [f["id"] for f in text.modal_fields("search")] == ["query"]
+
+
+def test_list_messages_filters_scope_and_caps():
+    items = [{"project_id": 1 if i % 2 else 2, "group": f"患者{i // 4}",
+              "text": f"・item {i}"} for i in range(40)]
+    result = {"list": {"title": "🗂 未確認一覧", "head": ["未確認 40件"],
+                       "items": items, "more": 5, "empty": "なし",
+                       "notes": ["※ 記録された状態です"]}}
+    out = "\n".join(text.list_messages(result, lambda pid: pid == 1))
+    shown = [ln for ln in out.splitlines() if ln.startswith("・item")]
+    assert len(shown) == text.LIST_SHOW
+    assert all(int(ln.split()[-1]) % 2 for ln in shown)   # project 1 only
+    assert "他10件" in out                  # 20 in scope - 15 + 5 overflow
+    assert out.startswith("**🗂 未確認一覧**\n未確認 40件\n■ 患者0")
+    assert out.rstrip().endswith("※ 記録された状態です")
+    empty = text.list_messages({"list": {**result["list"], "items": [],
+                                         "more": 0}}, lambda pid: True)
+    assert "なし" in empty[0] and "他" not in empty[0]
