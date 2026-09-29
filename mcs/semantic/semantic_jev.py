@@ -54,9 +54,6 @@ from mcs_util import env_value
 # The worker execution mechanism (bounded_http_request, the loopback
 # check, the response cap) lives in core/bounded_http.py — this module
 # keeps only the Jev-side policy: which endpoints a key may be sent to.
-# bounded_http_request stays re-exported here for backward compatibility
-# and so the tests' live-endpoint guard keeps a stable patch surface.
-bounded_http_request = bounded_http.bounded_http_request
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
