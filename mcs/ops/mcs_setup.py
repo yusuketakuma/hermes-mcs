@@ -1021,14 +1021,17 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     # profile's secret scope is authoritative and a miss never falls
     # through to the default profile's .env (agent/secret_scope.py).
     # Already-configured installs keep their existing tokens.
+    def _store(env_key, tok) -> bool:
+        ok = _hermes_config_set(exe, profile, env_key, tok)
+        print(f"  {env_key}: "
+              + (f"hermes {'-p ' + profile if profile else '既定'} "
+                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+        return ok
+
     for env_key, desc in tokens:
         tok = os.environ.get(env_key)
         if tok:
-            ok = _hermes_config_set(exe, profile, env_key, tok)
-            failed |= not ok
-            print(f"  {env_key}: "
-                  + (f"hermes {'-p ' + profile if profile else '既定'} "
-                     ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+            failed |= not _store(env_key, tok)
         elif _hermes_config_get(exe, profile, env_key):
             print(f"  {env_key}: 設定済み")
         else:
@@ -1037,11 +1040,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
                     f"  {desc}（hermes .env へ保存。"
                     "空欄=スキップ）: ") or None
                 if tok:
-                    ok = _hermes_config_set(exe, profile, env_key, tok)
-                    failed |= not ok
-                    print(f"  {env_key}: "
-                          + (f"hermes {'-p ' + profile if profile else '既定'}"
-                             " .env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+                    failed |= not _store(env_key, tok)
             if not tok:
                 print(f"  {env_key}: 未設定 — `hermes "
                       + (f"-p {profile} " if profile else "")
@@ -1709,6 +1708,70 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
     return problems
 
 
+def _cron_converged(after, sched, script) -> bool:
+    jobs = [e for e in after if e.get("script") == script]
+    if len(jobs) != 1:
+        return False
+    cur, want = (_norm_sched(jobs[0].get("schedule")),
+                 _norm_sched(sched))
+    return not (cur and want and cur != want)
+
+
+def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
+                       manifest, note) -> tuple[int, bool]:
+    """Post-change convergence check for _sync_cron. Returns (problems,
+    persist_ownership); mutates manifest['cron'] in place."""
+    problems = 0
+    # a zero exit is not proof — confirm desired jobs converged AND
+    # owned-but-undesired jobs are gone. A survivor keeps problems
+    # raised. No confirmed create: do not rewrite, so the previous
+    # file (which lists that script) stays. A create this run that
+    # `after` shows must be saved with the survivor, or the new job
+    # is unowned once it leaves the desired set. same tolerance as
+    # the pre-check: schedules are compared only when both sides
+    # parse — an undecodable display is not drift
+    after = _cron_list(hermes)
+    if after is None or not all(_cron_converged(after, sched, script)
+                                for _, sched, script in CRON_JOBS):
+        note("cron: post-change state unverifiable or not exactly one "
+             "job per script — re-run services")
+        problems += 1
+    # owned-but-undesired jobs still live after the change
+    survivors = [e for e in after or []
+                 if isinstance(e.get("script"), str)
+                 and e["script"] in owned_scripts
+                 and e["script"] not in desired_scripts]
+    left = list(dict.fromkeys(e["script"] for e in survivors))
+    if left:
+        note("cron: undesired job still present after remove ("
+             + ", ".join(left) + ")")
+        problems += 1
+    # any confirmed create stays owned whatever else failed (this
+    # stage or a later one) — else the job is orphaned once retired
+    if after is not None and created:
+        present = {e.get("script") for e in after}
+        confirmed = [s for s in created if s in present]
+        if confirmed:
+            manifest["cron"] = [
+                c for c in manifest["cron"]
+                if not (isinstance(c, dict)
+                        and c.get("script") in created
+                        and c.get("script") not in present)]
+            have = {c.get("script") for c in manifest["cron"]
+                    if isinstance(c, dict)}
+            for entry in survivors:
+                script = entry["script"]
+                if script not in have:
+                    manifest["cron"].append({
+                        "name": entry.get("name"),
+                        "id": entry.get("id"),
+                        "schedule": entry.get("schedule"),
+                        "script": script})
+                    have.add(script)
+            return problems, True
+    return problems, False
+
+
 def _sync_cron(prev, hermes, manifest, note,
                dry) -> tuple[int, bool]:
     """Stage 3: hermes cron jobs — create missing, edit drifted,
@@ -1808,60 +1871,10 @@ def _sync_cron(prev, hermes, manifest, note,
                          f"{(r.stderr or r.stdout).strip()}")
                     problems += 1
     if mutated and not dry:
-        # a zero exit is not proof — confirm desired jobs converged AND
-        # owned-but-undesired jobs are gone. A survivor keeps problems
-        # raised. No confirmed create: do not rewrite, so the previous
-        # file (which lists that script) stays. A create this run that
-        # `after` shows must be saved with the survivor, or the new job
-        # is unowned once it leaves the desired set. same tolerance as
-        # the pre-check: schedules are compared only when both sides
-        # parse — an undecodable display is not drift
-        def _converged(sched, script):
-            jobs = [e for e in after if e.get("script") == script]
-            if len(jobs) != 1:
-                return False
-            cur, want = (_norm_sched(jobs[0].get("schedule")),
-                         _norm_sched(sched))
-            return not (cur and want and cur != want)
-        after = _cron_list(hermes)
-        if after is None or not all(_converged(sched, script)
-                                    for _, sched, script in CRON_JOBS):
-            note("cron: post-change state unverifiable or not exactly one "
-                 "job per script — re-run services")
-            problems += 1
-        # owned-but-undesired jobs still live after the change
-        survivors = [e for e in after or []
-                     if isinstance(e.get("script"), str)
-                     and e["script"] in owned_scripts
-                     and e["script"] not in desired_scripts]
-        left = list(dict.fromkeys(e["script"] for e in survivors))
-        if left:
-            note("cron: undesired job still present after remove ("
-                 + ", ".join(left) + ")")
-            problems += 1
-        # any confirmed create stays owned whatever else failed (this
-        # stage or a later one) — else the job is orphaned once retired
-        if after is not None and created:
-            present = {e.get("script") for e in after}
-            confirmed = [s for s in created if s in present]
-            if confirmed:
-                manifest["cron"] = [
-                    c for c in manifest["cron"]
-                    if not (isinstance(c, dict)
-                            and c.get("script") in created
-                            and c.get("script") not in present)]
-                have = {c.get("script") for c in manifest["cron"]
-                        if isinstance(c, dict)}
-                for entry in survivors:
-                    script = entry["script"]
-                    if script not in have:
-                        manifest["cron"].append({
-                            "name": entry.get("name"),
-                            "id": entry.get("id"),
-                            "schedule": entry.get("schedule"),
-                            "script": script})
-                        have.add(script)
-                persist = True
+        p, ps = _verify_cron_after(hermes, created, owned_scripts,
+                                   desired_scripts, manifest, note)
+        problems += p
+        persist = persist or ps
     return problems, persist
 
 

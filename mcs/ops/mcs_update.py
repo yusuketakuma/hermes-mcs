@@ -820,7 +820,7 @@ def scan_pending_approvals(state: dict
         if not isinstance(rec, dict) or rec.get("scheduled") is not True:
             continue
         cmd = rec.get("cmd")
-        if cmd == "ops.update_apply" and rec.get("scheduled") is True:
+        if cmd == "ops.update_apply":
             if _ver_key(rec.get("tag")) is None \
                     or not isinstance(rec.get("target_sha"), str) \
                     or not HEX_RE.fullmatch(rec["target_sha"]):
@@ -1007,6 +1007,22 @@ def _consent_hold(state, e, backup_path) -> str:
     return rid
 
 
+def _rollback_applying(entry, prev_sha, command_id) -> dict:
+    """The rollback-shaped 'applying' journal record (mirrored by
+    mcs_recover's rollback_shaped check): target is entry's prev_sha."""
+    return {
+        "tag": "rollback:" + (entry.get("tag") or "?"),
+        "sha": entry["prev_sha"],
+        "prev_sha": prev_sha,
+        "rollback": True,
+        "plugin_changed": entry.get("plugin_changed"),
+        "schema_bump": entry.get("schema_bump"),
+        "backup_path": entry.get("backup_path"),
+        "manifest_snapshot": entry.get("manifest_snapshot"),
+        "command_id": command_id,
+        "at": time.time()}
+
+
 def _hold_rollback_for_consent(state, e, tag, command_id,
                                reason) -> int:
     """Rollback reached the DB replace and is held on consent: keep
@@ -1017,29 +1033,15 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
     consent hold without ever restoring)."""
     rid = e.report["report_id"]
     entry = state["applying"]
-    state["applying"] = {
-        "tag": "rollback:" + (entry.get("tag") or "?"),
-        "sha": entry["prev_sha"],
-        "prev_sha": entry.get("sha"),
-        "rollback": True,
-        "plugin_changed": entry.get("plugin_changed"),
-        "schema_bump": entry.get("schema_bump"),
-        "backup_path": entry.get("backup_path"),
-        "manifest_snapshot": entry.get("manifest_snapshot"),
-        "command_id": command_id or entry.get("command_id"),
-        "at": time.time()}
-    state["restore_consent"] = _consent_hold_record(
-        e, state["applying"].get("backup_path"))
+    state["applying"] = _rollback_applying(
+        entry, entry.get("sha"), command_id or entry.get("command_id"))
     reason += " (rollback held: consent pending " + rid[:16] + "…)"
     if command_id:
         state.setdefault("executed", {})[command_id] = {
             "result": "failed", "detail": reason[:200],
             "at": time.time()}
     _record_attempt(state, tag, "failed", reason)
-    save_state(state)
-    _report("restore_consent_pending",
-            rid + " — restore_report.json を確認し "
-            "ops.restore_approve で承認")
+    _consent_hold(state, e, state["applying"].get("backup_path"))
     return 2
 
 
@@ -1450,14 +1452,8 @@ def rollback(command_id: str | None = None) -> int:
                 raise UpdateError("tree_dirty_before_rollback")
             # crash-visible journal BEFORE quiesce (H4): recover can
             # converge the tree toward prev even if we die mid-reset
-            state["applying"] = {
-                "tag": "rollback:" + (entry.get("tag") or "?"),
-                "sha": prev, "prev_sha": _head_sha(), "rollback": True,
-                "plugin_changed": entry.get("plugin_changed"),
-                "schema_bump": entry.get("schema_bump"),
-                "backup_path": entry.get("backup_path"),
-                "manifest_snapshot": entry.get("manifest_snapshot"),
-                "command_id": command_id, "at": time.time()}
+            state["applying"] = _rollback_applying(
+                entry, _head_sha(), command_id)
             journal(state, "rollback")
             quiesced = True
             quiesce()
