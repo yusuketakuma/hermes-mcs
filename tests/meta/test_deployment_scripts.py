@@ -108,3 +108,46 @@ def test_check_incomplete_alert_names_its_cause(tmp_path):
                              env={"HOME": str(tmp_path)},
                              capture_output=True, text=True, timeout=30)
         assert out.returncode == 0 and out.stdout == want, health
+
+
+def _llama_restart(tmp_path, launchctl_body):
+    """Run llamacpp_restart_if_idle.sh with stub curl (unreachable ->
+    no idle wait) and a stub launchctl; returns (proc, log text)."""
+    import subprocess
+    bindir = tmp_path / "stub"
+    bindir.mkdir(exist_ok=True)
+    (bindir / "curl").write_text("#!/bin/sh\nexit 7\n")
+    (bindir / "launchctl").write_text("#!/bin/sh\n" + launchctl_body)
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    body = (SCRIPTS / "llamacpp_restart_if_idle.sh").read_text(
+        encoding="utf-8")
+    runner = tmp_path / "runner.sh"
+    runner.write_text(body.replace("/usr/bin/curl", str(bindir / "curl"))
+                      .replace("/bin/launchctl", str(bindir / "launchctl")))
+    log = tmp_path / ".hermes" / "logs" / "llamacpp-restart.log"
+    log.unlink(missing_ok=True)
+    proc = subprocess.run(["bash", str(runner)],
+                          env={"HOME": str(tmp_path),
+                               "PATH": "/usr/bin:/bin"},
+                          capture_output=True, text=True, timeout=30)
+    return proc, log.read_text() if log.exists() else ""
+
+
+def test_llama_restart_without_agent_is_a_clean_skip(tmp_path):
+    """--no-llm / self-managed server: no agent loaded is normal — the
+    daily cron must not fail every morning."""
+    proc, log = _llama_restart(tmp_path, "exit 113\n")
+    assert proc.returncode == 0
+    assert "restart skipped" in log
+
+
+def test_llama_restart_reports_failed_kickstart(tmp_path):
+    """A failed `kickstart -k` is a failure, never logged as restarted."""
+    proc, log = _llama_restart(
+        tmp_path, '[ "$1" = kickstart ] && exit 5\nexit 0\n')
+    assert proc.returncode == 5
+    assert "FAILED rc=5" in log and "restarted" not in log
+    proc, log = _llama_restart(tmp_path, "exit 0\n")
+    assert proc.returncode == 0
+    assert "restarted ai.hermes.llamacpp" in log
