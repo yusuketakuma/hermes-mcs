@@ -582,6 +582,49 @@ def test_reminders_capped_per_tick_and_rearmed_by_due_change(led, tmp_path):
         led, CFG, now=_at("2026-10-03", 9)) == 1
 
 
+# ---------- footer text budget ------------------------------------------
+
+def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
+                                                       monkeypatch):
+    """8+ acknowledgers, an owner, 3+ overdue tasks, the report mark and
+    the page cap together: the spec validator's estimate covers the real
+    Discord face and both stay under MAX_TOTAL_TEXT."""
+    import sys
+    from discord_testkit import _fake_discord
+    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from hermes_plugin.mcs_discord import cards as discord_cards
+    mids = tuple(range(100, 112))
+    _patient(led, 1, name="患" * 60)
+    for m in mids:
+        _msg(led, m, 1, parent=None if m == 100 else 100, body="長" * 900)
+    aid = _llm_extract(led, 101, {"summary": "s", "requests": []})
+    led.db.commit()
+    _dispatch(led, _intent(led, payload={"message_ids": list(mids)}))
+    _deliver(led)
+    for i in range(10):
+        _click(led, _spec(led), "ack", actor=f"discord:{10 ** 18 + i}")
+        _deliver(led)
+    _click(led, _spec(led), "assign", actor=f"discord:{2 * 10 ** 18}")
+    _deliver(led)
+    for i in range(5):
+        _request(led, title="題" * 200, assignee="担" * 120,
+                 due="2020-01-01")
+    assert _report(led, str(tmp_path), aid)["outcome"] == "applied"
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    spec = _spec(led)
+    footer = _footer(spec)
+    assert "他2名" in footer and "📝 他2件" in footer \
+        and "誤り報告" in footer and "ページ" in footer
+    spec_mod.validate(spec)
+    _, est = spec_mod._containers_cost(spec["parts"]["containers"])
+    est += spec_mod._footer_cost(spec["parts"]["footer"])[1]
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    view = discord_cards.build_view(spec)
+    real = sum(len(c.content) for c in view.items[0].children
+               if hasattr(c, "content"))
+    assert real <= est <= spec_mod.MAX_TOTAL_TEXT
+
+
 # ---------- urgency badge -------------------------------------------------
 
 def test_urgency_badge_names_its_source(led):
