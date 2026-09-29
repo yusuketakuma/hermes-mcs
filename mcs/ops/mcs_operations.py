@@ -121,8 +121,14 @@ def _v_adopt_summary(req: dict, base: set) -> str | None:
     return None
 
 
+# 🚫 structured dismissal reasons (ROADMAP #19) — optional; a command
+# without reason_code keeps working (free-text reason only)
+DISMISS_REASON_CODES = ("false_positive", "already_handled", "duplicate",
+                        "out_of_scope", "other")
+
+
 def _v_signal_dismiss(req: dict, base: set) -> str | None:
-    allowed = base | {"signal_key", "reason",
+    allowed = base | {"signal_key", "reason", "reason_code",
                       "expected_signal_artifact_id"}
     if req.keys() - allowed:
         return "unknown_field"
@@ -130,6 +136,8 @@ def _v_signal_dismiss(req: dict, base: set) -> str | None:
         return "bad_signal_key"
     if not _text(req.get("reason"), 2000):
         return "bad_reason"
+    if "reason_code" in req and req["reason_code"] not in DISMISS_REASON_CODES:
+        return "bad_reason_code"
     if "expected_signal_artifact_id" in req \
             and not positive(req["expected_signal_artifact_id"]):
         return "bad_expected_artifact_id"
@@ -544,6 +552,8 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
                      resolved_at=None, dismissed_by=req["actor"],
                      dismiss_reason=req["reason"],
                      dismiss_command_id=req["command_id"])
+    if req.get("reason_code"):
+        dismissed["dismiss_reason_code"] = req["reason_code"]
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,?,?,?,?,?)",
