@@ -344,9 +344,14 @@ def dispatch(ledger, req, cfg, root, now=None):
             # the anchored card's footer lists open tasks / the ⚠ mark —
             # re-render that card now; the drain's bounded sweep may not
             # reach it among many live cards
-            notify_cards.rerender_message_cards(
-                ledger, cfg, req["project_id"],
-                req.get("source_message_id") or req.get("message_id"))
+            # the command is already applied — a failed refresh must never
+            # turn its result into a failed dispatch (the sweep catches up)
+            try:
+                notify_cards.rerender_message_cards(
+                    ledger, cfg, req["project_id"],
+                    req.get("source_message_id") or req.get("message_id"))
+            except Exception as e:  # noqa: BLE001 — best-effort refresh
+                out = {**out, "rerender_error": type(e).__name__}
         return out
     return {"outcome": "rejected", "error": "unknown_op"}
 

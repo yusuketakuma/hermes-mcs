@@ -328,6 +328,24 @@ def test_request_create_rerenders_anchored_card(led, tmp_path):
     assert "📝 服薬状況を確認 — 担当 山田 — 期限 2026-10-01" in footer
 
 
+def test_applied_command_survives_a_failed_rerender(led, tmp_path,
+                                                    monkeypatch):
+    _card(led, tmp_path)
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", boom)
+    out = notify_cmds.dispatch(led, {
+        "version": 1, "cmd": "request.create",
+        "command_id": "11111111-2222-4333-8444-555555555556",
+        "actor": A, "human_confirmed": True, "project_id": 1,
+        "source_message_id": 101, "source_hash": f"{101:064x}",
+        "title": "件", "reason": "r"}, CFG, str(tmp_path / "data"))
+    assert out["outcome"] == "applied"
+    assert out["rerender_error"] == "OperationalError"
+    assert led.db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+
+
 # ---------- 📝 form: prefill + assignee roster ----------------------------
 
 def _llm_extract(led, mid, content, version=True):
