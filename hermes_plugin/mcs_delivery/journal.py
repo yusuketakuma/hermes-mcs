@@ -55,7 +55,9 @@ def append(state_dir: str, worker_id: str, record: dict, *,
     line = json.dumps(row, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":")) + "\n"
     created = not os.path.exists(path)
-    with open(path, "ab") as handle:
+    # 0600 like every other state file — never the umask default
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "ab") as handle:
         handle.write(line.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())

@@ -988,6 +988,21 @@ def test_dead_tombstone_outlives_ttl_while_spec_is_published(
     assert not list((tmp_path / "cmd_int").glob("*.json"))
 
 
+def test_new_journal_segment_is_owner_only(tmp_path):
+    import os
+    import stat
+    old = os.umask(0o022)
+    try:
+        path = journal.append(str(tmp_path), "w0",
+                              {"phase": "claimed", "attempt_id": "a1"})
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    journal.append(str(tmp_path), "w0",
+                   {"phase": "begin", "attempt_id": "a1"})
+    assert len(journal.scan(str(tmp_path))["a1"]) == 2
+
+
 def test_registry_expire_runs_once_per_interval(tmp_path, monkeypatch):
     """The O(registry) TTL sweep runs on the first tick, then at most
     once per EXPIRE_EVERY_S — not on every 2s poll."""
