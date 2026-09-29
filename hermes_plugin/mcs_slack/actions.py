@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import date
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
 from ..mcs_delivery.text import (NO_TASKS_TEXT, body_messages, ja,
-                                 task_done_text, task_list_text)
+                                 preview_text, task_done_text,
+                                 task_list_text, valid_due)
 from .cards import _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -291,12 +291,8 @@ class Actions:
                 or not context.get("source_message_id") \
                 or not context.get("source_hash") or not project:
             return None
-        if due:
-            try:
-                if date.fromisoformat(due).isoformat() != due:
-                    return None
-            except ValueError:
-                return None
+        if due and not valid_due(due):
+            return None
         attrs = {"title": title, "reason": reason}
         assignee = fields["assignee"].strip()
         if len(assignee) > 120:
@@ -320,16 +316,7 @@ class Actions:
         self._reg.put_confirm(confirm_id, {
             "token": pending["token"], "actor": pending["actor"],
             "origin": origin, "payload": payload})
-        if pending["action"] == "dismiss":
-            text = (f"確認 — 候補の却下\nsignal: {payload['signal_key']}\n"
-                    f"理由: {payload['reason'][:400]}")
-        else:
-            text = (f"確認 — 依頼の起票\n件名: {payload['title'][:200]}\n"
-                    f"理由: {payload['reason'][:400]}")
-            if payload.get("assignee"):
-                text += f"\n担当: {payload['assignee'][:120]}"
-            if payload.get("due_date"):
-                text += f"\n期限: {payload['due_date']}"
+        text = preview_text(pending["action"], payload, markdown=False)
         blocks = [{"type": "section", "text":
                    {"type": "plain_text", "text": text[:3000]}},
                   {"type": "actions", "elements": [
