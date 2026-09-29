@@ -306,6 +306,27 @@ def test_truncated_page_keeps_whole_scope_coverage(tmp_path):
     db.close()
 
 
+def test_limit_page_builds_facts_only_for_returned_records(tmp_path, monkeypatch):
+    db = _db(tmp_path, tuple(range(1, 8)))
+    for mid in range(1, 8):
+        _artifact(db, "canonical_projection", mid,
+                  {"canonical_facts": [{"fact_id": f"f{mid}", "kind": "symptom",
+                                        "evidence_ids": [f"e{mid}"]}]},
+                  {"hash": _hash_of(db, mid)})
+    full = read_model.read_model(db.db)
+    real, calls = read_model._fact_relations, []
+    monkeypatch.setattr(read_model, "_fact_relations",
+                        lambda *a: calls.append(1) or real(*a))
+    page = read_model.read_model(db.db, limit=3)
+    assert len(calls) == 3
+    assert page["records"] == full["records"][:3]
+    assert [list(r) for r in page["records"]] == \
+        [list(r) for r in full["records"][:3]]
+    assert page["coverage"] == full["coverage"]
+    assert (page["total"], page["truncated"]) == (7, True)
+    db.close()
+
+
 @pytest.mark.parametrize("limit", [0, -1, 1.5, True])
 def test_read_model_rejects_bad_limit(tmp_path, limit):
     db = _db(tmp_path, (1, 2))
