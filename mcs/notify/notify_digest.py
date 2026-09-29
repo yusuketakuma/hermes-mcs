@@ -114,7 +114,7 @@ def build_text(db, cfg, since: float, until: float) -> str:
             if c and c["state"] == "open" \
                     and c["type"] not in EXCLUDED_SIGNALS:
                 by_type[c["type"]] = by_type.get(c["type"], 0) + 1
-        lines.append(f"■ 確認候補（未対応）{sum(by_type.values())}件"
+        lines.append(f"■ 確認候補（open）{sum(by_type.values())}件"
                      + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
                                         sorted(by_type.items()))
                         if by_type else ""))
@@ -142,23 +142,31 @@ def maybe_enqueue(ledger, cfg, now=None) -> int:
         return 0
     day = local.date().isoformat()
     db = ledger.db
-    with db:
-        db.execute("BEGIN IMMEDIATE")
+
+    def last_digest():
         prev = db.execute(
-            "SELECT payload FROM notify_outbox WHERE kind=? "
+            "SELECT event_id, payload FROM notify_outbox WHERE kind=? "
             "ORDER BY event_id DESC LIMIT 1", (KIND,)).fetchone()
         try:
             last = json.loads(prev["payload"]) if prev else {}
         except (ValueError, TypeError):
             last = {}
-        if not isinstance(last, dict):
-            last = {}
-        if last.get("date") == day:
+        return (prev["event_id"] if prev else None,
+                last if isinstance(last, dict) else {})
+
+    seen, last = last_digest()
+    if last.get("date") == day:
+        return 0
+    since = last.get("until")
+    if type(since) not in (int, float) or not 0 < since < now:
+        since = now - 86400
+    # the read-heavy body is built outside the write lock; the insert
+    # re-checks that no other writer queued a digest meanwhile
+    text = build_text(db, cfg, since, now)
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if last_digest()[0] != seen:
             return 0
-        since = last.get("until")
-        if type(since) not in (int, float) or not 0 < since < now:
-            since = now - 86400
         ledger.outbox_add_tx(KIND, None, {
-            "text": build_text(db, cfg, since, now), "date": day,
-            "since": since, "until": now})
+            "text": text, "date": day, "since": since, "until": now})
     return 1

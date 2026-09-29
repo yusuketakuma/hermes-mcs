@@ -62,6 +62,21 @@ def test_once_per_day_after_the_hour(led):
     assert all(e["route"] == "text" for e in _digests(led))
 
 
+def test_body_is_built_outside_the_write_lock(led, monkeypatch):
+    """build_text runs before BEGIN IMMEDIATE; a digest another writer
+    queued meanwhile wins and no duplicate is written."""
+    real = notify_digest.build_text
+
+    def build(db, *a):
+        assert not db.in_transaction
+        led.outbox_add(notify_digest.KIND, None, {"text": "x",
+                                                  "date": "2026-10-01"})
+        return real(db, *a)
+    monkeypatch.setattr(notify_digest, "build_text", build)
+    assert notify_digest.maybe_enqueue(led, ON, now=T) == 0
+    assert len(_digests(led)) == 1
+
+
 def test_counts_ids_and_no_patient_content(led):
     _patient(led, 1, name="患者A")
     _patient(led, 2, name="患者B", archived=1)
@@ -127,7 +142,7 @@ def test_signal_block_excludes_request_and_deadline_types(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
-    assert "■ 確認候補（未対応）1件: adherence_concern 1" in _text(led)
+    assert "■ 確認候補（open）1件: adherence_concern 1" in _text(led)
 
 
 def test_signal_block_needs_signals_notify(led):
