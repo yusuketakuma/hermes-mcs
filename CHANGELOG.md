@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [1.0.7] — 2026-09-29
+
+v1.0.6 以降の運用で見つかった不具合の修正と、カード操作・導入まわりの
+全面的な改善です。Discord/Slack のスレッド本文・添付の二重投稿の解消、
+収集 health の誤判定・ディスク・ローカル LLM（llama-server）の異常終了への
+対策、1.0.5 以降のコードのリファクタリングと処理の無駄の削減、
+`install.sh` / `mcs_setup` の不具合修正と事前チェック、README の分割、
+そして通知カードのボタン（確認・担当の切替、タスク作成・完了、患者サマリー、
+抽出の誤り報告、自分のタスク・未確認一覧・患者内検索など）と
+朝の日次ダイジェストを加えました。`hermes_plugin/` と
+`deployment/` の変更を含むため、配備後に `hermes gateway restart` と
+`mcs_setup.py services` が必要です。
+
+### 修正・改善（運用で見つかったもの）
+
+- **スレッド本文の二重投稿** — 抽出結果が後から届いてチャンクの文面が変わると
+  2通目を投稿していた。前回の投稿 id（`prior_remote_id`）を計画に載せ、
+  Discord は edit・Slack は `chat.update` で書き換える。カード配信直後に
+  更新が発行される競合も、本文パートの配信確定まで更新を待たせて解消
+- **添付の二重送信** — 更新のたびに全添付を再アップロードしていた。
+  sha256 が同じ添付は既存の投稿を再利用する
+- **収集 health の常時 degraded** — 大きい患者の coverage 認証待ち（lag）を
+  エラー扱いしていた。lag は情報表示（`coverage_lagging`）にし、
+  history_head の停止だけを異常とする。health watch の5分毎の再通知を止めた
+- **ディスク** — 添付ダウンロードに空き容量ガード（ENOSPC で attempts を
+  消費しない）、空き不足時は日次バックアップを省略、health に空き容量。
+  MCS 用 Chrome の端末内 AI モデル取得を無効化
+- **llama-server の異常終了** — 処理中の slot への id_slot 指定が
+  llama.cpp の prompt cache 差し替えで `GGML_ASSERT` を起こしていた。
+  lend-rt drainer は処理中の slot を指定しない。同梱テンプレートは
+  `--cache-ram 0`
+- **抽出の無駄** — バッチ抽出（採用率46%）を既定オフ、書込みロック待ちで
+  捨てていた結果を同じ run 内で書き直す、tick の抽出段は slot が埋まって
+  いればスキップ
+- **signals 通知オフ時の digest カードの宙づり** を解消、registry の
+  スレッド間競合をロックで直列化、配備済み cron wrapper のずれを
+  `mcs_setup.py check` で検出
+- **1.0.5 以降のリファクタリングと無駄の削減** — Discord/Slack の重複処理の
+  共通化、rollup の不要な再生成・self_profile の毎回取得・Ledger 起動時の
+  全走査の削除など（7領域・64項目）
+- **README の分割** — README を概要に絞り（708→約120行）、利用者向けの
+  詳細を `docs/USER_GUIDE.md` に移した
+
 - **Slack カードの操作をコンパクトに** — モバイルで各ボタンが横幅いっぱいに並ぶため、
   Slack ではボタンを「確認」「担当」の2つに絞り、ほかの操作は1つの選択メニュー
   （`mcs:menu`、値は同じトークン）に、MCS リンクは文字リンクにした。Discord は変更なし。
