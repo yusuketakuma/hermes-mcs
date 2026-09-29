@@ -273,6 +273,26 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   project scope は `確定` だけを制限する: preview 後に project が scope 外に
   なった確認は `確定` に「権限がありません。」と答えるが、本人の `取消` は
   （何も enqueue しないため）許可 user・channel・card の確認だけで受け付ける。
+- `🚫 却下` のフォームは理由コードの選択（`false_positive` / `already_handled` /
+  `duplicate` / `out_of_scope` / `other`、表示は 誤検知 / 対応済み / 重複 /
+  対象外 / その他）＋任意メモ。`ops.signal_dismiss` に `reason_code` を付け、
+  メモが空なら区分名を `reason` にする。更新前に開いたフォーム（自由記述の
+  `reason` だけ）は従来どおり `reason_code` なしで送る。
+- 4行目の `📋 自分のタスク`・`🗂 未確認一覧`・`🔎 この患者を検索` は view 操作
+  （ephemeral 応答のみ、状態を変えない）。runner は `action:"list"` と
+  `list`（`title`/`head`/`items[{project_id, group?, text}]`/`more`/`empty`/
+  `notes`）を返し、plugin は `items` を `project_ids`（`project_ids_auto`）で
+  絞ってから `text.list_messages()` で 15 件＋「他N件」に整形する。runner は
+  plugin の project scope を知らないため、この絞り込みは plugin の責務。
+  入力を伴うクリックは notification envelope の任意フィールド `input`
+  （`{"name"}` = 📋 の押した人の表示名、`{"query"}` = 🔎 のキーワード、各
+  120 字以内）で渡し、`command_id` の後半を actor＋input のハッシュにする
+  （入力が変わっても前回の receipt と衝突しない）。🔎 はクリックで検索
+  モーダルを開き、送信で同じ card token を `input.query` 付きで再送する
+  （preview/確認なし）。一覧・検索結果の本文は command receipt に保存しない。
+  表示名は Discord では `display_name`、Slack ではペイロードの `user.name`
+  （ユーザー名）で、担当者欄との照合は runner の
+  `notify_render.assignee_matches()`。
 
 ## インタラクティブカード（mcs_slack）
 
