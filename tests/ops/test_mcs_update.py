@@ -1910,3 +1910,21 @@ def test_awaiting_consent_marker_matches_notify_cards(tmp_path, monkeypatch,
         (tmp_path / "restore_pending.json").write_bytes(content)
     assert (mcs_update._awaiting_consent_marker() is None) \
         == (notify_cards.restore_awaiting_consent(str(tmp_path)) is None)
+
+
+def test_rollback_applying_journal_shape():
+    """rollback() and the consent hold share one journal shape — the
+    one mcs_recover classifies as rollback_shaped (target = prev_sha)."""
+    entry = {"tag": "v1.1.0", "sha": "b" * 40, "prev_sha": "a" * 40,
+             "plugin_changed": True, "schema_bump": False,
+             "backup_path": "/x.db", "manifest_snapshot": {},
+             "command_id": "cid-apply"}
+    rec = mcs_update._rollback_applying(entry, entry["sha"], "cid-rb")
+    assert set(rec) == {"tag", "sha", "prev_sha", "rollback",
+                        "plugin_changed", "schema_bump", "backup_path",
+                        "manifest_snapshot", "command_id", "at"}
+    assert (rec["tag"], rec["sha"], rec["prev_sha"], rec["rollback"],
+            rec["command_id"]) == ("rollback:v1.1.0", "a" * 40, "b" * 40,
+                                   True, "cid-rb")
+    with pytest.raises(KeyError):
+        mcs_update._rollback_applying({}, None, None)
