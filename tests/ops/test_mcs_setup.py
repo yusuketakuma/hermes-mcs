@@ -1677,3 +1677,45 @@ def test_agent_reconcile_retries_transient_bootstrap(
     assert state["calls"][-1] == "print"
     assert sleeps == [1] * sum(rc != 0 for rc in outcomes)
     assert any("bootstrap failed" in n for n in notes) is (not ok)
+
+
+def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
+    """A checkout update without a `services` rerun left stale cron
+    wrappers running (2026-09: old mcs_check.sh night filter gapped
+    unread polling past the session limit). `check` compares the
+    deployed wrappers against the exact `services` render."""
+    src = tmp_path / "repo" / "deployment" / "scripts"
+    src.mkdir(parents=True)
+    (src / "a.sh").write_text("#!/bin/sh\nexec __PYTHON__ __REPO__/x\n")
+    (src / "b.sh").write_text("#!/bin/sh\necho __DATA__\n")
+    (src / "README.md").write_text("not a script")
+    monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(tmp_path / "repo"))
+    monkeypatch.setattr(mcs_setup, "SCRIPTS_DIR", str(tmp_path / "scripts"))
+    monkeypatch.setattr(mcs_setup, "HERMES_PY", "/h/venv/bin/python")
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path / "home dir"))
+
+    # nothing deployed yet (fresh install) -> warning, not an error
+    errors, warnings = mcs_setup._script_drift()
+    assert errors == []
+    assert any("a.sh, b.sh" in w and "services" in w for w in warnings)
+
+    # the services render is by definition in sync
+    mcs_setup._sync_scripts(mcs_setup._service_subs(), {"scripts": []},
+                            lambda m: None, dry=False)
+    assert "'" in (tmp_path / "scripts" / "b.sh").read_text()  # quoted
+    assert mcs_setup._script_drift() == ([], [])
+
+    # repo template changed, deployed copy not resynced -> named error
+    (src / "a.sh").write_text("#!/bin/sh\nexec __PYTHON__ __REPO__/y\n")
+    errors, warnings = mcs_setup._script_drift()
+    assert warnings == []
+    assert len(errors) == 1 and "a.sh" in errors[0] \
+        and "b.sh" not in errors[0] and "mcs_setup.py services" in errors[0]
+
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
+    monkeypatch.setattr(mcs_setup, "check_environment",
+                        lambda cfg: ([], []))
+    monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
+    assert mcs_setup.cmd_check(None) == 1
+    assert "a.sh" in capsys.readouterr().out

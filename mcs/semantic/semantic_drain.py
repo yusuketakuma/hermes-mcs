@@ -1637,7 +1637,10 @@ def main() -> int:
             for k in ("done", "deferred", "failed"):
                 totals[k] += out.get(k) or 0
             totals["left"] = out.get("left")
-            print(json.dumps({**out, "batches": totals["batches"]},
+            # ts/pid: a window cut short (e.g. gateway restart kills
+            # the catchup) is judged later from semantic_drain.log
+            print(json.dumps({**out, "batches": totals["batches"],
+                              "ts": time.time(), "pid": os.getpid()},
                              ensure_ascii=False, default=str),
                   flush=True)
             if out.get("left") == 0:
@@ -1652,7 +1655,8 @@ def main() -> int:
     finally:
         if led is not None:
             led.close()
-    print(json.dumps(totals, ensure_ascii=False))
+    print(json.dumps({**totals, "ts": time.time(), "pid": os.getpid()},
+                     ensure_ascii=False))
     return 0
 
 

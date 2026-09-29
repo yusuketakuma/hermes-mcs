@@ -1443,8 +1443,9 @@ def cmd_check(args) -> int:
     cfg = load_config()
     errors, warnings = validate_config(cfg)
     e2, w2 = check_environment(cfg)
-    errors += e2
-    warnings += w2 + _queue_warnings(cfg)
+    e3, w3 = _script_drift()
+    errors += e2 + e3
+    warnings += w2 + w3 + _queue_warnings(cfg)
     for w in warnings:
         print(f"  warn : {w}")
     for e in errors:
@@ -1588,15 +1589,50 @@ def _save_manifest(manifest: dict) -> None:
                              indent=1, sort_keys=True))
 
 
-def _sync_scripts(subs, manifest, note, dry) -> None:
-    """Stage 1: hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)."""
+def _service_subs() -> dict:
+    return {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
+            "DATA": os.path.join(HOME, "data")}
+
+
+def _rendered_scripts(subs):
+    """Yield (name, rendered body) for every deployment/scripts/*.sh —
+    the single rendering path for both `services` and `check`."""
     src = os.path.join(REPO_ROOT, "deployment", "scripts")
     for name in sorted(os.listdir(src)):
         if not name.endswith(".sh"):
             continue
-        body = _render_template(
+        yield name, _render_template(
             Path(os.path.join(src, name)).read_text(encoding="utf-8"),
             {key: shlex.quote(value) for key, value in subs.items()})
+
+
+def _script_drift() -> tuple[list[str], list[str]]:
+    """Deployed cron wrappers vs what `services` would render now. A
+    checkout update without a `services` rerun leaves stale wrappers
+    running (2026-09 incident: the old night filter in mcs_check.sh
+    turned a delayed tick into a no-op and unread polling gapped past
+    the session limit) — drift is an error, absence only a warning."""
+    drifted, missing = [], []
+    for name, body in _rendered_scripts(_service_subs()):
+        try:
+            cur = Path(SCRIPTS_DIR, name).read_text(encoding="utf-8")
+        except OSError:
+            missing.append(name)
+            continue
+        if cur != body:
+            drifted.append(name)
+    errors = [f"deployed scripts differ from the repo in {SCRIPTS_DIR}: "
+              + ", ".join(drifted)
+              + " — run `mcs_setup.py services` to resync"] if drifted else []
+    warnings = [f"scripts not deployed to {SCRIPTS_DIR}: "
+                + ", ".join(missing)
+                + " — run `mcs_setup.py services`"] if missing else []
+    return errors, warnings
+
+
+def _sync_scripts(subs, manifest, note, dry) -> None:
+    """Stage 1: hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)."""
+    for name, body in _rendered_scripts(subs):
         dst = os.path.join(SCRIPTS_DIR, name)
         manifest["scripts"].append({"name": name,
                                     "sha256": _sha256(body)})
@@ -1886,8 +1922,7 @@ def _record_llm_slots(manifest, note) -> None:
 
 def cmd_services(args) -> int:
     dry = getattr(args, "dry_run", False)
-    subs = {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
-            "DATA": os.path.join(HOME, "data")}
+    subs = _service_subs()
     problems = 0
     persist_partial = False
     prev = _load_manifest()
