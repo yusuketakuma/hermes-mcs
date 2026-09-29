@@ -289,9 +289,10 @@ def _validate_manifest(manifest) -> None:
             _err("bad_part_sha256")
         kind = p["kind"]
         if "prior_remote_id" in p and (
-                kind != "body_part" or not _text(p["prior_remote_id"], 64)):
-            # only a body chunk can be rewritten in place, and it names
-            # the earlier post by its transport id
+                kind not in ("body_part", "attachment_part")
+                or not _text(p["prior_remote_id"], 64)):
+            # only a body chunk (rewritten in place) or an unchanged
+            # attachment (reused) names its earlier post, by transport id
             _err("bad_prior_remote_id")
         if kind == "card" and i != 0:
             _err("bad_card_part")
