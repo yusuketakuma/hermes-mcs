@@ -20,10 +20,14 @@ def test_render_keeps_body_private_and_preserves_buttons():
     assert "非公開の合成本体" not in text + json.dumps(blocks, ensure_ascii=False)
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
-    assert [(e["action_id"], e["value"]) for e in actions[0]["elements"]] == [
-        ("mcs:a:" + "b" * 32, "b" * 32),
-        ("mcs:a:" + "c" * 32, "c" * 32),
-    ]
+    # compact mobile layout: 確認/担当 stay buttons, every other action
+    # is an option of one select — each still carries its durable token
+    button, menu = actions[0]["elements"]
+    assert (button["action_id"], button["value"]) == ("mcs:a:" + "c" * 32,
+                                                      "c" * 32)
+    assert menu["type"] == "static_select"
+    assert menu["action_id"] == "mcs:menu"
+    assert [o["value"] for o in menu["options"]] == ["b" * 32]
     assert any(b["type"] == "header" for b in blocks)
 
 
@@ -65,3 +69,44 @@ def test_slack_spec_with_unknown_feature_is_rejected_not_rendered():
     spec["parts"]["future_poll"] = {"q": "?"}
     with pytest.raises(ValueError, match="unsupported_parts_key"):
         render(spec)
+
+
+def test_select_click_resolves_the_same_token_as_a_button():
+    """The compact 操作 select carries the durable token as the chosen
+    option's value; it passes the same origin checks as a button and a
+    forged action_id or an outsider is rejected."""
+    from hermes_plugin.mcs_slack import actions as slack_actions
+    body = {"team": {"id": "T"}, "api_app_id": "A",
+            "channel": {"id": "C"}, "user": {"id": "U1"},
+            "message": {"ts": "1790000000.000001"}}
+    kw = dict(team_id="T", application_id="A", channel_id="C",
+              profile="p", allowed_user_ids={"U1"})
+    select = {"type": "static_select", "action_id": "mcs:menu",
+              "selected_option": {"value": "d" * 32}}
+    got = slack_actions.origin(body, select, **kw)
+    assert got and got["token"] == "d" * 32 and got["actor"] == "slack:T:U1"
+    assert slack_actions.origin(
+        body, {**select, "action_id": "mcs:a:" + "d" * 32}, **kw) is None
+    assert slack_actions.origin(
+        body, {**select, "selected_option": {"value": "x"}}, **kw) is None
+    outsider = {**body, "user": {"id": "U9"}}
+    assert slack_actions.origin(outsider, select, **kw) is None
+
+
+def test_full_card_is_one_compact_row():
+    """Every action of a busy card fits one actions block: the two
+    toggles as buttons and the rest as options of a single select."""
+    spec = _spec()
+    ids = ("ack", "assign", "request", "tasks_done", "summary", "report",
+           "mytasks", "unacked", "search", "prev", "next")
+    buttons = [{"id": i, "ui": "button", "style": "secondary",
+                "label": f"L{n}", "token": f"{n:032x}"}
+               for n, i in enumerate(ids)]
+    spec["parts"]["action_rows"] = [buttons[k:k + 5]
+                                    for k in range(0, len(buttons), 5)]
+    _, blocks = render(spec)
+    actions = [b for b in blocks if b["type"] == "actions"]
+    assert len(actions) == 1
+    kinds = [e["type"] for e in actions[0]["elements"]]
+    assert kinds == ["button", "button", "static_select"]
+    assert len(actions[0]["elements"][2]["options"]) == len(ids) - 2
