@@ -484,13 +484,8 @@ class Actions:
         if not title:
             return "件名の入力が必要です。"
         due = (fields.get("due_date") or "").strip()
-        if due:
-            from datetime import date
-            try:
-                if date.fromisoformat(due).isoformat() != due:
-                    return "期限は YYYY-MM-DD 形式で入力してください。"
-            except ValueError:
-                return "期限は YYYY-MM-DD 形式で入力してください。"
+        if due and not text.valid_due(due):
+            return "期限は YYYY-MM-DD 形式で入力してください。"
         f = {"title": title, "reason": reason}
         if (fields.get("assignee") or "").strip():
             f["assignee"] = fields["assignee"].strip()
@@ -502,18 +497,6 @@ class Actions:
                             payload: dict, confirm_id: str) -> None:
         import discord
 
-        if action == "dismiss":
-            text = (f"**確認 — 候補の却下**\n"
-                    f"signal: `{payload['signal_key']}`\n"
-                    f"理由: {payload['reason'][:400]}")
-        else:
-            text = (f"**確認 — 依頼の起票**\n"
-                    f"件名: {payload['title'][:200]}\n"
-                    f"理由: {payload['reason'][:400]}"
-                    + (f"\n担当: {payload['assignee']}"
-                       if payload.get("assignee") else "")
-                    + (f"\n期限: {payload['due_date']}"
-                       if payload.get("due_date") else ""))
         view = discord.ui.View(timeout=None)
         yes = discord.ui.Button(style=discord.ButtonStyle.success,
                                 label="確定する",
@@ -523,7 +506,9 @@ class Actions:
                                custom_id=f"{CONFIRM_PREFIX}{confirm_id}:cancel")
         view.add_item(yes)
         view.add_item(no)
-        await self._followup(interaction, text, view=view)
+        await self._followup(interaction,
+                             text.preview_text(action, payload, True),
+                             view=view)
 
     # -- confirm ------------------------------------------------------------
 
