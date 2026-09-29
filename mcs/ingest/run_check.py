@@ -734,13 +734,14 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
-    """extract_v1 (instant rules) -> extract_llm (v3) -> rollups.
+    """extract_v1 (instant rules) -> extract_llm (v4) -> rollups.
 
     Two lanes, one lineage: the rule pass is pure-pattern and instant —
     it keeps real-time analysis at ingest speed so notifications and
-    signals never wait on the LLM queue. The v3 pass then folds the
-    same rule output in as prompt hints and mints the extract_v1
-    artifact itself, so v1+v2 work happens inside the v3 pass too."""
+    signals never wait on the LLM queue. The extract_llm pass
+    (mcs/extract/v4, EXTRACT_VERSION=4) then folds the same rule output
+    in as prompt hints and mints the extract_v1 artifact itself when
+    the rule pass has not."""
     try:
         import extract
         ex = extract.run_pending(ledger)
@@ -751,26 +752,17 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     try:
         import extract_llm
-        # T18: under the v4 engine (fact_source=canonical) the legacy
-        # v3 extractor admits NOTHING new. Conversion manifests schedule
-        # v4 jobs; they never reopen v3. Outside canonical mode admission
-        # is unchanged.
-        admitted = None
+        # T18: under fact_source=canonical conversion manifests schedule
+        # semantic v4 jobs, so this tick lane admits NOTHING new
+        # (fail-closed empty set). Outside canonical mode admission is
+        # unrestricted.
         try:
             import semantic_policy
             scfg = semantic_policy.semantic_config(cfg or {})[0]
             canonical_mode = scfg.get("fact_source") == "canonical"
         except Exception:
             canonical_mode = False  # config unreadable → legacy behavior
-        if canonical_mode:
-            try:
-                import semantic_v4
-                admitted = semantic_v4.active_legacy_admissions(ledger)
-            except Exception:
-                # canonical mode defaults v3 admission to ZERO — a
-                # manifest read error must fail CLOSED, not open the
-                # legacy engine to unrestricted new inference
-                admitted = set()
+        admitted = set() if canonical_mode else None
         remain = (deadline - time.monotonic()) - 45
         result["extract_llm"] = (
             extract_llm.run_pending(

@@ -514,6 +514,29 @@ def test_stage_derive_two_lanes(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize("semantic,expected", [
+    ({"mode": "off", "fact_source": "canonical",
+      "fact_source_gate": "g6-v1:abc123"}, set()),
+    ({"mode": "off"}, None),
+])
+def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
+                                               semantic, expected):
+    """canonical mode admits nothing new (fail-closed empty set);
+    otherwise admission is unrestricted (None)."""
+    db = _ledger(tmp_path)
+    seen = {}
+
+    def run_pending(ledger, **kw):
+        seen["admitted"] = kw["admitted_ids"]
+        return {"done": 0, "failed": 0, "left": 0, "pids": []}
+    monkeypatch.setattr(extract_llm, "run_pending", run_pending)
+    result = {"errors": []}
+    run_check.stage_derive(db, result, time.monotonic() + 120,
+                           cfg={"semantic": semantic})
+    assert "admitted" in seen and seen["admitted"] == expected
+    db.close()
+
+
 def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
