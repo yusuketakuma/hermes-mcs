@@ -57,7 +57,7 @@
 | CD-9 | 本文 record `message_body`（Q1 の決定による契約拡張。2026-09-29・オーナー） | `mcs-read-model/1` の `_SCHEMAS` に新 record 型 `message_body` を追加する: `message_id`（必須。対応する `message` record と同じ世代に置く）・`body_text`（本文の格納表現をそのままの文字列。UTF-8、**8 KiB まで**。超過分は送信側で切詰めて `body_truncated=true`）・`body_format`（格納形式の enum。HTML のまま送り、受信側はテキスト表示に限定する）・`body_sha256`（`body_text` の UTF-8 bytes の sha256。同一入力なら `content_hash` と一致する）・`body_truncated`・`sender_kind`（enum。氏名・個人特定属性は送らない。値集合は fixture で固定する）。`content_omitted=true` の message には付けない。body の編集・削除は `body_sha256` の変化または body の消失として表れ、message の tombstone（`body_state=deleted`）で本文も消える。本文は自由文で PHI を含み得るため、受信側の staging は暗号化・read 監査が必須（zaitaku-calender `docs/adr-external-ingest-v1.md`） |
 | CD-10 | 患者単位の完全性 record `patient_coverage`（Q10 の決定による契約拡張。2026-09-29・オーナー: 送る） | `mcs-read-model/1` の `_SCHEMAS` に新 record 型 `patient_coverage` を追加する: `project_id`（必須）・`fetch_state`（enum: `pending` / `complete` / `incomplete`。`mcs_adapter.py:333` の既存値集合）・`coverage_ts`（その患者の最終取得試行の epoch 秒。未試行は null）。`history_floor` は v1 では送らない。受信側は `fetch_state` が `complete` でない患者、または世代に `patient_coverage` が欠ける患者を患者単位の「不明」と表示する（zaitaku-calender `ROADMAP.md` §4.4）。分割では meta・coverage と同じく各 part に複製する（CD-2）。allowlist の追加なのでレビュー対象 |
 
-C0 の前に、次の 2 つの決定が終わっている必要がある: #8-D2（wire の enum 名を改名するか。C0 fixture の固定前なら無償）と、#8 の `prev_content_hash` の要否（固定後は `/2` が必要）。
+C0 の前の 2 つの決定は**両方決定済み（2026-09-29・オーナー）**: #8-D2 は wire enum 名を**現行名のまま**（改名しない）、`prev_content_hash` は**追加しない**（fixture 固定後の追加は契約 `/2` が要るため C0 で決定）。
 
 C0 の合意事項は CD-1〜CD-10 のほか、次を含む（両文書で同一。zaitaku-calender `ROADMAP.md` §4.7）:
 - **撤回指示書の形式と認証**: `withdraw()` は `sink.delete` を呼ぶだけで、zaitaku-calender へ運ぶ指示書の形式・認証が未定義。提案は `mcs-ext-withdraw/1`: `envelope_id`・`auth_id`・理由コード（自由文なし）のみ、4 KiB 以下。受信側は未採用 staging を削除して削除 receipt を返す。withdraw が原本より先に届く場合（tombstone を先に置き後着を拒否）と part 分割の一部だけが withdraw された世代の扱いもここで決める。合意までは受信側 C1 の完了条件から外し、管理者による未採用 staging の即時 purge 手順で代替する。
@@ -131,7 +131,7 @@ C0 の合意事項は CD-1〜CD-10 のほか、次を含む（両文書で同一
 - 共通コマンド（全フェーズ）: `scripts/run_tests.sh tests/ops/ tests/views/test_read_model.py`、CI 範囲の ruff（`make lint`。ローカルは uv 経由）、`python3 scripts/update_readme.py --check`、`python3 ci/gates.py && python3 ci/mine_gates.py --check`。
 - integration の E2E（`test_mcs_recovery_narrative.py:556-575`）は無改変で緑のままであること（ライブラリの既定を変えないため）。
 
-**依存**: zaitaku-calender C0（同時）、**残りは Q7**（Q1〜Q4・Q8(b)・Q10・Q11 は 2026-09-29 決定済み、Q6 記録済み）、CD-1〜CD-10、#8-D2。
+**依存**: zaitaku-calender C0（同時）、**残りは CD-1〜CD-10 の合意**（Q1〜Q4・Q7・Q8(b)・Q10・Q11・#8-D2 は 2026-09-29 決定済み、Q6 記録済み）。
 
 **規模**: M。実作業は S〜M で、合意コストが支配的。
 
@@ -325,7 +325,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 
 ## 実施順
 
-1. **C0 の前提の決定**（コードなし）: **残りは Q7**（Q1〜Q4・Q8(b)・Q10・Q11 は 2026-09-29 決定済み、Q6 記録済み）、CD-1〜CD-10 と上記の C0 合意事項、#8-D2。特に CD-1 は初回の実送信前が期限。
+1. **C0 の前提の決定**（コードなし）: **残りは CD-1〜CD-10 と上記の C0 合意事項の合意**（Q1〜Q4・Q7・Q8(b)・Q10・Q11・#8-D2・`prev_content_hash` 追加しない、は 2026-09-29 決定済み、Q6 記録済み）。特に CD-1 は初回の実送信前が期限。
 2. **C0**（M）: 参照実装の変更（CD-1・CD-2・CD-4・CD-5・CD-6・CD-9・CD-10 の実装）、fixture・golden・MANIFEST、drift guard、文書。zaitaku-calender C0 と同時に進める（Q8(b): zaitaku 側コード実装は P0 後だが、C0 契約作業と hermes 側参照実装は進める）。
 3. **C1**（L）: G1 → G2 → G3 → G4 → G5 の順。合成環境で完結。本番投入は #4 の実施記録と Q6 の判断後。
 4. **C4**（S）: コードは独立に着手できる。運用開始の判断は zaitaku-calender C2 の実績後。
