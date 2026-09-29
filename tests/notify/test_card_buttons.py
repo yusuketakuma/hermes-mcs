@@ -458,6 +458,11 @@ def test_summary_with_rollup_and_coverage(led, tmp_path):
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
     assert "■ 次回予定（抽出表現）: 10/3 訪問" in body
     assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
+    led.db.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
+                   (json.dumps({"medications": []}),))
+    led.db.commit()
+    body = _click(led, _spec(led), "summary")["body"]
+    assert "■ 抽出されたバイタルなし" in body and "記録なし" not in body
 
 
 # ---------- ⚠ extraction report --------------------------------------------
