@@ -95,6 +95,9 @@ class DeliveryWorker:
     supplies ``_perform`` and any companion-message bookkeeping."""
 
     transport = "discord"   # runner default; transports override
+    # the transport's on-disk layout — every state read (journal view,
+    # scope lock) and write must resolve through this one hook
+    _notify_dirs = staticmethod(paths.notify_dirs)
 
     def __init__(self, *, bot: Any, settings: dict,
                  root: str, reg: registry.Registry,
@@ -102,7 +105,7 @@ class DeliveryWorker:
         self._bot = bot
         self._settings = settings
         self._root = root
-        self._dirs = paths.notify_dirs(root)
+        self._dirs = self._notify_dirs(root)
         self._reg = reg
         self._worker_id = worker_id
         self._log = log
@@ -146,7 +149,7 @@ class DeliveryWorker:
         return True
 
     def _ensure_dirs(self) -> None:
-        paths.ensure_dirs(self._root)
+        paths.ensure_dirs(self._root, self._dirs)
 
     def release_scope_lock(self) -> None:
         if self._lock_fd is not None:

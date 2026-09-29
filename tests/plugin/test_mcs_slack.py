@@ -13,6 +13,7 @@ from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
 from hermes_plugin.card_workers import make_slack_factory
 from hermes_plugin.mcs_delivery import envelopes, journal, registry
+from hermes_plugin.mcs_delivery import worker as worker_mod
 from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
@@ -510,17 +511,32 @@ def test_slack_thread_parts_post_under_bound_root_only(led):
                and p["channel"] == SCOPE["channel_id"]
                and "blocks" not in p for p in w.client.thread_posts)
 
-    # restart: every journaled part dedupes — nothing reposts
+    # restart with the registry's parts flag lost (crash before save):
+    # only the slack_state journal can prove the card and dedupe parts
     restored = registry.Registry(w.dirs["state"], scope=SCOPE)
+    restored._data["parts"].pop(spec["delivery_id"], None)
     replacement = DeliveryWorker(
         sender=w.sender, settings=SCOPE, root=str(w.root),
         reg=restored, worker_id=registry.new_worker_id(),
         log=lambda *_args, **_kw: None)
+    assert worker_mod._card_message_id(
+        replacement._jview.refresh(), spec["delivery_id"]) \
+        == "1790000000.000001"
     asyncio.run(replacement._resume_parts(spec))
     assert len(w.client.thread_posts) == n_body
+    assert restored.parts_done(spec["delivery_id"])
     assert led.db.execute(
         "SELECT parts_state FROM notification_renders"
     ).fetchone()[0] == "complete"
+
+
+def test_slack_worker_state_reads_and_writes_share_slack_state(led):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    assert w.worker._dirs["state"] == w.dirs["state"]
+    assert w.worker._jview._dir == w.dirs["state"]
+    assert w.dirs["state"].endswith("slack_state")
 
 
 def test_slack_started_only_part_is_unknown_and_never_resent(led):
@@ -563,16 +579,12 @@ def test_slack_started_only_part_is_unknown_and_never_resent(led):
              "attempt_id": "resume", "worker_id": "dead-worker"},
             second, "unknown")})
 
-    claim = {"attempt_id": "resume",
-             "worker_id": w.worker._worker_id, "spec": uspec,
-             "payload_hash": envelopes.payload_hash(uspec),
-             "spec_path": None, "phase": "settled"}
-    ctx = {"card_message_id": "1790000000.000001", "thread": None,
-           "thread_id": "1790000000.000001", "history": None,
-           "consumed": set()}
-    records = journal.scan(w.dirs["state"])
-    asyncio.run(w.worker._drive_parts(
-        claim, uspec["parts"]["manifest"], ctx, records))
+    # the update card is sent by the worker itself: its part pass reads
+    # the slack_state journal (not discord_state), so the started row
+    # dedupes body:0002 even though the registry never saw this delivery
+    assert not w.reg.parts_done(did)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    assert w.reg.parts_done(did)
     # the started-only part is skipped — its journal holds a 'started'
     # row and must never gain a result; siblings bind existing replies
     # or post their genuinely-new text under the same root
@@ -580,6 +592,10 @@ def test_slack_started_only_part_is_unknown_and_never_resent(led):
                for r in rows if r.get("attempt_id") ==
                envelopes.part_attempt_id(did, "body:0002")]
     assert {r["phase"] for r in skipped} == {"started"}
+    driven = {r.get("part_id") for rows in journal.scan(
+        w.dirs["state"]).values() for r in rows
+        if r.get("delivery_id") == did and r.get("phase") == "result"}
+    assert "body:0001" in driven and "body:0002" not in driven
     assert all(p["thread_ts"] == "1790000000.000001"
                for p in w.client.thread_posts)
     result = {"errors": []}
