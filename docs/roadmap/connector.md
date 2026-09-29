@@ -1,11 +1,11 @@
 # zaitaku-calender 接続（C0〜C4）の hermes-mcs 側の詳細計画
 
-[`docs/ROADMAP.md`](../ROADMAP.md) §4 の接続フェーズのうち、**hermes-mcs 側の成果物**を、実装に着手できる粒度まで掘り下げた計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q10）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-8）は両文書で共通。
+[`docs/ROADMAP.md`](../ROADMAP.md) §4 の接続フェーズのうち、**hermes-mcs 側の成果物**を、実装に着手できる粒度まで掘り下げた計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-8）は両文書で共通。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
 - 表記: 【実行確認】= 合成入力でローカル実行して確認、【未検証】= 実データ・実機・実 API・相手側実装に触れないと分からない点。
 - 実データは読んでいない。相手側（TypeScript）の受信実装は存在しないため、相手側の挙動は Node での簡易実験だけで確認した。
-- オーナー判断は項目内で `#N-Dk`（他項目）または `Q1〜Q10`（接続）と呼ぶ。
+- オーナー判断は項目内で `#N-Dk`（他項目）または `Q1〜Q12`（接続）と呼ぶ。
 
 ## 0. 結論
 
@@ -46,16 +46,24 @@
 
 | ID | 決めること | 推奨 |
 |---|---|---|
-| CD-1 | 数値の canonical 表記と受信側の hash 検証 | 整数値は整数で出力（-0 も 0）、指数表記になる値は拒否、キーは code point 順、空白なしで RFC 8785（JCS）互換にする。実装は `_canonical` の前処理 10 行程度。受信側は parse 後に JCS で再計算する。fixture に整数値 float の入力（`accepted/06`）を入れ、両実装で一致を確認する |
+| CD-1 | 数値の canonical 表記と受信側の hash 検証 | 規則は「整数値は整数表記（-0 も 0）、非整数は ECMAScript の数値表記、指数表記・NaN・Infinity・safe integer 範囲外は拒否」、キーは code point 順、空白なしで RFC 8785（JCS）互換にする。実装は `_canonical` の前処理 10 行程度。受信側は parse 後に JCS で再計算する。fixture に整数値 float の入力（`accepted/06`）を入れ、両実装で一致を確認する |
 | CD-2 | 分割集合の表現 | 各分割に meta・coverage・signals_truncated を同一内容で複製し、message / signal を排他的に分配する。envelope に任意項目 `part:{"index":1..N,"count":N}` を追加する（許可集合 :309-313 に任意として足す。`envelope_id` と `_intent_hash` には含めない）。受信側は (auth_id, snapshot_generation_id, part.count) で集合化し、揃うまで「不完全」と表示する。これがないと分割の欠落が「記録なし」に見える |
 | CD-3 | `--only-with-facts` の意味と伝播 | 残す条件は facts 非空、または `body_state=deleted`（tombstone）。受信側は、完全集合が届いた世代で、前世代の staging のうち再掲されないものを「MCS 側で現在は事実なし / 不明」に落とす（削除はしない）。facts のない返信は届かないので、受信側は「返信なし」と表示しない。Q2 = off なら message は 0 件（signal だけ）になる |
 | CD-4 | 取得完全性 | `coverage.collection` に `patients_incomplete`（`fetch_state≠'complete'` の件数、算出不能は null）を追加する（read_model の既存 `suppress` 流儀に合わせる）。患者単位が要るなら新 record 型が必要で、「新型を作らない」方針と衝突するため別判断（Q10）。#3 の `known_gaps` を後で加える余地がある |
 | CD-5 | receipt | 下記 (4)。envelope 単位の all-or-nothing（参照 receiver が最初の不正で全体拒否する挙動と同じ: :304-307）。`rejected` は終端 |
-| CD-6 | C1 プロファイル | fields は 5 種、patients は `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30（Q3 の min(retention, 30) と producer 側を一致させる）、meta・coverage 各 1 件必須、stat・attachment は受信側でも拒否する。producer と receiver の両方で強制し、期待コードを固定する |
+| CD-6 | C1 プロファイル | fields は 5 種、patients は `"all"`、`max_snapshot_age_s` 必須（≤3600）、`retention_days` ≤ 30（Q3 の min(retention, 30) と producer 側を一致させる）、meta・coverage 各 1 件必須、stat・attachment は受信側でも拒否する。producer と receiver の両方で強制し、期待コードを固定する。`max_snapshot_age_s` は送信側だけの検査（§1-6）なので、受信側は `snapshot_generated_at` と受信時刻で自前の鮮度閾値を持ち、超過は拒否でなく「古い」警告として age を常時表示する。受信側閾値の初期案は手渡し 24 時間・マシン送信 1 時間で、C0 で実測して決める提案値 |
 | CD-7 | signal 同一性 | 畳み込みを許容し、両文書に明記する。signal 件数の一致検証はしない |
 | CD-8 | fixture 正本（Q7） | hermes-mcs を正本にする（Python の参照実装から生成するため）。zaitaku-calender へコピーし、両 CI で `MANIFEST.sha256` を検証する。変更は同一変更単位（両文書とも同じ運用） |
 
 C0 の前に、次の 2 つの決定が終わっている必要がある: #8-D2（wire の enum 名を改名するか。C0 fixture の固定前なら無償）と、#8 の `prev_content_hash` の要否（固定後は `/2` が必要）。
+
+C0 の合意事項は CD-1〜CD-8 のほか、次を含む（両文書で同一。zaitaku-calender `ROADMAP.md` §4.7）:
+- **撤回指示書の形式と認証**: `withdraw()` は `sink.delete` を呼ぶだけで、zaitaku-calender へ運ぶ指示書の形式・認証が未定義。提案は `mcs-ext-withdraw/1`: `envelope_id`・`auth_id`・理由コード（自由文なし）のみ、4 KiB 以下。受信側は未採用 staging を削除して削除 receipt を返す。withdraw が原本より先に届く場合（tombstone を先に置き後着を拒否）と part 分割の一部だけが withdraw された世代の扱いもここで決める。合意までは受信側 C1 の完了条件から外し、管理者による未採用 staging の即時 purge 手順で代替する。
+- **受信側の鮮度閾値**（CD-6）と**サイズ上限の扱い**: 上限は canonical envelope 全体で 1,048,576 B。wire は再 JSON 化で +7〜8% 膨らむため、(a) 送信前検査を約 900,000 B に絞るか、(b) 受信側が生 bytes を扱うかを決める。上限ちょうどの受理と +1 byte の拒否を fixture と route テストに含める。
+- **`source` の対応付け**: message の論理キーの `source` は envelope のフィールドに対応しない。`destination` または `auth_id` へ対応付けるか、受信側の接続ラベルとするかを決める。
+- **`content_hash` の null 取扱い**: wire で任意（null あり）。UNIQUE キーに入れない方針（同一性キー参照）のため、受信側で明示的な `'null'` 値へ正規化するか必須化を求めるかを決める。
+- **message 同一性からの `content_hash` 除外**: 本書 2026-09-29 初版の ROADMAP §5 の文言（type + project_id + message_id + content_hash）は、編集のたびに別行となり supersede・撤回が壊れるため破棄する（ROADMAP §5 の新文言が両文書の正）。
+- **拒否コード表**: 上記 (2) の期待コードに受信側独自のコード（`record_type_not_accepted:<type>`、`envelope_coverage_missing`、`envelope_meta_missing`、`envelope_too_large` 等）を合わせて固定する。
 
 (2) fixture の中身:
 - 固定値: `FIXED_NOW=1_790_000_000.5`、generation `gen-c0-0001`、`generated_at=FIXED_NOW-30.25`、auth_id `auth-c0-synth-1`。ID と hash はすべて合成で、`content_hash` は `sha256("SYNTHETIC-C0-<mid>")`。
@@ -310,7 +318,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 
 ## 実施順
 
-1. **C0 の前提の決定**（コードなし）: Q1〜Q10、CD-1〜CD-8、#8-D2。特に CD-1 は初回の実送信前が期限。
+1. **C0 の前提の決定**（コードなし）: Q1〜Q4・Q7・Q10・Q11・Q8(b)（Q6 は判断者と根拠文書の場所の記録のみ）、CD-1〜CD-8 と上記の C0 合意事項、#8-D2。特に CD-1 は初回の実送信前が期限。
 2. **C0**（M）: 参照実装の変更（CD-1・CD-2・CD-4・CD-5・CD-6 の実装）、fixture・golden・MANIFEST、drift guard、文書。zaitaku-calender C0 と同時に進める。
 3. **C1**（L）: G1 → G2 → G3 → G4 → G5 の順。合成環境で完結。本番投入は #4 の実施記録と Q6 の判断後。
 4. **C4**（S）: コードは独立に着手できる。運用開始の判断は zaitaku-calender C2 の実績後。
