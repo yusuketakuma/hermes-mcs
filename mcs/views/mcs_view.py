@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader
+from mcs_queries import incomplete_reply_roots
 import mcs_requests as requests
 
 UNKNOWN_TIME = -(2**63)
@@ -198,11 +199,8 @@ class View:
                 max(CASE WHEN body_state IS NOT 'full' THEN posted_at_ts END) AS incomplete_body_last
               FROM messages WHERE project_id=?
             """, (pid,)).fetchone())
-            row["incomplete_reply_roots"] = self.db.execute("""
-              SELECT count(*) FROM messages m WHERE m.project_id=? AND m.parent_id IS NULL
-                AND m.reply_count > (SELECT count(*) FROM messages r
-                  WHERE r.project_id=m.project_id AND r.parent_id=m.message_id AND r.body_state='full')
-            """, (pid,)).fetchone()[0]
+            row["incomplete_reply_roots"] = incomplete_reply_roots(
+                self.db, pid)
             row["jobs"] = [dict(r) for r in self.db.execute("""
               SELECT kind,state,count(*) AS count,max(attempts) AS max_attempts,min(next_try) AS next_try
               FROM fetch_jobs WHERE project_id=? GROUP BY kind,state

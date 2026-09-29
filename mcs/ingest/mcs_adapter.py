@@ -48,6 +48,11 @@ from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
+
+
+def project_url(project_id: int) -> str:
+    """The MCS web page of a patient project (medical room)."""
+    return f"{BASE}/projects/medical/{project_id}"
 # cheap authenticated read used to tell an expired session from a
 # route-level 403 (see _request)
 SESSION_PROBE_PATH = "/users/self/count"
@@ -419,7 +424,7 @@ def _unread_patient(p, src: str) -> UnreadPatient:
         ).strip(),
         disease=_text(k.get("disease"), f"{src}: disease"),
         station_name=_text(st.get("name"), f"{src}: station name"),
-        url=f"{BASE}/projects/medical/{p['id']}")
+        url=project_url(p['id']))
 
 
 def _attachments(files: list | None) -> list[Attachment]:
@@ -653,9 +658,62 @@ class MCSAdapter:
         if not (name or profs or orgs):
             raise SchemaError("self_profile: empty profile")
         sid = u.get("id")
+        # station ids feed station_staffs(); record_self_profile keeps
+        # only the identity fields, so the stored artifact is unchanged
+        stations = [{"id": s["id"], "name": _text(s.get("name"),
+                                                  "self_profile: station name")}
+                    for s in sts if _valid_id(s.get("id"))]
         return {"sender_id": sid if type(sid) in (int, str) else None,
                 "name": name,
-                "professions": profs, "organizations": orgs}
+                "professions": profs, "organizations": orgs,
+                "stations": stations}
+
+    def station_staffs(self, stations: list, per_page: int = 100,
+                       max_pages: int = 10) -> list:
+        """The pharmacy's own member roster: GET /stations/{id}/staffs
+        for each own station (from /users/self), paginated. Shared
+        facility accounts (is_station_account) are skipped. Returns
+        [{staff_id, name, professions, station, is_self}] in MCS order.
+        Raises MCSError(kind='station_staffs_unavailable') on failure —
+        an expired session stays SessionExpired."""
+        out = []
+        for st in stations:
+            sid, sname = st.get("id"), st.get("name") or ""
+            if not _valid_id(sid):
+                continue
+            for page in range(1, max_pages + 1):
+                try:
+                    r = self._get(f"/stations/{sid}/staffs",
+                                  {"per_page": per_page, "page": page},
+                                  extend_session=False)
+                except SessionExpired:
+                    raise
+                except MCSError as e:
+                    raise MCSError("station_staffs_unavailable",
+                                   f"{e.kind}: {e.detail}",
+                                   status=e.status) from e
+                users, pag = r.get("users"), r.get("paginate")
+                if not isinstance(users, list) or not isinstance(pag, dict) \
+                        or any(not isinstance(u, dict) for u in users):
+                    raise SchemaError("staffs: page invalid")
+                for u in users:
+                    if u.get("is_station_account") is True \
+                            or not _valid_id(u.get("id")):
+                        continue
+                    name = _sender_name(u)
+                    if not name:
+                        continue
+                    out.append({"staff_id": u["id"], "name": name,
+                                "professions": [p for p in _profession(u)
+                                                .split(", ") if p],
+                                "station": sname,
+                                "is_self": u.get("is_self") is True})
+                if not _has_next(pag, "staffs"):
+                    break
+            else:
+                raise MCSError("pages_exceeded", "station staffs",
+                               retryable=True)
+        return out
 
     # ---------- auto login ----------
 
@@ -1210,7 +1268,7 @@ class MCSAdapter:
                     disease=_text(k.get("disease"), "kartes: disease"),
                     station_name=_text(station.get("name"),
                                        "kartes: station name"),
-                    url=f"{BASE}/projects/medical/{pid}"))
+                    url=project_url(pid)))
             if not _has_next(pag, "kartes"):
                 break
         else:

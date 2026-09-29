@@ -309,11 +309,13 @@ def _delivered_card(led, tmp_path, cfg=CFG):
 
 
 
-def test_ack_assign_defer_persist(led, tmp_path):
+def test_ack_assign_persist_and_defer_retired(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
-    for action in ("ack", "assign", "defer"):
+    assert "defer" not in {b["id"] for row in spec["parts"]["action_rows"]
+                           for b in row}
+    for action in ("ack", "assign"):
         tok = _token_for(spec, action)
-        req = _notif(tok)
+        req = _notif(tok, actor="discord:1001")
         req["origin"] = dict(ORIGIN, message_id="m-9")
         r = notify_cards.apply_notification(led, req, CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
@@ -322,11 +324,11 @@ def test_ack_assign_defer_persist(led, tmp_path):
         # for the next tick sweep to become visible on the card
         assert r.get("delivery_id"), action
     tri = led.db.execute("SELECT * FROM notification_triage").fetchone()
-    assert tri["state"] == "deferred" and tri["defer_until"] > NOW
+    assert tri["state"] == "assigned" and tri["owner"] == "discord:1001"
     ack = led.db.execute(
         "SELECT actor,manifest_id FROM notification_acknowledgements"
     ).fetchone()
-    assert ack["actor"] == "nurse-1"
+    assert ack["actor"] == "discord:1001"
     latest = _latest_render(led)
     assert latest["op"] == "update" and latest["state"] == "queued"
     latest_spec = json.loads(
@@ -334,9 +336,24 @@ def test_ack_assign_defer_persist(led, tmp_path):
          / (latest["delivery_id"] + ".json")).read_text())
     footer = " ".join(
         b.get("text", "") for b in latest_spec["parts"]["footer"])
-    # defer overwrote the assigned triage state, so 👤 is replaced by
-    # ⏸ — the last-applied state and the ack must both be visible
-    assert "確認" in footer and "保留中" in footer
+    assert "✅ 確認: <@1001>" in footer and "👤 担当: <@1001>" in footer
+    # a ⏸ button still on an already-posted card answers, changes no
+    # triage state and refreshes the card to the current buttons
+    _begin(led, latest, n=2)
+    _receipt(led, latest, f"{2:016x}", message_id="m-9", n=10)
+    _settle_bodies(led, latest)
+    tok = notify_cards._mint_token(
+        led.db, card["card_id"], "defer", None,
+        {"source_gen": card["source_generation"]}, NOW)
+    led.db.commit()
+    before = _latest_render(led)["render_rev"]
+    r = notify_cards.apply_notification(
+        led, {**_notif(tok), "origin": dict(ORIGIN, message_id="m-9")},
+        CFG, now=NOW)
+    assert r["outcome"] == "rejected" and r["error"] == "action_retired"
+    assert led.db.execute("SELECT state FROM notification_triage"
+                          ).fetchone()["state"] == "assigned"
+    assert _latest_render(led)["render_rev"] == before + 1
 
 
 def test_body_action_returns_full_text(led, tmp_path):
@@ -2397,10 +2414,25 @@ def _request(led, pid=1, src_mid=100, title="依頼X", status="open",
     return rid
 
 
+def _tasks_token(led, spec):
+    """A 📋/☑ token as a card rendered before the task existed carries
+    it (the button is only emitted while open tasks exist)."""
+    ack = led.db.execute(
+        "SELECT * FROM notification_action_tokens WHERE token=?",
+        (_token_for(spec, "ack"),)).fetchone()
+    tok = notify_cards._mint_token(
+        led.db, ack["card_id"], "tasks", None,
+        {"source_gen": ack["need_source_gen"],
+         "manifest_id": ack["need_manifest_id"],
+         "ui_rev": ack["need_ui_rev"]}, NOW)
+    led.db.commit()
+    return tok
+
+
 def _tasks_click(led, spec, msg_id="m-9", suffix="ab"):
     """Each click needs a fresh command_id — a repeated one replays the
     stored receipt by design."""
-    tok = _token_for(spec, "tasks")
+    tok = _tasks_token(led, spec)
     return notify_cards.apply_notification(
         led, {**_notif(tok), "command_id": f"{tok}:{suffix * 8}",
               "origin": dict(ORIGIN, message_id=msg_id)},
@@ -2408,9 +2440,20 @@ def _tasks_click(led, spec, msg_id="m-9", suffix="ab"):
 
 
 def test_tasks_button_only_on_thread_cards(led, tmp_path):
-    """📋 pins a task list to a thread — only thread cards carry it."""
+    """☑ pins a task list to a thread — only thread cards with open
+    tasks carry it."""
     card, spec = _delivered_card(led, tmp_path)
-    assert _token_for(spec, "tasks")
+    ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
+    assert "tasks" not in ids                 # no open task yet
+    _request(led, src_mid=101, title="返信タスク")
+    notify_cards.sweep(led, CFG, now=NOW)
+    render = _latest_render(led)
+    spec1 = json.loads(
+        (tmp_path / "data" / "discord_render"
+         / (render["delivery_id"] + ".json")).read_text())
+    button = next(b for row in spec1["parts"]["action_rows"] for b in row
+                  if b["id"] == "tasks")
+    assert button["label"] == "☑ タスク完了"
     _patient(led, 2)
     _msg(led, 200, 2)
     _signal_row(led, "sig-nt", pid=2, mids=[200])
@@ -2512,7 +2555,7 @@ def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
     """Card-bound tokens still require the bound message — only tokens
     minted for an ephemeral surface may arrive on another message."""
     card, spec = _delivered_card(led, tmp_path)
-    tok = _token_for(spec, "tasks")
+    tok = _tasks_token(led, spec)
     out = notify_cards.apply_notification(
         led, {**_notif(tok), "origin": dict(ORIGIN, message_id="eph-1")},
         CFG, now=NOW)

@@ -35,7 +35,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          item_unverified, transition_cooccurrences)
-from structured_view import latest_artifact
+from structured_view import message_urgency
 
 ARTIFACT_KIND = "signal_v1"
 
@@ -149,6 +149,41 @@ def record_self_profile(db, prof) -> bool:
         " VALUES(?,NULL,?,?,?)",
         (SELF_PROFILE_KIND, json.dumps(doc, ensure_ascii=False),
          json.dumps({"type": "self_profile"}), time.time()))
+    return True
+
+
+STATION_STAFF_KIND = "station_staff_v1"
+
+
+def latest_station_staff(db) -> list:
+    """The newest stored MCS station roster (station_staff_v1) — [] when
+    absent or unparsable."""
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind=? "
+        "AND json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        (STATION_STAFF_KIND,)).fetchone()
+    try:
+        d = json.loads(row["content"]) if row else {}
+    except (json.JSONDecodeError, TypeError):
+        return []
+    staff = d.get("staff") if isinstance(d, dict) else None
+    return [s for s in staff if isinstance(s, dict)] \
+        if isinstance(staff, list) else []
+
+
+def record_station_staff(db, staff: list) -> bool:
+    """Persist the fetched roster as an append-only artifact — skipped
+    when identical to the latest row (same replace-on-change rule as
+    record_self_profile). Caller holds the transaction."""
+    if staff == latest_station_staff(db):
+        return False
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
+        " VALUES(?,NULL,?,?,?)",
+        (STATION_STAFF_KIND,
+         json.dumps({"staff": staff, "fetched_at": int(time.time())},
+                    ensure_ascii=False),
+         json.dumps({"type": "station_staff"}), time.time()))
     return True
 
 
@@ -1043,19 +1078,16 @@ def sig_units(pairs):
 def _urgency_high(db, sig):
     """True when the signal's primary evidence message carries a
     high-urgency extraction — escalates a digest-tier signal to
-    immediate delivery. Mirrors notify_flush._urgency: either extractor
-    kind (rule extract_v1 or extract_llm) can carry the flag."""
+    immediate delivery. Same reading as the cards and text notices
+    (structured_view.message_urgency): either extractor kind (rule
+    extract_v1 or extract_llm) can carry the flag."""
     ev = sig.get("evidence") or {}
     mids = ev.get("message_ids")
     mid = ((mids[-1] if isinstance(mids, list) and mids else None)
            or ev.get("discharge_message_id"))
     if type(mid) is not int:
         return False
-    for kind in ("extract_llm", "extract_v1"):
-        doc = latest_artifact(db, kind, mid)
-        if doc and doc.get("urgency") == "high":
-            return True
-    return False
+    return message_urgency(db, mid) is not None
 
 
 def _digest_text(n):

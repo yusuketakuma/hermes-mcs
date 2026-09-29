@@ -473,6 +473,11 @@ class Ledger:
             self.db.execute(
                 "ALTER TABLE notification_renders ADD COLUMN parts_state "
                 "TEXT NOT NULL DEFAULT 'none'")
+        # ☐/✅ 確認 toggle: a withdrawn ack stays as an audit row
+        if "withdrawn_at" not in cols("notification_acknowledgements"):
+            self.db.execute(
+                "ALTER TABLE notification_acknowledgements "
+                "ADD COLUMN withdrawn_at REAL")
 
     def _backfill_v3(self):
         """Idempotently fill derived columns for pre-v3 rows."""

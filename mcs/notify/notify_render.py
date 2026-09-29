@@ -10,9 +10,12 @@ here is deterministic over the ledger so content fingerprints (source_fp
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 
+from mcs_queries import (EXTRACT_FEEDBACK_KIND, JST, current_extract_pred,
+                         incomplete_reply_roots)
 from mcs_requests import payload_hash, positive
 import structured_view
 
@@ -418,7 +421,8 @@ def _card_content(db, card) -> dict:
         for k in shown:
             containers.extend(sig_blocks[k])
         shown_kind = "signal_keys"
-    footer = _footer(db, card)
+    source_fp = _source_fp(db, card)
+    footer = _footer(db, card, shown, _current_generation(card, source_fp))
     if pages > 1:
         # F05: 順序・件数を表示 — a multi-page card must say where the
         # reader is, not just offer nav buttons
@@ -432,28 +436,233 @@ def _card_content(db, card) -> dict:
     return {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
-            "source_fp": _source_fp(db, card)}
+            "source_fp": source_fp}
 
 
-def _footer(db, card) -> list:
+def _current_generation(card, source_fp) -> int:
+    """The source generation this content will render under — the
+    drift bump ``_generation_drift`` applies right after this model is
+    built (the first observation only seeds the baseline)."""
+    gen = card["source_generation"]
+    if card["source_fp"] is not None and source_fp != card["source_fp"]:
+        gen += 1
+    return gen
+
+
+_DISCORD_UID = re.compile(r"[0-9]{1,20}")
+_SLACK_UID = re.compile(r"[UW][A-Z0-9]{1,30}")
+UNKNOWN_ACTOR = "不明なユーザー"
+
+
+def actor_label(actor) -> str:
+    """A stored actor id as a client-rendered user mention — Discord and
+    Slack both render ``<@id>`` as the member's name. The worker sends
+    cards with pings disabled; an unparsable actor gets a neutral label,
+    never the raw id."""
+    kind, _, rest = (actor if isinstance(actor, str) else "").partition(":")
+    if kind == "discord" and _DISCORD_UID.fullmatch(rest):
+        return f"<@{rest}>"
+    if kind == "slack":
+        uid = rest.rpartition(":")[2]          # slack:<team>:<user>
+        if ":" in rest and _SLACK_UID.fullmatch(uid):
+            return f"<@{uid}>"
+    return UNKNOWN_ACTOR
+
+
+def current_ackers(db, card_id, generation, shown) -> list:
+    """Actors whose live acknowledgement covers exactly this content —
+    the same source generation and shown set. New content (a reply, a
+    moved page) starts unconfirmed again; a withdrawn ack never counts."""
+    return [r["actor"] for r in db.execute(
+        """SELECT a.actor, MIN(a.ack_id) first
+           FROM notification_acknowledgements a
+           JOIN notification_view_manifests m
+             ON m.manifest_id=a.manifest_id
+           WHERE a.card_id=? AND a.withdrawn_at IS NULL
+             AND m.source_generation=? AND m.shown=?
+           GROUP BY a.actor ORDER BY first""",
+        (card_id, generation, json.dumps(shown, ensure_ascii=False)))]
+
+
+def open_tasks(db, card) -> list:
+    """Open/in-progress requests anchored to a thread card's messages —
+    the same anchor the task list view uses."""
+    if card["kind"] != "thread" or not positive(card["root_message_id"]) \
+            or not positive(card["project_id"]):
+        return []
+    return db.execute(
+        """SELECT request_id,title,assignee,due_date FROM requests
+           WHERE project_id=? AND status IN ('open','in_progress')
+           AND source_message_id IN (
+             SELECT message_id FROM messages
+             WHERE message_id=? OR parent_id=?)
+           ORDER BY due_date IS NULL, due_date, request_id""",
+        (card["project_id"], card["root_message_id"],
+         card["root_message_id"])).fetchall()
+
+
+FOOTER_TASKS = 3
+FOOTER_ACKERS = 8
+
+
+def today_jst(now=None) -> str:
+    """The JST calendar day (YYYY-MM-DD) due dates are compared against."""
+    from datetime import datetime
+    return datetime.fromtimestamp(time.time() if now is None else now,
+                                  JST).date().isoformat()
+
+
+def feedback_pending(db, card) -> bool:
+    """A ⚠ report still pins a current extraction of this card's
+    messages — the mark clears once a newer extraction replaced it."""
+    if card["kind"] != "thread":
+        return False
+    return db.execute(
+        f"""SELECT 1 FROM artifacts h
+            JOIN messages m ON m.message_id=h.message_id
+            JOIN artifacts a ON a.message_id=m.message_id
+             AND a.kind='extract_llm'
+             AND a.artifact_id=json_extract(
+               CASE WHEN json_valid(h.content) THEN h.content END,
+               '$.artifact_id')
+            WHERE h.kind='{EXTRACT_FEEDBACK_KIND}' AND m.project_id=?
+              AND (m.message_id=? OR m.parent_id=?)
+              {current_extract_pred('a', 'm')}
+            LIMIT 1""", (card["project_id"], card["root_message_id"],
+                         card["root_message_id"])).fetchone() is not None
+
+
+SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
+                  "訂正前の記録があり得るため、確定した処方一覧や依頼台帳の"
+                  "代わりにはなりません。原本で確認してください。")
+
+
+def patient_summary_text(db, project_id) -> tuple:
+    """🧾 answer: current meds (with the dated period), latest vitals,
+    next planned item from the stored patient_rollup, plus the open
+    tasks from the requests ledger. Missing material is said plainly —
+    the text never implies completeness."""
+    name = _patient_name(db, project_id) or f"project {project_id}"
+    title = f"🧾 {name} — 患者サマリー（暫定集約）"
+    lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind='patient_rollup' "
+        "AND project_id=? AND json_valid(content) "
+        "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
+    try:
+        roll = json.loads(row["content"]) if row else None
+    except (ValueError, TypeError, RecursionError):
+        roll = None
+    if not isinstance(roll, dict):
+        lines.append("集約資料がまだありません（未抽出・未集約）。"
+                     "原本を確認してください。")
+        roll = {}
+    else:
+        period = roll.get("current_med_period")
+        meds = [m for m in roll.get("medications") or []
+                if isinstance(m, dict) and m.get("name")]
+        lines.append("■ 薬（投稿から抽出。確定した処方ではありません）")
+        if isinstance(period, dict) and period.get("start"):
+            lines.append(f"処方期間（抽出表現）: {period.get('start')}"
+                         f"〜{period.get('end') or '?'}")
+        lines.extend("・" + " ".join(str(m[k]) for k in
+                                     ("name", "dose", "freq", "route")
+                                     if m.get(k))
+                     + (f"（最終言及 {m['last']}）" if m.get("last") else "")
+                     for m in meds[:15])
+        if not meds:
+            lines.append("・抽出された服用中の薬はありません（記録が無い≠服用無し）")
+        vit = roll.get("latest_vitals")
+        vline = (structured_view._vital_line({"vitals": vit}, {})
+                 if isinstance(vit, dict) else None)
+        lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
+                             else "バイタル: 記録なし"))
+        if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
+            lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
+    tasks = db.execute(
+        "SELECT request_id,title,assignee,due_date FROM requests "
+        "WHERE project_id=? AND status IN ('open','in_progress') "
+        "ORDER BY due_date IS NULL, due_date, request_id LIMIT 10",
+        (project_id,)).fetchall()
+    lines.append("■ 未完了タスク" + ("" if tasks else ": なし"))
+    lines.extend(f"・#{t['request_id']} {_inline(t['title'], 60)}"
+                 + (f" — 担当 {_inline(t['assignee'], 40)}"
+                    if t["assignee"] else "")
+                 + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
+                 for t in tasks)
+    return title, "\n".join(lines)
+
+
+def _coverage_line(db, project_id) -> str:
+    """How much of the room is stored — completion records only, never
+    a gapless claim: what was not fetched is unknown, not absent."""
+    p = db.execute("SELECT fetch_state,fetch_reason,history_floor "
+                   "FROM patients WHERE project_id=?",
+                   (project_id,)).fetchone()
+    floor = p["history_floor"] if p else None
+    if floor == -1:
+        parts = ["完了記録あり"]
+        if p["fetch_state"] == "incomplete":
+            parts.append(f"直近の取得は未完了（{p['fetch_reason'] or '理由未記録'}）")
+    else:
+        why = (p["fetch_reason"] if p and p["fetch_state"] == "incomplete"
+               and p["fetch_reason"] else
+               "指定日より前は未取得" if floor and floor > 0
+               else "完了記録なし")
+        parts = [f"未完了（{why}）"]
+    n = incomplete_reply_roots(db, project_id)
+    if n:
+        parts.append(f"返信の取得未完了{n}件")
+    return ("履歴取得: " + "／".join(parts)
+            + "（取れていない記録は「無い」ではありません。欠落なしの保証ではありません）")
+
+
+def _inline(text, cap) -> str:
+    """Free text (typed by staff) shown on one footer line — no line
+    breaks and no ``<``/``>`` so it can never form a mention/broadcast."""
+    t = " ".join(str(text or "").split())
+    t = t.replace("<", "＜").replace(">", "＞")
+    return t if len(t) <= cap else t[:cap - 1] + "…"
+
+
+def _footer(db, card, shown, generation) -> list:
     out = []
     tri = db.execute(
         "SELECT owner,state,defer_until,last_actor FROM notification_triage"
         " WHERE card_id=?", (card["card_id"],)).fetchone()
     if tri and tri["state"] == "assigned" and tri["owner"]:
-        out.append({"type": "text", "text": f"👤 担当: {tri['owner']}"})
+        out.append({"type": "text",
+                    "text": f"👤 担当: {actor_label(tri['owner'])}"})
     elif tri and tri["state"] == "deferred" and tri["defer_until"]:
+        # legacy state — 保留 is no longer offered; the sweep reopens it
         until = time.strftime("%m-%d %H:%M",
                               time.localtime(tri["defer_until"]))
         out.append({"type": "text", "text": f"⏸ 保留中（〜{until}）"})
-    acks = db.execute(
-        """SELECT DISTINCT a.actor FROM notification_acknowledgements a
-           WHERE a.card_id=? ORDER BY a.ack_id LIMIT 8""",
-        (card["card_id"],)).fetchall()
-    if acks:
-        out.append({"type": "text",
-                    "text": "✅ 確認: " + "・".join(a["actor"]
-                                                  for a in acks)})
+    ackers = current_ackers(db, card["card_id"], generation, shown)
+    if ackers:
+        names = "・".join(actor_label(a) for a in ackers[:FOOTER_ACKERS])
+        if len(ackers) > FOOTER_ACKERS:
+            names += f" 他{len(ackers) - FOOTER_ACKERS}名"
+        out.append({"type": "text", "text": "✅ 確認: " + names})
+    tasks = open_tasks(db, card)
+    if tasks:
+        # one footer item — every line costs a component slot otherwise
+        today = today_jst()
+        lines = []
+        for t in tasks[:FOOTER_TASKS]:
+            line = "📝 " + _inline(t["title"], 30)
+            if t["assignee"]:
+                line += " — 担当 " + _inline(t["assignee"], 40)
+            if t["due_date"]:
+                line += " — 期限 " + _inline(t["due_date"], 10)
+                if t["due_date"] < today:
+                    line = "⚠ 期限切れ " + line
+            lines.append(line)
+        if len(tasks) > FOOTER_TASKS:
+            lines.append(f"📝 他{len(tasks) - FOOTER_TASKS}件")
+        out.append({"type": "text", "text": "\n".join(lines)})
+    if feedback_pending(db, card):
+        out.append({"type": "text", "text": "⚠ 誤り報告あり（再抽出待ち）"})
     if card["delivery_state"] == "revoked":
         out.append({"type": "text", "text": "（取り下げ済み）"})
     return out

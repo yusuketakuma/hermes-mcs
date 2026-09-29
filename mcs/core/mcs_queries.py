@@ -72,6 +72,8 @@ CANONICAL_PROJECTION_KIND = "canonical_projection"
 # extract_llm `_replace_current` DELETE can never reach. When a
 # current v4 row exists it outranks both older kinds.
 V4_PROJECTION_KIND = "semantic_facts_v4"
+# human ⚠ report on one extraction (card button -> ops.extract_feedback)
+EXTRACT_FEEDBACK_KIND = "extract_feedback_v1"
 FACT_KINDS_SQL = ("'extract_llm','canonical_projection',"
                   "'semantic_facts_v4'")
 
@@ -346,6 +348,40 @@ def staff_directory(db, project_id=None):
             FROM messages WHERE {where}
             GROUP BY sender_name, organization
             ORDER BY last_seen DESC""", params).fetchall()
+
+
+def extract_feedback(db, project_id=None, limit=100):
+    """Human ⚠ extraction reports, newest first — each pins the
+    extract_llm artifact it judged (content: message_id, artifact_id,
+    hash, field, note, actor, at). ``current`` is 1 while that artifact
+    is still the message's extraction (the report awaits its one
+    re-extract), 0 once a newer extraction replaced it."""
+    where, params = "", []
+    if project_id is not None:
+        where, params = " AND h.project_id=?", [project_id]
+    return db.execute(
+        f"""SELECT h.artifact_id, h.project_id, h.message_id, h.content,
+                   h.created_at,
+                   EXISTS (SELECT 1 FROM artifacts a
+                           JOIN messages m ON m.message_id=a.message_id
+                           WHERE a.kind='extract_llm'
+                             AND a.message_id=h.message_id
+                             AND a.artifact_id=json_extract(
+                               {json_or_null('h.content')},'$.artifact_id')
+                             {current_extract_pred('a', 'm')}) AS current
+            FROM artifacts h WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'{where}
+            ORDER BY h.artifact_id DESC LIMIT ?""",
+        [*params, limit]).fetchall()
+
+
+def incomplete_reply_roots(db, project_id) -> int:
+    """Thread roots whose reported reply_count exceeds the replies
+    stored with a full body — replies not (yet) fetched."""
+    return db.execute("""
+      SELECT count(*) FROM messages m WHERE m.project_id=? AND m.parent_id IS NULL
+        AND m.reply_count > (SELECT count(*) FROM messages r
+          WHERE r.project_id=m.project_id AND r.parent_id=m.message_id AND r.body_state='full')
+    """, (project_id,)).fetchone()[0]
 
 
 def resolve_staff(db, name, project_id=None):

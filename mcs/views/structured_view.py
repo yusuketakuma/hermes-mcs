@@ -145,8 +145,30 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
     return out
 
 
-def _head_lines(llm: dict, v1: dict) -> list[str]:
+# where a high urgency came from — the source is always shown: the rule
+# extractor is a keyword match that also fires on negated phrases
+URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
+                 "rule": "緊急語を含む（機械照合）"}
+
+
+def message_urgency(db, mid: int) -> str | None:
+    """'llm' when the message's current extract_llm artifact says
+    urgency high, 'rule' when only the rule extractor (extract_v1)
+    flags it, else None — the one urgency reading for cards, text
+    notices and signal escalation."""
+    if (latest_artifact(db, "extract_llm", mid) or {}).get("urgency") \
+            == "high":
+        return "llm"
+    if (latest_artifact(db, "extract_v1", mid) or {}).get("urgency") \
+            == "high":
+        return "rule"
+    return None
+
+
+def _head_lines(llm: dict, v1: dict, urgency: str | None = None) -> list[str]:
     lines: list[str] = []
+    if urgency in URGENCY_LABEL:
+        lines.append(URGENCY_LABEL[urgency])
     if (llm.get("summary") or "").strip():
         lines.append(f"要約: {llm['summary'].strip()[:80]}")
     pts = [str(p).strip() for p in (llm.get("points") or [])
@@ -324,7 +346,7 @@ def structured_lines(db, mid: int) -> list[str]:
     llm = latest_fact_artifact(db, mid) or {}
     if not v1 and not llm:
         return []
-    lines: list[str] = _head_lines(llm, v1)
+    lines: list[str] = _head_lines(llm, v1, message_urgency(db, mid))
     if (line := _vital_line(llm, v1)) is not None:
         lines.append(line)
     if (line := _lab_line(llm)) is not None:

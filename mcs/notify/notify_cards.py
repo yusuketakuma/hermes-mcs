@@ -40,10 +40,13 @@ import time
 import uuid
 from contextlib import suppress
 
+from mcs_adapter import project_url
+from mcs_queries import current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp)
+    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
+    current_ackers, open_tasks, patient_summary_text)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
@@ -192,7 +195,8 @@ CREATE TABLE IF NOT EXISTS notification_acknowledgements(
   actor TEXT NOT NULL,
   command_id TEXT NOT NULL UNIQUE,
   receipt_ref TEXT,
-  created_at REAL NOT NULL);
+  created_at REAL NOT NULL,
+  withdrawn_at REAL);
 CREATE TABLE IF NOT EXISTS notification_triage(
   card_id INTEGER PRIMARY KEY REFERENCES notification_cards(card_id),
   owner TEXT, defer_until REAL,
@@ -230,16 +234,27 @@ CREATE TABLE IF NOT EXISTS notification_restore_holds(
   release_command_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_nholds_active
   ON notification_restore_holds(card_id, released_at);
+-- ⏰ one reminder per task and stage — the durable once-only marker
+CREATE TABLE IF NOT EXISTS notification_task_reminders(
+  request_id INTEGER NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('due','overdue')),
+  event_id INTEGER,
+  created_at REAL NOT NULL,
+  PRIMARY KEY(request_id, stage));
 """
 
-# card action vocabulary -> (label, discord style, class)
+# card action vocabulary -> (label, discord style, class). ack/assign
+# labels are state-dependent (_action_rows); "defer" is retired — never
+# minted, kept so tokens on already-posted cards still resolve.
 _ACTIONS = {
-    "ack":     ("✅ 確認", "success", "write"),
-    "assign":  ("👤 担当", "primary", "write"),
+    "ack":     ("☐ 確認", "secondary", "write"),
+    "assign":  ("👤 担当する", "secondary", "write"),
     "defer":   ("⏸ 保留", "secondary", "write"),
     "body":    ("📄 本文表示", "secondary", "view"),
-    "tasks":   ("📋 タスク", "secondary", "view"),
-    "request": ("📝 依頼作成", "secondary", "write"),
+    "tasks":   ("☑ タスク完了", "secondary", "view"),
+    "request": ("📝 タスク作成", "secondary", "write"),
+    "summary": ("🧾 患者サマリー", "secondary", "view"),
+    "report":  ("⚠ 抽出の誤りを報告", "secondary", "write"),
     "dismiss": ("🚫 却下", "danger", "write"),
     "prev":    ("◀ 前へ", "secondary", "view"),
     "next":    ("次へ ▶", "secondary", "view"),
@@ -250,6 +265,8 @@ _ACTIONS = {
 _WRITE_ACTIONS = frozenset(
     a for a, (_, _, cls) in _ACTIONS.items() if cls == "write")
 
+TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
+STAFF_CHOICES = 25            # Discord/Slack select option ceiling
 TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
                               # buttons stays under Discord's 25-button
                               # per-message ceiling
@@ -599,8 +616,16 @@ def _action_rows(db, card, content, now, context=None,
     need = {"source_gen": card["source_generation"],
             "manifest_id": content["manifest_id"],
             "ui_rev": card["ui_revision"]}
-    ack_label = ("✅ このページを確認" if kind == "digest"
-                 else _ACTIONS["ack"][0])
+    # toggles show state: the label/style is what a glance must tell
+    acked = bool(current_ackers(db, card["card_id"],
+                                card["source_generation"], content["shown"]))
+    if kind == "digest":
+        ack_label = "✅ このページ確認済み" if acked else "☐ このページを確認"
+    else:
+        ack_label = "✅ 確認済み" if acked else _ACTIONS["ack"][0]
+    tri = db.execute("SELECT state,owner FROM notification_triage "
+                     "WHERE card_id=?", (card["card_id"],)).fetchone()
+    assigned = bool(tri and tri["state"] == "assigned" and tri["owner"])
 
     def btn(action, params=None, label=None, style=None):
         tok = _mint_token(db, card["card_id"], action, params, need, now)
@@ -609,33 +634,47 @@ def _action_rows(db, card, content, now, context=None,
              "label": label or _ACTIONS[action][0], "token": tok}
         row.append(b)
 
-    btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label)
-    btn("assign")
-    btn("defer")
+    btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label,
+        style="success" if acked else None)
+    btn("assign", label="👤 担当中" if assigned else None,
+        style="primary" if assigned else None)
+    def flush():
+        if row:
+            rows.append(list(row))
+            row.clear()
+
+    # row 1 — state toggles (+ 📄 where no thread carries the body)
     if not in_thread_body:
         # cards with a companion thread show the body inside it on
         # delivery — the 📄 button only remains where no thread can
         # carry it (card_thread off, failed/deleted thread)
         btn("body")
-    if kind == "thread":
-        # thread scope is the only scope a task list can be pinned to —
-        # signal/digest cards span messages/projects the requests table
-        # does not key on.
-        btn("tasks")
-    rows.append(list(row))
-    row.clear()
-    if positive(card["project_id"]) \
-            and positive(context.get("source_message_id")) \
+    flush()
+    # row 2 — actions
+    pid = card["project_id"]
+    if positive(pid) and positive(context.get("source_message_id")) \
             and context.get("source_hash"):
         # a digest spans projects — a card-level request cannot pin a
         # single source, so the button is only emitted where it can work
-        btn("request", {"project_id": card["project_id"]})
+        btn("request", {"project_id": pid})
+    if open_tasks(db, card):
+        # only while the thread has open tasks — the list view is the
+        # thread-anchored _thread_tasks (signal/digest cards span
+        # messages/projects the requests table does not key on)
+        btn("tasks")
+    if positive(pid):
+        btn("summary")
+    if context.get("extract_ref"):
+        btn("report")
     if kind == "signal" and len(keys) == 1 \
             and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
-    if row:
-        rows.append(list(row))
-        row.clear()
+    flush()
+    # row 3 — MCS link + paging
+    if positive(pid):
+        # a plain link: no token, no runner round-trip
+        row.append({"id": "link", "ui": "link", "label": "🔗 MCSで開く",
+                    "url": project_url(pid)})
     if content["pages"] > 1:
         # only mint buttons that can actually move — a dead nav button
         # always comes back bad_page
@@ -643,8 +682,7 @@ def _action_rows(db, card, content, now, context=None,
             btn("prev", {"page": content["page"] - 1})
         if content["page"] + 1 < content["pages"]:
             btn("next", {"page": content["page"] + 1})
-        if row:
-            rows.append(list(row))
+    flush()
     return rows
 
 
@@ -1050,6 +1088,11 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "page": content["page"], "pages": content["pages"],
         "context": context,
     }
+    if any("<@" in (f.get("text") or "") for f in content["footer"]):
+        # the footer names members as <@id> mentions — a worker must
+        # render them without pinging; one that predates this key
+        # rejects the spec (held) instead of sending live mentions
+        spec["parts"]["mentions"] = "silent"
     if thread_on:
         spec["parts"]["thread_name"] = (_digest_thread_name()
                                         if card["kind"] == "digest"
@@ -1171,6 +1214,8 @@ def _render_context(db, card) -> dict:
       evidence message (the same 最新言及 the user sees).
     - ``signals``: rendered signal_key -> artifact_id — dismiss's
       ``expected_signal_artifact_id`` must equal what was rendered.
+    - ``extract_ref``: the extraction a ⚠ report would pin (see
+      ``_extract_ref``).
     Digests span projects, so no card-level source pin is emitted."""
     ctx: dict = {}
     if card["kind"] == "thread":
@@ -1181,6 +1226,9 @@ def _render_context(db, card) -> dict:
             pin = _source_hash(db, mid, card["project_id"])
             if pin is not None:
                 ctx["source_hash"] = pin
+            ref = _extract_ref(db, card["project_id"], root=mid)
+            if ref:
+                ctx["extract_ref"] = ref
         return ctx
     keys = _anchor_keys(card)
     sigs = _latest_signals(db, keys, card["project_id"])
@@ -1199,7 +1247,92 @@ def _render_context(db, card) -> dict:
         pin = _source_hash(db, mid, card["project_id"])
         if pin is not None:
             ctx["source_hash"] = pin
+        ref = _extract_ref(db, card["project_id"], mid=mid)
+        if ref:
+            ctx["extract_ref"] = ref
     return ctx
+
+
+def _extract_ref(db, project_id, *, root=None, mid=None) -> dict | None:
+    """The extraction a ⚠ report pins: the newest message of the thread
+    (or the signal's evidence message) whose current structured result
+    is an extract_llm artifact — a message served by the v4 read model
+    has no extract_llm result to re-run, so it offers no report."""
+    where = ("(m.message_id=? OR m.parent_id=?)" if root is not None
+             else "m.message_id=?")
+    args = (root, root) if root is not None else (mid,)
+    r = db.execute(
+        f"""SELECT a.artifact_id, m.message_id, m.content_hash
+            FROM messages m JOIN artifacts a
+              ON a.message_id=m.message_id AND a.kind='extract_llm'
+            WHERE {where} AND m.project_id=? AND m.body_state='full'
+              {current_extract_pred('a', 'm')}
+              AND {current_v4_id('m')} IS NULL
+            ORDER BY m.posted_at_ts DESC, a.artifact_id DESC LIMIT 1""",
+        (*args, project_id)).fetchone()
+    if r is None or not valid_hash(r["content_hash"]):
+        return None
+    return {"message_id": r["message_id"], "artifact_id": r["artifact_id"],
+            "content_hash": r["content_hash"]}
+
+
+def task_form(db, card) -> dict:
+    """Live data for the 📝 modal — the task text prefill (the first
+    request the source message's extraction found) and the assignee
+    choices. Returned with the modal-open result, never persisted."""
+    form: dict = {"staff": assignee_choices(db)}
+    ctx = _render_context(db, card)
+    mid = ctx.get("source_message_id")
+    m = db.execute(
+        "SELECT message_id,project_id,body_text,body_state,content_hash "
+        "FROM messages WHERE message_id=? AND project_id=?",
+        (mid, card["project_id"])).fetchone() if positive(mid) else None
+    if m is not None:
+        from mcs_requests import candidates
+        for c in candidates(db, m):
+            hint = " ".join(str(c.get("suggestion") or "").split())
+            if hint:
+                form["hint"] = hint[:TASK_HINT_MAX]
+                break
+    return form
+
+
+def assignee_choices(db, limit=STAFF_CHOICES) -> list:
+    """Assignee options for a task — ``name（station）`` strings, the
+    shape resolve_staff stores. The MCS station staff roster
+    (station_staff_v1, fetched from MCS) is the source; without it the
+    senders observed posting under our own stations (self profile) stand
+    in. Empty -> the plugins fall back to free text. This is the single
+    swap point for another roster source."""
+    from mcs_queries import staff_directory
+    from mcs_signals import _latest_self_profile, latest_station_staff
+    out, seen = [], set()
+
+    def add(name, station):
+        name = " ".join(str(name or "").split())
+        label = f"{name}（{station}）" if station else name
+        if name and name not in seen and len(label) <= 75 \
+                and len(out) < limit:
+            seen.add(name)
+            out.append(label)
+
+    for s in latest_station_staff(db):
+        add(s.get("name"), s.get("station"))
+    if out:
+        return out
+    prof = _latest_self_profile(db)
+    own = [" ".join(o.split()) for o in prof.get("organizations") or []
+           if isinstance(o, str) and o.strip()]
+    if not own:
+        return []
+    add(prof.get("name"), own[0])
+    for r in staff_directory(db):
+        stations = {" ".join(s.split())
+                    for s in (r["organization"] or "").split(",")}
+        match = next((o for o in own if o in stations), None)
+        if match:
+            add(r["sender_name"], match)
+    return out
 
 
 def _publish_specs(db, dirs, specs, now) -> list:
@@ -1527,7 +1660,10 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
             # outcome but never a copy of the source text — a copy would
             # outlive the source's deletion. The caller's result still
             # carries the body for this one delivery.
-            kept = {k: v for k, v in receipt.items() if k != "body"}
+            # the 📝 form's prefill/staff list is the same kind of live
+            # view data — recomputed per click, never persisted
+            kept = {k: v for k, v in receipt.items()
+                    if k not in ("body", "form")}
             db.execute(
                 "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                 (command_id, digest, receipt.get("project_id"),
@@ -1588,12 +1724,18 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 and _source_fp(db, card) != card["source_fp"])):
         return {**base, "outcome": "rejected", "error": "stale_source",
                 "hint": "refresh"}
-    if replay is not None and action not in ("body", "request", "dismiss"):
+    if replay is not None and action not in (
+            "body", "summary", "request", "dismiss", "report"):
         return replay
     if action in ("prev", "next"):
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
         return _act_body(db, base, card, tok)
+    if action == "summary":
+        # view-only and live like 📄 — the text is never persisted
+        title, text = patient_summary_text(db, card["project_id"])
+        return {**base, "outcome": "applied", "action": "summary",
+                "title": title, "body": text}
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -1602,33 +1744,29 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return {**base, "outcome": "applied", "action": "tasks",
                 "tasks": items, "token_ctx": token_ctx}
     if action == "task_status":
-        return _act_task_status(db, base, card, tok, tok_params, now)
+        return _act_task_status(db, base, card, tok, tok_params, cfg,
+                                now, specs)
     if action == "ack":
         return _act_ack(db, base, req, card, tok, cfg, now, specs)
     if action == "assign":
-        return _act_assign(db, base, card, actor, cfg, now, specs)
+        return _act_assign(db, base, card, tok, actor, cfg, now, specs)
     if action == "defer":
-        until = now + DEFER_S
-        db.execute(
-            """INSERT INTO notification_triage(
-                 card_id,owner,defer_until,state,revision,last_actor,
-                 updated_at) VALUES(?,NULL,?,'deferred',1,?,?)
-               ON CONFLICT(card_id) DO UPDATE SET
-                 defer_until=excluded.defer_until,state='deferred',
-                 revision=revision+1,last_actor=excluded.last_actor,
-                 updated_at=excluded.updated_at""",
-            (card["card_id"], until, actor, now))
-        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
-        return {**base, "outcome": "applied", "action": "defer",
-                "defer_until": until, "delivery_id": new_render}
+        # 保留 was retired — a button on an already-posted card answers
+        # and refreshes that card to the current button set
+        _issue_render(db, card["card_id"], cfg, now, specs, force=True)
+        return {**base, "outcome": "rejected", "error": "action_retired"}
     # request/dismiss tokens authorize the plugin-side modal — nothing
     # is applied here; the human command itself arrives separately as
     # request.create/ops.signal_dismiss with the full envelope. The
     # stored params go back to the caller so the plugin builds the modal
     # against what was rendered — user input never picks the target.
-    if action in ("request", "dismiss"):
+    if action in ("dismiss", "report"):
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": tok_params}
+    if action == "request":
+        return {**base, "outcome": "applied", "action": action,
+                "modal": True, "params": tok_params,
+                "form": task_form(db, card)}
     return {**base, "outcome": "rejected",
             "error": "action_not_applicable"}
 
@@ -1670,7 +1808,8 @@ def _act_body(db, base, card, tok) -> dict:
             "title": title, "body": body_text}
 
 
-def _act_task_status(db, base, card, tok, tok_params, now) -> dict:
+def _act_task_status(db, base, card, tok, tok_params, cfg, now,
+                     specs) -> dict:
     rid, to = tok_params.get("request_id"), tok_params.get("status")
     row = (db.execute(
         "SELECT * FROM requests WHERE request_id=? AND project_id=?",
@@ -1706,9 +1845,11 @@ def _act_task_status(db, base, card, tok, tok_params, now) -> dict:
                     "title": row["title"]}
         return {**base, "outcome": "rejected",
                 "error": "stale_task", "hint": "tasks"}
+    # the card footer lists open tasks — show the change now
+    new_render = _issue_render(db, card["card_id"], cfg, now, specs)
     return {**base, "outcome": "applied", "action": "task_status",
             "request_id": rid, "status": to, "title": row["title"],
-            "revision": row["revision"] + 1}
+            "revision": row["revision"] + 1, "delivery_id": new_render}
 
 
 def _act_ack(db, base, req, card, tok, cfg, now, specs) -> dict:
@@ -1720,13 +1861,29 @@ def _act_ack(db, base, req, card, tok, cfg, now, specs) -> dict:
     if man is None or man["invalidated"]:
         return {**base, "outcome": "rejected",
                 "error": "manifest_invalid"}
-    dupe = db.execute(
-        "SELECT 1 FROM notification_acknowledgements "
-        "WHERE card_id=? AND manifest_id=? AND actor=?",
-        (card["card_id"], mid, base["actor"])).fetchone()
-    if dupe:
+    # toggle: an actor whose ack already covers this content (same
+    # source generation + shown set) withdraws it — unless the ack is
+    # newer than the button clicked, i.e. a double tap on the stale face
+    mine = db.execute(
+        """SELECT a.ack_id, a.created_at FROM notification_acknowledgements a
+           JOIN notification_view_manifests m
+             ON m.manifest_id=a.manifest_id
+           WHERE a.card_id=? AND a.actor=? AND a.withdrawn_at IS NULL
+             AND m.source_generation=? AND m.shown=?""",
+        (card["card_id"], base["actor"], man["source_generation"],
+         man["shown"])).fetchall()
+    if any(r["created_at"] > tok["created_at"] for r in mine):
         return {**base, "outcome": "applied", "action": "ack",
                 "absorbed": True, "manifest_id": mid}
+    if mine:
+        db.execute(
+            "UPDATE notification_acknowledgements SET withdrawn_at=? "
+            "WHERE ack_id IN (" + ",".join("?" * len(mine)) + ")",
+            [now, *(r["ack_id"] for r in mine)])
+        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
+        return {**base, "outcome": "applied", "action": "ack",
+                "withdrawn": True, "manifest_id": mid,
+                "delivery_id": new_render}
     db.execute(
         "INSERT INTO notification_acknowledgements("
         "card_id,manifest_id,actor,command_id,receipt_ref,created_at)"
@@ -1743,7 +1900,23 @@ def _act_ack(db, base, req, card, tok, cfg, now, specs) -> dict:
             "delivery_id": new_render}
 
 
-def _act_assign(db, base, card, actor, cfg, now, specs) -> dict:
+def _act_assign(db, base, card, tok, actor, cfg, now, specs) -> dict:
+    tri = db.execute("SELECT state,owner,updated_at FROM notification_triage"
+                     " WHERE card_id=?", (card["card_id"],)).fetchone()
+    if tri and tri["state"] == "assigned" and tri["owner"] == actor:
+        if (tri["updated_at"] or 0) > tok["created_at"]:
+            # double tap on the face that predates this assignment
+            return {**base, "outcome": "applied", "action": "assign",
+                    "owner": actor, "absorbed": True}
+        # the owner taps 担当中 — release back to open
+        db.execute(
+            "UPDATE notification_triage SET owner=NULL,state='open',"
+            "revision=revision+1,last_actor=?,updated_at=? "
+            "WHERE card_id=?", (actor, now, card["card_id"]))
+        new_render = _issue_render(db, card["card_id"], cfg, now, specs)
+        return {**base, "outcome": "applied", "action": "assign",
+                "owner": None, "released": True, "delivery_id": new_render}
+    # unassigned, or another member takes over
     db.execute(
         """INSERT INTO notification_triage(
              card_id,owner,defer_until,state,revision,last_actor,
@@ -1866,6 +2039,103 @@ def apply_refresh(ledger, req, cfg, now=None) -> dict:
     ensure_dirs(root)
     _publish_specs(db, notify_dirs(root), specs, now)
     return receipt
+
+
+def rerender_message_cards(ledger, cfg, project_id, message_id,
+                           now=None) -> list:
+    """Issue the next render of the live thread card holding a message
+    (root or reply) — its footer shows a task/report that just landed.
+    The drain's bounded sweep alone may not reach it among many cards."""
+    if not positive(project_id) or not positive(message_id):
+        return []
+    db = _db(ledger)
+    now = time.time() if now is None else now
+    specs = []
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        root = _thread_root(db, message_id, project_id)
+        for r in db.execute(
+                "SELECT card_id FROM notification_cards WHERE kind='thread' "
+                "AND project_id=? AND root_message_id=? "
+                "AND delivery_state!='revoked'",
+                (project_id, root)).fetchall():
+            _issue_render(db, r["card_id"], cfg, now, specs)
+        if specs:
+            mark_snapshot_dirty(db)
+    if specs:
+        root_dir = data_root(ledger)
+        ensure_dirs(root_dir)
+        _publish_specs(db, notify_dirs(root_dir), specs, now)
+    return [s["delivery_id"] for s in specs]
+
+
+# reminders post inside this JST hour window only — a due-day reminder
+# at 3 a.m. helps nobody; the next tick in the window sends it
+REMINDER_HOURS = (8, 21)
+
+
+def task_reminders(ledger, cfg, now=None, limit=50) -> int:
+    """⏰ due-day and ⚠ overdue reminders for open tasks created from a
+    live thread card: one notify_outbox text notice per task and stage
+    (the notification_task_reminders row is the once-only marker, set in
+    the same transaction). A task already past due when first seen gets
+    only the overdue reminder. Off with the interactive switch and
+    outside REMINDER_HOURS."""
+    if not interactive_enabled(cfg):
+        return 0
+    from datetime import datetime
+    from mcs_queries import JST
+    now = time.time() if now is None else now
+    local = datetime.fromtimestamp(now, JST)
+    if not REMINDER_HOURS[0] <= local.hour < REMINDER_HOURS[1]:
+        return 0
+    today = local.date().isoformat()
+    db = _db(ledger)
+    sent = 0
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            """SELECT r.request_id, r.project_id, r.title, r.assignee,
+                      r.due_date FROM requests r
+               JOIN messages m ON m.message_id=r.source_message_id
+                AND m.project_id=r.project_id
+               WHERE r.status IN ('open','in_progress')
+                 AND r.due_date IS NOT NULL AND r.due_date<=?
+                 AND EXISTS (SELECT 1 FROM notification_cards c
+                     WHERE c.kind='thread' AND c.project_id=r.project_id
+                       AND c.transport=? AND c.delivery_state!='revoked'
+                       AND c.root_message_id IN (m.message_id, m.parent_id))
+                 AND NOT EXISTS (SELECT 1 FROM notification_task_reminders t
+                     WHERE t.request_id=r.request_id
+                       AND t.stage=CASE WHEN r.due_date=? THEN 'due'
+                                        ELSE 'overdue' END)
+               ORDER BY r.due_date, r.request_id LIMIT ?""",
+            (today, active_transport(cfg), today, limit)).fetchall()
+        for r in rows:
+            stage = "due" if r["due_date"] == today else "overdue"
+            head = (f"⏰ 期限リマインド（本日 {r['due_date']}）" if stage == "due"
+                    else f"⚠ 期限切れ（期限 {r['due_date']}）")
+            name = _patient_name(db, r["project_id"]) \
+                or f"project {r['project_id']}"
+            text = (f"{head} — {_plain(name)}: {_plain(r['title'])}"
+                    f" — 担当 {_plain(r['assignee'] or '未設定')}")
+            eid = ledger.outbox_add_tx(
+                "task_reminder", r["project_id"],
+                {"text": text, "request_id": r["request_id"],
+                 "stage": stage})
+            db.execute(
+                "INSERT INTO notification_task_reminders("
+                "request_id,stage,event_id,created_at) VALUES(?,?,?,?)",
+                (r["request_id"], stage, eid, now))
+            sent += 1
+    return sent
+
+
+def _plain(text) -> str:
+    """Frozen notice text — one line, no mention/broadcast syntax."""
+    t = " ".join(str(text or "").split())[:200]
+    return (t.replace("<", "＜").replace(">", "＞")
+            .replace("@", "＠"))
 
 
 # ---------- sweep / GC / watchdog / health ----------

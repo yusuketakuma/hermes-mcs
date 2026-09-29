@@ -985,12 +985,13 @@ def test_self_profile_normalizes_user_envelope():
                 "id": 42, "last_name": "山田", "first_name": "薬剤",
                 "specialist_categories": [{"name": "薬剤師"},
                                           {"name": "管理薬剤師"}],
-                "stations": [{"name": "みどり薬局"}]}}
+                "stations": [{"id": 7, "name": "みどり薬局"}]}}
 
     p = Adapter().self_profile()
     assert p == {"sender_id": 42, "name": "山田 薬剤",
                  "professions": ["薬剤師", "管理薬剤師"],
-                 "organizations": ["みどり薬局"]}
+                 "organizations": ["みどり薬局"],
+                 "stations": [{"id": 7, "name": "みどり薬局"}]}
 
 
 def test_self_profile_accepts_bare_user_object():
@@ -1152,3 +1153,70 @@ def test_403_with_unreachable_session_probe_stays_expiry(monkeypatch):
         monkeypatch, {"/users/self/count": 503, "/projects/2/messages": 403})
     with pytest.raises(mcs_adapter.SessionExpired):
         adapter._request("GET", "/projects/2/messages", retries=0)
+
+
+# ---------- station_staffs (own pharmacy roster) ----------
+
+
+def _staff_page(users, has_next):
+    return {"paginate": {"current_page": 1, "per_page": 100,
+                         "timestamp": 0, "total_entries": len(users),
+                         "total_pages": 1, "has_next": has_next},
+            "users": users}
+
+
+def test_station_staffs_paginates_and_skips_station_accounts():
+    calls = []
+    pages = {
+        (7, 1): _staff_page([
+            {"id": 1, "last_name": "山田", "first_name": "花子",
+             "specialist_categories": [{"name": "薬剤師"}],
+             "is_self": True, "is_station_account": False},
+            {"id": 2, "last_name": "みどり", "first_name": "薬局",
+             "specialist_categories": [], "is_station_account": True}],
+            True),
+        (7, 2): _staff_page([
+            {"id": 3, "last_name": "佐藤", "first_name": "一郎",
+             "specialist_categories": [{"name": "事務"}]}], False),
+    }
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            calls.append((path, params, extend_session))
+            sid = int(path.split("/")[2])
+            return pages[(sid, params["page"])]
+
+    staff = Adapter().station_staffs([{"id": 7, "name": "みどり薬局"},
+                                      {"id": "bad", "name": "x"}])
+    assert staff == [
+        {"staff_id": 1, "name": "山田 花子", "professions": ["薬剤師"],
+         "station": "みどり薬局", "is_self": True},
+        {"staff_id": 3, "name": "佐藤 一郎", "professions": ["事務"],
+         "station": "みどり薬局", "is_self": False}]
+    assert [c[0] for c in calls] == ["/stations/7/staffs"] * 2
+    assert all(c[1]["per_page"] == 100 and c[2] is False for c in calls)
+
+
+def test_station_staffs_failure_kinds():
+    import pytest
+
+    class Down(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            raise mcs_adapter.MCSError("http_error", "500", status=500)
+
+    class Expired(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            raise mcs_adapter.SessionExpired("token rejected")
+
+    class Bad(mcs_adapter.MCSAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            return {"users": "nope"}
+
+    st = [{"id": 7, "name": "みどり薬局"}]
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        Down().station_staffs(st)
+    assert e.value.kind == "station_staffs_unavailable"
+    with pytest.raises(mcs_adapter.SessionExpired):
+        Expired().station_staffs(st)
+    with pytest.raises(mcs_adapter.SchemaError):
+        Bad().station_staffs(st)
