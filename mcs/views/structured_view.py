@@ -152,12 +152,12 @@ URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
 
 
 def message_urgency(db, mid: int) -> str | None:
-    """'llm' when the message's current extract_llm artifact says
-    urgency high, 'rule' when only the rule extractor (extract_v1)
-    flags it, else None — the one urgency reading for cards, text
-    notices and signal escalation."""
-    if (latest_artifact(db, "extract_llm", mid) or {}).get("urgency") \
-            == "high":
+    """'llm' when the message's current fact artifact (the same
+    v4 > canonical > extract_llm pick the 📋 body reads —
+    latest_fact_artifact) says urgency high, 'rule' when only the rule
+    extractor (extract_v1) flags it, else None — the one urgency reading
+    for cards, text notices and signal escalation."""
+    if (latest_fact_artifact(db, mid) or {}).get("urgency") == "high":
         return "llm"
     if (latest_artifact(db, "extract_v1", mid) or {}).get("urgency") \
             == "high":
