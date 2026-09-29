@@ -835,6 +835,8 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     monkeypatch.setattr(mcs_setup, "MANIFEST_PATH",
                         str(tmp_path / "data" / "service_manifest.json"))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", "/h/venv/bin/python")
+    # interpreter probe has its own tests — keep it out of `calls`
+    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup, "_agent_loaded",
@@ -1717,5 +1719,220 @@ def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcs_setup, "check_environment",
                         lambda cfg: ([], []))
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
+    monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: ([], []))
     assert mcs_setup.cmd_check(None) == 1
     assert "a.sh" in capsys.readouterr().out
+
+
+# ---- invalid config.json is never treated as empty ---------------------
+
+def test_init_stops_on_invalid_config(monkeypatch, tmp_path, capsys):
+    """A present-but-broken config.json must not be overwritten with a
+    fresh one (every setting silently lost) — init stops, file intact."""
+    _init_env(monkeypatch, tmp_path, {})
+    (tmp_path / "c.json").write_text('{"mcs_login_id": "u1",')
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": "")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init"])
+    assert mcs_setup.main() == 1
+    assert (tmp_path / "c.json").read_text() == '{"mcs_login_id": "u1",'
+    assert "init --yes" in capsys.readouterr().out
+    assert not list(tmp_path.glob("c.json.corrupt-*"))
+
+
+@pytest.mark.parametrize("body", ['{"broken', "[1, 2]"])
+def test_init_yes_moves_invalid_config_aside(monkeypatch, tmp_path, body):
+    import json
+    _init_env(monkeypatch, tmp_path, {})
+    (tmp_path / "c.json").write_text(body)
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes",
+                         "--login-id", "u1", "--notify-target", "slack"])
+    assert mcs_setup.main() == 0
+    (backup,) = tmp_path.glob("c.json.corrupt-*")
+    assert backup.read_text() == body
+    assert backup.stat().st_mode & 0o777 == 0o600
+    assert json.loads((tmp_path / "c.json").read_text())["mcs_login_id"] \
+        == "u1"
+
+
+def test_fact_source_refuses_invalid_config(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    conf = tmp_path / "c.json"
+    conf.write_text("not json")
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    assert mcs_setup.cmd_fact_source(
+        SimpleNamespace(fact_source="shadow", gate_evidence=None)) == 1
+    assert conf.read_text() == "not json"
+
+
+def _check_only(monkeypatch, runtime=([], []), config=([], [])):
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: runtime)
+    monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: config)
+    monkeypatch.setattr(mcs_setup, "check_environment",
+                        lambda cfg: ([], []))
+    monkeypatch.setattr(mcs_setup, "_script_drift", lambda: ([], []))
+    monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
+
+
+def test_check_flags_invalid_config_file(monkeypatch, tmp_path, capsys):
+    _check_only(monkeypatch)
+    conf = tmp_path / "c.json"
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    assert mcs_setup.cmd_check(None) == 0      # absent = fresh, not broken
+    conf.write_text("{")
+    assert mcs_setup.cmd_check(None) == 1
+    assert "unreadable or invalid" in capsys.readouterr().out
+
+
+def test_check_prints_prioritized_blocker_summary(monkeypatch, capsys):
+    """Blockers end the output in priority order (runtime before config),
+    each with a one-line fix."""
+    _check_only(monkeypatch,
+                runtime=(["interpreter /h/py is missing — cannot start; "
+                          "re-run `/r/install.sh` (stage 2)"], []),
+                config=(["missing required key: mcs_login_id"],
+                        ["unknown config key: x"]))
+    assert mcs_setup.cmd_check(None) == 1
+    out = capsys.readouterr().out
+    summary = out[out.index("blockers (2)"):]
+    assert summary.index("interpreter /h/py is missing") \
+        < summary.index("missing required key")
+    assert "fix: /r/install.sh" in summary
+    assert "fix: mcs_setup.py init" in summary
+    assert out.rstrip().endswith("check: FAIL (2 errors, 1 warnings)")
+
+
+def test_check_ok_prints_no_blocker_summary(monkeypatch, capsys):
+    _check_only(monkeypatch)
+    assert mcs_setup.cmd_check(None) == 0
+    assert "blockers" not in capsys.readouterr().out
+
+
+def test_doctor_prints_facts_then_runs_check(monkeypatch, capsys):
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 7)
+    assert mcs_setup.cmd_doctor(None) == 7
+    out = capsys.readouterr().out
+    assert f"repo     : {mcs_setup.REPO_ROOT}" in out
+    assert mcs_setup.sys.executable in out
+
+
+# ---- runtime: services interpreter, launchd hermes, recovery, llama ----
+
+def _stub_py(path, rc):
+    path.write_text(f"#!/bin/sh\nexit {rc}\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_check_runtime_verifies_services_interpreter(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    cfg = {"hermes_bin": _stub_py(tmp_path / "hermes", 0)}
+    monkeypatch.setattr(mcs_setup, "HERMES_PY", str(tmp_path / "absent"))
+    errors, _ = mcs_setup.check_runtime(cfg)
+    assert any("absent is missing" in e and "install.sh" in e
+               for e in errors)
+    monkeypatch.setattr(mcs_setup, "HERMES_PY",
+                        _stub_py(tmp_path / "old-py", 1))
+    errors, _ = mcs_setup.check_runtime(cfg)
+    assert any("not a working Python >= 3.10" in e for e in errors)
+    monkeypatch.setattr(mcs_setup, "HERMES_PY",
+                        _stub_py(tmp_path / "py", 0))
+    assert mcs_setup.check_runtime(cfg) == ([], [])
+
+
+def test_check_runtime_hermes_must_resolve_on_launchd_path(monkeypatch,
+                                                          tmp_path):
+    """hermes found only via the login shell PATH (e.g. Homebrew) is
+    invisible to launchd/cron wrappers — an error with the exact fix."""
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    shell_only = "/opt/homebrew/bin/hermes"
+    monkeypatch.setattr(mcs_setup.shutil, "which",
+                        lambda cmd, mode=None, path=None:
+                        shell_only if path is None else None)
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: exe == shell_only)
+    errors, _ = mcs_setup.check_runtime({})
+    assert any("launchd PATH" in e
+               and f"ln -s {shell_only} ~/.local/bin/hermes" in e
+               for e in errors)
+    # an explicit hermes_bin is what every job uses -> fine
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    assert mcs_setup.check_runtime({"hermes_bin": shell_only}) == ([], [])
+
+
+def _runtime_darwin(monkeypatch, tmp_path, loaded=()):
+    from types import SimpleNamespace
+    repo = tmp_path / "repo"
+    (repo / "deployment" / "recovery").mkdir(parents=True)
+    (repo / "deployment" / "recovery" / "mcs_recover.py").write_text("v1")
+    for d in ("recovery", "agents"):
+        (tmp_path / d).mkdir()
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(tmp_path / "recovery"))
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path / "agents"))
+    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(mcs_setup, "_run",
+                        lambda *a, **k: SimpleNamespace(returncode=0))
+    loaded = set(loaded)
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda label: label in loaded)
+    return repo, loaded
+
+
+def test_check_runtime_nothing_installed_only_warns(monkeypatch, tmp_path):
+    _runtime_darwin(monkeypatch, tmp_path)
+    errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    assert errors == []
+    assert any("org.mcs.recovery" in w and "not installed" in w
+               for w in warnings)
+    assert any("no llama-server LaunchAgent" in w for w in warnings)
+
+
+def test_check_runtime_recovery_watchdog(monkeypatch, tmp_path):
+    repo, loaded = _runtime_darwin(
+        monkeypatch, tmp_path,
+        loaded={"org.mcs.recovery", "ai.mcs.llamaserver"})
+    rec = tmp_path / "recovery"
+    (rec / "mcs_recover.py").write_text("v1")
+    (rec / "repo_path").write_text(f"{repo}\n")
+    (tmp_path / "agents" / "org.mcs.recovery.plist").write_text("x")
+    assert mcs_setup.check_runtime({"hermes_bin": "/x"}) == ([], [])
+
+    (rec / "mcs_recover.py").write_text("v0")
+    (rec / "repo_path").write_text("/elsewhere\n")
+    loaded.discard("org.mcs.recovery")
+    errors, warnings = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    assert any("differs from the repo copy" in w for w in warnings)
+    assert any("recovers /elsewhere" in w for w in warnings)
+    assert any("org.mcs.recovery installed but not loaded" in e
+               and "launchctl bootstrap" in e for e in errors)
+
+
+def test_check_runtime_llama_agent_installed_but_unloaded(monkeypatch,
+                                                         tmp_path):
+    _runtime_darwin(monkeypatch, tmp_path)
+    (tmp_path / "agents" / "ai.mcs.llamaserver.plist").write_text("x")
+    errors, _ = mcs_setup.check_runtime({"hermes_bin": "/x"})
+    assert any("ai.mcs.llamaserver installed but not loaded" in e
+               for e in errors)
+
+
+def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,
+                                              capsys):
+    """Rendering wrappers/plists around a missing interpreter makes every
+    job fail at every run — services must stop before writing anything."""
+    probe = mcs_setup._hermes_py_problem
+    calls, args = _services_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", probe)
+    monkeypatch.setattr(mcs_setup.os.path, "isfile",
+                        lambda p: p != mcs_setup.HERMES_PY)
+    assert mcs_setup.cmd_services(args) == 1
+    assert calls == []
+    assert not (tmp_path / "scripts").exists()
+    assert "nothing rendered" in capsys.readouterr().out

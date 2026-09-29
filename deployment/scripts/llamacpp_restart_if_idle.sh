@@ -49,9 +49,16 @@ for cand in ai.hermes.llamacpp ai.mcs.llamaserver; do
   fi
 done
 if [ -z "$LABEL" ]; then
+  # --no-llm / self-managed server: nothing of ours to restart — a
+  # normal state, not a daily cron failure
   echo "$(ts) no llamacpp launchd agent loaded — restart skipped" >> "$LOG"
-  printf 'llamacpp restart: no launchd agent loaded (ai.hermes.llamacpp / ai.mcs.llamaserver)\n'
-  exit 1
+  exit 0
 fi
-/bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"
-echo "$(ts) restarted $LABEL (kickstart -k)" >> "$LOG"
+if /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"; then
+  echo "$(ts) restarted $LABEL (kickstart -k)" >> "$LOG"
+else
+  rc=$?
+  echo "$(ts) kickstart -k $LABEL FAILED rc=$rc" >> "$LOG"
+  printf 'llamacpp restart: kickstart -k %s failed (rc=%s)\n' "$LABEL" "$rc"
+  exit "$rc"
+fi
