@@ -87,8 +87,13 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
 - `ai.mcs.extract-drainer-rt`: `--all --shard 1/2 --lend-rt` — 全call前に
   `/slots` を照会し、RT slot が空いていれば借用する（polite lending）。
   RT 要求が来れば最大 1 call 分だけ queue 待ちさせる trade-off。
-  `/slots` 照会失敗時は slot 0 に fallback するため、サーバ停止中も
-  stall しない。
+  RT が使用中なら slot 0 が idle の場合だけ slot 0 を使い、両方使用中
+  なら 1 秒間隔で再照会して空きを待つ（call の deadline まで、deadline
+  無しは最大300s）。処理中の slot へ id_slot pin を送ると llama-server が
+  prompt cache を処理中 slot に load して `GGML_ASSERT(n <= tokens.size())`
+  で abort するため、使用中の slot 0 へは fallback しない。deadline 到達後
+  は call 自体が送信前に拒否される。`/slots` 照会失敗時のみ slot 0 に
+  fallback する（サーバ停止中は call も失敗するため stall しない）。
 - `mcs_llm_catchup.sh`（hermes cron・22:30 起動・最大55分）:
   `MCS_LLM_SLOT=1` で `semantic_drain.py --drain` を走らせ、QC/semantic
   ジョブを深夜 window で slot 1 から消化する。`WINDOW_S=3300` は
