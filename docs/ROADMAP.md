@@ -201,7 +201,7 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 
 ### Phase 0 — 判断と測定（コードなし。今すぐ）
 
-- **判断**（§9 の「決める時点」が Phase 0 のもの）: `#1-D1〜D6`（FileVault の有効化を含む）、`#9-D1〜D3`、`#8-D2`（wire enum の改名。C0 の fixture 固定前なら無償）、`#10-D1〜D2`、**Q7**（Q1〜Q4・Q8(b)・Q10・Q11 は 2026-09-29 決定済み: Q1 本文を送る→CD-9、Q2 semantic 常時稼働、Q3 PHI として扱う、Q4 対応付け・採用とも clerk も可、Q8(b) P0 完了後＝コード実装と本番投入のみ待機・C0 契約作業は進行、Q10 送る→CD-10、Q11 project_id リンク案。**Q6 は記録済み**・許可・本文含む、zaitaku-calender `docs/adr-external-ingest-v1.md` §4）、CD-1〜CD-10 と C0 合意事項（撤回指示書・受信側鮮度閾値・サイズ上限・`source` 対応付け・`content_hash` の null 取扱い）、`#12-D5`（F-2 の扱い）。
+- **判断**（§9 の「決める時点」が Phase 0 のもの）: `#1-D1〜D6`（FileVault の有効化を含む）、`#9-D1〜D3`、~~`#8-D2`~~（決定済み: wire enum 名は現行名のまま）、`#10-D1〜D2`、~~Q7~~（決定済み: fixture 正本は hermes-mcs）、**接続の C0 残りは CD-1〜CD-10 の合意のみ**（Q1〜Q4・Q7・Q8(b)・Q10・Q11・#8-D2・`prev_content_hash` 追加しない、は 2026-09-29 決定済み。**Q6 は記録済み**・許可・本文含む、zaitaku-calender `docs/adr-external-ingest-v1.md` §4）、CD-1〜CD-10 と C0 合意事項（撤回指示書・受信側鮮度閾値・サイズ上限・`source` 対応付け・`content_hash` の null 取扱い）、`#12-D5`（F-2 の扱い）。
 - **測定**（オーナーが snapshot に対して実行。実データの集計になるので調査側では未実行）: `runs` の所要時間分布（#5）、text 経路の held 件数（#6）、`ledger_audit` の初回（#7 Step 0）、現在の DB サイズ（#1）。
 - 目安: 実装は不要。Phase 1 の着手前提を揃える。
 
@@ -241,7 +241,7 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 
 ### 接続（zaitaku-calender と共通の番号）
 
-決める時点: **C0 の残りは Q7 と CD-1〜CD-10 の合意のみ**（Q1・Q2・Q3・Q4・Q8(b)・Q10・Q11 は 2026-09-29・オーナー決定済み。Q6 は記録済み: 許可・本文を含む staging の受入・保存、zaitaku-calender `docs/adr-external-ingest-v1.md` §4。実データ投入と本番投入は zaitaku-calender `ROADMAP.md` §10.3 のゲートの対象のまま。合成 fixture の開発は進めてよい）。C2 までに Q5・Q9、C3 前に Q8(a)。
+決める時点: **C0 の残りは CD-1〜CD-10 の合意のみ**（Q1・Q2・Q3・Q4・Q7・Q8(b)・Q10・Q11 は 2026-09-29・オーナー決定済み。Q6 は記録済み: 許可・本文を含む staging の受入・保存、zaitaku-calender `docs/adr-external-ingest-v1.md` §4。実データ投入と本番投入は zaitaku-calender `ROADMAP.md` §10.3 のゲートの対象のまま。合成 fixture の開発は進めてよい）。C2 までに Q5・Q9、C3 前に Q8(a)。
 
 1. ~~本文なしで足りるか~~ → **決定済み（2026-09-29・オーナー）**: 本文を送る。`mcs-read-model/1` に `message_body` record を追加（CD-9）。`docs/external-export-contract.md`・`export_schema.py`・両側 fixture の改訂が要る。
 2. ~~semantic 層（`semantic_facts_v4` または `canonical_projection`）を常時動かすか~~ → **決定済み（2026-09-29・オーナー）**: 常時動かす。facts が届く前提で fixture を作る。
@@ -249,7 +249,7 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 4. ~~患者対応付けと採用を pharmacist に限るか、clerk にも許すか~~ → **決定済み（2026-09-29・オーナー）**: 対応付け・採用とも clerk にも許す（capability で制御し職種強制はしない。zaitaku-calender `ROADMAP.md` §4.5）。
 5. Work Queue に「未確認の staging 行あり」を導出コードとして足すか（zaitaku-calender `docs/plans/implementation-plan.md:318` との両立）。C4 の digest 代替の可否もこれに従う。
 6. MCS から取得したデータを別システムへ転送・保存することが許されるか。根拠は zaitaku-calender `docs/domain-model-decision.md` の外部連携条項（接続先 ID と確認済み内部 ID の明示対応: L182、双方向連携の事前契約: L206）、MCS 利用規約、患者同意、院内規程。SHR-10／SCP-07（zaitaku-calender `docs/specs/visit-report-spec-v1.md:637, 82`）は「MCS への書き戻しをしない」ことの根拠としてだけ使う。**決まるまで C1 の本番投入（実データによる最初の envelope 作成と zaitaku-calender 本番へのアップロード）以降に進まない**。合成 fixture による開発・テストは進めてよい。**記録済み（2026-09-29・オーナー: 許可。本文を含む `message_body` を含む staging の受入・保存、zaitaku-calender `docs/adr-external-ingest-v1.md` §4）**。
-7. fixture の正本をどちらに置くか（CD-8 の推奨: hermes-mcs を正本に、zaitaku-calender へコピーし `MANIFEST.sha256` で一致確認）。
+7. ~~fixture の正本をどちらに置くか~~ → **決定済み（2026-09-29・オーナー）: hermes-mcs を正本**（CD-8 の推奨どおり。zaitaku-calender へコピーし `MANIFEST.sha256` で一致確認）。あわせて確定: `#8-D2` wire enum 名は現行名のまま（改名しない）、`prev_content_hash` は追加しない。
 8. (a) C3 の構成（D1 直接 binding か RPC か、mTLS 必須か（`bounded_http` は Bearer 固定で mTLS・Cloudflare Access 系ヘッダに未対応）、専用 Worker の権限を書込みのみに絞るか、Access service token かアプリ層 Bearer か。zaitaku-calender `ROADMAP.md` §4.9）。(b) ~~zaitaku-calender の P0 より先に接続へ着手するか~~ → **決定済み（2026-09-29・オーナー）: P0 完了後。適用範囲はコード実装と本番投入**（zaitaku 側 S2 以降、C1 本番投入）。C0 の契約合意・fixture 固定・hermes-mcs 側の参照実装変更（CD-9・CD-10 等）は進める。
 9. 型付き値（allergy・ADE・vital_lab の値）の送付を認めるか。認める場合は `docs/external-export-contract.md` の detail 禁止条項（L22・L137）の改訂とオーナーの明示承認が要る。hermes-mcs C2 の前提。
 10. ~~患者単位の取得完全性を zaitaku-calender へ送るか~~ → **決定済み（2026-09-29・オーナー）: 送る**。新 record 型 `patient_coverage`（`project_id`・`fetch_state`・`coverage_ts`。allowlist の変更）を CD-10 として起票し `export_schema.py` に追加する。全体件数（`patients_incomplete`、CD-4）と併せて患者単位の「不明」を出せる。
