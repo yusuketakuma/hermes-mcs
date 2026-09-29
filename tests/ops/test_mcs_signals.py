@@ -557,6 +557,34 @@ def test_dismiss_validation(led):
     assert r["outcome"] == "rejected" and r["error"] == "bad_signal_key"
 
 
+def test_dismiss_reason_code_is_optional_and_counted(led):
+    import mcs_requests
+    from uuid import uuid4
+    _req(led.db, "open", due="2026-09-10")
+    _req(led.db, "open", due="2026-09-11")
+    _ev(led)
+    base = {"cmd": "ops.signal_dismiss", "version": 1, "actor": "t",
+            "human_confirmed": True, "project_id": 1, "reason": "誤検知"}
+    bad = mcs_requests.apply_command(led, {
+        **base, "command_id": str(uuid4()),
+        "signal_key": "request_overdue:1:1", "reason_code": "wrong"})
+    assert bad["error"] == "bad_reason_code"
+    ok = mcs_requests.apply_command(led, {
+        **base, "command_id": str(uuid4()),
+        "signal_key": "request_overdue:1:1",
+        "reason_code": "false_positive"})
+    assert ok["outcome"] == "applied"
+    # an old command without reason_code keeps working
+    assert _dismiss(led, "request_overdue:1:2")["outcome"] == "applied"
+    rows = [json.loads(x[0]) for x in led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='signal_v1' "
+        "AND json_extract(content,'$.state')='dismissed' ORDER BY artifact_id")]
+    assert [r.get("dismiss_reason_code") for r in rows] == [
+        "false_positive", None]
+    assert mcs_signals.dismiss_reason_counts(led.db) == {
+        "request_overdue": {"false_positive": 1, "unclassified": 1}}
+
+
 # --- human-approved threshold policy (ops.signal_policy) ---
 
 def _policy(led, policy, reason="閾値承認"):

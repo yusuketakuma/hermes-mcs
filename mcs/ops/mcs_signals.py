@@ -1312,6 +1312,25 @@ def _notify(ledger, members, now, th):
     return 1
 
 
+def dismiss_reason_counts(db) -> dict:
+    """Human dismissals per signal type and reason code — every
+    'dismissed' transition counts once; rows from before reason codes
+    existed count as 'unclassified'. Read-only; no actor or free text.
+    A dismissal is a label, not proof the signal was wrong."""
+    out: dict = {}
+    for (content_s,) in db.execute(
+            "SELECT content FROM artifacts WHERE kind=? AND json_valid(content)"
+            " AND json_extract(content,'$.state')='dismissed'",
+            (ARTIFACT_KIND,)):
+        c = json.loads(content_s)
+        if not isinstance(c, dict):
+            continue
+        code = c.get("dismiss_reason_code") or "unclassified"
+        by_type = out.setdefault(str(c.get("type") or "unknown"), {})
+        by_type[code] = by_type.get(code, 0) + 1
+    return out
+
+
 def current_open(db, project_id=None, limit=50):
     """Read-side listing used by mcs_view — open signals with evidence
     ids. Runs on the snapshot connection; no state is touched. The
