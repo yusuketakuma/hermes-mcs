@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import itertools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
 from hermes_plugin.card_workers import make_slack_factory
 from hermes_plugin.mcs_delivery import envelopes, journal, registry
 from hermes_plugin.mcs_delivery import worker as worker_mod
+from hermes_plugin.mcs_delivery.spec import token_map
 from hermes_plugin.mcs_slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
@@ -540,7 +542,11 @@ def test_slack_worker_state_reads_and_writes_share_slack_state(led):
     assert w.dirs["state"].endswith("slack_state")
 
 
-def test_slack_started_only_part_is_unknown_and_never_resent(led):
+def test_slack_started_only_part_is_unknown_and_never_resent(led, monkeypatch):
+    # the runner clock is frozen; registry stamps must still order the
+    # old render's buttons before the update's
+    monkeypatch.setattr(registry, "time", SimpleNamespace(
+        time=itertools.count(NOW).__next__))
     _seed_thread(led)
     _big_body(led)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -586,6 +592,17 @@ def test_slack_started_only_part_is_unknown_and_never_resent(led):
     assert not w.reg.parts_done(did)
     asyncio.run(_granted_card(w.worker, led, w.root))
     assert w.reg.parts_done(did)
+    # the delivered in-place update retired the replaced buttons'
+    # contexts for every action it re-issued; the new render's buttons
+    # are pinned to the same ts
+    new_tokens = token_map(uspec)
+    reissued = {c["action"] for c in new_tokens.values()}
+    old_tokens = token_map(spec)
+    assert reissued & {c["action"] for c in old_tokens.values()}
+    for t, c in old_tokens.items():
+        assert (w.reg.token(t) is None) is (c["action"] in reissued)
+    assert all(w.reg.token(t)["message_id"] == "1790000000.000001"
+               for t in new_tokens)
     # the started-only part is skipped — its journal holds a 'started'
     # row and must never gain a result; siblings bind existing replies
     # or post their genuinely-new text under the same root

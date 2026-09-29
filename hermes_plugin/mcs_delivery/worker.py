@@ -745,6 +745,11 @@ class DeliveryWorker:
                           attempt_id=claim["attempt_id"],
                           delivery_id=spec["delivery_id"],
                           result=outcome["result"])
+            if spec["op"] == "update" and outcome["result"] == "delivered":
+                # the edit replaced the message's buttons — the old
+                # tokens' context can never be clicked again. Only on a
+                # proven edit: not_sent/unknown leave the old view live.
+                self._reg.prune_card_tokens(spec_mod.token_map(spec))
             claim["phase"] = "settled"
         if claim["phase"] == "settled":
             outcome = claim.get("outcome") or {}
