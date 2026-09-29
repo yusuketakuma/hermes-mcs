@@ -576,7 +576,7 @@ class Actions:
                     and result.get("outcome") == "applied":
                 for message in list_messages(
                         result, lambda pid: projects.project_allowed(
-                            self._settings, pid)):
+                            self._settings, pid), markdown=False):
                     await self._say(origin["channel_id"], rec["user"], message)
             elif result.get("action") == "task_status" \
                     and result.get("outcome") == "applied":

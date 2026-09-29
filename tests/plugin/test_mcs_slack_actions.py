@@ -725,6 +725,7 @@ def test_my_tasks_sends_the_name_and_filters_scope(tmp_path):
         text_ = "\n".join(m["text"] for m in app.client.messages)
         assert [m["user"] for m in app.client.messages] == ["U_OPERATOR"]
         assert "範囲内" in text_ and "範囲外" not in text_
+        assert "**" not in text_ and "*📋 自分のタスク" in text_
     asyncio.run(scenario())
 
 

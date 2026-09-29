@@ -257,15 +257,18 @@ def search_query(fields: dict) -> str | None:
 LIST_SHOW = 15             # ephemeral rows before 「他N件」
 
 
-def list_messages(result: dict, allowed) -> list:
+def list_messages(result: dict, allowed, markdown: bool = True) -> list:
     """A runner list view (📋 / 🗂 / 🔎) as ephemeral messages. Items of
     projects outside this deployment's scope (``allowed(pid)`` false)
     are dropped before counting; the rest is capped with 「他N件」 (the
-    runner's own overflow ``more`` is counted in, unfiltered)."""
+    runner's own overflow ``more`` is counted in, unfiltered). The title
+    is bold in Discord markdown, or in Slack mrkdwn (``*``) when
+    ``markdown`` is false."""
     view = result.get("list") or {}
     items = [i for i in view.get("items") or []
              if isinstance(i, dict) and allowed(i.get("project_id"))]
-    lines = [f"**{view.get('title') or '一覧'}**"]
+    bold = "**" if markdown else "*"
+    lines = [f"{bold}{view.get('title') or '一覧'}{bold}"]
     lines += [str(x) for x in view.get("head") or []]
     group = None
     for i in items[:LIST_SHOW]:

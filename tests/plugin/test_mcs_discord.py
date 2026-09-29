@@ -50,6 +50,13 @@ def _pin_wall_clock(monkeypatch):
 FOREIGN_USER = SimpleNamespace(id=9999)
 
 
+def _pings(allowed):
+    """True unless the send disabled every mention kind."""
+    return allowed is None or any(
+        getattr(allowed, k) for k in ("everyone", "users", "roles",
+                                      "replied_user"))
+
+
 class FakeResponse:
     def __init__(self):
         self.done = False
@@ -68,8 +75,10 @@ class FakeResponse:
         self.modal = modal
         self.done = True
 
-    async def send_message(self, content, ephemeral=False):
-        self.message = {"content": content, "ephemeral": ephemeral}
+    async def send_message(self, content, ephemeral=False,
+                           allowed_mentions=None):
+        self.message = {"content": content, "ephemeral": ephemeral,
+                        "pings": _pings(allowed_mentions)}
         self.done = True
 
 
@@ -77,14 +86,15 @@ class FakeFollowup:
     def __init__(self):
         self.sent = []
 
-    async def send(self, content, ephemeral=False, view=MISSING):
+    async def send(self, content, ephemeral=False, view=MISSING,
+                   allowed_mentions=None):
         # interaction followups are application webhooks — ephemeral is
         # always legal, but discord.py rejects an explicit view=None
         if view is not MISSING and view is None:
             raise TypeError("expected view parameter to be of type "
                             "View, not NoneType")
         self.sent.append({"content": content, "ephemeral": ephemeral,
-                          "view": view})
+                          "view": view, "pings": _pings(allowed_mentions)})
 
 
 class FakeInteraction:
@@ -1159,7 +1169,7 @@ def test_modal_wrong_actor_and_origin(world):
                            message_id=msg.id)
     asyncio.run(act.on_interaction(bad2))
     assert bad2.response.message == {"content": "権限がありません。",
-                                     "ephemeral": True}
+                                     "ephemeral": True, "pings": False}
     # an allowed channel but a different card message trips the
     # strict_message origin pin — the submit must come from the card
     # the form was opened on
@@ -1167,7 +1177,7 @@ def test_modal_wrong_actor_and_origin(world):
     asyncio.run(act.on_interaction(bad3))
     assert bad3.response.message == {
         "content": "フォームを開いたカードと送信元が一致しません。",
-        "ephemeral": True}
+        "ephemeral": True, "pings": False}
     assert bad3.response.deferred is None
     assert sorted((world.data / "cmd_int").glob("*.json")) == queued
     assert reg.modal(modal_id) is not None
@@ -2696,7 +2706,7 @@ def test_role_member_can_click_and_others_are_told(world):
     other.user = SimpleNamespace(id=3004, roles=[SimpleNamespace(id=556)])
     asyncio.run(world.interact(act, other))
     assert other.response.message == {"content": "権限がありません。",
-                                      "ephemeral": True}
+                                      "ephemeral": True, "pings": False}
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notification_acknowledgements"
     ).fetchone()[0] == 0
@@ -2922,6 +2932,36 @@ def test_search_modal_answers_hits_ephemeral(world):
                          message_id=msg.id, components=[])
     asyncio.run(world.interact(act, s2))
     assert "検索結果" not in (s2.response.message or {}).get("content", "")
+
+
+def test_late_search_result_reaches_the_sweep_without_pings(world,
+                                                             monkeypatch):
+    """🔎 hits that outlive the 20 s wait are delivered by the followup
+    sweep like other view clicks; every ephemeral/webhook send disables
+    mentions."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'search')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+    s = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, components=[
+        {"components": [{"custom_id": "query", "value": "本文"}]}])
+    asyncio.run(act.on_interaction(s))
+    assert "受け付けました" in s.followup.sent[-1]["content"]
+    assert not any(m["pings"] for m in s.followup.sent)
+    assert reg.followups()
+    world.drain()
+    asyncio.run(act.sweep_followups())
+    sent = sys.modules["discord"].Webhook.sent
+    assert any("「本文」の検索結果" in m["content"] for m in sent)
+    assert all(m["allowed_mentions"] is not None
+               and not m["allowed_mentions"].users for m in sent)
+    assert not reg.followups()
 
 
 def test_dismiss_reason_code_select_reaches_the_ledger(world):
