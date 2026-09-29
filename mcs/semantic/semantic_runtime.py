@@ -19,6 +19,7 @@ import uuid
 from contextlib import suppress
 
 from mcs_requests import payload_hash
+from mcs_util import loads_dict
 
 
 DEFAULT_ATTEMPT_LIMIT = 6
@@ -53,11 +54,7 @@ class LLMNotSent(RuntimeGuardError):
 
 def parse_payload(row: dict | object) -> dict:
     raw = row.get("payload") if isinstance(row, dict) else row["payload"]
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    return loads_dict(raw) or {}
 
 
 def attempt_limit(payload: dict) -> int:
@@ -556,7 +553,8 @@ def guard(ledger, token: JobToken, *, deadline: float,
 
 
 __all__ = [
-    "JobToken", "RuntimeBudget", "RuntimeGuardError", "RuntimeOff",
+    "JobToken", "LLMNotSent", "RuntimeBudget", "RuntimeGuardError",
+    "RuntimeOff",
     "RuntimeStale", "bind_jev", "config_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",

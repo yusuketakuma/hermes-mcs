@@ -189,11 +189,6 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     import semantic
 
     # facts: reuse a stored set for this fingerprint, else extract.
-    # fact_source selects the canonical path: "shadow" still feeds
-    # consumers from the legacy extractor while writing the v2
-    # document for comparison; "canonical" makes the v2 document the
-    # fact source and refuses to proceed while it stays incomplete —
-    # it never silently falls back to legacy.
     fact_source = scfg.get("fact_source", "legacy")
     v2_doc = None
     if fact_source != "legacy":
@@ -1110,9 +1105,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
             reserve_fn=reserve_fn)
-    except runtime.RuntimeStale:
-        return "stale"
-    except runtime.RuntimeOff:
+    except (runtime.RuntimeStale, runtime.RuntimeOff):
         return "stale"
     except runtime.LLMNotSent:
         # admission hold / refused connection: the LLM request never

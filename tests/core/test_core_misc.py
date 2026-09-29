@@ -382,6 +382,14 @@ def test_json_object_skips_trailing_prose_braces():
     assert mcs_util.json_object('[1,2]') is None
 
 
+def test_loads_dict_only_whole_dict_text():
+    """Stored JSON TEXT: a dict or None — never a located sub-object."""
+    import mcs_util
+    assert mcs_util.loads_dict('{"a": 1}') == {"a": 1}
+    for raw in (None, "", "[1]", "null", "x {\"a\": 1}"):
+        assert mcs_util.loads_dict(raw) is None
+
+
 def test_env_value_empty_line_is_unconfigured(tmp_path, monkeypatch):
     """An emptied `KEY=` line must read as None — `is None` setup checks
     otherwise report a blank credential as configured, and it must not

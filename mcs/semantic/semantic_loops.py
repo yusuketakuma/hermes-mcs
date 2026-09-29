@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from mcs_requests import payload_hash
+from mcs_util import loads_dict
 import semantic_jev as jev
 
 KIND_LOOP = "loop_candidate"
@@ -11,11 +12,7 @@ KIND_LOOP_EVENT = "loop_event"
 
 
 def _object(value):
-    try:
-        parsed = json.loads(value or "{}")
-    except (TypeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return loads_dict(value) or {}
 
 
 def _candidate_identity(candidate: dict) -> str:
