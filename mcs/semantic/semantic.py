@@ -163,7 +163,6 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     admission hold/deferral or a refused connection — so callers can
     wait without consuming an attempt (mirrors extract_llm's
     ``_DEFERRED``)."""
-    from semantic_runtime import LLMNotSent
     endpoint, model = llm_conf()
     err_out: dict = {}
     if local_llm.admission_enabled():
@@ -176,7 +175,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             max_tokens=max_tokens,
             request_fn=local_llm.bounded_request, error_out=err_out)
         if response is not None and response.get("admission"):
-            raise LLMNotSent(f"llm_admission:{response['admission']}")
+            raise runtime.LLMNotSent(f"llm_admission:{response['admission']}")
     else:
         response = local_llm.chat(
             prompt, endpoint=endpoint, model=model,
@@ -184,7 +183,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             extra_payload={"id_slot": local_llm.request_slot()},
             request_fn=local_llm.bounded_request, error_out=err_out)
     if response is None and err_out.get("kind") == "unreachable":
-        raise LLMNotSent("llm_unreachable")
+        raise runtime.LLMNotSent("llm_unreachable")
     # canonical acceptance: a length-truncated or empty completion is an
     # incomplete result, never a success payload — even when its text
     # happens to parse (C05)
