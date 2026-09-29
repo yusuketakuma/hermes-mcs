@@ -1772,9 +1772,10 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         # and refreshes that card to the current button set
         _issue_render(db, card["card_id"], cfg, now, specs, force=True)
         return {**base, "outcome": "rejected", "error": "action_retired"}
-    # request/dismiss tokens authorize the plugin-side modal — nothing
-    # is applied here; the human command itself arrives separately as
-    # request.create/ops.signal_dismiss with the full envelope. The
+    # request/dismiss/report tokens authorize the plugin-side modal —
+    # nothing is applied here; the human command itself arrives
+    # separately as request.create/ops.signal_dismiss/
+    # ops.extract_feedback with the full envelope. The
     # stored params go back to the caller so the plugin builds the modal
     # against what was rendered — user input never picks the target.
     if action in ("dismiss", "report"):

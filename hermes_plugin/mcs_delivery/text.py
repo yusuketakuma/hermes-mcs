@@ -124,8 +124,17 @@ def valid_due(due: str) -> bool:
 FEEDBACK_FIELDS = (("summary", "要約"), ("meds", "薬"), ("symptoms", "症状"),
                    ("requests", "依頼"), ("vitals", "バイタル"),
                    ("other", "その他"))
+# 🚫 reason codes — values match mcs_operations DISMISS_REASON_CODES
+DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応済み"),
+                   ("duplicate", "重複"), ("out_of_scope", "対象外"),
+                   ("other", "その他"))
 TASK_REASON = "通知カードからタスク作成"
 STAFF_OPTIONS = 25
+MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
+                "report": "抽出の誤りを報告", "search": "この患者を検索"}
+# card actions whose click opens a modal (text.modal_fields) instead of
+# answering directly
+MODAL_ACTIONS = tuple(MODAL_TITLES)
 
 
 def modal_fields(action: str, form: dict | None = None,
@@ -179,14 +188,6 @@ def modal_fields(action: str, form: dict | None = None,
         return [{"id": "query", "label": "キーワード（空白区切りで AND）",
                  "required": True, "max": 100, "default": ""}]
     return []
-
-
-MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
-                "report": "抽出の誤りを報告", "search": "この患者を検索"}
-# 🚫 reason codes — values match mcs_operations DISMISS_REASON_CODES
-DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応済み"),
-                   ("duplicate", "重複"), ("out_of_scope", "対象外"),
-                   ("other", "その他"))
 
 
 def task_attrs(fields: dict):
