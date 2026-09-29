@@ -93,14 +93,21 @@ def test_discord_view_renders_link_and_every_footer_line(monkeypatch):
                 or none.replied_user)
 
 
-def test_slack_footer_names_members_and_escapes_the_rest():
+def test_slack_footer_never_carries_mention_syntax():
+    """Slack has no allowed_mentions — a re-posted card with <@U…>
+    would ping. Mentions become display names or a neutral label and
+    the footer is plain_text."""
     _, blocks = slack_cards.render(_spec(slack=True))
     context = [b["elements"][0] for b in blocks if b["type"] == "context"]
-    # only a Slack-shaped user mention stays live; anything else is
-    # escaped to literal text
-    assert context[0] == {"type": "mrkdwn",
-                          "text": "✅ 確認: &lt;@1001&gt;・<@U0AB12CD>"}
-    assert context[1]["text"] == "📝 一件目 — 担当 山田\n📝 他1件 &amp; &lt;b&gt;"
+    assert context[0] == {"type": "plain_text",
+                          "text": "✅ 確認: <@1001>・メンバー"}
+    assert context[1] == {"type": "plain_text",
+                          "text": "📝 一件目 — 担当 山田\n📝 他1件 & <b>"}
+    _, blocks = slack_cards.render(_spec(slack=True), {"U0AB12CD": "佐藤"})
+    ctx = next(b for b in blocks if b["type"] == "context")["elements"][0]
+    assert ctx["text"] == "✅ 確認: <@1001>・佐藤"
+    assert all("<@U" not in b["elements"][0]["text"]
+               for b in blocks if b["type"] == "context")
     actions = [b for b in blocks if b["type"] == "actions"]
     link = actions[1]["elements"][0]
     assert link == {"type": "button", "action_id": slack_cards.LINK_ACTION,
@@ -119,9 +126,8 @@ def test_slack_footer_stays_plain_without_mentions():
     assert ctx == {"type": "plain_text", "text": "<!channel> 取り込み"}
 
 
-def test_slack_mrkdwn_never_lets_text_form_a_broadcast():
-    assert slack_cards._mrkdwn("<!channel> <@U1ABC> <@here>") \
-        == "&lt;!channel&gt; <@U1ABC> &lt;@here&gt;"
+def test_slack_mention_ids_reads_footer_only():
+    assert slack_cards.mention_ids(_spec(slack=True)) == {"U0AB12CD"}
 
 
 # ---------- shared modal definitions ------------------------------------

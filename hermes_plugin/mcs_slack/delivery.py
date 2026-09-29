@@ -11,7 +11,7 @@ from ..mcs_delivery.spec import token_map
 from ..mcs_delivery.worker import DeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
-from .cards import render, validate
+from .cards import mention_ids, render, validate
 from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -84,6 +84,30 @@ class SlackCardAdapter:
         self._allowed_user_ids = frozenset(allowed_user_ids)
         self._bound = False
         self._bot_id = ""
+        self._names: dict = {}
+
+    async def display_name(self, uid):
+        """The member's Slack display (or real) name via users.info —
+        cached per worker, None when unknown. A missing users:read
+        scope or any API error is cached as unknown, never raised."""
+        if uid in self._names:
+            return self._names[uid]
+        name = None
+        try:
+            user = _payload(await self._client.users_info(user=uid)) \
+                .get("user") or {}
+            prof = user.get("profile") or {}
+            for got in (prof.get("display_name"), prof.get("real_name"),
+                        user.get("real_name")):
+                if isinstance(got, str) and got.strip():
+                    name = " ".join(got.split())[:80]
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        self._names[uid] = name
+        return name
 
     async def bind(self):
         """Verify the native client belongs to the intended workspace."""
@@ -127,7 +151,12 @@ class SlackCardAdapter:
         if not isinstance(delivery, dict) or not self._owns(delivery):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
         try:
-            text, blocks = render(spec)
+            uids = sorted(mention_ids(spec))[:16]
+        except (AttributeError, TypeError):
+            uids = []
+        names = {u: await self.display_name(u) for u in uids}
+        try:
+            text, blocks = render(spec, names)
         except ValueError:
             return {"result": "not_sent", "error_code": "bad_render"}
         sender = single_attempt(self._client)

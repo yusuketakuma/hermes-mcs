@@ -66,8 +66,8 @@ DELIVERY_KEYS = frozenset({
 PARTS_KEYS = frozenset({
     "containers", "footer", "action_rows", "context", "manifest_id",
     "page", "pages", "thread_name", "thread_body_parts", "manifest",
-    # "silent": footer text carries <@id> member mentions — rendered as
-    # names, sent with every ping disabled (Discord allowed_mentions)
+    # "silent": footer text carries <@id> member mentions — Discord sends
+    # them with allowed_mentions=none; Slack replaces them with names
     "mentions"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",

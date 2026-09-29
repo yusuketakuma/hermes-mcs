@@ -455,10 +455,12 @@ UNKNOWN_ACTOR = "不明なユーザー"
 
 
 def actor_label(actor) -> str:
-    """A stored actor id as a client-rendered user mention — Discord and
-    Slack both render ``<@id>`` as the member's name. The worker sends
-    cards with pings disabled; an unparsable actor gets a neutral label,
-    never the raw id."""
+    """A stored actor id as a ``<@id>`` user mention. The Discord worker
+    sends it with allowed_mentions=none (rendered as the name, no ping);
+    the Slack worker has no such switch and replaces every ``<@U…>``
+    with the member's display name or a neutral label before sending,
+    so no Slack card carries mention syntax. An unparsable actor gets a
+    neutral label, never the raw id."""
     kind, _, rest = (actor if isinstance(actor, str) else "").partition(":")
     if kind == "discord" and _DISCORD_UID.fullmatch(rest):
         return f"<@{rest}>"
