@@ -60,8 +60,8 @@ runner が発行する新形式 spec を旧世代 worker が処理し、card は
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                # tests/ + integration/ の合成テスト全件（test_hermes_* は hermes-agent が無ければ収集対象外。一時HOME・認証環境の隔離）
-make lint                           # ruff（CIと同じ。範囲の正本は Makefile の LINT_PATHS）
+scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
+ruff check mcs/ tests/ hermes_plugin/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
 python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
 python3 scripts/update_readme.py --check
 python3 ci/gates.py
