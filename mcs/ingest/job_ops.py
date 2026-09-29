@@ -429,13 +429,6 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             ledger.job_retry(job["job_id"])
 
 
-def _due_history_jobs(ledger):
-    """All due history jobs in fair (least-recently-touched) order. The
-    snapshot is taken once — processing bumps updated_at, which already
-    rotates the job to the back for the NEXT drain (Oracle F8)."""
-    yield from ledger.history_jobs_due()
-
-
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
@@ -449,7 +442,9 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
     """
     limit = max_jobs or (TRICKLE_PATIENTS if trickle else HISTORY_JOB_LIMIT)
     done_n = 0
-    for job in _due_history_jobs(ledger):
+    # one fair (least-recently-touched) snapshot list; processing bumps
+    # updated_at, rotating the job back for the NEXT drain (Oracle F8)
+    for job in ledger.history_jobs_due():
         try:
             pl = json.loads(job["payload"] or "{}")
             if not _valid_history_payload(pl):
