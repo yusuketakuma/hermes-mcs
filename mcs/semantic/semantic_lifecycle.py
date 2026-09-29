@@ -26,7 +26,6 @@ is written to the ledger and no source text is emitted.
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import sys
@@ -39,16 +38,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
+from mcs_util import loads_dict
 from semantic_evaluation import LIFECYCLE_STAGES, EvaluationError, _dict
 from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, KIND_SUMMARY
-
-
-def _json_object(raw) -> dict | None:
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def _verified(db, mid: int, fp: str, policy: str) -> tuple[list | None, str]:
@@ -122,7 +114,7 @@ def _accepted_prefix(row, count: int) -> tuple[int | None, str | None]:
     raw = row["progress"]
     if not raw:
         return (None, None) if row["state"] == "accepted" else (0, None)
-    progress = _json_object(raw)
+    progress = loads_dict(raw)
     if progress is None:
         return None, None
     nxt, sent = progress.get("next", 0), progress.get("sent", [])
@@ -150,7 +142,7 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
             "SELECT event_id,state,payload,progress FROM notify_outbox "
             "WHERE kind='semantic_notice' AND project_id=? ORDER BY event_id",
             (pid,)):
-        payload = _json_object(row["payload"])
+        payload = loads_dict(row["payload"])
         if payload is None:
             return None, "notice_payload_invalid"
         if (payload.get("degraded") or payload.get("target_message_id") != mid
@@ -212,7 +204,7 @@ def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None,
                      (final_id, KIND_SUMMARY)).fetchone()
     if row is None:
         raise EvaluationError("artifact_missing")
-    summary, meta = _json_object(row["content"]), _json_object(row["meta"])
+    summary, meta = loads_dict(row["content"]), loads_dict(row["meta"])
     pid, mid = row["project_id"], row["message_id"]
     if (summary is None or meta is None or type(pid) is not int
             or type(mid) is not int or not isinstance(meta.get("fingerprint"), str)
@@ -226,8 +218,8 @@ def fact_lifecycle(db, final_id: int, artifact_ids: dict | None = None,
             continue
         other = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind=?",
                            (aid, kind)).fetchone() if type(aid) is int else None
-        other_meta = _json_object(other["meta"]) if other is not None else None
-        other_content = _json_object(other["content"]) if other is not None else None
+        other_meta = loads_dict(other["meta"]) if other is not None else None
+        other_content = loads_dict(other["content"]) if other is not None else None
         bound = (other_content or {}).get("source_fingerprint") \
             if kind == "semantic_bundle" else (other_meta or {}).get("fingerprint")
         if other is None or other["project_id"] != pid or bound != fp or (
