@@ -447,3 +447,28 @@ def test_slack_unknown_never_retries_and_operator_resolution_is_scoped(led):
     assert _drain(led, {**thread, "team_id": "T_OTHER"})["error"] == "scope_mismatch"
     assert _drain(led, thread)["thread_state"] == "created"
     assert _card(led)["thread_id"] == thread["thread_id"]
+
+
+def test_sealed_discord_intent_under_slack_config_holds_instead_of_hourly_forever(led, monkeypatch):
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    monkeypatch.setattr(notify_flush, "_config", lambda: SLACK)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda cfg: "/nonexistent/synthetic")
+
+    def row():
+        return led.db.execute(
+            "SELECT state, attempts, next_try FROM notify_outbox WHERE event_id=?",
+            (ev["event_id"],)).fetchone()
+
+    for attempt in range(5):
+        led.db.execute("UPDATE notify_outbox SET next_try=0 WHERE event_id=?",
+                       (ev["event_id"],))
+        led.db.commit()
+        assert notify_flush.flush(led)["failed"] == 1
+        state, attempts, next_try = row()
+        assert state == "failed"
+        if attempt < 4:
+            assert attempts == attempt + 1 and next_try is not None
+    assert next_try is None  # held: out of outbox_due, surfaced by health
+    assert notify_flush.flush(led)["failed"] == 0
