@@ -333,3 +333,24 @@ def test_planned_visit_is_not_a_past_visit_date(body, expected):
     result = extract.extract_message(body, '2026-09-20T10:00:00+09:00')
     assert {key: result[key] for key in ('visit_date', 'next_planned')
             if key in result} == expected
+
+
+def test_rule_pass_commits_in_chunks_and_resumes(db, monkeypatch):
+    monkeypatch.setattr(extract, "_CHUNK", 3)
+    db.save_messages([_message(mid=i, body=f"合成本文{i}") for i in range(1, 8)])
+    real, calls = extract.extract_message, []
+
+    def fail_on_fifth(body, posted):
+        calls.append(body)
+        if len(calls) == 5:
+            raise RuntimeError("synthetic crash")
+        return real(body, posted)
+
+    monkeypatch.setattr(extract, "extract_message", fail_on_fifth)
+    with pytest.raises(RuntimeError):
+        extract.run_pending(db)
+    assert len(db.artifacts("extract_v1")) == 3     # first chunk kept
+    monkeypatch.setattr(extract, "extract_message", real)
+    out = extract.run_pending(db)
+    assert out["done"] == 4 and out["pids"] == [1]
+    assert len(db.artifacts("extract_v1")) == 7
