@@ -31,9 +31,11 @@ snapshot timestamp returned by list_unread(). A response that fails to
 parse records status='unknown', never 'confirmed'.
 """
 import argparse
+import errno
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from contextlib import suppress
@@ -48,7 +50,7 @@ from ledger import Ledger
 from health_watch import HEALTH_REL
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
-                      load_config)
+                      disk_floor_mb, load_config)
 import job_ops
 import maintenance
 import notify_flush
@@ -61,6 +63,12 @@ RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enou
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
+# coverage lag is normal for large active patients (a pinned timeline
+# certifies only on a full rescan); only a history_head that failed or
+# sat untouched this long is a collection stall
+COVERAGE_STALL_S = 24 * 3600
+# attachments (up to 64 MiB x 30 per tick) defer below floor + this
+ATTACH_DISK_MARGIN_MB = 2048
 
 
 def _err_str(e: Exception) -> str:
@@ -83,6 +91,16 @@ def _config() -> dict:
 # SUBSYSTEMS did. Monitors must read this file — a partial run exits 0
 # by design (work happened), so exit-status-only monitoring hides it.
 
+def _prev_health() -> dict:
+    """The previously published health block ({} when unreadable)."""
+    try:
+        with open(HEALTH_FILE, encoding="utf-8") as f:
+            prev = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return prev if isinstance(prev, dict) else {}
+
+
 def _unread_at(result: dict, status: str, now: float) -> float | None:
     """When unread collection last completed. A --jobs-only deep run or
     a failed tick does not collect unread, so it carries the previous
@@ -91,13 +109,47 @@ def _unread_at(result: dict, status: str, now: float) -> float | None:
     if not result.get("jobs_only") \
             and status not in ("failed", "session_expired"):
         return now
-    try:
-        with open(HEALTH_FILE, encoding="utf-8") as f:
-            prev = json.load(f).get("unread_at")
-    except (OSError, ValueError, AttributeError):
-        return None
+    prev = _prev_health().get("unread_at")
     return prev if isinstance(prev, int | float) \
         and not isinstance(prev, bool) and math.isfinite(prev) else None
+
+
+def _free_mb() -> float | None:
+    """Free MiB on the volume attachments (and the ledger) live on;
+    None when unmeasurable."""
+    try:
+        return shutil.disk_usage(ATTACH_DIR).free / (1024 * 1024)
+    except OSError:
+        return None
+
+
+def _disk_low(free_mb: float | None) -> bool:
+    """Free space under the attachment guard (floor + margin); an
+    unmeasurable volume or a disabled floor (0) never reads as low."""
+    floor = disk_floor_mb()
+    return bool(floor) and free_mb is not None \
+        and free_mb < floor + ATTACH_DISK_MARGIN_MB
+
+
+def _collection(result: dict) -> dict:
+    """Collection verdict: a stalled history_head or an incomplete
+    unread fetch is 'incomplete'; coverage lag alone is information.
+    --jobs-only runs collect nothing, so they carry the last full
+    tick's verdict forward instead of resetting it to 'ok'."""
+    keys = ("collection", "incomplete_projects", "coverage_lagging",
+            "coverage_stalled")
+    if result.get("jobs_only"):
+        prev = _prev_health()
+        if prev.get("collection") in ("ok", "incomplete"):
+            return {k: prev.get(k) for k in keys}
+    gaps = result.get("coverage_gaps") or []
+    stalled = [g.get("pid") for g in result.get("coverage_stalled") or []]
+    return dict(zip(keys, (
+        "incomplete" if result.get("incomplete") or stalled else "ok",
+        result.get("incomplete") or [],
+        {"count": len(gaps),
+         "max_lag_s": max((g.get("lag_s") or 0 for g in gaps), default=0)},
+        stalled)))
 
 
 def _health(ledger, result: dict, status: str,
@@ -147,12 +199,11 @@ def _health(ledger, result: dict, status: str,
             {current_extract_pred('a', 'm')}
             AND json_extract({json_or_null('a.meta')},'$.extract_version')=?)
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
-    collection = ("incomplete"
-                  if result.get("incomplete") or result.get("coverage_gaps")
-                  else "ok")
+    coll = _collection(result)
+    free_mb = _free_mb()
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
-               if (result.get("errors") or collection != "ok"
+               if (result.get("errors") or coll["collection"] != "ok"
                    or notify_state == "incomplete")
                else "ok")
     return {
@@ -160,8 +211,9 @@ def _health(ledger, result: dict, status: str,
         "run_id": run_id,
         "at": now,
         "unread_at": _unread_at(result, status, now),
-        "collection": collection,
-        "incomplete_projects": result.get("incomplete") or [],
+        **coll,
+        "disk_free_mb": round(free_mb) if free_mb is not None else None,
+        "disk_low": _disk_low(free_mb) or bool(result.get("backup_skipped")),
         "notify": {"state": notify_state,
                    "pending": outbox["c"],
                    "held": held,
@@ -520,22 +572,47 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                 result.setdefault("coverage_gaps", []).append(
                     {"pid": pid, "lag_s": lag})
         else:
+            lag = ledger.coverage_lag(pid)
+            # read BEFORE job_add — it revives a failed row
+            stall = _head_stall(ledger, pid) if lag > 0 else None
             # A bounded frontier read is not a completed history walk.
             # Reserve its tail independently of the deep-import floor.
             ledger.job_add("history_head", pid, payload={
                 "since": max(0, cutoff),
                 "page": 1 + batch.pages if merged.checkpoint_safe else 1,
                 "pages": BACKFILL_MAX_PAGES, "trickle": False})
-            lag = ledger.coverage_lag(pid)
             if lag > 0:
-                # Only a real gap between the stored head and verified
-                # coverage is reportable — a bounded scan that cannot
-                # reach the natural end (>BACKFILL_MAX_PAGES of
-                # history) defers certification to history_head.
+                # A gap between the stored head and verified coverage
+                # is information, not an error: a patient with more
+                # than BACKFILL_MAX_PAGES of history certifies only
+                # when history_head finishes its full rescan, so a lag
+                # of hours to days is normal. Only a head job that
+                # failed or stopped advancing is a collection fault.
                 result.setdefault("coverage_gaps", []).append(
                     {"pid": pid, "lag_s": lag})
-                result["errors"].append(
-                    f"backfill {pid}: coverage_incomplete")
+                if stall:
+                    result.setdefault("coverage_stalled", []).append(
+                        {"pid": pid, "lag_s": lag, "reason": stall})
+                    result["errors"].append(
+                        f"backfill {pid}: coverage_stalled_{stall}")
+
+
+def _head_stall(ledger, pid: int) -> str | None:
+    """Stall evidence for a patient's history_head: 'failed' (attempts
+    exhausted / window stalled) or 'not_advancing' (pending but neither
+    worked nor deferred — every checkpoint bumps updated_at — for
+    COVERAGE_STALL_S). None while it is making progress."""
+    row = ledger.db.execute(
+        "SELECT state,updated_at FROM fetch_jobs WHERE kind='history_head'"
+        " AND project_id=? AND message_id=0", (pid,)).fetchone()
+    if row is None:
+        return None
+    if row["state"] == "failed":
+        return "failed"
+    if row["state"] == "pending" \
+            and time.time() - (row["updated_at"] or 0) > COVERAGE_STALL_S:
+        return "not_advancing"
+    return None
 
 
 # ---------- stage: self-post / missed-post probe ----------
@@ -618,7 +695,13 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
     # otherwise a deep backlog leaves new-message files undownloaded
     # when flush() posts the event, and accepted events never re-send
     priority = ledger.pending_notify_message_ids()
-    for a in ledger.attachments_due(limit=30, priority_mids=priority):
+    due = ledger.attachments_due(limit=30, priority_mids=priority)
+    # disk guard: under pressure downloads stay pending (no attempt
+    # spent) instead of burning into a permanent 'failed' state
+    if due and _disk_low(_free_mb()):
+        result["attachments_deferred"] = len(due)
+        return
+    for i, a in enumerate(due):
         if time.monotonic() > deadline - 20:
             break
         dest = os.path.join(ATTACH_DIR, str(a["attachment_id"]))
@@ -626,7 +709,18 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
             info = adapter.download(a["url"], dest)
             ledger.attachment_saved(a["attachment_id"], dest,
                                     info["bytes"], info["sha256"], semantic=semantic)
-        except MCSError as e:
+        except (MCSError, OSError) as e:
+            if getattr(e, "kind", None) == "disk_full" or getattr(
+                    e, "errno", None) in (errno.ENOSPC, errno.EDQUOT):
+                result["attachments_deferred"] = len(due) - i
+                break
+            if not isinstance(e, MCSError):
+                ledger.attachment_failed(
+                    a["attachment_id"], f"fs_{type(e).__name__}",
+                    semantic=semantic)
+                result["errors"].append(
+                    f"attach {a['attachment_id']}: fs")
+                continue
             # keep the HTTP status in the recorded kind — the failure
             # class (permanent 4xx vs transient) and triage need it (F11)
             kind = (f"http_{e.status}" if e.kind == "http_error"
@@ -635,10 +729,6 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
                                      semantic=semantic)
             result["errors"].append(
                 f"attach {a['attachment_id']}: {kind}")
-        except OSError as e:
-            ledger.attachment_failed(
-                a["attachment_id"], f"fs_{type(e).__name__}", semantic=semantic)
-            result["errors"].append(f"attach {a['attachment_id']}: fs")
 
 
 # ---------- stage: derived data ----------
@@ -1044,7 +1134,8 @@ def _housekeeping(result):
     """Daily backup, log rotation and attachment pruning — each failure
     lands in errors without failing the run."""
     try:
-        maintenance.daily_backup(DB)
+        if maintenance.daily_backup(DB) == "skipped_disk_low":
+            result["backup_skipped"] = "disk_low"
     except maintenance.MaintenanceError as e:
         result["errors"].append(f"backup: {e}")
     except Exception as e:
