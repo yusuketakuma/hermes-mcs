@@ -1021,7 +1021,8 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # the same card_thread switch: its posted ts is the thread root, so
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
-    in_thread_body = (notify_cfg(cfg).get("card_thread") is True
+    thread_on = notify_cfg(cfg).get("card_thread") is True
+    in_thread_body = (thread_on
                       and card["thread_state"] not in ("failed", "deleted"))
     spec["parts"] = {
         "containers": content["containers"],
@@ -1033,10 +1034,10 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "page": content["page"], "pages": content["pages"],
         "context": context,
     }
-    if notify_cfg(cfg).get("card_thread") is True and card["kind"] != "digest":
-        spec["parts"]["thread_name"] = _thread_name(db, card)
-    elif notify_cfg(cfg).get("card_thread") is True:
-        spec["parts"]["thread_name"] = _digest_thread_name(content)
+    if thread_on:
+        spec["parts"]["thread_name"] = (_digest_thread_name()
+                                        if card["kind"] == "digest"
+                                        else _thread_name(db, card))
     # the body travels inside the spec as individually journaled
     # durable parts — the card stays a summary surface while the
     # thread carries the untruncated shown-set text (T7)
@@ -1127,7 +1128,7 @@ def _thread_name(db, card) -> str:
     return title if len(title) <= 100 else title[:99] + "…"
 
 
-def _digest_thread_name(content) -> str:
+def _digest_thread_name() -> str:
     return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
 
 
