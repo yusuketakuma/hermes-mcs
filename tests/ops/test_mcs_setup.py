@@ -327,6 +327,11 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
     os.utime(src, (started - 100, started - 100))     # loaded before start
     os.utime(pyc, (started + 100, started + 100))     # regenerated at load
     assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
+    # a docs-only edit needs no restart
+    doc = tmp_path / "hermes_plugin" / "README.md"
+    doc.write_text("docs")
+    os.utime(doc, (started + 100, started + 100))
+    assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
     # a genuinely newer SOURCE file still warns
     os.utime(src, (started + 100, started + 100))
     assert mcs_setup._plugin_newer_than_gateway("PID 123 running")
