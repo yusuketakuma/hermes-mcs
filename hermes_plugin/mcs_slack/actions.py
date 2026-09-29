@@ -9,6 +9,7 @@ from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
 from ..mcs_delivery.text import (body_messages, ja, task_done_text,
                                  task_list_text)
+from .cards import _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
@@ -28,11 +29,7 @@ def _task_blocks(items):
     actions row per task, carrying the runner-minted transition tokens
     in the same mcs:a: namespace as card buttons. Transition buttons
     cap at 25 like the Discord view (12 rows x <=2 cannot reach it)."""
-    text = task_list_text(items)
-    blocks = [{"type": "section",
-               "text": {"type": "plain_text",
-                        "text": text[i:i + 3000]}}
-              for i in range(0, len(text), 3000)]
+    blocks = _sections(task_list_text(items))
     count = 0
     for task in items:
         elements = []
