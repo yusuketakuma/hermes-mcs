@@ -779,6 +779,42 @@ def test_self_probe_fetches_and_notifies_own_post(tmp_path):
     db.close()
 
 
+def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
+        tmp_path, monkeypatch):
+    """With self_posts on, the probe runs before backfill: an own post
+    (never unread) on backfill's first page is stored by the probe with a
+    source=self notification instead of silently by backfill."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(90))
+    db.save_messages([_msg_at(100, 90, _iso(1), unread=False)])
+    own = _msg_at(101, 90, _iso(0), unread=False)
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": 101, "is_self_only": True}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    result = {"errors": [], "new_messages": 0, "backfilled": 0}
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    run_check._stage_fetch(Adapter(), db, args, {"self_posts": True},
+                           result, time.monotonic() + 300, 1, False, None)
+
+    assert result["errors"] == []
+    assert result["self_probe_fetched"] == [90]
+    assert result["new_messages"] == 1 and result["backfilled"] == 0
+    rows = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchall()
+    assert [r["kind"] for r in rows] == ["new_messages"]
+    payload = json.loads(rows[0]["payload"])
+    assert payload["source"] == "self" and payload["message_ids"] == [101]
+    # no pending reply job, so backfill still certifies coverage this tick
+    assert db.coverage_ts(90) == db.high_watermark(90)
+    db.close()
+
+
 def test_self_probe_skips_when_latest_already_stored(tmp_path):
     """The latest endpoint returns no timestamp — freshness is decided
     by whether the returned id is already in the ledger."""

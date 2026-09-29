@@ -951,8 +951,8 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
 
 def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                  sem_on, notify_max_age_s):
-    """Priority fetch work — unread, optional backfill and self-post
-    probes — skipped entirely by --jobs-only runs."""
+    """Priority fetch work — unread, optional self-post probes, then
+    backfill — skipped entirely by --jobs-only runs."""
     if args.jobs_only:
         result["jobs_only"] = True
         return
@@ -960,19 +960,22 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                   stage_unread, adapter, ledger, args, result, deadline,
                   run_id, semantic=sem_on,
                   notify_max_age_s=notify_max_age_s)
-    if not args.no_backfill:
-        _with_relogin(adapter, ledger, result, "backfill",
-                      stage_backfill, adapter, ledger, result, deadline,
-                      run_id, semantic=sem_on,
-                      notify_max_age_s=notify_max_age_s)
     self_posts = cfg.get("self_posts", False)
     if type(self_posts) is not bool:
         result["errors"].append("config: self_posts_invalid")
         self_posts = False
+    # probe BEFORE backfill: backfill notifies unread rows only, so an
+    # own / other-read post on its first pages would be stored silently
+    # and the probe would then see the latest id as already stored
     if self_posts:
         _with_relogin(adapter, ledger, result, "self_probe",
                       stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
+                      notify_max_age_s=notify_max_age_s)
+    if not args.no_backfill:
+        _with_relogin(adapter, ledger, result, "backfill",
+                      stage_backfill, adapter, ledger, result, deadline,
+                      run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
 
 
