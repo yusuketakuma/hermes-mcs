@@ -55,10 +55,9 @@ def _finite_number(value) -> bool:
         return False
 
 
-def freshness_deadline(cfg: dict) -> int:
-    """tick_interval_s * (max_missed_runs + 1) from config — a reader
-    must not assume 'healthy' while the producer could legitimately be
-    inside its allowed missed-run window."""
+def _tick_settings(cfg: dict) -> tuple[dict, float, float]:
+    """(health block, tick_interval_s, max_missed_runs) with defaults
+    applied to missing or invalid values."""
     h = cfg.get("health") if isinstance(cfg, dict) else None
     h = h if isinstance(h, dict) else {}
     tick = h.get("tick_interval_s", DEFAULT_TICK_S)
@@ -67,6 +66,14 @@ def freshness_deadline(cfg: dict) -> int:
         tick = DEFAULT_TICK_S
     if not (_finite_number(missed) and missed >= 0):
         missed = DEFAULT_MAX_MISSED
+    return h, tick, missed
+
+
+def freshness_deadline(cfg: dict) -> int:
+    """tick_interval_s * (max_missed_runs + 1) from config — a reader
+    must not assume 'healthy' while the producer could legitimately be
+    inside its allowed missed-run window."""
+    h, tick, missed = _tick_settings(cfg)
     deadline = tick * (int(missed) + 1)
     return max(1, int(deadline)) if _finite_number(deadline) \
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
@@ -80,14 +87,7 @@ def _scheduled_deadline(health_at: float, cfg: dict,
     may finish up to RUN_GRACE_S after its scheduled start, so the
     third missed tick is only stale after that finish window.
     """
-    h = cfg.get("health") if isinstance(cfg, dict) else None
-    h = h if isinstance(h, dict) else {}
-    tick = h.get("tick_interval_s", DEFAULT_TICK_S)
-    missed = h.get("max_missed_runs", DEFAULT_MAX_MISSED)
-    if not (_finite_number(tick) and tick > 0):
-        tick = DEFAULT_TICK_S
-    if not (_finite_number(missed) and missed >= 0):
-        missed = DEFAULT_MAX_MISSED
+    h, tick, missed = _tick_settings(cfg)
     if tick != DEFAULT_TICK_S or h.get("night_thinning") is False \
             or type(missed) is not int or not 0 <= missed <= 100:
         return fallback
