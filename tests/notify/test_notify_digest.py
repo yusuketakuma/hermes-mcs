@@ -104,6 +104,25 @@ def test_counts_ids_and_no_patient_content(led):
     assert "欠落なしの保証ではありません" in text
 
 
+def test_patient_names_only_when_opted_in(led):
+    """include_names adds the patient name next to each listed project;
+    bodies and staff names never appear either way."""
+    _patient(led, 1, name="患者A")
+    _seen(led, 100, T - 3600)
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
+        (json.dumps({"urgency": "high"}), json.dumps({"hash": f"{100:064x}"}),
+         T))
+    led.db.commit()
+    cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
+    notify_digest.maybe_enqueue(led, cfg, now=T)
+    text = _text(led)
+    assert "・project 1 患者A / message 100（機械照合）" in text
+    for secret in ("秘密の本文", "職員"):
+        assert secret not in text
+
+
 def test_coverage_block_always_present(led):
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)

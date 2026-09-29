@@ -76,7 +76,8 @@ Slack は表示名の文字列で、取得できない場合は「メンバー�
 - **朝の日次ダイジェスト**（`daily_digest.enabled`、既定オフ）: 毎朝
   `daily_digest.hour_jst` 時（既定8時・JST）以降の最初の実行で1通、
   `notify_target` に送ります。前回のダイジェスト以降の新着件数（職種別）、
-  緊急度が高い投稿の ID（project / message。患者名・本文は出しません）、
+  緊急度が高い投稿の ID（project / message。本文は出しません。患者名は
+  `daily_digest.include_names` をオンにしたときだけ ID に添えます）、
   取得未完了として記録されたルームと理由コード（0件でも欄を出します）、
   open（未解決）の確認候補の型別件数（`signals.notify` がオンのときだけ。
   依頼・期限系の3型は除外）、未完了・期限切れタスク数です。件数は取得済みの

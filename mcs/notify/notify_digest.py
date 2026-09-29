@@ -16,7 +16,7 @@ from datetime import datetime
 import mcs_signals
 import structured_view
 from mcs_queries import JST, coverage_gaps
-from notify_render import plain_notice
+from notify_render import _patient_name, plain_notice
 
 KIND = "daily_digest"
 MAX_LIST = 10
@@ -29,12 +29,13 @@ NOTE = ("※ 取得済みの記録から数えた件数です。記録が見つ�
 
 
 def settings(cfg) -> dict | None:
-    """(enabled, hour) from config, or None when the digest is off."""
+    """(hour, include_names) from config, or None when the digest is off."""
     d = (cfg or {}).get("daily_digest")
     if not isinstance(d, dict) or d.get("enabled") is not True:
         return None
     hour = d.get("hour_jst", 8)
-    return {"hour_jst": hour if type(hour) is int and 0 <= hour <= 23 else 8}
+    return {"hour_jst": hour if type(hour) is int and 0 <= hour <= 23 else 8,
+            "include_names": d.get("include_names") is True}
 
 
 def _plain(text) -> str:
@@ -48,7 +49,17 @@ def _ids(pairs, fmt) -> str:
 
 
 def build_text(db, cfg, since: float, until: float) -> str:
-    """The digest body for the window [since, until) — ids and counts."""
+    """The digest body for the window [since, until) — ids and counts,
+    plus patient names next to project ids when
+    ``daily_digest.include_names`` is true (off by default: the digest
+    goes to the same notify_target as card bodies, but names stay out
+    unless the operator opts in)."""
+    names = (settings(cfg) or {}).get("include_names") is True
+
+    def room(pid) -> str:
+        name = _plain(_patient_name(db, pid)) if names else ""
+        return f"project {pid}" + (f" {name}" if name else "")
+
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
     lines = [f"🌅 MCS 日次ダイジェスト（{end:%m-%d %H:%M} JST）",
@@ -83,7 +94,7 @@ def build_text(db, cfg, since: float, until: float) -> str:
                  f"{len(urgent) - llm}）")
     if urgent:
         lines.append("・" + _ids(urgent, lambda u: (
-            f"project {u[0]} / message {u[1]}"
+            f"{room(u[0])} / message {u[1]}"
             + ("" if u[2] == "llm" else "（機械照合）"))))
 
     gaps = coverage_gaps(db)
@@ -91,7 +102,7 @@ def build_text(db, cfg, since: float, until: float) -> str:
     rooms = gaps["incomplete_rooms"]
     if rooms:
         lines.append(f"・取得未完了のルーム {len(rooms)}: " + _ids(
-            rooms, lambda r: f"project {r[0]}（{_plain(r[1])}）"))
+            rooms, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
     else:
         lines.append("・未完了として記録されたルーム: なし"
                      "（完全性の保証ではありません）")
