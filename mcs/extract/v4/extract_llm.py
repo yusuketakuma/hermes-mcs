@@ -1608,6 +1608,7 @@ def _thin_pending_sql() -> str:
           AND json_extract({meta},'$.extract_version')={EXTRACT_VERSION}
           AND json_extract({meta},'$.prefilter') IS NULL
           AND json_extract({meta},'$.thin_retried') IS NULL
+          AND json_extract({meta},'$.human_fix') IS NULL
           AND length(m.body_text) >= {_THIN_BODY_MIN}
           AND ({' + '.join(counts)}) < {_THIN_FACTS_MIN}
           ORDER BY t.artifact_id DESC LIMIT 1"""
@@ -1628,9 +1629,11 @@ def _thin_retry_content(ledger, row) -> str | None:
 def _human_flagged_sql(val: str = "h.artifact_id") -> str:
     """A human ⚠ report (extract_feedback_v1, card button) pinned to the
     message's CURRENT extract artifact re-pends it for exactly one
-    re-extract — the replacement artifact carries a new id, so the
-    report no longer pins the current row and the loop ends. Parallel
-    to the QC single-retry, never gated by it."""
+    re-extract, bypassing the no-signal prefilter. Success or failure
+    replaces the current row (meta.human_fix: feedback_id, applied), so
+    the report no longer pins the current row and the loop ends; a
+    human_fix row is never thin-retried. Parallel to the QC
+    single-retry, never gated by it."""
     return f"""SELECT {val} FROM artifacts h
         JOIN artifacts c ON c.artifact_id=json_extract(
                {json_or_null('h.content')},'$.artifact_id')
@@ -2294,11 +2297,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _commit(r, d, ctx, integrity, qc):
         """Persist one validated result — the caller holds the lock."""
         nonlocal done, deferred
-        # QC-flagged/thin rows already hold a current artifact —
-        # replacing it is the point of the feedback pass.
-        if qc is None and not r["thin_src"] \
+        # QC-flagged/thin/human-reported rows already hold a current
+        # artifact — replacing it is the point of the feedback pass.
+        if qc is None and not r["thin_src"] and not r["human_src"] \
                 and _current(ledger, r["message_id"], r["content_hash"]):
             return
+        extra = {"thin_retried": True} if r["thin_src"] else {}
+        if r["human_src"]:
+            extra["human_fix"] = {"feedback_id": r["human_src"],
+                                  "applied": True}
         if not _replace_current(ledger, r,
                                 json.dumps(d, ensure_ascii=False),
                                 ctx=ctx is not None,
@@ -2306,10 +2313,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 qc_fix=({"qc": qc["qc"],
                                          "applied": True}
                                         if qc else None),
-                                extra_meta=(
-                                    {"thin_retried": True}
-                                    if r["thin_src"]
-                                    else None)):
+                                extra_meta=extra or None):
             deferred += 1
             return
         # the whole body is now covered — checkpoints for
@@ -2359,6 +2363,26 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                     qc_fix={"qc": qc["qc"],
                                             "applied": False})
                     return
+                if r["human_src"]:
+                    # A failed report re-extract settles like the thin
+                    # retry: re-mint the reported content with
+                    # human_fix.applied=false — one attempt per report.
+                    src = ledger.db.execute(
+                        "SELECT c.content FROM artifacts h JOIN artifacts c"
+                        " ON c.artifact_id=json_extract(h.content,"
+                        "'$.artifact_id') WHERE h.artifact_id=?"
+                        " AND json_valid(h.content) AND c.kind=?"
+                        " AND c.message_id=?",
+                        (r["human_src"], KIND, r["message_id"])).fetchone()
+                    if src is not None:
+                        with lock(per_write_lock) as held:
+                            if held:
+                                _replace_current(
+                                    ledger, r, src["content"],
+                                    extra_meta={"human_fix": {
+                                        "feedback_id": r["human_src"],
+                                        "applied": False}})
+                    return
                 if r["thin_src"]:
                     # A thin retry that failed still settles: re-mint
                     # the prior content with the retried marker so the
@@ -2387,7 +2411,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                      max(r["attempts"], prev))
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
-            if r["thin_src"] and qc is None:
+            if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:
                     deferred += 1
