@@ -15,11 +15,13 @@ All filesystem I/O runs off the event loop via ``asyncio.to_thread``.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from typing import Any
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry, text
+from .cards import no_pings
 
 ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
@@ -488,10 +490,23 @@ class Actions:
             interaction, env)
         if not published:
             return
-        if result is None:
-            await self._followup(interaction, text.ja(result))
-            return
         self._reg.drop_modal(modal_id)
+        if result is None:
+            # a slow drain still owes the hits — the sweep delivers them
+            # while the interaction token lives, as for other view clicks
+            ctx = pending.get("context") or {}
+            self._reg.put_followup(env["request_id"], {
+                "application_id": str(interaction.application_id),
+                "token": interaction.token,
+                "kind": "action", "request_id": env["request_id"],
+                "actor": pending["actor"], "origin": pending["origin"],
+                "project_ids": _context_projects(
+                    {"project_id": ctx.get("project_id"), "context": ctx}),
+                "roles": sorted(self._allowed_roles(
+                    _role_ids(interaction)))})
+            await self._followup(
+                interaction, "処理を受け付けました。結果は反映後に表示されます。")
+            return
         self._result_log(interaction, "search", result)
         if result.get("outcome") == "applied" \
                 and result.get("action") == "list":
@@ -714,6 +729,8 @@ class Actions:
                 # application webhook, and ephemeral sends are refused
                 # (ValueError) unless the local type reflects that
                 hook.type = discord.WebhookType.application
+                send = functools.partial(hook.send,
+                                         allowed_mentions=no_pings())
                 applied = result.get("outcome") == "applied"
                 if applied and result.get("action") in ("body", "summary") \
                         and result.get("body"):
@@ -721,7 +738,7 @@ class Actions:
                     # owes the full text — generic text.ja would report
                     # "反映しました" and never deliver it
                     for msg in text.body_messages(result):
-                        await hook.send(msg, ephemeral=True)
+                        await send(msg, ephemeral=True)
                 elif applied and result.get("action") == "tasks":
                     # same debt for the 📋 list — and its transition
                     # tokens must be registered before the buttons can
@@ -732,20 +749,20 @@ class Actions:
                             self._reg.put_tokens, token_ctx)
                     items = result.get("tasks") or []
                     if items:
-                        await hook.send(text.task_list_text(items),
+                        await send(text.task_list_text(items),
                                         ephemeral=True,
                                         view=_task_view(items))
                     else:
-                        await hook.send(text.NO_TASKS_TEXT,
+                        await send(text.NO_TASKS_TEXT,
                                         ephemeral=True)
                 elif applied and result.get("action") == "list":
                     for msg in text.list_messages(result, self._allowed_pid):
-                        await hook.send(msg, ephemeral=True)
+                        await send(msg, ephemeral=True)
                 elif applied and result.get("action") == "task_status":
-                    await hook.send(text.task_done_text(result),
+                    await send(text.task_done_text(result),
                                     ephemeral=True)
                 else:
-                    await hook.send(text.ja(result), ephemeral=True)
+                    await send(text.ja(result), ephemeral=True)
             except Exception as e:
                 self._log("followup_failed", error=type(e).__name__)
 
@@ -785,10 +802,11 @@ class Actions:
     async def _ephemeral(self, interaction, text: str) -> None:
         try:
             if interaction.response.is_done():
-                await interaction.followup.send(text, ephemeral=True)
+                await interaction.followup.send(
+                    text, ephemeral=True, allowed_mentions=no_pings())
             else:
                 await interaction.response.send_message(
-                    text, ephemeral=True)
+                    text, ephemeral=True, allowed_mentions=no_pings())
         except Exception as e:
             self._log("respond_failed", error=type(e).__name__)
 
@@ -797,7 +815,7 @@ class Actions:
         try:
             # discord.py validates `view is not MISSING`, so a plain
             # None would TypeError — only pass a real view through
-            kwargs = {"ephemeral": True}
+            kwargs = {"ephemeral": True, "allowed_mentions": no_pings()}
             if view is not None:
                 kwargs["view"] = view
             await interaction.followup.send(text, **kwargs)

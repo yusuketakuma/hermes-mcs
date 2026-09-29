@@ -292,9 +292,13 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   120 字以内）で渡し、`command_id` の後半を actor＋input のハッシュにする
   （入力が変わっても前回の receipt と衝突しない）。🔎 はクリックで検索
   モーダルを開き、送信で同じ card token を `input.query` 付きで再送する
-  （preview/確認なし）。一覧・検索結果の本文は command receipt に保存しない。
-  表示名は Discord では `display_name`、Slack ではペイロードの `user.name`
-  （ユーザー名）で、担当者欄との照合は runner の
+  （preview/確認なし。待ち時間を超えた結果は他の view 操作と同じく
+  followup sweep が届ける）。一覧・検索結果の本文は command receipt に
+  保存しない。Discord の ephemeral・followup・webhook 送信はすべて
+  `allowed_mentions=none`。Slack の一覧は見出しを mrkdwn の `*…*` にする。
+  表示名は Discord では `display_name`、Slack では `users.info` の表示名
+  （無ければ氏名、取得できなければペイロードの `user.name`）で、
+  担当者欄との照合は runner の
   `notify_render.assignee_matches()`。
 
 ## インタラクティブカード（mcs_slack）

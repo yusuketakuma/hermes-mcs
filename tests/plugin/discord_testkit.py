@@ -116,7 +116,8 @@ def _fake_discord():
         def partial(cls, ident, token, client=None):
             return cls(ident, token, client)
 
-        async def send(self, content, ephemeral=False, view=MISSING):
+        async def send(self, content, ephemeral=False, view=MISSING,
+                       allowed_mentions=None):
             # discord.py validation: ephemeral requires an application
             # webhook; an explicitly-passed view=None is a TypeError
             if ephemeral and self.type != 3:
@@ -127,7 +128,7 @@ def _fake_discord():
                                 "View, not NoneType")
             Webhook.sent.append(
                 {"content": content, "ephemeral": ephemeral,
-                 "view": view})
+                 "view": view, "allowed_mentions": allowed_mentions})
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
