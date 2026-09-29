@@ -3,7 +3,7 @@
 Every MCS component answers through this listener; view/modal objects
 carry no business logic (plan §5). Custom-ID namespaces:
 
-- ``mcs:a:<token32>``  card action button (ack/assign/defer/nav/modal-open)
+- ``mcs:a:<token32>``  card action button (toggle/view/nav/modal-open)
 - ``mcs:m:<modal_id>`` modal submission (opaque id -> pending_modals)
 - ``mcs:c:<confirm_id>[:cancel]`` preview confirmation
 
@@ -31,6 +31,7 @@ RESULT_POLL_S = 0.5
 RESULT_WAIT_S = 20.0          # interactive ops budget (plan §7: p95<=6s)
 MODAL_OPEN_WAIT_S = 1.5       # send_modal initial-response ceiling ~3s
 HUMAN_WAIT_S = 25.0           # human command drains can queue behind tick
+_MODAL_ACTIONS = ("request", "dismiss", "report", "search")
 
 
 def _task_view(items: list):
@@ -289,101 +290,99 @@ class Actions:
             await self._ephemeral(interaction, "権限がありません。")
             return
 
-        if action in ("request", "dismiss", "report", "search"):
-            # modal-open clicks answer with send_modal — no defer, and
-            # the initial response must land inside Discord's ~3s. The
-            # token is applied first (plan flow) within a short window;
-            # a definite rejection never opens the modal, while a slow
-            # drain still opens it and re-validates at submit.
-            env = envelopes.notification(token, actor, origin)
-            try:
-                await asyncio.to_thread(envelopes.publish_command,
-                                        self._dirs["cmd_int"], env)
-            except OSError:
-                await self._ephemeral(
-                    interaction,
-                    "送信に失敗しました。もう一度操作してください。")
-                return
-            result = await self._wait_result(
-                env["request_id"], MODAL_OPEN_WAIT_S,
-                request_id=env["request_id"])
-            if result is not None and not (
-                    result.get("outcome") == "applied"
-                    and result.get("modal")):
-                self._result_log(interaction, action, result)
-                await self._ephemeral(interaction, text.ja(result))
-                return
-            modal_id = registry.new_modal_id()
-            modal = self._build_modal(
-                action, modal_id, (result or {}).get("form"),
-                _display_name(interaction))
-            if modal is None:
-                await self._ephemeral(interaction,
-                                      "このカードではその操作を実行できません。")
-                return
-            self._reg.put_modal(modal_id, {
-                "token": token, "action": action, "actor": actor,
-                "origin": origin, "context": ctx.get("context") or {},
-                "params": (result or {}).get("params") or {}})
-            try:
-                await interaction.response.send_modal(modal)
-                self._result_log(interaction, action,
-                                 {"outcome": "modal_opened"})
-            except Exception as e:
-                # the ~3s initial-response window can expire while the
-                # preflight drain ran — a dead modal entry must not stay
-                # claimable, and the click still deserves an answer via
-                # the 15-minute followup token
-                self._reg.drop_modal(modal_id)
-                self._result_log(interaction, action,
-                                 {"outcome": "modal_send_failed",
-                                  "error": type(e).__name__})
-                await self._followup(
-                    interaction,
-                    "応答が期限切れになりました。もう一度操作してください。")
+        if action in _MODAL_ACTIONS:
+            await self._open_modal(interaction, token, action, actor,
+                                   origin, ctx)
             return
 
         # everything else: type-6 defer, then the notification command
         await interaction.response.defer()
-        inputs = {}
-        name = _display_name(interaction)[:120]
-        if action == "mytasks" and name:
-            inputs["name"] = name
-        scope = projects.static_scope(self._settings)
-        if action in ("mytasks", "unacked") and scope:
-            inputs["projects"] = scope
-        env = envelopes.notification(token, actor, origin, inputs or None)
-        cid = env["request_id"]
+        env = envelopes.notification(
+            token, actor, origin,
+            projects.view_inputs(self._settings, action,
+                                 _display_name(interaction)))
         result, published = await self._dispatch_notification(
             interaction, env)
         if not published:
             return
         self._result_log(interaction, action, result)
         if result is None:
-            self._reg.put_followup(cid, {
-                "application_id": str(interaction.application_id),
-                "token": interaction.token,
-                "kind": "action", "request_id": cid,
-                "actor": actor, "origin": origin, "project_ids": pids,
-                "roles": sorted(self._allowed_roles(
-                    _role_ids(interaction)))})
-            await self._followup(interaction,
-                                 "処理を受け付けました。結果は反映後に表示されます。")
+            await self._park_followup(interaction, env["request_id"],
+                                      actor, origin, pids)
             return
-        outcome = result.get("outcome")
-        if outcome == "applied" and not result.get("modal"):
-            if result.get("action") in ("body", "summary") \
-                    and result.get("body"):
-                await self._send_body(interaction, result)
-            elif result.get("action") == "tasks":
-                await self._send_tasks(interaction, result)
-            elif result.get("action") == "list":
-                await self._send_list(interaction, result)
-            elif result.get("action") == "task_status":
-                await self._followup(interaction, text.task_done_text(result))
-            # silent ack — the card re-renders through the pipeline
+        answer = text.view_answer(result, self._allowed_pid)
+        if answer is not None:
+            await self._send_answer(interaction, answer, result)
+        elif result.get("outcome") != "applied" or result.get("modal"):
+            await self._followup(interaction, text.ja(result))
+        # else: silent ack — the card re-renders through the pipeline
+
+    async def _open_modal(self, interaction, token: str, action: str,
+                          actor: str, origin: dict, ctx: dict) -> None:
+        """Modal-open clicks answer with send_modal — no defer, and the
+        initial response must land inside Discord's ~3s. The token is
+        applied first (plan flow) within a short window; a definite
+        rejection never opens the modal, while a slow drain still opens
+        it and re-validates at submit."""
+        env = envelopes.notification(token, actor, origin)
+        try:
+            await asyncio.to_thread(envelopes.publish_command,
+                                    self._dirs["cmd_int"], env)
+        except OSError:
+            await self._ephemeral(
+                interaction,
+                "送信に失敗しました。もう一度操作してください。")
             return
-        await self._followup(interaction, text.ja(result))
+        result = await self._wait_result(
+            env["request_id"], MODAL_OPEN_WAIT_S,
+            request_id=env["request_id"])
+        if result is not None and not (
+                result.get("outcome") == "applied"
+                and result.get("modal")):
+            self._result_log(interaction, action, result)
+            await self._ephemeral(interaction, text.ja(result))
+            return
+        modal_id = registry.new_modal_id()
+        modal = self._build_modal(
+            action, modal_id, (result or {}).get("form"),
+            _display_name(interaction))
+        if modal is None:
+            await self._ephemeral(interaction,
+                                  "このカードではその操作を実行できません。")
+            return
+        self._reg.put_modal(modal_id, {
+            "token": token, "action": action, "actor": actor,
+            "origin": origin, "context": ctx.get("context") or {},
+            "params": (result or {}).get("params") or {}})
+        try:
+            await interaction.response.send_modal(modal)
+            self._result_log(interaction, action,
+                             {"outcome": "modal_opened"})
+        except Exception as e:
+            # the ~3s initial-response window can expire while the
+            # preflight drain ran — a dead modal entry must not stay
+            # claimable, and the click still deserves an answer via
+            # the 15-minute followup token
+            self._reg.drop_modal(modal_id)
+            self._result_log(interaction, action,
+                             {"outcome": "modal_send_failed",
+                              "error": type(e).__name__})
+            await self._followup(
+                interaction,
+                "応答が期限切れになりました。もう一度操作してください。")
+
+    async def _park_followup(self, interaction, request_id: str, actor: str,
+                             origin: dict, pids: list) -> None:
+        """A view answer that outlived the wait window — the sweep
+        delivers it while the interaction token lives."""
+        self._reg.put_followup(request_id, {
+            "application_id": str(interaction.application_id),
+            "token": interaction.token,
+            "kind": "action", "request_id": request_id,
+            "actor": actor, "origin": origin, "project_ids": pids,
+            "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
+        await self._followup(interaction,
+                             "処理を受け付けました。結果は反映後に表示されます。")
 
     # -- modal ------------------------------------------------------------
 
@@ -472,10 +471,13 @@ class Actions:
             return
         params = dict(pending.get("params") or {})
         params.update(result.get("params") or {})
-        fields = self._modal_fields(interaction)
-        preview = self._build_payload(pending["action"], actor,
-                                      pending["context"], params,
-                                      fields)
+        if pending["action"] == "dismiss" and not params.get("signal_key"):
+            # a token minted without the key pins the card's first signal
+            params["signal_key"] = next(
+                iter(pending["context"].get("signals") or {}), "")
+        preview = envelopes.human_payload(
+            pending["action"], actor, pending["context"], params,
+            self._modal_fields(interaction))
         if isinstance(preview, str):
             await self._followup(interaction, preview)   # error text
             return
@@ -502,25 +504,17 @@ class Actions:
             return
         self._reg.drop_modal(modal_id)
         if result is None:
-            # a slow drain still owes the hits — the sweep delivers them
-            # while the interaction token lives, as for other view clicks
+            # a slow drain still owes the hits, as for other view clicks
             ctx = pending.get("context") or {}
-            self._reg.put_followup(env["request_id"], {
-                "application_id": str(interaction.application_id),
-                "token": interaction.token,
-                "kind": "action", "request_id": env["request_id"],
-                "actor": pending["actor"], "origin": pending["origin"],
-                "project_ids": _context_projects(
-                    {"project_id": ctx.get("project_id"), "context": ctx}),
-                "roles": sorted(self._allowed_roles(
-                    _role_ids(interaction)))})
-            await self._followup(
-                interaction, "処理を受け付けました。結果は反映後に表示されます。")
+            await self._park_followup(
+                interaction, env["request_id"], pending["actor"],
+                pending["origin"], _context_projects(
+                    {"project_id": ctx.get("project_id"), "context": ctx}))
             return
         self._result_log(interaction, "search", result)
-        if result.get("outcome") == "applied" \
-                and result.get("action") == "list":
-            await self._send_list(interaction, result)
+        answer = text.view_answer(result, self._allowed_pid)
+        if answer is not None:
+            await self._send_answer(interaction, answer, result)
         else:
             await self._followup(interaction, text.ja(result))
 
@@ -541,42 +535,6 @@ class Actions:
                 elif isinstance(comp.get("values"), list):
                     out[cid] = (comp["values"] or [""])[0]
         return out
-
-    def _build_payload(self, action: str, actor: str, context: dict,
-                       params: dict, fields: dict):
-        """Human-command payload from render-pinned context + modal
-        input. Returns the envelope dict or an error string."""
-        if action == "report":
-            got = text.feedback_attrs(fields)
-            if isinstance(got, str):
-                return got
-            if not isinstance(context.get("extract_ref"), dict) \
-                    or not context.get("project_id"):
-                return "報告対象の抽出結果を特定できません。"
-            return envelopes.extract_feedback(actor, context, *got)
-        if action == "dismiss":
-            got = text.dismiss_attrs(fields)
-            if isinstance(got, str):
-                return got
-            key = (params.get("signal_key")
-                   or next(iter((context.get("signals")
-                                 or {"": None}).keys())))
-            if not key or key not in (context.get("signals") or {}):
-                return "対象シグナルを特定できません。"
-            return envelopes.signal_dismiss(actor, context, key, *got)
-        # request.create — the runner-stored project_id (params) wins
-        # over the spec context; source pinning stays render-side
-        context = {**context,
-                   "project_id": params.get("project_id")
-                   or context.get("project_id")}
-        if not context.get("source_message_id") \
-                or not context.get("source_hash") \
-                or not context.get("project_id"):
-            return "起票対象の投稿を特定できません。"
-        attrs = text.task_attrs(fields)
-        if isinstance(attrs, str):
-            return attrs
-        return envelopes.request_create(actor, context, attrs)
 
     async def _send_preview(self, interaction, action: str,
                             payload: dict, confirm_id: str) -> None:
@@ -741,73 +699,41 @@ class Actions:
                 hook.type = discord.WebhookType.application
                 send = functools.partial(hook.send,
                                          allowed_mentions=no_pings())
-                applied = result.get("outcome") == "applied"
-                if applied and result.get("action") in ("body", "summary") \
-                        and result.get("body"):
-                    # a body click that outlived the wait window still
-                    # owes the full text — generic text.ja would report
-                    # "反映しました" and never deliver it
-                    for msg in text.body_messages(result):
-                        await send(msg, ephemeral=True)
-                elif applied and result.get("action") == "tasks":
-                    # same debt for the 📋 list — and its transition
-                    # tokens must be registered before the buttons can
-                    # be clicked
-                    token_ctx = result.get("token_ctx") or {}
-                    if token_ctx:
-                        await asyncio.to_thread(
-                            self._reg.put_tokens, token_ctx)
-                    items = result.get("tasks") or []
-                    if items:
-                        await send(text.task_list_text(items),
-                                        ephemeral=True,
-                                        view=_task_view(items))
-                    else:
-                        await send(text.NO_TASKS_TEXT,
-                                        ephemeral=True)
-                elif applied and result.get("action") == "list":
-                    for msg in text.list_messages(result, self._allowed_pid):
-                        await send(msg, ephemeral=True)
-                elif applied and result.get("action") == "task_status":
-                    await send(text.task_done_text(result),
-                                    ephemeral=True)
-                else:
+                answer = text.view_answer(result, self._allowed_pid)
+                if answer is None:
                     await send(text.ja(result), ephemeral=True)
+                    continue
+                # a view answer that outlived the wait window still owes
+                # its text (generic text.ja would only say 反映しました),
+                # and 📋 transition tokens must land before their buttons
+                await self._register_tokens(result)
+                for msg, tasks in answer:
+                    await send(msg, ephemeral=True, **(
+                        {"view": _task_view(tasks)} if tasks else {}))
             except Exception as e:
                 self._log("followup_failed", error=type(e).__name__)
 
     # -- response helpers --------------------------------------------------
 
-    async def _send_body(self, interaction, result: dict) -> None:
-        """Full-text answer for the 'body' action as chunked ephemeral
-        followups — text stays ephemeral (unlike a file attachment,
-        whose CDN URL is reachable by link alone)."""
-        for msg in text.body_messages(result):
-            await self._followup(interaction, msg)
-
-    async def _send_tasks(self, interaction, result: dict) -> None:
-        """Task list answer for the 'tasks' action — ephemeral text plus
-        a view of per-task transition buttons. The runner minted those
-        tokens inside the result; their ctx must land in the registry
-        before the buttons are clickable."""
+    async def _register_tokens(self, result: dict) -> None:
+        """A 📋 task list carries runner-minted transition tokens whose
+        ctx must land in the registry before the buttons are clickable."""
         token_ctx = result.get("token_ctx") or {}
         if token_ctx:
             await asyncio.to_thread(self._reg.put_tokens, token_ctx)
-        items = result.get("tasks") or []
-        if not items:
-            await self._followup(
-                interaction, text.NO_TASKS_TEXT)
-            return
-        await self._followup(interaction, text.task_list_text(items),
-                             view=_task_view(items))
+
+    async def _send_answer(self, interaction, answer: list,
+                           result: dict) -> None:
+        """A view answer (text.view_answer) as ephemeral followups —
+        text stays ephemeral (unlike a file attachment, whose CDN URL is
+        reachable by link alone); a task list carries its buttons."""
+        await self._register_tokens(result)
+        for msg, tasks in answer:
+            await self._followup(interaction, msg,
+                                 view=_task_view(tasks) if tasks else None)
 
     def _allowed_pid(self, project_id) -> bool:
         return projects.project_allowed(self._settings, project_id)
-
-    async def _send_list(self, interaction, result: dict) -> None:
-        """📋 / 🗂 / 🔎 answer — project-scope filtered, ephemeral."""
-        for msg in text.list_messages(result, self._allowed_pid):
-            await self._followup(interaction, msg)
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:

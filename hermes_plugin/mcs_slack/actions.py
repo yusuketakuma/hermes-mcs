@@ -7,11 +7,9 @@ import time
 
 from .. import projects
 from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (MODAL_TITLES, NO_TASKS_TEXT, SEARCH_EMPTY,
-                                 body_messages, dismiss_attrs,
-                                 feedback_attrs, ja, list_messages,
+from ..mcs_delivery.text import (MODAL_TITLES, SEARCH_EMPTY, ja,
                                  modal_fields, preview_text, search_query,
-                                 task_attrs, task_done_text, task_list_text)
+                                 task_list_text, view_answer)
 from .cards import LINK_ACTION, _sections
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -25,6 +23,8 @@ _MODAL_ACTIONS = ("request", "dismiss", "report", "search")
 # field_ids — text.task_attrs / dismiss_attrs still accept these keys
 _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
                   "dismiss": ("reason",)}
+# "defer" (保留) is retired but still routed: the runner answers
+# action_retired and refreshes the posted card
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
           "mytasks", "unacked", "search")
@@ -271,55 +271,64 @@ class Actions:
             return
         clicker = await self._clicker_name(body["user"]) \
             if kind in ("mytasks", "request") else ""
-        inputs = {}
-        if kind == "mytasks" and clicker:
-            inputs["name"] = clicker[:120]
-        scope = projects.static_scope(self._settings)
-        if kind in ("mytasks", "unacked") and scope:
-            inputs["projects"] = scope
-        env = envelopes.notification(token, actor, origin, inputs or None)
+        env = envelopes.notification(
+            token, actor, origin,
+            projects.view_inputs(self._settings, kind, clicker))
         try:
             await self._publish(env)
         except (OSError, ValueError):
             await self._say(origin["channel_id"], user, "送信に失敗しました。")
             return
         if kind in _MODAL_ACTIONS:
-            form = None
-            if kind == "request":
-                result = await self._wait_result(env["request_id"],
-                                                 MODAL_OPEN_WAIT_S)
-                if result is not None and not (
-                        result.get("outcome") == "applied"
-                        and result.get("modal")):
-                    await self._say(origin["channel_id"], user, ja(result))
-                    return
-                form = (result or {}).get("form")
-            defs = modal_fields(kind, form, clicker)
-            modal_id = registry.new_modal_id()
-            self._reg.put_modal(modal_id, {
-                "token": token, "actor": actor, "origin": origin,
-                "action": kind, "request_id": env["request_id"],
-                "context": ctx.get("context") or {}, "user": user,
-                "field_ids": [f["id"] for f in defs]})
-            fields = _modal_blocks(defs)
-            try:
-                client = self._client()
-                if client is None:
-                    raise RuntimeError("retry_policy_unknown")
-                await client.views_open(
-                    trigger_id=body["trigger_id"],
-                    view={"type": "modal", "callback_id": "mcs:modal",
-                          "private_metadata": modal_id,
-                          "title": {"type": "plain_text",
-                                    "text": MODAL_TITLES[kind]},
-                          "submit": {"type": "plain_text", "text": "確認へ"},
-                          "close": {"type": "plain_text", "text": "取消"},
-                          "blocks": fields})
-            except Exception as exc:
-                self._reg.drop_modal(modal_id)
-                self._log("modal_open_failed", error=type(exc).__name__)
-                await self._say(origin["channel_id"], user, "フォームを開けませんでした。")
+            await self._open_modal(body, env, token, actor, origin, ctx,
+                                   kind, clicker)
             return
+        await self._queue_followup(env, origin, actor, token, user)
+
+    async def _open_modal(self, body, env, token, actor, origin, ctx, kind,
+                          clicker):
+        """Open the shared modal (text.modal_fields) for a published
+        modal-action click. 📝 first waits briefly for the runner's form;
+        a definite rejection answers instead of opening."""
+        user = body["user"]["id"]
+        form = None
+        if kind == "request":
+            result = await self._wait_result(env["request_id"],
+                                             MODAL_OPEN_WAIT_S)
+            if result is not None and not (
+                    result.get("outcome") == "applied"
+                    and result.get("modal")):
+                await self._say(origin["channel_id"], user, ja(result))
+                return
+            form = (result or {}).get("form")
+        defs = modal_fields(kind, form, clicker)
+        modal_id = registry.new_modal_id()
+        self._reg.put_modal(modal_id, {
+            "token": token, "actor": actor, "origin": origin,
+            "action": kind, "request_id": env["request_id"],
+            "context": ctx.get("context") or {}, "user": user,
+            "field_ids": [f["id"] for f in defs]})
+        try:
+            client = self._client()
+            if client is None:
+                raise RuntimeError("retry_policy_unknown")
+            await client.views_open(
+                trigger_id=body["trigger_id"],
+                view={"type": "modal", "callback_id": "mcs:modal",
+                      "private_metadata": modal_id,
+                      "title": {"type": "plain_text",
+                                "text": MODAL_TITLES[kind]},
+                      "submit": {"type": "plain_text", "text": "確認へ"},
+                      "close": {"type": "plain_text", "text": "取消"},
+                      "blocks": _modal_blocks(defs)})
+        except Exception as exc:
+            self._reg.drop_modal(modal_id)
+            self._log("modal_open_failed", error=type(exc).__name__)
+            await self._say(origin["channel_id"], user, "フォームを開けませんでした。")
+
+    async def _queue_followup(self, env, origin, actor, token, user):
+        """A published view click — its answer reaches the clicker
+        through the followup sweep."""
         self._reg.put_followup(env["command_id"], {
             "kind": "action", "request_id": env["request_id"],
             "origin": origin, "actor": actor, "token": token, "user": user})
@@ -370,11 +379,8 @@ class Actions:
             except (OSError, ValueError):
                 await self._say(origin["channel_id"], user, "送信に失敗しました。")
                 return
-            self._reg.put_followup(env["command_id"], {
-                "kind": "action", "request_id": env["request_id"],
-                "origin": origin, "actor": actor, "token": pending["token"],
-                "user": user})
-            await self.sweep_followups()
+            await self._queue_followup(env, origin, actor, pending["token"],
+                                       user)
             return
         pending["fields"] = fields
         pending["modal_id"] = modal_id
@@ -387,35 +393,12 @@ class Actions:
         await self.sweep_followups()
 
     def _payload(self, pending, result):
-        fields = pending["fields"]
-        context = pending["context"]
-        params = result.get("params") or {}
-        if pending["action"] == "report":
-            got = feedback_attrs(fields)
-            if isinstance(got, str) \
-                    or not isinstance(context.get("extract_ref"), dict) \
-                    or not context.get("project_id"):
-                return None
-            return envelopes.extract_feedback(pending["actor"], context,
-                                              *got)
-        if pending["action"] == "dismiss":
-            got = dismiss_attrs(fields)
-            if isinstance(got, str):
-                return None
-            key = params.get("signal_key")
-            if not isinstance(key, str) \
-                    or key not in (context.get("signals") or {}):
-                return None
-            return envelopes.signal_dismiss(pending["actor"], context,
-                                            key, *got)
-        project = params.get("project_id") or context.get("project_id")
-        attrs = task_attrs(fields)
-        if isinstance(attrs, str) \
-                or not context.get("source_message_id") \
-                or not context.get("source_hash") or not project:
-            return None
-        return envelopes.request_create(
-            pending["actor"], {**context, "project_id": project}, attrs)
+        """The shared human payload; any refusal -> None (one fixed
+        reply, see _preview)."""
+        got = envelopes.human_payload(
+            pending["action"], pending["actor"], pending["context"],
+            result.get("params") or {}, pending["fields"])
+        return None if isinstance(got, str) else got
 
     async def _preview(self, pending, result):
         origin = pending["origin"]
@@ -557,33 +540,18 @@ class Actions:
                 else:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
-            elif result.get("action") in ("body", "summary") \
-                    and result.get("outcome") == "applied":
-                for message in body_messages(result):
-                    await self._say(origin["channel_id"], rec["user"], message)
-            elif result.get("action") == "tasks" \
-                    and result.get("outcome") == "applied":
+                continue
+            answer = view_answer(
+                result, lambda pid: projects.project_allowed(
+                    self._settings, pid), markdown=False)
+            if answer is not None:
+                # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}
                 if token_ctx:
-                    await asyncio.to_thread(
-                        self._reg.put_tokens, token_ctx)
-                items = result.get("tasks") or []
-                if items:
+                    await asyncio.to_thread(self._reg.put_tokens, token_ctx)
+                for message, tasks in answer:
                     await self._say(origin["channel_id"], rec["user"],
-                                    task_list_text(items),
-                                    blocks=_task_blocks(items))
-                else:
-                    await self._say(origin["channel_id"], rec["user"],
-                                    NO_TASKS_TEXT)
-            elif result.get("action") == "list" \
-                    and result.get("outcome") == "applied":
-                for message in list_messages(
-                        result, lambda pid: projects.project_allowed(
-                            self._settings, pid), markdown=False):
-                    await self._say(origin["channel_id"], rec["user"], message)
-            elif result.get("action") == "task_status" \
-                    and result.get("outcome") == "applied":
-                await self._say(origin["channel_id"], rec["user"],
-                                task_done_text(result))
+                                    message, blocks=_task_blocks(tasks)
+                                    if tasks else None)
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
                 await self._say(origin["channel_id"], rec["user"], ja(result))
