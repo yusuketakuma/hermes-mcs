@@ -19,7 +19,7 @@ from hermes_plugin.mcs_discord import cards
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
                                       FakeHTTPClient, _chunks, _claim,
-                                      _receipts, _sent_parts, _spec, _state)
+                                      _sent_parts, _spec, _state)
 
 _discord = types.ModuleType("discord")          # send_attachment's File
 _discord.File = lambda path, filename=None: (path, filename)
@@ -183,12 +183,6 @@ def _attachment_spec(tmp_path):
     return spec
 
 
-def _legacy_spec():
-    spec = _spec(["body"], manifest=[])
-    spec["parts"]["thread_body"] = "legacy body"
-    return spec
-
-
 # fault that makes discord.py re-POST after the first POST committed
 RETRY_FAULTS = [500, ConnectionResetError(54, "Connection reset by peer")]
 
@@ -217,25 +211,6 @@ def test_durable_part_sdk_retry_is_single_post(tmp_path, part_id, faults,
     assert len(bot.wire.posts()) == posts
     row = _sent_parts(_state(tmp_path))[part_id]
     assert (row["result"], row["error_code"]) == ("unknown", SUPPRESSED)
-
-
-def test_legacy_thread_create_sdk_retry_is_single_post(tmp_path):
-    bot = WireBot(faults=[500])
-    w, _ = _mk(tmp_path, bot)
-    asyncio.run(w._deliver_parts(_claim(_legacy_spec()), "9001"))
-    assert len(bot.wire.posts()) == 1
-    tre = [e for e in _receipts(tmp_path / "cmd_int")
-           if e["op"] == "thread_receipt"]
-    assert tre and tre[0]["error_code"] == SUPPRESSED
-
-
-def test_legacy_body_send_sdk_retry_is_single_post(tmp_path):
-    bot = WireBot(faults=[None, 500])
-    w, logs = _mk(tmp_path, bot)
-    asyncio.run(w._deliver_parts(_claim(_legacy_spec()), "9001"))
-    assert len(bot.wire.posts()) == 2          # thread + one body POST
-    assert ("thread_body_failed",
-            {"error": "DiscordRetrySuppressed", "chunks_sent": 0}) in logs
 
 
 def _no_session(bot):
@@ -372,14 +347,6 @@ def test_rate_limited_durable_parts_are_delivered(tmp_path):
         "thread": "delivered", "body:0001": "delivered",
         "attach:0007": "delivered"}
     assert len(bot.wire.posts()) == 6 and bot.wire.committed == 3
-
-
-def test_rate_limited_legacy_body_continues(tmp_path):
-    bot = WireBot(faults=[None, 429])
-    w, logs = _mk(tmp_path, bot)
-    asyncio.run(w._deliver_parts(_claim(_legacy_spec()), "9001"))
-    assert len(bot.wire.posts()) == 3          # thread + 429 + body
-    assert not [e for e, _ in logs if e == "thread_body_failed"]
 
 
 def test_foreign_429_does_not_open_guarded_retry():

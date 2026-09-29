@@ -208,10 +208,6 @@ class DeliveryWorker(_BaseWorker):
             self._reg.save(immediate=True)
         return outcome
 
-    async def _maybe_thread(self, claim, message_id):
-        # Slack's posted ts is already the thread root; no second HTTP call.
-        return None
-
     # -- durable render parts (T9) ----------------------------------------
 
     async def _perform_part(self, claim: dict, part: dict,

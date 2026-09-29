@@ -14,7 +14,7 @@ a lost response can duplicate a Discord post; Slack strips its retry
 handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
-``_maybe_thread``; everything around them — claims, grants, journals,
+``_perform_part``; everything around them — claims, grants, journals,
 receipts, retries — is shared here. All filesystem work happens via
 ``asyncio.to_thread``; the event loop never blocks on the spec/result
 poll.
@@ -459,22 +459,16 @@ class DeliveryWorker:
         have committed is unknown (§4)."""
         raise NotImplementedError
 
-    async def _maybe_thread(self, claim: dict, message_id: str) -> None:
-        """Companion-message bookkeeping after a delivered send —
-        transports with no second post-deliver call leave it a no-op."""
-        return
-
     # -- durable render parts (T7) -------------------------------------
 
     async def _deliver_parts(self, claim: dict, message_id: str) -> None:
         """Dependent-part delivery after a settled card send — the
         sealed manifest's thread/body/attachment parts each journal
-        their own started/result/receipt. A spec without a manifest
-        falls back to the legacy companion-thread path."""
+        their own started/result/receipt. The runner seals a manifest
+        into every spec; one without it has no dependent parts."""
         spec = claim["spec"]
         manifest = (spec.get("parts") or {}).get("manifest")
         if not manifest:
-            await self._maybe_thread(claim, message_id)
             return
         ctx = {"card_message_id": message_id, "thread": None,
                "thread_id": spec["delivery"].get("thread_id"),
