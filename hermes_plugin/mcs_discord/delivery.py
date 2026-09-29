@@ -70,10 +70,11 @@ class DeliveryWorker(worker.DeliveryWorker):
             if not mid:
                 return {"result": "not_sent", "error_code": "no_target"}
             msg = await channel.fetch_message(int(mid))
-            await msg.edit(view=view)
+            await msg.edit(view=view, allowed_mentions=cards.no_pings())
             return {"result": "delivered", "message_id": mid}
         sent = await cards.single_post(           # create / notice
-            self._bot, partial(channel.send, view=view))
+            self._bot, partial(channel.send, view=view,
+                               allowed_mentions=cards.no_pings()))
         return {"result": "delivered",
                 "message_id": str(sent.id)}
 
@@ -115,7 +116,8 @@ class DeliveryWorker(worker.DeliveryWorker):
                     return {"result": "delivered",
                             "remote_id": str(mid)}
             sent = await cards.single_post(
-                self._bot, partial(thread.send, body))
+                self._bot, partial(thread.send, body,
+                                   allowed_mentions=cards.no_pings()))
             rid = getattr(sent, "id", None)
             if not rid:
                 # the wire call completed but carries no provable
@@ -244,7 +246,7 @@ class DeliveryWorker(worker.DeliveryWorker):
         if msg is None:
             return None
         try:
-            await msg.edit(content=text)
+            await msg.edit(content=text, allowed_mentions=cards.no_pings())
         except Exception as exc:
             if worker.is_definitive_reject(exc):
                 return None       # the edit did not commit — post afresh

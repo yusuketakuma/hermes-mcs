@@ -336,10 +336,16 @@ def test_real_spec_validates_and_builds(world):
     inner = view.items[0].children
     kinds = [type(i).__name__ for i in inner]
     assert "TextDisplay" in kinds and "ActionRow" in kinds
-    ids = [b.custom_id for i in inner if hasattr(i, "children")
-           for b in i.children]
+    buttons = [b for i in inner if hasattr(i, "children")
+               for b in i.children]
+    ids = [b.custom_id for b in buttons if b.url is None]
     assert ids and all(i.startswith("mcs:a:") for i in ids)
     assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex
+    # 🔗 MCSで開く is a plain link button — no custom_id, no token
+    links = [b for b in buttons if b.url is not None]
+    assert [b.url for b in links] == [
+        "https://www.medical-care.net/projects/medical/1"]
+    assert all(b.custom_id is None and b.style == 5 for b in links)
 
 
 @pytest.mark.parametrize(("mutate", "error"), [
@@ -1005,15 +1011,17 @@ def test_action_foreign_thread_denied(world):
 def test_confirm_preview_text_per_transport():
     req = {"title": "件" * 250, "reason": "理" * 450,
            "assignee": "担当者A", "due_date": "2026-10-01"}
-    tail = f"件名: {'件' * 200}\n理由: {'理' * 400}\n担当: 担当者A\n" \
-           "期限: 2026-10-01"
+    tail = f"内容: {'件' * 200}\n担当: 担当者A\n期限: 2026-10-01"
     assert text.preview_text("request", req, True) \
-        == "**確認 — 依頼の起票**\n" + tail
+        == "**確認 — タスク作成**\n" + tail
     assert text.preview_text("request", req, False) \
-        == "確認 — 依頼の起票\n" + tail
+        == "確認 — タスク作成\n" + tail
     assert text.preview_text(
         "request", {"title": "t", "reason": "r"}, False) \
-        == "確認 — 依頼の起票\n件名: t\n理由: r"
+        == "確認 — タスク作成\n内容: t"
+    report = {"field": "meds", "reason": "用量が違う"}
+    assert text.preview_text("report", report, False).startswith(
+        "確認 — 抽出の誤り報告\n箇所: 薬\nメモ: 用量が違う")
     dismiss = {"signal_key": "sig:1", "reason": "r"}
     assert text.preview_text("dismiss", dismiss, True) \
         == "**確認 — 候補の却下**\nsignal: `sig:1`\n理由: r"
@@ -2166,7 +2174,8 @@ def test_thread_opens_with_body_and_card_drops_body_button(world):
     _, spec = world.spec()
     ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
     assert "body" not in ids
-    assert {"ack", "assign", "defer", "tasks"} <= ids
+    assert {"ack", "assign", "summary", "link"} <= ids
+    assert not {"defer", "tasks"} & ids       # retired / no open tasks
     assert spec["parts"].get("thread_body_parts")   # durable part text
 
 
@@ -2518,11 +2527,17 @@ def test_action_tasks_ephemeral_list_and_transition(world):
 
 
 def test_action_tasks_empty_list(world):
+    """A ☑ button still on a posted card after its last task left the
+    list answers the empty list instead of failing."""
     world.seed()
+    rid = _request(world)
     world.dispatch()
     worker, reg, bot = world.mkworker()
     asyncio.run(_deliver(world, worker))
     _, spec = world.spec()
+    world.led.db.execute("UPDATE requests SET status='cancelled' "
+                         "WHERE request_id=?", (rid,))
+    world.led.db.commit()
     act = world.mkactions(reg, bot)
     msg = bot.channels[42].sent[0]
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'tasks')}",
@@ -2623,3 +2638,212 @@ def test_confirm_out_of_scope_after_preview_is_denied_but_cancellable(world):
     assert cancel.response.message["content"] == "取り消しました。"
     assert reg.confirm(confirm_id) is None
     assert len(list((world.data / "cmd_int").glob("*.json"))) == before
+
+
+# ---------- card buttons: toggles, names, roles, task form, report --------
+
+def _delivered(world):
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    return worker, reg, bot, spec
+
+
+def _face(msg):
+    return "\n".join(c.content for c in msg.view.items[0].children
+                     if hasattr(c, "content"))
+
+
+def test_card_posts_and_edits_never_ping(world):
+    """Footer names are <@id> mentions — every send and edit of the card
+    goes out with allowed_mentions none, so they render as names only."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    assert msg.allowed_mentions.users is False \
+        and msg.allowed_mentions.everyone is False
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'ack')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    asyncio.run(_deliver(world, worker))
+    assert msg.edits == 1 and msg.allowed_mentions.roles is False
+    assert "-# ✅ 確認: <@1001>" in _face(msg)
+    labels = [b.label for row in msg.view.items[0].children
+              if hasattr(row, "children") for b in row.children]
+    assert "✅ 確認済み" in labels and "⏸ 保留" not in labels
+
+
+def test_role_member_can_click_and_others_are_told(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = actions_mod.Actions(
+        bot=bot, settings={**SETTINGS, "allowed_role_ids": {"555"}},
+        root=str(world.data), reg=reg, log=lambda *a, **k: None)
+    staff = FakeInteraction(f"mcs:a:{world.token(spec, 'assign')}",
+                            user_id=3003, message_id=msg.id)
+    staff.user = SimpleNamespace(id=3003, roles=[SimpleNamespace(id=555)])
+    asyncio.run(world.interact(act, staff))
+    tri = world.led.db.execute(
+        "SELECT owner FROM notification_triage").fetchone()
+    assert tri["owner"] == "discord:3003"
+    other = FakeInteraction(f"mcs:a:{world.token(spec, 'ack')}",
+                            user_id=3004, message_id=msg.id)
+    other.user = SimpleNamespace(id=3004, roles=[SimpleNamespace(id=556)])
+    asyncio.run(world.interact(act, other))
+    assert other.response.message == {"content": "権限がありません。",
+                                      "ephemeral": True}
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notification_acknowledgements"
+    ).fetchone()[0] == 0
+    # a pending followup keeps the role it was authorized by — and
+    # loses it when the role leaves allowed_role_ids
+    rec = {"actor": "discord:3003", "roles": ["555"], "origin": {
+        "application_id": "1", "channel_id": "42", "guild_id": "7",
+        "profile": "mcs"}, "project_ids": [1], "application_id": "1"}
+    assert act._followup_authorized(rec) is True
+    act._settings = SETTINGS
+    assert act._followup_authorized(rec) is False
+
+
+def _llm(world, mid, content):
+    return world.led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
+        "meta,created_at) VALUES('extract_llm',1,?,?,'test',?,?)",
+        (mid, json.dumps(content, ensure_ascii=False),
+         json.dumps({"hash": f"{mid:064x}"}), NOW)).lastrowid
+
+
+def test_task_modal_roster_prefill_confirm_and_footer(world):
+    import mcs_signals
+    world.seed()
+    _llm(world, 100, {"requests": [{"action": "残薬を確認", "to": None}]})
+    with world.led.db:
+        mcs_signals.record_station_staff(world.led.db, [
+            {"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"},
+            {"staff_id": 2, "name": "佐藤 一郎", "station": "みどり薬局"}])
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'request')}",
+                         message_id=msg.id)
+    ix.user = SimpleNamespace(id=1001, display_name="佐藤 一郎")
+    asyncio.run(world.interact(act, ix))
+    modal = ix.response.modal
+    assert modal.title == "タスク作成"
+    task, pick, typed, due = modal.children
+    assert (task.custom_id, task.default, task.required) == (
+        "task", "残薬を確認", True)
+    assert pick.text == "担当者（一覧から）"
+    assert [(o.value, o.default) for o in pick.component.options] == [
+        ("山田 花子（みどり薬局）", False), ("佐藤 一郎（みどり薬局）", True)]
+    assert pick.component.min_values == 0
+    assert (typed.custom_id, due.custom_id) == ("assignee", "due_date")
+
+    modal_id = modal.custom_id[len("mcs:m:"):]
+
+    def submit(due_value):
+        s = FakeInteraction(
+            f"mcs:m:{modal_id}", message_id=msg.id, components=[
+                {"components": [{"custom_id": "task", "value": "残薬を確認"}]},
+                {"component": {"custom_id": "assignee_pick",
+                               "values": ["山田 花子（みどり薬局）"]}},
+                {"components": [{"custom_id": "assignee", "value": ""}]},
+                {"components": [{"custom_id": "due_date",
+                                 "value": due_value}]}])
+        asyncio.run(world.interact(act, s))
+        return s.followup.sent[-1]
+
+    assert submit("2026-13-01")["content"] \
+        == "期限は YYYY-MM-DD 形式で入力してください。"
+    ix2 = FakeInteraction(f"mcs:a:{world.token(spec, 'request')}",
+                          message_id=msg.id)
+    asyncio.run(world.interact(act, ix2))
+    modal_id = ix2.response.modal.custom_id[len("mcs:m:"):]
+    preview = submit("2026-10-01")
+    assert preview["content"].startswith("**確認 — タスク作成**\n内容: 残薬を確認")
+    cid = next(b.custom_id for b in preview["view"].items
+               if not b.custom_id.endswith(":cancel"))
+    confirm = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(world.interact(act, confirm))
+    row = world.led.db.execute(
+        "SELECT title,assignee,due_date FROM requests").fetchone()
+    assert tuple(row) == ("残薬を確認", "山田 花子（みどり薬局）", "2026-10-01")
+    _, spec2 = world.spec()
+    footer = "\n".join(f.get("text", "") for f in spec2["parts"]["footer"])
+    assert "📝 残薬を確認 — 担当 山田 花子（みどり薬局） — 期限 2026-10-01" \
+        in footer
+    assert any(b["id"] == "tasks" for row in spec2["parts"]["action_rows"]
+               for b in row)
+
+
+def test_summary_click_answers_ephemeral(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'summary')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    sent = "\n".join(m["content"] for m in ix.followup.sent)
+    assert "患者サマリー（暫定集約）" in sent and "集約資料がまだありません" in sent
+    assert all(m["ephemeral"] for m in ix.followup.sent)
+
+
+def test_report_modal_records_feedback(world):
+    world.seed()
+    aid = _llm(world, 101, {"summary": "s"})
+    world.led.db.commit()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'report')}",
+                         message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    field, note = ix.response.modal.children
+    assert [o.value for o in field.component.options] == [
+        "summary", "meds", "symptoms", "requests", "vitals", "other"]
+    assert field.component.min_values == 1
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    s = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, components=[
+        {"component": {"custom_id": "field", "values": ["vitals"]}},
+        {"components": [{"custom_id": "note", "value": ""}]}])
+    asyncio.run(world.interact(act, s))
+    preview = s.followup.sent[-1]
+    assert "箇所: バイタル" in preview["content"]
+    cid = next(b.custom_id for b in preview["view"].items
+               if not b.custom_id.endswith(":cancel"))
+    asyncio.run(world.interact(act, FakeInteraction(cid, message_id=msg.id)))
+    row = world.led.db.execute(
+        "SELECT content FROM artifacts WHERE kind='extract_feedback_v1'"
+    ).fetchone()
+    content = json.loads(row["content"])
+    assert (content["artifact_id"], content["field"], content["note"]) == (
+        aid, "vitals", "抽出の誤り報告（バイタル）")
+
+
+def test_old_defer_button_answers_retired(world):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    card = world.card()
+    tok = notify_cards._mint_token(world.led.db, card["card_id"], "defer",
+                                   None, {}, NOW)
+    world.led.db.commit()
+    reg.put_tokens({tok: {"action": "defer", "card_key": card["card_key"],
+                          "kind": "thread", "project_id": 1,
+                          "context": {"project_id": 1},
+                          "channel_id": "42"}})
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    asyncio.run(world.interact(act, ix))
+    assert ix.followup.sent[-1]["content"] == text.ERR_JA["action_retired"]
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notification_triage").fetchone()[0] == 0

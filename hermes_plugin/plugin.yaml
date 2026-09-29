@@ -24,6 +24,13 @@ config_schema:
     description: Discord user IDs allowed to use /mcs and Discord card
       actions (Slack uses slack_allowed_user_ids). Also the only gate,
       with allowed_chat_ids, for install-wide update/restore approvals.
+  allowed_role_ids:
+    type: list
+    required: false
+    description: Discord guild role IDs whose members may use Discord
+      card actions like an allowed user (channel and project checks
+      still apply). Does not extend /mcs commands or install-wide
+      approvals.
   allowed_chat_ids:
     type: list
     required: true

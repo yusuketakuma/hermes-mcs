@@ -195,6 +195,21 @@ def request_create(actor: str, context: dict, fields: dict,
     return env
 
 
+def extract_feedback(actor: str, context: dict, field: str, reason: str,
+                     command_id: str | None = None) -> dict:
+    """⚠ report — the message/artifact pin is the render-time
+    ``extract_ref``; the runner rejects it once that extraction is no
+    longer current (extraction_changed)."""
+    ref = context["extract_ref"]
+    return {"version": 1, "cmd": "ops.extract_feedback",
+            "command_id": command_id or str(uuid.uuid4()),
+            "actor": actor, "human_confirmed": True,
+            "project_id": context["project_id"],
+            "message_id": ref["message_id"],
+            "artifact_id": ref["artifact_id"],
+            "field": field, "reason": reason}
+
+
 def signal_dismiss(actor: str, context: dict, signal_key: str,
                    reason: str,
                    command_id: str | None = None) -> dict:

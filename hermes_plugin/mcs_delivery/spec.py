@@ -31,6 +31,7 @@ MAX_TEXT = 4000               # single TextDisplay content limit
 MAX_ROWS = 5                  # ActionRow per view
 MAX_BUTTONS = 5               # buttons per ActionRow
 MAX_LABEL = 80
+MAX_URL = 512
 MAX_THREAD_NAME = 100
 MAX_PARTS = 256                # declared bound — the runner adds a
                                # visible marker part rather than
@@ -64,7 +65,10 @@ DELIVERY_KEYS = frozenset({
     "transport", "team_id"})
 PARTS_KEYS = frozenset({
     "containers", "footer", "action_rows", "context", "manifest_id",
-    "page", "pages", "thread_name", "thread_body_parts", "manifest"})
+    "page", "pages", "thread_name", "thread_body_parts", "manifest",
+    # "silent": footer text carries <@id> member mentions — rendered as
+    # names, sent with every ping disabled (Discord allowed_mentions)
+    "mentions"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
     "attachment_id", "path", "unavailable", "prior_remote_id"})
@@ -198,6 +202,16 @@ def _action_rows_cost(rows) -> int:
             _err("bad_action_row")
         slots += len(row)
         for b in row:
+            if isinstance(b, dict) and b.get("ui") == "link":
+                # a plain URL button: no token, no interaction
+                if not _text(b.get("url"), MAX_URL) \
+                        or not b["url"].startswith("https://"):
+                    _err("bad_button_url")
+                if not _text(b.get("label"), MAX_LABEL):
+                    _err("bad_button_label")
+                if not _text(b.get("id"), 32):
+                    _err("bad_button_id")
+                continue
             if not isinstance(b, dict) or b.get("ui") != "button":
                 _err("bad_button")
             if not _TOKEN.fullmatch(str(b.get("token") or "")):
@@ -224,6 +238,8 @@ def validate(spec) -> dict:
     if not isinstance(parts, dict):
         _err("bad_parts")
     _known_keys(parts, PARTS_KEYS, "parts")
+    if parts.get("mentions", "silent") != "silent":
+        _err("bad_mentions")
     if parts.get("context") is not None and not isinstance(parts["context"], dict):
         _err("bad_context")
     containers = parts.get("containers")
@@ -365,6 +381,8 @@ def token_map(spec: dict) -> dict:
     ctx = spec["parts"].get("context") or {}
     for row in spec["parts"].get("action_rows") or []:
         for b in row:
+            if b.get("ui") == "link":
+                continue                   # no token — nothing to route
             out[b["token"]] = {
                 "action": b["id"],
                 "card_key": spec.get("card_key"),

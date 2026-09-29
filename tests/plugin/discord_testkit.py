@@ -55,10 +55,35 @@ def _fake_discord():
             self.accent_color = accent_color
 
     class Button:
-        def __init__(self, style=None, label=None, custom_id=None):
+        def __init__(self, style=None, label=None, custom_id=None,
+                     url=None):
             self.style = style
             self.label = label
             self.custom_id = custom_id
+            self.url = url
+
+    class SelectOption:
+        def __init__(self, label=None, value=None, default=False):
+            self.label, self.value, self.default = label, value, default
+
+    class Select:
+        def __init__(self, custom_id=None, options=(), required=True,
+                     min_values=1, max_values=1, **_):
+            self.custom_id = custom_id
+            self.options = list(options)
+            self.required = required
+            self.min_values, self.max_values = min_values, max_values
+
+    class Label:
+        def __init__(self, text=None, component=None, **_):
+            self.text, self.component = text, component
+
+    class AllowedMentions:
+        @classmethod
+        def none(cls):
+            m = cls()
+            m.everyone = m.users = m.roles = m.replied_user = False
+            return m
 
     class Modal:
         def __init__(self, title=None, custom_id=None, timeout=None):
@@ -71,9 +96,11 @@ def _fake_discord():
 
     class TextInput:
         def __init__(self, label=None, style=None, custom_id=None,
-                     max_length=None, required=True, **_):
+                     max_length=None, required=True, default=None, **_):
             self.label = label
             self.custom_id = custom_id
+            self.required = required
+            self.default = default
             self.value = None
 
     class Webhook:
@@ -106,9 +133,12 @@ def _fake_discord():
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
                              Container=Container,
                              Button=Button, Modal=Modal,
-                             TextInput=TextInput)
+                             TextInput=TextInput, Select=Select,
+                             Label=Label)
+    mod.SelectOption = SelectOption
+    mod.AllowedMentions = AllowedMentions
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
-                                      danger=4)
+                                      danger=4, link=5)
     mod.TextStyle = SimpleNamespace(short=1, paragraph=2)
     mod.WebhookType = SimpleNamespace(incoming=1, channel_follower=2,
                                       application=3)
@@ -137,8 +167,9 @@ class FakeThread:
         self.id = tid
         self.sent = []
 
-    async def send(self, content):
+    async def send(self, content, allowed_mentions=None):
         self.sent.append(content)
+        self.allowed_mentions = allowed_mentions
 
     async def history(self, limit=None):
         items = self.sent if limit is None else self.sent[-limit:]
@@ -155,10 +186,11 @@ class FakeMessage:
         self.deleted = False
         self.threads = []
 
-    async def edit(self, view=None):
+    async def edit(self, view=None, allowed_mentions=None):
         if self.deleted:
             raise FakeHTTP(404)
         self.view = view
+        self.allowed_mentions = allowed_mentions
         self.edits += 1
 
     async def delete(self):
@@ -182,10 +214,11 @@ class FakeChannel:
         self.messages = {}
         self._next = 9000
 
-    async def send(self, view=None):
+    async def send(self, view=None, allowed_mentions=None):
         self._next += 1
         m = FakeMessage(self._next, channel=self)
         m.view = view
+        m.allowed_mentions = allowed_mentions
         self.sent.append(m)
         self.messages[m.id] = m
         return m
