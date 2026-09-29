@@ -14,7 +14,7 @@ from pathlib import Path
 from contextlib import suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
-from mcs_util import atomic_write, publish_tmp
+from mcs_util import atomic_write, disk_floor_mb, publish_tmp
 
 HOME = os.path.expanduser("~/.mcs")
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -47,13 +47,18 @@ def _publish_backup(tmp: str, dest: str) -> None:
 def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
-    fresh backup (Oracle B24)."""
+    fresh backup (Oracle B24). Returns "skipped_disk_low" without
+    writing when the volume lacks room for two ledger copies above the
+    disk floor — a backup must not be what fills the disk."""
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
     stamp = time.strftime("%Y%m%d")
     dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
     if valid_mcs_db(dest):
         return
+    need_mb = os.path.getsize(db_path) * 2 / (1024 * 1024) + disk_floor_mb()
+    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < need_mb:
+        return "skipped_disk_low"
     tmp = dest + ".tmp"
     with suppress(FileNotFoundError):
         os.unlink(tmp)

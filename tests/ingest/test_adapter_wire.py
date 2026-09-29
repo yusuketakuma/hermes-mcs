@@ -597,6 +597,21 @@ def test_keychain_password_locked_by_stderr_text(monkeypatch, tmp_path):
         a._keychain_password()
 
 
+
+def test_chrome_launch_disables_on_device_model_download(monkeypatch):
+    import subprocess
+    a = mcs_adapter.MCSAdapter()
+    launched = []
+    monkeypatch.setattr(a, "_cdp_up", lambda: bool(launched))
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda argv, **kw: launched.append(argv))
+    a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
+    features = [x for x in launched[0] if x.startswith("--disable-features=")]
+    assert features == ["--disable-features=OptimizationGuideModelDownloading,"
+                        "OptimizationHintsFetching,"
+                        "OptimizationGuideOnDeviceModel"]
+
 def test_auto_login_reports_keychain_locked(monkeypatch, tmp_path):
     """auto_login must distinguish a locked keychain from a missing
     credential — the run alert then names the real recovery action."""
