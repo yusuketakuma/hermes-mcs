@@ -14,7 +14,7 @@ from pathlib import Path
 from contextlib import suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
-from mcs_util import atomic_write
+from mcs_util import atomic_write, publish_tmp
 
 HOME = os.path.expanduser("~/.mcs")
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -41,18 +41,7 @@ def atomic_publish_text(path: str, text: str) -> None:
 def _publish_backup(tmp: str, dest: str) -> None:
     """chmod -> fsync -> os.replace -> dir fsync for a verified backup
     copy — a power loss never leaves a torn rollback point at ``dest``."""
-    os.chmod(tmp, 0o600)
-    fd = os.open(tmp, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, dest)
-    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+    publish_tmp(tmp, dest, mode=0o600)
 
 
 def daily_backup(db_path: str):

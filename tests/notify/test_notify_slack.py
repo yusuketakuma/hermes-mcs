@@ -11,18 +11,12 @@ import notify_cmds as cmds
 import notify_transport as transport
 from hermes_plugin.mcs_slack import cards as slack_cards
 from mcs_requests import canonical
-from test_notify_cards import (
+from notify_testkit import (
     CFG, NOW, _begin, _card, _dispatch, _intent, _latest_render,
     _seed_thread, _signal_row, _token_for, _uuid,
 )
+from slack_testkit import SCOPE, SLACK
 
-SCOPE = {"transport": "slack", "profile": "synthetic-slack",
-         "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
-         "channel_id": "C_SYNTHETIC"}
-SLACK = {"notify": {"interactive": "slack", "route_epoch": 1,
-                    "card_thread": True,
-                    "slack": {k: v for k, v in SCOPE.items() if k != "transport"}},
-         "signals": {"notify": True}}
 # flag-off variant — the ephemeral body-button contract survives as the
 # escape hatch for deployments without card threads
 SLACK_FLAT = {"notify": {"interactive": "slack", "route_epoch": 1,

@@ -5,7 +5,7 @@ from ledger import Ledger
 import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
-from test_mcs_semantic import _cfg, _FakeJev, _llm, _seeded
+from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
 def test_drain_circuit_preserves_jobs_and_resumes_after_cooldown(tmp_path, monkeypatch):

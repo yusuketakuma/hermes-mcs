@@ -734,6 +734,13 @@ def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
             == sum(provenance.values())}
 
 
+def criteria_sha256(criteria: dict) -> str:
+    """SHA-256 of the canonical JSON of validated criteria."""
+    return hashlib.sha256(json.dumps(
+        criteria, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
 def evaluate_records(records: list[dict], manifest: dict,
                      criteria: dict) -> dict:
     manifest = validate_manifest(manifest)
@@ -752,9 +759,7 @@ def evaluate_records(records: list[dict], manifest: dict,
         "manifest": manifest_report,
         "criteria_version": criteria["version"],
         "criteria": criteria,
-        "criteria_sha256": hashlib.sha256(json.dumps(
-            criteria, ensure_ascii=False, sort_keys=True,
-            separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
+        "criteria_sha256": criteria_sha256(criteria),
         "label_provenance": checked["provenance"],
         "records": len(records),
         "splits": {split: _scope_report(rows)

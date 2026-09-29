@@ -9,9 +9,7 @@ import pytest
 
 import ledger as ledger_mod
 import mcs_signals
-
-NOW = 1789975073.0   # 2026-09-21 JST
-DAY = 86400
+from ops_testkit import DAY, NOW, _extract_v1, _msg
 
 
 @pytest.fixture
@@ -19,22 +17,6 @@ def led(tmp_path):
     lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
     yield lg
     lg.db.close()
-
-
-def _msg(db, mid, pid=1, ts=NOW - 30 * DAY, chash="h1", body="b",
-         prof="看護師", org="org", parent=None):
-    db.execute(
-        "INSERT INTO messages(message_id,project_id,parent_id,sender_id,"
-        "sender_name,sender_type,profession,organization,posted_at,"
-        "posted_at_ts,body_text,body_state,content_hash,reply_count,"
-        "is_unread,first_seen,updated_seen) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (mid, pid, parent, 1, "n", "staff", prof, org,
-         "2026-08-22T10:00:00+09:00", ts, body, "full", chash, 0, 0,
-         ts, ts))
-    db.execute(
-        "INSERT OR IGNORE INTO patients(project_id,is_archived,"
-        "created_at,last_seen) VALUES (?,0,?,?)", (pid, ts, ts))
 
 
 def _extract_llm(db, mid, chash, meds, events=None):
@@ -54,14 +36,6 @@ def _extract_doc(db, mid, chash, **fields):
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
         (mid, json.dumps(fields), json.dumps({"hash": chash})))
-
-
-def _extract_v1(db, mid, chash, periods):
-    db.execute(
-        "INSERT INTO artifacts(kind,message_id,content,meta) "
-        "VALUES ('extract_v1',?,?,?)",
-        (mid, json.dumps({"med_periods": periods}),
-         json.dumps({"hash": chash})))
 
 
 def _req(db, status, due=None, src_mid=1, created=NOW):
@@ -1186,6 +1160,53 @@ def test_symptom_after_med_change_ignores_unverified_symptoms(led):
              if s["type"] == "symptom_after_med_change"]
     assert [i["project_id"] for i in items] == [2]
     assert items[0]["evidence"]["symptoms"] == ["発疹"]
+
+# Fail-closed ``unverified`` policy (same as mcs_queries.item_unverified,
+# rollup, brain_export and structured_view): only a MISSING flag (pre-flag
+# and rule rows) or a literal JSON false reads as confirmed. Producers only
+# ever write booleans, so any other value is a corrupted row — it must never
+# surface as a confirmed request/symptom/med, including falsy ones (0, null,
+# "") that a truthiness check would have read as verified.
+_MISSING = object()
+
+
+@pytest.mark.parametrize("flag,confirmed", [
+    (_MISSING, True), (False, True),
+    (True, False), (1, False), (0, False), (None, False),
+    ("", False), ("true", False), ("false", False), (2, False)])
+def test_unverified_flag_fails_closed(led, flag, confirmed):
+    def item(**d):
+        if flag is not _MISSING:
+            d["unverified"] = flag
+        return d
+    # pharmacist_request_unanswered (SQL)
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[item(to="薬剤師", action="残薬調整の確認")])
+    # rx_request_visibility (SQL)
+    _msg(led.db, 2, pid=2, ts=NOW - 1 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2",
+                 requests=[item(to="医師", action="フロセミド処方")])
+    # symptom_after_med_change: flagged symptom beside a confirmed med,
+    # then a confirmed symptom beside a flagged med (Python predicates)
+    _msg(led.db, 3, pid=3, ts=NOW - 1 * DAY, chash="h3")
+    _extract_doc(led.db, 3, "h3",
+                 meds=[{"name": "薬A", "action": "start"}],
+                 symptoms=[item(text="浮腫", status="new", negated=False)])
+    _msg(led.db, 4, pid=4, ts=NOW - 1 * DAY, chash="h4")
+    _extract_doc(led.db, 4, "h4",
+                 meds=[item(name="薬B", action="start")],
+                 symptoms=[{"text": "発疹", "status": "new",
+                            "negated": False}])
+    _ev(led)
+    got = {(s["type"], s["project_id"])
+           for s in mcs_signals.current_open(led.db)["items"]}
+    want = {("pharmacist_request_unanswered", 1),
+            ("rx_request_visibility", 2),
+            ("symptom_after_med_change", 3),
+            ("symptom_after_med_change", 4)}
+    assert (got & want) == (want if confirmed else set())
+
 
 # --- adherence body phrases ---
 

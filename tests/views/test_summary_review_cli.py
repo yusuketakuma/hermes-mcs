@@ -7,7 +7,7 @@ import job_ops
 import ledger
 import mcs_view
 import semantic
-from test_mcs_semantic import _cfg, _seeded
+from semantic_testkit import _cfg, _seeded
 
 
 def test_comparison_cli_and_confirmed_adoption(tmp_path, monkeypatch, capsys):

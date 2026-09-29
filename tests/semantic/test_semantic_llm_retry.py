@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 
 import conftest as test_guard
 import semantic
-from test_mcs_semantic import _FakeJev, _cfg, _seeded
+from semantic_testkit import _FakeJev, _cfg, _seeded
 
 
 def _guard_original(owner, name):
@@ -249,7 +249,7 @@ def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):
     """LLMNotSent on target 2's summary must still commit target 1's
     audited result — otherwise every pass re-spends its Jev audit."""
     import semantic_runtime
-    from test_mcs_semantic import _FakeJev, _llm
+    from semantic_testkit import _FakeJev, _llm
     db = _seeded(tmp_path)
     jev = _FakeJev()
     calls = {"summary": 0}
@@ -291,7 +291,7 @@ def test_not_sent_repair_is_an_unavailable_repair(tmp_path):
     pass is still committed, never discarded."""
     import json
     import semantic_runtime
-    from test_mcs_semantic import _FakeJev, _llm
+    from semantic_testkit import _FakeJev, _llm
     db = _seeded(tmp_path)
     calls = {"n": 0}
 

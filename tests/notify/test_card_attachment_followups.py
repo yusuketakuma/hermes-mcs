@@ -6,10 +6,10 @@ import pytest
 
 import ledger
 import notify_cards
-from test_notify_cards import (
+from notify_testkit import (
     NOW, _dispatch, _intent, _latest_render, _msg, _seed_thread,
 )
-from test_notify_slack import SLACK
+from slack_testkit import SLACK
 
 
 @pytest.fixture

@@ -95,6 +95,9 @@ case "$1" in
         touch "$STUB_STATE/watchdog-failed-once"
         echo "Bootstrap failed: 5: Input/output error" >&2; exit 5
     fi
+    if [ -n "$STUB_WATCHDOG_NOLOAD" ] && [ "$label" = org.mcs.recovery ]; then
+        exit 0                   # exit 0, yet the label never loads
+    fi
     touch "$STUB_STATE/loaded/$label"; exit 0 ;;
   bootout)
     label="${2##*/}"
@@ -370,6 +373,8 @@ STOPPED = "installation stopped; repair the failed stage and re-run install.sh"
     ("STUB_FAIL_PLUGIN", "plugins enable failed"),
     ("STUB_FAIL_SERVICES", "services reported problems"),
     ("STUB_FAIL_WATCHDOG", "watchdog bootstrap failed"),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ("STUB_WATCHDOG_NOLOAD", "watchdog bootstrap failed"),
 ])
 def test_failed_stage_stops_install_then_rerun_recovers(
         tmp_path, switch, message):
@@ -387,7 +392,7 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert message in r.stderr
     assert STOPPED in r.stderr
     assert "Done." not in r.stdout
-    if switch != "STUB_FAIL_WATCHDOG":
+    if switch not in ("STUB_FAIL_WATCHDOG", "STUB_WATCHDOG_NOLOAD"):
         # stopped before stage 6 — the old tool is untouched
         assert (rec / "mcs_recover.py").read_bytes() == old_gen
         assert not (rec / "mcs_recover.py.prev").exists()

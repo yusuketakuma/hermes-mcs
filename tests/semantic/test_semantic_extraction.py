@@ -7,7 +7,7 @@ import pytest
 import semantic_audit
 import semantic_extraction as extraction
 from semantic_runtime import RuntimeGuardError
-from test_mcs_semantic import BODY, _FakeJev, _ledger, _llm, _seeded, _cfg
+from semantic_testkit import BODY, _FakeJev, _ledger, _llm, _seeded, _cfg
 
 
 def _member(body):

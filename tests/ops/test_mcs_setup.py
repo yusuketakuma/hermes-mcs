@@ -1636,15 +1636,18 @@ def test_stale_transport_scope_warns(monkeypatch):
                for w in warnings)
 
 
-@pytest.mark.parametrize("outcomes,late,ok,boots", [
-    ([5, 0], False, True, 2),
-    ([5, 5, 5], True, True, 3),
-    ([5, 5, 5], False, False, 3),
+@pytest.mark.parametrize("outcomes,late,ok,boots,loads", [
+    ([5, 0], False, True, 2, True),
+    ([5, 5, 5], True, True, 3, True),
+    ([5, 5, 5], False, False, 3, True),
+    # exit 0 is not proof: the label must answer `print` afterwards
+    ([0], False, False, 1, False),
 ])
 def test_agent_reconcile_retries_transient_bootstrap(
-        monkeypatch, outcomes, late, ok, boots):
+        monkeypatch, outcomes, late, ok, boots, loads):
     import subprocess
     from types import SimpleNamespace
+    import mcs_util
     state = {"loaded": True, "calls": [], "outcomes": list(outcomes)}
 
     def fake_run(argv, **kwargs):
@@ -1655,7 +1658,7 @@ def test_agent_reconcile_retries_transient_bootstrap(
             state["loaded"] = False
         elif verb == "bootstrap":
             rc = state["outcomes"].pop(0)
-            if rc == 0 or (late and not state["outcomes"]):
+            if (rc == 0 and loads) or (late and not state["outcomes"]):
                 state["loaded"] = True
         elif verb == "print":
             rc = 0 if state["loaded"] else 113
@@ -1664,12 +1667,13 @@ def test_agent_reconcile_retries_transient_bootstrap(
 
     sleeps, notes = [], []
     monkeypatch.setattr(mcs_setup, "_run", fake_run)
-    monkeypatch.setattr(mcs_setup, "time",
-                        SimpleNamespace(time=mcs_setup.time.time,
+    monkeypatch.setattr(mcs_util, "time",
+                        SimpleNamespace(time=mcs_util.time.time,
                                         sleep=sleeps.append))
     assert mcs_setup._agent_reconcile("ai.mcs.x", "/p.plist",
                                       notes.append, False) is ok
     assert state["calls"][:2] == ["print", "bootout"]
     assert state["calls"].count("bootstrap") == boots
-    assert sleeps == [1] * (boots if not ok or late else boots - 1)
+    assert state["calls"][-1] == "print"
+    assert sleeps == [1] * sum(rc != 0 for rc in outcomes)
     assert any("bootstrap failed" in n for n in notes) is (not ok)

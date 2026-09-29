@@ -15,41 +15,25 @@ import semantic_lifecycle as lifecycle
 import semantic_v4
 from semantic_evaluation import EvaluationError
 from semantic_render import mandatory_render, render_notice
-from test_mcs_semantic import _ledger, _message, _patient
-from test_semantic_evaluation import CRITERIA, MANIFEST, _record
+from semantic_testkit import (CRITERIA, MANIFEST, _ledger, _message, _patient,
+                              _record, v2_doc, v2_fact)
 
 FP, POLICY, REV = "fp-synthetic", "policy-synthetic", "rev-synthetic"
 TARGET = "discord:synthetic"
 
 
-def _fact(fid, statement):
-    return {"fact_id": fid, "kind": "medication_event",
-            "subject": "patient:1", "actor": "sender:s1",
-            "statement": statement, "polarity": "affirmed",
-            "epistemic": "asserted", "workflow_status": "performed",
-            "event_time": "unknown", "valid_time": "unknown",
-            "evidence_ids": [], "obligation_ids": [],
-            "importance": "T1", "provenance": "local_llm",
-            "validation_status": "verified"}
-
-
 def _doc(facts):
-    return {"version": "semantic-facts/v2",
-            "source": {"message_id": "m1", "revision": REV,
-                       "source_fingerprint": FP},
-            "atoms": [], "chunks": [], "evidence": [],
-            "facts": facts, "obligations": [], "relations": [],
-            "coverage": {"category_counts": {}, "open_obligation_ids": [],
-                         "limitations": [], "status": "complete"}}
+    return v2_doc(facts, source={"message_id": "m1", "revision": REV,
+                                 "source_fingerprint": FP})
 
 
 def _meta(**extra):
     return {"fingerprint": FP, "policy_fingerprint": POLICY, **extra}
 
 
-def _audit(db, doc, status="PASS"):
+def _audit(db, doc, status="PASS", evaluated=True):
     db.artifact_add("semantic_facts_audit", json.dumps(
-        {"status": status, "evaluated": True, "findings": [],
+        {"status": status, "evaluated": evaluated, "findings": [],
          "fact_verdicts": {}}), project_id=1, message_id=1,
         meta=_meta(doc_hash=semantic_v4._doc_hash(doc), audit_status=status))
 
@@ -115,7 +99,7 @@ def _read(tmp_path, final_id, cfg=None):
 def test_full_chain_yields_equal_sets_and_complete_evaluator_lifecycle(
         tmp_path, monkeypatch):
     db, final_id, event_id, chunks, _ = _chain(
-        tmp_path, [_fact("f1", "薬剤A継続"), _fact("f2", "薬剤B中止")])
+        tmp_path, [v2_fact("f1", statement="薬剤A継続"), v2_fact("f2", statement="薬剤B中止")])
     try:
         _receipt(db, event_id, "accepted", len(chunks))
         before = list(db.db.iterdump())
@@ -158,7 +142,7 @@ def test_full_chain_yields_equal_sets_and_complete_evaluator_lifecycle(
 
 
 def test_undelivered_chunk_drops_every_fact_it_carries(tmp_path):
-    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+    facts = [v2_fact(f"f{i}", statement=f"合成事実{i}：" + "長い記述" * 12)
              for i in range(1, 41)]
     db, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
     try:
@@ -214,7 +198,7 @@ def _cli(tmp_path, final_id, config=None):
 
 def test_cli_credits_a_matching_partial_receipt_from_supplied_config(
         tmp_path):
-    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+    facts = [v2_fact(f"f{i}", statement=f"合成事実{i}：" + "長い記述" * 12)
              for i in range(1, 41)]
     db, final_id, event_id, chunks, summary = _chain(tmp_path, facts)
     try:
@@ -242,7 +226,7 @@ def test_cli_credits_a_matching_partial_receipt_from_supplied_config(
                          ids=["no-config", "empty-config", "config"])
 def test_cli_partial_receipt_with_changed_chunk_width_is_unprovable(
         tmp_path, monkeypatch, config):
-    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+    facts = [v2_fact(f"f{i}", statement=f"合成事実{i}：" + "長い記述" * 12)
              for i in range(1, 41)]
     db, final_id, event_id, chunks, _ = _chain(tmp_path, facts)
     try:
@@ -262,7 +246,7 @@ def test_cli_partial_receipt_with_changed_chunk_width_is_unprovable(
 @pytest.mark.parametrize("fingerprint", [None, 7, "wrong"])
 def test_partial_receipt_without_valid_fingerprint_is_unprovable(
         tmp_path, fingerprint):
-    facts = [_fact(f"f{i}", f"合成事実{i}：" + "長い記述" * 12)
+    facts = [v2_fact(f"f{i}", statement=f"合成事実{i}：" + "長い記述" * 12)
              for i in range(1, 41)]
     db, final_id, event_id, chunks, _ = _chain(tmp_path, facts)
     try:
@@ -276,7 +260,7 @@ def test_partial_receipt_without_valid_fingerprint_is_unprovable(
 
 
 def test_unprovable_delivery_omits_the_stage(tmp_path):
-    db, final_id, _, _, _ = _chain(tmp_path, [_fact("f1", "薬剤A継続")],
+    db, final_id, _, _, _ = _chain(tmp_path, [v2_fact("f1", statement="薬剤A継続")],
                                    notice=False)
     try:
         got = _read(tmp_path, final_id)
@@ -289,7 +273,7 @@ def test_unprovable_delivery_omits_the_stage(tmp_path):
 
 def test_accepted_state_without_full_receipt_is_unprovable(tmp_path):
     db, final_id, event_id, chunks, _ = _chain(
-        tmp_path, [_fact("f1", "薬剤A継続")])
+        tmp_path, [v2_fact("f1", statement="薬剤A継続")])
     try:
         _receipt(db, event_id, "accepted", 0)
         got = _read(tmp_path, final_id)
@@ -304,20 +288,33 @@ def test_accepted_state_without_full_receipt_is_unprovable(tmp_path):
         db.close()
 
 
-@pytest.mark.parametrize("audit", [None, "NEEDS_REVIEW", "later_needs_review",
-                                   "stale_doc"])
+LATER = ("later_needs_review", "stale_doc", "later_unevaluated",
+         "later_other_doc")
+
+
+def _later_audit(db, facts, audit):
+    """Rows appended after the PASS for the generation's doc."""
+    if audit == "later_needs_review":
+        _audit(db, _doc(facts), "NEEDS_REVIEW")
+    if audit == "later_unevaluated":
+        # a newer unevaluated run on the same doc: the drain re-audits
+        # instead of reusing the older PASS, so it is not verified
+        _audit(db, _doc(facts), "PENDING", evaluated=False)
+    if audit == "later_other_doc":
+        # the newest audit judged another document hash
+        _audit(db, _doc([v2_fact("f8", statement="別文書")]))
+
+
+@pytest.mark.parametrize("audit", [None, "NEEDS_REVIEW", *LATER])
 def test_non_pass_fact_audit_leaves_verified_unobserved(tmp_path, audit):
-    facts = [_fact("f1", "薬剤A継続")]
+    facts = [v2_fact("f1", statement="薬剤A継続")]
     db, final_id, event_id, chunks, _ = _chain(
-        tmp_path, facts,
-        audit="PASS" if audit in ("later_needs_review", "stale_doc")
-        else audit)
+        tmp_path, facts, audit="PASS" if audit in LATER else audit)
     try:
-        if audit == "later_needs_review":
-            _audit(db, _doc(facts), "NEEDS_REVIEW")
+        _later_audit(db, facts, audit)
         if audit == "stale_doc":
             # a newer (e.g. repaired) doc for the generation has no audit
-            newer = _doc([_fact("f1", "薬剤A継続"), _fact("f9", "合成")])
+            newer = _doc([v2_fact("f1", statement="薬剤A継続"), v2_fact("f9", statement="合成")])
             db.artifact_add("semantic_facts_v2", json.dumps(newer),
                             project_id=1, message_id=1, meta=_meta())
         _receipt(db, event_id, "accepted", len(chunks))
@@ -332,8 +329,34 @@ def test_non_pass_fact_audit_leaves_verified_unobserved(tmp_path, audit):
         db.close()
 
 
+@pytest.mark.parametrize("audit", ["PASS", "NEEDS_REVIEW", "later_needs_review",
+                                   "later_unevaluated", "later_other_doc"])
+def test_verified_stage_matches_the_publication_gate(tmp_path, audit):
+    """The evaluation's verified stage and the re-projection gate judge
+    the same stored audit (semantic_v4.fact_audit_verdict): one never
+    accepts a document the other rejects."""
+    facts = [v2_fact("f1", statement="薬剤A継続")]
+    db, final_id, _, _, _ = _chain(
+        tmp_path, facts, audit="PASS" if audit in LATER else audit,
+        notice=False)
+    try:
+        _later_audit(db, facts, audit)
+        doc_hash = semantic_v4._doc_hash(_doc(facts))
+        gate_doc, reason = semantic_v4.reproject_doc(
+            db, 1, _meta(doc_hash=doc_hash))
+        got = _read(tmp_path, final_id)
+        if audit == "PASS":
+            assert gate_doc == _doc(facts) and reason is None
+            assert got["fact_ids"]["verified"] == ["f1"]
+        else:
+            assert gate_doc is None and reason == "audit_not_pass"
+            assert "verified" not in got["fact_ids"]
+    finally:
+        db.close()
+
+
 def test_artifact_binding_is_checked(tmp_path):
-    db, final_id, _, _, _ = _chain(tmp_path, [_fact("f1", "薬剤A継続")])
+    db, final_id, _, _, _ = _chain(tmp_path, [v2_fact("f1", statement="薬剤A継続")])
     try:
         other = db.artifact_add("semantic_candidate", "{}", project_id=1,
                                 message_id=1,

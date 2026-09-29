@@ -9,8 +9,8 @@ import mcs_requests
 import notify_flush
 import semantic
 import semantic_runtime as runtime
-from test_mcs_semantic import _seeded, _message, _cfg, _FakeJev, _llm
-from test_semantic_delivery import _semantic_event
+from semantic_testkit import (_cfg, _FakeJev, _llm, _message, _seeded,
+                              _semantic_event)
 
 
 def _control(db, action):

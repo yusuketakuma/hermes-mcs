@@ -1,7 +1,7 @@
 """Offline/status entry points cannot implicitly start a model drain."""
 import pytest
 import semantic
-from test_mcs_semantic import _seeded
+from semantic_testkit import _seeded
 
 
 def test_offline_status_is_read_only_and_drain_requires_explicit_action(tmp_path, monkeypatch, capsys):

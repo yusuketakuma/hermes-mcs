@@ -3,7 +3,7 @@ import json
 import pytest
 
 import semantic
-from test_mcs_semantic import _cfg, _seeded
+from semantic_testkit import _cfg, _seeded
 
 
 def test_degraded_notice_requires_all_arrival_targets_to_pass(tmp_path):

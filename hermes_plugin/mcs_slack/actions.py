@@ -14,6 +14,7 @@ _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
+_EXPIRED = "この確認は期限切れです。もう一度操作してください。"
 _FIELDS = {
     "request": (("title", "件名", False), ("reason", "理由・依頼内容", True),
                 ("assignee", "担当者（任意）", False),
@@ -120,14 +121,21 @@ class Actions:
         # client — the single place the retry_handlers copy lives.
         return self._sender.single_attempt()
 
-    def _pinned(self, token, origin, actor):
+    def _card(self, token, origin, actor):
+        """The token's card pin and the actor — no project scope."""
         ctx = self._reg.token(token)
-        if not ctx:
+        if not ctx or actor != origin.get("actor"):
             return None
         if ctx.get("action") != "task_status" and (
                 ctx.get("team_id") != origin["team_id"]
                 or ctx.get("channel_id") != origin["channel_id"]
                 or ctx.get("message_id") != origin["message_id"]):
+            return None
+        return ctx
+
+    def _pinned(self, token, origin, actor):
+        ctx = self._card(token, origin, actor)
+        if not ctx:
             return None
         # task_status tokens ride an ephemeral task list — the ctx pins
         # only the card/project scope; origin() already bound the click
@@ -146,8 +154,6 @@ class Actions:
                         self._settings, s.get("project_id"))
                     for s in signals.values()):
                 return None
-        if actor != origin.get("actor"):
-            return None
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None):
@@ -236,13 +242,21 @@ class Actions:
             return
         modal_id = view.get("private_metadata")
         pending = self._reg.modal(modal_id)
+        user = body["user"]["id"]
         if pending is None:
+            await self._say(self._settings["channel_id"], user,
+                            "この入力フォームは期限切れです。"
+                            "もう一度操作してください。")
             return
         origin = pending["origin"]
-        actor = f"slack:{origin['team_id']}:{body['user']['id']}"
-        if pending["actor"] != actor \
-                or not self._pinned(pending["token"],
-                                    {**origin, "actor": actor}, actor):
+        actor = f"slack:{origin['team_id']}:{user}"
+        if pending["actor"] != actor:
+            await self._say(origin["channel_id"], user,
+                            "操作した本人のみ送信できます。")
+            return
+        if not self._pinned(pending["token"],
+                            {**origin, "actor": actor}, actor):
+            await self._say(origin["channel_id"], user, "権限がありません。")
             return
         values = view.get("state", {}).get("values", {})
         fields = {}
@@ -329,6 +343,12 @@ class Actions:
         await self._say(origin["channel_id"], pending["user"],
                         "確認", blocks=blocks)
 
+    # Reply rule (confirm and modal, as Discord's _on_confirm/_on_modal):
+    # a click that fails _scope (inactive worker, foreign team/app, user
+    # outside allowed_user_ids) stays silent — nothing unverified earns a
+    # post. Every later refusal answers with fixed text only, through
+    # chat.postEphemeral to the clicking allowed user in the configured
+    # channel, so a non-actor learns nothing of the preview it clicked.
     async def _confirm(self, ack, body, action):
         await ack()
         if not self._scope(body):
@@ -338,31 +358,48 @@ class Actions:
             return
         confirm_id, cancel = match.groups()
         pending = self._reg.confirm(confirm_id)
+        user = body["user"]["id"]
         if pending is None:
+            await self._say(self._settings["channel_id"], user, _EXPIRED)
             return
         origin = pending["origin"]
-        user = body["user"]["id"]
         actor = f"slack:{origin['team_id']}:{user}"
-        if pending["actor"] != actor \
-                or (body.get("channel") or {}).get("id") != origin["channel_id"] \
-                or not self._pinned(pending["token"],
-                                    {**origin, "actor": actor}, actor):
+        if pending["actor"] != actor:
+            await self._say(origin["channel_id"], user,
+                            "確認した本人のみ確定できます。")
             return
-        if pending.get("in_flight"):
+        if (body.get("channel") or {}).get("id") != origin["channel_id"]:
+            await self._say(origin["channel_id"], user,
+                            "確認を開始した場所と送信元が一致しません。")
+            return
+        # the card token lapsed (or no longer pins this card) — start over
+        if not self._card(pending["token"],
+                          {**origin, "actor": actor}, actor):
+            await self._say(origin["channel_id"], user, _EXPIRED)
+            return
+        payload = pending["payload"]
+        # project scope (card and payload) gates only 確定 — a 取消 drops
+        # the actor's own preview and queues nothing
+        allowed = bool(self._pinned(pending["token"],
+                                    {**origin, "actor": actor}, actor)) \
+            and projects.project_allowed(self._settings, payload["project_id"])
+        # decided before the first await: a racing cancel sees in_flight
+        taken = self._reg.take_confirm(confirm_id, bool(cancel),
+                                       allowed=allowed)
+        if taken == "gone":           # expired since the lookup above
+            await self._say(origin["channel_id"], user, _EXPIRED)
+            return
+        if taken == "denied":
+            await self._say(origin["channel_id"], user, "権限がありません。")
+            return
+        if taken == "busy":
             # a 確定 is queueing this command — never report a cancel
             await self._say(origin["channel_id"], user,
                             "この確認は処理中です。結果をお待ちください。")
             return
-        if cancel:
-            self._reg.drop_confirm(confirm_id)
+        if taken == "cancelled":
             await self._say(origin["channel_id"], user, "取り消しました。")
             return
-        payload = pending["payload"]
-        if not projects.project_allowed(self._settings,
-                                        payload["project_id"]):
-            return
-        # taken before the first await: a racing cancel now sees in_flight
-        self._reg.begin_confirm(confirm_id)
         try:
             await self._publish(payload)
         except (OSError, ValueError):

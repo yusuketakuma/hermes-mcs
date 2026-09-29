@@ -9,7 +9,7 @@ import job_ops
 import ledger
 import mcs_requests
 import mcs_view
-from test_mcs_features import _source
+from ops_testkit import _source
 
 
 def test_operations_view_and_human_confirmed_cli_use_existing_inbox(tmp_path, monkeypatch, capsys):

@@ -5,7 +5,7 @@ import time
 import pytest
 
 import semantic
-from test_mcs_semantic import _FakeJev, _cfg, _llm, _seeded
+from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
 @pytest.mark.parametrize('replacement', ['300g', '300μg', '300mg/mL', '500mg', '300mg/kg', '300mg/5mL', '-300mg', '1,300mg', '300mg/日'])

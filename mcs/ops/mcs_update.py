@@ -45,8 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 
-from mcs_util import (acquire_run_lock, atomic_write,  # noqa: E402
-                      load_config)
+from mcs_util import (UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
+                      atomic_write, launchd_bootstrap, load_config)
 
 HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
@@ -56,7 +56,7 @@ LEDGER = os.path.join(DATA, "ledger.db")
 STATE_PATH = os.path.join(DATA, "update_state.json")
 UPDATE_LOCK = os.path.join(DATA, "update.lock")
 RUN_LOCK = os.path.join(DATA, "run.lock")
-MARKER_PATH = os.path.join(DATA, "update_in_progress.marker")
+MARKER_PATH = os.path.join(DATA, UPDATE_MARKER_NAME)
 MANIFEST_PATH = os.path.join(DATA, "service_manifest.json")
 REPORT_PATH = os.path.join(DATA, "recovery_report.json")
 RESTORE_REPORT_PATH = os.path.join(DATA, "restore_report.json")
@@ -87,7 +87,24 @@ T_FETCH = 120
 T_MERGE = 60
 T_GIT = 30
 T_POST_MERGE = 600        # services + restart + postcheck can be slow
+# launchctl answers in well under 1s and the drainers install no SIGTERM
+# handler (bootout returns as soon as they die), so 10s is >10x headroom
+# for a loaded machine while bounding a wedged launchd. Budget inside
+# the post-merge child (T_POST_MERGE=600), every call hung:
+#   restart_agents: a label is only STARTED before RESTART_BUDGET_S, and
+#     one resident label costs at most bootout 10 + bootstrap 3x(10+1s)
+#     + print 10 + pid wait (15 + last 10) = 78s  =>  <= 120 + 78 = 198s
+#     (per-call bound alone: 2x78 + 2x(10+33+10) = 262s for 4 labels)
+#   + services 120 + postcheck (git 2x30 + keychain 2x60 + urlopen 2x3
+#     + print 2x10) = 326  =>  child worst ~524s < 600: the child is not
+#     killed mid-restart only for the parent's bail to redo the restart.
+T_LAUNCHCTL = 10
+RESTART_BUDGET_S = 120
 STALE_S = 1800            # no stage progress for this long => stale apply
+# an unchanged unresolved escalation re-notifies at most this often
+# (health_watch.REALERT_S dedup convention; longer here because the
+# human was already told it needs manual action)
+ESCALATE_REALERT_S = 6 * 3600
 GIT_LOCK_MIN_AGE_S = 600  # younger .git/*.lock may belong to a live op
 RUN_LOCK_TRIES = 40       # 30s x 40 = 20min > RUN_DEADLINE_S (S21)
 RUN_LOCK_INTERVAL = 30
@@ -555,9 +572,30 @@ def _uid() -> int:
     return os.getuid()
 
 
-def _agent_pid(label: str) -> int | None:
-    r = subprocess.run(["launchctl", "print", f"gui/{_uid()}/{label}"],
-                       capture_output=True, text=True, timeout=T_GIT)
+def _run(argv: list, timeout: int = T_LAUNCHCTL
+         ) -> subprocess.CompletedProcess:
+    """subprocess.run that never raises — mcs_setup._run's contract,
+    kept local so a rolled-back tree never mixes generations. A hung
+    command yields returncode 124 (as timeout(1)), one that cannot start
+    127: every launchctl caller records a per-label problem and moves on,
+    so one wedged label never aborts a restart loop mid-way (H4)."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "",
+                                           f"timed out after {timeout}s")
+    except OSError as e:
+        return subprocess.CompletedProcess(argv, 127, "", str(e))
+
+
+def _agent_pid(label: str, unknown: int | None = None) -> int | None:
+    """Running pid, or None when the label is not running. A launchctl
+    that hung or could not start answers `unknown` — quiesce passes a
+    non-None value so an unverifiable stop is never taken as stopped."""
+    r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
+    if r.returncode in (124, 127):
+        return unknown
     if r.returncode != 0:
         return None
     m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
@@ -576,19 +614,44 @@ def _write_marker() -> None:
         os.close(dfd)
 
 
+def _awaiting_consent_marker() -> dict | None:
+    """notify_cards.restore_awaiting_consent, kept local: recover runs on
+    whatever tree HEAD is (a rolled-back prev may predate that helper),
+    and a failed import there would leave drainers down. Same fail-closed
+    reading: an awaiting_consent phase, or a marker present but
+    unreadable/unknown, holds."""
+    path = os.path.join(DATA, "restore_pending.json")
+    try:
+        with open(path, "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8"))
+    except FileNotFoundError:
+        return {"unreadable": True} if os.path.lexists(path) else None
+    except (OSError, ValueError, RecursionError):
+        return {"unreadable": True}
+    if not isinstance(data, dict):
+        return {"unreadable": True}
+    if data.get("phase") == "awaiting_consent":
+        return data
+    if data.get("phase") == "restored" \
+            or ("phase" not in data and "restored_at" in data):
+        return None
+    return {"unreadable": True}
+
+
 def _remove_marker() -> None:
     with suppress(OSError):
         os.unlink(MARKER_PATH)
-def _stray_drainer_pids() -> list[int]:
+
+
+def _stray_drainer_pids() -> list[int] | None:
     """Same-uid python processes running the drainer scripts — the
     pattern requires an interpreter argv0 so editors, test runners and
-    unrelated commands containing the filename never match (H7)."""
-    try:
-        r = subprocess.run(
-            ["pgrep", "-u", str(_uid()), "-f", _STRAY_RE],
-            capture_output=True, text=True, timeout=T_GIT)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    unrelated commands containing the filename never match (H7).
+    None = unverifiable (pgrep hung, missing, or exit >1 — 1 is "no
+    match"): quiesce must never read that as "no strays"."""
+    r = _run(["pgrep", "-u", str(_uid()), "-f", _STRAY_RE], timeout=T_GIT)
+    if r.returncode not in (0, 1):
+        return None
     return [int(p) for p in r.stdout.split()
             if p.isdigit() and int(p) != os.getpid()]
 
@@ -600,61 +663,75 @@ def quiesce() -> list[str]:
     _write_marker()
     stopped = []
     for label in RESIDENT_LABELS:
-        subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{label}"],
-                       capture_output=True, timeout=T_GIT)
+        _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
         deadline = time.time() + 15
         while time.time() < deadline:
-            if _agent_pid(label) is None:
+            if _agent_pid(label, unknown=-1) is None:
                 break
             time.sleep(0.5)
-        if _agent_pid(label) is not None:
+        if _agent_pid(label, unknown=-1) is not None:
             raise UpdateError(f"drainer_stop_failed: {label}")
         stopped.append(label)
     # stray sweep: helpers may have spawned drainers outside launchd
     for i in range(4):
         pids = _stray_drainer_pids()
-        if not pids:
+        if not pids:                   # [] swept, None decided below
             break
         sig = 15 if i < 3 else 9       # TERM, then KILL on the last pass
         for pid in pids:
             with suppress(OSError):
                 os.kill(pid, sig)
         time.sleep(1)
-    if _stray_drainer_pids():
+    else:
+        pids = _stray_drainer_pids()
+    if pids is None:
+        # fail closed like drainer_stop_failed: callers restart what
+        # was stopped and never merge beside an unseen live drainer
+        raise UpdateError("stray_drainer_unverifiable")
+    if pids:
         raise UpdateError("stray_drainer_survived")
     return stopped
 
 
 def _bootstrap_agent(label: str, plist: str) -> bool:
-    """install.sh bootstrap_agent: launchd may still be tearing down a
-    just-booted-out job ("5: Input/output error") — retry briefly, then
-    accept a label that is loaded now."""
-    for _ in range(3):
-        r = subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{_uid()}", plist],
-            capture_output=True, text=True, timeout=T_GIT)
-        if r.returncode == 0:
-            return True
-        time.sleep(1)
-    return subprocess.run(
-        ["launchctl", "print", f"gui/{_uid()}/{label}"],
-        capture_output=True, timeout=T_GIT).returncode == 0
+    """Verified bootstrap (mcs_util.launchd_bootstrap — imported at
+    process start, so a rolled-back tree never mixes generations)."""
+    return launchd_bootstrap(label, plist, _run) is None
 
 
-def restart_agents() -> list[str]:
+def restart_agents(bounce: bool = True) -> list[str]:
     """Re-bootstrap resident drainers and verify a NEW pid; watchers are
-    verified loaded only (R20). Returns list of verify failures."""
+    verified loaded only (R20). Returns list of verify failures. Labels
+    not yet started when RESTART_BUDGET_S runs out are reported as
+    restart_deadline:<label> (see the T_LAUNCHCTL budget).
+
+    bounce=False is the idempotent ensure-running pass (a repeated
+    escalation of the same condition — H4 only needs drainers UP): a
+    drainer launchd shows running is never touched; one not running,
+    not loaded or unverifiable (hung print — fail closed) is started:
+    bootstrap unless loaded, then `kickstart` without -k, which starts
+    a stopped job and never kills a running one."""
     problems = []
+    deadline = time.time() + RESTART_BUDGET_S
     for label in RESIDENT_LABELS:
+        if time.time() >= deadline:
+            problems.append(f"restart_deadline:{label}")
+            continue
         plist = os.path.join(AGENTS_DIR, label + ".plist")
-        subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{label}"],
-                       capture_output=True, timeout=T_GIT)
-        if not _bootstrap_agent(label, plist):
+        target = f"gui/{_uid()}/{label}"
+        if bounce:
+            _run(["launchctl", "bootout", target])
+        elif _agent_pid(label):
+            continue                   # running — never bounce it
+        if (bounce or _run(["launchctl", "print", target]).returncode != 0) \
+                and not _bootstrap_agent(label, plist):
             problems.append(f"bootstrap_failed:{label}")
             continue
-        deadline = time.time() + 15
+        if not bounce:
+            _run(["launchctl", "kickstart", target])
+        until = time.time() + 15       # never shadow the budget deadline
         pid = None
-        while time.time() < deadline:
+        while time.time() < until:
             pid = _agent_pid(label)
             if pid:
                 break
@@ -662,17 +739,13 @@ def restart_agents() -> list[str]:
         if not pid:
             problems.append(f"drainer_not_running:{label}")
     for label in WATCHER_LABELS:
-        r = subprocess.run(
-            ["launchctl", "print", f"gui/{_uid()}/{label}"],
-            capture_output=True, timeout=T_GIT)
-        if r.returncode != 0:
-            _bootstrap_agent(label,
-                             os.path.join(AGENTS_DIR, label + ".plist"))
-            r = subprocess.run(
-                ["launchctl", "print", f"gui/{_uid()}/{label}"],
-                capture_output=True, timeout=T_GIT)
-            if r.returncode != 0:
-                problems.append(f"watcher_not_loaded:{label}")
+        if time.time() >= deadline:
+            problems.append(f"restart_deadline:{label}")
+            continue
+        r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
+        if r.returncode != 0 and not _bootstrap_agent(
+                label, os.path.join(AGENTS_DIR, label + ".plist")):
+            problems.append(f"watcher_not_loaded:{label}")
     _remove_marker()
     return problems
 
@@ -680,11 +753,13 @@ def restart_agents() -> list[str]:
 def restart_gateway(cfg: dict) -> None:
     """Fire-and-forget — a cron-spawned updater is a gateway descendant;
     a synchronous `gateway restart` would wait on ourselves (S12)."""
-    subprocess.Popen(
-        ["launchctl", "kickstart", "-k",
-         f"gui/{_uid()}/ai.hermes.gateway"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    with suppress(OSError):  # runs after durable bookkeeping — never undo it
+        subprocess.Popen(
+            ["launchctl", "kickstart", "-k",
+             f"gui/{_uid()}/ai.hermes.gateway"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, close_fds=True,
+            start_new_session=True)
 
 
 def _clean_stale_git_locks() -> list[str]:
@@ -833,10 +908,9 @@ def _record_attempt(state: dict, tag: str | None, result: str,
 
 
 def _services_reconcile() -> None:
-    r = subprocess.run([sys.executable,
-                        os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
-                        "services"],
-                       capture_output=True, text=True, timeout=120)
+    r = _run([sys.executable,
+              os.path.join(REPO, "mcs", "ops", "mcs_setup.py"), "services"],
+             timeout=120)
     if r.returncode != 0:
         raise UpdateError("services_failed: "
                           + (r.stderr or r.stdout).strip()[:200])
@@ -1028,6 +1102,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     quiesced = False
     rollback_failed = False
     consent_hold = False
+    delegated = False
 
     def bail(reason: str) -> int:
         nonlocal rollback_failed, consent_hold
@@ -1101,6 +1176,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if state.get("applying") or state.get("stages"):
             os.close(upd_fd)
             upd_fd = None
+            # the journal is ANOTHER run's: whatever recover raises must
+            # propagate (as in rollback()), never reach bail() below,
+            # which would treat that journal as this apply's own and
+            # _rollback_tree it unlocked, then overwrite it
+            delegated = True
             return recover_interrupted()
 
         journal(state, "local_checks")
@@ -1217,9 +1297,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if applied_entry[-1].get("plugin_changed"):
             restart_gateway(cfg)
         return 0
-    except UpdateError as e:
-        return bail(str(e))
     except Exception as e:
+        if delegated:
+            raise
+        if isinstance(e, UpdateError):
+            return bail(str(e))
         return bail(f"unexpected:{type(e).__name__}")
     finally:
         if quiesced and not consent_hold:
@@ -1295,9 +1377,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
             continue
         if label not in desired_agents and label not in \
                 set(mcs_setup.AGENT_LABELS):
-            subprocess.run(["launchctl", "bootout",
-                            f"gui/{_uid()}/{label}"],
-                           capture_output=True, timeout=T_GIT)
+            _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
             with suppress(OSError):
                 os.unlink(path)
     return problems
@@ -1429,6 +1509,14 @@ def rollback(command_id: str | None = None) -> int:
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
         except UpdateError as e:
+            if quiesced:
+                # quiesce itself failed part-way (one drainer already
+                # stopped) — restart before reporting (H4)
+                problems = restart_agents()
+                _remove_marker()
+                quiesced = False
+                if problems:
+                    e = UpdateError(f"{e} restart:" + ",".join(problems))
             # consume the receipt — the attempt genuinely ran and the
             # human must see a result, not an infinite retry
             if command_id:
@@ -1781,27 +1869,87 @@ def recover_interrupted(if_stale: bool = False) -> int:
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
+        rollback_shaped = bool(applying and applying.get("rollback")
+                               and applying.get("backup_path"))
+        if not state.get("restore_consent") and rollback_shaped:
+            marker = _awaiting_consent_marker()
+            if marker is not None:
+                # A hold without its journal record: entered before
+                # holds were journaled (older watchdog) or a crash
+                # between the awaiting_consent marker and
+                # _consent_hold. Record it so this and every later pass
+                # (either tool) keeps the freeze; the head==target pass
+                # rewrites it from a fresh loss report.
+                state["restore_consent"] = {
+                    "report_id": marker.get("report_id"),
+                    "backup_path": applying["backup_path"],
+                    "from_marker": True, "at": time.time()}
+                save_state(state)
+        prior_drainers = _last_report().get("drainers_key")
+        head = None                    # measured below (restart identity)
+        tree_reset = False
+        restarted = False
+
+        def held() -> bool:
+            """Restore-consent hold: the journal record, or (fail
+            closed — a hold whose record is missing) the awaiting_consent
+            / unreadable restore_pending marker."""
+            return bool(state.get("restore_consent")) \
+                or _awaiting_consent_marker() is not None
+
+        def drainers(dkey: str) -> list:
+            """Bounce drainers once per journal + HEAD (or after this
+            pass reset the tree); a later pass of the same unresolved
+            condition only ensures they run — H4 without bouncing
+            healthy drainers on every check / consent respawn."""
+            nonlocal restarted
+            bounce = not restarted and (tree_reset
+                                        or prior_drainers != dkey)
+            restarted = True
+            return restart_agents() if bounce \
+                else restart_agents(bounce=False)
 
         def escalate(detail: str) -> int:
             """Fail closed on the journal but keep the rest of the
-            system alive: drainers back up, marker gone, human told."""
+            system alive: drainers back up, marker gone, human told.
+            Inside a restore-consent hold every escalation keeps the
+            freeze instead (canonical; mcs_recover.py mirrors it): the
+            tree is on prev_sha while the DB may still be the newer
+            schema, so drainers stay down, both markers, 'applying' and
+            the receipt stay, and the human is told via the report only
+            — an outbox notice would change notify_outbox, i.e. the
+            loss report's content digest, voiding the consent it
+            awaits. An invalid hold record (wrong journal shape) is
+            held the same way: only a human can repair it. The journal
+            stays, so the next check / consent respawn retries."""
+            if held():
+                _report("restore_consent_blocked",
+                        detail[:240] + " — hold kept, retried next pass")
+                return 1
             cid = (applying or {}).get("command_id")
             if cid:
                 state.setdefault("executed", {})[cid] = {
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 save_state(state)
-            _report("escalate", detail)
-            problems = restart_agents()
+            key = _alert_key(state, detail)
+            dkey = _drainers_key(state, head)
+            notify, notified_at = _alert_due("escalate", key, time.time())
+            _report("escalate", detail, alert_key=key,
+                    notified_at=notified_at, drainers_key=dkey)
+            problems = drainers(dkey)
             _remove_marker()
-            _enqueue_notice(
-                f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
-                + ((" restart:" + ",".join(problems)) if problems else ""))
+            # every pass (daily check, consent respawn) re-escalates the
+            # same stuck journal — notify once per condition (dedup)
+            if notify and not _enqueue_notice(
+                    f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
+                    + ((" restart:" + ",".join(problems))
+                       if problems else "")):
+                _report("escalate", detail, alert_key=key,
+                        drainers_key=dkey)          # retry next
             return 1
 
-        if state.get("restore_consent") and not (
-                applying and applying.get("rollback")
-                and applying.get("backup_path")):
+        if held() and not rollback_shaped:
             # A held schema-bump DB replace must reach _restore_db again
             # via the head==target rollback branch — any other journal
             # shape is corruption; fail closed rather than 'finish' into
@@ -1809,7 +1957,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
             return escalate("restore_consent without a rollback "
                             "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
-            if state.get("restore_consent"):
+            if held():
                 # the rollback tree reset already completed before the
                 # consent hold began — a MERGE_HEAD here is drift
                 return escalate("restore_consent with MERGE_HEAD — "
@@ -1847,6 +1995,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if head == target:
             if not clean:
                 # crash during the target checkout — converge to target
+                tree_reset = True
                 _git_out(["reset", "--hard", target])
                 if not _tree_clean():
                     return escalate("target tree could not be cleaned")
@@ -1862,13 +2011,18 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     return 0
                 except UpdateError as e:
                     return escalate("rollback db restore: " + str(e))
+                # the DB is at the backup schema and the marker left
+                # awaiting_consent: the hold is over — later failures
+                # escalate normally (drainers up on a consistent DB)
+                if state.pop("restore_consent", None) is not None:
+                    save_state(state)
             try:
                 if applying.get("rollback"):
                     problems = _reconcile_membership(applying.get("manifest_snapshot"))
                     if problems:
                         return escalate("membership: " + ",".join(problems))
                 _services_reconcile()
-                problems = restart_agents()
+                problems = drainers(_drainers_key(state, head))
                 errors = _postcheck(state, target)
                 if problems or errors:
                     return escalate("resume postcheck: "
@@ -1902,7 +2056,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
         if prev and head == prev:
-            if state.get("restore_consent"):
+            if held():
                 # a held restore resolves ONLY through the head==target
                 # rollback branch; landing here means the journal
                 # drifted — escalate, never 'finish' into a wedge
@@ -1921,6 +2075,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
         return escalate("unclassifiable repo state — "
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
+    except UpdateError as e:
+        # git itself failed (timeout / spawn / nonzero: HEAD, status,
+        # reset, merge --abort) — the tree is unmeasurable: escalate,
+        # which inside a consent hold keeps the freeze (see escalate).
+        return escalate(f"git unverifiable: {e}")
     finally:
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -1949,16 +2108,63 @@ def _finish_recovery(state: dict, result: str, removed: list) -> None:
     _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}")
 
 
-def _report(result: str, detail: str) -> None:
+def _report(result: str, detail: str, **extra) -> None:
     """Atomic report write — a torn report must never mislead a human
     checking `status` after a crash."""
     with suppress(OSError):
         atomic_write(REPORT_PATH,
                      lambda f: json.dump({"result": result,
                                           "detail": detail,
-                                          "at": time.time()},
+                                          "at": time.time(), **extra},
                                          f, ensure_ascii=False),
                      tmp_prefix=".ureport.")
+
+
+def _alert_key(state: dict, detail: str) -> str:
+    """Dedup key of an unresolved recovery condition: the stuck journal
+    (applying + stages, untouched by escalate) and the reason class
+    (detail up to its first ':', '—' or '(' — volatile tails such as
+    stderr stay out). Identical in mcs_recover.py so both tools dedup
+    against the same recovery_report.json."""
+    reason = re.split(r"[:—(]", detail, maxsplit=1)[0].strip()
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), reason],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
+def _alert_due(result: str, key: str, now: float) -> tuple[bool, float]:
+    """(notify?, notified_at to record). The previous report suppresses
+    only the same (result, key) notified less than ESCALATE_REALERT_S
+    ago; any other report in between (a state change) or an unreadable
+    one re-alerts — the first alert is never suppressed."""
+    last = _last_report()
+    at = last.get("notified_at")
+    if (last.get("result"), last.get("alert_key")) == (result, key) \
+            and type(at) in (int, float) \
+            and 0 <= now - at < ESCALATE_REALERT_S:
+        return False, at
+    return True, now
+
+
+def _last_report() -> dict:
+    """recovery_report.json as a dict — {} when missing or unreadable."""
+    try:
+        with open(REPORT_PATH, encoding="utf-8") as f:
+            last = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return last if isinstance(last, dict) else {}
+
+
+def _drainers_key(state: dict, head: str | None) -> str:
+    """Identity of what an escalation (re)started drainers for: the
+    stuck journal + the HEAD measured in that pass. A later pass with
+    the same key only ensures drainers run — the code they run has not
+    changed, so bouncing them again every pass fixes nothing. Identical
+    in mcs_recover.py (both tools share recovery_report.json)."""
+    return hashlib.sha256(json.dumps(
+        [state.get("applying"), state.get("stages"), head or None],
+        sort_keys=True, default=str).encode()).hexdigest()[:32]
 # -------------------------------------------------------------------- CLI
 
 def cmd_check() -> int:

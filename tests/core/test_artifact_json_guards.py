@@ -41,7 +41,7 @@ def _bad_content_rows(conn, raw, mid=2, chash="h2"):
 
 
 def _stats_db(bad, planner):
-    from test_mcs_stats import SCHEMA, SNAP_TS, _extract, _msg
+    from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
     conn = sqlite3.connect(":memory:")
     conn.executescript(SCHEMA)
     conn.execute("INSERT INTO snapshot_meta VALUES (1,'g',?)", (SNAP_TS,))
@@ -64,7 +64,7 @@ def _stats_db(bad, planner):
 
 @pytest.mark.parametrize("planner", PLANNERS)
 def test_med_stats_ignore_malformed_content(planner):
-    from test_mcs_stats import SNAP_TS
+    from views_testkit import SNAP_TS
     clean, dirty = _stats_db(False, planner), _stats_db(True, planner)
     try:
         for name in MED_STATS:
@@ -80,7 +80,7 @@ def test_med_stats_ignore_malformed_content(planner):
 
 @pytest.mark.parametrize("planner", PLANNERS)
 def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
-    from test_mcs_signals import NOW, _extract_v1, _msg
+    from ops_testkit import NOW, _extract_v1, _msg
     lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
     try:
         _msg(lg.db, 1)
@@ -110,7 +110,7 @@ def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
 def test_qc_readers_ignore_malformed_rows_under_skewed_stats(
         tmp_path, raw, column):
     from extract_testkit import _hash, _ledger
-    from test_extract_llm_v2 import _seed_qc_flagged
+    from extract_testkit import _seed_qc_flagged
     db = _ledger(tmp_path)
     try:
         _seed_qc_flagged(db)
@@ -138,7 +138,7 @@ def test_qc_readers_ignore_malformed_rows_under_skewed_stats(
 
 @pytest.mark.parametrize("raw", MALFORMED)
 def test_qc_view_ignores_malformed_content_under_skewed_stats(tmp_path, raw):
-    from test_qc_view import _qc, _seeded, _view
+    from views_testkit import _qc, _seeded, _view
     db = _seeded(tmp_path)
     try:
         _qc(db, 1, {"qc": "done", "items": [

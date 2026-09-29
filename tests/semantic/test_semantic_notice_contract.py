@@ -1,6 +1,6 @@
 """Audited claims and timestamps survive the final notification render."""
 import semantic
-from test_mcs_semantic import _seeded
+from semantic_testkit import _seeded
 
 
 def test_notice_preserves_all_sections_and_uses_instant_order(tmp_path):

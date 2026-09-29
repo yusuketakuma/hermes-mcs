@@ -3,7 +3,7 @@ import copy
 import time
 
 import semantic
-from test_mcs_semantic import _FakeJev, _llm, _seeded
+from semantic_testkit import _FakeJev, _llm, _seeded
 
 
 def test_fingerprint_changes_with_every_interpretation_input(tmp_path):

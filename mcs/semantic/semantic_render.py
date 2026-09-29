@@ -42,6 +42,11 @@ _LINE_ATTRS = (("quantity", "量"), ("polarity", "極性"),
                ("actor", "記録者"))
 
 
+def fact_binding(fid: str) -> str:
+    """Page-line marker binding a fact ID to its evidence."""
+    return f"、ID:{fid}、証拠:"
+
+
 def _attr_desc(fact: dict) -> str:
     return "".join(f"、{label}:{fact[key]}" for key, label in _LINE_ATTRS
                    if isinstance(fact.get(key), str)
@@ -94,7 +99,7 @@ def verify_mandatory_pages(rendered: dict,
                  if len(p.get("text") or "") > budget]
     unbound = [{"page": p.get("index"), "fact_id": fid}
                for p in pages for fid in p.get("fact_ids") or []
-               if f"、ID:{fid}、証拠:" not in (p.get("text") or "")]
+               if fact_binding(fid) not in (p.get("text") or "")]
     return {"complete": not (missing or extra or duplicated
                              or oversized or unbound),
             "missing": missing, "extra": extra,
@@ -134,7 +139,7 @@ def mandatory_render(doc: dict,
                 f"（対象:{fact.get('subject') or '不明'}"
                 f"、時点:{fact.get('event_time') or '不明'}"
                 f"{_attr_desc(fact)}"
-                f"、ID:{fid}、証拠:{_evidence_desc(fact)}）")
+                f"{fact_binding(fid)}{_evidence_desc(fact)}）")
         lines.append(line)
         fact_ids.append(fid)
         entries.append((line, fid))
