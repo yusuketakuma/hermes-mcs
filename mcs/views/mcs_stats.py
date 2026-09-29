@@ -346,27 +346,35 @@ def st_doc_burden(db, scope):
 
 # ---------------- meds (extract_llm source) ----------------
 
-def _med_rows(db, scope):
-    """(project_id, message_id, med_dict, posted_at_ts) for current-
-    revision extract_llm artifacts in scope. artifacts has no
-    UNIQUE(kind, message_id), so duplicate current-hash rows are
+def _med_messages(db, scope, extra_sql="", extra_params=()):
+    """(project_id, message_id, posted_at_ts, meds) per message with a
+    current-revision fact artifact carrying meds, in scope. artifacts has
+    no UNIQUE(kind, message_id), so duplicate current-hash rows are
     deduplicated per message_id here rather than double-counted — the
     NEWEST row wins, as in every display reader (structured_view)."""
     w, p = _where(scope)
     rows = db.execute(
-        f"""SELECT m.project_id, m.message_id, a.content, m.posted_at_ts
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
-              AND json_array_length({json_or_null('a.content')},'$.meds')>0{w}
+              AND json_array_length({json_or_null('a.content')},'$.meds')>0
+              {extra_sql}{w}
             ORDER BY a.artifact_id DESC""",
-        p).fetchall()
+        [*extra_params, *p]).fetchall()
     seen = set()
-    for pid, mid, content, ts in rows:
+    for pid, mid, ts, content in rows:
         if mid in seen:
             continue
         seen.add(mid)
-        for med in (json.loads(content).get("meds") or []):
+        yield pid, mid, ts, json.loads(content).get("meds") or []
+
+
+def _med_rows(db, scope):
+    """(project_id, message_id, med_dict, posted_at_ts) for the
+    patient's current med mentions in scope (see _med_messages)."""
+    for pid, mid, ts, meds in _med_messages(db, scope):
+        for med in meds:
             # negated / other-person / historical-report mentions are
             # not the patient's current medication activity — the same
             # predicate the prospective signal applies
@@ -516,23 +524,10 @@ def st_med_change_followup(db, scope):
     record found' — never 'no follow-up happened'. A request row
     referencing the message counts as a visible follow-up."""
     cutoff = scope["as_of"] - 7 * DAY_S
-    w, p = _where(scope)
-    rows = db.execute(
-        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
-            FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind IN ({FACT_KINDS_SQL})
-              {current_fact_pred()}
-              AND json_array_length({json_or_null('a.content')},'$.meds')>0
-              AND m.posted_at_ts IS NOT NULL
-              AND m.posted_at_ts <= ?{w}
-            ORDER BY a.artifact_id DESC""",
-        [cutoff, *p]).fetchall()
-    seen, total, no_follow = set(), 0, []
-    for pid, mid, ts, content in rows:
-        if mid in seen:
-            continue
-        seen.add(mid)
-        meds = json.loads(content).get("meds") or []
+    total, no_follow = 0, []
+    for pid, mid, ts, meds in _med_messages(
+            db, scope, "AND m.posted_at_ts IS NOT NULL"
+            " AND m.posted_at_ts <= ?", (cutoff,)):
         # CHANGE_ACTIONS only — a "none" (no-change) mention is not a
         # change; negated/other-person/historical mentions are filtered
         # by the same predicate the signal detector uses

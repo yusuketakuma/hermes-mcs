@@ -72,12 +72,6 @@ def fact_generations(db, mids: list) -> dict:
     return result
 
 
-def fact_ready_ids(db, mids: list) -> set:
-    """Message IDs with a current selected fact artifact."""
-    return {mid for mid, kinds in fact_generations(db, mids).items()
-            if any(k != "extract_v1" for k in kinds)}
-
-
 def latest_fact_artifact(db, mid: int) -> dict | None:
     """Newest usable fact artifact for a message — a hash-current
     ``canonical_projection`` shadows ``extract_llm`` (the same
