@@ -988,6 +988,27 @@ def test_dead_tombstone_outlives_ttl_while_spec_is_published(
     assert not list((tmp_path / "cmd_int").glob("*.json"))
 
 
+def test_registry_expire_runs_once_per_interval(tmp_path, monkeypatch):
+    """The O(registry) TTL sweep runs on the first tick, then at most
+    once per EXPIRE_EVERY_S — not on every 2s poll."""
+    from hermes_plugin.mcs_delivery import worker as worker_mod
+    clock = [1000.0]
+    monkeypatch.setattr(worker_mod, "time", types.SimpleNamespace(
+        time=lambda: clock[0], monotonic=lambda: clock[0]))
+    w, reg, _ = _mkworker(tmp_path)
+    calls = []
+    real = reg.expire
+    monkeypatch.setattr(reg, "expire",
+                        lambda **kw: calls.append(kw) or real(**kw))
+    for _ in range(3):
+        asyncio.run(w.tick())
+        clock[0] += worker_mod.POLL_S
+    assert len(calls) == 1
+    clock[0] = 1000.0 + worker_mod.EXPIRE_EVERY_S
+    asyncio.run(w.tick())
+    assert len(calls) == 2
+
+
 def _envelope(channel_id="42"):
     return {"op": "transport_begin", "profile": "mcs",
             "application_id": "1", "channel_id": channel_id,
