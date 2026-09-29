@@ -588,14 +588,30 @@ MCS 外の診療事実を自動補完しない。
 > AI エージェントに導入させる場合の対話実行用 runbook は
 > [docs/SETUP_AGENT.md](docs/SETUP_AGENT.md)。
 
-### Hermes addon として(clone して使う)
+### クイックスタート
+
+前提は macOS 13 以降・普段のユーザー(sudo 不可)・Xcode Command Line
+Tools・Homebrew・空き約 12 GB。Python は `install.sh` が用意する。
 
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
-cd hermes-mcs && ./install.sh      # hermes-agent 未導入なら pin 済み commit を
-                                   #   ~/.hermes/hermes-agent に自動導入してから
-                                   #   ~/.hermes/plugins/mcs-discord-commands をリンク
+cd hermes-mcs
+./install.sh --preflight   # 読取り専用の事前チェック。NG 行の fix: を実行し 0 blocker(s) にする
+./install.sh               # 依存一式を導入(冪等。止まったら直して再実行すれば続きから)
 ```
+
+最後に `Installed. Summary:` と、次に実行する `mcs_setup.py init` /
+`services` / `check` のコマンド(venv インタプリタのフルパス付き)が
+表示されるので、それを順に実行する。困ったときは同じインタプリタで
+`mcs_setup.py doctor`。手順全体・成功の目安・メッセージ別の対処は
+[docs/INSTALLATION.md](docs/INSTALLATION.md) の「最短手順」と §7。
+
+### Hermes addon として(clone して使う)
+
+`./install.sh` は hermes-agent 未導入なら pin 済み commit を
+`~/.hermes/hermes-agent` に導入し、`~/.hermes/plugins/mcs-discord-commands`
+をこの checkout の `hermes_plugin/` にリンクする(checkout を移動したら
+新しい場所で `./install.sh` を再実行する)。
 
 profile の `config.yaml` で有効化(全 scope 必須、未設定は拒否)。
 `mcs_setup.py init` で `notify.interactive=discord` を選ぶと、
@@ -620,9 +636,11 @@ Discord で `/mcs <json>` が使えるようになる。詳細: `hermes_plugin/R
 ### 収集パイプラインのマシンセットアップ(Mac mini 等)
 
 ```bash
+./install.sh --preflight                # 読取り専用の事前チェック(--dry-run で計画も表示)
 ./install.sh                            # 依存一式を冪等インストール:
                                         #   brew pkg / hermes / plugin /
-                                        #   llama-server+model / launchd+cron
+                                        #   llama-server+model / launchd+cron /
+                                        #   復旧 watchdog
                                         #   一部導入済みなら --no-llm 等の
                                         #   stage skip フラグあり(--help)
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init
@@ -631,7 +649,10 @@ Discord で `/mcs <json>` が使えるようになる。詳細: `hermes_plugin/R
                                         #   ※mcs_setup は Python ≥3.10 必須 —
                                         #   /usr/bin/python3(3.9系)では不可
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check
-                                        # 必須条件の検証(exit 1 で失敗)
+                                        # 必須条件の検証(exit 1 で失敗。
+                                        #   blockers を直す順に表示)
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py doctor
+                                        # check + インタプリタ・launchd 状態
 ```
 
 `init` は対話実行すると全 config キーをセクション別に案内する

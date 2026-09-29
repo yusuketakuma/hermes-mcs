@@ -5,6 +5,10 @@
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
 
+下表がジョブ一覧の唯一の表（`docs/INSTALLATION.md` §6 はここを参照する）。
+正本はコード — hermes cron は `mcs/ops/mcs_setup.py` の `CRON_JOBS`、
+services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わせる。
+
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
 | 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *`（スクリプト内で 22-06時は :00/:20/:40 起点の各5分窓に間引き — 詳細は `docs/INSTALLATION.md`） | hermes cron (`mcs_check.sh`) |
@@ -32,14 +36,22 @@ cron スケジュールの差分は reconcile する（loaded でも内容が違
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 所有 agent/cron は削除）。実績は `data/service_manifest.json` に記録
 され、更新・ロールバックの reconcile 正本になる。
-`./install.sh` からも自動で呼ばれる。
+`./install.sh` からも自動で呼ばれる（stage 5）。services は全 wrapper・
+plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画する
+ため、このインタプリタが無ければ何も描画せず exit 1 で止まる
+（`./install.sh` の再実行で stage 2 が venv を作り直す）。
+描画される `__REPO__` は checkout の絶対パスなので、checkout を移動したら
+新しい場所で `./install.sh` を再実行する（`docs/INSTALLATION.md` §A-7）。
+配置・ロード状態の確認は `mcs_setup.py check`（drift・未ロードを
+エラー表示）/ `doctor`（各 label の loaded/not loaded 一覧）。
 
 **復旧 watchdog（install.sh が別系統で所有）**: `org.mcs.recovery`
 は hermes cron に乗らない独立 launchd agent（StartInterval 900、
 `/usr/bin/python3` で `~/.mcs-recovery/mcs_recover.py --if-stale`）。
 gateway 死亡・新版破損でも動くことが目的のため services の所有・
-reconcile 対象外。手動実行は `python3 ~/.mcs-recovery/mcs_recover.py`
-（`--status` で状態診断）。
+reconcile 対象外。手動実行は `/usr/bin/python3 ~/.mcs-recovery/mcs_recover.py`
+（`--status` で状態診断）。復旧対象の checkout は install.sh が
+`~/.mcs-recovery/repo_path` に記録する（無ければ `~/.mcs`）。
 
 配置内容を確認してから適用する場合:
 
@@ -154,7 +166,10 @@ in-flight 要求を kill する実害があった）。24/7 drainer 常駐下で
 kickstart 対象のラベルは機で異なるため、スクリプトが loaded な方を
 選ぶ: `ai.hermes.llamacpp`（hermes 管理・実機）を先に試し、
 未ロードなら `ai.mcs.llamaserver`（repo テンプレート由来）に fallback。
-どちらも無ければ alert 行を出して失敗終了する。
+どちらもロードされていなければ（`--no-llm`・自前サーバ運用）再起動を
+skip してログに記録し exit 0 — 日次 cron の失敗にはしない。
+`launchctl kickstart -k` が失敗した場合はその終了コードで非 0 終了し、
+失敗行を出力する。
 
 ## ollama（embedding）
 
