@@ -18,25 +18,17 @@ import notify_render
 import notify_views
 from mcs_queries import JST, extract_feedback
 from notify_testkit import (
-    CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render, _msg,
-    _patient, _receipt, _seed_thread, _settle_bodies, _signal_row,
-    _token_for, led)
+    CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _dispatch,
+    _intent, _latest_render, _llm_extract, _msg, _patient, _seed_thread,
+    _signal_row, _spec, led, pinned_clock)
 
-__all__ = ["led"]
+__all__ = ["led", "pinned_clock"]
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 CFG_OFF = {"notify": {**CFG["notify"], "interactive": "off"},
            "signals": CFG["signals"]}
 A, B = "discord:1001", "discord:2002"
 SLACK_ACTOR = "slack:T0SYN:U0SYN1"
-
-
-@pytest.fixture(autouse=True)
-def _pin_wall_clock(monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-
-
-def _spec(led, card_id=1):
-    return json.loads(_latest_render(led, card_id)["spec_json"])
 
 
 def _button(spec, action):
@@ -52,39 +44,10 @@ def _footer(spec):
     return "\n".join(f.get("text", "") for f in spec["parts"]["footer"])
 
 
-_N = iter(range(1, 10_000))
-
-
-def _deliver(led):
-    """Land the latest render (card + body parts) so the next action
-    re-renders as an update."""
-    r = _latest_render(led)
-    n = next(_N)
-    _begin(led, r, n=n)
-    _receipt(led, r, f"{n:016x}", message_id="m-9", n=5000 + n)
-    _settle_bodies(led, r)
-
-
-def _card(led, tmp_path):
-    _seed_thread(led)
-    _dispatch(led, _intent(led))
-    _deliver(led)
-    return _spec(led)
-
-
-def _click(led, spec, action, actor=A, now=NOW, token=None):
-    tok = token or _token_for(spec, action)
-    return notify_cards.apply_notification(led, {
-        "version": 1, "op": "notification",
-        "command_id": f"{tok}:{next(_N):016x}", "actor": actor,
-        "token": tok, "origin": dict(ORIGIN, message_id="m-9")},
-        CFG, now=now)
-
-
 # ---------- ☐/✅ 確認 ------------------------------------------------------
 
-def test_ack_toggles_label_footer_and_withdraws(led, tmp_path):
-    spec1 = _card(led, tmp_path)
+def test_ack_toggles_label_footer_and_withdraws(led):
+    spec1 = _delivered_card(led)
     ack = _button(spec1, "ack")
     assert (ack["label"], ack["style"]) == ("☐ 確認", "secondary")
     assert "✅" not in _footer(spec1)
@@ -131,8 +94,8 @@ def test_ack_toggles_label_footer_and_withdraws(led, tmp_path):
     assert "✅" not in _footer(spec5)
 
 
-def test_new_content_starts_unconfirmed(led, tmp_path):
-    spec1 = _card(led, tmp_path)
+def test_new_content_starts_unconfirmed(led):
+    spec1 = _delivered_card(led)
     _click(led, spec1, "ack", now=NOW + 1)
     _deliver(led)
     assert _button(_spec(led), "ack")["label"] == "✅ 確認済み"
@@ -161,8 +124,8 @@ def test_digest_ack_label_follows_toggle(led):
 
 # ---------- 👤 担当 --------------------------------------------------------
 
-def test_assign_toggle_takeover_and_release(led, tmp_path):
-    spec1 = _card(led, tmp_path)
+def test_assign_toggle_takeover_and_release(led):
+    spec1 = _delivered_card(led)
     b = _button(spec1, "assign")
     assert (b["label"], b["style"]) == ("👤 担当する", "secondary")
 
@@ -210,10 +173,10 @@ def test_actor_label_never_renders_raw_ids(actor, label):
     assert notify_render.actor_label(actor) == label
 
 
-def test_stored_legacy_owner_renders_as_mention(led, tmp_path):
+def test_stored_legacy_owner_renders_as_mention(led):
     """Triage rows written before this change hold the same actor
     strings — they render as names with no migration."""
-    _card(led, tmp_path)
+    _delivered_card(led)
     led.db.execute(
         "INSERT INTO notification_triage(card_id,owner,state,revision,"
         "last_actor,updated_at) VALUES(1,'discord:3922000000000001',"
@@ -243,8 +206,8 @@ def test_withdrawn_at_migration_is_additive_and_idempotent(tmp_path):
 
 # ---------- layout / 🔗 link ----------------------------------------------
 
-def test_button_rows_layout_and_link(led, tmp_path):
-    spec = _card(led, tmp_path)
+def test_button_rows_layout_and_link(led):
+    spec = _delivered_card(led)
     rows = [[b["id"] for b in row] for row in spec["parts"]["action_rows"]]
     # card_thread on: 📄 lives in the thread; no task yet -> no ☑;
     # no extract_llm result -> no ⚠
@@ -259,27 +222,15 @@ def test_button_rows_layout_and_link(led, tmp_path):
 
 # ---------- 📝 tasks in the footer / ☑ ------------------------------------
 
-def _request(led, src_mid=100, title="残薬確認", status="open",
-             assignee=None, due=None):
-    rid = led.db.execute(
-        "INSERT INTO requests(project_id,source_message_id,source_hash,"
-        "title,assignee,due_date,status,revision,created_at,updated_at) "
-        "VALUES(1,?,?,?,?,?,?,1,?,?)",
-        (src_mid, f"{src_mid:064x}", title, assignee, due, status, NOW,
-         NOW)).lastrowid
-    led.db.commit()
-    return rid
-
-
-def test_footer_lists_open_tasks_and_tasks_button(led, tmp_path):
-    _card(led, tmp_path)
+def test_footer_lists_open_tasks_and_tasks_button(led):
+    _delivered_card(led)
     today = notify_render.today_jst(NOW)
-    _request(led, title="期限切れの確認", assignee="山田（みどり薬局）",
+    _add_request(led, title="期限切れの確認", assignee="山田（みどり薬局）",
              due="2020-01-01")
-    _request(led, src_mid=101, title="<@999> 返信の件", due=today)
-    _request(led, title="三件目")
-    _request(led, title="四件目")
-    _request(led, title="完了済み", status="done")
+    _add_request(led, src_mid=101, title="<@999> 返信の件", due=today)
+    _add_request(led, title="三件目")
+    _add_request(led, title="四件目")
+    _add_request(led, title="完了済み", status="done")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     spec = _spec(led)
     tasks_item = next(f["text"] for f in spec["parts"]["footer"]
@@ -301,9 +252,9 @@ def test_footer_lists_open_tasks_and_tasks_button(led, tmp_path):
     assert "tasks" not in _ids(spec) and "📝" not in _footer(spec)
 
 
-def test_task_status_rerenders_the_card(led, tmp_path):
-    spec = _card(led, tmp_path)
-    _request(led, title="対応する")
+def test_task_status_rerenders_the_card(led):
+    spec = _delivered_card(led)
+    _add_request(led, title="対応する")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     _deliver(led)
     spec = _spec(led)
@@ -319,7 +270,7 @@ def test_task_status_rerenders_the_card(led, tmp_path):
 
 
 def test_request_create_rerenders_anchored_card(led, tmp_path):
-    _card(led, tmp_path)
+    _delivered_card(led)
     before = _latest_render(led)["render_rev"]
     root = str(tmp_path / "data")
     out = notify_cmds.dispatch(led, {
@@ -338,7 +289,7 @@ def test_request_create_rerenders_anchored_card(led, tmp_path):
 
 def test_applied_command_survives_a_failed_rerender(led, tmp_path,
                                                     monkeypatch):
-    _card(led, tmp_path)
+    _delivered_card(led)
 
     def boom(*_a, **_k):
         raise sqlite3.OperationalError("database is locked")
@@ -355,19 +306,6 @@ def test_applied_command_survives_a_failed_rerender(led, tmp_path,
 
 
 # ---------- 📝 form: prefill + assignee roster ----------------------------
-
-def _llm_extract(led, mid, content, version=True):
-    h = led.db.execute("SELECT content_hash FROM messages WHERE "
-                       "message_id=?", (mid,)).fetchone()[0]
-    meta = {"hash": h}
-    if version:
-        meta["extract_version"] = extract_llm.EXTRACT_VERSION
-    return led.db.execute(
-        "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
-        "meta,created_at) VALUES('extract_llm',1,?,?,'test',?,?)",
-        (mid, json.dumps(content, ensure_ascii=False), json.dumps(meta),
-         NOW)).lastrowid
-
 
 def test_request_click_returns_prefill_and_roster_never_persisted(
         led, tmp_path):
@@ -409,18 +347,10 @@ def test_roster_falls_back_to_own_station_senders(led):
         "薬局 太郎（みどり薬局）", "佐藤 一郎（みどり薬局）"]
 
 
-def test_roster_replace_on_change(led):
-    staff = [{"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"}]
-    with led.db:
-        assert mcs_signals.record_station_staff(led.db, staff) is True
-        assert mcs_signals.record_station_staff(led.db, staff) is False
-    assert mcs_signals.latest_station_staff(led.db) == staff
-
-
 # ---------- 🧾 summary -----------------------------------------------------
 
-def test_summary_without_rollup_says_so(led, tmp_path):
-    spec = _card(led, tmp_path)
+def test_summary_without_rollup_says_so(led):
+    spec = _delivered_card(led)
     r = _click(led, spec, "summary")
     assert r["outcome"] == "applied" and r["action"] == "summary"
     assert "暫定集約" in r["title"]
@@ -434,8 +364,8 @@ def test_summary_without_rollup_says_so(led, tmp_path):
     assert "集約資料" not in stored and "body" not in json.loads(stored)
 
 
-def test_summary_with_rollup_and_coverage(led, tmp_path):
-    spec = _card(led, tmp_path)
+def test_summary_with_rollup_and_coverage(led):
+    spec = _delivered_card(led)
     led.db.execute("UPDATE patients SET history_floor=-1,"
                    "fetch_state='incomplete',fetch_reason='network_error'")
     led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
@@ -450,7 +380,7 @@ def test_summary_with_rollup_and_coverage(led, tmp_path):
             "latest_vitals": {"at": "2026-09-22", "sbp": 128, "dbp": 70,
                               "bt": 36.5},
             "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
-    _request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
+    _add_request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
     body = _click(led, spec, "summary")["body"]
     assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
             "／返信の取得未完了1件") in body
@@ -559,16 +489,16 @@ def _at(day, hour):
         tzinfo=JST).timestamp()
 
 
-def test_due_and_overdue_reminders_fire_once(led, tmp_path):
-    _card(led, tmp_path)
+def test_due_and_overdue_reminders_fire_once(led):
+    _delivered_card(led)
     # activation baseline before any task exists
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-09-20", 9)) == 0
-    due = _request(led, title="今日の確認", assignee="山田", due="2026-10-01")
-    late = _request(led, src_mid=101, title="<@1> 昨日の件",
+    due = _add_request(led, title="今日の確認", assignee="山田", due="2026-10-01")
+    late = _add_request(led, src_mid=101, title="<@1> 昨日の件",
                     due="2026-09-30")
-    _request(led, title="期限なし")
-    _request(led, title="完了", due="2026-09-01", status="done")
+    _add_request(led, title="期限なし")
+    _add_request(led, title="完了", due="2026-09-01", status="done")
     morning = _at("2026-10-01", 9)
     assert notify_cards.task_reminders(led, CFG_OFF, now=morning) == 0
     assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 23)) == 0
@@ -594,12 +524,12 @@ def test_due_and_overdue_reminders_fire_once(led, tmp_path):
         led, CFG, now=_at("2026-10-03", 9)) == 0
 
 
-def test_first_activation_baselines_old_overdue_tasks(led, tmp_path):
+def test_first_activation_baselines_old_overdue_tasks(led):
     """Tasks already overdue when reminders first run are recorded, not
     announced — only tasks that fall due afterwards are sent."""
-    _card(led, tmp_path)
-    old = _request(led, title="古い期限切れ", due="2026-09-01")
-    today = _request(led, title="本日", due="2026-10-01")
+    _delivered_card(led)
+    old = _add_request(led, title="古い期限切れ", due="2026-09-01")
+    today = _add_request(led, title="本日", due="2026-10-01")
     # the baseline runs even outside the posting hours
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-10-01", 23)) == 0
@@ -611,11 +541,11 @@ def test_first_activation_baselines_old_overdue_tasks(led, tmp_path):
     assert sent == [today] and old != today
 
 
-def test_reminders_capped_per_tick_and_rearmed_by_due_change(led, tmp_path):
-    _card(led, tmp_path)
+def test_reminders_capped_per_tick_and_rearmed_by_due_change(led):
+    _delivered_card(led)
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-09-20", 9)) == 0       # baseline
-    ids = [_request(led, title=f"t{i}", due="2026-10-01") for i in range(5)]
+    ids = [_add_request(led, title=f"t{i}", due="2026-10-01") for i in range(5)]
     morning = _at("2026-10-01", 9)
     assert notify_cards.task_reminders(led, CFG, now=morning) \
         == notify_cards.REMINDER_LIMIT == 3
@@ -656,7 +586,7 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     _click(led, _spec(led), "assign", actor=f"discord:{2 * 10 ** 18}")
     _deliver(led)
     for i in range(5):
-        _request(led, title="題" * 200, assignee="担" * 120,
+        _add_request(led, title="題" * 200, assignee="担" * 120,
                  due="2020-01-01")
     assert _report(led, str(tmp_path), aid)["outcome"] == "applied"
     notify_cards.sweep(led, CFG, now=NOW + 1)

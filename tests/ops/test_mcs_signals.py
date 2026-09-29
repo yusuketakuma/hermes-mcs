@@ -585,6 +585,14 @@ def test_dismiss_reason_code_is_optional_and_counted(led):
         "request_overdue": {"false_positive": 1, "unclassified": 1}}
 
 
+def test_station_staff_roster_replaced_only_on_change(led):
+    staff = [{"staff_id": 1, "name": "山田 花子", "station": "みどり薬局"}]
+    with led.db:
+        assert mcs_signals.record_station_staff(led.db, staff) is True
+        assert mcs_signals.record_station_staff(led.db, staff) is False
+    assert mcs_signals.latest_station_staff(led.db) == staff
+
+
 # --- human-approved threshold policy (ops.signal_policy) ---
 
 def _policy(led, policy, reason="閾値承認"):

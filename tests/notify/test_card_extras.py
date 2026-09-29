@@ -3,7 +3,6 @@ optional button row's component budget. Synthetic temp ledger only."""
 from __future__ import annotations
 
 import json
-from itertools import count
 
 import pytest
 
@@ -12,58 +11,13 @@ import notify_cmds
 import notify_render
 import notify_views
 from notify_testkit import (
-    CFG, NOW, ORIGIN, _begin, _dispatch, _intent, _latest_render, _msg,
-    _receipt, _seed_thread, _settle_bodies, _token_for, led)
+    CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _msg,
+    _spec, led, pinned_clock)
 
-__all__ = ["led"]
+__all__ = ["led", "pinned_clock"]
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 A = "discord:1001"
-_N = count(1)
-
-
-@pytest.fixture(autouse=True)
-def _pin_wall_clock(monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-
-
-def _spec(led, card_id=1):
-    return json.loads(_latest_render(led, card_id)["spec_json"])
-
-
-def _deliver(led):
-    r = _latest_render(led)
-    n = next(_N)
-    _begin(led, r, n=n)
-    _receipt(led, r, f"{n:016x}", message_id="m-9", n=5000 + n)
-    _settle_bodies(led, r)
-
-
-def _card(led):
-    _seed_thread(led)
-    _dispatch(led, _intent(led))
-    _deliver(led)
-    return _spec(led)
-
-
-def _click(led, spec, action, inputs=None, actor=A):
-    tok = _token_for(spec, action)
-    req = {"version": 1, "op": "notification",
-           "command_id": f"{tok}:{next(_N):016x}", "actor": actor,
-           "token": tok, "origin": dict(ORIGIN, message_id="m-9")}
-    if inputs:
-        req["input"] = inputs
-    assert notify_cmds.validate_int(req) is None
-    return notify_cards.apply_notification(led, req, CFG, now=NOW)
-
-
-def _request(led, title, assignee=None, due=None, status="open", pid=1):
-    rid = led.db.execute(
-        "INSERT INTO requests(project_id,source_message_id,source_hash,"
-        "title,assignee,due_date,status,revision,created_at,updated_at) "
-        "VALUES(?,100,?,?,?,?,?,1,?,?)",
-        (pid, "0" * 64, title, assignee, due, status, NOW, NOW)).lastrowid
-    led.db.commit()
-    return rid
 
 
 def _texts(view):
@@ -71,7 +25,7 @@ def _texts(view):
 
 
 def test_extra_row_is_budgeted(led):
-    spec = _card(led)
+    spec = _delivered_card(led)
     assert [b["id"] for b in spec["parts"]["action_rows"][-1]] == [
         "mytasks", "unacked", "search"]
     card = notify_cards._card_row(led.db, 1)
@@ -93,12 +47,12 @@ def test_extra_row_is_budgeted(led):
 
 
 def test_my_tasks_matches_display_name_overdue_first(led):
-    spec = _card(led)
-    later = _request(led, "来週の確認", "山田 太郎（みどり訪看）", "2026-12-01")
-    late = _request(led, "昨日の確認", "山田太郎", "2026-01-01")
-    undated = _request(led, "期限なし", "山田 太郎", status="in_progress")
-    _request(led, "他人", "山田 太郎子")
-    _request(led, "完了済み", "山田 太郎", "2026-01-01", status="done")
+    spec = _delivered_card(led)
+    later = _add_request(led, "来週の確認", "山田 太郎（みどり訪看）", "2026-12-01")
+    late = _add_request(led, "昨日の確認", "山田太郎", "2026-01-01")
+    undated = _add_request(led, "期限なし", "山田 太郎", status="in_progress")
+    _add_request(led, "他人", "山田 太郎子")
+    _add_request(led, "完了済み", "山田 太郎", "2026-01-01", status="done")
     r = _click(led, spec, "mytasks", {"name": "山田　太郎"})
     assert (r["outcome"], r["action"]) == ("applied", "list")
     view = r["list"]
@@ -121,11 +75,11 @@ def test_my_tasks_matches_display_name_overdue_first(led):
 def test_list_counts_respect_the_plugin_project_scope(led):
     """Head counts cover only the projects the plugin may show — the
     plugin's static project list rides in input.projects."""
-    spec = _card(led)
+    spec = _delivered_card(led)
     led.db.execute("INSERT INTO patients(project_id,patient_name,"
                    "is_archived) VALUES(2,'患者B',0)")
-    _request(led, "範囲内", "山田", "2026-01-01")
-    _request(led, "範囲外", "山田", "2026-01-01", pid=2)
+    _add_request(led, "範囲内", "山田", "2026-01-01")
+    _add_request(led, "範囲外", "山田", "2026-01-01", pid=2)
     view = _click(led, spec, "mytasks",
                   {"name": "山田", "projects": [1]})["list"]
     assert view["head"] == ["未完了 1件（うち期限切れ 1件）"]
@@ -143,14 +97,14 @@ def test_list_counts_respect_the_plugin_project_scope(led):
 
 
 def test_my_tasks_without_name_says_why(led):
-    spec = _card(led)
-    _request(led, "件", "山田")
+    spec = _delivered_card(led)
+    _add_request(led, "件", "山田")
     view = _click(led, spec, "mytasks")["list"]
     assert view["items"] == [] and "表示名を取得できない" in view["empty"]
 
 
 def test_unacked_lists_until_acknowledged(led):
-    spec = _card(led)
+    spec = _delivered_card(led)
     view = _click(led, spec, "unacked")["list"]
     assert view["head"] == ["未確認 1件（うち担当者あり 0件）"]
     item = view["items"][0]
@@ -177,7 +131,7 @@ def test_unacked_lists_until_acknowledged(led):
 
 
 def test_unacked_leaves_out_old_cards(led):
-    spec = _card(led)
+    spec = _delivered_card(led)
     led.db.execute("UPDATE notification_cards SET updated_at=?",
                    (NOW - notify_views.UNACKED_WINDOW_S - 1,))
     led.db.commit()
@@ -185,7 +139,7 @@ def test_unacked_leaves_out_old_cards(led):
 
 
 def test_search_opens_modal_then_answers_hits(led):
-    spec = _card(led)
+    spec = _delivered_card(led)
     for mid, body in ((102, "昨日から 発熱 あり。解熱剤を使用"),
                       (103, "発熱なし、食欲あり")):
         _msg(led, mid, parent=100, body=body, prof="看護師")
@@ -208,7 +162,7 @@ def test_search_opens_modal_then_answers_hits(led):
 
 
 def test_search_caps_hits_and_counts_the_rest(led):
-    spec = _card(led)
+    spec = _delivered_card(led)
     for mid in range(110, 110 + notify_views.SEARCH_HITS + 3):
         _msg(led, mid, parent=100, body="定期訪問")
     view = _click(led, spec, "search", {"query": "訪問"})["list"]
