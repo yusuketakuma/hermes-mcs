@@ -24,6 +24,8 @@
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
   cancellation に限定し、process 起動や別の network transport は許可しない
 - 通知を設定した場合、本文・要約・送信対象の添付は Discord 等の設定先へ送る。
+  対話カードを有効にすると、タスクの期限リマインドも `notify_target` へ
+  患者名・タスク内容・担当者名を含むテキストで送る。
   閲覧用 snapshot と `mcs_view` 出力にも PHI が含まれ得るため、閲覧権限と転送先を管理する
 - Jev 連携は `semantic.mode` 等の明示設定に従い、本文・必要なスレッド文脈を
   外部 API へ送る。本文を DATA 扱いにしても匿名化されるわけではない
