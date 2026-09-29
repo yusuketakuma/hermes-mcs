@@ -1,6 +1,6 @@
 # AGENTS.md — hermes-mcs
 
-エージェント作業用の最小指示。詳細は `README.md`・`SECURITY.md`。
+エージェント作業用の最小指示。詳細は `README.md`（概要）・`docs/DEVELOPMENT.md`・`SECURITY.md`。
 
 ## これは何か（機能サマリ）
 
@@ -37,9 +37,13 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   sys.path に挿れて `import _mcs_path`（.py を持つ全サブディレクトリを
   任意の深さで import root として登録）する2行ブートストラップを持つ。
   `mcs/` 直下に import 可能なモジュールは `_mcs_path.py` のみ
-- `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置
-  （`conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
-  テスト間ヘルパーimportを維持 + socket 遮断ガード）
+- `tests/` — pytest。`mcs/` と同じ領域名 + `plugin/`(hermes_plugin) ·
+  `meta/`(ci・deployment・install.sh・復旧の検証) のサブディレクトリに配置
+  （`tests/conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
+  テスト間ヘルパーimportを維持 + socket 遮断ガード。`integration/` 単独実行では
+  このガードは読み込まれない）
+- `ci/` — incident 由来の静的ゲート（`gates.py`・`mine_gates.py`・
+  `gates-coverage.json`）。`docs/dev-records/` を証跡入力として走査する
 - `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
   rehearsal結果）
 - `hermes_plugin/` — `mcs_discord/`(Discord worker) · `mcs_slack/`(Slack worker) ·
@@ -47,7 +51,7 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `card_workers.py`(worker 設定解決・factory) · `projects.py`
 - `integration/` — Hermes 連携・複数領域の統合テスト
 - `deployment/` — 配備用スクリプト・設定候補（変更だけでは実機適用しない）
-- `docs/` — 仕様・開発資料・検証記録
+- `docs/` — 仕様・開発資料・計画(`roadmap/`)・検証記録(`dev-records/`)。索引は `docs/README.md`
 - `scripts/` — `run_tests.sh`、`update_readme.py`、`keychain_to_env.py`、
   `semantic_shadow_e2e.py`
 
