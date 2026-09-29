@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 
 HOME = os.path.expanduser("~/.mcs")
@@ -333,12 +334,15 @@ def _restart_drainers(bounce=True):
 
 
 def _restart_gateway():
-    subprocess.Popen(
-        ["launchctl", "kickstart", "-k",
-         f"gui/{os.getuid()}/ai.hermes.gateway"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL, close_fds=True,
-        start_new_session=True)
+    # runs after durable bookkeeping — never undo it (mirrors
+    # mcs_update.restart_gateway)
+    with suppress(OSError):
+        subprocess.Popen(
+            ["launchctl", "kickstart", "-k",
+             f"gui/{os.getuid()}/ai.hermes.gateway"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, close_fds=True,
+            start_new_session=True)
 
 
 def _clean_stale_git_locks():
