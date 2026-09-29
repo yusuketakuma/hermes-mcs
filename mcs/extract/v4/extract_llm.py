@@ -1511,7 +1511,8 @@ def _write_lock(enabled: bool):
     The tick caller already holds the lock for the whole run, so it
     passes False. The standalone --all backlog drainer passes True so it
     never holds the lock longer than a single write — holding it across
-    the whole backlog would starve the 15-min tick for days."""
+    the whole backlog would starve the 5-min tick (20 min overnight)
+    for days."""
     fd = None
     if enabled:
         for _ in range(60):
@@ -1768,18 +1769,23 @@ _LEND_POLL_S = 1.0
 
 
 def _choose_slot(deadline: float | None = None) -> int | None:
-    """Wire id_slot for the next call. With --lend-rt the drainer asks
-    /slots each call and rides the real-time slot while it is idle —
-    an RT request arriving mid-call queues behind at most that one
-    call (~tens of seconds). Otherwise it takes the background slot
-    only once that slot is idle too: a pinned request landing on a
-    BUSY slot makes llama-server load prompt cache into it and abort
-    (GGML_ASSERT n <= tokens.size()), so while both slots are busy it
-    re-polls until one frees; if the wait runs out (deadline, or
-    _LEND_WAIT_S without one) it returns None and the caller defers
-    without sending — a busy slot is never pinned. Only a failed probe
-    falls back to the background slot — the server is down and the
-    call fails anyway. --slot always wins over all of it."""
+    """Wire id_slot for the next call. Per path:
+
+    - --slot: that fixed slot, always (wins over everything below).
+    - admission (MCS_LLM_ADMISSION): local_llm.request_slot(), no peek.
+    - --lend-rt: asks /slots each call and rides the real-time slot
+      while it is idle (an RT request arriving mid-call queues behind
+      at most that one call), else the background slot once it is
+      idle. A pinned request landing on a BUSY slot makes llama-server
+      load prompt cache into it and abort (GGML_ASSERT n <= tokens.size()),
+      so while both are busy it re-polls; if the wait runs out
+      (deadline, or _LEND_WAIT_S without one) it returns None and the
+      caller defers without sending. Only a failed probe falls back
+      to the background slot — the server is down anyway.
+    - everything else (the tick, a drainer without --lend-rt): pins
+      the background slot WITHOUT checking busy — the GGML_ASSERT risk
+      remains on these paths (mitigated server-side by --cache-ram 0;
+      the tick also skips its lane via pinned_slot_busy())."""
     if _SLOT_OVERRIDE is not None:
         # a stale/invalid override must not go unpinned on the wire —
         # bound it to the selected count exactly like --slot parsing
@@ -1809,6 +1815,22 @@ def _choose_slot(deadline: float | None = None) -> int | None:
                 return None
             time.sleep(_LEND_POLL_S)
     return local_llm.request_slot()
+
+
+def pinned_slot_busy(deadline: float | None = None) -> bool:
+    """True when the plain (non-lend) path would pin a slot /slots
+    reports busy right now. A point sample for skipping a lane that
+    would only queue server-side — not a guarantee against a race.
+    False under --slot/--lend-rt/admission (T20: no peek) or a failed
+    probe, so a stopped drainer never starves the caller."""
+    try:
+        if _LEND_RT or _SLOT_OVERRIDE is not None \
+                or local_llm.admission_enabled():
+            return False
+        busy = _slots_busy(deadline)
+        return bool(busy) and busy.get(local_llm.request_slot()) is True
+    except Exception:
+        return False
 
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
@@ -2567,12 +2589,29 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {pending_pred()}").fetchone()[0]
-    age_min, age_max = ledger.db.execute(
-        "SELECT MIN(m.posted_at_ts), MAX(m.posted_at_ts) FROM messages m "
-        f"WHERE {pending_pred()}").fetchone()
+    left, age_min, age_max = ledger.db.execute(
+        "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
+        f"FROM messages m WHERE {pending_pred()}").fetchone()
     now_ts = time.time()
+    return {"done": done, "failed": failed, "left": left,
+            "selected": len(rows), "deferred": deferred,
+            "skipped": skipped, "lock_lost": lock_lost,
+            "circuit_open_s": round(circuit_s) or None,
+            "disk_free_mb": round(free_mb) if free_mb is not None
+                            else None,
+            "pids": sorted(done_pids),
+            "queue_ages_s": {
+                "oldest": (now_ts - age_min) if age_min is not None
+                          else None,
+                "newest": (now_ts - age_max) if age_max is not None
+                          else None},
+            "llm_calls": _llm_call_stats(metas)}
+
+
+def _llm_call_stats(metas) -> dict | None:
+    """Sum calls/prompt_ms/predicted_ms/tokens over per-row metas (a
+    batch meta shared by several rows counts once); a field no meta
+    reported is None, and all-None collapses to None."""
     llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
                  "tokens": 0}
     have_calls = have_ms = have_toks = False
@@ -2603,20 +2642,29 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         llm_calls["prompt_ms"] = llm_calls["predicted_ms"] = None
     if not have_toks:
         llm_calls["tokens"] = None
-    return {"done": done, "failed": failed, "left": left,
-            "selected": len(rows), "deferred": deferred,
-            "skipped": skipped, "lock_lost": lock_lost,
-            "circuit_open_s": round(circuit_s) or None,
-            "disk_free_mb": round(free_mb) if free_mb is not None
-                            else None,
-            "pids": sorted(done_pids),
-            "queue_ages_s": {
-                "oldest": (now_ts - age_min) if age_min is not None
-                          else None,
-                "newest": (now_ts - age_max) if age_max is not None
-                          else None},
-            "llm_calls": llm_calls if any(
-                v is not None for v in llm_calls.values()) else None}
+    return llm_calls if any(
+        v is not None for v in llm_calls.values()) else None
+
+
+def legacy_admissions(ledger, cfg) -> set | None:
+    """T18 legacy (v3) admission set shared by the tick and the drainer:
+    None = unrestricted (legacy fact_source), a set = only those ids.
+    A non-dict config, a semantic_config error or any failure fails
+    CLOSED (empty set) — an errored canonical block must not fall back
+    to legacy and reopen unrestricted v3 inference."""
+    try:
+        if not isinstance(cfg, dict):
+            return set()
+        import semantic_policy
+        policy, error = semantic_policy.semantic_config(cfg)
+        if error:
+            return set()
+        if policy.get("fact_source") != "canonical":
+            return None
+        import semantic_v4
+        return semantic_v4.active_legacy_admissions(ledger)
+    except Exception:
+        return set()
 
 
 def main() -> int:
@@ -2702,23 +2750,14 @@ def main() -> int:
     # an admission read error fails CLOSED (empty set).
     def _admitted():
         try:
-            import semantic_policy
-            cfg = load_config()
-            if not isinstance(cfg, dict):
-                return set()
-            policy, error = semantic_policy.semantic_config(cfg)
-            if error:
-                return set()
-            if policy.get("fact_source") != "canonical":
-                return None
-            import semantic_v4
-            return semantic_v4.active_legacy_admissions(led)
+            return legacy_admissions(led, load_config())
         except Exception:
             return set()
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
-            # lock across the whole backlog would starve the 15-min tick.
+            # lock across the whole backlog would starve the 5-min tick
+            # (20 min overnight).
             stop = (time.monotonic() + args.stop_after
                     if args.stop_after > 0 else None)
 
@@ -2766,8 +2805,8 @@ def main() -> int:
                     # selected). Stay resident and poll instead of exiting:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
-                    # poll interval still beats the 15-min tick for picking
-                    # up newly fetched messages.
+                    # poll interval still beats the 5-min tick (20 min
+                    # overnight) for picking up newly fetched messages.
                     pause(120)
                     continue
                 if r["done"] == 0 and r["failed"] == 0:

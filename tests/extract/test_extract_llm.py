@@ -2229,3 +2229,44 @@ def test_request_free_text_fields_are_length_capped():
     short = extract_llm._validate({"requests": [
         {"to": "医師", "action": "合成確認"}]})["requests"][0]
     assert short["to"] == "医師" and short["action"] == "合成確認"
+
+
+@pytest.mark.parametrize(("cfg", "expect"), [
+    ({}, None),
+    ({"semantic": {"fact_source": "canonical",
+                   "fact_source_gate": "g6-v1:synthetic"}}, {7}),
+    # canonical without its gate errors back to legacy: fail CLOSED
+    ({"semantic": {"fact_source": "canonical"}}, set()),
+    ({"semantic": {"fact_source": "bogus"}}, set()),
+    (None, set()),
+    ("not a dict", set()),
+])
+def test_legacy_admissions_single_t18_boundary(monkeypatch, cfg, expect):
+    import semantic_v4
+    monkeypatch.setattr(semantic_v4, "active_legacy_admissions",
+                        lambda ledger: {7})
+    assert extract_llm.legacy_admissions(object(), cfg) == expect
+
+
+def test_legacy_admissions_manifest_error_fails_closed(monkeypatch):
+    import semantic_v4
+
+    def boom(ledger):
+        raise RuntimeError("manifest")
+    monkeypatch.setattr(semantic_v4, "active_legacy_admissions", boom)
+    assert extract_llm.legacy_admissions(object(), {"semantic": {
+        "fact_source": "canonical",
+        "fact_source_gate": "g6-v1:synthetic"}}) == set()
+
+
+def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():
+    shared = {"calls": 1, "timings": {"prompt_ms": 10, "predicted_ms": 5.5},
+              "usage": {"total_tokens": 40}}
+    stats = extract_llm._llm_call_stats(
+        [shared, shared, None, {"calls": True, "usage": {"total_tokens": "9"}},
+         {"calls": 2}])
+    assert stats == {"calls": 3, "prompt_ms": 10, "predicted_ms": 5.5,
+                     "tokens": 40}
+    assert extract_llm._llm_call_stats([{"calls": 2}]) == {
+        "calls": 2, "prompt_ms": None, "predicted_ms": None, "tokens": None}
+    assert extract_llm._llm_call_stats([None, {}]) is None
