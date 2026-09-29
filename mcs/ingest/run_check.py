@@ -752,39 +752,33 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     try:
         import extract_llm
-        # T18: under the v4 engine (fact_source=canonical) the legacy
-        # v3 extractor admits NOTHING new. Conversion manifests schedule
-        # v4 jobs; they never reopen v3. Outside canonical mode admission
-        # is unchanged.
-        admitted = None
-        try:
-            import semantic_policy
-            scfg = semantic_policy.semantic_config(cfg or {})[0]
-            canonical_mode = scfg.get("fact_source") == "canonical"
-        except Exception:
-            canonical_mode = False  # config unreadable → legacy behavior
-        if canonical_mode:
-            try:
-                import semantic_v4
-                admitted = semantic_v4.active_legacy_admissions(ledger)
-            except Exception:
-                # canonical mode defaults v3 admission to ZERO — a
-                # manifest read error must fail CLOSED, not open the
-                # legacy engine to unrestricted new inference
-                admitted = set()
         remain = (deadline - time.monotonic()) - 45
-        result["extract_llm"] = (
-            extract_llm.run_pending(
-                ledger, limit=15, budget_s=min(llm_budget_cap,
-                                               max(0, remain)),
-                admitted_ids=admitted,
+        budget = min(llm_budget_cap, max(0, remain))
+        idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
+        if remain <= 10:
+            result["extract_llm"] = idle
+        elif extract_llm.pinned_slot_busy(deadline):
+            # the drainers hold the slot this tick would pin: the call
+            # would only queue server-side while we sit on the run lock
+            result["extract_llm"] = {**idle, "skipped_busy": True}
+        else:
+            # T18: under the v4 engine (fact_source=canonical) the legacy
+            # v3 extractor admits NOTHING new; one helper with the drainer,
+            # fail-closed on an errored semantic config. No cfg (direct
+            # callers) keeps the per-key defaults, as before.
+            admitted = extract_llm.legacy_admissions(ledger, cfg or {})
+            result["extract_llm"] = extract_llm.run_pending(
+                # one single call (p50 ~23s, floor _MIN_CALL_S) fits per
+                # _MIN_CALL_S of budget — claiming more rows only burns
+                # claim/release commits and blocks the drainers from them.
+                # ponytail: assumes singles (_BATCH_K=0); revisit if
+                # batching comes back.
+                ledger, limit=max(1, int(budget // extract_llm._MIN_CALL_S)),
+                budget_s=budget, admitted_ids=admitted,
                 # drainers take the newest rows (DESC); the tick walks
                 # the tail so the two never re-process the same rows.
-                # batch_k amortizes the per-call cost over context-free
-                # backlog rows — singles stay the path for context rows.
+                # batch_k follows the module default (_BATCH_K, 0 = singles).
                 oldest_first=True, batch_k=extract_llm._BATCH_K)
-            if remain > 10 else {"done": 0, "failed": 0, "left": -1,
-                                 "pids": []})
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
