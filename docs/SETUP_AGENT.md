@@ -51,26 +51,45 @@ TYPESAFE_API_KEY**。
 ## Phase 1 — 前提条件の確認
 
 以下を順に実行し、全て合格してから Phase 2 へ。不合格は【失敗時】
-の指示に従う。
+の指示に従う。**Python の事前確認はしない** — 新規 Mac の `python3` は
+3.9 系で、Path A では `install.sh` が `python@3.13` と hermes-agent の
+venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
+実行しない（Path A は `~/.hermes/hermes-agent/venv/bin/python`、
+Path B は `python3.13`）。
 
 | # | チェック | コマンド | 合格条件 |
 |---|---|---|---|
 | 1 | macOS である | `uname -s` | `Darwin` |
-| 2 | Homebrew | `command -v brew` | パスが返る |
-| 3 | Python 3.11–3.13 | `python3 -c 'import sys;print(sys.version_info[:2])'` | `(3, 11)`〜`(3, 13)` |
-| 4 | Chrome が存在 | `ls -d "/Applications/Google Chrome.app"` | 存在 |
-| 5 | CDP :9333 が開いている | `curl -sf -m 3 http://127.0.0.1:9333/json/version` | JSON が返る |
-| 6 | 空き容量 ~10GB | `df -g ~ | awk 'NR==2{print $4}'` | 10 以上 |
-| 7 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば【ユーザー確認】で再設定か維持かを聞く |
+| 2 | リポジトリがある | `ls hermes-mcs/install.sh` — 無ければ `git clone https://github.com/yusuketakuma/hermes-mcs.git`（git が無ければ先に `xcode-select --install`） | 存在 |
+| 3 | 前提一式（読取り専用） | `cd hermes-mcs && ./install.sh --preflight` | exit 0・最終行 `preflight: 0 blocker(s), N warning(s)` |
+| 4 | CDP :9333 が開いている | `curl -sf -m 3 http://127.0.0.1:9333/json/version` | JSON が返る |
+| 5 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば【ユーザー確認】で再設定か維持かを聞く |
+
+`--preflight` は何も書き込まず、root 実行・macOS 版・Xcode CLT・
+Homebrew・Python（brew が入れられない場合のみ NG）・git・空き容量・
+github.com / huggingface.co への疎通・既存 hermes-agent checkout・
+別 checkout からの既存導入・Chrome・:8080 の使用状況を
+`OK`/`WARN`/`NG` で出す。NG と一部の WARN には `fix:` 行が付く。
 
 【失敗時】
 
-- 2: brew 未導入 → ユーザーに公式インストール手順を案内して待機
-- 4: Chrome 無し → `brew install --cask google-chrome`（ユーザー承認）
-- 5: Chrome が CDP で起動していない → ユーザーに「MCS ログイン済み
+- 3: **NG 行ごとに、その下の `fix:` を実行してから `--preflight` を
+  再実行する**（全 NG が消えるまで）。ソフトウェアの導入を伴う fix
+  （Homebrew 公式インストーラ・`xcode-select --install`・
+  `brew install ...`）はユーザー承認のうえで実行、または GUI 操作が
+  要るのでユーザー自身に実行してもらう。次は必ず【ユーザー確認】:
+  - `existing install points at another checkout` → 旧 checkout を使うか、
+    `--force-repo` でこの checkout に切り替えるか（既存導入の張替え）
+  - `port 8080 is taken by a process that is not an LLM server` →
+    そのプロセスを止めるか、`--no-llm` で自前サーバを使うか
+  - `custom HERMES_HOME` → 既定 `~/.hermes` にするか `--no-services` か
+  - `running as root` → エージェント自身が sudo/root で動いていないか確認
+  WARN は続行可。内容はユーザーに伝える（例: `Google Chrome missing` は
+  stage 1 が入れない構成なら `brew install --cask google-chrome`）
+- 4: Chrome が CDP で起動していない → ユーザーに「MCS ログイン済み
   プロファイルで `--remote-debugging-port=9333` 付きで起動して
   ください」と依頼。起動確認できてから継続
-- 7: 既存 `~/.mcs/config.json` がある → **【ユーザー確認】**
+- 5: 既存 `~/.mcs/config.json` がある → **【ユーザー確認】**
   「既存の MCS 設定が見つかりました。上書きせず維持して確認のみ
   進めますか？それとも `init` で再設定しますか？」
 
@@ -89,29 +108,40 @@ TYPESAFE_API_KEY**。
 
 ## Phase 3 — Path A: 依存の自動導入
 
-### 3-1. clone と install.sh
+### 3-1. install.sh
+
+Phase 1 の `--preflight` が exit 0 であることが前提。
 
 【実行】
 
 ```bash
-# 既に clone 済みなら skip（ls で確認してから）
-git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
-./install.sh
+./install.sh --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
+./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
 
-【検証】次が全て成立すること:
+【検証】出力の最後に `Installed. Summary:` と 6 ステージ分の結果
+（`1/6 brew:` 〜 `6/6 recovery:`）が出て exit 0。加えて:
 
 ```bash
-command -v hermes                          # hermes CLI
-ls -la ~/.hermes/plugins/mcs-discord-commands   # symlink がある
-curl -sf -m 3 http://127.0.0.1:8080/v1/models   # llama-server 応答
+~/.hermes/hermes-agent/venv/bin/python -V        # 3.11〜3.13（以後の mcs_setup はこのインタプリタ）
+ls -la ~/.hermes/plugins/mcs-discord-commands    # symlink がこの checkout の hermes_plugin/ を指す
+curl -sf -m 3 http://127.0.0.1:8080/v1/models    # llama-server 応答（--no-llm なら自前サーバ）
+cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パス（--no-recovery 以外）
 ```
 
-【失敗時】install.sh の出力をユーザーに見せる。hermes 未導入なら
-スクリプトが pin 済み fork を導入する — 出力を確認し
-`~/.local/bin` が PATH に無い場合は PATH 設定を案内する。
-モデル DL 失敗時はスクリプトの warn に従い手動配置を案内。
+Summary に続いて表示される `init`・`services`・`check` のコマンド
+（venv インタプリタと `mcs_setup.py` のフルパス付き）を Phase 5 で使う。
+
+【失敗時】install.sh は失敗したステージで止まり、`error: <原因と直し方>`
+と `error: installation stopped; repair the failed stage and re-run
+install.sh` を出す（後続ステージは実行されない）。`error:` 行の指示を
+実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
+skip され、中断した clone/checkout・venv・pip install・モデル DL
+（`.part` から再開）は続きから進む。よくある原因と対処は
+INSTALLATION.md §7-1。`warn:` 行（`~/.local/bin` が PATH に無い、
+llama plist の再読込保留、hermes 管理 LLM agent の未ロード等）は
+install を止めないが、表示されたコマンドをユーザーに案内する。
 
 ## Phase 4 — Path A: 通知先の準備【ユーザー確認】
 
@@ -194,10 +224,15 @@ Slack も `init` が設定ブロックとトークンを書き込む。`init` �
       --plugin-project-ids <pid,...>
   ```
 
+`init` は既存の `~/.mcs/config.json` が壊れていると何も書かずに止まる
+（`config: ... is unreadable or invalid ... nothing written`）。
+**【ユーザー確認】** 手で直すか、`--yes` で `config.json.corrupt-<日時>` に
+退避して既定値から作り直すか。`init` は最後に `check` を自動実行する。
+
 【検証】`config`・`.env`・Keychain が書かれたこと:
 
 ```bash
-python3 - <<'PYSETUP'
+~/.hermes/hermes-agent/venv/bin/python - <<'PYSETUP'
 import json
 from pathlib import Path
 cfg = json.loads((Path.home() / ".mcs/config.json").read_text())
@@ -219,7 +254,7 @@ security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 【検証】cron/launchd/gateway が登録されたこと:
 
 ```bash
-hermes cron list --all | grep -i mcs # 6件登録
+hermes cron list --all | grep -iE "mcs|llamacpp"   # 6件登録
 launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```
@@ -235,13 +270,36 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 
 ### 5-4. 必須条件の検証
 
-【実行】`~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check` — exit 0 を期待
+【実行】`~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check` — exit 0・最終行
+`check: OK (0 errors, N warnings)` を期待
 
-【失敗時】INSTALLATION.md §7 の対応表に従う。主なもの:
+【失敗時】`check` はエラーを優先度順（実行基盤 → config → マシン →
+配置 drift）に並べ、最後に `blockers (N) — fix in this order:` として
+番号付きの要約と `fix:` 行を出す。**1 番から順に直して `check` を
+再実行する**（上位の原因が下位のエラーを引き起こしていることがある）。
+診断・報告には `doctor` を使う — インタプリタ・`hermes` の解決先
+（launchd PATH 含む）・repo・各 launchd agent の `loaded`/`not loaded` を
+出してから `check` を実行する:
 
+```bash
+~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py doctor
+```
+
+メッセージ別の対処は INSTALLATION.md §7-2。主なもの:
+
+- `interpreter ... is missing or not executable` → `./install.sh` 再実行
+  （stage 2 が venv を作り直す）→ `services`
+- `hermes resolves here (...) but not on the launchd PATH` → 表示の
+  `ln -s ... ~/.local/bin/hermes`
 - `missing required key` → `init` で再登録
 - `Keychain entry ... unreadable` → `security unlock-keychain` を
   ユーザーに依頼
+- `LaunchAgent ... installed but not loaded` → 表示の
+  `launchctl bootstrap ...`（MCS 4件なら `services` 再実行）
+- `deployed scripts differ from the repo` → `services` 再実行
+- `recovery watchdog recovers <パス>, not this checkout` → 正しい
+  checkout で `./install.sh`（移動した場合。別 checkout が残っていれば
+  `--force-repo` は【ユーザー確認】）
 - `hermes gateway is not supervised` → `services` 再実行
 - `llama-server advertises N slots` → plist の `-np 2` 確認
 
@@ -271,9 +329,14 @@ $PY mcs/views/mcs_view.py status
 ```bash
 brew install python@3.13 llama.cpp       # 未導入のみ
 brew install --cask google-chrome        # 未導入のみ
-git clone https://github.com/yusuketakuma/hermes-mcs.git
-cd hermes-mcs
+cd hermes-mcs                            # Phase 1 で clone 済み
+PY=python3.13                            # 以後の MCS コマンドはすべて $PY で実行
+$PY -V                                   # Python 3.13.x
 ```
+
+素の `python3`（新規 Mac では 3.9 系）は使わない — `mcs_setup` は
+`mcs_setup requires Python >= 3.10` で止まる。以後のコマンドは同じ
+シェルで `PY` を設定した前提。
 
 ### 6-2. init（通知は送らない前提の設定）
 
@@ -286,7 +349,7 @@ cd hermes-mcs
 【実行】
 
 ```bash
-MCS_SETUP_PASSWORD=<sec> python3 mcs/ops/mcs_setup.py init --yes \
+MCS_SETUP_PASSWORD=<sec> $PY mcs/ops/mcs_setup.py init --yes \
     --login-id <ID> --notify-target local \
     --set 'notify.interactive="off"'
 ```
@@ -321,12 +384,16 @@ MCS_SETUP_PASSWORD=<sec> python3 mcs/ops/mcs_setup.py init --yes \
 ### 6-5. 検証
 
 ```bash
-python3 mcs/ingest/run_check.py --json --download-files --mark-read --no-notify
-python3 mcs/views/mcs_view.py status
+$PY mcs/ingest/run_check.py --json --download-files --mark-read --no-notify
+$PY mcs/views/mcs_view.py status
+$PY mcs/ops/mcs_setup.py check
 ```
 
-`mcs_setup check` は `hermes CLI not resolvable` エラーを出す —
-スタンドアロンでは想定内。それ以外のエラーは対処する。
+`check` はスタンドアロンでは exit 1 になる。次は想定内（一覧は
+INSTALLATION.md §B-5）: `interpreter ~/.hermes/hermes-agent/venv/bin/python
+is missing` と `hermes CLI not resolvable` のエラー、LaunchAgent 4件・
+`org.mcs.recovery`・`~/.hermes/scripts` 未配置の警告。それ以外のエラーは
+対処する。
 
 ## Phase 7 — 完了報告
 
@@ -335,6 +402,8 @@ python3 mcs/views/mcs_view.py status
 ```text
 【MCS セットアップ完了】
 - 導入形態: A(hermes アドオン) / B(スタンドアロン)
+- 事前チェック: install.sh --preflight = 0 blocker(s) / 警告N件
+- install.sh: Installed（使用フラグ: …）/ B のため未使用
 - 設定: ~/.mcs/config.json（notify_target=…、interactive=…）
 - 秘密情報: Keychain mcs-adapter=登録済み / .env=設定済み
 - スケジュール: hermes cron=N件 / launchd=N件 / crontab=N件
