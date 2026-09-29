@@ -34,15 +34,15 @@
   <text x="80" y="240" font-size="10" fill="#d1d2d3" font-weight="bold">依頼</text>
   <text x="80" y="258" font-size="10" fill="#d1d2d3">次回訪問で残薬を確認</text>
   <rect x="80" y="272" width="74" height="26" rx="5" fill="#007a5a"/>
-  <text x="117" y="289" font-size="10" fill="#fff" text-anchor="middle">✅ 確認</text>
+  <text x="117" y="289" font-size="10" fill="#fff" text-anchor="middle">✅ 確認済み</text>
   <rect x="162" y="272" width="74" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="199" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">👤 担当</text>
+  <text x="199" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">👤 担当中</text>
   <rect x="244" y="272" width="74" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="281" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">⏸ 保留</text>
+  <text x="281" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">🔗 MCSで開く</text>
   <rect x="80" y="306" width="110" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="135" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">📝 依頼作成</text>
+  <text x="135" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">📝 タスク作成</text>
   <rect x="198" y="306" width="110" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="253" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">📄 本文表示</text>
+  <text x="253" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">🧾 患者サマリー</text>
   <text x="80" y="356" font-size="9" fill="#6e7681">カード本体は要約と操作だけ</text>
 
   <!-- Slack reply bar -->

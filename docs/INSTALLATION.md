@@ -309,7 +309,17 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
 - **`hermes_plugin/` のコードを変更・更新したら `hermes gateway
   restart` が必須** — gateway は plugin を起動時に読み込む長寿命
   プロセス。再起動しないと新形式 spec を旧 worker が処理し、カード
-  だけ届いてスレッド本文・添付が欠落する（2026-09 実機事案）
+  だけ届いてスレッド本文・添付が欠落する（2026-09 実機事案）。
+  リンクボタン（`🔗 MCSで開く`）や人名表示（`parts.mentions`）を含む
+  カードは、旧 worker では配送されず保留される（再起動後に配送）
+- **カードを操作できる人を増やす（Discord）** — 薬局スタッフ全員に
+  ロールを付け、そのロール ID を `allowed_role_ids` に入れる:
+  `python3 mcs/ops/mcs_setup.py init --plugin-role-ids <role id>[,<role id>]`
+  （または `hermes -p <profile> config set
+  plugins.entries.mcs-discord-commands.settings.allowed_role_ids
+  '["<role id>"]'`）。ユーザー単位なら `allowed_user_ids` に列挙する。
+  いずれも設定後に `hermes gateway restart`。Slack は
+  `slack_allowed_user_ids` に複数の member ID を列挙する
 - Slack カードを使う場合は `notify.interactive="slack"` +
   `notify.slack` ブロック（`profile`・`application_id`・`team_id`・
   `channel_id`、**guild_id は不可**）。wizard/init の対応で

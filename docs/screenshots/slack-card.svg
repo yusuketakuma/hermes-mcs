@@ -43,15 +43,15 @@
 
   <!-- actions -->
   <rect x="82" y="326" width="84" height="32" rx="6" fill="#007a5a"/>
-  <text x="124" y="347" font-size="12" fill="#fff" text-anchor="middle">✅ 確認</text>
+  <text x="124" y="347" font-size="12" fill="#fff" text-anchor="middle">✅ 確認済み</text>
   <rect x="174" y="326" width="84" height="32" rx="6" fill="#222529" stroke="#565a5e"/>
-  <text x="216" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">👤 担当</text>
+  <text x="216" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">👤 担当中</text>
   <rect x="266" y="326" width="84" height="32" rx="6" fill="#222529" stroke="#565a5e"/>
-  <text x="308" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">⏸ 保留</text>
+  <text x="308" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">🔗 MCSで開く</text>
   <rect x="358" y="326" width="104" height="32" rx="6" fill="#222529" stroke="#565a5e"/>
-  <text x="410" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">📝 依頼作成</text>
+  <text x="410" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">📝 タスク作成</text>
   <rect x="470" y="326" width="104" height="32" rx="6" fill="#222529" stroke="#565a5e"/>
-  <text x="522" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">📄 本文表示</text>
+  <text x="522" y="347" font-size="12" fill="#d1d2d3" text-anchor="middle">🧾 患者サマリー</text>
   <circle cx="745" cy="342" r="9" fill="#1d9bd1"/>
   <text x="745" y="346" font-size="10" fill="#fff" text-anchor="middle">3</text>
 
@@ -71,7 +71,7 @@
   <rect x="58" y="482" width="4" height="70" fill="#1d9bd1"/>
   <rect x="62" y="482" width="700" height="70" rx="4" fill="#222529" stroke="#35373c"/>
   <text x="78" y="506" font-size="12" fill="#d1d2d3" font-weight="bold">山田 太郎（合成例）— 09-27 の記録</text>
-  <text x="78" y="528" font-size="11" fill="#53b987">✅ 確認済み 10:05 · 担当: 訪問看護 田中（合成）</text>
+  <text x="78" y="528" font-size="11" fill="#53b987">✅ 確認: 田中（合成） · 👤 担当: 田中（合成）</text>
   <text x="78" y="546" font-size="9" fill="#6e7681">ボタン操作の結果がメッセージへ反映されます（receipt として台帳に記録）</text>
 
   <!-- legend -->
@@ -84,7 +84,7 @@
   <text x="40" y="612" font-size="11" fill="#ababad">構造化フィールド — ローカルLLMの抽出結果（候補扱い）</text>
   <circle cx="500" cy="586" r="8" fill="#1d9bd1"/>
   <text x="500" y="590" font-size="9" fill="#fff" text-anchor="middle">3</text>
-  <text x="516" y="590" font-size="11" fill="#ababad">操作ボタン — 確認・担当・保留・依頼作成・本文表示</text>
+  <text x="516" y="590" font-size="11" fill="#ababad">操作ボタン — 確認・担当・タスク作成・患者サマリー・MCSで開く</text>
   <circle cx="500" cy="608" r="8" fill="#1d9bd1"/>
   <text x="500" y="612" font-size="9" fill="#fff" text-anchor="middle">4</text>
   <text x="516" y="612" font-size="11" fill="#ababad">配送状態 — 本文・添付はスレッドへ</text>
