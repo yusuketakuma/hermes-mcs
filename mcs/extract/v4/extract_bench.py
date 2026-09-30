@@ -24,6 +24,14 @@ Matching is deliberately loose: meds key on (name, action), symptoms on
 text containment, events/urgency exact. `expect` entries must appear;
 `forbid` entries must not. Items the model dropped count as FN; extra
 items matching nothing count as FP.
+
+Requests key on action containment; any other key a label carries
+(to/from/kind/condition/due/due_text/evidence) must match exactly, and
+an explicit null there means the output must NOT carry it. A case may
+give `context` (formatted thread block) and `posted_at`, passed through
+to llm_extract. `expect.reply` is {"kind": ...} or null (must be
+absent); `forbid.reply` is {"kind": ...} or a list of them; the run
+JSON's `reply_confusion` is {expected_kind: {got_kind: n}}.
 """
 from __future__ import annotations
 
@@ -76,13 +84,25 @@ def _match_symptom(expected: dict, got: list) -> bool:
                for s in got)
 
 
+_REQ_KEYS = ("to", "from", "kind", "condition", "due", "due_text",
+             "evidence")
+
+
 def _match_request(expected: dict, got: list) -> bool:
     action = expected.get("action", "")
+    # a key the label carries must match exactly — an explicit null
+    # pins "absent" (from=null: the extractor must not invent a sender)
     return any(isinstance(item, dict) and action
                and action in (item.get("action") or "")
-               and all(expected.get(key) in (None, item.get(key))
-                       for key in ("to", "from", "due", "evidence"))
+               and all(key not in expected
+                       or expected[key] == item.get(key)
+                       for key in _REQ_KEYS)
                for item in got)
+
+
+def _reply_kind(section) -> str | None:
+    return (section or {}).get("kind") if isinstance(section, dict) \
+        else None
 
 
 def _match_pairs(expected: list, got: list, matcher) -> dict[int, int]:
@@ -136,6 +156,9 @@ def _score_case(case: dict, out: dict | None) -> dict:
             fields["vitals"] = {"tp": 0, "fp": 0, "fn": len(exp["vitals"])}
         if "urgency" in exp:
             fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
+        if "reply" in exp:
+            fields["reply"] = {"tp": 0, "fp": 0,
+                               "fn": int(exp["reply"] is not None)}
         for key in _MED_ATTRS:
             expected = sum(m.get(key) is not None for m in exp.get("meds", []))
             if expected:
@@ -164,6 +187,14 @@ def _score_case(case: dict, out: dict | None) -> dict:
         ok = out.get("urgency") == exp["urgency"]
         fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
                              "fn": int(not ok)}
+    got_reply = _reply_kind(out.get("reply"))
+    if "reply" in exp:
+        # like urgency, but null is a legal expectation: "no reply"
+        want = _reply_kind(exp["reply"])
+        ok = want == got_reply
+        fields["reply"] = {"tp": int(ok and want is not None),
+                           "fp": int(not ok and got_reply is not None),
+                           "fn": int(not ok and want is not None)}
     # safety-attribute scoring (F23): for each expected med that PINS
     # an attribute, the name/action-matched output must carry the same
     # value — a wrong status/subject/negated is a miss with its own
@@ -192,12 +223,34 @@ def _score_case(case: dict, out: dict | None) -> dict:
                       if _match_request(request, got_requests))
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
         violations.append(f"urgency:{forbid['urgency']}")
-    return {"id": case["id"], "fields": fields,
-            "forbid_violations": violations,
-            "items_dropped": out.get("_items_dropped", 0),
-            "evidence_dropped": out.get("_evidence_dropped", 0),
-            "raw": {k: out.get(k) for k in
-                    ("meds", "symptoms", "events", "requests", "urgency")}}
+    forbid_reply = forbid.get("reply")
+    for fr in (forbid_reply if isinstance(forbid_reply, list)
+               else [forbid_reply]):
+        if got_reply is not None and _reply_kind(fr) == got_reply:
+            violations.append(f"reply:{got_reply}")
+    score = {"id": case["id"], "fields": fields,
+             "forbid_violations": violations,
+             "items_dropped": out.get("_items_dropped", 0),
+             "evidence_dropped": out.get("_evidence_dropped", 0),
+             "raw": {k: out.get(k) for k in
+                     ("meds", "symptoms", "events", "requests", "urgency")}}
+    score["raw"]["reply"] = got_reply
+    if "reply" in exp:
+        score["reply_expected"] = _reply_kind(exp["reply"])
+    return score
+
+
+def _reply_confusion(scores: list[dict]) -> dict:
+    """{expected_kind: {got_kind: n}} over scored (non-failed) cases
+    that pin a reply — a wrong `done` is one lookup. "null" = absent."""
+    confusion: dict = {}
+    for s in scores:
+        if "reply_expected" not in s or "raw" not in s:
+            continue
+        row = confusion.setdefault(s["reply_expected"] or "null", {})
+        got = s["raw"].get("reply") or "null"
+        row[got] = row.get(got, 0) + 1
+    return confusion
 
 
 def _aggregate(scores: list[dict]) -> dict:
@@ -245,11 +298,23 @@ def _duration_percentiles(durations: list[float]) -> dict:
 def _section_valid(section) -> bool:
     """An expect/forbid block survives _validate WHOLE — a dropped item
     (typo'd enum, missing name) would otherwise turn silently into
-    "expect nothing" and the case would pass vacuously."""
+    "expect nothing" and the case would pass vacuously. Request kind
+    and reply kind are checked here explicitly: _validate only omits a
+    bad kind KEY, and the bench's reply shapes (null / list) are not
+    extractor output."""
     import extract_llm
     if not isinstance(section, dict):
         return False
-    v = extract_llm._validate(dict(section))
+    section = dict(section)
+    replies = section.pop("reply", None)
+    for r in (replies if isinstance(replies, list) else [replies]):
+        if r is not None and _reply_kind(r) not in extract_llm._REPLY_KINDS:
+            return False
+    for r in section.get("requests") or []:
+        if isinstance(r, dict) and "kind" in r \
+                and r["kind"] not in extract_llm._REQ_KINDS:
+            return False
+    v = extract_llm._validate(section)
     return isinstance(v, dict) and not v.get("_items_dropped")
 
 
@@ -273,7 +338,9 @@ def cmd_run(args) -> int:
     for c in cases:
         meta = {}
         started = time.monotonic()
-        out = extract_llm.llm_extract(c["body"], meta_out=meta)
+        out = extract_llm.llm_extract(
+            c["body"], meta_out=meta, context=c.get("context"),
+            posted_at=c.get("posted_at"))
         elapsed = time.monotonic() - started
         durations.append(elapsed)
         if out is extract_llm._DEFERRED:
@@ -291,6 +358,9 @@ def cmd_run(args) -> int:
     report = {"tag": args.tag, "created_at": int(time.time()),
               "elapsed_s": round(time.time() - t0, 1),
               "corpus_sha256": corpus_sha256,
+              "model": extract_llm.MODEL,
+              "prompt_sha256": hashlib.sha256(
+                  extract_llm._PROMPT_HEAD.encode("utf-8")).hexdigest(),
               "performance": _duration_percentiles(durations),
               "n_cases": len(cases),
               # end-to-end success: extraction completed at all, over
@@ -300,7 +370,8 @@ def cmd_run(args) -> int:
                                          / len(cases), 3)
                                    if cases else None),
               "errors": [s["id"] for s in scores if s.get("error")],
-              "fields": agg, "cases": scores}
+              "fields": agg, "reply_confusion": _reply_confusion(scores),
+              "cases": scores}
     with open(args.out, "w") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n{args.tag}: {len(cases)} cases, "
@@ -309,6 +380,8 @@ def cmd_run(args) -> int:
     for field, a in agg.items():
         print(f"  {field:9s} P={a['precision']:.3f} "
               f"R={a['recall']:.3f} F1={a['f1']:.3f}")
+    if report["reply_confusion"]:
+        print(f"  reply_confusion {report['reply_confusion']}")
     vio = [(s["id"], s["forbid_violations"])
            for s in scores if s.get("forbid_violations")]
     if vio:
@@ -336,6 +409,8 @@ def cmd_report(args) -> int:
     for r in reps:
         if r["errors"]:
             print(f"{r['tag']} extraction errors: {r['errors']}")
+        if r.get("reply_confusion"):
+            print(f"{r['tag']} reply_confusion: {r['reply_confusion']}")
     return 0
 
 
