@@ -101,8 +101,7 @@ def _match_request(expected: dict, got: list) -> bool:
 
 
 def _reply_kind(section) -> str | None:
-    return (section or {}).get("kind") if isinstance(section, dict) \
-        else None
+    return section.get("kind") if isinstance(section, dict) else None
 
 
 def _match_pairs(expected: list, got: list, matcher) -> dict[int, int]:

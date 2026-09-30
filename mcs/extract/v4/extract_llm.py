@@ -926,9 +926,9 @@ class _Validator:
         out["requests"] = reqs
 
     def reply(self, d: dict, out: dict):
-        if d.get("reply") is None:
+        r = d.get("reply")
+        if r is None:
             return          # null = no reply (the object/plain rungs)
-        r = d["reply"]
         kind = self.enum(r, "kind", _REPLY_KINDS) \
             if isinstance(r, dict) else False
         if not kind:
@@ -1403,9 +1403,7 @@ def llm_extract(body: str, *, context: str | None = None,
         return None
     out = outs[0] if len(outs) == 1 else _merge(outs)
     if not context:
-        # a reply classification without the thread it answers is a
-        # guess — the rules live in _CTX_HEAD, so root posts never
-        # saw them
+        # checkpointed chunks (chunks_in) bypass the per-chunk pop above
         out.pop("reply", None)
     if len(chunks) > 1:
         out["_chunks_total"] = len(chunks)
