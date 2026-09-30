@@ -2029,6 +2029,26 @@ def _slots_busy(deadline: float | None) -> dict | None:
         return None
 
 
+# Elastic backlog (2026-10-01): the slot-2 worker is the second backlog
+# lane only while the GPU is quiet. All slots share one GPU, so while
+# the realtime slot (Hermes, new arrivals) is decoding, slot 2 starts
+# no new work — backlog runs on slot 0 alone — and it resumes once the
+# realtime slot has been idle for _ELASTIC_QUIET_S. An in-flight call
+# is never interrupted; the gate applies before each item.
+_ELASTIC_SLOT = 2
+_ELASTIC_QUIET_S = 120.0
+_ELASTIC_POLL_S = 5.0
+
+
+def _elastic_hold(gate: dict, now: float) -> bool:
+    """True while the elastic lane stays idle. A failed /slots probe
+    records nothing — the server is down and every lane waits anyway."""
+    busy = _slots_busy(None)
+    if busy and busy.get(local_llm.REALTIME_SLOT) is True:
+        gate["rt_busy_at"] = now
+    return now - gate.get("rt_busy_at", float("-inf")) < _ELASTIC_QUIET_S
+
+
 def _choose_slot(deadline: float | None = None) -> int:
     """Pin each process to its configured lane; never borrow realtime."""
     if _SLOT_OVERRIDE in local_llm.BACKGROUND_SLOTS \
@@ -3047,10 +3067,26 @@ def _main() -> int:
                     time.sleep(remaining)
 
             total = {"done": 0, "failed": 0, "left": 0}
+            elastic = _SLOT_OVERRIDE == _ELASTIC_SLOT
+            gate: dict = {}
+
+            def held() -> bool:
+                """Elastic gate with one log line per hold/resume."""
+                hold = elastic and _elastic_hold(gate, time.monotonic())
+                if hold != gate.get("held", False):
+                    gate["held"] = hold
+                    print(json.dumps({"event": "elastic_hold" if hold
+                                      else "elastic_resume",
+                                      "ts": time.time()}), flush=True)
+                return hold
+
             while True:
                 if stop is not None and time.monotonic() > stop:
                     total["stopped"] = "stop_after"
                     break
+                if held():
+                    pause(_ELASTIC_POLL_S)
+                    continue
                 # the inner batch must also honor --stop-after: its
                 # budget is the remaining allowance, not a fresh 3600 s
                 # (F13)
@@ -3069,7 +3105,7 @@ def _main() -> int:
                                 shard=shard, batch_k=args.batch,
                                 admitted_ids=_admitted())
                 sem = None
-                if args.semantic:
+                if args.semantic and not held():
                     sem = _background_semantic(led, stop)
                     print(json.dumps({"semantic": sem, "ts": time.time()},
                                      ensure_ascii=False), flush=True)
