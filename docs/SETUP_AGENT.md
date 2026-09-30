@@ -150,16 +150,28 @@ install を止めないが、表示されたコマンドをユーザーに案内
 【ユーザー確認】
 
 > 通知先を選んでください:
-> **discord** / **slack** / **off**（通知なし — テキスト通知も
-> 含め配送しない）
+> **slack**（推奨）/ **discord** / **off**（通知なし —
+> テキスト通知も含め配送しない）
 
-- `discord` → 4-2
-- `slack` → 4-3
+- `slack` → 4-2
+- `discord` → 4-3
 - `off` → Phase 6 の通知を送らない構成を使う。`interactive=off` は
   テキスト配送を止めないため、全 runner に `--no-notify` が必要。
   既存の Hermes 定期ジョブがある場合は、承認範囲内で停止・置換を確認する
 
-### 4-2. Discord の場合
+### 4-2. Slack の場合（推奨）
+
+INSTALLATION.md 付録B を案内し、次を収集:
+
+1. `SLACK_BOT_TOKEN`（xoxb-）・`SLACK_APP_TOKEN`（xapp-）— secrets
+2. `team_id`・`application_id`（api_app_id）・`channel_id`
+3. `slack_allowed_user_ids`（member ID カンマ区切り）
+4. `slack_profile`・`project_ids`
+
+Slack も `init` が設定ブロックとトークンを書き込む。`init` を使えない
+場合の手動設定手順は 5-3 を参照。
+
+### 4-3. Discord の場合
 
 未取得の値をまとめて確認する。各値の取り方は
 INSTALLATION.md 付録A を案内する（Developer Portal での手順を
@@ -188,18 +200,6 @@ INSTALLATION.md 付録A を案内する（Developer Portal での手順を
 > Threads・Send Messages in Threads・Attach Files の権限が
 > 必要です。**
 
-### 4-3. Slack の場合
-
-INSTALLATION.md 付録B を案内し、次を収集:
-
-1. `SLACK_BOT_TOKEN`（xoxb-）・`SLACK_APP_TOKEN`（xapp-）— secrets
-2. `team_id`・`application_id`（api_app_id）・`channel_id`
-3. `slack_allowed_user_ids`（member ID カンマ区切り）
-4. `slack_profile`・`project_ids`
-
-Slack も `init` が設定ブロックとトークンを書き込む。`init` を使えない
-場合の手動設定手順は 5-3 を参照。
-
 ## Phase 5 — Path A: init・services・check
 
 ### 5-1. 設定ウィザード実行
@@ -214,15 +214,21 @@ Slack も `init` が設定ブロックとトークンを書き込む。`init` �
 - **非対話:** エージェントが収集した値で実行（secrets は §0-1 経由）:
 
   ```bash
-  MCS_SETUP_PASSWORD=<sec> TYPESAFE_API_KEY=<key> DISCORD_BOT_TOKEN=<tok> \
+  MCS_SETUP_PASSWORD=<sec> TYPESAFE_API_KEY=<key> \
+  SLACK_BOT_TOKEN=<tok> SLACK_APP_TOKEN=<tok2> \
   ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
-      --login-id <ID> --notify-target discord:<channel_id> \
-      --set 'notify.interactive="discord"' \
-      --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
+      --login-id <ID> --notify-target slack:<channel_id> \
+      --set 'notify.interactive="slack"' \
+      --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
       --plugin-profile <profile> \
-      --plugin-user-ids <uid,...> --plugin-chat-ids <chid,...> \
+      --plugin-user-ids <uid,...> \
       --plugin-project-ids <pid,...>
   ```
+
+  Discord の場合は `notify.interactive="discord"` +
+  `notify.discord={"profile","application_id","guild_id","channel_id"}`
+  と `--notify-target discord:<channel_id>`・`--plugin-chat-ids` を使い、
+  トークンは `DISCORD_BOT_TOKEN` で渡す。
 
 `init` は既存の `~/.mcs/config.json` が壊れていると何も書かずに止まる
 （`config: ... is unreadable or invalid ... nothing written`）。
@@ -301,7 +307,7 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
   checkout で `./install.sh`（移動した場合。別 checkout が残っていれば
   `--force-repo` は【ユーザー確認】）
 - `hermes gateway is not supervised` → `services` 再実行
-- `llama-server advertises N slots` → plist の `-np 2` 確認
+- `llama-server advertises N slots` → plist の `-np 3` 確認
 
 ### 5-5. 動作確認
 

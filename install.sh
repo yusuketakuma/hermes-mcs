@@ -760,8 +760,8 @@ cat <<'EOF'
 
 The wizard covers EVERY config.json setting (Enter keeps the
 current/default — a partially configured install just confirms
-existing values). When you pick notify.interactive=discord or
-slack it also, through the public hermes CLI only:
+existing values). When you pick notify.interactive=slack or
+discord it also, through the public hermes CLI only:
 
   - writes the plugin settings block (snapshot/inbox/allowlists and
     the notify.<transport> scope — slack_* keys for Slack) into the
@@ -773,21 +773,22 @@ slack it also, through the public hermes CLI only:
   - and 'services' (already run above) installs the gateway via
     'hermes gateway install' when interactive is configured
 
-Non-interactive equivalent (discord):
+Non-interactive equivalent (slack):
 
 EOF
 printf '    %s %s init --yes \\\n' "$PYQ" "$SETUPQ"
 cat <<'EOF'
-        --login-id <ID> --notify-target discord:<channel> \
-        --set 'notify.interactive="discord"' \
-        --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
+        --login-id <ID> --notify-target slack:<channel_id> \
+        --set 'notify.interactive="slack"' \
+        --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
         --plugin-profile <serving profile> \
-        --plugin-user-ids <uid> --plugin-chat-ids <chid> \
+        --plugin-user-ids <uid> \
         --plugin-project-ids <pid>
-    # DISCORD_BOT_TOKEN=<token> in the environment stores the token
-    # Slack: notify.interactive="slack" + notify.slack={profile,
-    #   application_id, team_id, channel_id}; tokens come from
-    #   SLACK_BOT_TOKEN / SLACK_APP_TOKEN in the environment
+    # SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token> in the
+    #   environment store the tokens
+    # Discord: notify.interactive="discord" + notify.discord={profile,
+    #   application_id, guild_id, channel_id}; the token comes from
+    #   DISCORD_BOT_TOKEN in the environment
 
 Then re-run services + validate:
 
