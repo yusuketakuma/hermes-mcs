@@ -1043,10 +1043,12 @@ def test_med_exclude_names(led):
 
 # --- pharmacist_request_unanswered / rx_request_visibility ---
 
-def _req_item(to, action, unverified=None):
+def _req_item(to, action, unverified=None, kind=None):
     r = {"to": to, "action": action}
     if unverified is not None:
         r["unverified"] = unverified
+    if kind is not None:
+        r["kind"] = kind
     return r
 
 
@@ -1115,6 +1117,40 @@ def test_rx_request_visibility(led):
     assert rx[0]["evidence"]["message_ids"] == [1]
     assert "フロセミド処方" in rx[0]["note"]
     assert "記録上の言及" in rx[0]["note"]
+
+
+@pytest.mark.parametrize("kind, fires", [
+    ("self_plan", False), ("question", False), (None, True),
+    ("request", True)])
+def test_pharmacist_request_kind_guard(led, kind, fires):
+    """#20 order 3: a pharmacist's own plan or a question addressed to
+    the pharmacy is not an unanswered request; kind absent (pre-#20
+    artifacts) or request fires as before."""
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認", kind=kind)])
+    _ev(led)
+    ph = [s for s in mcs_signals.current_open(led.db)["items"]
+          if s["type"] == "pharmacist_request_unanswered"]
+    assert bool(ph) is fires
+
+
+def test_rx_request_visibility_kind_guard(led):
+    """#20 order 3: a question about a drug is not a prescription in
+    the pipeline; a self_plan neither. Kind absent still fires."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[_req_item("医師", "フロセミド処方は必要か",
+                                     kind="question"),
+                           _req_item("看護師", "薬の残数確認",
+                                     kind="self_plan")])
+    _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2")
+    _extract_doc(led.db, 2, "h2",
+                 requests=[_req_item("医師", "フロセミド処方")])
+    _ev(led)
+    rx = [s for s in mcs_signals.current_open(led.db)["items"]
+          if s["type"] == "rx_request_visibility"]
+    assert [s["evidence"]["message_ids"] for s in rx] == [[2]]
 
 
 # --- discharge_notice / symptom_after_med_change ---

@@ -142,6 +142,28 @@ def test_rollup_keeps_item_unverified_flag(db, flag):
             ("フラグ無し依頼", False)]
 
 
+def test_rollup_carries_request_kind_condition_due_text(db):
+    """#20 order 3: LLM request rows expose kind/condition/due_text under
+    NEW keys (req_kind/condition/due_text); kind (=to) and ctx are
+    untouched, rows without them gain no keys, and no version bump means
+    the rebuilt rollup is not re-dirtied."""
+    _add(db, 1, "canonical_projection",
+         {"requests": [
+             {"to": "SYNTH-看護師", "action": "医師へ連絡", "kind": "request",
+              "condition": "血圧が160を超えるようなら", "due": None,
+              "due_text": "明日まで"},
+             {"to": "SYNTH-医師", "action": "素の依頼"}]},
+         "2026-09-19T00:00:00+09:00")
+    out = rollup.build_rollup(db, 1)
+    typed, plain = out["recent_requests"]
+    assert (typed["kind"], typed["ctx"]) == ("SYNTH-看護師", "医師へ連絡")
+    assert (typed["req_kind"], typed["condition"], typed["due_text"]) \
+        == ("request", "血圧が160を超えるようなら", "明日まで")
+    assert set(plain) == {"kind", "ctx", "at", "mid", "unverified"}
+    rollup.rebuild(db, 1)
+    assert rollup.dirty_projects(db) == []
+
+
 def test_pre_flag_rollup_is_rebuilt_with_unverified_flag(db):
     """A rollup persisted before todo 15 (version-1 meta, no
     'unverified' keys) is dirty once and rebuilt with the flag; the

@@ -152,10 +152,17 @@ def build_rollup(ledger, project_id: int) -> dict:
                         for rq in _dicts(v1.get("requests")))
         # negated/speculative/ungrounded requests stay flagged for the
         # readers; any flag other than a literal False fails closed
-        requests.extend({"kind": rq.get("to"), "ctx": rq.get("action"),
-                         "at": m["posted_at"], "mid": m["message_id"],
-                         "unverified": item_unverified(rq)}
-                        for rq in _dicts(lm.get("requests")))
+        for rq in _dicts(lm.get("requests")):
+            row = {"kind": rq.get("to"), "ctx": rq.get("action"),
+                   "at": m["posted_at"], "mid": m["message_id"],
+                   "unverified": item_unverified(rq)}
+            # #20 request kind/condition/due_text under NEW keys — "kind"
+            # already means the addressee for mcs-read-model/1 readers
+            for src, dst in (("kind", "req_kind"), ("condition", "condition"),
+                             ("due_text", "due_text")):
+                if isinstance(rq.get(src), str) and rq[src]:
+                    row[dst] = rq[src]
+            requests.append(row)
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:

@@ -502,6 +502,10 @@ def _transition_reconciliation(db, now, th, sig_cfg):
 PHARM_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬剤師%' "
                     f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬局%' "
                     f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%調剤%'")
+# a poster's own plan or a question is not a request somebody must
+# answer — neither detector fires on it (#20 order 3)
+REQ_ACTIONABLE_SQL = (f"COALESCE(json_extract({JSON_OBJECT_SQL},'$.kind'),'') "
+                      "NOT IN ('self_plan','question')")
 
 
 def _pharmacist_request(db, now, th, sig_cfg):
@@ -529,6 +533,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
               AND m.posted_at_ts <= ?
               AND COALESCE(p.is_archived,0)=0
               AND {ITEM_CONFIRMED_SQL}
+              AND {REQ_ACTIONABLE_SQL}
               AND ({PHARM_TARGET_SQL}
                    {tgt_pred})
             ORDER BY m.project_id, m.message_id""",
@@ -578,6 +583,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
               AND {ITEM_CONFIRMED_SQL}
+              AND {REQ_ACTIONABLE_SQL}
               AND NOT ({PHARM_TARGET_SQL})
               AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.to'),'')
                   NOT IN ('','不明'{extra})
