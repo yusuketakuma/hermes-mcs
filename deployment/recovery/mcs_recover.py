@@ -62,7 +62,7 @@ REPORT_PATH = os.path.join(DATA, "recovery_report.json")
 LEDGER = os.path.join(DATA, "ledger.db")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 
-RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-rt")
+RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 # current desired sets — kept in sync with mcs_setup.AGENT_LABELS /

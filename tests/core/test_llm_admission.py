@@ -614,13 +614,9 @@ def test_choose_slot_never_borrows_rt_under_admission(
         admitted_env, monkeypatch):
     import extract_llm
     import local_llm
-    # --lend-rt armed, RT slot idle — under the boundary there is no
-    # borrow; the class permit IS the authorization
-    extract_llm._LEND_RT = True
-    try:
-        assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
-    finally:
-        extract_llm._LEND_RT = False
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
+    monkeypatch.setenv("MCS_LLM_SLOT", str(local_llm.BACKGROUND_SLOT))
+    assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
 
 
 def test_same_class_concurrency_capped_at_slots(tmp_path):

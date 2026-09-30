@@ -161,7 +161,7 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 | 1 | brew パッケージ: `git` `python@3.13` `uv` `llama.cpp` `google-chrome`(cask)。導入済みは skip | `brew` が無い・`brew install` 失敗で停止 |
 | 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築（`pip install -e hermes-agent[messaging]`）・`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | 中断した clone/checkout・Python の無い venv・失敗した pip install は再実行時にやり直す。clone・venv・pip の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
-| 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 2`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデル DL は `.part` から続きを再開（`curl -C -`）。`MCS_MODEL_SHA256` を設定すると DL 後に sha256 を照合し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
+| 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデル DL は `.part` から続きを再開（`curl -C -`）。`MCS_MODEL_SHA256` を設定すると DL 後に sha256 を照合し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 4件 + hermes cron 6件の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | bootstrap 失敗で停止 |
 
@@ -464,11 +464,11 @@ crontab -e
 ```cron
 */5 * * * * $HOME/.mcs/scripts/mcs_check.sh
 7,37 * * * * $HOME/.mcs/scripts/mcs_deep.sh
-30 22 * * * $HOME/.mcs/scripts/mcs_llm_catchup.sh
+0 */6 * * * $HOME/.mcs/scripts/mcs_llm_catchup.sh
 ```
 
-`mcs_check.sh` には夜間間引き（22-06時は :00/:20/:40 を起点とする各5分窓で実行。
-分の値が20で割った余り5未満なら実行）が組み込み済み — 5分 cron のまま貼ればスクリプト側が間引く。
+`mcs_check.sh` は24時間5分間隔で収集する。`mcs_llm_catchup.sh` は
+上限・クールダウンを保持した再試行の登録のみ行う。解析は常駐workerが行う。
 この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
 併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
 通知を送信し得る。抽出は上記の定期ジョブから実行される。
@@ -639,7 +639,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `Keychain entry ... unreadable` | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
 | `Chrome binary missing` | Chrome が `/Applications` に無い — `brew install --cask google-chrome` |
 | `local LLM endpoint not reachable (http://127.0.0.1:8080/v1/models)` | llama-server 未起動 — Path A-1/§B-3。収集自体は動く（警告） |
-| `llama-server advertises N slots` | `-np` が選択スロット数（2）未満 — plist の `-np 2` を確認 |
+| `llama-server advertises N slots` | `-np` が選択スロット数（3）未満 — plist の `-np 3` を確認 |
 | `LaunchAgent ai.hermes.llamacpp`（または `ai.mcs.llamaserver`）`installed but not loaded — the local LLM is down` | LLM サーバが止まっている — 表示の `launchctl bootstrap gui/<uid> <plist>` |
 | `no llama-server LaunchAgent (...)`（警告） | 自前サーバを `local_llm.url` で使うなら問題なし。そうでなければ `./install.sh`（stage 4） |
 | `update recovery watchdog (org.mcs.recovery) not installed`（警告） | `./install.sh`（stage 6。`--no-recovery` で導入しなかった場合は想定内） |

@@ -42,7 +42,6 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
     monkeypatch.setattr(bounded_http.time, "monotonic", lambda: 100.0)
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-secret")
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
-    monkeypatch.setattr(extract_llm, "_LEND_RT", entry == "slots")
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
     deadline = 100.25
     if entry == "chat":
@@ -53,7 +52,7 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
         assert local_llm.probe_format(
             local_llm.ENDPOINT, "synthetic", {}, deadline=deadline) == "plain"
     elif entry == "slots":
-        assert extract_llm._choose_slot(deadline) == local_llm.request_slot()
+        assert extract_llm._slots_busy(deadline) is None
     else:
         assert not extract_llm._llm_up(deadline)
     assert len(processes) == 1
@@ -100,7 +99,6 @@ def test_worker_preserves_connection_refused_as_unreachable(monkeypatch, wrapped
     assert local_llm.chat("synthetic", error_out=err) is None
     assert err == {"kind": "unreachable"}
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
-    monkeypatch.setattr(extract_llm, "_LEND_RT", False)
     assert extract_llm._llm_call("synthetic") is extract_llm._DEFERRED
 
 

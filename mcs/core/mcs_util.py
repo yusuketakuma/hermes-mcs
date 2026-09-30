@@ -21,7 +21,7 @@ import re
 import tempfile
 import time
 import urllib.request
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 HOME = os.path.expanduser("~/.mcs")
 CONF_PATH = os.path.join(HOME, "config.json")
@@ -356,6 +356,21 @@ def acquire_run_lock(path: str | None = None) -> int | None:
         os.close(fd)
         return None
     return fd
+
+
+@contextmanager
+def unlocked_transport(ledger, lock_fd):
+    """Release the run lock during transport and reacquire before DB work."""
+    if lock_fd is None:
+        yield
+        return
+    if ledger.db.in_transaction:
+        raise RuntimeError("transport_inside_db_transaction")
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    try:
+        yield
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
 
 def launchd_bootstrap(label: str, plist: str, run) -> str | None:

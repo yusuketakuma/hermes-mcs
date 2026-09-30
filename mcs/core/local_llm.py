@@ -20,7 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 import bounded_http
 
@@ -63,36 +63,23 @@ def probe_urls(endpoint: str) -> tuple[str, str]:
         base = ENDPOINT.split("/v1/", 1)[0]
     return f"{base}/v1/models", f"{base}/slots"
 
-# Slot reservation on the shared -np 2 llama-server: every MCS
-# background call pins slot 1 so slot 2 stays free for interactive
-# clients (queue wait is the dominant latency for them; decode speed
-# is shared compute either way).
-# Slot naming is 1-based for humans: "slot 1" = background/batch traffic
-# (MCS semantic drain, extract_llm), "slot 2" = real-time/interactive traffic
-# (Hermes agent + auxiliary calls). The llama-server wire protocol (id_slot)
-# is 0-based, so logical slot N is sent as id_slot N-1.
-SLOT_1 = 1  # background
-SLOT_2 = 2  # real-time
-BACKGROUND_SLOT = SLOT_1 - 1  # wire id_slot 0
-REALTIME_SLOT = SLOT_2 - 1    # wire id_slot 1
-
-# T19: the selected safe parallel width of the deployed server — the
-# checked-in ``-np`` value of ai.mcs.llamaserver.plist. This is the
-# measured deployment choice, not a promise: the selection record lives
-# in .omo/evidence/.../task-19/slot-capacity-selection.json and the
-# rollback count below is the configuration reverted to on regression.
-# A server advertising FEWER slots than this is a mismatch — flag it,
-# never let a call ride an out-of-range (unpinned) id_slot.
-SLOT_COUNT = 2
-ROLLBACK_SLOT_COUNT = 1
+# Three fixed lanes: wire slot 1 is realtime (MCS arrivals + Hermes),
+# slots 0 and 2 are backlog. Background workers never borrow realtime.
+SLOT_1 = 1
+SLOT_2 = 2
+SLOT_3 = 3
+BACKGROUND_SLOT = 0
+REALTIME_SLOT = 1
+BACKGROUND_SLOTS = (0, 2)
+SLOT_COUNT = 3
+ROLLBACK_SLOT_COUNT = 2
 
 
 def request_slot() -> int:
-    """Wire id_slot for a background call. ``MCS_LLM_SLOT`` (decimal)
+    """Wire id_slot selected for this process. ``MCS_LLM_SLOT`` (decimal)
     overrides the default — scoped to whatever process the operator
-    sets it on (the nightly QC drainer exports it to borrow the RT
-    slot inside its window); unset everywhere else keeps slot 1's
-    real-time reservation. An override at or beyond the deployed slot
+    sets it on; the check uses realtime and the resident workers use
+    one of the two background slots. Unset keeps the background default. An override at or beyond the deployed slot
     count is invalid — llama.cpp treats out-of-range id_slot as
     UNPINNED, which could land on the real-time slot; fall back to the
     background slot instead."""
@@ -107,6 +94,22 @@ def request_slot() -> int:
             if 0 <= slot < SLOT_COUNT:
                 return slot
     return BACKGROUND_SLOT
+
+
+@contextmanager
+def pinned_slot(slot):
+    """Scope process routing to a valid fixed slot and restore it on exit."""
+    if type(slot) is not int or not 0 <= slot < SLOT_COUNT:
+        raise ValueError("invalid_llm_slot")
+    previous = os.environ.get("MCS_LLM_SLOT")
+    os.environ["MCS_LLM_SLOT"] = str(slot)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("MCS_LLM_SLOT", None)
+        else:
+            os.environ["MCS_LLM_SLOT"] = previous
 
 
 # ---------- cross-client admission boundary (T20, default off) ----------

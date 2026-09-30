@@ -14,6 +14,7 @@ import _mcs_path  # noqa: F401  registers every subdir as import root
 
 from functools import wraps
 import json
+from contextlib import contextmanager
 import math
 import time
 
@@ -1331,9 +1332,26 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
     return list(arrivals), list(backfill), {"turn": turn_next}
 
 
+@contextmanager
+def _job_lock(ledger, job_id):
+    """Exclude duplicate inference for a job while ingestion keeps writing."""
+    from mcs_util import acquire_run_lock
+    db_path = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    path = os.path.join(os.path.dirname(db_path), "semantic_locks",
+                        str(job_id) + ".lock")
+    fd = acquire_run_lock(path)
+    try:
+        yield fd is not None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    # Keep the inode: unlinking a flock file can create two lock owners.
+
+
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
-            cfg_path: str | None = None) -> dict:
+            cfg_path: str | None = None, run_lock_fd=None,
+            lane: str | None = None) -> dict:
     """Drain due semantic jobs inside the tick's remaining budget.
     OFF returns immediately — no job creation, no external calls, no
     auto-drain (AT-053). The caller's shared run lock is held by
@@ -1341,6 +1359,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     cfg_path, when given, re-validates config between jobs so an OFF
     flip mid-run takes effect at the next job boundary (AT-060)."""
     import semantic
+    if lane not in (None, "realtime", "backlog"):
+        raise ValueError("semantic_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
         raise ValueError("semantic_max_jobs_invalid")
     scfg, errors = semantic_config(cfg)
@@ -1408,329 +1428,382 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])
-    # extract_qc jobs derive from extract_llm artifacts — seeded lazily
-    # here so the drain remains the single queue and enabling the
-    # feature also backfills artifacts written before it existed.
-    if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
-            and jev_client is not None:
-        try:
-            _qc_seed(ledger, time.time())
-        except Exception:
-            result["errors"].append("semantic: qc_seed_failed")
-    qc_active = (scfg["extract_qc"] == "annotate"
-                 and jev_client is not None)
-    kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
-    # arrival-descended seeds outrank import/replay seeds: a deep
-    # backfill must never starve a fresh notification's evaluation
-    # (§19.1's existing-work-first ordering applied inside the queue
-    # too). 'eligible' is set at seed time and survives payload merges,
-    # so a merged arrival+history job keeps its priority.
-    # T14: the backfill cohort additionally gets a guaranteed share of
-    # every window — a continuous arrival stream cannot starve runnable
-    # backlog (persisted accounting row keeps it restart-safe).
-    # QC dedicated frame (observed 2026-09-30): kind ordering puts every
-    # semantic row ahead of QC in both cohorts, and a ~240 s generation
-    # consumes the whole window — QC rows sat pending for hours at
-    # attempts=0. QC gets a bounded share of the window, served FIRST
-    # (each pass is one bounded chunked eval), expanding into whatever
-    # the semantic lanes leave unused. A 1-job window cannot be split —
-    # QC falls back to the persisted cohort alternation inside the
-    # non-eligible lane.
-    qc_rows = []
-    if qc_active and max_jobs > 1:
-        qc_rows = ledger.db.execute(
-            "SELECT * FROM fetch_jobs WHERE state='pending' "
-            "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
-            (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
-    qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
-    qc_jobs = list(qc_rows[:qc_share])
-    arrivals, backfill, sched_mut = _due_lanes(
-        ledger, (JOB_KIND,) if qc_jobs else kinds,
-        max_jobs - len(qc_jobs))
-    # unused lane capacity flows back to QC — same rule the backfill
-    # cohort uses against an idle arrival lane
-    spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
-    if spare > 0:
-        qc_jobs += list(qc_rows[qc_share:qc_share + spare])
-    due = qc_jobs + list(arrivals) + list(backfill)
-    cohort_of = {id(job): "qc" for job in qc_jobs}
-    cohort_of.update({id(job): "arrival" for job in arrivals})
-    cohort_of.update({id(job): "backfill" for job in backfill})
-    out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
-    if qc_active:
-        out["lanes"]["qc"] = len(qc_jobs)
-    selected = {"qc": 0, "arrival": 0, "backfill": 0}
-    for job in due:
-        token = runtime.JobToken.from_row(job)
-        payload = runtime.parse_payload(job)
-        limit = runtime.attempt_limit(payload)
-        if runtime.circuit_open(ledger):
-            out["circuit_open"] = True
-            break
-        from mcs_operations import paused
-        if paused(ledger.db, job["project_id"]):
-            runtime.transition(ledger, token, "defer", retry_in=300)
-            out["deferred"] += 1
-            continue
-        if cfg_path is not None:
-            current_cfg = load_config(cfg_path)
-            scfg, errs = semantic_config(current_cfg)
-            cfg_generation = runtime.config_generation(current_cfg)
-            for e in errs:
-                if e not in result["errors"]:
-                    result["errors"].append(e)
-            if scfg["mode"] == "off":
-                runtime.transition(ledger, token, "defer", retry_in=300)
-                out["deferred"] += 1
-                out["mode"] = "off"
+    from mcs_util import unlocked_transport
+    original_llm = llm_fn
+
+    @wraps(original_llm)
+    def unlocked_llm(*args, **kwargs):
+        with unlocked_transport(ledger, run_lock_fd):
+            return original_llm(*args, **kwargs)
+
+    llm_fn = unlocked_llm
+    original_http = None
+    if (run_lock_fd is not None and jev_client is not None
+            and getattr(jev_client, "_mcs_jev_hookable", False)):
+        original_http = jev_client._http_request
+
+        def unlocked_http(*args, **kwargs):
+            with unlocked_transport(ledger, run_lock_fd):
+                return original_http(*args, **kwargs)
+
+        jev_client._http_request = unlocked_http
+    try:
+        # extract_qc jobs derive from extract_llm artifacts — seeded lazily
+        # here so the drain remains the single queue and enabling the
+        # feature also backfills artifacts written before it existed.
+        if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
+                and jev_client is not None:
+            try:
+                _qc_seed(ledger, time.time())
+            except Exception:
+                result["errors"].append("semantic: qc_seed_failed")
+        qc_active = (scfg["extract_qc"] == "annotate"
+                     and jev_client is not None)
+        kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
+        # arrival-descended seeds outrank import/replay seeds: a deep
+        # backfill must never starve a fresh notification's evaluation
+        # (§19.1's existing-work-first ordering applied inside the queue
+        # too). 'eligible' is set at seed time and survives payload merges,
+        # so a merged arrival+history job keeps its priority.
+        # T14: the backfill cohort additionally gets a guaranteed share of
+        # every window — a continuous arrival stream cannot starve runnable
+        # backlog (persisted accounting row keeps it restart-safe).
+        # QC dedicated frame (observed 2026-09-30): kind ordering puts every
+        # semantic row ahead of QC in both cohorts, and a ~240 s generation
+        # consumes the whole window — QC rows sat pending for hours at
+        # attempts=0. QC gets a bounded share of the window, served FIRST
+        # (each pass is one bounded chunked eval), expanding into whatever
+        # the semantic lanes leave unused. A 1-job window cannot be split —
+        # QC falls back to the persisted cohort alternation inside the
+        # non-eligible lane.
+        qc_rows = []
+        if qc_active and max_jobs > 1:
+            qc_rows = ledger.db.execute(
+                "SELECT * FROM fetch_jobs WHERE state='pending' "
+                "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+                (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+        qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
+        qc_jobs = list(qc_rows[:qc_share])
+        arrivals, backfill, sched_mut = _due_lanes(
+            ledger, (JOB_KIND,) if qc_jobs else kinds,
+            max_jobs - len(qc_jobs))
+        # unused lane capacity flows back to QC — same rule the backfill
+        # cohort uses against an idle arrival lane
+        spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
+        if spare > 0:
+            qc_jobs += list(qc_rows[qc_share:qc_share + spare])
+        if lane is not None:
+            eligible = ("json_valid(payload) AND "
+                        "COALESCE(json_extract(payload,'$.eligible'),0)=1")
+            # Fresh arrivals use realtime. Background workers may also finish
+            # older arrival-seeded jobs; a per-job flock excludes double work.
+            where = f"AND kind=? AND {eligible}" if lane == "realtime" else ""
+            params = (JOB_KIND,) if lane == "realtime" else ()
+            order = "updated_at DESC, job_id DESC" if lane == "realtime" else "job_id"
+            rows = ledger.db.execute(
+                f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+                f"AND kind IN ({','.join('?' * len(kinds))}) {where} "
+                f"ORDER BY {order} LIMIT ?",
+                (time.time(), *kinds, *params, max_jobs + 8)).fetchall()
+            # Include extra candidates so another worker's current job cannot
+            # hide the next runnable item. Work remains bounded by max_jobs.
+            qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
+            arrivals = [j for j in rows if j['kind'] == JOB_KIND
+                        and runtime.parse_payload(j).get('eligible')]
+            backfill = [j for j in rows if j['kind'] == JOB_KIND
+                        and not runtime.parse_payload(j).get('eligible')]
+            sched_mut = {"turn": None}
+        due = (list(rows) if lane is not None else
+               qc_jobs + list(arrivals) + list(backfill))
+        cohort_of = {id(job): "qc" for job in qc_jobs}
+        cohort_of.update({id(job): "arrival" for job in arrivals})
+        cohort_of.update({id(job): "backfill" for job in backfill})
+        out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
+        if qc_active:
+            out["lanes"]["qc"] = len(qc_jobs)
+        selected = {"qc": 0, "arrival": 0, "backfill": 0}
+        for job in due:
+            if sum(selected.values()) >= max_jobs:
                 break
-        # A semantic job's first call is exempt from the in-call reserve
-        # gate — dispatching one under the call reserve burns a doomed
-        # generation and a retry attempt (2026-10-01: revived jobs
-        # failed at the attempt ceiling doing exactly this in 120 s
-        # batches). Only start one when a call can plausibly fit — the
-        # same reserve the gate applies to follow-up calls; further
-        # stages then defer via BudgetShort for free. Trailing QC rows
-        # need only ~15 s.
-        floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
-                            min(runtime.LLM_CALL_RESERVE_S,
-                                float(scfg["job_budget_seconds"]) * 2 / 3))
-        if time.monotonic() > floor:
-            if job["kind"] == QC_JOB_KIND:
-                out["deferred"] += 1
-                break
-            continue
-        if scfg["project_ids"] is not None \
-                and job["project_id"] not in scfg["project_ids"]:
-            # outside the rollout scope — defer instead of leaving it
-            # due-now, so a backlog of out-of-scope rows cannot fill
-            # the whole max_jobs window and starve in-scope work. The
-            # row stays pending: a later project_ids change resumes it.
-            runtime.transition(ledger, token, "defer", retry_in=300)
-            out["deferred"] += 1
-            continue
-        if token.attempts < 0 or token.attempts >= limit:
-            # A row can be re-seeded or manually edited while it is waiting
-            # in this due-list snapshot.  Close an exhausted row with the
-            # complete token CAS before any client, budget, or network path.
-            # Keep OFF/paused/out-of-scope rows untouched; they retain the
-            # existing queue hold contract until the feature can run again.
-            if runtime.transition(ledger, token, "failed"):
-                out["failed"] += 1
-            else:
-                out["deferred"] += 1
-            continue
-        if jev_client is not None:
-            # the daily cap binds at REQUEST granularity, not just job
-            # granularity — one job's claim-audit + loop-relation calls
-            # must not overshoot it mid-flight (§13.5)
-            remaining = (scfg["daily_request_budget"]
-                         - jev_usage_today(ledger))
-            if remaining <= 0:
-                result["errors"].append(
-                    "semantic: daily_budget_exhausted")
-                out["budget_exhausted"] = True
-                break
-            jev_client.request_cap = (jev_client.requests_made
-                                      + remaining)
-            if hasattr(jev_client, "attempt_timeout"):
-                jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
-            if hasattr(jev_client, "job_budget"):
-                jev_client.job_budget = scfg["job_budget_seconds"]
-        reserve_fn = None
-        if (jev_client is not None
-                and getattr(jev_client, "_mcs_jev_hookable", False)):
-            reserve_fn = runtime.usage_reserver(
-                ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
-                project_id=job["project_id"], message_id=job["message_id"])
-        # only now has the job cleared every gate — the persisted
-        # fairness counters count jobs that were actually served, not
-        # selections lost to circuit/budget/pause breaks (T14)
-        selected[cohort_of[id(job)]] += 1
-        req0 = jev_client.requests_made if jev_client is not None else 0
-        usage_before = dict(getattr(jev_client, "usage_totals", {}))
-        job_started = time.perf_counter()
-        job_age = max(0.0, time.time() - job["created_at"])
-        # T14 phase split: queue wait (job_age_s) | model calls | Jev
-        # evaluation | post-processing (validate→facts→render). The
-        # wrappers only time calls — all attribution stays honest, and
-        # the residual post_s covers the work between them.
-        timed_jev = _TimedClient(jev_client) \
-            if jev_client is not None else None
-        timed_llm, llm_acc = _timed_llm(llm_fn)
-        art0 = _last_stage_artifact(ledger, job["project_id"])
-        try:
-            if job["kind"] == QC_JOB_KIND:
-                status = _process_qc_job(
-                    ledger, scfg, job, timed_jev, deadline,
-                    reserve_fn=reserve_fn, cfg_path=cfg_path,
-                    config_generation=cfg_generation)
-            else:
-                status = semantic._process_job(
-                    ledger, scfg, job, timed_jev, timed_llm, deadline,
-                    cfg_path=cfg_path,
-                    config_generation=cfg_generation,
-                    reserve_fn=reserve_fn)
-        except Exception as e:
-            runtime.transition(ledger, token, "retry", retry_in=300,
-                               max_attempts=limit)
-            result["errors"].append(
-                f"semantic {job['message_id']}: {type(e).__name__}")
-            out["failed"] += 1
-            status = None
-        job_elapsed = time.perf_counter() - job_started
-        job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
-        if job_progressed:
-            out["progressed"] += 1
-        budget_short = status == "deferred_short"
-        if budget_short and not job_progressed:
-            # nothing persisted this pass: a free defer would loop
-            # forever (and re-spend Jev every minute) — charge a bounded
-            # attempt like any other overrun
-            status = "retry"
-        # durable per-attempt request delta — the daily budget ledger
-        # (jev_usage_today) is exact and covers claim-audit and loop
-        # calls, not just the primary assessment
-        used = (jev_client.requests_made - req0) \
-            if jev_client is not None else 0
-        usage_after = getattr(jev_client, "usage_totals", {})
-        usage = {key: usage_after.get(key, 0) - usage_before.get(key, 0)
-                 for key in ("input_tokens", "output_tokens", "reported_requests")}
-        usage["unreported_requests"] = used - usage["reported_requests"]
-        llm_s = llm_acc["s"]
-        jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
-        out["job_metrics"].append({
-            "job_id": job["job_id"], "project_id": job["project_id"],
-            "kind": job["kind"],
-            "cohort": cohort_of.get(id(job), "backfill"),
-            "generation": token.generation,
-            "status": status if status is not None else "error",
-            # phase split — queue wait vs model call vs Jev evaluation
-            # vs the residual validate/render phase (T14)
-            "queue_wait_s": job_age,
-            "llm_s": llm_s,
-            "jev_s": jev_s,
-            "post_s": max(0.0, job_elapsed - llm_s - jev_s),
-            "elapsed_s": job_elapsed, "job_age_s": job_age,
-            "jev_requests": used, "usage": usage,
-            # last Jev error class/kind of this pass — a job that ends
-            # "failed" after a few Jev calls was previously
-            # undiagnosable from the run record (2026-09-30)
-            "jev_error": _jev_error_brief(
-                getattr(jev_client, "last_error", None))
-            if status not in (None, "done") else None,
-        })
-        if status == "done":
-            out["done_by_kind"][job["kind"]] = \
-                out["done_by_kind"].get(job["kind"], 0) + 1
-        if used:
-            runtime.record_circuit_result(ledger, getattr(jev_client, "last_error", None))
-        # Real Jev calls reserve one usage row before POST.  A crash after
-        # that commit therefore still spends the daily cap; adding the old
-        # post-job delta would double count it.  Injected fake clients keep
-        # the delta row for compatibility with offline tests.
-        if used and reserve_fn is None:
-            ledger.artifact_add(
-                KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
-                project_id=job["project_id"],
-                message_id=job["message_id"], model=jev.JEV_MODEL,
-                meta={"jev_requests": used})
-        if status is None:
-            continue
-        if status == "done":
-            out["done"] += 1
-        elif status in ("deferred", "deferred_short"):
-            out["deferred"] += 1
-            runtime.transition(ledger, token, "defer", retry_in=60)
-            if status == "deferred_short":
-                # less than one call reserve is left: the next job's
-                # first call is exempt from the reserve gate and would
-                # be dispatched only to time out at the deadline
-                break
-        elif status == "deferred_backoff":
-            out["deferred"] += 1
-            runtime.transition(ledger, token, "defer",
-                               retry_in=NOT_SENT_BACKOFF_S)
-        elif status == "retry":
-            runtime.transition(ledger, token, "retry", retry_in=300,
-                               max_attempts=limit)
-            out["deferred"] += 1
-            if budget_short:
-                break      # same reason as deferred_short: no call fits
-        elif status == "failed":
-            runtime.transition(ledger, token, "retry", max_attempts=1)
-            out["failed"] += 1
-        elif status == "stale":
-            # The worker that observed this row no longer owns it.  Do not
-            # defer/retry/done the replacement generation by ID alone.
-            out["deferred"] += 1
-        else:
-            out["failed"] += 1
-    if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
-        try:
-            out["degraded_notices"] = _emit_degraded(ledger, scfg)
-        except Exception:
-            out["degraded_notices"] = 0
-            result["errors"].append("semantic: degraded_scan_failed")
-    kind_ph = ",".join("?" * len(kinds))
-    out["left"] = ledger.db.execute(
-        f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
-        "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
-    out["elapsed_s"] = time.perf_counter() - drain_started
-    if due:
-        # persisted fairness accounting — survives restarts, feeds
-        # semantic_observe's scheduler section (T14)
-        try:
-            sched = _sched_state(ledger)
-            for cohort in ("arrival", "backfill"):
-                sched[cohort + "_selected"] = \
-                    sched.get(cohort + "_selected", 0) + selected[cohort]
-            if qc_active:
-                sched["qc_selected"] = \
-                    sched.get("qc_selected", 0) + selected["qc"]
-            if selected["backfill"]:
-                sched["backfill_last_served_at"] = time.time()
-            if selected["qc"]:
-                sched["qc_last_served_at"] = time.time()
-            if sched_mut.get("turn"):
-                sched["turn"] = sched_mut["turn"]
-            _sched_write(ledger, sched)
-        except Exception:
-            # accounting must never break the drain itself
-            result["errors"].append("semantic: sched_persist_failed")
-        # Bounded per-run metrics artifact — observe() aggregates the
-        # recent ones; a drain that attempted work leaves durable
-        # evidence instead of an in-memory-only result (T14).
-        try:
-            ledger.artifact_add(
-                "semantic_drain_run",
-                json.dumps({
-                    "v": 1, "mode": scfg["mode"],
-                    "done": out["done"], "deferred": out["deferred"],
-                    "failed": out["failed"],
-                    "budget_exhausted": out["budget_exhausted"],
-                    "left": out["left"], "elapsed_s": out["elapsed_s"],
-                    "oldest_pending_age_s":
-                        out["oldest_pending_job_age_s"],
-                    "lanes": out["lanes"],
-                    "job_metrics": out["job_metrics"][:64]},
-                    ensure_ascii=False),
-                model="semantic_drain")
-        except Exception:
-            result["errors"].append("semantic: metrics_persist_failed")
-    return out
+            with _job_lock(ledger, job["job_id"]) as held:
+                if not held:
+                    continue
+                token = runtime.JobToken.from_row(job)
+                payload = runtime.parse_payload(job)
+                limit = runtime.attempt_limit(payload)
+                if runtime.circuit_open(ledger):
+                    out["circuit_open"] = True
+                    break
+                from mcs_operations import paused
+                if paused(ledger.db, job["project_id"]):
+                    runtime.transition(ledger, token, "defer", retry_in=300)
+                    out["deferred"] += 1
+                    continue
+                if cfg_path is not None:
+                    current_cfg = load_config(cfg_path)
+                    scfg, errs = semantic_config(current_cfg)
+                    cfg_generation = runtime.config_generation(current_cfg)
+                    for e in errs:
+                        if e not in result["errors"]:
+                            result["errors"].append(e)
+                    if scfg["mode"] == "off":
+                        runtime.transition(ledger, token, "defer", retry_in=300)
+                        out["deferred"] += 1
+                        out["mode"] = "off"
+                        break
+                # A semantic job's first call is exempt from the in-call reserve
+                # gate — dispatching one under the call reserve burns a doomed
+                # generation and a retry attempt (2026-10-01: revived jobs
+                # failed at the attempt ceiling doing exactly this in 120 s
+                # batches). Only start one when a call can plausibly fit — the
+                # same reserve the gate applies to follow-up calls; further
+                # stages then defer via BudgetShort for free. Trailing QC rows
+                # need only ~15 s.
+                floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
+                                    min(runtime.LLM_CALL_RESERVE_S,
+                                        float(scfg["job_budget_seconds"]) * 2 / 3))
+                if time.monotonic() > floor:
+                    if job["kind"] == QC_JOB_KIND:
+                        out["deferred"] += 1
+                        break
+                    continue
+                if scfg["project_ids"] is not None \
+                        and job["project_id"] not in scfg["project_ids"]:
+                    # outside the rollout scope — defer instead of leaving it
+                    # due-now, so a backlog of out-of-scope rows cannot fill
+                    # the whole max_jobs window and starve in-scope work. The
+                    # row stays pending: a later project_ids change resumes it.
+                    runtime.transition(ledger, token, "defer", retry_in=300)
+                    out["deferred"] += 1
+                    continue
+                if token.attempts < 0 or token.attempts >= limit:
+                    # A row can be re-seeded or manually edited while it is waiting
+                    # in this due-list snapshot.  Close an exhausted row with the
+                    # complete token CAS before any client, budget, or network path.
+                    # Keep OFF/paused/out-of-scope rows untouched; they retain the
+                    # existing queue hold contract until the feature can run again.
+                    if runtime.transition(ledger, token, "failed"):
+                        out["failed"] += 1
+                    else:
+                        out["deferred"] += 1
+                    continue
+                if jev_client is not None:
+                    # the daily cap binds at REQUEST granularity, not just job
+                    # granularity — one job's claim-audit + loop-relation calls
+                    # must not overshoot it mid-flight (§13.5)
+                    remaining = (scfg["daily_request_budget"]
+                                 - jev_usage_today(ledger))
+                    if remaining <= 0:
+                        result["errors"].append(
+                            "semantic: daily_budget_exhausted")
+                        out["budget_exhausted"] = True
+                        break
+                    jev_client.request_cap = (jev_client.requests_made
+                                              + remaining)
+                    if hasattr(jev_client, "attempt_timeout"):
+                        jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
+                    if hasattr(jev_client, "job_budget"):
+                        jev_client.job_budget = scfg["job_budget_seconds"]
+                reserve_fn = None
+                if (jev_client is not None
+                        and getattr(jev_client, "_mcs_jev_hookable", False)):
+                    reserve_fn = runtime.usage_reserver(
+                        ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
+                        project_id=job["project_id"], message_id=job["message_id"])
+                # only now has the job cleared every gate — the persisted
+                # fairness counters count jobs that were actually served, not
+                # selections lost to circuit/budget/pause breaks (T14)
+                selected[cohort_of[id(job)]] += 1
+                req0 = jev_client.requests_made if jev_client is not None else 0
+                usage_before = dict(getattr(jev_client, "usage_totals", {}))
+                job_started = time.perf_counter()
+                job_age = max(0.0, time.time() - job["created_at"])
+                # T14 phase split: queue wait (job_age_s) | model calls | Jev
+                # evaluation | post-processing (validate→facts→render). The
+                # wrappers only time calls — all attribution stays honest, and
+                # the residual post_s covers the work between them.
+                timed_jev = _TimedClient(jev_client) \
+                    if jev_client is not None else None
+                timed_llm, llm_acc = _timed_llm(llm_fn)
+                art0 = _last_stage_artifact(ledger, job["project_id"])
+                try:
+                    if job["kind"] == QC_JOB_KIND:
+                        status = _process_qc_job(
+                            ledger, scfg, job, timed_jev, deadline,
+                            reserve_fn=reserve_fn, cfg_path=cfg_path,
+                            config_generation=cfg_generation)
+                    else:
+                        status = semantic._process_job(
+                            ledger, scfg, job, timed_jev, timed_llm, deadline,
+                            cfg_path=cfg_path,
+                            config_generation=cfg_generation,
+                            reserve_fn=reserve_fn)
+                except Exception as e:
+                    runtime.transition(ledger, token, "retry", retry_in=300,
+                                       max_attempts=limit)
+                    result["errors"].append(
+                        f"semantic {job['message_id']}: {type(e).__name__}")
+                    out["failed"] += 1
+                    status = None
+                job_elapsed = time.perf_counter() - job_started
+                job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
+                if job_progressed:
+                    out["progressed"] += 1
+                budget_short = status == "deferred_short"
+                if budget_short and not job_progressed:
+                    # nothing persisted this pass: a free defer would loop
+                    # forever (and re-spend Jev every minute) — charge a bounded
+                    # attempt like any other overrun
+                    status = "retry"
+                # durable per-attempt request delta — the daily budget ledger
+                # (jev_usage_today) is exact and covers claim-audit and loop
+                # calls, not just the primary assessment
+                used = (jev_client.requests_made - req0) \
+                    if jev_client is not None else 0
+                usage_after = getattr(jev_client, "usage_totals", {})
+                usage = {key: usage_after.get(key, 0) - usage_before.get(key, 0)
+                         for key in ("input_tokens", "output_tokens", "reported_requests")}
+                usage["unreported_requests"] = used - usage["reported_requests"]
+                llm_s = llm_acc["s"]
+                jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
+                out["job_metrics"].append({
+                    "job_id": job["job_id"], "project_id": job["project_id"],
+                    "kind": job["kind"],
+                    "cohort": cohort_of.get(id(job), "backfill"),
+                    "generation": token.generation,
+                    "status": status if status is not None else "error",
+                    # phase split — queue wait vs model call vs Jev evaluation
+                    # vs the residual validate/render phase (T14)
+                    "queue_wait_s": job_age,
+                    "llm_s": llm_s,
+                    "jev_s": jev_s,
+                    "post_s": max(0.0, job_elapsed - llm_s - jev_s),
+                    "elapsed_s": job_elapsed, "job_age_s": job_age,
+                    "jev_requests": used, "usage": usage,
+                    # last Jev error class/kind of this pass — a job that ends
+                    # "failed" after a few Jev calls was previously
+                    # undiagnosable from the run record (2026-09-30)
+                    "jev_error": _jev_error_brief(
+                        getattr(jev_client, "last_error", None))
+                    if status not in (None, "done") else None,
+                })
+                if status == "done":
+                    out["done_by_kind"][job["kind"]] = \
+                        out["done_by_kind"].get(job["kind"], 0) + 1
+                if used:
+                    runtime.record_circuit_result(ledger, getattr(jev_client, "last_error", None))
+                # Real Jev calls reserve one usage row before POST.  A crash after
+                # that commit therefore still spends the daily cap; adding the old
+                # post-job delta would double count it.  Injected fake clients keep
+                # the delta row for compatibility with offline tests.
+                if used and reserve_fn is None:
+                    ledger.artifact_add(
+                        KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
+                        project_id=job["project_id"],
+                        message_id=job["message_id"], model=jev.JEV_MODEL,
+                        meta={"jev_requests": used})
+                if status is None:
+                    continue
+                if status == "done":
+                    out["done"] += 1
+                elif status in ("deferred", "deferred_short"):
+                    out["deferred"] += 1
+                    runtime.transition(ledger, token, "defer", retry_in=60)
+                    if status == "deferred_short":
+                        # less than one call reserve is left: the next job's
+                        # first call is exempt from the reserve gate and would
+                        # be dispatched only to time out at the deadline
+                        break
+                elif status == "deferred_backoff":
+                    out["deferred"] += 1
+                    runtime.transition(ledger, token, "defer",
+                                       retry_in=NOT_SENT_BACKOFF_S)
+                elif status == "retry":
+                    runtime.transition(ledger, token, "retry", retry_in=300,
+                                       max_attempts=limit)
+                    out["deferred"] += 1
+                    if budget_short:
+                        break      # same reason as deferred_short: no call fits
+                elif status == "failed":
+                    runtime.transition(ledger, token, "retry", max_attempts=1)
+                    out["failed"] += 1
+                elif status == "stale":
+                    # The worker that observed this row no longer owns it.  Do not
+                    # defer/retry/done the replacement generation by ID alone.
+                    out["deferred"] += 1
+                else:
+                    out["failed"] += 1
+        if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
+            try:
+                out["degraded_notices"] = _emit_degraded(ledger, scfg)
+            except Exception:
+                out["degraded_notices"] = 0
+                result["errors"].append("semantic: degraded_scan_failed")
+        kind_ph = ",".join("?" * len(kinds))
+        out["left"] = ledger.db.execute(
+            f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
+            "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
+        out["elapsed_s"] = time.perf_counter() - drain_started
+        if due:
+            # persisted fairness accounting — survives restarts, feeds
+            # semantic_observe's scheduler section (T14)
+            try:
+                sched = _sched_state(ledger)
+                for cohort in ("arrival", "backfill"):
+                    sched[cohort + "_selected"] = \
+                        sched.get(cohort + "_selected", 0) + selected[cohort]
+                if qc_active:
+                    sched["qc_selected"] = \
+                        sched.get("qc_selected", 0) + selected["qc"]
+                if selected["backfill"]:
+                    sched["backfill_last_served_at"] = time.time()
+                if selected["qc"]:
+                    sched["qc_last_served_at"] = time.time()
+                if sched_mut.get("turn"):
+                    sched["turn"] = sched_mut["turn"]
+                _sched_write(ledger, sched)
+            except Exception:
+                # accounting must never break the drain itself
+                result["errors"].append("semantic: sched_persist_failed")
+            # Bounded per-run metrics artifact — observe() aggregates the
+            # recent ones; a drain that attempted work leaves durable
+            # evidence instead of an in-memory-only result (T14).
+            try:
+                ledger.artifact_add(
+                    "semantic_drain_run",
+                    json.dumps({
+                        "v": 1, "mode": scfg["mode"],
+                        "done": out["done"], "deferred": out["deferred"],
+                        "failed": out["failed"],
+                        "budget_exhausted": out["budget_exhausted"],
+                        "left": out["left"], "elapsed_s": out["elapsed_s"],
+                        "oldest_pending_age_s":
+                            out["oldest_pending_job_age_s"],
+                        "lanes": out["lanes"],
+                        "job_metrics": out["job_metrics"][:64]},
+                        ensure_ascii=False),
+                    model="semantic_drain")
+            except Exception:
+                result["errors"].append("semantic: metrics_persist_failed")
+        return out
+    finally:
+        if original_http is not None:
+            jev_client._http_request = original_http
 
 
-# Nightly automatic retry of exhausted semantic jobs (owner request
+
+
+
+# Bounded automatic retry of exhausted semantic jobs (owner request
 # 2026-09-30). Bounded three ways so a permanently broken input cannot
-# burn the Jev budget: at most NIGHTLY_REVIVE_MAX jobs per night, each
-# job at most NIGHTLY_REVIVE_PER_INPUT times for the same input
-# generation, and only after NIGHTLY_REVIVE_COOLDOWN_S since it failed.
+# burn the Jev budget: at most REVIVE_MAX jobs per pass, each
+# job at most REVIVE_PER_INPUT times for the same input
+# generation, and only after REVIVE_COOLDOWN_S since it failed.
 # Each revival grants exactly one more attempt (manual_attempt_limit =
 # attempts + 1); an input change still resets everything as before.
-NIGHTLY_REVIVE_MAX = 20
-NIGHTLY_REVIVE_PER_INPUT = 3
-NIGHTLY_REVIVE_COOLDOWN_S = 6 * 3600
+REVIVE_MAX = 20
+REVIVE_PER_INPUT = 3
+REVIVE_COOLDOWN_S = 6 * 3600
 
 
 def revive_failed(ledger, now: float | None = None) -> dict:
@@ -1747,10 +1820,10 @@ def revive_failed(ledger, now: float | None = None) -> dict:
         "SELECT job_id,attempts,payload FROM fetch_jobs "
         "WHERE kind=? AND state='failed' AND updated_at<=? "
         "ORDER BY updated_at LIMIT ?",
-        (JOB_KIND, now - NIGHTLY_REVIVE_COOLDOWN_S,
-         NIGHTLY_REVIVE_MAX * 4)).fetchall()
+        (JOB_KIND, now - REVIVE_COOLDOWN_S,
+         REVIVE_MAX * 4)).fetchall()
     for row in rows:
-        if out["revived"] >= NIGHTLY_REVIVE_MAX:
+        if out["revived"] >= REVIVE_MAX:
             break
         try:
             pl = json.loads(row["payload"] or "{}")
@@ -1760,7 +1833,7 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             continue
         n = pl.get("auto_retry")
         n = n if type(n) is int and n >= 0 else 0
-        if n >= NIGHTLY_REVIVE_PER_INPUT:
+        if n >= REVIVE_PER_INPUT:
             out["skipped_cap"] += 1
             continue
         attempts = int(row["attempts"] or 0)
@@ -1779,14 +1852,7 @@ def revive_failed(ledger, now: float | None = None) -> dict:
 
 
 def main() -> int:
-    """Standalone drain loop (nightly catch-up window).
-
-    ``--drain --stop-after N --max-jobs M``: each iteration takes the
-    run lock for one batch sized to the configured job budget (+30 s,
-    floor 120 s) — shorter than that and a ~300 s canonical generation
-    can never complete, so the tick is delayed by at most one
-    budget-sized iteration — never starved by the window.
-    Set MCS_LLM_SLOT=1 to lend calls to the RT slot when it is idle."""
+    """Bounded background drain; transport releases the ingestion lock."""
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--drain", action="store_true",
@@ -1796,10 +1862,25 @@ def main() -> int:
     ap.add_argument("--max-jobs", type=int, default=8)
     ap.add_argument("--revive-failed", action="store_true",
                     help="before draining, give exhausted failed jobs one "
-                         "more bounded attempt (nightly window)")
+                         "more bounded attempt")
     args = ap.parse_args()
     if not args.drain:
-        ap.error("--drain required")
+        if not args.revive_failed:
+            ap.error("--drain or --revive-failed required")
+        from ledger import Ledger
+        from mcs_util import DB, acquire_run_lock
+        fd = acquire_run_lock()
+        if fd is None:
+            return 3
+        try:
+            led = Ledger(DB)
+            try:
+                print(json.dumps(revive_failed(led)))
+            finally:
+                led.close()
+        finally:
+            os.close(fd)
+        return 0
     if not 1 <= args.max_jobs <= 32:
         ap.error("max-jobs must be between 1 and 32")
     if not math.isfinite(args.stop_after) or args.stop_after < 0:
@@ -1837,7 +1918,8 @@ def main() -> int:
                 out = run_due(
                     led, cfg, result,
                     deadline=min(stop, time.monotonic() + batch_s),
-                    max_jobs=args.max_jobs, cfg_path=CONF_PATH)
+                    max_jobs=args.max_jobs, cfg_path=CONF_PATH,
+                    run_lock_fd=lock_fd, lane="backlog")
             finally:
                 os.close(lock_fd)
             totals["batches"] += 1

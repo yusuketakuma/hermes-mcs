@@ -104,43 +104,15 @@ def test_deadline_derives_from_config_not_hardcode():
 def _eval(home, now):
     return health_watch.evaluate(home=str(home), now=now,
                                  cfg={"health": {"tick_interval_s": 300,
-                                                 "max_missed_runs": 2,
-                                                 "night_thinning": False}})
+                                                 "max_missed_runs": 2}})
 
 
 def _local_time(day, hour, minute):
     return time.mktime((2026, 9, day, hour, minute, 0, 0, 0, -1))
 
 
-def test_overnight_thinning_does_not_raise_false_stale(tmp_path):
-    last = _local_time(27, 21, 50)
-    _health_file(tmp_path, {"overall": "ok", "at": last})
-    at_2210 = health_watch.evaluate(home=str(tmp_path),
-                                     now=_local_time(27, 22, 10), cfg={})
-    assert at_2210["status"] == "ok"
-    assert not at_2210["alert"]
-    malformed = {"health": {"tick_interval_s": "bad",
-                            "max_missed_runs": -1}}
-    assert health_watch.evaluate(home=str(tmp_path),
-                                 now=_local_time(27, 22, 10),
-                                 cfg=malformed)["status"] == "ok"
-    # Due checks: 21:55, 22:00, 22:20; allow the last run 480s.
-    at_2230 = health_watch.evaluate(home=str(tmp_path),
-                                     now=_local_time(27, 22, 30), cfg={})
-    assert at_2230["status"] == "stale"
-    assert at_2230["alert"]
 
 
-def test_morning_transition_counts_daytime_checks(tmp_path):
-    last = _local_time(28, 6, 40)
-    _health_file(tmp_path, {"overall": "ok", "at": last})
-    at_0712 = health_watch.evaluate(home=str(tmp_path),
-                                     now=_local_time(28, 7, 12), cfg={})
-    assert at_0712["status"] == "ok"
-    # Due checks: 07:00, 07:05, 07:10, then 8-minute run grace.
-    at_0720 = health_watch.evaluate(home=str(tmp_path),
-                                     now=_local_time(28, 7, 20), cfg={})
-    assert at_0720["status"] == "stale"
 
 
 def test_first_ok_observation_does_not_alert(tmp_path):

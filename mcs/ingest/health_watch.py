@@ -9,9 +9,7 @@ are detectable even when every run "succeeded".
 
 Freshness deadline comes from config (health.tick_interval_s, default
 300 — the deployed 5-minute tick — and health.max_missed_runs, default
-2). The deployed check skips most 5-minute ticks overnight, so the
-default watcher counts the actual scheduled ticks and allows one run
-deadline for the last due tick. No hardcoded 'healthy'.
+2). Collection runs at the same interval around the clock.
 
 Output contract: alert content is status codes/counters only — never
 patient data. stdout carries one alert line on alert transitions
@@ -39,7 +37,6 @@ STATUS_REL = os.path.join("data", "health_watch_status.json")
 DEFAULT_TICK_S = 300        # deployed cron cadence: */5 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
 RUN_GRACE_S = 480           # run_check's whole-run deadline
-NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5, 6}
 REALERT_S = 3600            # unchanged bad state re-alerts hourly
 
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
@@ -79,32 +76,6 @@ def freshness_deadline(cfg: dict) -> int:
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
 
 
-def _scheduled_deadline(health_at: float, cfg: dict,
-                        fallback: int) -> float:
-    """Deadline from the deployed day/night check schedule.
-
-    Other tick settings use their configured uniform interval. A run
-    may finish up to RUN_GRACE_S after its scheduled start, so the
-    third missed tick is only stale after that finish window.
-    """
-    h, tick, missed = _tick_settings(cfg)
-    if tick != DEFAULT_TICK_S or h.get("night_thinning") is False \
-            or type(missed) is not int or not 0 <= missed <= 100:
-        return fallback
-    due = 0
-    slot = (int(health_at) // DEFAULT_TICK_S + 1) * DEFAULT_TICK_S
-    try:
-        while due <= missed:
-            local = time.localtime(slot)
-            if local.tm_hour not in NIGHT_HOURS \
-                    or local.tm_min in (0, 20, 40):
-                due += 1
-            slot += DEFAULT_TICK_S
-    except (OverflowError, OSError, ValueError):
-        return fallback
-    return slot - DEFAULT_TICK_S + RUN_GRACE_S - health_at
-
-
 def classify_health(path: str, now: float, deadline_s: int,
                     cfg: dict | None = None) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
@@ -132,8 +103,6 @@ def classify_health(path: str, now: float, deadline_s: int,
     # tie keeps unread_at (min returns its first minimal argument)
     binding = (min(unread_at, h["at"]) if _finite_number(unread_at)
                else h["at"])
-    if cfg is not None:
-        deadline_s = _scheduled_deadline(binding, cfg, deadline_s)
     age = now - binding
     report = {"health_at": h["at"], "age_s": round(max(age, 0), 1),
               "overall": overall, "run_status": h.get("run_status"),

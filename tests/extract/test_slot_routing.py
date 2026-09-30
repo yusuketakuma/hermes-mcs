@@ -1,5 +1,5 @@
 """Slot routing: local_llm.request_slot env override and
-extract_llm._choose_slot --lend-rt / --slot precedence."""
+fixed extractor background slots."""
 import json
 
 import extract_llm
@@ -22,9 +22,8 @@ def test_request_slot_env_invalid(monkeypatch):
         assert local_llm.request_slot() == local_llm.BACKGROUND_SLOT
 
 
-def _set_state(monkeypatch, slot=None, lend=False):
+def _set_state(monkeypatch, slot=None):
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", slot)
-    monkeypatch.setattr(extract_llm, "_LEND_RT", lend)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
 
 
@@ -34,39 +33,8 @@ def test_choose_slot_default(monkeypatch):
 
 
 def test_choose_slot_override_wins(monkeypatch):
-    _set_state(monkeypatch, slot=1, lend=True)
-    assert extract_llm._choose_slot() == 1
-
-
-def test_choose_slot_lend_idle(monkeypatch):
-    _set_state(monkeypatch, lend=True)
-    slots = [{"id": local_llm.BACKGROUND_SLOT, "is_processing": True},
-             {"id": local_llm.REALTIME_SLOT, "is_processing": False}]
-    monkeypatch.setattr(extract_llm, "_opener_request",
-                        lambda *a, **k: (200, {}, json.dumps(slots).encode()))
-    assert extract_llm._choose_slot() == local_llm.REALTIME_SLOT
-
-
-def test_choose_slot_lend_busy_gives_no_slot_at_deadline(monkeypatch):
-    """Both slots busy: the chooser re-polls until the deadline (see
-    test_lane_slot_and_lock) — at an expired deadline it returns None
-    rather than pin a busy slot; the caller defers."""
-    _set_state(monkeypatch, lend=True)
-    slots = [{"id": local_llm.BACKGROUND_SLOT, "is_processing": True},
-             {"id": local_llm.REALTIME_SLOT, "is_processing": True}]
-    monkeypatch.setattr(extract_llm, "_opener_request",
-                        lambda *a, **k: (200, {}, json.dumps(slots).encode()))
-    assert extract_llm._choose_slot(deadline=0.0) is None
-
-
-def test_choose_slot_lend_probe_failure_falls_back(monkeypatch):
-    _set_state(monkeypatch, lend=True)
-
-    def boom(*a, **k):
-        raise OSError("server down")
-
-    monkeypatch.setattr(extract_llm, "_opener_request", boom)
-    assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
+    _set_state(monkeypatch, slot=2)
+    assert extract_llm._choose_slot() == 2
 
 
 def _capture_bodies():
@@ -138,18 +106,16 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
     same single point as the extraction calls it precedes."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
-    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 1)
-    monkeypatch.setattr(extract_llm, "_LEND_RT", False)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 2)
     bodies, send = _capture_bodies()
     monkeypatch.setattr(extract_llm, "_opener_request", send)
     assert extract_llm._probe_format() == "schema"
-    assert bodies and all(b.get("id_slot") == 1 for b in bodies)
+    assert bodies and all(b.get("id_slot") == 2 for b in bodies)
 
 
 def test_slot_override_out_of_range_falls_back(monkeypatch):
     """A _SLOT_OVERRIDE past the deployed count must not go unpinned."""
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE",
                         local_llm.SLOT_COUNT)
-    monkeypatch.setattr(extract_llm, "_LEND_RT", False)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT

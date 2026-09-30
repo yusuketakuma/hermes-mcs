@@ -507,8 +507,8 @@ def test_stage_derive_two_lanes(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_BATCH_K", 0)
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "s"})
-    result = {"errors": []}
-    run_check.stage_derive(db, result, time.monotonic() + 60)
+    result = {"errors": [], "realtime_ids": [1]}
+    run_check.stage_derive(db, result, time.monotonic() + 150)
     assert result["extracted"] == 1
     assert result["extract_llm"]["done"] == 1
     assert db.artifacts("extract_v1", message_id=1)
@@ -519,7 +519,7 @@ def test_stage_derive_two_lanes(tmp_path, monkeypatch):
 @pytest.mark.parametrize("semantic,expected", [
     ({"mode": "off", "fact_source": "canonical",
       "fact_source_gate": "g6-v1:abc123"}, set()),
-    ({"mode": "off"}, None),
+    ({"mode": "off"}, {1}),
 ])
 def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
                                                semantic, expected):
@@ -532,8 +532,8 @@ def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
         seen["admitted"] = kw["admitted_ids"]
         return {"done": 0, "failed": 0, "left": 0, "pids": []}
     monkeypatch.setattr(extract_llm, "run_pending", run_pending)
-    result = {"errors": []}
-    run_check.stage_derive(db, result, time.monotonic() + 120,
+    result = {"errors": [], "realtime_ids": [1]}
+    run_check.stage_derive(db, result, time.monotonic() + 150,
                            cfg={"semantic": semantic})
     assert "admitted" in seen and seen["admitted"] == expected
     db.close()
@@ -551,17 +551,17 @@ def _stub_llm_lane(monkeypatch, busy=False):
 def test_stage_derive_limits_rows_to_budget(tmp_path, monkeypatch, cap, limit):
     db = _ledger(tmp_path)
     calls = _stub_llm_lane(monkeypatch)
-    run_check.stage_derive(db, {"errors": []}, time.monotonic() + 600, {},
+    run_check.stage_derive(db, {"errors": [], "realtime_ids": [1]}, time.monotonic() + 600, {},
                            llm_budget_cap=cap)
     assert calls[0]["limit"] == limit and calls[0]["budget_s"] == cap
-    assert calls[0]["oldest_first"] is True
+    assert calls[0]["oldest_first"] is False
     db.close()
 
 
 def test_stage_derive_skips_llm_lane_when_pinned_slot_busy(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     calls = _stub_llm_lane(monkeypatch, busy=True)
-    result = {"errors": []}
+    result = {"errors": [], "realtime_ids": [1]}
     run_check.stage_derive(db, result, time.monotonic() + 600, {})
     assert calls == []
     assert result["extract_llm"] == {"done": 0, "failed": 0, "left": -1,
@@ -570,8 +570,8 @@ def test_stage_derive_skips_llm_lane_when_pinned_slot_busy(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(("cfg", "admitted"), [
-    ({}, None),
-    (None, None),                                   # direct caller: defaults
+    ({}, {1}),
+    (None, {1}),                                   # direct caller: defaults
     ({"semantic": "typo"}, set()),                  # semantic_config error
     ({"semantic": {"fact_sourse": "canonical"}}, set()),
     # gate missing → error → legacy fallback used to open v3 unrestricted
@@ -581,7 +581,7 @@ def test_stage_derive_legacy_admission_fails_closed(tmp_path, monkeypatch,
                                                      cfg, admitted):
     db = _ledger(tmp_path)
     calls = _stub_llm_lane(monkeypatch)
-    run_check.stage_derive(db, {"errors": []}, time.monotonic() + 600, cfg)
+    run_check.stage_derive(db, {"errors": [], "realtime_ids": [1]}, time.monotonic() + 600, cfg)
     assert calls[0]["admitted_ids"] == admitted
     db.close()
 
@@ -590,8 +590,7 @@ def test_stage_derive_legacy_admission_fails_closed(tmp_path, monkeypatch,
     ({}, {0: True, 1: False}, True),
     ({}, {0: False, 1: True}, False),
     ({}, None, False),                               # probe failed
-    ({"_LEND_RT": True}, {0: True, 1: True}, False),
-    ({"_SLOT_OVERRIDE": 0}, {0: True, 1: True}, False),
+    ({"_SLOT_OVERRIDE": 0}, {0: True, 1: True}, True),
 ])
 def test_pinned_slot_busy(monkeypatch, state, probe, expect):
     for k, v in state.items():
@@ -1974,7 +1973,6 @@ def _sem_setup(monkeypatch, tmp_path, prev_lane=None, busy=False):
     samples = list(busy) if isinstance(busy, list) else None
     monkeypatch.setattr(extract_llm, "pinned_slot_busy",
                         lambda deadline: samples.pop(0) if samples else bool(busy) if samples is None else False)
-    monkeypatch.setattr(extract_llm, "YIELD_FLAG", str(tmp_path / "flags" / "llm_yield"))
     monkeypatch.setattr(run_check.time, "sleep", lambda s: None)
 
 
@@ -1993,32 +1991,10 @@ def test_semantic_lane_leaves_tail_reserve(tmp_path, monkeypatch):
     db.close()
 
 
-def test_semantic_lane_yields_then_runs_when_drainer_frees_slot(tmp_path, monkeypatch):
-    """A drainer inside its window owns slot 0: the lane raises the
-    yield flag, waits for the slot, runs once it frees, and clears the
-    flag afterwards."""
-    import semantic
-    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2},
-               busy=[True, True, False])
-    seen = {}
-
-    def run_due(ledger, cfg, result, deadline, **kw):
-        seen["flag_up"] = extract_llm.tick_wants_slot()
-        return {"done": 1, "deferred": 0, "failed": 0}
-    monkeypatch.setattr(semantic, "run_due", run_due)
-    db = _ledger(tmp_path)
-    result = {"errors": []}
-    run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 400, True)
-    assert seen["flag_up"] is True
-    assert result["semantic"]["done"] == 1
-    assert result["semantic_lane"] == {"starved_streak": 0}
-    assert extract_llm.tick_wants_slot() is False
-    db.close()
 
 
 def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
-    """Slot stays busy past SEMANTIC_YIELD_WAIT_S: explicit skip in
-    run_due's shape, streak untouched, flag cleared."""
+    """A busy realtime slot skips analysis without pausing background."""
     import semantic
     clock = [1000.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
@@ -2032,77 +2008,14 @@ def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
     run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 400, True)
     assert result["semantic"]["skipped"] == "slot_busy"
     assert result["semantic"]["mode"] == "off" and result["semantic"]["elapsed_s"] == 0.0
-    assert result["semantic_lane"] == {"starved_streak": 2}
+    assert result["semantic_lane"] == {"starved_streak": 0}
     # the flag stays up so the drainers pause and the NEXT tick gets
     # the slot (overnight arrivals are processed overnight)
-    assert extract_llm.tick_wants_slot() is True
     db.close()
 
 
-def test_semantic_lane_starvation_streak_sets_self_clearing_hold(tmp_path, monkeypatch):
-    """Three ticks that burn >= half their allowance with nothing done
-    pause the lane; the next tick honours hold_until and health reports
-    degraded while it lasts; an expired hold restarts from zero."""
-    import semantic
-    clock = [1000.0]
-    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
-    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2})
-
-    def starving(ledger, cfg, result, deadline, **kw):
-        clock[0] = deadline          # waited out the whole allowance
-        return {"done": 0, "deferred": 1, "failed": 0}
-    monkeypatch.setattr(semantic, "run_due", starving)
-    db = _ledger(tmp_path)
-    result = {"errors": []}
-    # a short allowance (180 s of budget left) still counts: relative, not absolute
-    run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 180, True)
-    lane = result["semantic_lane"]
-    assert lane["starved_streak"] == 0
-    assert lane["hold_until"] > time.time()
-    assert run_check._health(db, result, "ok")["overall"] == "degraded"
-
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {"semantic_lane": lane})
-    monkeypatch.setattr(semantic, "run_due",
-                        lambda *a, **k: pytest.fail("held lane must not run"))
-    held = {"errors": []}
-    run_check._run_semantic(db, _sem_args(), {}, held, clock[0] + 480, True)
-    assert held["semantic"]["skipped"] == "held" and held["errors"] == []
-
-    monkeypatch.setattr(run_check, "_prev_health", lambda: {
-        "semantic_lane": {"starved_streak": 0, "hold_until": time.time() - 1}})
-    monkeypatch.setattr(semantic, "run_due",
-                        lambda *a, **k: {"done": 1, "deferred": 0, "failed": 0})
-    again = {"errors": []}
-    run_check._run_semantic(db, _sem_args(), {}, again, clock[0] + 480, True)
-    assert again["semantic"]["done"] == 1
-    assert again["semantic_lane"] == {"starved_streak": 0}
-    assert run_check._health(db, again, "ok")["overall"] == "ok"
-    db.close()
 
 
-def test_semantic_lane_no_budget_after_yield_wait(tmp_path, monkeypatch):
-    """The slot frees but the wait spent the lane's allowance: skip
-    exactly like the pre-wait no-budget guard — the streak stands
-    (nothing was evaluated, so it must not read as starved) and the
-    flag comes back down so the drainers resume."""
-    import semantic
-    clock = [1000.0]
-    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
-    _sem_setup(monkeypatch, tmp_path,
-               prev_lane={"starved_streak": 2},
-               busy=[True] * 40 + [False])
-    monkeypatch.setattr(run_check.time, "sleep",
-                        lambda s: clock.__setitem__(0, clock[0] + s))
-    monkeypatch.setattr(semantic, "run_due",
-                        lambda *a, **k: pytest.fail("no budget must not run"))
-    db = _ledger(tmp_path)
-    result = {"errors": []}
-    run_check._run_semantic(db, _sem_args(), {}, result,
-                            clock[0] + 100, True)
-    assert result["semantic"]["skipped"] == "no_budget"
-    assert result["semantic_lane"] == {"starved_streak": 2}
-    assert extract_llm.tick_wants_slot() is False
-    db.close()
 
 
 def test_semantic_lane_off_clears_stale_hold(tmp_path, monkeypatch):
@@ -2138,7 +2051,7 @@ def test_semantic_lane_streak_only_counts_evaluated_starvation(tmp_path, monkeyp
         assert result["semantic_lane"] == {"starved_streak": 0}
     else:
         assert result["errors"] == ["semantic: RuntimeError"]
-        assert result["semantic_lane"] == {"starved_streak": 2}
+        assert result["semantic_lane"] == {"starved_streak": 0}
     db.close()
 
 
