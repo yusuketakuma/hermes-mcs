@@ -1583,10 +1583,14 @@ class MCSAdapter:
             # project holds more unread rows than the screen cap. Only a
             # caller that verified ledger.unread_cap_cleared may clear
             # through the plain list read (same side effect, verified
-            # live) — everything else keeps the strict route.
+            # live) — everything else keeps the strict route. The
+            # snapshot timestamp still rides along so the read stays
+            # gated to the collection snapshot wherever the server
+            # honors it.
             if not (fallback_plain and e.kind == "http_error"):
                 raise
             self._get(f"/projects/{project_id}/messages", {
+                "timestamp": snapshot_ts,
                 "per_page": 1, "page": 1, "include_paginate_totals": 0})
         r, proj = self._project_detail(project_id)
         if proj is not None and proj.get("oldest_unread_message") is None:

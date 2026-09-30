@@ -2156,6 +2156,7 @@ def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
                                posted_at="2026-09-01T00:00:00+09:00")],
                      project_id=1)
     db.set_history_floor(1, 0)                        # -1: whole timeline
+    db.set_coverage(1, db.high_watermark(1))          # the since=0 walk certifies it
     result = _capped_run(db, adapter)
     row = db.db.execute(
         "SELECT fetch_state FROM patients WHERE project_id=1").fetchone()
@@ -2171,20 +2172,61 @@ def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
     db.close()
 
 
-@pytest.mark.parametrize(("floor", "reply_pending", "stored", "cleared"), [
-    (-1, False, True, True),
-    (0, False, True, False),         # never floored
-    (1_700_000_000, False, True, True),   # floor at/below the oldest unread
-    (1_800_000_000, False, True, False),  # floor still above it
-    (-1, True, True, False),         # replies still pending
-    (-1, False, False, False),       # oldest unread not stored
+def test_unread_cap_stuck_after_full_walk_is_reported_not_rewalked(tmp_path):
+    """A completed since=0 walk (floor -1) that still cannot clear the
+    cap must not be revived every tick — it is surfaced instead."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(1))
+    db.save_messages([_message(mid=5, unread=True,
+                               posted_at="2026-09-01T00:00:00+09:00")],
+                     project_id=1)
+    db.set_history_floor(1, 0)
+    job = db.job_add("history", 1, payload={"since": 0, "page": 1, "pages": 10})
+    db.job_done(job)
+    marks = []
+    adapter = SimpleNamespace(      # coverage never certified -> not cleared
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[_message(mid=90, unread=True)], reached=True, capped=True),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        oldest_unread_id=lambda pid: 5,
+        mark_patient_read=lambda *a, **k: marks.append(a),
+    )
+    for _ in range(2):
+        result = _capped_run(db, adapter)
+        assert "project 1: unread_cap_stuck" in result["errors"]
+        assert result["incomplete"] == [1] and marks == []
+        assert db.job_state("history", 1) == "done"
+    row = db.db.execute(
+        "SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()
+    assert row["fetch_reason"] == "unread_capped"
+    db.close()
+
+
+@pytest.mark.parametrize(("floor", "reply_pending", "stored", "covered", "cleared"), [
+    (-1, False, "full", True, True),
+    (0, False, "full", True, False),         # never floored
+    (1_700_000_000, False, "full", True, True),   # floor at/below the oldest unread
+    (1_800_000_000, False, "full", True, False),  # floor still above it
+    (-1, True, "full", True, False),         # replies still pending
+    (-1, False, None, True, False),          # oldest unread not stored
+    (-1, False, "deleted", True, True),      # server-deleted anchor is terminal
+    (-1, False, "snippet", True, False),     # truncated anchor is not
+    (-1, False, "full", False, False),       # a newer row sits past verified coverage
 ])
-def test_unread_cap_cleared_rule(tmp_path, floor, reply_pending, stored, cleared):
+def test_unread_cap_cleared_rule(tmp_path, floor, reply_pending, stored,
+                                 covered, cleared):
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(1))     # floor lives on the patient row
     if stored:
-        db.save_messages([_message(mid=5, posted_at="2026-09-01T00:00:00+09:00")],
+        db.save_messages([_message(mid=5, state=stored,
+                                   posted_at="2026-09-01T00:00:00+09:00")],
                          project_id=1)   # ~1.788e9
+    db.set_coverage(1, db.high_watermark(1))
+    if not covered:
+        db.save_messages([_message(mid=9, posted_at="2026-09-02T00:00:00+09:00")],
+                         project_id=1)
     if floor:
         db.set_history_floor(1, floor if floor > 0 else 0)
     if reply_pending:
@@ -2225,6 +2267,7 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     db.save_messages([_message(mid=5, unread=True,
                                posted_at="2026-09-01T00:00:00+09:00")], project_id=1)
     db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
     # the bottom is certified but a newer post (id 7) is not stored yet
     latest["id"] = 7
     result = _capped_run(db, adapter)
@@ -2234,10 +2277,94 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     assert row["fetch_reason"] == "unread_capped"
     db.save_messages([_message(mid=7, unread=True,
                                posted_at="2026-09-02T00:00:00+09:00")], project_id=1)
+    # stored by the unread path, not yet certified by a walk: still waits
+    result = _capped_run(db, adapter)
+    assert marks == [] and result["incomplete"] == [1]
+    db.set_coverage(1, db.high_watermark(1))              # backfill certifies it
     result = _capped_run(db, adapter)
     assert marks == [((1, 123), {"fallback_plain": True})]
     assert result["marked_read"] == [1] and result["incomplete"] == []
+    assert db.job_pending("history_head", 1) is None      # post-ack probe: no gap
     db.close()
+
+
+def _certified_capped_db(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(1))
+    db.save_messages([_message(mid=5, unread=True,
+                               posted_at="2026-09-01T00:00:00+09:00")], project_id=1)
+    db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
+    return db
+
+
+@pytest.mark.parametrize("probe", ["newer_post", "probe_fails"])
+def test_fallback_ack_seeds_head_walk_on_post_ack_gap(tmp_path, probe):
+    """A post landing between the gate and the plain read would be
+    cleared unfetched: the post-ack probe seeds a bounded head walk and
+    records post_ack_gap. An unanswerable probe counts as a gap."""
+    db = _certified_capped_db(tmp_path)
+    seen = iter([5, 8])            # gate sees 5 stored; 8 lands before the re-probe
+
+    def latest(pid):
+        mid = next(seen)
+        if mid == 8 and probe == "probe_fails":
+            raise mcs_adapter.MCSError("http_error", status=502)
+        return {"message_id": mid, "is_self_only": False}
+    marks = []
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=400)),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        oldest_unread_id=lambda pid: 5,
+        fetch_latest=latest,
+        mark_patient_read=lambda *a, **k: marks.append(a),
+    )
+    result = _capped_run(db, adapter)
+    assert marks == [(1, 123)] and result["marked_read"] == [1]
+    assert "mark 1: post_ack_gap" in result["errors"]
+    job = db.job_pending("history_head", 1)
+    assert json.loads(job["payload"]) == {
+        "since": db.coverage_ts(1) - run_check.BACKFILL_OVERLAP_S, "page": 1,
+        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False}
+    db.close()
+
+
+def test_unread_route_5xx_keeps_http_error_without_fallback(tmp_path):
+    """Only a 4xx is the screen-cap rejection; a 5xx is an ordinary
+    incomplete fetch — no cap gate, no full walk, no acknowledgement."""
+    db = _certified_capped_db(tmp_path)
+    marks = []
+
+    def forbidden(*_):
+        raise AssertionError("cap gate must not run for a 5xx")
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=503)),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        oldest_unread_id=forbidden, fetch_latest=forbidden,
+        mark_patient_read=lambda *a, **k: marks.append(a),
+    )
+    result = _capped_run(db, adapter)
+    row = db.db.execute(
+        "SELECT fetch_state,fetch_reason FROM patients WHERE project_id=1").fetchone()
+    assert (row["fetch_state"], row["fetch_reason"]) == ("incomplete", "http_error")
+    assert marks == [] and result["incomplete"] == [1]
+    assert db.history_job(1) is None
+    db.close()
+
+
+def test_code_changed_is_recorded_once(monkeypatch):
+    result = {"errors": []}
+    assert run_check._code_changed(result) is False
+    monkeypatch.setattr(run_check, "_CODE_STAMP", -1)
+    assert run_check._code_changed(result) is True
+    assert run_check._code_changed(result) is True
+    assert result["errors"] == ["code_changed"]
 
 
 # ---------- stage: 連携サマリー ----------
@@ -2365,17 +2492,21 @@ def test_karte_summary_fresh_project_beats_persistently_failing_backlog(tmp_path
     # push a project that just stored chat past the per-tick cap
     db = _karte_db(tmp_path, 13)
     adapter = _MemoAdapter(gone={pid * 10 for pid in range(1, 13)})
-    for _ in range(3):
-        result = _run_stage(adapter, db, targets=range(1, 14))
-        assert adapter.calls[-12:][0] == 130                     # fresh wins the cap
-        assert result["karte_summary"]["fetched"] == 1
-        assert db.karte_summary_current(13)["comment"] == "合成 130"
+    result = _run_stage(adapter, db, targets=range(1, 14))
+    assert adapter.calls[0] == 130                               # fresh wins the cap
+    assert result["karte_summary"]["fetched"] == 1
     assert result["karte_summary"]["deferred"] == 1              # 12 dead + fresh > cap
     assert len(result["karte_summary"]["errors"]) == 11
     # a 4xx is not carried over (the flag re-arms on the next new
-    # message); only the never-reached oldest one still waits, costing
-    # no GET while fresher targets fill the cap
+    # message); only the never-reached oldest one still waits
     assert db.karte_summary_due() == [1]
+    # the failed ones sit out the backoff even when re-flagged, so the
+    # next ticks spend no GET on them
+    result = _run_stage(adapter, db, targets=range(1, 14))
+    assert adapter.calls[12:] == [130, 10]
+    result = _run_stage(adapter, db, targets=range(1, 14))
+    assert adapter.calls[14:] == [130]
+    assert db.karte_summary_current(13)["comment"] == "合成 130"
     db.close()
 
 
@@ -2402,11 +2533,20 @@ def test_karte_summary_project_error_is_recorded_not_partial(tmp_path):
     assert result["errors"] == [] and result["incomplete"] == []
     assert adapter.marked == []
     assert db.karte_summary_current(2) is None
-    # a retryable (5xx) failure keeps the flag: retried on the next tick
+    # a retryable (5xx) failure keeps the flag, but the project sits
+    # out the backoff before it is retried
+    assert db.db.execute("SELECT karte_summary_due FROM patients "
+                         "WHERE project_id=2").fetchone()[0] == 1
+    assert db.karte_summary_due() == []
+    db.db.execute("UPDATE patients SET karte_summary_failed_at=? WHERE project_id=2",
+                  (time.time() - ledger.KARTE_SUMMARY_BACKOFF_S - 1,))
+    db.db.commit()
     assert db.karte_summary_due() == [2]
     adapter.fail.clear()
     assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 1
     assert adapter.calls[3:] == [20] and db.karte_summary_due() == []
+    assert db.db.execute("SELECT karte_summary_failed_at FROM patients "
+                         "WHERE project_id=2").fetchone()[0] is None
     db.close()
 
 
@@ -2417,9 +2557,37 @@ def test_karte_summary_session_expired_propagates(tmp_path):
         def fetch_memo_summary(self, karte_id):
             raise mcs_adapter.SessionExpired("gone")
 
+        def _probe_session_ok(self):
+            return False
+
     with pytest.raises(mcs_adapter.SessionExpired):
         _run_stage(Adapter(), db, targets=[1])
     assert db.karte_summary_due() == [1]                         # still due after relogin
+    db.close()
+
+
+def test_karte_summary_expiry_on_one_karte_with_live_session_is_a_karte_failure(tmp_path):
+    db = _karte_db(tmp_path, 3)
+
+    class Adapter(_MemoAdapter):
+        def fetch_memo_summary(self, karte_id):
+            if karte_id == 20:
+                self.calls.append(karte_id)
+                raise mcs_adapter.SessionExpired("403")
+            return super().fetch_memo_summary(karte_id)
+
+        def _probe_session_ok(self):
+            return True
+
+    adapter = Adapter()
+    result = _run_stage(adapter, db, targets=[1, 2, 3])
+    assert adapter.calls == [30, 20, 10]                         # loop continues
+    assert result["karte_summary"]["errors"] == [
+        {"project": 2, "kind": "session_expired"}]
+    assert result["karte_summary"]["fetched"] == 2
+    assert db.karte_summary_due() == []                          # non-retryable: cleared
+    # the failed karte is not re-picked by the deep-run fill either
+    assert db.karte_summary_missing(10) == []
     db.close()
 
 

@@ -282,6 +282,19 @@ def _code_stamp() -> int:
 _CODE_STAMP = _code_stamp()
 
 
+def _code_changed(result: dict) -> bool:
+    """True once the mcs/ tree changed under this tick; records 'code_changed' once.
+
+    Stages that import modules lazily (derive, semantic) are skipped from
+    then on, so a tick overlapping a deploy never mixes code generations."""
+    if "code_changed" in result["errors"]:
+        return True
+    if _code_stamp() == _CODE_STAMP:
+        return False
+    result["errors"].append("code_changed")
+    return True
+
+
 def _wait_run_lock(wait_s: float) -> int | None:
     """Poll the run lock until ``wait_s`` elapses — short polls so a
     holder that releases between batches is won, not missed. A lock won
@@ -400,13 +413,15 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
 
 # ---------- stage: unread pipeline ----------
 
-def _cap_cleared(adapter, ledger, p, top: bool = False) -> bool:
+def _cap_cleared(adapter, ledger, p, result, top: bool = False) -> bool:
     """F-5 acknowledgement gate for an unread-capped patient: the
     history walk must have certified down to the server's oldest
     unread (ledger.unread_cap_cleared) and, when nothing this tick
     fetched the top of the range (``top``), the server's newest message
     must already be stored. Anything less keeps the patient incomplete
-    and seeds the walk once."""
+    and seeds the walk once — or, when the full walk already completed
+    (floor -1), reports unread_cap_stuck instead of re-walking the
+    whole timeline every tick."""
     oldest = adapter.oldest_unread_id(p.project_id)
     ok = oldest is not None and ledger.unread_cap_cleared(
         p.project_id, oldest)
@@ -416,10 +431,34 @@ def _cap_cleared(adapter, ledger, p, top: bool = False) -> bool:
     if not ok:
         p.fetch_state = "incomplete"
         p.fetch_reason = "unread_capped"
-        if not ledger.history_job(p.project_id):
+        if ledger.history_floor(p.project_id) == -1:
+            result["errors"].append(
+                f"project {p.project_id}: unread_cap_stuck")
+        elif not ledger.history_job(p.project_id):
             ledger.job_add("history", p.project_id, payload={
                 "since": 0, "page": 1, "pages": 10})
     return ok
+
+
+def _post_ack_gap(adapter, ledger, pid: int, result):
+    """After a plain-list acknowledgement, verify the server's newest
+    message is stored. The plain read clears the whole project flag, so
+    a post that landed after the gate would arrive read and unnotified —
+    seed a bounded history_head walk and record post_ack_gap instead of
+    letting it disappear. An unanswerable probe counts as a gap."""
+    try:
+        latest = adapter.fetch_latest(pid)["message_id"]
+        gap = latest is not None and not ledger.has_message(latest)
+    except MCSError:
+        gap = True
+    if not gap:
+        return
+    cutoff = (ledger.coverage_ts(pid) or ledger.high_watermark(pid)) \
+        - BACKFILL_OVERLAP_S
+    ledger.job_add("history_head", pid, payload={
+        "since": max(0, cutoff), "page": 1,
+        "pages": BACKFILL_MAX_PAGES, "trickle": False})
+    result["errors"].append(f"mark {pid}: post_ack_gap")
 
 
 def stage_unread(adapter, ledger, args, result, deadline, run_id,
@@ -487,6 +526,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                     p.fetch_state = "incomplete"
                     p.fetch_reason = "replies_missing"
             if batch.error and batch.error.kind == "http_error" \
+                    and 400 <= (batch.error.status or 0) < 500 \
                     and not p.messages:
                 # F-5: the unread route rejects a project past the screen
                 # cap. The rows still arrive through the self probe and
@@ -498,11 +538,13 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                 # the plain list read clears the whole project flag and
                 # a row imported later by the walk arrives read (never
                 # notified).
-                p.ack_fallback = _cap_cleared(adapter, ledger, p, top=True)
+                p.ack_fallback = _cap_cleared(adapter, ledger, p, result,
+                                              top=True)
             elif batch.error:
                 p.fetch_state = "incomplete"
                 p.fetch_reason = batch.error.kind
                 if batch.error.kind == "pages_exceeded" \
+                        and ledger.history_floor(p.project_id) != -1 \
                         and not ledger.history_job(p.project_id):
                     # more unread than the page cap: the tail is
                     # unreachable via the unread list — hand the
@@ -515,7 +557,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                 # would clear them unfetched. Stay incomplete until the
                 # history walk has stored down to the server's oldest
                 # unread message; only then is acknowledgement safe.
-                _cap_cleared(adapter, ledger, p)
+                _cap_cleared(adapter, ledger, p, result)
             if p.fetch_state != "incomplete":
                 p.fetch_state = "complete"
         except SessionExpired:
@@ -564,6 +606,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                                           fallback_plain=p.ack_fallback)
                 ledger.mark_read(p.project_id, snap.timestamp, "confirmed")
                 result["marked_read"].append(p.project_id)
+                if p.ack_fallback:
+                    _post_ack_gap(adapter, ledger, p.project_id, result)
             except MCSError as e:
                 result["errors"].append(
                     f"mark {p.project_id}: {_err_str(e)}")
@@ -794,8 +838,10 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     so fresh chat wins the cap) — the save paths set it when they store
     new chat (unread root, reply job or self-probe import); a deferred
     (cap/margin) or retryably failed GET keeps it, a non-retryable one
-    (4xx, schema) clears it until the next new message, so a dead karte
-    cannot starve the cap — and on deep runs up to KARTE_SUMMARY_FILL
+    (4xx, schema, or a per-karte expiry while the session probe is
+    fine) clears it until the next new message, and any failure keeps
+    the project out of selection for 6 h (KARTE_SUMMARY_BACKOFF_S), so
+    a dead karte cannot starve the cap — and on deep runs up to KARTE_SUMMARY_FILL
     never-fetched live projects (oldest first). At most
     KARTE_SUMMARY_TICK_CAP GETs per run, stopping KARTE_SUMMARY_MARGIN_S
     before the deadline; runs after notify. Per-project MCSErrors are
@@ -820,11 +866,19 @@ def stage_karte_summary(adapter, ledger, result, deadline,
         gets += 1
         try:
             payload = adapter.fetch_memo_summary(karte_id)
-        except SessionExpired:
-            raise
+        except SessionExpired as e:
+            # a 403 on one karte reads as expiry; a live session means
+            # the karte itself is refused — fail it, keep the run going
+            if not adapter._probe_session_ok():
+                raise
+            stats["errors"].append({"project": pid, "kind": e.kind})
+            ledger.karte_summary_mark_due(pid, due=False)
+            ledger.karte_summary_failed(pid)
+            continue
         except MCSError as e:
             stats["errors"].append({"project": pid, "kind": e.kind})
             ledger.karte_summary_mark_due(pid, due=e.retryable)
+            ledger.karte_summary_failed(pid)
             continue
         stats["fetched"] += 1
         if payload is None:
@@ -1522,8 +1576,9 @@ def main() -> int:
         # jobs-only runs skip fetch entirely, so the LLM extract slice
         # can be wider than the 15-min tick's — still capped well under
         # RUN_DEADLINE_S so history/trickle stages keep their share.
-        stage_derive(ledger, result, deadline, cfg,
-                     llm_budget_cap=240 if args.jobs_only else 90)
+        if not _code_changed(result):
+            stage_derive(ledger, result, deadline, cfg,
+                         llm_budget_cap=240 if args.jobs_only else 90)
 
         _deliver(ledger, args, cfg, result, deadline)
         # 連携サマリー GETs sit behind unread collection and notify (spec:
@@ -1532,7 +1587,8 @@ def main() -> int:
         _with_relogin(adapter, ledger, result, "karte_summary",
                       stage_karte_summary, adapter, ledger, result,
                       deadline, jobs_only=args.jobs_only)
-        _run_semantic(ledger, args, cfg, result, deadline, sem_on)
+        if not _code_changed(result):
+            _run_semantic(ledger, args, cfg, result, deadline, sem_on)
         _housekeeping(result)
         status = _finish_run(ledger, cfg, result, run_id, deadline)
         _write_health(ledger, result, status, run_id=run_id)

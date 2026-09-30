@@ -36,6 +36,10 @@ SCHEMA_VERSION = 7
 # head reconciliation walk
 HEAD_SYNC_OVERLAP_S = 120
 
+# a failed 連携サマリー GET keeps its project out of the due/fill
+# selection this long, so one broken karte cannot burn every tick's cap
+KARTE_SUMMARY_BACKOFF_S = 6 * 3600
+
 # body_state values meaning "nothing more to fetch" — shared by the
 # ledger's job-reconciliation and the walk checkpoint logic
 TERMINAL_BODY_STATES = ("full", "deleted")
@@ -319,6 +323,9 @@ class Ledger:
                          ("karte_summary_due",
                           "ALTER TABLE patients ADD COLUMN karte_summary_due "
                           "INTEGER NOT NULL DEFAULT 0"),
+                         ("karte_summary_failed_at",
+                          "ALTER TABLE patients ADD COLUMN "
+                          "karte_summary_failed_at REAL"),
                          ("is_archived",
                           "ALTER TABLE patients ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")]:
             if col not in c:
@@ -928,17 +935,22 @@ class Ledger:
         """An unread-capped patient may be acknowledged only when the
         history walk has certified everything the unread screen could
         not show: the server's oldest unread message is stored with a
-        full body, the certified floor reaches at/below its posting
-        time (or the whole timeline, -1), and no reply fetch is pending.
-        Anything less keeps the patient incomplete (never acknowledged)."""
+        full (or server-deleted) body, the certified floor reaches
+        at/below its posting time (or the whole timeline, -1), verified
+        coverage is contiguous up to the newest stored message, and no
+        reply fetch is pending. Anything less keeps the patient
+        incomplete (never acknowledged)."""
         row = self.db.execute(
             "SELECT posted_at_ts FROM messages WHERE project_id=? "
-            "AND message_id=? AND body_state='full'",
+            "AND message_id=? AND body_state IN ('full','deleted')",
             (project_id, oldest_id)).fetchone()
         if row is None or type(row["posted_at_ts"]) is not int:
             return False
         floor = self.history_floor(project_id)
         if not (floor == -1 or 0 < floor <= row["posted_at_ts"]):
+            return False
+        wm = self.high_watermark(project_id)
+        if not (wm > 0 and self.coverage_ts(project_id) >= wm):
             return False
         return self.pending_reply_jobs(project_id) == 0
 
@@ -1253,13 +1265,27 @@ class Ledger:
                         "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                         (json.dumps(meta, ensure_ascii=False),
                          row["artifact_id"]))
-                    self._karte_summary_due(project_id, 0)
+                    self._karte_summary_stored(project_id)
                     return False
         self.artifact_add("karte_summary", text, project_id=project_id,
                           meta={"karte_id": karte_id, "fetched_at": now,
                                 "sha256": sha})
-        self._karte_summary_due(project_id, 0)
+        self._karte_summary_stored(project_id)
         return True
+
+    def _karte_summary_stored(self, project_id: int):
+        self.db.execute(
+            "UPDATE patients SET karte_summary_due=0,"
+            "karte_summary_failed_at=NULL WHERE project_id=?",
+            (project_id,))
+        self.db.commit()
+
+    def karte_summary_failed(self, project_id: int):
+        """Record a failed 連携サマリー GET; the project sits out selection for KARTE_SUMMARY_BACKOFF_S."""
+        self.db.execute(
+            "UPDATE patients SET karte_summary_failed_at=? WHERE project_id=?",
+            (time.time(), project_id))
+        self.db.commit()
 
     def _karte_summary_due(self, project_id: int, flag: int):
         self.db.execute(
@@ -1285,7 +1311,9 @@ class Ledger:
         cap over an older carry-over."""
         return [r["project_id"] for r in self.db.execute(
             "SELECT project_id FROM patients WHERE karte_summary_due=1 "
-            "AND karte_id IS NOT NULL ORDER BY last_seen DESC, project_id")]
+            "AND karte_id IS NOT NULL AND COALESCE(karte_summary_failed_at,0)"
+            "<? ORDER BY last_seen DESC, project_id",
+            (time.time() - KARTE_SUMMARY_BACKOFF_S,))]
 
     def karte_summary_current(self, project_id: int) -> dict | None:
         """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
@@ -1307,10 +1335,12 @@ class Ledger:
         """Live projects with a karte_id and no karte_summary artifact, oldest last_seen first."""
         return [r["project_id"] for r in self.db.execute("""
             SELECT project_id FROM patients p
-            WHERE karte_id IS NOT NULL AND is_archived=0 AND NOT EXISTS(
+            WHERE karte_id IS NOT NULL AND is_archived=0
+              AND COALESCE(karte_summary_failed_at,0)<? AND NOT EXISTS(
               SELECT 1 FROM artifacts a
               WHERE a.kind='karte_summary' AND a.project_id=p.project_id)
-            ORDER BY last_seen, project_id LIMIT ?""", (limit,))]
+            ORDER BY last_seen, project_id LIMIT ?""",
+            (time.time() - KARTE_SUMMARY_BACKOFF_S, limit))]
 
     def set_probe_marker(self, project_id: int, message_id: int):
         self.db.execute(
