@@ -57,9 +57,11 @@ def _dicts(value) -> list[dict]:
 
 
 def _llm_reply_kind(blob):
-    """reply.kind of one extract_llm artifact blob, else None."""
+    """reply.kind of one extract_llm artifact (blob or its already
+    parsed dict), else None."""
     try:
-        lm = json.loads(blob) if blob else None
+        lm = blob if isinstance(blob, dict) \
+            else json.loads(blob) if blob else None
     except (json.JSONDecodeError, TypeError):
         return None
     if not isinstance(lm, dict) or lm.get("_error"):
@@ -129,6 +131,8 @@ def build_rollup(ledger, project_id: int) -> dict:
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
         blobs = arts.get(m["message_id"], {})
+        llm_blob = blobs.get("extract_llm")
+        llm = llm_blob   # parsed below when it is the row lm came from
         try:
             v1 = json.loads(blobs["extract_v1"]) \
                 if "extract_v1" in blobs else {}
@@ -138,8 +142,10 @@ def build_rollup(ledger, project_id: int) -> dict:
             # its reply can be read below).
             lm_blob = blobs.get("semantic_facts_v4") \
                 or blobs.get("canonical_projection") \
-                or blobs.get("extract_llm")
+                or llm_blob
             lm = json.loads(lm_blob) if lm_blob else {}
+            if lm_blob is not None and lm_blob is llm_blob:
+                llm = lm    # one decode per unshadowed extract_llm row
         except (json.JSONDecodeError, TypeError):
             v1 = lm = {}
         if not isinstance(v1, dict):
@@ -191,7 +197,7 @@ def build_rollup(ledger, project_id: int) -> dict:
             req_thread.append((row, root, ts, m["sender_name"]))
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
-        kind = _llm_reply_kind(blobs.get("extract_llm"))
+        kind = _llm_reply_kind(llm)
         if kind in _REPLY_STAGE:
             replies.setdefault(root, []).append((ts, m["sender_name"], kind))
         for f in _dicts(lm.get("canonical_facts")):
