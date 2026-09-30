@@ -121,6 +121,76 @@ def test_validate_request_from_due():
     assert "due" not in out["requests"][1]
 
 
+def test_validate_request_kind_is_descriptive():
+    """#20 order 1: kind is descriptive — a valid value is kept, an
+    invalid one omits the KEY and the item survives (never dropped)."""
+    out = extract_llm._validate({"requests": [
+        {"to": "医師", "action": "状態確認", "kind": "question"},
+        {"to": "医師", "action": "訪問予定", "kind": "Self_Plan "},
+        {"to": "医師", "action": "薬確認", "kind": "explicit"},
+        {"to": "医師", "action": "連絡", "kind": None},
+    ]})
+    kinds = [r.get("kind") for r in out["requests"]]
+    assert kinds == ["question", "self_plan", None, None]
+    assert len(out["requests"]) == 4
+    assert "_items_dropped" not in out
+
+
+def test_validate_request_condition_must_locate_in_body():
+    """condition is a quote: stored as the body's own span, dropped at
+    the key (never the item) when it does not locate, capped at 60."""
+    long = "".join(chr(0x3042 + i) for i in range(80))   # unique 80-char run
+    body = "血圧が 160を超えるようなら医師へ連絡をお願いします。" + long + "なら。"
+    out = extract_llm._validate({"requests": [
+        {"to": "看護師", "action": "医師へ連絡",
+         "condition": "血圧が160を超えるようなら"},     # whitespace-tolerant
+        {"to": "看護師", "action": "報告", "condition": "熱が出たら"},
+        {"to": "看護師", "action": "再確認", "condition": long},
+        {"to": "看護師", "action": "無条件", "condition": None},
+    ]}, body)
+    reqs = out["requests"]
+    assert reqs[0]["condition"] == "血圧が 160を超えるようなら"
+    assert "condition" not in reqs[1]
+    assert reqs[2]["condition"] == long[:60]
+    assert "condition" not in reqs[3]
+    assert len(reqs) == 4
+    # no body at all -> nothing to locate against -> key absent
+    nobody = extract_llm._validate({"requests": [
+        {"to": "看護師", "action": "連絡", "condition": "熱が出たら"}]})
+    assert "condition" not in nobody["requests"][0]
+
+
+def test_validate_reply_requires_kind_and_located_evidence():
+    body = "承知しました。明日の往診で確認します。"
+    ok = extract_llm._validate(
+        {"reply": {"kind": "ack", "evidence": "承知しました"}}, body)
+    assert ok["reply"] == {"kind": "ack", "evidence": "承知しました"}
+    done = extract_llm._validate(
+        {"reply": {"kind": "done", "evidence": "明日の往診で確認します"},
+         "summary": "s"}, body)
+    assert done["reply"]["kind"] == "done"
+    # unlocated / missing evidence: the typed reply is dropped whole
+    for r in ({"kind": "ack", "evidence": "本文にない"},
+              {"kind": "ack"}):
+        out = extract_llm._validate({"reply": r, "summary": "s"}, body)
+        assert "reply" not in out
+    # invalid or missing kind: dropped and counted
+    for r in ({"kind": "maybe", "evidence": "承知しました"},
+              {"evidence": "承知しました"}, "ack"):
+        out = extract_llm._validate({"reply": r, "summary": "s"}, body)
+        assert "reply" not in out and out["_items_dropped"] == 1
+
+
+def test_schema_batch_item_inherits_kind_condition_reply():
+    props = extract_llm._SCHEMA_BATCH["schema"]["properties"]["items"][
+        "items"]["properties"]
+    req = props["requests"]["items"]["properties"]
+    assert "kind" in req and "condition" in req
+    assert props["requests"]["items"]["required"] == ["action"]
+    assert props["reply"]["required"] == ["kind"]
+    assert set(props["reply"]["properties"]) == {"kind", "evidence"}
+
+
 def test_validate_evidence_must_locate_uniquely_in_body():
     body = "発熱あり。発熱あり。"  # duplicated -> ambiguous span
     out = extract_llm._validate({"symptoms": [
@@ -657,6 +727,52 @@ def test_llm_extract_context_block_boundaries(monkeypatch):
     extract_llm.llm_extract("対象の本文")
     sent = json.loads(captured["req"].data.decode())["messages"][0]
     assert "参考コンテキスト(同じスレッド" not in sent["content"]
+
+
+def test_reply_rules_ride_context_only_and_root_posts_drop_reply(
+        monkeypatch):
+    """#20 order 1: reply rules live in _CTX_HEAD (root posts pay no
+    prompt growth) and a reply emitted without context is popped —
+    fail closed, the model never saw the rules."""
+    prompts = []
+
+    def fake(prompt, **kw):
+        prompts.append(prompt)
+        return {"reply": {"kind": "ack", "evidence": "承知しました"},
+                "summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    body = "承知しました。"
+    root = extract_llm.llm_extract(body)
+    assert "reply" not in root and root["summary"] == "s"
+    assert "返信判定" not in prompts[0]
+    assert "返信判定" not in extract_llm._PROMPT_HEAD
+    reply = extract_llm.llm_extract(body, context="[看護師] 確認をお願いします")
+    assert reply["reply"] == {"kind": "ack", "evidence": "承知しました"}
+    assert "返信判定" in prompts[1]
+    assert prompts[1].index("返信判定") < prompts[1].index("対象本文(投稿日時")
+
+
+def test_merge_keeps_first_reply_and_dedupes_requests():
+    a = {"requests": [{"to": "医師", "action": "確認", "kind": "request"}],
+         "reply": {"kind": "ack", "evidence": "承知"}}
+    b = {"requests": [{"to": "医師", "action": "確認", "kind": "question"},
+                      {"to": "家族", "action": "連絡"}],
+         "reply": {"kind": "done", "evidence": "完了"}}
+    out = extract_llm._merge([{"summary": "x"}, a, b])
+    assert out["reply"] == {"kind": "ack", "evidence": "承知"}
+    # dedupe key is (to, from, action, due) — kind is not part of it
+    assert out["requests"] == [
+        {"to": "医師", "action": "確認", "kind": "request"},
+        {"to": "家族", "action": "連絡"}]
+    assert "reply" not in extract_llm._merge([{"summary": "x"}])
+
+
+def test_repair_cannot_drop_reply():
+    prior = {"reply": {"kind": "ack", "evidence": "承知"}, "summary": "s"}
+    assert not extract_llm._improves({"summary": "s"}, prior)
+    assert extract_llm._improves(
+        {"reply": {"kind": "ack", "evidence": "承知"},
+         "meds": [{"name": "薬A"}], "summary": "s"}, prior)
 
 
 def test_rule_hints_ride_the_prompt_as_candidates(monkeypatch):
@@ -1497,7 +1613,9 @@ def test_prompt_head_is_byte_stable_and_batch_shares_spec():
         extract_llm._PROMPT_SPEC + extract_llm._PROMPT_EXAMPLES)
     assert extract_llm._PROMPT_HEAD.startswith("あなたは在宅医療")
     assert "例3:" in extract_llm._PROMPT_EXAMPLES
+    assert "例4:" in extract_llm._PROMPT_EXAMPLES
     assert extract_llm._PROMPT_HEAD.endswith("\n\n")
+    assert '"kind": "request|question|self_plan"' in extract_llm._PROMPT_SPEC
     assert extract_llm._BATCH_HEAD.startswith(extract_llm._PROMPT_SPEC)
 
 
@@ -2221,6 +2339,8 @@ def test_request_free_text_fields_are_length_capped():
         {"to": "医" * 100, "from": "看" * 100, "action": "合" * 500}]})
     rq = d["requests"][0]
     assert len(rq["to"]) == 30 and len(rq["from"]) == 30
+    # the prompt now asks for 30字 (#20 order 1) but the stored cap
+    # stays 60 so existing expected actions keep substring-matching
     assert len(rq["action"]) == 60
     short = extract_llm._validate({"requests": [
         {"to": "医師", "action": "合成確認"}]})["requests"][0]
