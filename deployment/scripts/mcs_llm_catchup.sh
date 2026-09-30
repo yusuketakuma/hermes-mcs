@@ -38,7 +38,13 @@ if ! pgrep -f "extract_llm.py --all .*--shard 0/2" >/dev/null 2>&1; then
     >>__DATA__/extract_drain.log 2>&1 &
 fi
 
-MCS_LLM_SLOT=1 "$PY" "$DRAIN" --drain \
+# Nightly bounded retry of exhausted failures (2026-09-30): re-open
+# extract error rows past their 5-attempt ceiling and failed semantic
+# jobs for one more attempt each (caps and cooldown live in the code);
+# the drainers and the drain below pick them up in this window.
+"$PY" __REPO__/mcs/extract/v4/extract_llm.py --revive-failed \
+  >>__DATA__/extract_drain.log 2>&1 || true
+MCS_LLM_SLOT=1 "$PY" "$DRAIN" --drain --revive-failed \
   --stop-after "$WINDOW_S" >>"$LOG" 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then

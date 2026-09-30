@@ -2723,3 +2723,35 @@ def test_resident_idles_outside_active_hours(monkeypatch):
     assert extract_llm.main() == 0
     assert calls == []
     assert now[0] >= 130
+
+
+def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
+    """An error row at the 5-attempt ceiling gets one more attempt per
+    night (attempts back to 4), capped per body hash; a refail keeps the
+    count so the cap holds; a new body starts fresh."""
+    from ledger import Ledger
+    db = Ledger(str(tmp_path / "revive.db"))
+    try:
+        now = time.time()
+        r = {"project_id": 1, "message_id": 7, "content_hash": "h1"}
+        extract_llm._fail(db, r, 4)                       # attempts=5
+        with db.db:
+            db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
+                          (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
+        for night in range(1, extract_llm.REVIVE_PER_INPUT + 1):
+            assert extract_llm.revive_failed(db, now)["revived"] == 1
+            meta = json.loads(db.db.execute(
+                "SELECT meta FROM artifacts WHERE kind='extract_llm'").fetchone()[0])
+            assert meta["attempts"] == 4 and meta["auto_retry"] == night
+            extract_llm._fail(db, r, 4)                   # the extra try fails
+            with db.db:
+                db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
+                              (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
+        assert extract_llm.revive_failed(db, now) == {"revived": 0, "skipped_cap": 1}
+        extract_llm._fail(db, dict(r, content_hash="h2"), 4)   # edited body
+        with db.db:
+            db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
+                          (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
+        assert extract_llm.revive_failed(db, now)["revived"] == 1
+    finally:
+        db.close()

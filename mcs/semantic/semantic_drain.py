@@ -1674,6 +1674,63 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     return out
 
 
+# Nightly automatic retry of exhausted semantic jobs (owner request
+# 2026-09-30). Bounded three ways so a permanently broken input cannot
+# burn the Jev budget: at most NIGHTLY_REVIVE_MAX jobs per night, each
+# job at most NIGHTLY_REVIVE_PER_INPUT times for the same input
+# generation, and only after NIGHTLY_REVIVE_COOLDOWN_S since it failed.
+# Each revival grants exactly one more attempt (manual_attempt_limit =
+# attempts + 1); an input change still resets everything as before.
+NIGHTLY_REVIVE_MAX = 20
+NIGHTLY_REVIVE_PER_INPUT = 3
+NIGHTLY_REVIVE_COOLDOWN_S = 6 * 3600
+
+
+def revive_failed(ledger, now: float | None = None) -> dict:
+    """Give exhausted 'failed' semantic jobs one more bounded attempt.
+
+    Oldest failures first. The job keeps its generation and accumulated
+    attempts; ``auto_retry`` counts revivals of the current input so the
+    per-input cap survives restarts, and ``retry_command_id`` fences a
+    worker that captured the pre-revival payload (same mechanism as the
+    human retry command)."""
+    now = time.time() if now is None else now
+    out = {"revived": 0, "skipped_cap": 0}
+    rows = ledger.db.execute(
+        "SELECT job_id,attempts,payload FROM fetch_jobs "
+        "WHERE kind=? AND state='failed' AND updated_at<=? "
+        "ORDER BY updated_at LIMIT ?",
+        (JOB_KIND, now - NIGHTLY_REVIVE_COOLDOWN_S,
+         NIGHTLY_REVIVE_MAX * 4)).fetchall()
+    for row in rows:
+        if out["revived"] >= NIGHTLY_REVIVE_MAX:
+            break
+        try:
+            pl = json.loads(row["payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(pl, dict):
+            continue
+        n = pl.get("auto_retry")
+        n = n if type(n) is int and n >= 0 else 0
+        if n >= NIGHTLY_REVIVE_PER_INPUT:
+            out["skipped_cap"] += 1
+            continue
+        attempts = int(row["attempts"] or 0)
+        pl["auto_retry"] = n + 1
+        pl["manual_attempt_limit"] = max(
+            attempts + 1, runtime.attempt_limit(pl))
+        pl["retry_command_id"] = f"auto-{int(now)}-{row['job_id']}"
+        with ledger.db:
+            ledger.db.execute(
+                "UPDATE fetch_jobs SET state='pending',payload=?,next_try=?,"
+                "updated_at=? WHERE job_id=? AND state='failed'",
+                (json.dumps(pl, ensure_ascii=False, sort_keys=True),
+                 now, now, row["job_id"]))
+        out["revived"] += 1
+    return out
+
+
 def main() -> int:
     """Standalone drain loop (nightly catch-up window).
 
@@ -1688,6 +1745,9 @@ def main() -> int:
                          "--stop-after expires")
     ap.add_argument("--stop-after", type=float, default=3600.0)
     ap.add_argument("--max-jobs", type=int, default=8)
+    ap.add_argument("--revive-failed", action="store_true",
+                    help="before draining, give exhausted failed jobs one "
+                         "more bounded attempt (nightly window)")
     args = ap.parse_args()
     if not args.drain:
         ap.error("--drain required")
@@ -1709,6 +1769,8 @@ def main() -> int:
             try:
                 if led is None:
                     led = Ledger(os.path.join(HOME, "data", "ledger.db"))
+                    if args.revive_failed:
+                        totals["revive"] = revive_failed(led)
                 result = {"errors": []}
                 out = run_due(
                     led, load_config(), result,

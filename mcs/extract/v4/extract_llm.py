@@ -1623,20 +1623,65 @@ def _llm_up(deadline: float | None = None) -> bool:
 # lease/fail bookkeeping per claimed row.
 
 
-def _fail_tx(ledger, r, attempts: int):
+def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
     """In-transaction error artifact insert — caller holds `with
     ledger.db` AND has already cleared prior error rows in the same tx.
     extract_version is stamped so a prior schema version's permanent
     failure never blocks the current version's retry budget."""
+    meta = {"hash": r["content_hash"], "error": True,
+            "extract_version": EXTRACT_VERSION,
+            "attempts": attempts + 1,
+            "next_try": time.time() + min(3600, 300 * (attempts + 1))}
+    if auto_retry:
+        meta["auto_retry"] = auto_retry
     ledger.artifact_add_tx(
         KIND, json.dumps({"_model": MODEL, "_error": True},
                          ensure_ascii=False),
         project_id=r["project_id"], message_id=r["message_id"],
-        model=MODEL,
-        meta={"hash": r["content_hash"], "error": True,
-              "extract_version": EXTRACT_VERSION,
-              "attempts": attempts + 1,
-              "next_try": time.time() + min(3600, 300 * (attempts + 1))})
+        model=MODEL, meta=meta)
+
+
+# Nightly automatic retry of permanently failed extractions (owner
+# request 2026-09-30): an error row that reached the 5-attempt ceiling
+# gets ONE more attempt per night, at most REVIVE_PER_INPUT times for
+# the same body hash and REVIVE_MAX rows per night, only after
+# REVIVE_COOLDOWN_S. A new body hash starts a fresh budget as before.
+REVIVE_MAX = 30
+REVIVE_PER_INPUT = 3
+REVIVE_COOLDOWN_S = 6 * 3600
+
+
+def revive_failed(ledger, now: float | None = None) -> dict:
+    """Re-open exhausted current-version error rows for one more try."""
+    now = time.time() if now is None else now
+    out = {"revived": 0, "skipped_cap": 0}
+    rows = ledger.db.execute(
+        "SELECT artifact_id,meta FROM artifacts WHERE kind=? "
+        "AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
+        "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
+        "AND COALESCE(json_extract(meta,'$.attempts'),0)>=5 "
+        "AND created_at<=? ORDER BY created_at LIMIT ?",
+        (KIND, EXTRACT_VERSION, now - REVIVE_COOLDOWN_S,
+         REVIVE_MAX * 4)).fetchall()
+    for row in rows:
+        if out["revived"] >= REVIVE_MAX:
+            break
+        try:
+            meta = json.loads(row["meta"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        n = meta.get("auto_retry")
+        n = n if type(n) is int and n >= 0 else 0
+        if n >= REVIVE_PER_INPUT:
+            out["skipped_cap"] += 1
+            continue
+        meta.update({"attempts": 4, "next_try": now, "auto_retry": n + 1})
+        with ledger.db:
+            ledger.db.execute(
+                "UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                (json.dumps(meta, ensure_ascii=False), row["artifact_id"]))
+        out["revived"] += 1
+    return out
 
 
 def _fail(ledger, r, attempts: int):
@@ -1645,8 +1690,20 @@ def _fail(ledger, r, attempts: int):
     error rows are folded in, not stacked."""
     with ledger.db:
         prev = _error_attempts(ledger, r["message_id"])
+        revived = _error_auto_retry(ledger, r["message_id"],
+                                    r["content_hash"])
         _clear_error_tx(ledger, r["message_id"])
-        _fail_tx(ledger, r, max(attempts, prev))
+        _fail_tx(ledger, r, max(attempts, prev), revived)
+
+
+def _error_auto_retry(ledger, mid: int, content_hash) -> int:
+    """Nightly revivals already spent on this body hash (0 for a new
+    body) — carried so a refail keeps the per-input cap."""
+    return ledger.db.execute(
+        "SELECT COALESCE(MAX(json_extract(meta,'$.auto_retry')),0) "
+        "FROM artifacts WHERE kind=? AND message_id=? AND json_valid(meta) "
+        "AND json_extract(meta,'$.error')=1 AND json_extract(meta,'$.hash')=?",
+        (KIND, mid, content_hash)).fetchone()[0] or 0
 
 
 def _error_attempts(ledger, mid: int) -> int:
@@ -2945,6 +3002,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--budget", type=float, default=180)
+    ap.add_argument("--revive-failed", action="store_true",
+                    help="give exhausted error rows one more bounded "
+                         "attempt, then exit (nightly window)")
     ap.add_argument("--all", action="store_true",
                     help="drain the whole backlog, then stay resident "
                          "polling for new work — use --stop-after for a "
@@ -2983,6 +3043,15 @@ def main() -> int:
                          "batched LLM call (0-8; 0 disables — every "
                          "message gets its own call)")
     args = ap.parse_args()
+    if args.revive_failed:
+        # DB-only bookkeeping: no LLM call, no run lock needed (a single
+        # UPDATE per row; drainers re-select revived rows on their own)
+        led = Ledger(DB)
+        try:
+            print(json.dumps(revive_failed(led), ensure_ascii=False))
+        finally:
+            led.close()
+        return 0
     if not (0 <= args.batch <= 8):
         print(json.dumps({"ok": False, "error": "bad_batch"}))
         return 2

@@ -1,4 +1,5 @@
 """Executed work that exceeds its deadline must consume the retry budget."""
+import json
 import time
 
 import pytest
@@ -177,5 +178,35 @@ def test_foreign_artifacts_do_not_count_as_progress(tmp_path):
         assert semantic_drain._last_stage_artifact(db, 1) == base
         db.artifact_add("semantic_facts", "{}", project_id=1, message_id=1)
         assert semantic_drain._last_stage_artifact(db, 1) > base
+    finally:
+        db.close()
+
+
+def test_nightly_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
+    """Exhausted failed jobs get one more attempt per night, at most
+    NIGHTLY_REVIVE_PER_INPUT times for the same input, only after the
+    cooldown; the revived job is picked up by run_due."""
+    import semantic_drain
+    db = _seeded(tmp_path)
+    try:
+        now = time.time()
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=6,"
+                          "updated_at=? WHERE kind='semantic'", (now - 10,))
+        assert semantic_drain.revive_failed(db, now)["revived"] == 0   # cooldown
+        later = now + semantic_drain.NIGHTLY_REVIVE_COOLDOWN_S
+        for night in range(1, semantic_drain.NIGHTLY_REVIVE_PER_INPUT + 1):
+            assert semantic_drain.revive_failed(db, later)["revived"] == 1
+            row = db.db.execute("SELECT state,attempts,payload FROM fetch_jobs "
+                                "WHERE kind='semantic'").fetchone()
+            pl = json.loads(row["payload"])
+            assert row["state"] == "pending" and pl["auto_retry"] == night
+            assert semantic.runtime.attempt_limit(pl) == row["attempts"] + 1
+            with db.db:     # the extra attempt is used up and fails again
+                db.db.execute("UPDATE fetch_jobs SET state='failed',"
+                              "attempts=attempts+1,updated_at=? "
+                              "WHERE kind='semantic'", (now - 10,))
+        out = semantic_drain.revive_failed(db, later)
+        assert out == {"revived": 0, "skipped_cap": 1}
     finally:
         db.close()
