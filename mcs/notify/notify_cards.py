@@ -774,14 +774,8 @@ def _plan_attachments(db, shown) -> list:
     return out
 
 
-def _thread_plan_ids(db, card, shown) -> list:
-    """Messages whose bodies a thread-bound render carries: the face's
-    shown page plus every message a still-pending intent announces on
-    this card. The face opens on the last page, so an intent spanning
-    several pages would otherwise never post its earlier bodies (the
-    in-thread card has no 📄 button to reach them)."""
-    if card["kind"] != "thread":
-        return list(shown)
+def _announced_ids(db, card) -> set:
+    """Message ids a still-pending intent announces on this card."""
     covered = set()
     for r in db.execute(
             "SELECT coverage FROM notification_intent_cards "
@@ -792,6 +786,18 @@ def _thread_plan_ids(db, card, shown) -> list:
             continue
         if isinstance(cov, list):
             covered.update(m for m in cov if positive(m))
+    return covered
+
+
+def _thread_plan_ids(db, card, shown) -> list:
+    """Messages whose bodies a thread-bound render carries: the face's
+    shown page plus every message a still-pending intent announces on
+    this card. The face opens on the last page, so an intent spanning
+    several pages would otherwise never post its earlier bodies (the
+    in-thread card has no 📄 button to reach them)."""
+    if card["kind"] != "thread":
+        return list(shown)
+    covered = _announced_ids(db, card)
     if not covered - set(shown):
         return list(shown)
     wanted = covered | {m for m in shown if positive(m)}
@@ -825,6 +831,49 @@ def _prior_remote_ids(db, card) -> dict:
     return out
 
 
+def _prior_body_posts(db, card) -> dict:
+    """post key -> remote id of the newest delivered body chunk. Chunks
+    from before per-reply posts carry no key; they are the ``legacy``
+    group's posts by chunk index."""
+    out: dict = {}
+    for r in db.execute(
+            """SELECT p.part_id, p.name, p.remote_id
+               FROM notification_render_parts p
+               JOIN notification_renders r ON r.delivery_id=p.delivery_id
+               WHERE r.card_id=? AND p.kind='body_part'
+                 AND p.state='delivered' AND p.remote_id IS NOT NULL
+               ORDER BY r.render_rev, p.idx""", (card["card_id"],)):
+        key = r["name"] or f"legacy#{int(r['part_id'].rsplit(':', 1)[1])}"
+        out[key] = str(r["remote_id"])
+    return out
+
+
+def _body_groups(db, card, planned, prior) -> list:
+    """[(post key, message ids)] — one thread post per reply. A reply an
+    intent announces (realtime) opens its own post, so the thread
+    notifies; a backlog reply is appended to the preceding post, which
+    is edited in place and notifies nobody. A thread with no body post
+    yet gives every message its own post."""
+    if card["kind"] != "thread":
+        return [("legacy", list(planned))]
+    announced = _announced_ids(db, card)
+    legacy = any(k.startswith("legacy#") for k in prior)
+    groups, head = [], []
+    for mid in planned:
+        if not prior or f"m:{mid}#1" in prior or mid in announced:
+            groups.append((f"m:{mid}", head + [mid]))
+            head = []
+        elif groups:
+            groups[-1][1].append(mid)
+        elif legacy:
+            groups.append(("legacy", [mid]))
+        else:
+            head.append(mid)       # joins the next post, never its own
+    if head:
+        groups.append((f"m:{head[0]}", head))
+    return groups
+
+
 def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
@@ -848,26 +897,32 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
                      "sha256": _sha_text(tname)})
     idx += 1
     planned = _thread_plan_ids(db, card, content["shown"])
-    man = {"shown": json.dumps(planned, ensure_ascii=False)}
-    body = _card_body_text(db, card, man, max_chars=None)[1]
-    chunks = _split_body_chunks(body)      # lossless — no chunk dropped
+    update = spec["op"] == "update"
+    posts = _prior_body_posts(db, card) if update else {}
+    keyed = []                             # (post key, chunk)
+    for key, mids in _body_groups(db, card, planned, posts):
+        man = {"shown": json.dumps(mids, ensure_ascii=False)}
+        body = _card_body_text(db, card, man, max_chars=None)[1]
+        # lossless — no chunk dropped
+        keyed += [(f"{key}#{k}", c)
+                  for k, c in enumerate(_split_body_chunks(body), 1)]
     attachments = _plan_attachments(db, planned)
-    if len(chunks) + len(attachments) > MAX_PARTS - 2:
+    if len(keyed) + len(attachments) > MAX_PARTS - 2:
         # One shared budget includes card, thread and an explicit omission
         # marker. Unplanned downloaded attachments retain the existing
         # attachment-followup path after the card is delivered.
-        chunks = chunks[:MAX_PARTS - 3]
-        attachments = attachments[:MAX_PARTS - 3 - len(chunks)]
-        chunks.append(_TRUNCATED_PART)
-    parts["thread_body_parts"] = chunks
-    prior = _prior_remote_ids(db, card) if spec["op"] == "update" else {}
-    for i, chunk in enumerate(chunks):
+        keyed = keyed[:MAX_PARTS - 3]
+        attachments = attachments[:MAX_PARTS - 3 - len(keyed)]
+        keyed.append(("truncated#1", _TRUNCATED_PART))
+    parts["thread_body_parts"] = [c for _k, c in keyed]
+    prior = _prior_remote_ids(db, card) if update else {}
+    for i, (key, chunk) in enumerate(keyed):
         entry = {"part_id": f"body:{i + 1:04d}",
-                 "kind": "body_part", "index": idx,
+                 "kind": "body_part", "index": idx, "name": key,
                  "sha256": _sha_text(chunk),
                  "bytes": len(chunk.encode("utf-8"))}
-        if entry["part_id"] in prior:
-            entry["prior_remote_id"] = prior[entry["part_id"]][0]
+        if key in posts:
+            entry["prior_remote_id"] = posts[key]
         manifest.append(entry)
         idx += 1
     for a in attachments:

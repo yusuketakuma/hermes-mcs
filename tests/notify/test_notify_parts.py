@@ -109,9 +109,14 @@ def test_long_body_uncapped_parts(led):
     body_parts = [p for p in spec["parts"]["manifest"]
                   if p["kind"] == "body_part"]
     assert len(body_parts) == len(chunks)
-    joined = "".join(chunks)
+    # one post per reply: chunks rejoin per post, posts per reply break
+    posts: dict = {}
+    for p, c in zip(body_parts, chunks, strict=True):
+        posts[p["name"].split("#")[0]] = posts.get(
+            p["name"].split("#")[0], "") + c
+    assert list(posts) == ["m:100", "m:101", "m:102"]
     full_body = notify_render_body(led)
-    assert joined == full_body            # nothing silently dropped
+    assert "\n\n".join(posts.values()) == full_body   # nothing dropped
 
 
 def notify_render_body(led):
@@ -573,37 +578,82 @@ def _prior_ids(render):
 
 
 def _deliver_bodies(led, render, remote_id, n):
-    """Deliver the card and every body chunk of one render; `n` keeps the
+    """Deliver the card and every body chunk of one render; each chunk
+    gets its own post id ``<remote_id>/<part_id>``. `n` keeps the
     command ids of successive renders apart."""
     grant = _begin(led, render, n=n)
     _receipt(led, render, grant["attempt_id"], message_id="m-9", n=n + 1)
     _part_receipt(led, render, "thread", remote_id="t-1", n=n + 2)
     for p in _parts(led, render["delivery_id"]):
         if p["kind"] == "body_part":
-            _part_receipt(led, render, p["part_id"], remote_id=remote_id,
-                          n=n + 3)
+            _part_receipt(led, render, p["part_id"],
+                          remote_id=f"{remote_id}/{p['part_id']}",
+                          n=n + 3 + p["idx"])
+
+
+def _body_names(render):
+    return [p["name"] for p in _spec(render)["parts"]["manifest"]
+            if p["kind"] == "body_part"]
 
 
 def test_update_plan_names_the_post_that_carries_each_chunk(led):
-    """The thread body's text changes after the first post (the
-    extraction arrives, a reply joins). The update plan names the message
-    that already carries each chunk, so the worker rewrites it instead of
-    adding a second post beside it."""
+    """One post per reply: an update rewrites each reply's own post in
+    place, and a reply the intent announces opens a new post of its own
+    so the thread notifies."""
     _seed_thread(led)
     _dispatch(led, _intent(led))
     r1 = _latest_render(led)
     assert r1["op"] == "create"
     assert _prior_ids(r1) == {}            # nothing posted yet
+    assert _body_names(r1) == ["m:100#1", "m:101#1"]
     _deliver_bodies(led, r1, "msg-1", n=80)
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     r2 = _latest_render(led)
     assert r2["op"] == "update"
-    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+    assert _body_names(r2) == ["m:100#1", "m:101#1", "m:300#1"]
+    assert _prior_ids(r2) == {"body:0001": "msg-1/body:0001",
+                              "body:0002": "msg-1/body:0002"}
+    assert "新しい記録" in _spec(r2)["parts"]["thread_body_parts"][2]
     # only a body chunk can be rewritten in place
     assert all("prior_remote_id" not in p
                for p in _spec(r2)["parts"]["manifest"]
                if p["kind"] != "body_part")
+
+
+def test_backlog_reply_edits_the_preceding_post(led):
+    """A reply no intent announces (history backfill) joins the post
+    before it — edited in place, never a new post that would notify."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    _deliver_bodies(led, r1, "msg-1", n=170)
+    _msg(led, 300, parent=100, body="履歴の返信")
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    r2 = _latest_render(led)
+    assert r2["op"] == "update"
+    assert _body_names(r2) == ["m:100#1", "m:101#1"]
+    assert _prior_ids(r2) == {"body:0001": "msg-1/body:0001",
+                              "body:0002": "msg-1/body:0002"}
+    assert "履歴の返信" in _spec(r2)["parts"]["thread_body_parts"][1]
+
+
+def test_legacy_combined_posts_are_rewritten_not_reposted(led):
+    """Cards posted before per-reply posts carry unnamed chunks of the
+    whole thread. Their messages stay in those posts (by chunk index);
+    only the newly announced reply gets a post of its own."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r1 = _latest_render(led)
+    _deliver_bodies(led, r1, "msg-1", n=180)
+    led.db.execute("UPDATE notification_render_parts SET name=NULL "
+                   "WHERE kind='body_part'")
+    led.db.commit()
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    r2 = _latest_render(led)
+    assert _body_names(r2) == ["legacy#1", "m:300#1"]
+    assert _prior_ids(r2) == {"body:0001": "msg-1/body:0001"}
 
 
 def test_update_plan_ignores_chunks_that_never_reached_the_thread(led):
@@ -612,8 +662,9 @@ def test_update_plan_ignores_chunks_that_never_reached_the_thread(led):
     r1 = _latest_render(led)
     _begin_and_deliver_card(led, r1)
     _part_receipt(led, r1, "thread", remote_id="t-1", n=82)
-    _part_receipt(led, r1, "body:0001", result="not_sent", remote_id=None,
-                  error_code="http_500", n=83)
+    for i, part in enumerate(("body:0001", "body:0002")):
+        _part_receipt(led, r1, part, result="not_sent", remote_id=None,
+                      error_code="http_500", n=83 + i)
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     r2 = _latest_render(led)
@@ -636,7 +687,15 @@ def test_update_plan_follows_the_newest_post_of_a_chunk(led):
     _dispatch(led, _intent(led, payload={"message_ids": [301]}))
     r3 = _latest_render(led)
     assert r3["op"] == "update"
-    assert _prior_ids(r3) == {"body:0001": "msg-2"}
+    assert _prior_ids(r3) == {"body:0001": "msg-2/body:0001",
+                              "body:0002": "msg-2/body:0002",
+                              "body:0003": "msg-2/body:0003"}
+
+
+def _land_bodies(led, render, n):
+    _part_receipt(led, render, "thread", remote_id="t-1", n=n)
+    _part_receipt(led, render, "body:0001", remote_id="msg-1", n=n + 1)
+    _part_receipt(led, render, "body:0002", remote_id="msg-2", n=n + 2)
 
 
 def test_update_waits_until_the_previous_parts_have_landed(led):
@@ -652,12 +711,11 @@ def test_update_waits_until_the_previous_parts_have_landed(led):
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     assert _latest_render(led)["delivery_id"] == r1["delivery_id"]
-    _part_receipt(led, r1, "thread", remote_id="t-1", n=142)
-    _part_receipt(led, r1, "body:0001", remote_id="msg-1", n=143)
+    _land_bodies(led, r1, n=142)
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     r2 = _latest_render(led)
     assert r2["op"] == "update"
-    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+    assert _prior_ids(r2) == {"body:0001": "msg-1", "body:0002": "msg-2"}
 
 
 def test_sweep_issues_the_held_update_once_the_parts_land(led):
@@ -673,12 +731,11 @@ def test_sweep_issues_the_held_update_once_the_parts_land(led):
     led.db.commit()
     notify_cards.sweep(led, CFG, now=NOW + 1)
     assert _latest_render(led)["delivery_id"] == r1["delivery_id"]
-    _part_receipt(led, r1, "thread", remote_id="t-1", n=162)
-    _part_receipt(led, r1, "body:0001", remote_id="msg-1", n=163)
+    _land_bodies(led, r1, n=162)
     notify_cards.sweep(led, CFG, now=NOW + 2)
     r2 = _latest_render(led)
     assert r2["op"] == "update"
-    assert _prior_ids(r2) == {"body:0001": "msg-1"}
+    assert _prior_ids(r2) == {"body:0001": "msg-1", "body:0002": "msg-2"}
 
 
 def test_a_failed_part_does_not_hold_the_next_render(led):
@@ -688,8 +745,9 @@ def test_a_failed_part_does_not_hold_the_next_render(led):
     grant = _begin(led, r1, n=150)
     _receipt(led, r1, grant["attempt_id"], message_id="m-9", n=151)
     _part_receipt(led, r1, "thread", remote_id="t-1", n=152)
-    _part_receipt(led, r1, "body:0001", result="not_sent", remote_id=None,
-                  error_code="http_500", n=153)
+    for i, part in enumerate(("body:0001", "body:0002")):
+        _part_receipt(led, r1, part, result="not_sent", remote_id=None,
+                      error_code="http_500", n=153 + i)
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     assert _latest_render(led)["op"] == "update"
