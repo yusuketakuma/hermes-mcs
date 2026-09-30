@@ -180,7 +180,7 @@ def rotate_log(paths=None):
     for path in paths or (LOGFILE,
                           os.path.join(HOME, "data", "extract_drain.log"),
                           os.path.join(HOME, "data",
-                                       "extract_drain_rt.log"),
+                                       "extract_drain_2.log"),
                           os.path.join(HOME, "data", "extract_llm.log"),
                           os.path.join(HOME, "data",
                                        "semantic_drain.log")):
