@@ -1514,7 +1514,9 @@ def _main() -> int:
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
     try:
-        ledger = Ledger(DB)
+        ledger = Ledger(
+            DB, notify_all_replies=(not args.jobs_only
+                                    and _config().get("notify_all_replies") is True))
     except Exception:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))

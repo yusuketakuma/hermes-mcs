@@ -1970,3 +1970,10 @@ def test_plugin_role_ids_written_only_when_given(monkeypatch):
         dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco",
                                          plugin_role_ids="555,g")) is False
     assert all(not k.endswith("allowed_role_ids") for _, k, _ in sets)
+
+
+def test_all_replies_config_requires_boolean():
+    base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs"}
+    assert mcs_setup.validate_config({**base, "notify_all_replies": True}) == ([], [])
+    errors, _ = mcs_setup.validate_config({**base, "notify_all_replies": "true"})
+    assert errors == ["notify_all_replies: must be a boolean"]
