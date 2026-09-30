@@ -122,7 +122,8 @@ def enqueue_ready_attachment_followups_tx(db, event_id, now) -> int:
 
 
 class Ledger:
-    def __init__(self, path: str):
+    def __init__(self, path: str, *, notify_all_replies: bool = False):
+        self.notify_all_replies = notify_all_replies is True
         self.db = sqlite3.connect(path, timeout=30)
         try:
             os.chmod(path, 0o600)   # PHI store: never umask-loose
@@ -795,8 +796,32 @@ class Ledger:
         origin = {"source": "history_import"}
         if notify:
             origin = {"source": notify.get("source")}
+            # Recent arrivals also notify when the server already marks
+            # them read. A bounded age and known timestamp keep historical
+            # imports from announcing old or undated read context.
+            if new_ids and notify_max_age_s is not None:
+                recent = self.db.execute(
+                    "SELECT message_id FROM messages WHERE message_id IN ("
+                    + ",".join("?" * len(new_ids))
+                    + ") AND posted_at_ts >= ?",
+                    [*new_ids, now - notify_max_age_s]).fetchall()
+                notify_ids = list(dict.fromkeys(
+                    notify_ids + self._unnotified([r[0] for r in recent])))
+            # Opted-in realtime notification paths cover every new
+            # reply. Bulk imports have no notify template and stay quiet.
+            reply_ids = []
+            if self.notify_all_replies and new_ids:
+                replies = self.db.execute(
+                    "SELECT message_id FROM messages WHERE message_id IN ("
+                    + ",".join("?" * len(new_ids))
+                    + ") AND parent_id IS NOT NULL AND parent_id != 0",
+                    new_ids).fetchall()
+                reply_ids = self._unnotified([r[0] for r in replies])
+            unbounded = set(reply_ids)
             notify_ids = self._filter_notify_age(
-                notify_ids, now, notify_max_age_s)
+                [mid for mid in notify_ids if mid not in unbounded],
+                now, notify_max_age_s)
+            notify_ids = list(dict.fromkeys(notify_ids + reply_ids))
             if notify_ids:
                 payload = dict(notify, message_ids=notify_ids)
                 origin["event_id"] = self._outbox_insert(
@@ -834,8 +859,7 @@ class Ledger:
         return [i for i in ids if i in keep]
 
     def _unnotified(self, ids: list) -> list:
-        """Of `ids` (already filtered to this fetch's unread messages),
-        those whose stored row has never been in a notify intent.
+        """Of caller-selected candidates, return rows never notified.
         Caller holds `with self.db`."""
         if not ids:
             return []
@@ -1034,7 +1058,11 @@ class Ledger:
         notify_all_new widens notification eligibility from this fetch's
         unread posts to every newly-stored row — used by the self-post
         probe, whose whole point is catching posts the unread set can
-        never contain (own posts are is_unread=0 by definition)."""
+        never contain (own posts are is_unread=0 by definition).
+        With notify_max_age_s, newly stored read posts with a known
+        recent timestamp also qualify through the shared save gate.
+        notify_all_replies on the ledger exempts new replies from the age
+        and unread gates only when this call supplies a notify template."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -1045,8 +1073,8 @@ class Ledger:
             changed_semantic = (self._semantic_changed_ids(before_semantic)
                                 if before_semantic else {})
             if project_id:
-                # Backfill arrivals may already be read: only this
-                # fetch's unread posts qualify for a notification.
+                # Previously stored rows qualify when freshly unread;
+                # the shared gate also admits new recent read arrivals.
                 fresh_unread = [m.message_id for m in msgs
                                 if m.is_unread] + [
                     t.message_id for m in msgs for t in m.replies
@@ -1072,7 +1100,9 @@ class Ledger:
         a still-incomplete reply reserves a durable retry.
         notify_max_age_s drops stale replies from the intent — a thread
         drained for a bulk-added patient can carry months-old unread
-        replies that must not announce."""
+        replies that must not announce. New read replies with a known
+        timestamp inside the bound also qualify for notification;
+        notify_all_replies exempts new replies from that bound."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(replies)

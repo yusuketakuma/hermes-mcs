@@ -537,7 +537,8 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `notify.route_epoch` | int | `1` | 配送先を変えたとき +1 する番号 |
 | `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`） |
 | `notify_system_target` | str | なし | 障害・システム通知の送り先（空欄=`notify_target` と同じ） |
-| `notify_max_age_h` | num | なし | この時間より古い未読は通知しない |
+| `notify_max_age_h` | num | なし | この時間より古い投稿は通知しない。設定時は期間内の新規取込みを既読でも通知（既読投稿は投稿時刻が必要） |
+| `notify_all_replies` | bool | false | リアルタイム通知経路で新規取得した返信を既読・投稿時刻によらず全件通知。返信には `notify_max_age_h` を適用しない。履歴一括取込み・保存済み返信の再送は対象外 |
 | `hermes_bin` | str | 自動検出 | `hermes` コマンドのパス |
 | `daily_digest.enabled` | bool | `false` | 朝の日次ダイジェスト（件数と ID のみ）を `notify_target` に送る |
 | `daily_digest.hour_jst` | int(0-23) | `8` | 日次ダイジェストを送る時刻（JST。この時刻以降の最初の実行で1日1回） |

@@ -1413,3 +1413,70 @@ def test_consent_hold_defers_everything_but_restore_approve(
     assert receipt["cmd"] == "ops.restore_approve"
     assert receipt["outcome"] == "applied"
     assert receipt["report_id"] == rid
+
+
+@pytest.mark.parametrize("save_method", ["save_messages", "save_thread_replies"])
+@pytest.mark.parametrize("age_h", [23, 24])
+def test_recent_read_arrival_notifies_once_with_age_bound(tmp_path, monkeypatch, save_method, age_h):
+    """A new read reply can notify without replaying old/undated context."""
+    from datetime import datetime, timezone
+
+    db = _ledger(tmp_path)
+    db.ensure_patient(84)
+    now = int(time.time())  # ledger posted_at_ts has second precision
+    recent = _message(mid=61, project_id=84, unread=False, parent_id=60)
+    old = _message(mid=62, project_id=84, unread=False, parent_id=60)
+    undated = _message(mid=63, project_id=84, unread=False, parent_id=60)
+    monkeypatch.setattr(ledger.time, "time", lambda: now)
+    recent.posted_at = datetime.fromtimestamp(now - age_h * 3600, timezone.utc).isoformat()
+    old.posted_at = datetime.fromtimestamp(now - 24 * 3600 - 1, timezone.utc).isoformat()
+    undated.posted_at = "unknown"
+    save = getattr(db, save_method)
+    args = {"project_id": 84, "notify": {"source": "history"},
+            "notify_max_age_s": 24 * 3600, "semantic": True}
+    save([recent, old, undated], **args)
+    save([recent, old, undated], **args)
+    rows = db.db.execute("SELECT payload FROM notify_outbox").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["payload"])["message_ids"] == [61]
+    assert db.job_pending("semantic", 84, 60) is not None
+    assert db.db.execute(
+        "SELECT notified_at FROM messages WHERE message_id=61").fetchone()[0] is not None
+    db.close()
+
+
+@pytest.mark.parametrize("save_method", ["save_patient", "save_messages", "save_thread_replies"])
+@pytest.mark.parametrize("realtime", [True, False])
+def test_all_replies_only_notifies_new_realtime_arrivals(tmp_path, save_method, realtime):
+    """All-reply mode bypasses age/read gates, never bulk imports or dedup."""
+    db = ledger.Ledger(str(tmp_path / "db"), notify_all_replies=True)
+    db.ensure_patient(84)
+    root = _message(mid=60, project_id=84, posted_at="2000-01-01T00:00:00+00:00")
+    replies = [
+        _message(mid=61, project_id=84, parent_id=60, unread=False,
+                 posted_at="2000-01-01T00:00:00+00:00"),
+        _message(mid=62, project_id=84, parent_id=60, unread=False, posted_at="unknown"),
+    ]
+    notify = {"source": "history"} if realtime else None
+    kwargs = {"notify": notify, "notify_max_age_s": 24 * 3600, "semantic": True}
+    if save_method == "save_patient":
+        patient = _unread_patient(84)
+        root.replies = replies
+        patient.messages = [root]
+        args = (patient,)
+    elif save_method == "save_messages":
+        root.replies = replies
+        args = ([root], 84)
+    else:
+        db.save_messages([root], project_id=84)
+        args = (replies, 84)
+    save = getattr(db, save_method)
+    save(*args, **kwargs)
+    save(*args, **kwargs)
+    events = db.db.execute("SELECT payload FROM notify_outbox").fetchall()
+    if realtime:
+        assert len(events) == 1
+        assert set(json.loads(events[0]["payload"])["message_ids"]) == {61, 62}
+    else:
+        assert not events
+    db.close()
