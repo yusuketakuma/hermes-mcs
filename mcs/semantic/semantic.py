@@ -185,46 +185,50 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
     return _FMT_MODE
 
 
-# Runaway generations (2026-10-01): with temperature 0 a prompt that
-# decodes until max_tokens does so identically on every retry — one
-# job burned ~5 min of a slot per attempt and never finished. A length
-# stop is retried ONCE with repetition control; the prompt is then
-# remembered (1 = start penalized, 2 = penalized also ran away: fail
-# fast without a model call) so later attempts spend no GPU on it.
-_RUNAWAY_PATH = os.path.join(HOME, "data", "semantic_runaway.json")
-_RUNAWAY_MAX = 500
-_RUNAWAY_MIN_RETRY_S = 60.0
-_ANTI_REPEAT = {"repeat_penalty": 1.1, "repeat_last_n": 256,
-                "dry_multiplier": 0.8}
+# Long outputs (2026-10-01): a fact-rich message can need more than
+# max_tokens — one 879-char post emits a 40-fact v2 doc of ~5.7k tokens.
+# With temperature 0 every retry stopped at the same ceiling, spending
+# ~5 min of a slot per attempt until the job failed. A length stop is
+# retried ONCE with LLM_LONG_MAX_TOKENS in the remaining budget, and the
+# prompt is remembered (1 = start at the long ceiling, 2 = even that
+# stopped on length: fail fast without a model call) so later attempts
+# spend the long call only once. Prompt + long ceiling fit one slot.
+LLM_LONG_MAX_TOKENS = 8192
+_LONG_PATH = os.path.join(HOME, "data", "semantic_long_output.json")
+_LONG_MAX = 500
+# a long-ceiling call measured ~320 s alone: with less budget it would
+# only time out and burn an attempt, so it is not sent (free defer —
+# the 450 s background lanes take it; a tick lane never can)
+_LONG_MIN_CALL_S = 400.0
 
 
-def _runaway_key(model: str, prompt: str) -> str:
+def _long_key(model: str, prompt: str) -> str:
     import hashlib
     return hashlib.sha256(f"{model}\0{prompt}".encode("utf-8")).hexdigest()
 
 
-def _runaway_marks() -> dict:
+def _long_marks() -> dict:
     try:
-        with open(_RUNAWAY_PATH, encoding="utf-8") as f:
+        with open(_LONG_PATH, encoding="utf-8") as f:
             marks = json.load(f)
     except (OSError, ValueError):
         return {}
     return marks if isinstance(marks, dict) else {}
 
 
-def _runaway_mark(key: str, level: int) -> None:
-    """Best effort — a lost write only costs one more runaway call."""
+def _long_mark(key: str, level: int) -> None:
+    """Best effort — a lost write only costs one more length stop."""
     # ponytail: unlocked read-modify-write across processes; a lost
     # concurrent mark only re-spends one call — lock it if marks churn
     try:
         import maintenance
-        marks = _runaway_marks()
+        marks = _long_marks()
         marks.pop(key, None)
         marks[key] = level
-        while len(marks) > _RUNAWAY_MAX:
+        while len(marks) > _LONG_MAX:
             marks.pop(next(iter(marks)))
-        os.makedirs(os.path.dirname(_RUNAWAY_PATH), exist_ok=True)
-        maintenance.atomic_publish_text(_RUNAWAY_PATH, json.dumps(marks))
+        os.makedirs(os.path.dirname(_LONG_PATH), exist_ok=True)
+        maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
     except Exception:
         pass
 
@@ -260,19 +264,21 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         rf = {"type": "json_object"} \
             if _probe_format(endpoint, model, timeout) == "object" else None
         timeout = max(0.5, timeout - (time.monotonic() - started))
-        key = _runaway_key(model, prompt)
-        level = _runaway_marks().get(key, 0)
+        key = _long_key(model, prompt)
+        level = _long_marks().get(key, 0)
         if level >= 2:
-            return None       # penalized decoding ran away too
+            return None       # even the long ceiling stopped on length
+        if level and timeout < _LONG_MIN_CALL_S:
+            raise runtime.LLMNotSent("long_output_needs_budget")
         while True:
             call_at = time.monotonic()
-            payload = {"id_slot": local_llm.request_slot()}
-            if level:
-                payload.update(_ANTI_REPEAT)
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
-                timeout=timeout, max_tokens=max_tokens,
-                response_format=rf, extra_payload=payload,
+                timeout=timeout,
+                max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
+                if level else max_tokens,
+                response_format=rf,
+                extra_payload={"id_slot": local_llm.request_slot()},
                 request_fn=local_llm.bounded_request, error_out=err_out)
             timeout = max(0.5, timeout - (time.monotonic() - call_at))
             if rf is not None and response is not None \
@@ -286,9 +292,9 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if response is not None \
                     and response.get("finish_reason") == "length":
                 level += 1
-                _runaway_mark(key, level)
-                if level == 1 and timeout >= _RUNAWAY_MIN_RETRY_S:
-                    continue  # one penalized retry in what is left
+                _long_mark(key, level)
+                if level == 1 and timeout >= _LONG_MIN_CALL_S:
+                    continue  # one long-ceiling retry in what is left
             break
     if response is None and err_out.get("kind") == "unreachable":
         raise runtime.LLMNotSent("llm_unreachable")

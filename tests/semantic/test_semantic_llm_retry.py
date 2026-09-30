@@ -394,57 +394,64 @@ def test_semantic_llm_chat_reject_retry_shares_remaining_budget(monkeypatch):
     assert timeouts == [4, 2.5]
 
 
-def _runaway_send(bodies, penalized_ok):
+def _long_send(bodies, long_ok):
     def send(endpoint, method, body, timeout, deadline=None):
         bodies.append(body)
-        if "repeat_penalty" in body and penalized_ok:
+        if body["max_tokens"] > semantic.LLM_MAX_TOKENS and long_ok:
             return 200, {}, json.dumps(_response('{"facts": []}')).encode()
         return 200, {}, json.dumps(_response('{"facts": [', "length")).encode()
     return send
 
 
-@pytest.mark.parametrize("penalized_ok", [True, False])
-def test_runaway_retries_once_penalized_then_stops_spending(
-        monkeypatch, tmp_path, penalized_ok):
-    """temperature 0 reproduces a max_tokens runaway on every retry: a
-    length stop is retried once with repetition control, and a prompt
-    that runs away even then fails fast later without a model call."""
+def _long_env(monkeypatch, tmp_path, bodies, long_ok):
     import local_llm
     monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
     monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
-    monkeypatch.setattr(semantic, "_RUNAWAY_PATH",
-                        str(tmp_path / "data" / "runaway.json"))
-    bodies = []
+    monkeypatch.setattr(semantic, "_LONG_PATH",
+                        str(tmp_path / "data" / "long.json"))
     monkeypatch.setattr(local_llm, "bounded_request",
-                        _runaway_send(bodies, penalized_ok))
-    out = semantic.llm_chat("抽出 JSON:", timeout=300)
-    assert [("repeat_penalty" in b) for b in bodies] == [False, True]
-    assert out == ('{"facts": []}' if penalized_ok else None)
+                        _long_send(bodies, long_ok))
+
+
+def _ceilings(bodies):
+    return [b["max_tokens"] for b in bodies]
+
+
+@pytest.mark.parametrize("long_ok", [True, False])
+def test_length_stop_retries_once_at_long_ceiling_then_stops_spending(
+        monkeypatch, tmp_path, long_ok):
+    """temperature 0 stops a fact-rich doc at the same max_tokens on
+    every retry: a length stop is retried once at the long ceiling, and
+    a prompt that stops even there fails fast later without a call."""
+    bodies = []
+    _long_env(monkeypatch, tmp_path, bodies, long_ok)
+    short, long_ = semantic.LLM_MAX_TOKENS, semantic.LLM_LONG_MAX_TOKENS
+    out = semantic.llm_chat("抽出 JSON:", timeout=900)
+    assert _ceilings(bodies) == [short, long_]
+    assert out == ('{"facts": []}' if long_ok else None)
     bodies.clear()
-    out = semantic.llm_chat("抽出 JSON:", timeout=300)
-    if penalized_ok:
-        # remembered: the next attempt starts penalized, no runaway call
-        assert [("repeat_penalty" in b) for b in bodies] == [True]
+    out = semantic.llm_chat("抽出 JSON:", timeout=450)
+    if long_ok:
+        # remembered: the next attempt starts at the long ceiling
+        assert _ceilings(bodies) == [long_]
         assert out == '{"facts": []}'
     else:
         assert bodies == [] and out is None
-    # another prompt is untouched
     bodies.clear()
-    semantic.llm_chat("別 JSON:", timeout=300)
-    assert "repeat_penalty" not in bodies[0]
+    semantic.llm_chat("別 JSON:", timeout=300)     # other prompts untouched
+    assert _ceilings(bodies)[0] == short
 
 
-def test_runaway_without_time_left_marks_and_retries_next_attempt(
+def test_length_stop_without_time_left_uses_long_ceiling_next_attempt(
         monkeypatch, tmp_path):
-    import local_llm
-    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
-    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
-    monkeypatch.setattr(semantic, "_RUNAWAY_PATH",
-                        str(tmp_path / "data" / "runaway.json"))
     bodies = []
-    monkeypatch.setattr(local_llm, "bounded_request",
-                        _runaway_send(bodies, True))
+    _long_env(monkeypatch, tmp_path, bodies, True)
     assert semantic.llm_chat("抽出 JSON:", timeout=30) is None
-    assert len(bodies) == 1          # < _RUNAWAY_MIN_RETRY_S left
-    assert semantic.llm_chat("抽出 JSON:", timeout=300) == '{"facts": []}'
-    assert "repeat_penalty" in bodies[-1]
+    assert len(bodies) == 1          # < _LONG_MIN_CALL_S left
+    # a marked prompt is never sent into a budget it cannot finish in
+    # (a tick lane): free defer, the background lane takes it
+    with pytest.raises(semantic.runtime.LLMNotSent):
+        semantic.llm_chat("抽出 JSON:", timeout=300)
+    assert len(bodies) == 1
+    assert semantic.llm_chat("抽出 JSON:", timeout=450) == '{"facts": []}'
+    assert _ceilings(bodies)[-1] == semantic.LLM_LONG_MAX_TOKENS
