@@ -502,10 +502,11 @@ def _transition_reconciliation(db, now, th, sig_cfg):
 PHARM_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬剤師%' "
                     f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%薬局%' "
                     f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%調剤%'")
-# a poster's own plan or a question is not a request somebody must
-# answer — neither detector fires on it (#20 order 3)
+# a poster's own plan is not a request somebody must answer — neither
+# detector fires on it (#20 order 3); a question addressed to the
+# pharmacy is still a consultation that needs a reply, so it counts
 REQ_ACTIONABLE_SQL = (f"COALESCE(json_extract({JSON_OBJECT_SQL},'$.kind'),'') "
-                      "NOT IN ('self_plan','question')")
+                      "<> 'self_plan'")
 
 
 def _pharmacist_request(db, now, th, sig_cfg):

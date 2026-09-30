@@ -75,8 +75,8 @@ def test_confirmed_requests_render_unchanged(db):
 def test_request_kind_prefix_due_text_and_condition(db):
     """#20 order 3: self_plan/question get a per-item prefix inside the
     same 依頼: line, a relative deadline shows through due_text when due
-    is null, and a located condition is appended truncated to 20 chars.
-    Unverified items keep going to 依頼候補（未確認）."""
+    is null, and a located condition is appended in full (M2: never cut
+    to 20).  Unverified items keep going to 依頼候補（未確認）."""
     joined = _render(db, {"requests": [
         {"to": "不明", "from": "ケアマネ", "kind": "self_plan",
          "action": "訪問して状況確認", "due": None, "due_text": "明日まで"},
@@ -88,9 +88,19 @@ def test_request_kind_prefix_due_text_and_condition(db):
     assert _request_rows(joined) == [
         "依頼: 予定:ケアマネ→訪問して状況確認(期限:明日まで) / "
         "確認依頼:家族へデイ利用希望の確認 / "
-        "看護師へ医師へ連絡(条件:血圧が160を超えるようなら翌朝までに必)",
+        "看護師へ医師へ連絡(条件:血圧が160を超えるようなら翌朝までに必ず)",
         "依頼候補（未確認）: 予定:医師へ再診"]
-    assert len("血圧が160を超えるようなら翌朝までに必ず") == 21  # cut at 20
+    # a long condition (stored cap 60) stays whole; the action gives way
+    # first and a cut is marked with …
+    cond = "あ" * 60
+    joined = _render(db, {"requests": [
+        {"to": "医師", "action": "い" * 30, "condition": cond}]})
+    assert _request_rows(joined) == [
+        f"依頼: 医師へ{'い' * 9}…(条件:{cond})"]
+    joined = _render(db, {"requests": [
+        {"to": "医師", "action": "い" * 31, "condition": "う" * 20}]})
+    assert _request_rows(joined) == [
+        f"依頼: 医師へ{'い' * 29}…(条件:{'う' * 20})"]
     # foreign/legacy artifacts: an unhashable kind and a non-string due
     # neither abort the card nor hide a renderable due_text
     joined = _render(db, {"requests": [

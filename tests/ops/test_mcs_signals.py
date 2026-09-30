@@ -1120,12 +1120,12 @@ def test_rx_request_visibility(led):
 
 
 @pytest.mark.parametrize("kind, fires", [
-    ("self_plan", False), ("question", False), (None, True),
+    ("self_plan", False), ("question", True), (None, True),
     ("request", True)])
 def test_pharmacist_request_kind_guard(led, kind, fires):
-    """#20 order 3: a pharmacist's own plan or a question addressed to
-    the pharmacy is not an unanswered request; kind absent (pre-#20
-    artifacts) or request fires as before."""
+    """#20 order 3: a pharmacist's own plan is not an unanswered request;
+    a question addressed to the pharmacy is a consultation and still
+    fires, as do kind absent (pre-#20 artifacts) and request."""
     _msg(led.db, 1, ts=NOW - 4 * DAY)
     _extract_doc(led.db, 1, "h1",
                  requests=[_req_item("薬剤師", "残薬調整の確認", kind=kind)])
@@ -1136,21 +1136,24 @@ def test_pharmacist_request_kind_guard(led, kind, fires):
 
 
 def test_rx_request_visibility_kind_guard(led):
-    """#20 order 3: a question about a drug is not a prescription in
-    the pipeline; a self_plan neither. Kind absent still fires."""
+    """#20 order 3: a self_plan about a drug is not a prescription in
+    the pipeline; a question about one is still a consultation and
+    fires, as does kind absent."""
     _msg(led.db, 1, ts=NOW - 1 * DAY)
     _extract_doc(led.db, 1, "h1",
                  requests=[_req_item("医師", "フロセミド処方は必要か",
-                                     kind="question"),
-                           _req_item("看護師", "薬の残数確認",
-                                     kind="self_plan")])
+                                     kind="question")])
     _msg(led.db, 2, ts=NOW - 1 * DAY, chash="h2")
     _extract_doc(led.db, 2, "h2",
                  requests=[_req_item("医師", "フロセミド処方")])
+    _msg(led.db, 3, ts=NOW - 1 * DAY, chash="h3")
+    _extract_doc(led.db, 3, "h3",
+                 requests=[_req_item("看護師", "薬の残数確認",
+                                     kind="self_plan")])
     _ev(led)
     rx = [s for s in mcs_signals.current_open(led.db)["items"]
           if s["type"] == "rx_request_visibility"]
-    assert [s["evidence"]["message_ids"] for s in rx] == [[2]]
+    assert [s["evidence"]["message_ids"] for s in rx] == [[1], [2]]
 
 
 # --- discharge_notice / symptom_after_med_change ---
