@@ -81,6 +81,14 @@ def build_rollup(ledger, project_id: int) -> dict:
     out: dict = {"project_id": project_id, "generated_at": time.time(),
                  "msg_count": len(msgs),
                  "reply_count": sum(1 for m in msgs if m["parent_id"])}
+    # 連携サマリー (#21): the newest karte_summary artifact, or None when
+    # never fetched — 空 (fetched, nothing registered) stays distinct.
+    ks = ledger.karte_summary_current(project_id)
+    out["karte_summary"] = None if ks is None else {
+        "comment": ks.get("comment"), "updated_at": ks.get("updated_at"),
+        "updater_profession": (ks.get("updater") or {}).get("profession")
+        if isinstance(ks.get("updater"), dict) else None,
+        "empty": bool(ks.get("empty")), "fetched_at": ks.get("fetched_at")}
     if not msgs:
         return out
     newest = msgs[0]
@@ -441,7 +449,7 @@ def dirty_projects(ledger) -> list:
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
                            'canonical_projection',
-                           'semantic_facts_v4')) AS art_ts,
+                           'semantic_facts_v4','karte_summary')) AS art_ts,
         (SELECT MAX(m.updated_seen) FROM messages m
           WHERE m.project_id=p.project_id) AS msg_ts
       FROM patients p

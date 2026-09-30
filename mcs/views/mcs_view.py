@@ -192,6 +192,8 @@ class View:
                 "cutoff_recorded" if floor and floor > 0 else "no_completion_record"
             row["gapless_verified"] = False
             row["exact_missing_ranges"] = None
+            row["karte_summary_at"], row["karte_summary_empty"] = \
+                self._karte_summary_state(pid)
             row["messages"] = dict(self.db.execute("""
               SELECT count(*) AS stored,min(posted_at_ts) AS earliest,max(posted_at_ts) AS latest,
                 count(CASE WHEN body_state IS NOT 'full' THEN 1 END) AS incomplete_bodies,
@@ -231,6 +233,22 @@ class View:
                     key: payload.get(key) if type(payload.get(key)) is int else None
                     for key in ("since", "page", "pages")}})
         return page
+
+    def _karte_summary_state(self, pid):
+        """(fetched_at, empty) of the newest 連携サマリー artifact, (None, None) when never fetched.
+
+        The comment itself never leaves the artifact."""
+        row = self.db.execute(
+            "SELECT content,meta FROM artifacts WHERE kind='karte_summary' "
+            "AND project_id=? AND json_valid(content) AND json_valid(meta) "
+            "ORDER BY artifact_id DESC LIMIT 1", (pid,)).fetchone()
+        if not row:
+            return None, None
+        content, meta = json.loads(row["content"]), json.loads(row["meta"])
+        at = meta.get("fetched_at") if isinstance(meta, dict) else None
+        empty = content.get("empty") if isinstance(content, dict) else None
+        return (at if type(at) in (int, float) else None,
+                empty if isinstance(empty, bool) else None)
 
     def _operations(self, pid, limit, cursor):
         from mcs_operations import paused

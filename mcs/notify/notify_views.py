@@ -65,6 +65,7 @@ def patient_summary_text(db, project_id) -> tuple:
                              else "抽出されたバイタルなし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
+        lines.append(_karte_summary_line(roll.get("karte_summary")))
     tasks = db.execute(
         "SELECT request_id,title,assignee,due_date FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
@@ -77,6 +78,20 @@ def patient_summary_text(db, project_id) -> tuple:
                  + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
                  for t in tasks)
     return title, "\n".join(lines)
+
+
+def _karte_summary_line(ks) -> str:
+    """One line for the MCS 患者連携サマリー carried by the rollup (#21):
+    未取得 (never fetched) / 空 (fetched, nothing registered) / the first
+    80 chars with the update date and the updater's profession."""
+    if not isinstance(ks, dict):
+        return "連携サマリー（MCS）: 未取得"
+    if ks.get("empty") or not ks.get("comment"):
+        return "連携サマリー（MCS）: 空"
+    when = _mmdd(ks.get("updated_at")).replace("-", "/")
+    prof = _inline(ks.get("updater_profession"), 20) or "職種不明"
+    return (f"連携サマリー（MCS・更新 {when}・{prof}）: "
+            f"{_inline(ks['comment'], 80)}")
 
 
 def _coverage_line(db, project_id) -> str:
