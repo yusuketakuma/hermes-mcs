@@ -1904,19 +1904,17 @@ def main() -> int:
     if not args.drain:
         if not args.revive_failed:
             ap.error("--drain or --revive-failed required")
+        # Bookkeeping only: revive_failed's per-row conditional UPDATE is
+        # a CAS on state='failed', so it needs no run lock — taking one
+        # made the 6-hourly maintenance report failure whenever a tick or
+        # drain held the lock at that moment (2026-10).
         from ledger import Ledger
-        from mcs_util import DB, acquire_run_lock
-        fd = acquire_run_lock()
-        if fd is None:
-            return 3
+        from mcs_util import DB
+        led = Ledger(DB)
         try:
-            led = Ledger(DB)
-            try:
-                print(json.dumps(revive_failed(led)))
-            finally:
-                led.close()
+            print(json.dumps(revive_failed(led)))
         finally:
-            os.close(fd)
+            led.close()
         return 0
     if not 1 <= args.max_jobs <= 32:
         ap.error("max-jobs must be between 1 and 32")
