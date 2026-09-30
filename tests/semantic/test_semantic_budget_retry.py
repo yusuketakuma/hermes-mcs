@@ -58,3 +58,48 @@ def test_budget_before_dispatch_defers_without_attempt(tmp_path, monkeypatch):
         assert not client.calls
     finally:
         db.close()
+
+
+def test_next_call_short_of_reserve_defers_without_attempt(tmp_path, monkeypatch):
+    """Each pass dispatches one long model call, persists its stage,
+    and defers (attempts untouched) when the next call cannot start
+    within LLM_CALL_RESERVE_S; the job completes over several runs
+    from the durable stages (2026-09-30: multi-call jobs burned all
+    six attempts on deadline overruns while progressing)."""
+    clock = [100.0]
+    monkeypatch.setattr(semantic.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(semantic.runtime.time, 'monotonic', lambda: clock[0])
+    calls = []
+
+    def llm(prompt, timeout=None):
+        calls.append(prompt[:6])
+        clock[0] += 200          # one long generation, inside the deadline
+        return _llm(prompt)
+
+    db = _seeded(tmp_path)
+    try:
+        cfg = _cfg('shadow', job_budget_seconds=450.0)
+        runs = 0
+        while runs < 6:
+            with db.db:
+                db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            before = len(calls)
+            out = semantic.run_due(db, cfg, {'errors': []}, clock[0] + 450,
+                                   jev_client=_FakeJev(), llm_fn=llm)
+            runs += 1
+            row = db.db.execute("SELECT state,attempts,next_try FROM fetch_jobs WHERE kind='semantic'").fetchone()
+            assert row['attempts'] == 0
+            assert len(calls) - before <= 1          # at most one long call per pass
+            assert out['progressed'] == 1
+            if row['state'] == 'done':
+                break
+            assert tuple(row[:2]) == ('pending', 0)
+            assert row['next_try'] > time.time()
+            assert out['deferred'] == 1 and out['done'] == 0
+        assert row['state'] == 'done' and 2 <= runs <= 6
+        # cached stages are never regenerated: one facts artifact per target
+        facts = db.db.execute("SELECT COUNT(*), COUNT(DISTINCT message_id) "
+                              "FROM artifacts WHERE kind='semantic_facts'").fetchone()
+        assert facts[0] == facts[1] >= 1
+    finally:
+        db.close()

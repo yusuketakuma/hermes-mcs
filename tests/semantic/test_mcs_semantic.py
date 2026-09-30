@@ -272,7 +272,8 @@ def test_off_no_seed_no_drain(tmp_path):
     out = semantic.run_due(db, {"semantic": {"mode": "off"}}, res,
                            time.monotonic() + 60)
     assert out == {"mode": "off", "done": 0, "deferred": 0,
-                   "failed": 0, "left": None, "budget_exhausted": False}
+                   "failed": 0, "left": None, "budget_exhausted": False,
+                   "progressed": 0}
     assert db.job_pending("semantic", 1, 1)["state"] == "pending"
     db.close()
 
@@ -1677,4 +1678,36 @@ def test_transition_rescues_null_payload_row(tmp_path):
         "UPDATE fetch_jobs SET state='pending' WHERE message_id=8")
     db.db.commit()
     assert semantic_runtime.transition_tx(db, stale, "done") is False
+    db.close()
+
+
+def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path):
+    """2026-09-30: one malformed medication-detail reply (choice outside
+    the criteria) must not kill the job after a single attempt — it
+    retries within the bounded budget; a whole-envelope protocol error
+    (test_nonretryable_jev_error_fails_bounded) still fails at once."""
+    class DetailFlaky(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            if set(questions) & set(jev.MED_DETAIL_QUESTIONS):
+                self.requests_made += 1
+                self.last_error = jev.JevError(
+                    "protocol_error", "change_kind:choice_invalid")
+                raise self.last_error
+            return super().evaluate(state, questions, deadline)
+
+    db = _seeded(tmp_path)
+    fake = DetailFlaky()
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
+    job = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    assert job["state"] == "pending" and job["attempts"] == 1
+    for _ in range(8):
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        db.db.commit()
+        semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                         time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
+    job = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    assert job["state"] == "failed" and job["attempts"] > 1   # bounded, not endless
     db.close()

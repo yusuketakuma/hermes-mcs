@@ -153,6 +153,38 @@ LLM_MAX_TOKENS = 4096
 
 # ---------- local LLM (existing endpoint, same isolation) ----------
 
+# Constrained JSON output for every semantic prompt (facts v2, legacy
+# facts, summary, repairs all end in "JSON:"): the server's json_object
+# grammar removes prose-wrapped/unterminated replies that parsed as
+# nothing (11 of 104 shadow audits in the week to 2026-09-30 had no
+# parseable summary). Same probe/cooldown/degrade ladder as
+# extract_llm, minus the schema rung; a rejected format degrades to
+# plain for one retry and re-probes after the cooldown.
+_FMT_MODE = None      # None=unprobed | "object" | "plain"
+_FMT_TS = 0.0
+_PROBE_RETRY_S = 600
+_FMT_REJECT_STATUSES = (400, 404, 422)
+
+
+def _probe_format(endpoint: str, model: str) -> str:
+    global _FMT_MODE, _FMT_TS
+    if _FMT_MODE == "object":
+        return _FMT_MODE
+    if _FMT_MODE is not None \
+            and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
+        return _FMT_MODE
+    try:
+        _FMT_MODE = local_llm.probe_format(
+            endpoint, model, None, timeout=10,
+            request_fn=local_llm.bounded_request,
+            slot=local_llm.request_slot(),
+            verify=lambda text: _json_block(text) is not None) or "plain"
+    except Exception:
+        _FMT_MODE = "plain"
+    _FMT_TS = time.monotonic()
+    return _FMT_MODE
+
+
 def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
              max_tokens: int = LLM_MAX_TOKENS) -> str | None:
     """One local-llama.cpp chat call via the shared loopback adapter.
@@ -177,11 +209,24 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         if response is not None and response.get("admission"):
             raise runtime.LLMNotSent(f"llm_admission:{response['admission']}")
     else:
-        response = local_llm.chat(
-            prompt, endpoint=endpoint, model=model,
-            timeout=timeout, max_tokens=max_tokens,
-            extra_payload={"id_slot": local_llm.request_slot()},
-            request_fn=local_llm.bounded_request, error_out=err_out)
+        global _FMT_MODE
+        rf = {"type": "json_object"} \
+            if _probe_format(endpoint, model) == "object" else None
+        while True:
+            response = local_llm.chat(
+                prompt, endpoint=endpoint, model=model,
+                timeout=timeout, max_tokens=max_tokens,
+                response_format=rf,
+                extra_payload={"id_slot": local_llm.request_slot()},
+                request_fn=local_llm.bounded_request, error_out=err_out)
+            if rf is not None and response is not None \
+                    and response.get("status") in _FMT_REJECT_STATUSES:
+                # the server rejected the constraint (restart / model
+                # swap): degrade to plain for this and later calls
+                _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+                rf = None
+                continue
+            break
     if response is None and err_out.get("kind") == "unreachable":
         raise runtime.LLMNotSent("llm_unreachable")
     # canonical acceptance: a length-truncated or empty completion is an

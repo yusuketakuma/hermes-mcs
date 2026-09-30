@@ -581,8 +581,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # a hook before each internal retry attempt and a durable reservation
     # immediately before the POST.
     jev_client, _ = runtime.bind_jev(jev_client, guard, reserve_fn)
-    llm_fn = runtime.guarded_llm(llm_fn, guard, deadline,
-                                 timeout_cap=semantic.LLM_TIMEOUT)
+    llm_fn = runtime.guarded_llm(
+        llm_fn, guard, deadline, timeout_cap=semantic.LLM_TIMEOUT,
+        # one long canonical generation (~300 s) or two thirds of the
+        # per-job budget, whichever is smaller — a follow-up call that
+        # cannot fit defers the pass instead of overrunning it
+        call_reserve=min(runtime.LLM_CALL_RESERVE_S,
+                         float(scfg["job_budget_seconds"]) * 2 / 3))
     # provenance on the recorded bundle (spec §12.1): which stored
     # origin event / capture path this evaluation descends from
     origin = pl.get("origin") if isinstance(pl.get("origin"), dict) \
@@ -715,7 +720,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if not event_details["complete"] and event_details["failure_reason"] != "invalid":
             incomplete = True
             error = getattr(jev_client, "last_error", None)
-            if error is not None and _jev_failure_class(error) == "failed":
+            if error is not None and _jev_failure_class(error) == "failed" \
+                    and not _malformed_answer(error):
                 hard_fail = True
             elif event_details["failure_reason"] != "deadline" and (
                     error is None or _jev_failure_class(error) != "resource"):
@@ -742,7 +748,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if not coverage["evaluated"]:
                 incomplete = True
                 error = getattr(jev_client, "last_error", None)
-                if error is not None and _jev_failure_class(error) == "failed":
+                if error is not None and _jev_failure_class(error) == "failed" \
+                        and not _malformed_answer(error):
                     hard_fail = True
                 elif (error is not None and _jev_failure_class(error) == "retry"
                       or coverage.get("failure_reason") == "model"):
@@ -1114,6 +1121,11 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         # back off hourly so a held LLM cannot re-spend the Jev budget
         # every minute
         return "deferred_backoff" if jev_sent() else "deferred"
+    except runtime.RuntimeBudgetShort:
+        # earlier calls of this pass completed and persisted; the next
+        # one could not start in the remaining budget — resume next
+        # tick from the durable stages without charging an attempt
+        return "deferred"
     except runtime.RuntimeBudget:
         return "retry" if jev_sent() or llm_started else "deferred"
 
@@ -1145,6 +1157,43 @@ class _TimedClient:
 
     def __setattr__(self, name, value):
         setattr(self._client, name, value)
+
+
+def _malformed_answer(error) -> bool:
+    """A protocol_error raised while validating ONE answer of a
+    per-fact/per-dimension question (2026-09-30: two jobs died on a
+    single malformed medication-detail reply after ~100 s of local
+    generation). Such a reply is a per-request defect of the remote
+    model, not a contract break like auth/model_mismatch: the job
+    retries within its bounded attempts and the already-persisted
+    detail answers are reused. Response-shape errors on the whole
+    envelope (answers/usage missing) stay hard failures."""
+    return getattr(error, "kind", "") == "protocol_error" and any(
+        str(getattr(error, "detail", "") or "").endswith(suffix)
+        for suffix in (":choice_invalid", ":confidence_invalid",
+                       ":noul_invalid", ":probabilities_missing",
+                       ":not_object", ":type_invalid"))
+
+
+def _jev_error_brief(error) -> dict | None:
+    """Kind/class of a JevError for run-record diagnostics (no bodies)."""
+    if error is None:
+        return None
+    return {"kind": str(getattr(error, "kind", "") or "")[:40],
+            # JevError.detail is a code (never a response body) — the
+            # protocol_error variant is only diagnosable from it
+            "detail": str(getattr(error, "detail", "") or "")[:60],
+            "status": getattr(error, "status", 0) or 0,
+            "class": _jev_failure_class(error)}
+
+
+def _last_stage_artifact(ledger) -> int:
+    """Highest artifact id that is a stage result (not a Jev usage
+    receipt) — a pass that raised it made durable progress."""
+    return ledger.db.execute(
+        "SELECT COALESCE(MAX(artifact_id),0) FROM artifacts "
+        "WHERE kind NOT IN (?,?,?)",
+        (KIND_USAGE, "semantic_drain_run", SCHED_KIND)).fetchone()[0]
 
 
 def _timed_llm(fn):
@@ -1283,7 +1332,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         if e not in result["errors"]:
             result["errors"].append(e)
     out = {"mode": scfg["mode"], "done": 0, "deferred": 0,
-           "failed": 0, "left": None, "budget_exhausted": False}
+           "failed": 0, "left": None, "budget_exhausted": False,
+           # jobs whose pass persisted at least one new stage artifact
+           # (usage receipts excluded) — "no completion" is not "no
+           # progress" for the tick's starvation guard (2026-09-30)
+           "progressed": 0}
     from semantic_store import invalidate_projections
     invalidate_projections(ledger, scfg)
     if scfg["mode"] == "off":
@@ -1449,6 +1502,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         timed_jev = _TimedClient(jev_client) \
             if jev_client is not None else None
         timed_llm, llm_acc = _timed_llm(llm_fn)
+        art0 = _last_stage_artifact(ledger)
         try:
             if job["kind"] == QC_JOB_KIND:
                 status = _process_qc_job(
@@ -1469,6 +1523,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             out["failed"] += 1
             status = None
         job_elapsed = time.perf_counter() - job_started
+        if _last_stage_artifact(ledger) > art0:
+            out["progressed"] += 1
         # durable per-attempt request delta — the daily budget ledger
         # (jev_usage_today) is exact and covers claim-audit and loop
         # calls, not just the primary assessment
@@ -1494,6 +1550,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             "post_s": max(0.0, job_elapsed - llm_s - jev_s),
             "elapsed_s": job_elapsed, "job_age_s": job_age,
             "jev_requests": used, "usage": usage,
+            # last Jev error class/kind of this pass — a job that ends
+            # "failed" after a few Jev calls was previously
+            # undiagnosable from the run record (2026-09-30)
+            "jev_error": _jev_error_brief(
+                getattr(jev_client, "last_error", None))
+            if status not in (None, "done") else None,
         })
         if status == "done":
             out["done_by_kind"][job["kind"]] = \
