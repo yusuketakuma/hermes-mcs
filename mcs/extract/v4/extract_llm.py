@@ -27,6 +27,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -35,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import bounded_http
 import local_llm
-from ledger import Ledger
+from ledger import Ledger, _posted_epoch
 from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
@@ -91,7 +92,7 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "route": "oral|topical|injection|infusion|inhalation|tube|other または省略", "freq": "服用頻度の原文表現(例:1日2回、隔日) または省略", "prn": 頓服なら true, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
 - "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "severity": "mild|moderate|severe(強さの記述がある場合のみ)", "onset": "発症時期の原文表現(例:昨日から) または省略", "duration": "継続期間の原文表現(例:3日間) または省略", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
 - "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
-- "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "本文に依頼者が明記された場合のみその職種・続柄、無ければ null", "kind": "request|question|self_plan", "action": "依頼内容を30字以内で", "condition": "条件の原文(「〜なら」「〜の場合」等) または null", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null", "evidence": "対象本文の完全一致引用"}] — kind は他者への依頼が request、質問・確認の求めが question、投稿者自身の予定・行動が self_plan。一投稿に別の行動が複数あれば別項目にする。挨拶・完了済みの報告・単なる出来事は requests にしない。参考コンテキストや引用転載された過去の依頼は対象投稿の依頼にしない
+- "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "本文に依頼者が明記された場合のみその職種・続柄、無ければ null", "kind": "request|question|self_plan", "action": "依頼内容を30字以内で", "condition": "条件の原文(「〜なら」「〜の場合」等) または null", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null", "evidence": "対象本文の完全一致引用"}] — kind: 依頼（〜してください／〜していただけますか／〜をお願いできますか 等、相手に行動を求める丁寧表現を含む）は request、相手に答え・情報だけを求める問いは question、自分が行う予定は self_plan。一投稿に別の行動が複数あれば別項目にする。挨拶・完了済みの報告・単なる出来事は requests にしない。参考コンテキストや引用転載された過去の依頼は対象投稿の依頼にしない
 - "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
 - "labs": 本文に結果が明記された検査値の配列 [{"name": "検査項目名", "value": 数値または短い結果表現, "unit": "単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用"}] — 推測の基準値判定はしない。記載の無い検査は含めない
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
@@ -623,8 +624,13 @@ def _valid_date(text: str) -> bool:
         return False
 
 
+def _flat(text: str) -> str:
+    """NFKC-normalized text with all whitespace removed."""
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
 def _validate(d: dict, body: str | None = None,
-              drops: dict | None = None) -> dict | None:
+              drops: dict | None = None, ctx: bool = False) -> dict | None:
     """Schema check — malformed LLM output must not become a success
     artifact (it poisons downstream rollups, Oracle B20). Returns the
     cleaned dict or None when nothing salvageable remains.
@@ -651,9 +657,13 @@ def _validate(d: dict, body: str | None = None,
 
     `drops`, when given, collects bounded failure detail for the repair
     pass: {"ev": [rejected quotes], "items": [fields with dropped
-    items]} — capped so a pathological output can't blow memory."""
+    items]} — capped so a pathological output can't blow memory.
+
+    `ctx` (the prompt carried thread/summary context) enables the lift
+    guard: a med dose/freq or symptom onset/duration absent from the
+    body is dropped at the key — it was lifted from the context."""
     out: dict = {}
-    v = _Validator(body, drops)
+    v = _Validator(body, drops, ctx)
     try:
         v.meds(d, out)
         v.symptoms(d, out)
@@ -684,11 +694,37 @@ class _Validator:
     """Per-field schema cleaning shared state: the evidence verifier +
     drop accounting used by every item validator in _validate."""
 
-    def __init__(self, body, drops):
+    def __init__(self, body, drops, ctx=False):
         self.body = body
         self.drops = drops
+        self.ctx = ctx
+        self.flat = _flat(body) if body is not None else None
         self.ev_dropped = 0
         self.items_dropped = 0
+
+    def grounded(self, text) -> bool:
+        """True when text occurs in the body after NFKC + whitespace
+        removal; with no body there is nothing to check against."""
+        if self.flat is None:
+            return True
+        t = _flat(text) if isinstance(text, str) else ""
+        return bool(t) and t in self.flat
+
+    def unlift(self, item: dict, keys: tuple):
+        """Lift guard: with context in the prompt, drop detail keys
+        whose value the target body does not contain."""
+        if self.ctx and self.body is not None:
+            for k in keys:
+                if item.get(k) and not self.grounded(item[k]):
+                    del item[k]
+
+    def miss(self, q):
+        """Count an unlocated quote so the repair pass re-asks for it."""
+        self.ev_dropped += 1
+        if self.drops is not None:
+            lst = self.drops.setdefault("ev", [])
+            if len(lst) < 5:
+                lst.append(str(q)[:60])
 
     def drop_item(self, field: str):
         self.items_dropped += 1
@@ -707,11 +743,7 @@ class _Validator:
         span = locate_quote_span(self.body, q) if isinstance(q, str) \
             and q.strip() and self.body is not None else None
         if span is None:
-            self.ev_dropped += 1
-            if self.drops is not None:
-                lst = self.drops.setdefault("ev", [])
-                if len(lst) < 5:
-                    lst.append(str(q)[:60])
+            self.miss(q)
             item["unverified"] = True
         else:
             item["evidence"] = self.body[span[0]:span[1]]
@@ -778,6 +810,7 @@ class _Validator:
                 item["status"] = st
             if sj:
                 item["subject"] = sj
+            self.unlift(item, ("dose", "freq"))
             if st is None or sj is None or "negated" not in m:
                 item["unverified"] = True
             self.ev(item, m)
@@ -821,6 +854,7 @@ class _Validator:
             duration = _clean_text(s.get("duration"), 30)
             if duration:
                 item["duration"] = duration
+            self.unlift(item, ("onset", "duration"))
             if st is None or sj is None or "negated" not in s:
                 item["unverified"] = True
             self.ev(item, s)
@@ -910,18 +944,28 @@ class _Validator:
             # injected string must not ride through unbounded).
             item = {"to": _cap(r.get("to"), 30),
                     "action": _cap(r.get("action"), 60)}
-            if isinstance(r.get("from"), str):
+            # from/due_text are kept only when the body states them
+            if isinstance(r.get("from"), str) \
+                    and self.grounded(r["from"].strip()[:30]):
                 item["from"] = r["from"].strip()[:30]
             kind = self.enum(r, "kind", _REQ_KINDS)
             if kind:
                 item["kind"] = kind
             # a condition is a quote: stored only as the body's own
-            # span, never as the model's rendering (no fabricated 〜なら)
+            # span, never as the model's rendering (no fabricated 〜なら).
+            # An unlocated one is a counted miss (repair re-asks) and the
+            # request stays only as an unverified candidate — never an
+            # unconditional instruction.
             cond = _clean_text(r.get("condition"), 60)
             span = locate_quote_span(self.body, cond) \
                 if cond and self.body is not None else None
             if span is not None:
                 item["condition"] = self.body[span[0]:span[1]]
+            elif cond:
+                self.miss(cond)
+                item["unverified"] = True
+            elif r.get("unverified") is True:
+                item["unverified"] = True   # re-validated checkpoint
             if isinstance(r.get("due"), str) \
                     and _valid_date(r["due"].strip()):
                 item["due"] = r["due"].strip()
@@ -929,7 +973,10 @@ class _Validator:
             # verbatim — never coerced into a guessed ISO date
             if isinstance(r.get("due_text"), str) \
                     and r["due_text"].strip():
-                item["due_text"] = r["due_text"].strip()[:60]
+                if self.grounded(r["due_text"].strip()[:60]):
+                    item["due_text"] = r["due_text"].strip()[:60]
+                else:
+                    item.pop("due", None)   # derived from an unlocated text
             self.ev(item, r)
             reqs.append(item)
         out["requests"] = reqs
@@ -1236,8 +1283,13 @@ def _drop_total(v: dict | None) -> float:
 _FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "requests")
 
 
-def _facts(v: dict | None) -> set:
-    """Clinical assertions retained independently of prose fields."""
+def _facts(v: dict | None, split_conditions: bool = False) -> set:
+    """Clinical assertions retained independently of prose fields.
+
+    With split_conditions a request's located condition is its own
+    fact, so a repair that grounds an unverified request's condition
+    still covers the prior request, and losing a located one regresses.
+    """
     facts = set()
     for key in _FACT_LIST_FIELDS:
         for item in (v or {}).get(key) or []:
@@ -1245,6 +1297,11 @@ def _facts(v: dict | None) -> set:
                 item = {k: x for k, x in item.items()
                         if not k.startswith("_")
                         and k not in ("unverified", "evidence")}
+                if split_conditions and key == "requests" \
+                        and "condition" in item:
+                    facts.add(("request_condition", json.dumps(
+                        item, sort_keys=True, ensure_ascii=False)))
+                    item.pop("condition")
             facts.add((key, json.dumps(item, sort_keys=True,
                                        ensure_ascii=False)))
     for key, value in ((v or {}).get("vitals") or {}).items():
@@ -1261,7 +1318,8 @@ def _improves(candidate: dict | None, prior: dict | None) -> bool:
         return False
     if prior is None:
         return True
-    prior_facts, candidate_facts = _facts(prior), _facts(candidate)
+    prior_facts = _facts(prior, split_conditions=True)
+    candidate_facts = _facts(candidate, split_conditions=True)
     if not prior_facts.issubset(candidate_facts):
         return False
     if prior.get("urgency") == "high" and candidate.get("urgency") != "high":
@@ -1329,6 +1387,7 @@ def llm_extract(body: str, *, context: str | None = None,
     complete, which is exactly the silent-coverage-loss failure mode
     the error+backoff path exists to avoid."""
     prompt = _PROMPT_HEAD
+    has_ctx = bool(context)   # thread and/or summary: lift guard on
     if context and context.startswith(_KARTE_HEAD):
         cut = context.index(_KARTE_TAIL) + len(_KARTE_TAIL)
         prompt += context[:cut]
@@ -1364,7 +1423,7 @@ def llm_extract(body: str, *, context: str | None = None,
         if d is _DEFERRED:
             return _DEFERRED
         drops: dict = {}
-        v = _validate(d, body, drops) if d is not None else None
+        v = _validate(d, body, drops, has_ctx) if d is not None else None
         if v is not None and not context:
             # a reply classification without the thread it answers is
             # a guess (the rules live in _CTX_HEAD): drop it before it
@@ -1398,7 +1457,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
-                    rv = _validate(rd, body)
+                    rv = _validate(rd, body, ctx=has_ctx)
                     if rv is not None and not context:
                         rv.pop("reply", None)
                     if _improves(rv, v):
@@ -1496,14 +1555,23 @@ def _ctx_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
     return [p[2] for p in parts]
 
 
-def _karte_block(ledger, project_id: int) -> str:
+def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     """Fenced 患者連携サマリー block for the prompt, "" when the project
     has no stored summary or its comment is empty. The comment is
     untrusted text of the same class as thread posts: sanitized and
-    hard-cut at _KARTE_MAX."""
+    hard-cut at _KARTE_MAX.
+
+    Injected only when the summary's updated_at is at or before the
+    target's posted_at — a later summary may describe what the post
+    did not know. Missing/unparseable timestamps inject nothing."""
     ks = ledger.karte_summary_current(project_id) or {}
     comment = ks.get("comment")
     if not isinstance(comment, str) or not comment.strip():
+        return ""
+    upd = _posted_epoch(ks.get("updated_at")) \
+        if isinstance(ks.get("updated_at"), str) else None
+    post = _posted_epoch(posted_at) if isinstance(posted_at, str) else None
+    if upd is None or post is None or upd > post:
         return ""
     return _KARTE_HEAD + _sanitize_ctx(comment[:_KARTE_MAX]) + _KARTE_TAIL
 
@@ -1518,7 +1586,7 @@ def _thread_context(ledger, r) -> str | None:
     point-in-time read of what the extractor could see; meta.ctx on the
     artifact records that context existed). Returns None when neither
     a summary nor earlier thread material exists."""
-    karte = _karte_block(ledger, r["project_id"])
+    karte = _karte_block(ledger, r["project_id"], r["posted_at"])
     root = r["parent_id"] or r["message_id"]
     ts = r["posted_at_ts"] or 0
     rows = ledger.db.execute(
