@@ -91,7 +91,7 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "meds": 薬剤名の配列 [{"name": "薬剤名", "dose": "40mg"等 または null, "action": "start|stop|change|decrease|increase|none" または null, "status": "current|past|planned", "subject": "patient|family|other", "negated": false, "route": "oral|topical|injection|infusion|inhalation|tube|other または省略", "freq": "服用頻度の原文表現(例:1日2回、隔日) または省略", "prn": 頓服なら true, "evidence": "根拠となる対象本文の完全一致引用"}] — 用量表記が無い薬剤も拾うこと。中止済み・過去の薬は status:"past"、開始予定・検討中は "planned"。本人以外(家族等)の薬は subject:"family"または"other"。否定文脈(「〜は使っていない」等)は negated:true。「〜の管理は出来ない」「〜は出来ない」等の能力・実施可否の記述は処方変更ではなく action:"none" にする。在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない
 - "symptoms": 症状・状態変化の配列 [{"text": "症状名", "negated": false, "status": "new|ongoing|resolved|past", "subject": "patient|family|other(省略可)", "severity": "mild|moderate|severe(強さの記述がある場合のみ)", "onset": "発症時期の原文表現(例:昨日から) または省略", "duration": "継続期間の原文表現(例:3日間) または省略", "evidence": "対象本文の完全一致引用"}] — 「〜なし」「低下なし」等の否定文脈は negated=true。消失・治癒した症状は status:"resolved"、過去の症状は "past"。本人以外の症状は subject を付ける
 - "events": 該当するもの ["visit","exam","admission","discharge","transfer","fall","eol","care","family_contact","other"]
-- "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "依頼者(職種・家族等) または null", "action": "依頼内容を15字以内で", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null"}]
+- "requests": [{"to": "医師|看護師|薬剤師|ケアマネ|介護士|家族|不明", "from": "本文に依頼者が明記された場合のみその職種・続柄、無ければ null", "kind": "request|question|self_plan", "action": "依頼内容を30字以内で", "condition": "条件の原文(「〜なら」「〜の場合」等) または null", "due": "YYYY-MM-DD形式の期限 または null", "due_text": "期限の原文表現(相対表現はそのまま) または null", "evidence": "対象本文の完全一致引用"}] — kind は他者への依頼が request、質問・確認の求めが question、投稿者自身の予定・行動が self_plan。一投稿に別の行動が複数あれば別項目にする。挨拶・完了済みの報告・単なる出来事は requests にしない。参考コンテキストや引用転載された過去の依頼は対象投稿の依頼にしない
 - "vitals": 数値のみ {"bt": 体温(℃), "hr": 脈拍/心拍数(「脈」「脈拍」「HR」), "rr": 呼吸数, "sbp": 収縮期血圧(血圧の上), "dbp": 拡張期血圧(血圧の下), "spo2": 酸素飽和度(SpO2), "bs": 血糖値(「血糖」「BS」「Glu」)} — キーは本文の測定名に忠実に割り当てる。「脈」はbsではなくhrである
 - "labs": 本文に結果が明記された検査値の配列 [{"name": "検査項目名", "value": 数値または短い結果表現, "unit": "単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用"}] — 推測の基準値判定はしない。記載の無い検査は含めない
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
@@ -114,7 +114,7 @@ JSON:{"meds":[{"name":"ロキソプロフェン","dose":null,"action":"stop","st
 <<<
 看護師より: 夜間の疼痛が続いています。医師にトラマドールの追加を相談したところ「明日の往診で検討する」との回答でした。介護士さんはそれまで現行のカロナールで対応をお願いします。再評価は2026-10-05のカンファレンスで行います。
 >>>
-JSON:{"meds":[{"name":"トラマドール","dose":null,"action":null,"status":"planned","subject":"patient","negated":false,"evidence":"トラマドールの追加を相談"},{"name":"カロナール","dose":null,"action":"none","status":"current","subject":"patient","negated":false,"evidence":"現行のカロナールで対応"}],"symptoms":[{"text":"疼痛","negated":false,"status":"ongoing","evidence":"夜間の疼痛が続いています"}],"requests":[{"to":"介護士","from":"看護師","action":"現行薬で対応","due":null}],"summary":"疼痛持続。トラマドール追加は往診で検討。介護士は現行薬対応","points":["トラマドールは検討段階で未開始","10-05のカンファレンスで再評価"],"urgency":"routine"}
+JSON:{"meds":[{"name":"トラマドール","dose":null,"action":null,"status":"planned","subject":"patient","negated":false,"evidence":"トラマドールの追加を相談"},{"name":"カロナール","dose":null,"action":"none","status":"current","subject":"patient","negated":false,"evidence":"現行のカロナールで対応"}],"symptoms":[{"text":"疼痛","negated":false,"status":"ongoing","evidence":"夜間の疼痛が続いています"}],"requests":[{"to":"介護士","from":"看護師","kind":"request","action":"現行薬で対応","condition":null,"due":null,"evidence":"介護士さんはそれまで現行のカロナールで対応をお願いします"}],"summary":"疼痛持続。トラマドール追加は往診で検討。介護士は現行薬対応","points":["トラマドールは検討段階で未開始","10-05のカンファレンスで再評価"],"urgency":"routine"}
 
 例3:
 対象本文:
@@ -122,6 +122,13 @@ JSON:{"meds":[{"name":"トラマドール","dose":null,"action":null,"status":"p
 ベッドで臥床中でしたがお話は饒舌。薬、インスリン管理は出来ない。喫煙するとのことで在宅酸素は出来ない。内服の飲み忘れが多いとのことです。
 >>>
 JSON:{"meds":[{"name":"インスリン","dose":null,"action":"none","status":"current","subject":"patient","negated":false,"evidence":"インスリン管理は出来ない"}],"summary":"臥床中だが会話は明瞭。インスリンの自己管理が困難。在宅酸素は喫煙のため実施不可。内服の飲み忘れあり","points":["インスリン管理は出来ない=処方変更ではなく管理困難","在宅酸素は調剤対象外","飲み忘れが多い"],"urgency":"routine"}
+
+例4:
+対象本文:
+<<<
+ケアマネより: 明日は私が訪問して状況を確認します。看護師さんは血圧が160を超えるようなら医師へ連絡をお願いします。ご家族はデイサービスの利用を希望されていますか？
+>>>
+JSON:{"requests":[{"to":"不明","from":"ケアマネ","kind":"self_plan","action":"訪問して状況確認","condition":null,"due":null,"due_text":"明日","evidence":"明日は私が訪問して状況を確認します"},{"to":"看護師","from":"ケアマネ","kind":"request","action":"医師へ連絡","condition":"血圧が160を超えるようなら","due":null,"evidence":"血圧が160を超えるようなら医師へ連絡をお願いします"},{"to":"家族","from":"ケアマネ","kind":"question","action":"デイサービス利用希望の確認","condition":null,"due":null,"evidence":"デイサービスの利用を希望されていますか"}],"summary":"ケアマネが明日訪問。血圧160超なら看護師が医師へ連絡。家族にデイ利用希望を確認","points":["明日ケアマネ訪問","血圧160超なら医師へ連絡"],"urgency":"routine"}
 
 """
 
@@ -136,6 +143,7 @@ _PROMPT_HEAD = _PROMPT_SPEC + _PROMPT_EXAMPLES
 # target body, and _validate enforces that by locating quotes in
 # `body` alone.
 _CTX_HEAD = """参考コンテキスト(同じスレッドの過去投稿。参照専用 — ここからの項目抽出・evidence引用は禁止):
+返信判定: 対象本文がコンテキスト中の依頼・質問に答えている場合のみ "reply": {"kind": "ack|intent|progress|answer|done|cancel", "evidence": "対象本文の完全一致引用"} を出力する。「承知しました」「確認しました」「拝見しました」のみで対象の明示が無ければ ack、「対応します」は intent、一部のみ確認・実施済みは progress、質問への回答のみは answer、依頼された対象と完了を示す語が揃う場合のみ done、依頼の取り消し・中止は cancel。「ありがとうございます」だけの投稿は reply を出力しない。
 <<<
 """
 _CTX_TAIL = """
@@ -281,7 +289,11 @@ _SCHEMA = {
                 "properties": {
                     "to": {"type": ["string", "null"]},
                     "from": {"type": ["string", "null"]},
+                    "kind": {"type": ["string", "null"],
+                             "enum": ["request", "question", "self_plan",
+                                      None]},
                     "action": {"type": ["string", "null"]},
+                    "condition": {"type": ["string", "null"]},
                     "due": {"type": ["string", "null"]},
                     "due_text": {"type": ["string", "null"]},
                     "evidence": {"type": "string"}},
@@ -304,7 +316,16 @@ _SCHEMA = {
                 "additionalProperties": False}},
             "summary": {"type": "string", "minLength": 1},
             "points": {"type": "array", "items": {"type": "string"}},
-            "urgency": {"type": "string", "enum": ["high", "routine"]}},
+            "urgency": {"type": "string", "enum": ["high", "routine"]},
+            # reply-to-earlier-request classification; only meaningful
+            # with thread context (llm_extract drops it otherwise)
+            "reply": {"type": "object", "properties": {
+                "kind": {"type": "string",
+                         "enum": ["ack", "intent", "progress", "answer",
+                                  "done", "cancel"]},
+                "evidence": {"type": "string"}},
+                "required": ["kind"],
+                "additionalProperties": False}},
         "additionalProperties": False}}
 
 # Batch envelope: same per-message object plus the target index. The
@@ -574,6 +595,10 @@ _SYM_STATUSES = {"new", "ongoing", "resolved", "past"}
 _RX_ROUTES = {"oral", "topical", "injection", "infusion",
               "inhalation", "tube", "other"}
 _SYM_SEVERITY = {"mild", "moderate", "severe"}
+# descriptive, not safety-bearing: an invalid kind omits the KEY, the
+# request item survives (unlike status/negated, which drop the item)
+_REQ_KINDS = {"request", "question", "self_plan"}
+_REPLY_KINDS = {"ack", "intent", "progress", "answer", "done", "cancel"}
 _LAB_FLAGS = {"high", "low"}
 _DUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -626,6 +651,7 @@ def _validate(d: dict, body: str | None = None,
         v.labs(d, out)
         v.events(d, out)
         v.requests(d, out)
+        v.reply(d, out)
         v.vitals(d, out)
         v.scalars(d, out)
         if v.ev_dropped:
@@ -877,6 +903,16 @@ class _Validator:
                     "action": _cap(r.get("action"), 60)}
             if isinstance(r.get("from"), str):
                 item["from"] = r["from"].strip()[:30]
+            kind = self.enum(r, "kind", _REQ_KINDS)
+            if kind:
+                item["kind"] = kind
+            # a condition is a quote: stored only as the body's own
+            # span, never as the model's rendering (no fabricated 〜なら)
+            cond = _clean_text(r.get("condition"), 60)
+            span = locate_quote_span(self.body, cond) \
+                if cond and self.body is not None else None
+            if span is not None:
+                item["condition"] = self.body[span[0]:span[1]]
             if isinstance(r.get("due"), str) \
                     and _valid_date(r["due"].strip()):
                 item["due"] = r["due"].strip()
@@ -888,6 +924,21 @@ class _Validator:
             self.ev(item, r)
             reqs.append(item)
         out["requests"] = reqs
+
+    def reply(self, d: dict, out: dict):
+        if "reply" not in d:
+            return
+        r = d["reply"]
+        kind = self.enum(r, "kind", _REPLY_KINDS) \
+            if isinstance(r, dict) else False
+        if not kind:
+            self.drop_item("reply")
+            return
+        item = {"kind": kind}
+        self.ev(item, r)
+        # a typed reply never surfaces without its located quote
+        if "evidence" in item:
+            out["reply"] = item
 
     def vitals(self, d: dict, out: dict):
         if "vitals" not in d:
@@ -1143,6 +1194,8 @@ def _merge(outs: list[dict]) -> dict:
             out.setdefault("vitals", {})[k] = v   # latest reading wins
         if d.get("urgency") == "high":
             out["urgency"] = "high"
+        if "reply" not in out and d.get("reply"):
+            out["reply"] = d["reply"]
         for k in ("_items_dropped", "_evidence_dropped"):
             if d.get(k):
                 out[k] = out.get(k, 0) + d[k]
@@ -1184,6 +1237,9 @@ def _facts(v: dict | None) -> set:
                                        ensure_ascii=False)))
     for key, value in ((v or {}).get("vitals") or {}).items():
         facts.add(("vitals", key, value))
+    reply = (v or {}).get("reply")
+    if isinstance(reply, dict) and reply.get("kind"):
+        facts.add(("reply", reply["kind"]))
     return facts
 
 
@@ -1336,6 +1392,11 @@ def llm_extract(body: str, *, context: str | None = None,
     if not outs:
         return None
     out = outs[0] if len(outs) == 1 else _merge(outs)
+    if not context:
+        # a reply classification without the thread it answers is a
+        # guess — the rules live in _CTX_HEAD, so root posts never
+        # saw them
+        out.pop("reply", None)
     if len(chunks) > 1:
         out["_chunks_total"] = len(chunks)
     # Bounded integrity metadata — delivered through ``meta_out`` only;
@@ -2504,6 +2565,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # recovering the lost evidence/items — batch items must not
             # settle for the degraded output a single would have repaired
             if v is not None and not drops:
+                v.pop("reply", None)   # batch rows are context-free
                 out[index] = v
         return "ok", out, meta
 
