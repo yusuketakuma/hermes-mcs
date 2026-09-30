@@ -1095,12 +1095,13 @@ def test_karte_id_migration_is_additive_and_idempotent(tmp_path):
     path = str(tmp_path / "ledger.db")
     db = ledger.Ledger(path)
     db.db.execute("ALTER TABLE patients DROP COLUMN karte_id")  # pre-#21 shape
+    db.db.execute("ALTER TABLE patients DROP COLUMN karte_summary_due")
     db.db.commit()
     db.close()
-    for _ in range(2):  # reopen twice: column added once, then a no-op
+    for _ in range(2):  # reopen twice: columns added once, then a no-op
         db = ledger.Ledger(path)
         cols = {r[1] for r in db.db.execute("PRAGMA table_info(patients)")}
-        assert "karte_id" in cols
+        assert {"karte_id", "karte_summary_due"} <= cols
         assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
         db.close()
 
@@ -1166,18 +1167,20 @@ def test_karte_summary_missing_orders_oldest_first_and_limits(tmp_path):
     db.close()
 
 
-def test_karte_summary_stale_lists_projects_with_newer_messages(tmp_path):
+def test_karte_summary_due_flag_is_durable_until_stored(tmp_path):
     db = _ledger(tmp_path)
     for pid, karte in ((1, 10), (2, 20)):
         db.upsert_patient_info(_karte_patient(pid, karte))
-        db.karte_summary_store(pid, karte, _summary())
-    db.upsert_patient_info(_karte_patient(3, 30))                # never fetched
-    assert db.karte_summary_stale() == []
-    db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.fetched_at',1.0) "
-                  "WHERE project_id=1")
+    db.upsert_patient_info(_unread_patient(3))                   # no karte_id
+    db.db.execute("UPDATE patients SET last_seen=project_id*-1")  # 2 oldest
     db.db.commit()
-    db.save_messages([_msg_at(100, 1, _iso(0)), _msg_at(300, 3, _iso(0))])
-    assert db.karte_summary_stale() == [1]
-    db.karte_summary_store(1, 10, _summary())                    # refetched
-    assert db.karte_summary_stale() == []
+    assert db.karte_summary_due() == []
+    for pid in (1, 2, 3, 1):
+        db.karte_summary_mark_due(pid)
+    assert db.karte_summary_due() == [2, 1]                      # 3 has no karte_id
+    db.karte_summary_store(1, 10, _summary())                    # new artifact clears
+    assert db.karte_summary_due() == [2]
+    db.karte_summary_mark_due(1)
+    db.karte_summary_store(1, 10, _summary())                    # same sha clears too
+    assert db.karte_summary_due() == [2]
     db.close()
