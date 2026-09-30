@@ -16,7 +16,7 @@
 - 空きディスク約 12 GB（LLM モデル 5.7 GB を含む）と、github.com・
   huggingface.co へ接続できるネットワーク
 - MCS のログイン ID とパスワード
-- 通知を使う場合: Discord bot または Slack app（作り方は付録A/B）
+- 通知を使う場合: Slack app（推奨・作り方は付録B）または Discord bot（付録A）
 
 **手順**:
 
@@ -170,23 +170,26 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 `services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
 （秘密情報と選択が必要）だけ。
 
-### A-2. 通知先（Discord / Slack）側の準備
+### A-2. 通知先（Slack / Discord）側の準備
+
+通知先は **Slack を推奨**します（カード操作がコンパクトで、導入も
+`hermes slack` コマンド一発。Discord も同じカード形式で使えます）。
 
 収集する値:
 
 | 用途 | 値 | 入手先 |
 |---|---|---|
-| Discord | `application_id` | Developer Portal → General Information |
-| Discord | `guild_id`（サーバーID） | Discord 開発者モード → サーバー名右クリック |
-| Discord | `channel_id`（カード投稿先） | 同上 → チャンネル右クリック |
-| Discord | `DISCORD_BOT_TOKEN` | Developer Portal → Bot → Reset Token（**一度しか表示されない**） |
-| Discord | 自分の user ID | 開発者モード → 自分の名前右クリック → Copy User ID |
 | Slack | `SLACK_BOT_TOKEN`（`xoxb-`） | api.slack.com → Install App |
 | Slack | `SLACK_APP_TOKEN`（`xapp-`） | 同上 → Socket Mode で `connections:write` 付き生成 |
 | Slack | `team_id`（ワークスペースID） | Slack 管理画面や API |
 | Slack | `application_id`（api_app_id） | api.slack.com → Basic Information |
 | Slack | `channel_id` | チャンネル名 → チャンネル詳細 → 最下部の ID |
 | Slack | member ID（許可ユーザー） | プロフィール → ⋮ → Copy member ID |
+| Discord | `application_id` | Developer Portal → General Information |
+| Discord | `guild_id`（サーバーID） | Discord 開発者モード → サーバー名右クリック |
+| Discord | `channel_id`（カード投稿先） | 同上 → チャンネル右クリック |
+| Discord | `DISCORD_BOT_TOKEN` | Developer Portal → Bot → Reset Token（**一度しか表示されない**） |
+| Discord | 自分の user ID | 開発者モード → 自分の名前右クリック → Copy User ID |
 
 アプリ・bot の作成手順は hermes-agent リポジトリのドキュメントを
 **付録A（Discord）・付録B（Slack）に転記済み** — そちらをそのまま
@@ -210,31 +213,34 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 - Keychain `mcs-adapter` へ MCS パスワードを登録
 - `~/.mcs/.env` に `MCS_PASSWORD`（Keychain ロック中のフォールバック）
   と `TYPESAFE_API_KEY`（環境変数で渡した場合）を保存
-- `notify.interactive=discord`/`slack` を選んだ場合、hermes 側へも
+- `notify.interactive=slack`/`discord` を選んだ場合、hermes 側へも
   書き込む（Slack は `slack_*` settings キーにマップされる）:
   - プラグイン settings を serving profile の config.yaml へ
     （`hermes -p <profile> config set` 経由 — snapshot/inbox/
     allowlists/scope 一式）
-  - `DISCORD_BOT_TOKEN`（Slack は `SLACK_BOT_TOKEN`+
-    `SLACK_APP_TOKEN`）を同 profile の `.env` へ（stdin 経由、
+  - `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN`（Discord は
+    `DISCORD_BOT_TOKEN`）を同 profile の `.env` へ（stdin 経由、
     argv には載せない。既設定済みのトークンは残る）
 
 非対話でも実行できる（CI・再現用）:
 
 ```bash
 MCS_SETUP_PASSWORD=<mcs-pass> TYPESAFE_API_KEY=<key> \
-DISCORD_BOT_TOKEN=<token> \
+SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token2> \
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
-    --login-id <ID> --notify-target discord:<チャンネルID> \
-    --set 'notify.interactive="discord"' \
-    --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C"}' \
+    --login-id <ID> --notify-target slack:<チャンネルID> \
+    --set 'notify.interactive="slack"' \
+    --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
     --plugin-profile <serving profile> \
-    --plugin-user-ids <uid> --plugin-chat-ids <chid> \
+    --plugin-user-ids <uid> \
     --plugin-project-ids <pid>
 ```
 
-`--set` の値は JSON（文字列は内側の引用符が必要）。例は
-`init --help` の末尾にも表示される。
+`--set` の値は JSON（文字列は内側の引用符が必要）。Discord の場合は
+`notify.interactive="discord"` +
+`notify.discord={"profile","application_id","guild_id","channel_id"}`・
+`--notify-target discord:<チャンネルID>`・`--plugin-chat-ids`、
+トークンは `DISCORD_BOT_TOKEN`。例は `init --help` の末尾にも表示される。
 
 - 既存の `~/.mcs/config.json` が壊れている（JSON として読めない・
   オブジェクトでない）場合、`init` は何も書かずに停止する（exit 1）。
@@ -564,7 +570,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
-| `health.max_missed_runs` | int | `2` | 欠測許容回数。昼5分・夜20分の予定と完了猶予から判定 |
+| `health.max_missed_runs` | int | `2` | 欠測許容回数。5分間隔の予定実行と完了猶予から判定 |
 
 ## 5. 秘密情報の配置
 
