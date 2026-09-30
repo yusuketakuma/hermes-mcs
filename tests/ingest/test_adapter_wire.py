@@ -1220,3 +1220,104 @@ def test_station_staffs_failure_kinds():
         Expired().station_staffs(st)
     with pytest.raises(mcs_adapter.SchemaError):
         Bad().station_staffs(st)
+
+
+# ---- F-5: unread screen cap (80 rows) ----
+
+def _raw_msg(mid):
+    return {"id": mid, "comment": "synthetic", "user": {"id": 1},
+            "created_at": "2026-09-19T00:00:00+09:00", "is_unread": True}
+
+
+class _UnreadPagesAdapter(mcs_adapter.MCSAdapter):
+    def __init__(self, pages, total=None):
+        self.pages = pages          # list of message-count per page
+        self.total = total
+
+    def _get(self, path, params=None, extend_session=True):
+        page = params["page"]
+        n = self.pages[page - 1] if page <= len(self.pages) else 0
+        base = (page - 1) * 100
+        pag = {"has_next": page < len(self.pages)}
+        if self.total is not None:
+            pag["total_entries"] = self.total
+        return {"messages": [_raw_msg(base + i + 1) for i in range(n)],
+                "paginate": pag}
+
+
+@pytest.mark.parametrize(("pages", "total", "capped"), [
+    ([10] * 8, None, True),        # exactly the 80-row screen cap
+    ([10] * 8, 80, True),          # cap with an honest total
+    ([10, 2], 12, False),          # complete short walk
+    ([10, 2], 30, True),           # server reports more than it listed
+    ([3], None, False),
+])
+def test_unread_walk_flags_screen_cap(pages, total, capped):
+    batch = _UnreadPagesAdapter(pages, total).fetch_unread_messages(1, 123)
+    assert batch.reached and batch.error is None
+    assert batch.capped is capped
+    assert len(batch.messages) == sum(pages)
+
+
+def test_unread_walk_page_cap_error_is_not_capped_flag():
+    batch = _UnreadPagesAdapter([10] * 30).fetch_unread_messages(1, 123, max_pages=3)
+    assert batch.error is not None and batch.error.kind == "pages_exceeded"
+    assert batch.capped is False
+
+
+@pytest.mark.parametrize(("detail", "expect"), [
+    ({"project": {"is_archived": False, "oldest_unread_message": {"id": 7}}}, 7),
+    ({"project": {"is_archived": False, "oldest_unread_message": None}}, None),
+    ({"data": {"project": {"is_archived": True, "oldest_unread_message": {"id": 9}}}}, 9),
+])
+def test_oldest_unread_id_reads_project_detail(detail, expect):
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._get = lambda path, params=None, **k: detail
+    assert adapter.oldest_unread_id(1) == expect
+
+
+@pytest.mark.parametrize("detail", [
+    {}, {"project": {}}, {"project": {"is_archived": False,
+                                       "oldest_unread_message": {"id": "x"}}},
+])
+def test_oldest_unread_id_rejects_malformed_detail(detail):
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._get = lambda path, params=None, **k: detail
+    with pytest.raises(mcs_adapter.SchemaError):
+        adapter.oldest_unread_id(1)
+
+
+# ---- F-5: fallback acknowledgement when the unread route rejects a capped project ----
+
+def _mark_adapter(unread_kind, calls):
+    adapter = mcs_adapter.MCSAdapter()
+
+    def get(path, params=None, **k):
+        calls.append((path, dict(params or {})))
+        if path.endswith("/messages") and params and params.get("unread") == 1:
+            raise mcs_adapter.MCSError(unread_kind, "GET messages", status=400)
+        if path.endswith("/messages"):
+            return {"messages": [], "paginate": {"has_next": False}}
+        return {"project": {"is_archived": False, "oldest_unread_message": None}}
+    adapter._get = get
+    return adapter
+
+
+def test_mark_read_fallback_uses_plain_list_only_when_allowed():
+    calls = []
+    adapter = _mark_adapter("http_error", calls)
+    assert adapter.mark_patient_read(1, 123, fallback_plain=True)["project"]["is_archived"] is False
+    plain = [p for path, p in calls if path.endswith("/messages") and "unread" not in p]
+    assert plain == [{"per_page": 1, "page": 1, "include_paginate_totals": 0}]
+    assert "keep_read_status" not in plain[0]        # the read must clear the flag
+
+
+def test_mark_read_without_fallback_or_other_kinds_raises():
+    calls = []
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        _mark_adapter("http_error", calls).mark_patient_read(1, 123)
+    assert e.value.kind == "http_error" and len(calls) == 1
+    calls.clear()
+    with pytest.raises(mcs_adapter.MCSError) as e:
+        _mark_adapter("network_error", calls).mark_patient_read(1, 123, fallback_plain=True)
+    assert e.value.kind == "network_error" and len(calls) == 1
