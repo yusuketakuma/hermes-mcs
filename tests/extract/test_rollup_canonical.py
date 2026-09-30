@@ -164,6 +164,63 @@ def test_rollup_carries_request_kind_condition_due_text(db):
     assert rollup.dirty_projects(db) == []
 
 
+def _thread(db, rows):
+    """rows: (mid, parent, sender, posted, content) -> messages + LLM
+    artifacts; the root request row is mid 1 by SYNTH-A."""
+    for mid, parent, sender, posted, content in rows:
+        msg = _message(mid=mid, body="合成本文", parent_id=parent,
+                       posted_at=posted)
+        msg.sender_name = sender
+        db.save_messages([msg])
+        db.artifact_add("extract_llm", json.dumps(content), project_id=1,
+                        message_id=mid, meta={"hash": _hash(db, mid)})
+
+
+_REQ = {"requests": [{"to": "SYNTH-医師", "action": "処方変更を確認"}]}
+
+
+def _reply(kind):
+    return {"reply": {"kind": kind, "evidence": "合成本文"}}
+
+
+@pytest.mark.parametrize(("replies", "state", "conflict"), [
+    ([(2, 1, "SYNTH-B", "T01:00", _reply("done"))], "done", False),
+    # the requester's own 「承知しました」 never answers the request
+    ([(2, 1, "SYNTH-A", "T01:00", _reply("ack"))], None, False),
+    ([(2, 1, "SYNTH-B", "T01:00", _reply("ack")),
+      (3, 1, "SYNTH-B", "T02:00", _reply("done"))], "done", False),
+    ([(2, 1, "SYNTH-B", "T01:00", _reply("done")),
+      (3, 1, "SYNTH-C", "T02:00", _reply("cancel"))], "cancel", True),
+    # reply on an unrelated thread (root 9) is not this request's
+    ([(9, None, "SYNTH-B", "T01:00", {}),
+      (10, 9, "SYNTH-C", "T02:00", _reply("done"))], None, False),
+    # a reply posted BEFORE the request never counts
+    ([(2, 1, "SYNTH-B", "T00:00", _reply("done"))], None, False),
+])
+def test_rollup_thread_reply_state(db, replies, state, conflict):
+    """#20-C order 4: thread-level, view-only reply_state on LLM request
+    rows — strongest later reply kind from another sender in the same
+    thread; cancel after done also flags reply_conflict."""
+    day = "2026-09-19"
+    _thread(db, [(1, None, "SYNTH-A", f"{day}T00:30:00+09:00", _REQ)] + [
+        (mid, parent, sender, f"{day}{hm}:00+09:00", content)
+        for mid, parent, sender, hm, content in replies])
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert len(rows) == 1 and rows[0]["mid"] == 1
+    assert rows[0].get("reply_state") == state
+    assert rows[0].get("reply_conflict", False) is conflict
+    assert rows[0]["unverified"] is False
+
+
+def test_rollup_reply_with_unparseable_posted_at_is_never_later(db):
+    """NULL posted_at_ts maps to 0 and can never be 'later' than the
+    request, so a reply with an unparseable date sets nothing."""
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "not-a-date", _reply("done"))])
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert "reply_state" not in rows[0]
+
+
 def test_pre_flag_rollup_is_rebuilt_with_unverified_flag(db):
     """A rollup persisted before todo 15 (version-1 meta, no
     'unverified' keys) is dirty once and rebuilt with the flag; the
