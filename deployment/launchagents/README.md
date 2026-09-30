@@ -138,7 +138,11 @@ backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 �
   fallback する（サーバ停止中は call も失敗するため stall しない）。
 - `mcs_llm_catchup.sh`（hermes cron・22:30 起動・最大55分）:
   `MCS_LLM_SLOT=1` で `semantic_drain.py --drain` を走らせ、QC/semantic
-  ジョブを深夜 window で slot 1 から消化する。`WINDOW_S=3300` は
+  ジョブを深夜 window で slot 1 から消化する。その前に上限到達の失敗を
+  夜間に 1 回ずつ再試行する（`extract_llm.py --revive-failed` と
+  `semantic_drain.py --revive-failed`。失敗から 6 時間以上経ったもの、
+  同じ入力につき最大 3 夜、1 夜あたり抽出 30 件・semantic 20 件まで。
+  本文や入力が変われば従来どおり新しい予算で始まる）。`WINDOW_S=3300` は
   hermes cron の script timeout 既定 3600s 未満に収める上限 —
   超過すると毎回 kill される（tests/meta/test_deployment_scripts.py
   で固定）。extract drainer 死亡時は shard 0/2 の gap-fill を
