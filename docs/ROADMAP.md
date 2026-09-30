@@ -1,6 +1,6 @@
 # hermes-mcs ロードマップ
 
-改訂日: 2026-09-29（v1.0.6 / `f947042` 時点。詳細計画を追加）
+改訂日: 2026-09-30（詳細計画の基準は v1.0.6 / `f947042`。処方薬剤歴の抽出候補とタスク候補抽出・v4強化計画を追加）
 対になる文書: zaitaku-calender `ROADMAP.md`。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約決定の番号（CD-1〜CD-10）、契約版は両文書で共通。片方の C0/Q/CD 見出し行だけを変えた場合は C0 を完了扱いにしない。
 旧版（Oracle レビュー統合版、機能候補 v2 30 項目）は git 履歴（`git show f947042:docs/ROADMAP.md`）を参照。変更の詳細は `CHANGELOG.md`。
 
@@ -11,10 +11,12 @@
 | 取得・アーカイブ | #1〜#6 | [`roadmap/acquisition.md`](roadmap/acquisition.md) |
 | 整合性・命名・運用前提 | #7〜#10 | [`roadmap/integrity.md`](roadmap/integrity.md) |
 | 抽出 | #11・#15・#16 | [`roadmap/extraction.md`](roadmap/extraction.md) |
+| タスク候補抽出・v4強化 | #20 | [`roadmap/task-extraction.md`](roadmap/task-extraction.md) |
+| MCS 患者連携サマリーの取り込み | #21 | [`roadmap/karte-summary.md`](roadmap/karte-summary.md) |
 | シグナル・統計 | #12〜#14・#17〜#19 | [`roadmap/signals-stats.md`](roadmap/signals-stats.md) |
 | zaitaku-calender 接続 | C0〜C4（hermes-mcs 側） | [`roadmap/connector.md`](roadmap/connector.md) |
 
-**ID の扱い**: 項目は §4 の番号（#1〜#19）で呼ぶ。旧版にある ID は A1-x / B1-x / C1-x、懸念 C01〜C07、機能候補 v2 の #1〜#30 で、「旧版の出典」列の「優先順位 N」は旧版「機能候補の優先順位（基盤修正完了後）」の N 番目を指す。本書で新設する ID は次の 4 種。
+**ID の扱い**: 項目は §4 の番号（#1〜#21）で呼ぶ。旧版にある ID は A1-x / B1-x / C1-x、懸念 C01〜C07、機能候補 v2 の #1〜#30 で、「旧版の出典」列の「優先順位 N」は旧版「機能候補の優先順位（基盤修正完了後）」の N 番目を指す。本書で新設する ID は次の 4 種。
 - `F-n`: 先に直す既存不具合・ガード（§3）。
 - `#N-Dk`: 項目 N のオーナー判断（§9）。
 - `CD-n`: C0 で決める契約事項（§5）。
@@ -63,11 +65,12 @@
 | F-1 | **未確認の検査値がカードに確定表示される**。`structured_view._lab_line`（`mcs/views/structured_view.py:195-208`）が `unverified` を見ない。薬・症状・依頼は見ている。【実行確認】値が自分の evidence と矛盾する場合も、evidence がない場合も「検査:」行に出る | Discord/Slack のカードと text 通知に、根拠のない検査値が確定として出る | #15-A（値と evidence の突合、読み側で「検査候補（未確認）」に分離） | S |
 | F-2 | **ルール抽出が否定表現でも緊急度 high にする**。`_URGENT` の部分一致（`mcs/extract/v1/extract.py:48,304-306`）。【実行確認】「急ぎではありません」「緊急の対応は不要です」「明日すぐに連絡します」がすべて high | 第一報の警告表示（`notify_flush.py:267-270`）と signal の即時配信への昇格（`mcs_signals.py:1043-1058,1190-1197`）が、緊急でない投稿で起きる | #12a（出所ラベル）と #12-D5（ルール由来を同格に扱うか）。ルール側の否定ガードは #12c（RULE_VERSION の bump を伴う） | S（表示）/ M（12c） |
 | F-3 | **外部出力の receipt が `status` を無視して acked にする**。`ext_contract._valid_ack`（:546-553）は id・sha・records・acked_at だけを見る。`status:"rejected"` でも acked になる | 手動・未運用のため潜在。C1 で receipt を扱う前に直す | C1 の G3（`parse_receipt` と `_valid_ack` の status 検査） | S |
+| F-5 | **未読取得がサーバ側の切り詰め（未読画面は最大 80 件）を検知できない**。`fetch_unread_messages` は `include_paginate_totals=1` を付けるが `paginate.total_entries` を検証せず、`has_next=false` を完了と見なす。既読化は timestamp ゲート無しで患者の未読フラグを全消しするため、切り詰められた古い未読は取得されずに既読になり得る（2026-09-30 オーナー指摘。現状の実発生は 0 回） | 未読一覧が上限に当たった患者で取得漏れが既読化される | (1) `total_entries > 取得件数` なら `unread_capped` として `incomplete`＋history job、(2) 既読化を「取得件数 == total_entries」かつ事後検証成立時に限定、(3) 上限到達時は `/projects/{id}` の `oldest_unread_message` を anchor に、その投稿が本文つきで保存され floor が到達し返信 job が無いときだけ既読化（`ledger.unread_cap_cleared`）。(4) 未読ルート自体が失敗する場合も、同じ証明が揃った患者だけ `keep_read_status` なしの通常一覧 GET で既読化（`mark_patient_read(fallback_plain=True)`。事後検証は共通）。**2026-09-30 実装済み（`UNREAD_SCREEN_CAP=80`、理由コード `unread_capped`、テスト 19 本）** | S |
 | F-4 | **PRESETS / DETECTORS と export allowlist の整合を検証するテストがない**。食い違うと `brain_export.run` 全体が `stat_not_exportable` / `aggregate_field_type_invalid` で失敗する（`export_schema.py:159-161,172`） | 新しい stat / signal 型を足すたびに、export 全体が止まるリスク | 共通ガードテスト（drift guard。C0 の成果物と共通） | S |
 
 コード外の運用リスク（実装計画ではなく判断事項）: **この Mac は FileVault Off・Time Machine の保存先なし**（2026-09-29 確認）。原本 DB と日次バックアップは同一ディスク上の平文だけで、端末の故障・盗難で復旧点が残らない。#1 と同時に判断する（`#1-D6`）。
 
-## 4. 項目一覧（#1〜#19）
+## 4. 項目一覧（#1〜#21）
 
 規模: S = 半日〜1 日、M = 2〜4 日、L = 1 週間以上（実装 + テスト + docs。運用での測定は別）。「旧版の出典」は旧 ROADMAP の項目名・ID。
 
@@ -92,6 +95,31 @@
 | 17 | 職種間やり取りの構造と応答時間 | v2 #20 | M（v2 L） | — | 永続テーブルなしの導出。職種群 × {n, 中央値, p90, 未応答数}。小セル抑制。個人データなし |
 | 18 | 業務負荷レポートと集計 | v2 #27、優先順位 7（集計部分） | M | #13 | `coverage_gaps` stat + 週次・月次レポート。取得未完了範囲を必ず併記。定期出力の仕組みは新規 |
 | 19 | シグナル精度のフィードバック | v2 #28 | M | — | ラベル基盤（resolution の原因、`reason_code`）と `st_signal_feedback`。内部だけ。検知条件への自動フィードバックはしない |
+| 20 | チャットからのタスク候補抽出・v4 能力強化 | 2026-09-30 ユーザー要望 | E1 設定のみ / A S / B S〜M / C S〜M / E2 設定+観測 / D M / E3 人手ラベル期間 | #20-D1〜D4。#11・#16 は後続の補助 | 利用者に届く extract_llm の `requests` に種別・条件・返信種別を加法追加し、canonical は同じ項目へ追従。shadow の semantic/summary/loop/fact_source は assist→calibration→enforce→G6→canonical の順に on にする（ゲートは満たして通す）。派生 artifact は保留。詳細は [`roadmap/task-extraction.md`](roadmap/task-extraction.md) |
+| 21 | MCS 患者連携サマリーの取り込みと活用 | 2026-09-30 ユーザー要望（MCS 新機能） | M | #20 の実装群の後。#21-D1〜D3 | `GET /kartes/{id}/memo_summary` を読み取り専用で bounded 取得し、rollup・患者サマリー・抽出文脈・digest 件数に使う。書き戻し・既読化・allowlist 変更なし。詳細は [`roadmap/karte-summary.md`](roadmap/karte-summary.md) |
+
+### 今後の候補 — 処方薬剤歴の抽出（2026-09-30 追加、未着手）
+
+**目的**: 現在収集している薬剤師の添付 PDF と投稿本文・返信から、出典付きの薬剤歴候補を抽出する。#11（薬剤名正規化）・#16（添付 OCR）の拡張候補として扱い、処方正本の確定・採用は zaitaku-calender 側で人が行う。実装順・規模・接続契約は未決定。
+
+**取得元と進め方**
+
+- 先行: 投稿単位の既存抽出結果（薬剤名・用量・開始／中止／増減量・現在／過去／予定・根拠引用）を時系列に整理する。患者 rollup は最新状態への集約であり、全履歴の取得元にはしない。
+- 添付: 薬剤師の PDF を「その時点の薬剤一覧」の候補として抽出し、その後の本文の変更記録で補う。#16 の PDFKit によるテキスト層抽出を優先し、スキャン PDF・画像はローカル OCR を使う。処方箋・お薬手帳・退院時薬剤一覧の写真も候補とする。
+- 比較: 定期報告の一覧間で追加・用量／用法変更を候補提示する。一覧から消えただけでは中止と確定しない。
+- 将来の別連携: 薬局システムから CSV 等を出力できる場合は、OCR を介さない取込を検討する。現在の MCS 収集とは別範囲で、出力可否・権限・契約の確認が必要。
+
+**候補として保持する項目・区別**
+
+- 患者との対応、薬剤名の原表記、規格、服用量、用法、日数、処方日／変更日、変更内容、根拠投稿 ID／添付 ID・ページ・引用、確認状態。記載のない値は推測で埋めない。
+- 投稿日時と実際の処方・変更日、処方・調剤・実際の服用・変更予定、本人と家族の薬を区別する。OCR テキスト上の引用一致だけでは原画像の正読を保証しないため、原本参照と人の確認を残す。
+- #11 の正規化は原表記を残して注釈として使う。規格・剤形・用法の違いを成分名だけで統合しない。記録の欠落・矛盾・訂正は未確認として残す。
+
+**保存・公開の前提と受入の方向**
+
+- 現状の添付実体はダウンロードから原則 14 日後に削除される（`mcs/core/maintenance.py`）。削除前に抽出結果を保存し、薬剤歴の検証に必要な原本・抽出結果の保持範囲と期間を #16-D2／D4 と併せて決める。削除済みの過去添付は現行経路で再取得できないため、未抽出として扱う。
+- #16 のローカル限定・未確認候補の境界を維持する。新しい表示画面や通知・export 経路をこの候補追加だけで承認した扱いにはしない。zaitaku-calender への受渡しは別途契約を決める。
+- 完全合成の本文・PDF／画像で、薬と用量／用法の行対応、規格と服用量の区別、日付、予定・否定・家族の薬、OCR 誤読、重複、訂正、一覧からの欠落を検証する。実データの PDF 残存量・書式・抽出精度は未確認であり、実装前に許可された範囲で評価する。
 
 ### 調査で分かった旧記述の誤り（各詳細計画に根拠）
 
@@ -237,6 +265,18 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 
 - #14（#11 の完了と #19 のラベルが十分に貯まってから）、#16 stage 2/3、#15-D/E、#17 第 2 版、C3、#7 Step 2、C2（Q9 の承認後だけ。着手を勧めない）。
 
+### #20 — 本文のタスク候補抽出・v4強化（追加計画）
+
+- 既存の取得・復旧・接続フェーズの完了条件は変更しない。順序: 20-E1（`summary_mode`/`loop_mode` を assist、`semantic_observe` の日次観測。設定のみ・今すぐ）→20-A（依頼の評価ケース）→20-B（extract_llm `requests` の種別・条件）→20-C（返信の種別と rollup の `reply_state`）→20-E2（calibration → `mode`/`summary_mode`/`loop_mode` enforce。`semantic_notice` 配送開始）→20-D（canonical v2 の同項目追従）→20-E3（人手ラベル 200 件 → G6 → `fact-source canonical`）。A〜C は extract_llm と読み側だけを触る。#11・#16・C1 の完了待ちにしない。
+- **オーナー方針（2026-09-30）: shadow/off の機能は on にする。** コード上のゲート（enforce の `threshold_mode: calibrated` + `calibration_version`、canonical の G6 評価 token）は迂回せず満たす。canonical は 20-D の前に切り替えるとカードの「依頼:」行が退行するため 20-D 完了を前提にする。`docs/semantic-evaluation.md` §4 の「config だけで有効化しない」は、この方針下では「ゲートを満たした上で設定する」と読む。
+- 稼働構成（2026-09-30 確認）は semantic/summary/loop/fact_source がすべて shadow、extract_qc は annotate（最大）。初版計画の canonical 上の派生 artifact（`request_detail`）・prefix 評価 harness・合成 100 スレッドは、A〜E の実測で必要と分かった場合だけ別単位で計画する。
+- `EXTRACT_VERSION` は上げない（新着から適用）。全量再抽出が要る場合は #15-B・#4 の再生成窓に合わせる。`mcs-read-model/1` allowlist と Jev への送信 payload は変えない。詳細・受入条件は [`roadmap/task-extraction.md`](roadmap/task-extraction.md)。
+- **容量ゲート（2026-09-30）**: E2/E3 の切替は、直近 2 週間で semantic の LLM 時間が日中の 50% 以下・job p90 900 秒以下・tick の semantic 休止が週 1 回以下を満たしてから。履歴全件の canonical 化は LLM 時間 78 日分で不可、新着と bounded cohort のみ。根拠と削減策は詳細計画の「容量ゲート」。
+
+### #21 — MCS 患者連携サマリー（追加計画）
+
+- MCS 側の新機能「患者連携サマリー」（karte 単位の共有メモ、150 字）を読み取り専用で取り込む。adapter＋ledger＋取得段 → rollup／患者サマリー表示 → 抽出の参照専用文脈 → digest 件数の順。#20 の実装群と同じファイルを触るため、その後に直列で入れる。書き戻し・既読化・通知種別追加・allowlist 変更はしない。詳細は [`roadmap/karte-summary.md`](roadmap/karte-summary.md)。
+
 ## 9. オーナー判断一覧
 
 ### 接続（zaitaku-calender と共通の番号）
@@ -285,6 +325,8 @@ hermes-mcs では今後作らない。「旧版の出典」は v2 #N と優先�
 | #17-D1〜D3 | 小セル閾値 k と職種群 / `text_candidates` を出すか / 職種 map | 第 1 版の前 |
 | #18-D1〜D5 | 読者と配信先 / 週次・月次の切り方 / 休日 / 自施設と全体の分割 / 保持期間 | #18 の前 |
 | #19-D1〜D4 | 理由語彙 / digest 型の却下 UI / ack を採用に数えるか / n の下限 | #19 の前 |
+| #20-D1〜D4 | 初期対象業務・評価ラベル / `reply_state` を通知カードにも出すか閲覧のみか / E2（enforce）・E3（canonical）の切替時期 / 人手ラベル 200 件の分割・期間・記入者と E2 の前提観測の閾値 | D1 は 20-A、D2 は 20-C、D3 は各切替の前、D4 は E1 の観測開始後 |
+| #21-D1〜D3 | 患者サマリー view に本文先頭 80 字を出すか / 抽出文脈に注入するか / digest に件数・ID を出すか | #21 の実装前（既定は全て「出す・注入する」） |
 | C4-D1〜D2 | 縮退の範囲（名前のみ / 投稿者名も / 本文・要約も）/ 既定値 | C4 の前 |
 | CD-1〜CD-10 | §5 の契約事項 | C0（CD-1 は初回の実送信前が期限） |
 
