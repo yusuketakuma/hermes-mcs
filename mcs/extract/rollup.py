@@ -45,6 +45,10 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # v1.0.5 rows carry version 1, so 2 already rebuilds them under this code.
 # Rebuilds only rewrite artifacts; no notification reads patient_rollup.
 PERIOD_CHECK_VERSION = 2
+# #20-C thread-level reply_state: strongest reply kind seen in the thread
+# after the request, from another sender. View-only, never a transition.
+_REPLY_STAGE = {k: i for i, k in enumerate(
+    ("ack", "intent", "progress", "answer", "done", "cancel"))}
 
 
 def _dicts(value) -> list[dict]:
@@ -99,6 +103,10 @@ def build_rollup(ledger, project_id: int) -> dict:
     # slot-less canonical categories stay enumerable in the read model.
     canonical = {}
     requests = []
+    # thread root -> [(ts, sender, reply kind)] / LLM request rows with
+    # their (root, ts, sender) for the reply_state pass below
+    replies = {}
+    req_thread = []
     next_planned = None
     senders = {}
     summary = None
@@ -163,6 +171,12 @@ def build_rollup(ledger, project_id: int) -> dict:
                 if isinstance(rq.get(src), str) and rq[src]:
                     row[dst] = rq[src]
             requests.append(row)
+            req_thread.append((row, m["parent_id"] or m["message_id"],
+                               ts, m["sender_name"]))
+        reply = lm.get("reply")
+        if isinstance(reply, dict) and reply.get("kind") in _REPLY_STAGE:
+            replies.setdefault(m["parent_id"] or m["message_id"], []) \
+                .append((ts, m["sender_name"], reply["kind"]))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
@@ -205,6 +219,19 @@ def build_rollup(ledger, project_id: int) -> dict:
     if symptoms:
         out["recent_symptoms"] = [{"symptom": k, "last": v}
                                   for k, v in list(symptoms.items())[:20]]
+    # ponytail: thread-level reply_state — any later reply by another
+    # sender in the same thread counts, no per-request action matching
+    # (that is the Loop path). NULL posted_at_ts is 0 and never 'later'.
+    for row, root, ts, sender in req_thread:
+        seen = [(rts, kind) for rts, rsender, kind in replies.get(root, ())
+                if rts > ts and rsender != sender]
+        if seen:
+            row["reply_state"] = max(
+                (kind for _, kind in seen), key=_REPLY_STAGE.get)
+            done_at = [rts for rts, kind in seen if kind == "done"]
+            if done_at and any(kind == "cancel" and rts > done_at[0]
+                               for rts, kind in seen):
+                row["reply_conflict"] = True
     if requests:
         out["recent_requests"] = requests[:15]
     if canonical:
