@@ -155,21 +155,55 @@
     },
     {
       "id": "synth-request-self-plan",
-      "body": "看護師より: 明後日の午前に私が訪問して創部の状態を確認します。",
+      "body": "薬剤師より: 今週金曜の夕方、SYNTH-ジロウさん宅へ残薬を数えに伺う予定です。",
       "posted_at": "2026-09-01T10:00:00+09:00",
       "expect": {
-        "requests": [{"action": "創部", "kind": "self_plan"}]
+        "requests": [{"action": "残薬", "kind": "self_plan"}]
       },
       "forbid": {
-        "requests": [{"action": "創部", "kind": "request"}]
+        "requests": [{"action": "残薬", "kind": "request"}]
       }
     },
     {
       "id": "synth-request-conditional",
-      "body": "看護師さんへ: 体温が38度を超えるようなら医師へ連絡してください。",
+      "body": "介護士さんへ: 尿量が極端に少ない日があれば、訪問看護ステーションにも連絡を入れてください。",
       "posted_at": "2026-09-01T10:00:00+09:00",
       "expect": {
-        "requests": [{"action": "連絡", "to": "看護師", "kind": "request", "condition": "体温が38度を超えるようなら"}]
+        "requests": [{"action": "連絡", "to": "介護士", "kind": "request", "condition": "尿量が極端に少ない日があれば", "unverified": false}]
+      }
+    },
+    {
+      "id": "synth-request-condition-paraphrased",
+      "body": "薬剤師さんへ: 飲み込みにくそうな様子が見られたときは、粉砕への切り替えを医師に提案してください。",
+      "posted_at": "2026-09-01T10:00:00+09:00",
+      "expect": {
+        "requests": [{"action": "粉砕", "to": "薬剤師", "kind": "request", "condition": "飲み込みにくそうな様子が見られたとき", "unverified": false}]
+      },
+      "forbid": {
+        "requests": [{"action": "粉砕", "condition": null}]
+      }
+    },
+    {
+      "id": "synth-request-condition-negated",
+      "body": "介護士さんへ: 午前中に排尿がない場合、訪問看護へ電話で知らせてください。",
+      "posted_at": "2026-09-01T10:00:00+09:00",
+      "expect": {
+        "requests": [{"action": "知らせ", "to": "介護士", "kind": "request", "condition": "午前中に排尿がない場合", "unverified": false}]
+      },
+      "forbid": {
+        "requests": [{"action": "知らせ", "condition": null}]
+      }
+    },
+    {
+      "id": "synth-request-polite-question-form",
+      "body": "看護師より: 先生、SYNTH-サブロウさんに酸化マグネシウムの処方をお願いできますか？",
+      "posted_at": "2026-09-01T10:00:00+09:00",
+      "expect": {
+        "meds": [{"name": "酸化マグネシウム"}],
+        "requests": [{"action": "処方", "to": "医師", "from": "看護師", "kind": "request"}]
+      },
+      "forbid": {
+        "requests": [{"action": "処方", "kind": "question"}]
       }
     },
     {
@@ -278,6 +312,47 @@
       },
       "forbid": {
         "requests": [{"action": "服薬カレンダー", "to": "看護師"}]
+      }
+    },
+    {
+      "id": "synth-reply-intent",
+      "context": "[医師] 薬剤師さんはSYNTH-ハナコさんの残薬の数の確認をお願いします。",
+      "body": "薬剤師より: 次回の訪問時に対応します。",
+      "posted_at": "2026-09-01T11:00:00+09:00",
+      "expect": {"reply": {"kind": "intent"}},
+      "forbid": {"reply": [{"kind": "done"}, {"kind": "ack"}]}
+    },
+    {
+      "id": "synth-reply-bare-confirm-not-done",
+      "context": "[医師] 看護師さんは明日の訪問で血圧測定と採血をお願いします。",
+      "body": "確認しました。",
+      "posted_at": "2026-09-01T11:00:00+09:00",
+      "expect": {"reply": {"kind": "ack"}, "requests": []},
+      "forbid": {"reply": {"kind": "done"}}
+    },
+    {
+      "id": "synth-reply-done-other-object",
+      "context": "[医師] 薬剤師さんは残薬の数の確認をお願いします。",
+      "body": "薬剤師より: 服薬カレンダーのセットを完了しました。",
+      "posted_at": "2026-09-01T11:00:00+09:00",
+      "expect": {"reply": null, "requests": []},
+      "forbid": {"reply": [{"kind": "done"}, {"kind": "progress"}]}
+    },
+    {
+      "id": "synth-context-clinical-unchanged",
+      "context": "[医師] 看護師さんは次回訪問で体調の確認をお願いします。ロキソニンは継続です。",
+      "body": "看護師より: 本日伺いました。咳は続いていますが発熱はありません。センノシドは昨日から中止しています。",
+      "posted_at": "2026-09-01T15:00:00+09:00",
+      "expect": {
+        "meds": [{"name": "センノシド", "action": "stop"}],
+        "symptoms": [{"text": "咳", "negated": false},
+                     {"text": "発熱", "negated": true}],
+        "events": ["visit"]
+      },
+      "forbid": {
+        "meds": [{"name": "ロキソニン"}],
+        "symptoms": [{"text": "発熱", "negated": false},
+                     {"text": "咳", "negated": true}]
       }
     }
   ]
