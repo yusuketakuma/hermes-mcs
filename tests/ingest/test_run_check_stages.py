@@ -1978,23 +1978,22 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
 
 
 
-# ---- in-tick semantic lane guards (2026-09-30 starvation incident) ----
+# ---- in-tick semantic run guards (2026-09-30 starvation incident) ----
 
 def _sem_args():
     return SimpleNamespace(jobs_only=False)
 
 
-def _sem_setup(monkeypatch, tmp_path, prev_lane=None, busy=False):
+def _sem_setup(monkeypatch, tmp_path, busy=False):
     """busy: False, True, or a list consumed one probe at a time."""
-    monkeypatch.setattr(run_check, "_prev_health",
-                        lambda: {"semantic_lane": prev_lane} if prev_lane is not None else {})
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
     samples = list(busy) if isinstance(busy, list) else None
     monkeypatch.setattr(extract_llm, "pinned_slot_busy",
                         lambda deadline: samples.pop(0) if samples else bool(busy) if samples is None else False)
     monkeypatch.setattr(run_check.time, "sleep", lambda s: None)
 
 
-def test_semantic_lane_leaves_tail_reserve(tmp_path, monkeypatch):
+def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     import semantic
     seen = {}
     _sem_setup(monkeypatch, tmp_path)
@@ -2005,18 +2004,17 @@ def test_semantic_lane_leaves_tail_reserve(tmp_path, monkeypatch):
     deadline = time.monotonic() + 400
     run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
     assert seen["deadline"] <= deadline - run_check.SEMANTIC_TAIL_RESERVE_S
-    assert result["semantic_lane"] == {"starved_streak": 0}
     db.close()
 
 
 
 
-def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
+def test_semantic_run_skips_when_slot_never_frees(tmp_path, monkeypatch):
     """A busy realtime slot skips analysis without pausing background."""
     import semantic
     clock = [1000.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
-    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2}, busy=True)
+    _sem_setup(monkeypatch, tmp_path, busy=True)
     monkeypatch.setattr(run_check.time, "sleep",
                         lambda s: clock.__setitem__(0, clock[0] + s))
     monkeypatch.setattr(semantic, "run_due",
@@ -2026,9 +2024,6 @@ def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
     run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 400, True)
     assert result["semantic"]["skipped"] == "slot_busy"
     assert result["semantic"]["mode"] == "off" and result["semantic"]["elapsed_s"] == 0.0
-    assert result["semantic_lane"] == {"starved_streak": 0}
-    # the flag stays up so the drainers pause and the NEXT tick gets
-    # the slot (overnight arrivals are processed overnight)
     db.close()
 
 
@@ -2036,25 +2031,22 @@ def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
 
 
 
-def test_semantic_lane_off_clears_stale_hold(tmp_path, monkeypatch):
-    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 0,
-                                       "hold_until": time.time() + 3000})
+def test_semantic_run_off_keeps_overall_ok(tmp_path, monkeypatch):
+    _sem_setup(monkeypatch, tmp_path)
     db = _ledger(tmp_path)
     result = {"errors": []}
     run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 480, False)
-    assert result["semantic_lane"] == {"starved_streak": 0}
     assert run_check._health(db, result, "ok")["overall"] == "ok"
     db.close()
 
 
 @pytest.mark.parametrize("outcome", ["done", "exception"])
-def test_semantic_lane_streak_only_counts_evaluated_starvation(tmp_path, monkeypatch, outcome):
-    """Completed work resets the streak; a crashing lane neither
-    increments nor resets it (it is reported through errors instead)."""
+def test_semantic_run_records_outcome_or_error(tmp_path, monkeypatch, outcome):
+    """A crashing semantic lane surfaces through errors, not a state flag."""
     import semantic
     clock = [1000.0]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
-    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2})
+    _sem_setup(monkeypatch, tmp_path)
 
     def run_due(ledger, cfg, result, deadline, **kw):
         clock[0] = deadline
@@ -2066,10 +2058,9 @@ def test_semantic_lane_streak_only_counts_evaluated_starvation(tmp_path, monkeyp
     result = {"errors": []}
     run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 480, True)
     if outcome == "done":
-        assert result["semantic_lane"] == {"starved_streak": 0}
+        assert result["semantic"]["done"] == 1
     else:
         assert result["errors"] == ["semantic: RuntimeError"]
-        assert result["semantic_lane"] == {"starved_streak": 0}
     db.close()
 
 

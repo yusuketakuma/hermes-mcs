@@ -204,10 +204,6 @@ def _health(ledger, result: dict, status: str,
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     coll = _collection(result)
     free_mb = _free_mb()
-    lane = result.get("semantic_lane")
-    lane = lane if isinstance(lane, dict) else _semantic_lane_prev()
-    lane_held = _finite_number(lane.get("hold_until")) \
-        and now < lane["hold_until"]
     cards_health = notify_cards.health_cards(ledger)
     # Itemized attention block (2026-09-30): 'degraded' alone did not
     # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
@@ -244,7 +240,7 @@ def _health(ledger, result: dict, status: str,
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (result.get("errors") or coll["collection"] != "ok"
-                   or notify_state == "incomplete" or lane_held)
+                   or notify_state == "incomplete")
                else "ok")
     return {
         "overall": overall, "run_status": status,
@@ -271,7 +267,6 @@ def _health(ledger, result: dict, status: str,
             "poison_gated": poison,
             "ratio": round(current / total, 4) if total else None},
         "cards": cards_health,
-        "semantic_lane": lane,
         "attention": attention,
         "errors": list(result.get("errors") or []),
     }
@@ -1352,14 +1347,6 @@ def _deliver(ledger, args, cfg, result, deadline):
 SEMANTIC_TAIL_RESERVE_S = 60
 
 
-def _semantic_lane_prev() -> dict:
-    return {}
-
-
-def _lane(streak: int, hold_until: float | None = None) -> dict:
-    return {"starved_streak": 0}
-
-
 def _semantic_skipped(cfg, reason: str, **extra) -> dict:
     import semantic
     mode = semantic.semantic_config(cfg)[0]["mode"]
@@ -1371,7 +1358,6 @@ def _semantic_skipped(cfg, reason: str, **extra) -> dict:
 def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
                   run_lock_fd=None):
     """Serve arrival jobs on realtime while residents drain the backlog."""
-    result["semantic_lane"] = _lane(0)
     if not sem_on:
         return
     if args.jobs_only:

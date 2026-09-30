@@ -65,9 +65,6 @@ def probe_urls(endpoint: str) -> tuple[str, str]:
 
 # Three fixed lanes: wire slot 1 is realtime (MCS arrivals + Hermes),
 # slots 0 and 2 are backlog. Background workers never borrow realtime.
-SLOT_1 = 1
-SLOT_2 = 2
-SLOT_3 = 3
 BACKGROUND_SLOT = 0
 REALTIME_SLOT = 1
 BACKGROUND_SLOTS = (0, 2)

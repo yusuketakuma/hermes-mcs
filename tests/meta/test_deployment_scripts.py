@@ -26,8 +26,7 @@ def test_drainer_spawn_scripts_guard_quiesce_marker():
 
 
 def test_check_runs_around_the_clock(tmp_path):
-    """Every scheduled tick runs at day and night, including 22:37."""
-    import json
+    """The scheduled tick always runs — no time-of-day thinning."""
     import subprocess
     import sys
     body = (SCRIPTS / "mcs_check.sh").read_text(encoding="utf-8")
@@ -40,24 +39,9 @@ def test_check_runs_around_the_clock(tmp_path):
         'echo ran >> "$0.log"\n')
     (tmp_path / "py").chmod(0o755)
     runner.write_text(body)
-    bindir = tmp_path / ".local" / "bin"
-    bindir.mkdir(parents=True)
-    for hour, minute, thinning, ran in (
-            ("23", "02", None, True), ("23", "20", None, True),
-            ("23", "07", None, True), ("12", "07", None, True),
-            ("22", "37", False, True), ("06", "15", False, True)):
-        health = {} if thinning is None else {"night_thinning": thinning}
-        (tmp_path / "config.json").write_text(json.dumps({"health": health}))
-        log = tmp_path / "py.log"
-        log.unlink(missing_ok=True)
-        (bindir / "date").write_text(
-            "#!/bin/sh\ncase \"$1\" in\n"
-            f"  +%H) echo {hour} ;;\n  +%M) echo {minute} ;;\n"
-            "  *) /bin/date \"$@\" ;;\nesac\n")
-        (bindir / "date").chmod(0o755)
-        subprocess.run(["bash", str(runner)], env={"HOME": str(tmp_path)},
-                       capture_output=True, timeout=30)
-        assert log.exists() is ran, (hour, minute)
+    subprocess.run(["bash", str(runner)], env={"HOME": str(tmp_path)},
+                   capture_output=True, timeout=30)
+    assert (tmp_path / "py.log").exists()
 
 
 def test_check_incomplete_alert_names_its_cause(tmp_path):

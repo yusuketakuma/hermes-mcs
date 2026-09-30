@@ -193,7 +193,7 @@ def test_llm_chat_pins_background_slot(monkeypatch):
     monkeypatch.setattr(local_llm, "chat", fake_chat)
     assert semantic.llm_chat("hi") == "ok"
     assert seen["extra_payload"] == {"id_slot": local_llm.BACKGROUND_SLOT}
-    assert local_llm.BACKGROUND_SLOT == local_llm.SLOT_1 - 1 == 0
+    assert local_llm.BACKGROUND_SLOT == 0
 
 
 def test_probe_format_pins_background_slot(monkeypatch):

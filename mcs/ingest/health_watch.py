@@ -76,8 +76,7 @@ def freshness_deadline(cfg: dict) -> int:
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
 
 
-def classify_health(path: str, now: float, deadline_s: int,
-                    cfg: dict | None = None) -> dict:
+def classify_health(path: str, now: float, deadline_s: int) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
     try:
@@ -160,7 +159,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     state_path = os.path.join(home, STATE_REL)
     status_path = os.path.join(home, STATUS_REL)
 
-    obs = classify_health(health_path, now, deadline, cfg)
+    obs = classify_health(health_path, now, deadline)
     state = _load_state(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
