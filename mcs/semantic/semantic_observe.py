@@ -216,8 +216,10 @@ def _recent_runs(c, days: int = 14) -> dict:
     recent.update({key: _complete_total(phases[key])
                    for key in ("llm_s", "jev_s", "post_s")})
     recent["queue_wait_s_max"] = _complete_total(phases["queue_wait_s"], reducer=max)
-    recent["llm_s_p90"] = _percentile(
-        [v for v in phases["llm_s"] if _nonnegative(v)], 0.90)
+    # same completeness rule as the total: any job without a valid llm_s
+    # leaves both gate inputs unknown instead of a p90 over a subset
+    recent["llm_s_p90"] = (None if recent["llm_s"] is None
+                           else _percentile(phases["llm_s"], 0.90))
     recent["usage_tokens"] = _complete_total(tokens, integer=True)
     return recent
 

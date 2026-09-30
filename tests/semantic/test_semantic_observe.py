@@ -209,5 +209,20 @@ def test_recent_drain_window_and_llm_p90(tmp_path):
         recent = semantic_observe.observe(db_path)["recent_drain"]
         assert recent["runs"] == 1 and recent["llm_s_p90"] is None
         assert recent["llm_s"] is None
+
+        # mixed window: one run with metrics, one without, one with a
+        # non-numeric llm_s -> both gate inputs unknown, never a subset p90
+        run([1.0, 3.0])
+        recent = semantic_observe.observe(db_path)["recent_drain"]
+        assert recent["runs"] == 2 and recent["llm_s"] is None
+        assert recent["llm_s_p90"] is None
+        with db.db:
+            db.db.execute("DELETE FROM artifacts")
+        run([1.0, 3.0])
+        db.artifact_add("semantic_drain_run", json.dumps(
+            {"v": 1, "done": 1, "job_metrics": [{"llm_s": "9"}]}))
+        recent = semantic_observe.observe(db_path)["recent_drain"]
+        assert recent["runs"] == 2 and recent["llm_s"] is None
+        assert recent["llm_s_p90"] is None
     finally:
         db.close()
