@@ -56,6 +56,18 @@ def _dicts(value) -> list[dict]:
         if isinstance(value, list) else []
 
 
+def _llm_reply_kind(blob):
+    """reply.kind of one extract_llm artifact blob, else None."""
+    try:
+        lm = json.loads(blob) if blob else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(lm, dict) or lm.get("_error"):
+        return None
+    reply = lm.get("reply")
+    return reply.get("kind") if isinstance(reply, dict) else None
+
+
 def build_rollup(ledger, project_id: int) -> dict:
     db = ledger.db
     msgs = db.execute("""
@@ -80,7 +92,8 @@ def build_rollup(ledger, project_id: int) -> dict:
           ('extract_v1','extract_llm','canonical_projection',
            'semantic_facts_v4')
         {current_extract_pred()}
-        AND (a.kind='extract_v1' OR (1=1 {current_fact_pred()}))
+        AND (a.kind IN ('extract_v1','extract_llm')
+             OR (1=1 {current_fact_pred()}))
       ORDER BY a.artifact_id
     """, (project_id,)):
         arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
@@ -119,7 +132,9 @@ def build_rollup(ledger, project_id: int) -> dict:
             v1 = json.loads(blobs["extract_v1"]) \
                 if "extract_v1" in blobs else {}
             # semantic_facts_v4 (T18) shadows canonical_projection,
-            # which shadows extract_llm for the same message.
+            # which shadows extract_llm for the same message (a
+            # hash-current extract_llm row is kept in blobs only so
+            # its reply can be read below).
             lm_blob = blobs.get("semantic_facts_v4") \
                 or blobs.get("canonical_projection") \
                 or blobs.get("extract_llm")
@@ -173,10 +188,12 @@ def build_rollup(ledger, project_id: int) -> dict:
             requests.append(row)
             req_thread.append((row, m["parent_id"] or m["message_id"],
                                ts, m["sender_name"]))
-        reply = lm.get("reply")
-        if isinstance(reply, dict) and reply.get("kind") in _REPLY_STAGE:
+        # reply lives only in extract_llm; read it there even when a
+        # canonical_projection / semantic_facts_v4 blob shadows lm
+        kind = _llm_reply_kind(blobs.get("extract_llm"))
+        if kind in _REPLY_STAGE:
             replies.setdefault(m["parent_id"] or m["message_id"], []) \
-                .append((ts, m["sender_name"], reply["kind"]))
+                .append((ts, m["sender_name"], kind))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
@@ -228,8 +245,10 @@ def build_rollup(ledger, project_id: int) -> dict:
         if seen:
             row["reply_state"] = max(
                 (kind for _, kind in seen), key=_REPLY_STAGE.get)
+            # conflict = a cancel later than the EARLIEST done (seen is
+            # newest-first, so done_at[0] would be the newest)
             done_at = [rts for rts, kind in seen if kind == "done"]
-            if done_at and any(kind == "cancel" and rts > done_at[0]
+            if done_at and any(kind == "cancel" and rts > min(done_at)
                                for rts, kind in seen):
                 row["reply_conflict"] = True
     if requests:
