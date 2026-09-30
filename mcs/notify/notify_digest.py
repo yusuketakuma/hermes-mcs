@@ -1,8 +1,9 @@
 """Morning daily digest — one text notice per JST day (ROADMAP #13).
 
 Counts and ids only: new messages by profession, urgency-high message
-ids, open review candidates by type, recorded fetch gaps (always shown)
-and open/overdue task counts. No bodies, summaries or patient names.
+ids, open review candidates by type, recorded fetch gaps (always shown),
+連携サマリー updates (count and project ids, never the comment) and
+open/overdue task counts. No bodies, summaries or patient names.
 Off unless ``daily_digest.enabled`` is true; fires at or after
 ``daily_digest.hour_jst`` once per day. The ``notify_outbox`` row itself
 is the durable once-per-day marker (``payload.date``).
@@ -117,6 +118,23 @@ def build_text(db, cfg, since: float, until: float) -> str:
                       "state='failed' AND next_try IS NULL").fetchone()[0]
     if held:
         lines.append(f"・送信保留の通知: {held}件")
+
+    # 連携サマリー (#21): artifacts stored in the window whose content is
+    # a registered summary; the comment body never leaves the ledger
+    summaries = []
+    for r in db.execute(
+            "SELECT project_id, content FROM artifacts WHERE "
+            "kind='karte_summary' AND created_at>=? AND created_at<? "
+            "ORDER BY artifact_id", (since, until)):
+        try:
+            c = json.loads(r["content"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(c, dict) and c.get("empty") is not True:
+            summaries.append(r["project_id"])
+    lines.append(f"■ 連携サマリー更新: {len(summaries)}件"
+                 + (": " + _ids(list(dict.fromkeys(summaries)), room)
+                    if summaries else ""))
 
     sig = cfg.get("signals")
     if isinstance(sig, dict) and sig.get("notify") is True:
