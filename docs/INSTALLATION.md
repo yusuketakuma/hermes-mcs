@@ -52,7 +52,7 @@ $PY mcs/ops/mcs_setup.py doctor     #    （困ったとき）check + インタ�
 - `check` の最終行が `check: OK (0 errors, N warnings)`（exit 0）。
   `warn` 行は動作を止めないが、内容は一度確認する
 - `doctor` の `launchd :` 行で `local.mcs-cmd`・`local.mcs-int`・
-  `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-rt`・`org.mcs.recovery`
+  `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`org.mcs.recovery`
   と、llama-server（`ai.hermes.llamacpp` か `ai.mcs.llamaserver` の
   どちらか）が `loaded`
 
@@ -578,7 +578,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 
 収集ジョブは **hermes cron 6件 + launchd 5件** のハイブリッド
 （services 所有: cron 6件と launchd 4件 `local.mcs-cmd`・`local.mcs-int`・
-`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-rt`。install.sh 所有:
+`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`。install.sh 所有:
 復旧 watchdog `org.mcs.recovery`。別に LLM サーバ常駐の
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 

@@ -60,6 +60,7 @@ import notify_flush
 LOCKFILE = RUN_LOCK
 ATTACH_DIR = os.path.join(HOME, "data", "attachments")
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
+REALTIME_CARRY_S = 86400      # notified arrivals stay on the realtime slot this long
 BACKFILL_MAX_PAGES = 3        # per patient, per run — newest-first walk
 BACKFILL_OVERLAP_S = 120      # re-scan window; dedup handles repeats
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
@@ -947,7 +948,14 @@ def stage_derive(ledger, result, deadline, cfg=None,
         remain = (deadline - time.monotonic()) - 45
         budget = min(llm_budget_cap, max(0, remain))
         idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
-        if budget < extract_llm._MIN_CALL_S or not result.get("realtime_ids"):
+        # This tick's arrivals plus earlier notified arrivals a busy or
+        # one-call tick left behind — the oldest-first background lanes
+        # would otherwise reach them only after the whole backlog.
+        realtime = set(result.get("realtime_ids", [])) | {
+            r[0] for r in ledger.db.execute(
+                "SELECT message_id FROM messages WHERE notified_at >= ?",
+                (time.time() - REALTIME_CARRY_S,))}
+        if budget < extract_llm._MIN_CALL_S or not realtime:
             result["extract_llm"] = idle
         elif extract_llm.pinned_slot_busy(deadline):
             # Hermes is using realtime; the arrival stays durable for
@@ -966,10 +974,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 # ponytail: assumes singles (_BATCH_K=0); revisit if
                 # batching comes back.
                 ledger, limit=max(1, int(budget // extract_llm._MIN_CALL_S)),
-                budget_s=budget, admitted_ids=(set(result.get("realtime_ids", [])) if admitted is None
-                              else set(result.get("realtime_ids", [])) & admitted),
-                # Only this collection's arrivals use realtime, newest
-                # first. Existing claim leases exclude in-flight work.
+                budget_s=budget, admitted_ids=(
+                    realtime if admitted is None else realtime & admitted),
+                # Only realtime arrivals use this slot, newest first.
+                # Existing claim leases exclude in-flight work.
                 oldest_first=False, batch_k=extract_llm._BATCH_K)
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
