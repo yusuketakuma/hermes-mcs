@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:3bcfb6efa7e5ba2be5cb8244f6bcf2d875f1b8ed25c1c4e0bd90df7e88155720",
+  "claims": [
+    {
+      "id": "claim_298417924213463b8559010cf6be79be",
+      "statement": "run_tests.sh runs pytest under env -i with a temporary HOME and XDG directories, TZ=UTC and MCS_TEST_SANDBOX=1, so real credentials and data are unreachable.",
+      "evidence": [
+        {
+          "resource": "repo://scripts/run_tests.sh#L26-L46",
+          "version": "repo-lines-v1:sha256:89d83c1f667d24f01d6260f310c78f8e820b97635dea0e2c6754897e26273b26:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNlZjQ5MThiODcwMjllZGRjZDU1ODk2YWQ1YjUxZWU2NTZhZGZlODYyY2Q0Mjg3Y2VkZGU2YmM3MzNlZDhjMmMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3ZWVjOTMyYTVhMTVjMjAwYWY0MTYyZDI3MGQxYjQ5ZWQ1ZWViYzA2OTQ3ZDVkMTA3MzZlNjQzZGNjNGZlMTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImMzOGQ2OTkxZmU2OGQ1ODE4MjQwNjc2YWYwZTM3OTY2MGRmNDEwM2FhYWFlYTI1ZGJhNzBhYWQ3ODdjYTdjZmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_29b886f45b8a4f52830533118ff81b16",
+      "statement": "The root conftest skips integration/test_hermes_* files when Hermes SDK modules are not importable, while pure-synthetic integration tests still run.",
+      "evidence": [
+        {
+          "resource": "repo://conftest.py#L1-L24",
+          "version": "repo-lines-v1:sha256:a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU2NTFkYzlmMDJkOWE0MzQ5YTQwZjFjZDkyNDhmNWQwYmNlOWZkMmQ1YTJkNzQ5M2VkOWMxMzIzNWJiODMzMzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFiYzg3N2E3YmFlMjQwMTU4MjhkMTdhMWQ3ODkwNTAyNTYyZTRhZGM0YmY3NGY2MDUwZGI3YWE2Mjc2NjhlYzgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_6a2e2c4489ee4456b72020c3edb19012",
+      "statement": "ci/gates.py encodes incident-derived static checks, including an allowlist of files permitted to construct a write-mode Ledger, and exits 1 on any violation.",
+      "evidence": [
+        {
+          "resource": "repo://ci/gates.py#L1-L25",
+          "version": "repo-lines-v1:sha256:93188c5c1241de8e7f9cf9b186aa2c08495d132c383fca9520000d1b41be5a7c:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjljMGQ0NDVjZjc2MWUwYjIxNzU5NTk0MGZjNzY3NTdlMWY3Y2FmNGIxNjJkZWQxNjc3OTEzN2E4NDBhZTQxMjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ4ZjgyNTNiYTEwZWMzMDM4NGYwYzQ3M2Y2ZDJhNTU4Y2FlOGVmNjRlOWY2NDRiMWQwMWVhMDZjYzZjMWYzY2EifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ab5189b9644a40fbb8e2bfd657101163",
+      "statement": "ci/mine_gates.py requires defect-class incident IDs to be covered by a gate or test in ci/gates-coverage.json.",
+      "evidence": [
+        {
+          "resource": "repo://ci/mine_gates.py#L1-L20",
+          "version": "repo-lines-v1:sha256:931807c71ca7bfdd02195f3ee5e60c242b7a97136d5a4fb359c1950d123b6d27:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI4NmE1OWExOGVhYzAxNmIxZjc5NDE3MTc0Y2Y4NTkzYWRhOTAxMjRlZjliZDdhNTU1MTdkMGMyNzdkOGZlMTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9169771eddfe488ca1e92216d40b11c3",
+      "statement": "Test process boundaries fail accidental live network, Keychain and Chrome calls while allowing synthetic CLI subprocesses.",
+      "evidence": [
+        {
+          "resource": "repo://tests/conftest.py#L1-L10",
+          "version": "repo-lines-v1:sha256:9e54a869961ac8115c8e546da06d24c3c62b69a5e0cc58578b2d623c40f7bc04:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU1ZDE3YThjNTdhNTQ5Y2NjMjc5ZWZmYzQ4OTEwMmM4MWUzNDJjMjlkNWFhNjc4NDM3NDViM2MzMDBmOGU0MDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQzY2RlNjFjMjFkNGJmZDc3MDc2NDJjMDI4YjYxMjZiZDQ0NTA4OTI4ZTlkMDBmYzM4NTU2YjhjYjkzNDgxM2EiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNlOWNkMTk4NjYxN2VmMTMxNGYyYTUyNDRiNmU0YTVhZDE4Mjg4NWVjNDE0ZjQ5MmE5YjlkMjBiNDYxZjBmMjcifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

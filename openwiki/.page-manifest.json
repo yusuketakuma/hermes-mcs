@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "pages": {
+    "/openwiki/architecture/extraction-and-semantic.md": {
+      "pageVersion": "sha256:9acb429bdc05492ac21a8b86b4cb15e33968c9c3199dfec8716814559657da45",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/architecture/human-approval-and-external-export.md": {
+      "pageVersion": "sha256:9548c9571d53b85c0d6052483282449e7c1c6fe08421d94de98a8e0eceb1b58e",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/architecture/ingest-and-mcs-adapter.md": {
+      "pageVersion": "sha256:79099f5bfa5b97d9333ff699b55005acbe86244f6a2d3df7b8aaca8d01fcf958",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/architecture/ledger-storage.md": {
+      "pageVersion": "sha256:8470fabce9a2e3ab879eec7f64f84ed1b546157019cdaa8cc2c5842d9dfea564",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/architecture/notification-delivery.md": {
+      "pageVersion": "sha256:71116014e8aa3508d38d3f453900727803b7e030cab9efc44f56d85a21d2e272",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/architecture/overview.md": {
+      "pageVersion": "sha256:b5b9a7021efa43e4ce8e104013b67d2fb210de74cadc345327e14f20993cd50e",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/operations/deployment-and-updates.md": {
+      "pageVersion": "sha256:5562e686da0855a729e708c7032e2102bee60fdc23093d5b2807c6d9dbcec318",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/operations/testing-and-ci.md": {
+      "pageVersion": "sha256:3bcfb6efa7e5ba2be5cb8244f6bcf2d875f1b8ed25c1c4e0bd90df7e88155720",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    },
+    "/openwiki/quickstart.md": {
+      "pageVersion": "sha256:412fb1f693863471ec5c364a54c8d15d50949fac65428108bb3c4bd06b13dd09",
+      "completedBy": "claude-code",
+      "completedRunId": "f568dbc6-5c14-4031-8bed-f54ac98b9515",
+      "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+      "sourceFingerprint": "sha256:0d3df38514ef3a4a79aec4c5f90357f1b5ca16b84c2e0f28f2f5c95f0ae929cc"
+    }
+  }
+}

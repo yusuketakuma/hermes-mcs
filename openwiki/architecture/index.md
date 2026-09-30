@@ -1,0 +1,8 @@
+# Files
+
+- [Structured Extraction and Semantic Pipeline](extraction-and-semantic.md) - How stored messages become structured data — rule-based extract_v1, local-LLM extract_llm (v4), the semantic drain and its send-time gate, and the RT/BACKLOG admission broker for the shared local LLM.
+- [Human-Approved Requests, Views and External Export](human-approval-and-external-export.md) - The read-only read model, review-candidate signals, receipt-first human-confirmed command processing, and the governed external export contract that is disabled by default.
+- [Ingest: MCS Adapter, Worker and Tick Pipeline](ingest-and-mcs-adapter.md) - How each scheduled tick collects unread messages, history and self-post probes from MedicalCareStation, the API contract and safety rules of the adapter, deadline-bounded workers, durable fetch jobs and the independent health watcher.
+- [Ledger: SQLite Storage Model](ledger-storage.md) - The SQLite ledger (schema v7) that stores messages, artifacts, the notify outbox and read-mark intents, plus its open-time safety checks, read-only reader, verified backups and snapshot publishing.
+- [Notification and Delivery (Outbox, Cards, Hermes Plugin)](notification-delivery.md) - How notify_outbox events reach Discord/Slack — the plain `hermes send` path, interactive cards with grants and receipts, the journaled transport-neutral delivery worker, and post-restore reconciliation that holds ambiguous scopes instead of resending.
+- [System Architecture Overview](overview.md) - End-to-end view of hermes-mcs — the scheduled tick that collects MedicalCareStation chats into a local SQLite ledger, derives structure locally, notifies through Hermes, and the flat-import module layout that holds it together.

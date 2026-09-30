@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:5562e686da0855a729e708c7032e2102bee60fdc23093d5b2807c6d9dbcec318",
+  "claims": [
+    {
+      "id": "claim_d96dcd15c4434e9494b4d75339f81e84",
+      "statement": "Deployment templates are rendered by install.sh or mcs_setup.py services, so hand-editing rendered copies on the machine drifts from the repo.",
+      "evidence": [
+        {
+          "resource": "repo://deployment/README.md#L1-L10",
+          "version": "repo-lines-v1:sha256:b429adef0a46971dd6a12d26612eb7bdede7f15649ae01a73b6e71300280c406:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIzODdiYWI1NmVjNTVmZmI2ZjhjMTc2YTcwYzEzZGIyNDk4MzRlY2RjMjdkYjczZWFhMzA2Nzc5NTE3YTNmY2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzNjY0ZTUxZjhiNjQ4OWFkNmM0NWE5NDEwNTVlMzRhOGVlODMzNWIyZmVhM2YwMmJiNDU3NjljNDBlZTQ3MTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_bbf1d87fc1be4a948b8921a6d5ce0ce8",
+      "statement": "The update apply pipeline takes update.lock then run.lock, journals each stage, quiesces drainers, and never touches data/, config.json or .env or runs git clean.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ops/mcs_update.py#L1-L30",
+          "version": "repo-lines-v1:sha256:a0a152ff1321950907e065df819d8c4a4ddf75d064d586c3ab4a72ea26742d84:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNlYzk3NTQ0N2QyZDA2ZTYxMzNkMmFmZDJkYmIyNzZlNTNlOGRjZGY0MDZlNzJjOTQ0MTU5NzZlYjgxNmY5NzgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2MWE5MTEyYTI5MThlMmFiYTAzZTE5YTJmMjIxYTAyN2FiNGI2ZjllOTQ2YTZjMzk4MTRmNTRlMThlMDdkZmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYzYTRlZjU0YTBjNDdhY2JjNzg2NzUyOWQ4YzI1YTMzZDQzYTMzMzRmYjU5NjliOGZmZmE2NTJlODMwNWQyNDAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_120845dff8ee4d5883aa0b5d61f3ea4d",
+      "statement": "The recovery watchdog lives outside the repo, needs only stdlib and git, and recovers from the update journal in data/update_state.json rather than trusting HEAD alone.",
+      "evidence": [
+        {
+          "resource": "repo://deployment/recovery/mcs_recover.py#L1-L16",
+          "version": "repo-lines-v1:sha256:f330bd9563698c3313840d75a42271fb45cd5ceace519b0f599a2c045f519fc1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk2OGIwMjg5NTk0MTEyYzQ2MmE4Y2RlMDJiNjU0NGRiYWM5ZjRlNDc3YTViYzk1MGFhOWRmYTgxMWQ4OGUyZmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU0MzM3M2E1NzJlYTZmNjk2OWExNGI1ODBiYzg2ODFiMmRlN2JhZTFkNDFmZGYyYjZiNWZmZDk5MjU5ODI4NDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1eac2179259546fd8bcda0588e08e12b",
+      "statement": "install.sh installs in idempotent stages including the local LLM on 127.0.0.1:8080, scheduled services via mcs_setup.py, and the independent recovery watchdog.",
+      "evidence": [
+        {
+          "resource": "repo://install.sh#L1-L20",
+          "version": "repo-lines-v1:sha256:377b7eeb1a532179158e351af6c417ac8c0601d011b2fcf8a4020b95a2cd2eea:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE4MDc2ZDNkMjhkMjFlMDIwMTJiMjBlYWY3ZGJmNzU0MDlhNjI3NzEzNDQzOTAyNWYyODJlMzY4ZTMzMDVhYmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzNGQ5NzJlYzlmN2RlMTExMDk4YjM0ZGFhMTNlZTBjYzllYzI1MmY0Y2M4NWMzMjFlNTg1Yjk1MGIyNDUzMDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQyMjIyYzgwMzViNzA5NjMxMDFkZTljZmYzMGFkM2EzNDVmMmRkY2Y5MjJkZjUwMDA3MTAwY2U1ODlmZWE4YTcifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

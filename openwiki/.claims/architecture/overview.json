@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:b5b9a7021efa43e4ce8e104013b67d2fb210de74cadc345327e14f20993cd50e",
+  "claims": [
+    {
+      "id": "claim_9c59ceaff032497297a84cbb52e90811",
+      "statement": "Modules use flat imports because an entry point puts the mcs/ root on sys.path and imports _mcs_path, which prepends every directory containing .py files at any depth ahead of installed packages.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/_mcs_path.py#L1-L26",
+          "version": "repo-lines-v1:sha256:03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZmOGFkZjdjNDZjYTg2YjI2ZmRkZjg1NzY3NDlkMGU2Mjk3MjNhNzRiZmMyMmYwZTViMGE5YWIwY2MyODgwNzAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI1MWQyMGE0ODQwNDNiNDZlYzNiMjgzZjVlZGNjYjMyMmE5ODgzNGMzMmY2Mzc2N2JlOTg5ZGE0ZjM1NDQ5ODAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_5381820d3dbc4c5880336484148c051c",
+      "statement": "run_check orchestrates the tick: fetch stages through the adapter, then derive and delivery stages, all reading and writing the SQLite ledger as the source of truth.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/ledger.py#L1-L25",
+          "version": "repo-lines-v1:sha256:d6447fb9be982dee73e4974cdbb201216a3503ee67e121732836a2089bea768f:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY5YjczYWJhNDYxNmY5MTVhZjdhZjA3YWU0ZDA4ZjZhMDQ4MjI5MzE0Mjc4Y2EyNWIxZDRhNjA4YWI2MjQ1ZjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiMmRkYjhhMmU2NGM2MTY2ZmVlZGFmMzBlZTUwYWM2MjE2NWZlMTQ5ZmRkOGIwZDdiNzc3ZWJlZTIxY2EzNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY4MDU0MmI1M2QzY2NiOWQ0MzM1MDQ4N2ZhMmVhY2VhMjA1ZmU4OTMxNGQ3MzAwZDI4YWUyZjllYTRhNzQzYmUifQ"
+        },
+        {
+          "resource": "repo://mcs/ingest/run_check.py#L1-L20",
+          "version": "repo-lines-v1:sha256:02690995e9e245561958fedfdfccc8b8958181f50a263bf2f056dd76806c8ce8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJlYTYwZjg0YTdjNjkxMTFlNDgzODI0MjVmZjUwMzk1NjVmNzg2Yzk0OGE4YWQ0MDYxMWNmYzNjNjRmOTM5MWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM0MjZjMWY0NTA2NDBmOTIxZTRhMzhkNmU1OGQxMWFkYjkwNGJmMWE1YjE2NDg3N2IwOGJmNDBhYzBlMGI1MDEifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}
