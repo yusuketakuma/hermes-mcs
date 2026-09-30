@@ -429,8 +429,9 @@ def _unread_patient(p, src: str) -> UnreadPatient:
     k = p.get("karte") or {}
     if not isinstance(k, dict):
         raise SchemaError(f"{src}: karte invalid")
-    if not _valid_id(k.get("id")):
-        raise SchemaError(f"{src}: karte id invalid")
+    # a row without a usable karte.id (null/absent/legacy shape) must not
+    # take the whole /projects snapshot down — it just gets no 連携サマリー
+    karte_id = k.get("id") if _valid_id(k.get("id")) else None
     st = k.get("station") or {}
     if not isinstance(st, dict):
         raise SchemaError(f"{src}: station invalid")
@@ -443,7 +444,7 @@ def _unread_patient(p, src: str) -> UnreadPatient:
         ).strip(),
         disease=_text(k.get("disease"), f"{src}: disease"),
         station_name=_text(st.get("name"), f"{src}: station name"),
-        url=project_url(p['id']), karte_id=k["id"])
+        url=project_url(p['id']), karte_id=karte_id)
 
 
 def _attachments(files: list | None) -> list[Attachment]:

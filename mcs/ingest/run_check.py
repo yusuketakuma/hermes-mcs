@@ -71,6 +71,7 @@ COVERAGE_STALL_S = 24 * 3600
 ATTACH_DISK_MARGIN_MB = 2048
 KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
 KARTE_SUMMARY_FILL = 10       # never-fetched projects filled per deep run
+KARTE_SUMMARY_MARGIN_S = 60   # keep the tail of the deadline for semantic/finish
 
 
 def _err_str(e: Exception) -> str:
@@ -789,15 +790,17 @@ def stage_karte_summary(adapter, ledger, result, deadline,
                         jobs_only: bool = False):
     """Read-only 連携サマリー refresh for projects that stored new chat.
 
-    Targets: projects flagged karte_summary_due — the save paths set it
-    when they store new chat (unread root, reply job or self-probe
-    import) and this stage re-sets it on a deferred or failed GET, so the
-    carry-over is durable whether or not an artifact exists yet — and on
-    deep runs up to KARTE_SUMMARY_FILL never-fetched projects (oldest
-    first). At most KARTE_SUMMARY_TICK_CAP GETs per run; a successful
-    store clears the flag; per-project MCSErrors are recorded under
-    result["karte_summary"] and never make the run partial. No
-    mark-as-read, no POST."""
+    Targets: projects flagged karte_summary_due (newest last_seen first,
+    so fresh chat wins the cap) — the save paths set it when they store
+    new chat (unread root, reply job or self-probe import); a deferred
+    (cap/margin) or retryably failed GET keeps it, a non-retryable one
+    (4xx, schema) clears it until the next new message, so a dead karte
+    cannot starve the cap — and on deep runs up to KARTE_SUMMARY_FILL
+    never-fetched live projects (oldest first). At most
+    KARTE_SUMMARY_TICK_CAP GETs per run, stopping KARTE_SUMMARY_MARGIN_S
+    before the deadline; runs after notify. Per-project MCSErrors are
+    recorded under result["karte_summary"] and never make the run
+    partial. No mark-as-read, no POST."""
     stats = {"fetched": 0, "stored": 0, "empty": 0, "skipped": 0,
              "deferred": 0, "errors": []}
     result["karte_summary"] = stats
@@ -809,7 +812,8 @@ def stage_karte_summary(adapter, ledger, result, deadline,
         karte_id = ledger.karte_id(pid)
         if not karte_id:
             continue
-        if gets >= KARTE_SUMMARY_TICK_CAP or time.monotonic() > deadline:
+        if (gets >= KARTE_SUMMARY_TICK_CAP
+                or time.monotonic() > deadline - KARTE_SUMMARY_MARGIN_S):
             stats["deferred"] += 1
             ledger.karte_summary_mark_due(pid)
             continue
@@ -820,7 +824,7 @@ def stage_karte_summary(adapter, ledger, result, deadline,
             raise
         except MCSError as e:
             stats["errors"].append({"project": pid, "kind": e.kind})
-            ledger.karte_summary_mark_due(pid)
+            ledger.karte_summary_mark_due(pid, due=e.retryable)
             continue
         stats["fetched"] += 1
         if payload is None:
@@ -1513,9 +1517,6 @@ def main() -> int:
                      run_id, sem_on, notify_max_age_s)
         _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   notify_max_age_s)
-        _with_relogin(adapter, ledger, result, "karte_summary",
-                      stage_karte_summary, adapter, ledger, result,
-                      deadline, jobs_only=args.jobs_only)
 
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice
@@ -1525,6 +1526,12 @@ def main() -> int:
                      llm_budget_cap=240 if args.jobs_only else 90)
 
         _deliver(ledger, args, cfg, result, deadline)
+        # 連携サマリー GETs sit behind unread collection and notify (spec:
+        # 取得段は unread 収集・通知の後) so a late tick spends its tail
+        # on sends, not on summaries
+        _with_relogin(adapter, ledger, result, "karte_summary",
+                      stage_karte_summary, adapter, ledger, result,
+                      deadline, jobs_only=args.jobs_only)
         _run_semantic(ledger, args, cfg, result, deadline, sem_on)
         _housekeeping(result)
         status = _finish_run(ledger, cfg, result, run_id, deadline)
