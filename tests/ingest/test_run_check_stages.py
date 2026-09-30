@@ -569,6 +569,24 @@ def test_stage_derive_skips_llm_lane_when_pinned_slot_busy(tmp_path, monkeypatch
     db.close()
 
 
+def test_stage_derive_carries_recent_notified_arrivals(tmp_path, monkeypatch):
+    """A notified arrival a busy or one-call tick left behind stays on
+    the realtime lane; stale and never-notified rows go to the backlog."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=m) for m in (1, 2, 3)])
+    now = time.time()
+    db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1",
+                  (now - 60,))
+    db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=2",
+                  (now - run_check.REALTIME_CARRY_S - 60,))
+    db.db.commit()
+    calls = _stub_llm_lane(monkeypatch)
+    run_check.stage_derive(db, {"errors": []}, time.monotonic() + 600, {})
+    assert calls[0]["admitted_ids"] == {1}
+    db.close()
+
+
 @pytest.mark.parametrize(("cfg", "admitted"), [
     ({}, {1}),
     (None, {1}),                                   # direct caller: defaults
