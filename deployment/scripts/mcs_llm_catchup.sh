@@ -1,9 +1,10 @@
 #!/bin/bash
 # MCS semantic/QC backlog catch-up — hermes cron job (nightly window).
 #
-# extract_llm backlog is covered 24/7 by the two launchd drainers
-# (shard 0/2 on slot 0, shard 1/2 polite-lending slot 1), so this
-# window now drains the DOWNSTREAM queue: extract_qc + semantic jobs
+# extract_llm backlog is covered by the two launchd drainers inside
+# their 20-07 window (shard 0/2 on slot 0, shard 1/2 polite-lending
+# slot 1; `--active-hours`, 2026-09-30), so this window drains the
+# DOWNSTREAM queue: extract_qc + semantic jobs
 # via semantic_drain --drain, with calls pinned to slot 1
 # (MCS_LLM_SLOT=1) — safe inside this dead-of-night window; a rare RT
 # call shares the slot queue. The drain loop takes the run lock only

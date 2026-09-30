@@ -203,8 +203,9 @@ $PY mcs/ingest/init_data.py --project <id>       # 患者個別
   drain、`--slot N` で wire id_slot pin、`--lend-rt` で RT slot の
   idle 時借用(polite lending)、`--batch K` で context 無し単一
   チャンク本文の集約呼出し(既定0=単発。K=4 は採用率46%・採用1件あたり
-  50s vs 単発27.7s と実測で純損のため明示指定時のみ) — 2系統の常駐
-  drainerが shard 0/2 と 1/2 を分担する
+  50s vs 単発27.7s と実測で純損のため明示指定時のみ)、`--active-hours HH-HH`
+  で稼働時間帯を限定(窓の外は idle) — 2系統の常駐 drainer が shard 0/2 と
+  1/2 を分担し、いずれも 20-07 時だけ backlog を流す
   (deployment/launchagents/README.md 参照)
 - `rollup.py` — 患者ロールアップ (kind='patient_rollup'): 最新バイタル・
   現在の薬期間・薬剤一覧・直近症状(否定統合済み)・未解決依頼・次回予定・
