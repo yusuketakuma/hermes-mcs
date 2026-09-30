@@ -156,6 +156,8 @@ def _queue_stats(c):
         "arrival_selected": sched.get("arrival_selected"),
         "backfill_selected": sched.get("backfill_selected"),
         "backfill_last_served_at": sched.get("backfill_last_served_at"),
+        "qc_selected": sched.get("qc_selected"),
+        "qc_last_served_at": sched.get("qc_last_served_at"),
     }
     return queue_ages, cohorts, scheduler
 

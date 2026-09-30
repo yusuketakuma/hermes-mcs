@@ -2561,3 +2561,22 @@ def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
         CFG, now=NOW)
     assert out["outcome"] == "rejected" \
         and out["error"] == "origin_mismatch"
+
+
+def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
+    """The operator worklist: each unsettled attempt carries the exact
+    scope ops.card_resolve validates against — check the channel, then
+    submit the approval flow. Nothing is re-sent from here."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    r = _latest_render(led)
+    _begin(led, r, n=1)
+    health = notify_cards.health_cards(led)
+    assert health["attempts_unsettled"] == 1
+    assert health["oldest_unsettled_age_s"] == 0.0   # pinned NOW clock
+    w = health["unsettled"][0]
+    assert w["attempt_id"] == f"{1:016x}"
+    assert w["delivery_id"] == r["delivery_id"]
+    assert w["state"] == "granted"
+    assert w["channel_id"] == r["channel_id"]
+    assert w["resolve_scope"] == notify_cards.stored_scope(r)

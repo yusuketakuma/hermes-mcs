@@ -1204,7 +1204,10 @@ def _last_stage_artifact(ledger, project_id) -> int:
     ph = ",".join("?" * len(_STAGE_KINDS))
     return ledger.db.execute(
         "SELECT COALESCE(MAX(artifact_id),0) FROM artifacts "
-        "WHERE project_id=? AND (kind LIKE 'semantic\\_%' ESCAPE '\\' "
+        # GLOB, not LIKE: a case-insensitive LIKE cannot seek
+        # idx_artifacts_lookup, and its OR branch forced a full
+        # artifacts scan for every job, twice per pass
+        "WHERE project_id=? AND (kind GLOB 'semantic_*' "
         f"OR kind IN ({ph})) AND kind NOT IN (?,?,?)",
         (project_id, *_STAGE_KINDS, KIND_USAGE, "semantic_drain_run",
          SCHED_KIND)).fetchone()[0]
@@ -1425,12 +1428,38 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # T14: the backfill cohort additionally gets a guaranteed share of
     # every window — a continuous arrival stream cannot starve runnable
     # backlog (persisted accounting row keeps it restart-safe).
-    arrivals, backfill, sched_mut = _due_lanes(ledger, kinds, max_jobs)
-    due = arrivals + backfill
-    cohort_of = {id(job): "arrival" for job in arrivals}
+    # QC dedicated frame (observed 2026-09-30): kind ordering puts every
+    # semantic row ahead of QC in both cohorts, and a ~240 s generation
+    # consumes the whole window — QC rows sat pending for hours at
+    # attempts=0. QC gets a bounded share of the window, served FIRST
+    # (each pass is one bounded chunked eval), expanding into whatever
+    # the semantic lanes leave unused. A 1-job window cannot be split —
+    # QC falls back to the persisted cohort alternation inside the
+    # non-eligible lane.
+    qc_rows = []
+    if qc_active and max_jobs > 1:
+        qc_rows = ledger.db.execute(
+            "SELECT * FROM fetch_jobs WHERE state='pending' "
+            "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+            (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+    qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
+    qc_jobs = list(qc_rows[:qc_share])
+    arrivals, backfill, sched_mut = _due_lanes(
+        ledger, (JOB_KIND,) if qc_jobs else kinds,
+        max_jobs - len(qc_jobs))
+    # unused lane capacity flows back to QC — same rule the backfill
+    # cohort uses against an idle arrival lane
+    spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
+    if spare > 0:
+        qc_jobs += list(qc_rows[qc_share:qc_share + spare])
+    due = qc_jobs + list(arrivals) + list(backfill)
+    cohort_of = {id(job): "qc" for job in qc_jobs}
+    cohort_of.update({id(job): "arrival" for job in arrivals})
     cohort_of.update({id(job): "backfill" for job in backfill})
     out["lanes"] = {"arrival": len(arrivals), "backfill": len(backfill)}
-    selected = {"arrival": 0, "backfill": 0}
+    if qc_active:
+        out["lanes"]["qc"] = len(qc_jobs)
+    selected = {"qc": 0, "arrival": 0, "backfill": 0}
     for job in due:
         token = runtime.JobToken.from_row(job)
         payload = runtime.parse_payload(job)
@@ -1455,9 +1484,22 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["deferred"] += 1
                 out["mode"] = "off"
                 break
-        if time.monotonic() > deadline - 15:
-            out["deferred"] += 1
-            break
+        # A semantic job's first call is exempt from the in-call reserve
+        # gate — dispatching one under the call reserve burns a doomed
+        # generation and a retry attempt (2026-10-01: revived jobs
+        # failed at the attempt ceiling doing exactly this in 120 s
+        # batches). Only start one when a call can plausibly fit — the
+        # same reserve the gate applies to follow-up calls; further
+        # stages then defer via BudgetShort for free. Trailing QC rows
+        # need only ~15 s.
+        floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
+                            min(runtime.LLM_CALL_RESERVE_S,
+                                float(scfg["job_budget_seconds"]) * 2 / 3))
+        if time.monotonic() > floor:
+            if job["kind"] == QC_JOB_KIND:
+                out["deferred"] += 1
+                break
+            continue
         if scfg["project_ids"] is not None \
                 and job["project_id"] not in scfg["project_ids"]:
             # outside the rollout scope — defer instead of leaving it
@@ -1643,8 +1685,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             for cohort in ("arrival", "backfill"):
                 sched[cohort + "_selected"] = \
                     sched.get(cohort + "_selected", 0) + selected[cohort]
+            if qc_active:
+                sched["qc_selected"] = \
+                    sched.get("qc_selected", 0) + selected["qc"]
             if selected["backfill"]:
                 sched["backfill_last_served_at"] = time.time()
+            if selected["qc"]:
+                sched["qc_last_served_at"] = time.time()
             if sched_mut.get("turn"):
                 sched["turn"] = sched_mut["turn"]
             _sched_write(ledger, sched)
@@ -1735,8 +1782,10 @@ def main() -> int:
     """Standalone drain loop (nightly catch-up window).
 
     ``--drain --stop-after N --max-jobs M``: each iteration takes the
-    run lock for one short batch (~2 min max) so the 15-min tick is
-    delayed by at most one iteration — never starved by the window.
+    run lock for one batch sized to the configured job budget (+30 s,
+    floor 120 s) — shorter than that and a ~300 s canonical generation
+    can never complete, so the tick is delayed by at most one
+    budget-sized iteration — never starved by the window.
     Set MCS_LLM_SLOT=1 to lend calls to the RT slot when it is idle."""
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1771,10 +1820,23 @@ def main() -> int:
                     led = Ledger(os.path.join(HOME, "data", "ledger.db"))
                     if args.revive_failed:
                         totals["revive"] = revive_failed(led)
+                cfg = load_config()
+                # the batch must fit one full job budget or a ~300 s
+                # canonical generation can never complete inside it —
+                # 120 s batches burned a doomed call + an attempt on
+                # every revived job (2026-10-01: 11 jobs failed at the
+                # attempt ceiling with llm_s≈118 each pass). Still
+                # bounded: the tick waits at most job_budget+30 s.
+                try:
+                    batch_s = max(
+                        120.0, float(semantic_config(cfg)[0]
+                                     ["job_budget_seconds"]) + 30.0)
+                except Exception:
+                    batch_s = 480.0
                 result = {"errors": []}
                 out = run_due(
-                    led, load_config(), result,
-                    deadline=min(stop, time.monotonic() + 120.0),
+                    led, cfg, result,
+                    deadline=min(stop, time.monotonic() + batch_s),
                     max_jobs=args.max_jobs, cfg_path=CONF_PATH)
             finally:
                 os.close(lock_fd)

@@ -2080,6 +2080,31 @@ def test_semantic_lane_starvation_streak_sets_self_clearing_hold(tmp_path, monke
     db.close()
 
 
+def test_semantic_lane_no_budget_after_yield_wait(tmp_path, monkeypatch):
+    """The slot frees but the wait spent the lane's allowance: skip
+    exactly like the pre-wait no-budget guard — the streak stands
+    (nothing was evaluated, so it must not read as starved) and the
+    flag comes back down so the drainers resume."""
+    import semantic
+    clock = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path,
+               prev_lane={"starved_streak": 2},
+               busy=[True] * 40 + [False])
+    monkeypatch.setattr(run_check.time, "sleep",
+                        lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(semantic, "run_due",
+                        lambda *a, **k: pytest.fail("no budget must not run"))
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result,
+                            clock[0] + 100, True)
+    assert result["semantic"]["skipped"] == "no_budget"
+    assert result["semantic_lane"] == {"starved_streak": 2}
+    assert extract_llm.tick_wants_slot() is False
+    db.close()
+
+
 def test_semantic_lane_off_clears_stale_hold(tmp_path, monkeypatch):
     _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 0,
                                        "hold_until": time.time() + 3000})
@@ -2623,4 +2648,44 @@ def test_new_message_paths_mark_karte_summary_due(tmp_path):
     run_check.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
     assert sorted(db.karte_summary_due()) == [1, 2]
+    db.close()
+
+
+def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
+    """'degraded' never said WHERE — attention separates a fresh
+    failure, due-but-never-attempted backlog (the QC starvation
+    signature), and old unsettled deliveries."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    now = time.time()
+    db.job_add("extract_qc", 1, 1)
+    db.job_add("semantic", 1, 1)
+    db.db.execute(
+        "UPDATE fetch_jobs SET state='failed',updated_at=? "
+        "WHERE kind='semantic'", (now - 60,))
+    # the starvation signature is never-touched (updated_at==created_at)
+    db.db.execute(
+        "UPDATE fetch_jobs SET created_at=?,updated_at=?,next_try=? "
+        "WHERE kind='extract_qc'", (now - 1000, now - 1000, now - 10))
+    db.db.commit()
+    att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
+    assert att["failed_jobs_24h"] == {"semantic": 1}
+    assert att["failed_jobs_latest_at"] == now - 60
+    qc = att["pending_unstarted"]["extract_qc"]
+    assert qc["count"] == 1 and qc["oldest_age_s"] >= 1000
+    assert att["delivery_unsettled"] == {"attempts": 0, "oldest_age_s": 0}
+    # a not-yet-due unstarted row is scheduled, not stuck
+    db.db.execute(
+        "UPDATE fetch_jobs SET next_try=? WHERE kind='extract_qc'",
+        (now + 500,))
+    db.db.commit()
+    # and a rotation job (reconcile shape: attempts=0 but served —
+    # updated_at moved past created_at) is not a starvation signal
+    db.job_add("reconcile", 1, 2)
+    db.db.execute(
+        "UPDATE fetch_jobs SET created_at=? WHERE kind='reconcile'",
+        (now - 1000,))
+    db.db.commit()
+    att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
+    assert att["pending_unstarted"] == {}
     db.close()

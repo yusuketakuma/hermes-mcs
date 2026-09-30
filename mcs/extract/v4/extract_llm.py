@@ -1389,9 +1389,14 @@ def llm_extract(body: str, *, context: str | None = None,
     prompt = _PROMPT_HEAD
     has_ctx = bool(context)   # thread and/or summary: lift guard on
     if context and context.startswith(_KARTE_HEAD):
-        cut = context.index(_KARTE_TAIL) + len(_KARTE_TAIL)
-        prompt += context[:cut]
-        context = context[cut:]
+        # _thread_context always pairs head+tail; a caller-built
+        # context without the tail is thread material, not a summary
+        # block — leave it whole instead of raising ValueError
+        end = context.find(_KARTE_TAIL, len(_KARTE_HEAD))
+        if end >= 0:
+            cut = end + len(_KARTE_TAIL)
+            prompt += context[:cut]
+            context = context[cut:]
     if context:
         prompt += _CTX_HEAD + context + _CTX_TAIL
     if hints:
@@ -1689,7 +1694,7 @@ def _fail(ledger, r, attempts: int):
     must retry later, a permanent one must stop (Oracle B21). Prior
     error rows are folded in, not stacked."""
     with ledger.db:
-        prev = _error_attempts(ledger, r["message_id"])
+        prev = _error_attempts(ledger, r["message_id"], r["content_hash"])
         revived = _error_auto_retry(ledger, r["message_id"],
                                     r["content_hash"])
         _clear_error_tx(ledger, r["message_id"])
@@ -1706,16 +1711,19 @@ def _error_auto_retry(ledger, mid: int, content_hash) -> int:
         (KIND, mid, content_hash)).fetchone()[0] or 0
 
 
-def _error_attempts(ledger, mid: int) -> int:
+def _error_attempts(ledger, mid: int, content_hash) -> int:
     """Highest attempts count on the message's CURRENT-version error
-    rows — read inside the write tx so a concurrent writer's row isn't
-    rolled back to a stale count."""
+    rows for THIS body — read inside the write tx so a concurrent
+    writer's row isn't rolled back to a stale count. Stale rows of an
+    older body hash may linger until the next sweep; they must not
+    fold into the fresh body's budget (mirrors _error_auto_retry)."""
     return ledger.db.execute(
         "SELECT COALESCE(MAX(json_extract(meta,'$.attempts')),0) "
         "FROM artifacts WHERE kind=? AND message_id=? "
         "AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
-        "AND COALESCE(json_extract(meta,'$.extract_version'),0)=?",
-        (KIND, mid, EXTRACT_VERSION)).fetchone()[0]
+        "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
+        "AND json_extract(meta,'$.hash')=?",
+        (KIND, mid, EXTRACT_VERSION, content_hash)).fetchone()[0]
 
 
 def _clear_error_tx(ledger, mid: int):
@@ -2162,6 +2170,14 @@ _MIN_CALL_S = 75.0      # one full extraction call (eval + decode)
 _MIN_REPAIR_S = 75.0    # repair re-ask — same shape as a single call
 _BATCH_PER_ITEM_S = 55.0  # decode share per item inside a batch call
 
+# Stale-artifact/leaked-claim sweep cadence. Housekeeping only — the
+# current_*_pred hash gate already hides old-body artifacts from
+# selection, so a bounded lag is harmless; without it every run_pending
+# call re-scanned the whole kind= table (~10k rows, ~0.5s) inside the
+# write lock — the resident drainer paid it per 8-row batch.
+_STALE_GC_S = 300.0
+_stale_gc_at = 0.0
+
 
 def _batch_need_s(n: int) -> float:
     """Estimated wall time a batch call needs to actually finish —
@@ -2422,8 +2438,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     deadline = time.monotonic() + budget_s
     lock = _write_lock
     # Any artifact for an older body is stale, including retry state.
+    global _stale_gc_at
     with lock(per_write_lock) as held:
-        if held:
+        if held and time.time() - _stale_gc_at >= _STALE_GC_S:
             ledger.db.execute("""
               DELETE FROM artifacts
               WHERE kind=? AND message_id IN (SELECT message_id FROM messages)
@@ -2440,6 +2457,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "DELETE FROM fetch_jobs WHERE kind='extract_claim'"
                 " AND next_try < ?", (time.time() - 86400,))
             ledger.db.commit()
+            _stale_gc_at = time.time()
     # pending = no current-version artifact, plus retriable CURRENT-
     # version error artifacts whose backoff expired (attempts < 5,
     # next_try <= now). Error rows of older schema versions neither
@@ -2486,6 +2504,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                  THEN json_extract(e.meta,'$.error')=1
                   AND COALESCE(json_extract(e.meta,'$.extract_version'),0)
                       =?
+                  AND json_extract(e.meta,'$.hash')=m.content_hash
                  ELSE 0 END
       WHERE m.body_text IS NOT NULL AND m.body_text != ''
         AND (m.body_state IS NULL OR m.body_state='full'){adm_sql}
@@ -2691,7 +2710,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             # concurrent writer's row can't roll the
                             # count back
                             prev = _error_attempts(ledger,
-                                                   r["message_id"])
+                                                   r["message_id"],
+                                                   r["content_hash"])
                             _clear_error_tx(ledger, r["message_id"])
                             _fail_tx(ledger, r,
                                      max(r["attempts"], prev))

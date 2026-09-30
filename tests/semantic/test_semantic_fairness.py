@@ -291,7 +291,9 @@ def test_observe_unknowns_are_null_not_zero(tmp_path):
     assert snap["cohorts"] == {"arrival": 0, "backfill": 0}
     assert snap["scheduler"] == {"arrival_selected": None,
                                 "backfill_selected": None,
-                                "backfill_last_served_at": None}
+                                "backfill_last_served_at": None,
+                                "qc_selected": None,
+                                "qc_last_served_at": None}
     recent = snap["recent_drain"]
     assert recent["runs"] == 0
     assert recent["llm_s"] is None and recent["usage_tokens"] is None
@@ -317,6 +319,30 @@ def test_observe_partial_measurements_remain_unknown(tmp_path):
         assert snap['extract_recent']['predicted_ms'] is None
     finally:
         db.close()
+
+
+def test_short_window_skips_semantic_but_serves_qc(tmp_path):
+    """A semantic job only starts when the window can host its whole
+    job budget — a doomed first call (exempt from the in-call reserve
+    gate) would burn a generation and a retry attempt. QC rows need
+    only ~15 s and are still served in the same window."""
+    from extract_testkit import _hash, _v2_artifact
+    db = _world(tmp_path, [10])
+    _job(db, 10)
+    _v2_artifact(db, 10, _hash(db, 10))   # source row for _qc_seed
+    out = semantic.run_due(db, _cfg("shadow", extract_qc="annotate"),
+                           {"errors": []}, time.monotonic() + 20,
+                           jev_client=_FakeJev(choice="routine"),
+                           llm_fn=_llm)
+    row = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'"
+    ).fetchone()
+    assert (row["state"], row["attempts"]) == ("pending", 0)
+    assert not [m for m in out["job_metrics"] if m["kind"] == "semantic"]
+    qc = db.db.execute(
+        "SELECT state FROM fetch_jobs WHERE kind='extract_qc'").fetchone()
+    assert qc["state"] == "done"
+    db.close()
 
 
 def test_observe_corrupt_records_are_visible_without_read_writes(tmp_path):

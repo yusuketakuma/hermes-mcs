@@ -610,3 +610,64 @@ def test_qc_dedup_keeps_original_item_indices():
     assert layout == [("v0", "vitals", "hr"),
                       ("e0", "events", 0), ("e1", "events", 2)]
     assert json.loads(context["e1"]) == "exam"
+
+
+# ---------- dedicated QC frame ----------
+
+def _sem_job(db, mid, eligible=False):
+    """Direct semantic job seed — mirrors the fairness fixture:
+    arrival jobs carry eligible=True."""
+    payload = {"targets": [mid],
+               "origin": {"source": "unread" if eligible
+                          else "history_import",
+                          "event_id": mid if eligible else None},
+               "generation": f"g{mid}", "source_generation": "sg1"}
+    if eligible:
+        payload["eligible"] = True
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,"
+        "payload,state,next_try,created_at,updated_at) "
+        "VALUES('semantic',?,?,NULL,?,'pending',0,?,?)",
+        (1, mid, json.dumps(payload), time.time(), time.time()))
+    db.db.commit()
+
+
+def test_qc_frame_survives_semantic_load(tmp_path):
+    """Observed starvation (2026-09-30 ledger): kind ordering put every
+    semantic row ahead of QC and ~240 s generations consumed whole
+    windows — 12 QC rows sat at attempts=0 for ~8h. QC now owns a
+    bounded share of every multi-slot window, served FIRST."""
+    from semantic_testkit import _llm
+    db = _ledger(tmp_path)
+    db.save_messages([_message(i) for i in range(1, 7)])
+    for mid in range(1, 6):
+        _v2_artifact(db, mid, _hash(db, mid))
+        _sem_job(db, mid, eligible=True)
+    out = semantic.run_due(
+        db, _cfg(extract_qc="annotate"), {"errors": []},
+        time.monotonic() + 60, jev_client=_FakeJev(choice="routine"),
+        llm_fn=_llm, max_jobs=4)
+    assert out["lanes"] == {"arrival": 3, "backfill": 0, "qc": 1}
+    assert out["job_metrics"][0]["kind"] == "extract_qc"
+    assert out["job_metrics"][0]["cohort"] == "qc"
+    assert out["done_by_kind"].get("extract_qc") == 1
+    # the QC lane's progress is persisted — restart-safe observation
+    sched = semantic_drain._sched_state(db)
+    assert sched["qc_selected"] == 1 and sched["qc_last_served_at"]
+    db.close()
+
+
+def test_qc_frame_expands_into_idle_semantic_lanes(tmp_path):
+    """With no semantic work due, QC drains through the whole window —
+    the frame is a floor, not a ceiling."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(i) for i in range(1, 7)])
+    for mid in range(1, 7):
+        _v2_artifact(db, mid, _hash(db, mid))
+    out = semantic.run_due(
+        db, _cfg(extract_qc="annotate"), {"errors": []},
+        time.monotonic() + 60, jev_client=_FakeJev(choice="routine"),
+        max_jobs=4)
+    assert out["lanes"]["qc"] == 4
+    assert out["done_by_kind"].get("extract_qc") == 4
+    db.close()

@@ -370,3 +370,25 @@ def test_semantic_llm_chat_degrades_to_plain_when_format_rejected(monkeypatch):
     # the module cooldown restarts at the rejection (not a local binding)
     assert semantic._FMT_TS != 10.0 ** 9
     assert semantic._FMT_TS <= semantic.time.monotonic()
+
+
+def test_semantic_llm_chat_reject_retry_shares_remaining_budget(monkeypatch):
+    """The degrade-to-plain retry spends what is left of the caller's
+    timeout — not a fresh one — so the absolute deadline holds."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", "object")
+    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    timeouts = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        timeouts.append(timeout)
+        clock[0] += 1.5
+        if body.get("response_format"):
+            return 422, {}, b""
+        return 200, {}, json.dumps(_response("{}")).encode()
+
+    monkeypatch.setattr(local_llm, "bounded_request", send)
+    assert semantic.llm_chat("p JSON:", timeout=4) == "{}"
+    assert timeouts == [4, 2.5]

@@ -28,7 +28,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
-from ledger import Ledger
+from ledger import Ledger, karte_summary_block
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import acquire_run_lock
@@ -85,10 +85,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     # never fetched — 空 (fetched, nothing registered) stays distinct.
     ks = ledger.karte_summary_current(project_id)
     out["karte_summary"] = None if ks is None else {
-        "comment": ks.get("comment"), "updated_at": ks.get("updated_at"),
-        "updater_profession": (ks.get("updater") or {}).get("profession")
-        if isinstance(ks.get("updater"), dict) else None,
-        "empty": bool(ks.get("empty")), "fetched_at": ks.get("fetched_at")}
+        **karte_summary_block(ks), "fetched_at": ks.get("fetched_at")}
     if not msgs:
         return out
     newest = msgs[0]

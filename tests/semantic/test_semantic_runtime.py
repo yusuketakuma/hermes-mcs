@@ -112,7 +112,10 @@ def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypa
                       "WHERE kind='semantic'")
         db.db.commit()
         semantic.run_due(db, _cfg("shadow"), result,
-                         time.monotonic() + 30,
+                         # the window must host the whole job budget
+                         # (default 45 s) — a shorter one is skipped at
+                         # the pick-time floor, never attempted
+                         time.monotonic() + 60,
                          jev_client=client, llm_fn=_llm)
     row = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()

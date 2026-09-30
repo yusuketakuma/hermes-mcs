@@ -217,6 +217,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if _probe_format(endpoint, model, timeout) == "object" else None
         timeout = max(0.5, timeout - (time.monotonic() - started))
         while True:
+            call_at = time.monotonic()
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 timeout=timeout, max_tokens=max_tokens,
@@ -226,8 +227,10 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             if rf is not None and response is not None \
                     and response.get("status") in _FMT_REJECT_STATUSES:
                 # the server rejected the constraint (restart / model
-                # swap): degrade to plain for this and later calls
+                # swap): degrade to plain for this and later calls —
+                # the retry shares what is left of the caller's budget
                 _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+                timeout = max(0.5, timeout - (time.monotonic() - call_at))
                 rf = None
                 continue
             break
