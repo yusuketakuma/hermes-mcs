@@ -65,7 +65,12 @@ def patient_summary_text(db, project_id) -> tuple:
                              else "抽出されたバイタルなし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
-        lines.append(_karte_summary_line(roll.get("karte_summary")))
+    # the 連携サマリー line stands on its own: with no rollup yet, or a
+    # rollup built before the summary was fetched, read the artifact
+    ks = roll.get("karte_summary")
+    if ks is None:
+        ks = _karte_summary_from_artifact(db, project_id)
+    lines.append(_karte_summary_line(ks))
     tasks = db.execute(
         "SELECT request_id,title,assignee,due_date FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
@@ -78,6 +83,27 @@ def patient_summary_text(db, project_id) -> tuple:
                  + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
                  for t in tasks)
     return title, "\n".join(lines)
+
+
+def _karte_summary_from_artifact(db, project_id) -> dict | None:
+    """Newest karte_summary artifact in the rollup's block shape; None
+    when the summary was never fetched."""
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind='karte_summary' "
+        "AND project_id=? AND json_valid(content) "
+        "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        c = json.loads(row["content"])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(c, dict):
+        return None
+    updater = c.get("updater") if isinstance(c.get("updater"), dict) else {}
+    return {"comment": c.get("comment"), "updated_at": c.get("updated_at"),
+            "updater_profession": updater.get("profession"),
+            "empty": bool(c.get("empty"))}
 
 
 def _karte_summary_line(ks) -> str:

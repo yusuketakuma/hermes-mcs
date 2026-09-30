@@ -670,3 +670,18 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
                    (json.dumps({"urgency": "high"}), v4.lastrowid))
     led.db.commit()
     assert structured_view.message_urgency(led.db, 100) == "llm"
+
+
+def test_summary_karte_summary_line_without_rollup_reads_artifact(led):
+    """No patient_rollup yet (or one built before the fetch): the
+    連携サマリー line still reflects the stored artifact."""
+    _patient(led, 1)
+    body = notify_views.patient_summary_text(led.db, 1)[1]
+    assert "連携サマリー（MCS）: 未取得" in body
+    led.karte_summary_store(1, 10, {
+        "comment": "合成のサマリー本文", "updated_at": "2026-09-30T10:00:00+09:00",
+        "user": {"profession": "薬剤師", "name": "SYNTH"},
+        "is_editable": True})
+    body = notify_views.patient_summary_text(led.db, 1)[1]
+    assert "連携サマリー（MCS・更新 09/30・薬剤師）: 合成のサマリー本文" in body
+    assert body.count("連携サマリー") == 1
