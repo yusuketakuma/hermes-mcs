@@ -373,8 +373,7 @@ MCS_SETUP_PASSWORD=<sec> $PY mcs/ops/mcs_setup.py init --yes \
 7,37 * * * * $HOME/.mcs/scripts/mcs_deep.sh
 ```
 
-（`mcs_check.sh` には `--no-notify` を付与。夜間間引きは
-スクリプト内に組込み済み）
+（`mcs_check.sh` には `--no-notify` を付与）
 
 この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
 併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
