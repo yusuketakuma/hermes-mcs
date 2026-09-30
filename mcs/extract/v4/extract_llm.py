@@ -2690,6 +2690,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         envelope itself was unusable; "deferred" means the budget ended
         before/during the call."""
         notes = _note_list()
+        notes.clear()   # batch-only runs never enter llm_extract's
+                        # clear — unbounded in a resident worker
         start = len(notes)
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)

@@ -1801,6 +1801,30 @@ def test_batch_envelope_failure_residues_to_singles(
     db.close()
 
 
+def test_batch_call_notes_reset_between_runs(tmp_path, monkeypatch):
+    """The batch lane clears the shared thread-local call notes each
+    pass — a batch-only resident worker must not grow it one entry per
+    call (singles already reset inside llm_extract)."""
+    db = _batch_ledger(tmp_path, n=4)
+
+    def fake_call(prompt, **kw):
+        # mirror the real _llm_call's note append
+        extract_llm._integrity_note(
+            {"status": 200, "finish_reason": "stop"})
+        return {"items": [{"i": i, "summary": f"s{i}"}
+                          for i in range(4)]}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
+    for round_ in range(3):
+        if round_:
+            db.save_messages(
+                [_message(mid=100 + round_ * 10 + i, body=f"追加{i}")
+                 for i in range(4)])
+        extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4)
+    assert len(extract_llm._note_list()) == 1   # last batch's note only
+    db.close()
+
+
 def test_batch_item_evidence_validates_against_own_body(
         tmp_path, monkeypatch):
     """An item quoting body B under index A fails to locate its
