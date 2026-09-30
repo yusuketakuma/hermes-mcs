@@ -2276,8 +2276,9 @@ def _karte_db(tmp_path, n, artifact=False):
 
 
 def _run_stage(adapter, db, targets=(), jobs_only=False, deadline=None):
-    result = {"errors": [], "incomplete": [],
-              "karte_summary_targets": list(targets)}
+    for pid in targets:                     # what the save paths do
+        db.karte_summary_mark_due(pid)
+    result = {"errors": [], "incomplete": []}
     run_check.stage_karte_summary(
         adapter, db, result, deadline or time.monotonic() + 300,
         jobs_only=jobs_only)
@@ -2290,7 +2291,7 @@ def test_karte_summary_tick_fetches_only_projects_with_new_messages(tmp_path):
     adapter = _MemoAdapter(empty={30})
     result = _run_stage(adapter, db, targets=[3, 1, 9, 3])
 
-    assert adapter.calls == [30, 10]                             # dedup, no id -> no GET
+    assert adapter.calls == [10, 30]                             # dedup, no id -> no GET
     assert result["karte_summary"] == {
         "fetched": 2, "stored": 2, "empty": 1, "skipped": 0, "deferred": 0,
         "errors": []}
@@ -2298,6 +2299,8 @@ def test_karte_summary_tick_fetches_only_projects_with_new_messages(tmp_path):
     assert db.karte_summary_current(1)["comment"] == "合成 10"
     assert db.karte_summary_current(2) is None                   # untouched
     assert result["errors"] == []
+    assert db.karte_summary_due() == []                          # cleared by store
+    assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 0
     db.close()
 
 
@@ -2314,22 +2317,25 @@ def test_karte_summary_deep_run_fills_ten_oldest_missing(tmp_path):
     db.close()
 
 
-def test_karte_summary_cap_twelve_and_carry_over(tmp_path):
-    db = _karte_db(tmp_path, 13, artifact=True)
-    db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.fetched_at',1.0)")
-    db.db.commit()
-    db.save_messages([_msg_at(pid * 100, pid, _iso(0)) for pid in range(1, 14)])
+@pytest.mark.parametrize("artifact", [False, True])
+def test_karte_summary_cap_twelve_and_carry_over(tmp_path, artifact):
+    # artifact=False is the rollout case: none of the 13 projects has
+    # ever been fetched, and the 13th must still be fetched on the NEXT
+    # normal tick, not on a later deep-run fill slot
+    db = _karte_db(tmp_path, 13, artifact=artifact)
     adapter = _MemoAdapter()
     result = _run_stage(adapter, db, targets=range(1, 14))
 
     assert len(adapter.calls) == run_check.KARTE_SUMMARY_TICK_CAP == 12
     assert result["karte_summary"]["deferred"] == 1
-    assert result["karte_summary"]["stored"] == 12
-    # next tick: the 13th is stale (message newer than its fetch) and
-    # nothing already refreshed is fetched again
+    assert result["karte_summary"]["fetched"] == 12
+    assert db.karte_summary_due() == [13]                        # durable carry-over
+    # next tick: only the deferred 13th is fetched, nothing refreshed
+    # this tick is fetched again
     result = _run_stage(adapter, db)
     assert adapter.calls[12:] == [130]
     assert result["karte_summary"]["fetched"] == 1
+    assert db.karte_summary_due() == []
     assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 0
     db.close()
 
@@ -2341,6 +2347,7 @@ def test_karte_summary_deadline_stops_the_loop(tmp_path):
                         deadline=time.monotonic() - 1)
     assert adapter.calls == []
     assert result["karte_summary"]["deferred"] == 3
+    assert db.karte_summary_due() == [1, 2, 3]                   # retried next run
     db.close()
 
 
@@ -2355,6 +2362,11 @@ def test_karte_summary_project_error_is_recorded_not_partial(tmp_path):
     assert result["errors"] == [] and result["incomplete"] == []
     assert adapter.marked == []
     assert db.karte_summary_current(2) is None
+    # the failed never-fetched project is retried on the next normal tick
+    assert db.karte_summary_due() == [2]
+    adapter.fail.clear()
+    assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 1
+    assert adapter.calls[3:] == [20] and db.karte_summary_due() == []
     db.close()
 
 
@@ -2367,22 +2379,34 @@ def test_karte_summary_session_expired_propagates(tmp_path):
 
     with pytest.raises(mcs_adapter.SessionExpired):
         _run_stage(Adapter(), db, targets=[1])
+    assert db.karte_summary_due() == [1]                         # still due after relogin
     db.close()
 
 
-def test_new_message_paths_register_karte_summary_targets(tmp_path):
+def test_new_message_paths_mark_karte_summary_due(tmp_path):
     db = _karte_db(tmp_path, 2)
-    result = {"errors": []}
-    job_ops.note_new_messages(result, 1)
-    job_ops.note_new_messages(result, 1)
-    assert result["karte_summary_targets"] == [1]
-    # self probe path: a stored own post registers its project
+    db.upsert_patient_info(_unread_patient(9))                   # karte_id unknown
+    db.karte_summary_mark_due(9)
+    assert db.karte_summary_due() == []                          # waits for karte_id
+    # reply job path: a stored reply flags its project
+    db.save_messages([_msg_at(10, 1, _iso(2))])
+    db.job_add("reply", 1, 11, parent_id=10)
+
+    class ReplyAdapter:
+        def fetch_thread(self, pid, parent_id):
+            return [_msg_at(11, pid, _iso(1))]
+
+    result = {"errors": [], "incomplete": []}
+    job_ops.run_reply_jobs(ReplyAdapter(), db, result, time.monotonic() + 300)
+    assert db.karte_summary_due() == [1]
+    # self probe path: a stored own post flags its project
     db.save_messages([_msg_at(100, 2, _iso(1), unread=False)])
     own = _msg_at(101, 2, _iso(0), unread=False)
 
     class Adapter:
         def fetch_latest(self, pid):
-            return {"message_id": 101, "is_self_only": True}
+            return {"message_id": 101 if pid == 2 else None,
+                    "is_self_only": True}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
             return mcs_adapter.MessageBatch([own], pages=1, reached=True)
@@ -2390,5 +2414,5 @@ def test_new_message_paths_register_karte_summary_targets(tmp_path):
     result = {"errors": [], "new_messages": 0}
     run_check.stage_self_probe(Adapter(), db, result,
                                time.monotonic() + 300, run_id=1)
-    assert result["karte_summary_targets"] == [2]
+    assert db.karte_summary_due() == [1, 2]
     db.close()

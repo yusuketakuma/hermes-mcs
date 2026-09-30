@@ -316,6 +316,9 @@ class Ledger:
                           "ALTER TABLE patients ADD COLUMN history_target INTEGER"),
                          ("karte_id",
                           "ALTER TABLE patients ADD COLUMN karte_id INTEGER"),
+                         ("karte_summary_due",
+                          "ALTER TABLE patients ADD COLUMN karte_summary_due "
+                          "INTEGER NOT NULL DEFAULT 0"),
                          ("is_archived",
                           "ALTER TABLE patients ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")]:
             if col not in c:
@@ -1226,7 +1229,7 @@ class Ledger:
         empty=true/comment=null so 空 (fetched, nothing registered) stays
         distinct from 未取得 (never fetched). An unchanged summary (same
         sha256) writes no new artifact — only the newest row's
-        fetched_at moves, so the stale check does not refetch forever."""
+        fetched_at moves. Either way the project's due flag is cleared."""
         p = payload or {}
         user = p.get("user") or {}
         content = {
@@ -1250,12 +1253,35 @@ class Ledger:
                         "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                         (json.dumps(meta, ensure_ascii=False),
                          row["artifact_id"]))
-                    self.db.commit()
+                    self._karte_summary_due(project_id, 0)
                     return False
         self.artifact_add("karte_summary", text, project_id=project_id,
                           meta={"karte_id": karte_id, "fetched_at": now,
                                 "sha256": sha})
+        self._karte_summary_due(project_id, 0)
         return True
+
+    def _karte_summary_due(self, project_id: int, flag: int):
+        self.db.execute(
+            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+            (flag, project_id))
+        self.db.commit()
+
+    def karte_summary_mark_due(self, project_id: int):
+        """Flag a project for a 連携サマリー GET on the next run (durable).
+
+        Set by the save paths that stored new chat (unread root, reply job,
+        self-probe import) and again when the stage defers or fails a GET,
+        so the carry-over survives the process; cleared by
+        karte_summary_store. The flag persists for a project whose
+        karte_id is still unknown and fires once it is."""
+        self._karte_summary_due(project_id, 1)
+
+    def karte_summary_due(self) -> list:
+        """Projects flagged for a summary GET that have a karte_id, oldest last_seen first."""
+        return [r["project_id"] for r in self.db.execute(
+            "SELECT project_id FROM patients WHERE karte_summary_due=1 "
+            "AND karte_id IS NOT NULL ORDER BY last_seen, project_id")]
 
     def karte_summary_current(self, project_id: int) -> dict | None:
         """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
@@ -1281,24 +1307,6 @@ class Ledger:
               SELECT 1 FROM artifacts a
               WHERE a.kind='karte_summary' AND a.project_id=p.project_id)
             ORDER BY last_seen, project_id LIMIT ?""", (limit,))]
-
-    def karte_summary_stale(self) -> list:
-        """Projects whose newest message was stored after the last summary fetch.
-
-        This is the carry-over: a project cut off by the per-tick GET cap
-        or a failed fetch still shows a message newer than its artifact's
-        fetched_at, so it is offered again next run without extra state."""
-        return [r["project_id"] for r in self.db.execute("""
-            SELECT a.project_id FROM artifacts a
-            JOIN patients p ON p.project_id=a.project_id
-            WHERE a.kind='karte_summary' AND p.karte_id IS NOT NULL
-              AND a.artifact_id=(SELECT MAX(b.artifact_id) FROM artifacts b
-                                 WHERE b.kind='karte_summary'
-                                   AND b.project_id=a.project_id)
-              AND EXISTS(SELECT 1 FROM messages m
-                         WHERE m.project_id=a.project_id
-                           AND m.first_seen > json_extract(a.meta,'$.fetched_at'))
-            ORDER BY p.last_seen, a.project_id""")]
 
     def set_probe_marker(self, project_id: int, message_id: int):
         self.db.execute(

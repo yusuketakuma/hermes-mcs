@@ -545,7 +545,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
         result["messages"] += len(p.messages)
         result["new_messages"] += len(new_ids)
         if new_ids:
-            job_ops.note_new_messages(result, p.project_id)
+            ledger.karte_summary_mark_due(p.project_id)
 
         if session_error:
             raise session_error
@@ -723,7 +723,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             notify_max_age_s=notify_max_age_s, notify_all_new=True)
         if new_ids:
             result["new_messages"] += len(new_ids)
-            job_ops.note_new_messages(result, pid)
+            ledger.karte_summary_mark_due(pid)
         result.setdefault("self_probe_fetched", []).append(pid)
         # A page-limited walk has not established that the latest id is
         # unfetchable. Only a completed walk may suppress later probes.
@@ -789,21 +789,19 @@ def stage_karte_summary(adapter, ledger, result, deadline,
                         jobs_only: bool = False):
     """Read-only 連携サマリー refresh for projects that stored new chat.
 
-    Targets: projects that stored a new message this run (unread root,
-    reply job or self-probe import — note_new_messages), projects whose
-    newest message postdates their last fetch (carry-over past the cap or
-    a failed GET), and on deep runs up to KARTE_SUMMARY_FILL never-fetched
-    projects (oldest first). At most KARTE_SUMMARY_TICK_CAP GETs per run;
-    per-project MCSErrors are recorded under result["karte_summary"] and
-    never make the run partial. No mark-as-read, no POST."""
+    Targets: projects flagged karte_summary_due — the save paths set it
+    when they store new chat (unread root, reply job or self-probe
+    import) and this stage re-sets it on a deferred or failed GET, so the
+    carry-over is durable whether or not an artifact exists yet — and on
+    deep runs up to KARTE_SUMMARY_FILL never-fetched projects (oldest
+    first). At most KARTE_SUMMARY_TICK_CAP GETs per run; a successful
+    store clears the flag; per-project MCSErrors are recorded under
+    result["karte_summary"] and never make the run partial. No
+    mark-as-read, no POST."""
     stats = {"fetched": 0, "stored": 0, "empty": 0, "skipped": 0,
              "deferred": 0, "errors": []}
     result["karte_summary"] = stats
-    targets = list(result.get("karte_summary_targets") or [])
-    # ponytail: carry-over rides on the stale check, so a never-fetched
-    # project cut by the cap waits for the deep fill or its next message;
-    # persist deferred ids if that window ever matters
-    targets += ledger.karte_summary_stale()
+    targets = ledger.karte_summary_due()
     if jobs_only:
         targets += ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
     gets = 0
@@ -813,6 +811,7 @@ def stage_karte_summary(adapter, ledger, result, deadline,
             continue
         if gets >= KARTE_SUMMARY_TICK_CAP or time.monotonic() > deadline:
             stats["deferred"] += 1
+            ledger.karte_summary_mark_due(pid)
             continue
         gets += 1
         try:
@@ -821,6 +820,7 @@ def stage_karte_summary(adapter, ledger, result, deadline,
             raise
         except MCSError as e:
             stats["errors"].append({"project": pid, "kind": e.kind})
+            ledger.karte_summary_mark_due(pid)
             continue
         stats["fetched"] += 1
         if payload is None:
