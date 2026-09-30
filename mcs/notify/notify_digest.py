@@ -119,12 +119,16 @@ def build_text(db, cfg, since: float, until: float) -> str:
     if held:
         lines.append(f"・送信保留の通知: {held}件")
 
-    # 連携サマリー (#21): artifacts stored in the window whose content is
-    # a registered summary; the comment body never leaves the ledger
+    # 連携サマリー (#21): artifacts stored in the window that change an
+    # earlier stored summary (a room's first fetch/backfill is not an
+    # update) into a registered one; the comment never leaves the ledger
     summaries = []
     for r in db.execute(
-            "SELECT project_id, content FROM artifacts WHERE "
+            "SELECT project_id, content FROM artifacts a WHERE "
             "kind='karte_summary' AND created_at>=? AND created_at<? "
+            "AND EXISTS (SELECT 1 FROM artifacts b WHERE "
+            "b.kind='karte_summary' AND b.project_id=a.project_id "
+            "AND b.artifact_id<a.artifact_id) "
             "ORDER BY artifact_id", (since, until)):
         try:
             c = json.loads(r["content"])

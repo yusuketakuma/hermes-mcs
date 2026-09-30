@@ -315,6 +315,11 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
 _REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
 
 
+def _clip(text: str, cap: int) -> str:
+    """Cut text to cap chars, marking an actual cut with a trailing …."""
+    return text if len(text) <= cap else text[:cap - 1] + "…"
+
+
 def _request_lines(llm: dict, v1: dict) -> list[str]:
     reqs, cands = [], []
     for r in llm.get("requests") or []:
@@ -333,13 +338,19 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             due = due if isinstance(due, str) and due else r.get("due_text")
             suffix = f"(期限:{due})" if isinstance(due, str) and due \
                 else ""
+            # the condition is shown in full up to its stored 60-char cap;
+            # action + condition share the 50-char item budget and the
+            # action gives way first (floor 10 so it never vanishes)
             cond = r.get("condition")
-            if isinstance(cond, str) and cond:
-                suffix += f"(条件:{cond[:20]})"
+            cond = _clip(cond, 60) if isinstance(cond, str) else ""
+            if cond:
+                suffix += f"(条件:{cond})"
+            action = _clip(str(r.get("action") or ""),
+                           min(30, max(10, 50 - len(cond))))
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
             (cands if item_unverified(r) else reqs).append(
-                prefix + to + str(r.get("action") or "")[:30] + suffix)
+                prefix + to + action + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:
         reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"

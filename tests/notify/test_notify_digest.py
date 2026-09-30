@@ -135,30 +135,37 @@ def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):
 
 
 def test_karte_summary_count_and_ids_without_comment(led):
-    """Registered summaries stored in the window are counted with their
-    project ids; empty stores and out-of-window ones are not; the
+    """Registered summaries stored in the window that change an earlier
+    stored one are counted with their project ids; a room's first
+    fetch/backfill, empty stores and out-of-window ones are not; the
     comment and updater never appear."""
     _patient(led, 1, name="患者A")
     _patient(led, 2, name="患者B")
     _patient(led, 3, name="患者C")
     _patient(led, 4, name="患者D")
-    _summary_at(led, 1, T - 3600)
-    _summary_at(led, 1, T - 60, comment="二度目の秘密")      # same room: counted once
+    _patient(led, 5, name="患者E")
+    _summary_at(led, 1, T - 3600)                          # first fetch
+    _summary_at(led, 1, T - 60, comment="二度目の秘密")      # the update
+    _summary_at(led, 1, T - 30, comment="三度目の秘密")      # same room: counted once
+    _summary_at(led, 2, T - 2 * 86400)
     _summary_at(led, 2, T - 60, empty=True)                # 空: not counted
+    _summary_at(led, 5, T - 60)                            # backfill: not an update
     _summary_at(led, 3, T - 2 * 86400)                     # before window
     _summary_at(led, 4, T + 5)                             # after window
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
     assert "■ 連携サマリー更新: 1件: project 1" in text     # rooms, not artifacts
     assert "project 2" not in text and "project 3" not in text
-    assert "project 4" not in text
-    for secret in ("連携の秘密本文", "二度目の秘密", "職員X", "患者A"):
+    assert "project 4" not in text and "project 5" not in text
+    for secret in ("連携の秘密本文", "二度目の秘密", "三度目の秘密", "職員X",
+                   "患者A"):
         assert secret not in text
 
 
 def test_karte_summary_names_when_opted_in(led):
     _patient(led, 1, name="患者A")
-    _summary_at(led, 1, T - 60)
+    _summary_at(led, 1, T - 2 * 86400)
+    _summary_at(led, 1, T - 60, comment="更新後")
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
