@@ -131,6 +131,154 @@
     {"id": "review-negated-admission", "body": "本日訪問しました。入院は不要です。", "expect": {"events": ["visit"]}, "forbid": {"events": ["admission"]}},
     {"id": "review-discharge-only", "body": "本日退院して自宅に戻りました。", "expect": {"events": ["discharge"]}, "forbid": {"events": ["admission"]}},
     {"id": "review-family-vital", "body": "本人の脈拍は72です。同居の娘さんの血圧は180/110でした。", "expect": {"vitals": {"hr": 72}}},
-    {"id": "review-multiple-bp", "body": "午前の血圧120/80。現在の収縮期血圧は90、拡張期血圧は測定できませんでした。", "expect": {"vitals": {"sbp": 90}}}
+    {"id": "review-multiple-bp", "body": "午前の血圧120/80。現在の収縮期血圧は90、拡張期血圧は測定できませんでした。", "expect": {"vitals": {"sbp": 90}}},
+    {
+      "id": "synth-request-multi-split",
+      "body": "ケアマネより: 看護師さんは次回訪問で体重測定をお願いします。薬剤師さんは残薬の数の確認をお願いします。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "体重測定", "to": "看護師", "from": "ケアマネ", "kind": "request"},
+                     {"action": "残薬", "to": "薬剤師", "from": "ケアマネ", "kind": "request"}],
+        "urgency": "routine"
+      }
+    },
+    {
+      "id": "synth-request-question",
+      "body": "医師へ質問です。SYNTH-タロウさんの利尿薬は今週も継続でよろしいでしょうか。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "継続", "to": "医師", "kind": "question"}]
+      },
+      "forbid": {
+        "requests": [{"action": "継続", "kind": "request"}]
+      }
+    },
+    {
+      "id": "synth-request-self-plan",
+      "body": "看護師より: 明後日の午前に私が訪問して創部の状態を確認します。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "創部", "kind": "self_plan"}]
+      },
+      "forbid": {
+        "requests": [{"action": "創部", "kind": "request"}]
+      }
+    },
+    {
+      "id": "synth-request-conditional",
+      "body": "看護師さんへ: 体温が38度を超えるようなら医師へ連絡してください。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "連絡", "to": "看護師", "kind": "request", "condition": "体温が38度を超えるようなら"}]
+      }
+    },
+    {
+      "id": "synth-request-relative-due-unknown-date",
+      "body": "薬剤師さんへ: 残薬の数を報告してください。期限は明日です。",
+      "expect": {
+        "requests": [{"action": "報告", "to": "薬剤師", "kind": "request", "due": null, "due_text": "明日"}]
+      }
+    },
+    {
+      "id": "synth-request-negated",
+      "body": "本日の採血は行いません。次回訪問でも採血の予定はありません。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {"requests": [], "urgency": "routine"},
+      "forbid": {"requests": [{"action": "採血"}]}
+    },
+    {
+      "id": "synth-reply-cancel",
+      "context": "[医師] 看護師さんは明日の訪問で採血をお願いします。",
+      "body": "医師より: 先ほどの採血の依頼は取り消します。明日の採血は不要です。",
+      "posted_at": "2026-09-01 12:00",
+      "expect": {"reply": {"kind": "cancel"}},
+      "forbid": {"reply": [{"kind": "done"}, {"kind": "ack"}]}
+    },
+    {
+      "id": "synth-quoted-old-request",
+      "context": "[医師] 看護師さんは本日の訪問で血圧測定をお願いします。",
+      "body": "> 看護師さんは本日の訪問で血圧測定をお願いします\n看護師より: 測定しました。血圧は128/76でした。",
+      "posted_at": "2026-09-01 15:00",
+      "expect": {"requests": [], "vitals": {"sbp": 128, "dbp": 76}},
+      "forbid": {"requests": [{"action": "血圧測定"}]}
+    },
+    {
+      "id": "synth-request-family-addressee",
+      "body": "ご家族へ: 次回の受診日までに保険証の写しをご用意ください。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "保険証", "to": "家族", "kind": "request"}]
+      }
+    },
+    {
+      "id": "synth-report-no-request",
+      "body": "本日訪問し、清拭と体位変換を実施しました。特に変わりありません。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {"requests": [], "events": ["visit"], "urgency": "routine"}
+    },
+    {
+      "id": "synth-greeting-no-request",
+      "body": "おはようございます。本日もよろしくお願いいたします。",
+      "posted_at": "2026-09-01 08:00",
+      "expect": {"requests": [], "urgency": "routine"}
+    },
+    {
+      "id": "synth-reply-ack",
+      "context": "[医師] 看護師さんは次回訪問で創部の写真を撮影してください。",
+      "body": "承知しました。",
+      "posted_at": "2026-09-01 11:00",
+      "expect": {"reply": {"kind": "ack"}, "requests": []},
+      "forbid": {"reply": {"kind": "done"}}
+    },
+    {
+      "id": "synth-reply-progress",
+      "context": "[医師] 薬剤師さんは3名分の残薬確認をお願いします。",
+      "body": "薬剤師より: SYNTH-ハナコさんの分のみ確認済みです。残りのお二人は明日確認します。",
+      "posted_at": "2026-09-01 11:00",
+      "expect": {"reply": {"kind": "progress"}},
+      "forbid": {"reply": {"kind": "done"}}
+    },
+    {
+      "id": "synth-reply-answer",
+      "context": "[ケアマネ] 医師へ質問です。デイサービスでの入浴は可能でしょうか。",
+      "body": "医師より: 入浴は可能です。皮膚の乾燥に注意してください。",
+      "posted_at": "2026-09-01 11:00",
+      "expect": {"reply": {"kind": "answer"}},
+      "forbid": {"reply": {"kind": "done"}}
+    },
+    {
+      "id": "synth-reply-done",
+      "context": "[医師] 薬剤師さんは残薬の数の確認をお願いします。",
+      "body": "薬剤師より: 残薬の確認を完了しました。残りは3錠でした。",
+      "posted_at": "2026-09-01 11:00",
+      "expect": {"reply": {"kind": "done"}, "requests": []},
+      "forbid": {"reply": [{"kind": "ack"}, {"kind": "intent"}]}
+    },
+    {
+      "id": "synth-reply-thanks-only",
+      "context": "[看護師] 本日の訪問で創部の写真を撮影しました。",
+      "body": "ありがとうございます。",
+      "posted_at": "2026-09-01 11:00",
+      "expect": {"reply": null, "requests": []}
+    },
+    {
+      "id": "synth-request-from-unstated",
+      "body": "看護師さんは次回訪問時に体重を測定してください。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "体重", "to": "看護師", "kind": "request", "from": null}]
+      }
+    },
+    {
+      "id": "synth-request-to-unstated",
+      "body": "次回までに服薬カレンダーの準備をお願いします。",
+      "posted_at": "2026-09-01 10:00",
+      "expect": {
+        "requests": [{"action": "服薬カレンダー", "to": "不明"}]
+      },
+      "forbid": {
+        "requests": [{"action": "服薬カレンダー", "to": "看護師"}]
+      }
+    }
   ]
 }
