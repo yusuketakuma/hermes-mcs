@@ -191,6 +191,11 @@ def _reply(kind):
       (3, 1, "SYNTH-B", "T02:00", _reply("done"))], "done", False),
     ([(2, 1, "SYNTH-B", "T01:00", _reply("done")),
       (3, 1, "SYNTH-C", "T02:00", _reply("cancel"))], "cancel", True),
+    # done -> cancel -> done: the cancel is later than the FIRST done,
+    # so it still conflicts (the walk is newest-first)
+    ([(2, 1, "SYNTH-B", "T01:00", _reply("done")),
+      (3, 1, "SYNTH-C", "T02:00", _reply("cancel")),
+      (4, 1, "SYNTH-B", "T03:00", _reply("done"))], "cancel", True),
     # reply on an unrelated thread (root 9) is not this request's
     ([(9, None, "SYNTH-B", "T01:00", {}),
       (10, 9, "SYNTH-C", "T02:00", _reply("done"))], None, False),
@@ -210,6 +215,20 @@ def test_rollup_thread_reply_state(db, replies, state, conflict):
     assert rows[0].get("reply_state") == state
     assert rows[0].get("reply_conflict", False) is conflict
     assert rows[0]["unverified"] is False
+
+
+def test_rollup_reply_survives_canonical_projection_shadowing(db):
+    """A current canonical_projection shadows extract_llm as the fact
+    source for that message, but reply is read from extract_llm itself
+    (no other engine emits it), so an audited reply still counts."""
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
+                  _reply("done"))])
+    db.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
+                    project_id=1, message_id=2,
+                    meta={"hash": _hash(db, 2)})
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert rows[0]["reply_state"] == "done"
 
 
 def test_rollup_reply_with_unparseable_posted_at_is_never_later(db):
