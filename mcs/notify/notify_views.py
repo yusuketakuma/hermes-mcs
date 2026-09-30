@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 import structured_view
+from ledger import karte_summary_block
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from notify_render import (
@@ -100,10 +101,7 @@ def _karte_summary_from_artifact(db, project_id) -> dict | None:
         return None
     if not isinstance(c, dict):
         return None
-    updater = c.get("updater") if isinstance(c.get("updater"), dict) else {}
-    return {"comment": c.get("comment"), "updated_at": c.get("updated_at"),
-            "updater_profession": updater.get("profession"),
-            "empty": bool(c.get("empty"))}
+    return karte_summary_block(c)
 
 
 def _karte_summary_line(ks) -> str:

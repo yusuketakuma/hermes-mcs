@@ -2450,8 +2450,9 @@ def recover(ledger, cfg, result) -> dict:
 
 
 def health_cards(ledger) -> dict:
-    """The health.json 'cards' section — counts and ages only, no
-    patient data."""
+    """The health.json 'cards' section — counts and ages plus the
+    bounded unsettled-attempt worklist an operator resolves via
+    ops.card_resolve (ids only, no patient data)."""
     db = _db(ledger)
     now = time.time()
     states = {r["delivery_state"]: r["c"] for r in db.execute(
@@ -2473,6 +2474,18 @@ def health_cards(ledger) -> dict:
     unknown = db.execute(
         "SELECT COUNT(*) FROM notification_renders WHERE state='unknown'"
     ).fetchone()[0]
+    # Unsettled attempts as an actionable list, oldest first — each row
+    # carries the exact scope ops.card_resolve validates against, so
+    # resolving is: check the remote channel -> submit the approval
+    # flow. Never auto-resend: a granted attempt may already be remote.
+    worklist = db.execute(
+        "SELECT a.attempt_id,a.delivery_id,a.state,a.message_id,"
+        "a.error_code,a.created_at,r.card_id,r.transport,r.profile,"
+        "r.application_id,r.guild_id,r.channel_id,r.team_id "
+        "FROM notification_delivery_attempts a "
+        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
+        "WHERE a.state IN ('granted','unknown') "
+        "ORDER BY a.created_at LIMIT 20").fetchall()
     return {
         "pending": states.get("pending", 0),
         "delivered": states.get("delivered", 0),
@@ -2486,5 +2499,17 @@ def health_cards(ledger) -> dict:
         "attempts_unsettled": unsettled["c"],
         "oldest_unsettled_age_s": (round(now - unsettled["o"], 1)
                                  if unsettled["o"] else 0),
+        "unsettled": [
+            {"attempt_id": w["attempt_id"],
+             "delivery_id": w["delivery_id"],
+             "state": w["state"],
+             "card_id": w["card_id"],
+             "transport": w["transport"],
+             "channel_id": w["channel_id"],
+             "message_id": w["message_id"],
+             "error_code": w["error_code"],
+             "age_s": round(now - w["created_at"], 1),
+             "resolve_scope": stored_scope(w)}
+            for w in worklist],
         "last_delivered_at": last or 0,
     }

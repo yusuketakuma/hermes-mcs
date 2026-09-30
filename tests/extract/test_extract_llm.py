@@ -1073,6 +1073,23 @@ def test_karte_block_cut_at_150_and_budgets_thread(tmp_path):
     db.close()
 
 
+def test_context_with_karte_head_but_no_tail_is_thread(monkeypatch):
+    """A caller-built context that opens with the summary head but has
+    no tail is thread material — the block split must not raise, and
+    the whole text rides the thread fence instead."""
+    seen = {}
+
+    def fake(prompt, **kw):
+        seen["prompt"] = prompt
+        return {"summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    ctx = extract_llm._KARTE_HEAD + "headの後にtailが無い断片"
+    out = extract_llm.llm_extract("対象本文です", context=ctx)
+    assert out == {"summary": "s"}
+    assert extract_llm._CTX_HEAD in seen["prompt"]
+    assert "断片" in seen["prompt"]
+
+
 def test_karte_quote_rejected_by_body_only_evidence_check():
     """A quote lifted from the 連携サマリー is not in the target body,
     so the body-only evidence check drops it."""
@@ -2281,6 +2298,33 @@ def test_llm_error_retry_resets_after_body_change(tmp_path, monkeypatch):
     result = extract_llm.run_pending(db, limit=1, budget_s=5)
 
     assert result["done"] == 1
+    db.close()
+
+
+def test_stale_error_row_does_not_gate_fresh_body(tmp_path, monkeypatch):
+    """With the sweep gated off (per-process cadence), a stale error
+    artifact at the attempts ceiling must not block the edited body —
+    selection and fold-in both require the artifact's hash to match."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="A")])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._fail(db, row, 4)
+    db.save_messages([_message(body="B")])
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: {})
+    monkeypatch.setattr(extract_llm, "_stale_gc_at", time.time())
+
+    result = extract_llm.run_pending(db, limit=1, budget_s=5)
+
+    assert result["done"] == 1
+    # and a fresh-body failure folds in only same-hash prior attempts —
+    # the lingering stale row must not roll it back to the ceiling
+    row_b = db.db.execute(
+        "SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm._fail(db, row_b, 0)
+    meta = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm' "
+        "AND json_extract(meta,'$.error')=1").fetchone()[0])
+    assert meta["attempts"] == 1
     db.close()
 
 

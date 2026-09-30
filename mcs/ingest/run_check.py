@@ -207,6 +207,36 @@ def _health(ledger, result: dict, status: str,
     lane = lane if isinstance(lane, dict) else _semantic_lane_prev()
     lane_held = _finite_number(lane.get("hold_until")) \
         and now < lane["hold_until"]
+    cards_health = notify_cards.health_cards(ledger)
+    # Itemized attention block (2026-09-30): 'degraded' alone did not
+    # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
+    # unsettled deliveries aged ~31h while everything read "incomplete".
+    # Three separate signals: fresh failures (24h), due-but-never-
+    # picked rows (updated_at==created_at — attempts alone cannot tell
+    # starvation from healthy rotation jobs like reconcile, which
+    # progress by payload page with attempts=0), and old unsettled
+    # deliveries. Informational only — 'overall' keeps its own rules.
+    _failed_rows = ledger.db.execute(
+        "SELECT kind,COUNT(*) c,MAX(updated_at) u FROM fetch_jobs "
+        "WHERE state='failed' AND updated_at>=? GROUP BY kind",
+        (now - 86400,)).fetchall()
+    attention = {
+        "failed_jobs_24h": {r["kind"]: r["c"] for r in _failed_rows},
+        "failed_jobs_latest_at": max(
+            (r["u"] for r in _failed_rows if r["u"] is not None),
+            default=None),
+        "pending_unstarted": {
+            r["kind"]: {"count": r["c"],
+                        "oldest_age_s": round(now - r["o"], 1)}
+            for r in ledger.db.execute(
+                "SELECT kind,COUNT(*) c,MIN(created_at) o "
+                "FROM fetch_jobs WHERE state='pending' "
+                "AND COALESCE(attempts,0)=0 AND updated_at<=created_at "
+                "AND next_try<=? GROUP BY kind", (now,)).fetchall()},
+        "delivery_unsettled": {
+            "attempts": cards_health["attempts_unsettled"],
+            "oldest_age_s": cards_health["oldest_unsettled_age_s"]},
+    }
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (result.get("errors") or coll["collection"] != "ok"
@@ -236,8 +266,9 @@ def _health(ledger, result: dict, status: str,
             "current": current, "eligible": total,
             "poison_gated": poison,
             "ratio": round(current / total, 4) if total else None},
-        "cards": notify_cards.health_cards(ledger),
+        "cards": cards_health,
         "semantic_lane": lane,
+        "attention": attention,
         "errors": list(result.get("errors") or []),
     }
 
@@ -1396,6 +1427,13 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on):
                 return
             time.sleep(1.0)
         allowance = deadline - time.monotonic() - SEMANTIC_TAIL_RESERVE_S
+        if allowance <= 0:
+            # the wait spent the lane's budget: same skip as the
+            # pre-wait guard — the streak stands (nothing evaluated)
+            # and the finally clause drops the flag so drainers resume
+            result["semantic"] = _semantic_skipped(cfg, "no_budget")
+            result["semantic_lane"] = _lane(streak)
+            return
         started = time.monotonic()
         try:
             import semantic

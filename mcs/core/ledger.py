@@ -64,6 +64,18 @@ def _posted_epoch(posted_at: str) -> int | None:
         return None
 
 
+def karte_summary_block(content: dict) -> dict:
+    """The read-model shape one stored 連携サマリー content maps to —
+    shared by the patient rollup and the 🧾 summary line so the two
+    never drift on the same artifact."""
+    updater = content.get("updater") \
+        if isinstance(content.get("updater"), dict) else {}
+    return {"comment": content.get("comment"),
+            "updated_at": content.get("updated_at"),
+            "updater_profession": updater.get("profession"),
+            "empty": bool(content.get("empty"))}
+
+
 def _enqueue_attachment_followup_tx(db, attachment_id, project_id, message_id, now):
     if db.execute("""
         SELECT 1 FROM notify_outbox
