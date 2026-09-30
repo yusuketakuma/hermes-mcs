@@ -185,6 +185,50 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
     return _FMT_MODE
 
 
+# Runaway generations (2026-10-01): with temperature 0 a prompt that
+# decodes until max_tokens does so identically on every retry — one
+# job burned ~5 min of a slot per attempt and never finished. A length
+# stop is retried ONCE with repetition control; the prompt is then
+# remembered (1 = start penalized, 2 = penalized also ran away: fail
+# fast without a model call) so later attempts spend no GPU on it.
+_RUNAWAY_PATH = os.path.join(HOME, "data", "semantic_runaway.json")
+_RUNAWAY_MAX = 500
+_RUNAWAY_MIN_RETRY_S = 60.0
+_ANTI_REPEAT = {"repeat_penalty": 1.1, "repeat_last_n": 256,
+                "dry_multiplier": 0.8}
+
+
+def _runaway_key(model: str, prompt: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{model}\0{prompt}".encode("utf-8")).hexdigest()
+
+
+def _runaway_marks() -> dict:
+    try:
+        with open(_RUNAWAY_PATH, encoding="utf-8") as f:
+            marks = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return marks if isinstance(marks, dict) else {}
+
+
+def _runaway_mark(key: str, level: int) -> None:
+    """Best effort — a lost write only costs one more runaway call."""
+    # ponytail: unlocked read-modify-write across processes; a lost
+    # concurrent mark only re-spends one call — lock it if marks churn
+    try:
+        import maintenance
+        marks = _runaway_marks()
+        marks.pop(key, None)
+        marks[key] = level
+        while len(marks) > _RUNAWAY_MAX:
+            marks.pop(next(iter(marks)))
+        os.makedirs(os.path.dirname(_RUNAWAY_PATH), exist_ok=True)
+        maintenance.atomic_publish_text(_RUNAWAY_PATH, json.dumps(marks))
+    except Exception:
+        pass
+
+
 def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
              max_tokens: int = LLM_MAX_TOKENS) -> str | None:
     """One local-llama.cpp chat call via the shared loopback adapter.
@@ -216,23 +260,35 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         rf = {"type": "json_object"} \
             if _probe_format(endpoint, model, timeout) == "object" else None
         timeout = max(0.5, timeout - (time.monotonic() - started))
+        key = _runaway_key(model, prompt)
+        level = _runaway_marks().get(key, 0)
+        if level >= 2:
+            return None       # penalized decoding ran away too
         while True:
             call_at = time.monotonic()
+            payload = {"id_slot": local_llm.request_slot()}
+            if level:
+                payload.update(_ANTI_REPEAT)
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 timeout=timeout, max_tokens=max_tokens,
-                response_format=rf,
-                extra_payload={"id_slot": local_llm.request_slot()},
+                response_format=rf, extra_payload=payload,
                 request_fn=local_llm.bounded_request, error_out=err_out)
+            timeout = max(0.5, timeout - (time.monotonic() - call_at))
             if rf is not None and response is not None \
                     and response.get("status") in _FMT_REJECT_STATUSES:
                 # the server rejected the constraint (restart / model
                 # swap): degrade to plain for this and later calls —
                 # the retry shares what is left of the caller's budget
                 _FMT_MODE, _FMT_TS = "plain", time.monotonic()
-                timeout = max(0.5, timeout - (time.monotonic() - call_at))
                 rf = None
                 continue
+            if response is not None \
+                    and response.get("finish_reason") == "length":
+                level += 1
+                _runaway_mark(key, level)
+                if level == 1 and timeout >= _RUNAWAY_MIN_RETRY_S:
+                    continue  # one penalized retry in what is left
             break
     if response is None and err_out.get("kind") == "unreachable":
         raise runtime.LLMNotSent("llm_unreachable")
