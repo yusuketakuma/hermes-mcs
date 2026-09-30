@@ -72,6 +72,27 @@ def test_confirmed_requests_render_unchanged(db):
     assert _request_rows(joined) == ["依頼: 医師へa / 医師へb / 医師へc"]
 
 
+def test_request_kind_prefix_due_text_and_condition(db):
+    """#20 order 3: self_plan/question get a per-item prefix inside the
+    same 依頼: line, a relative deadline shows through due_text when due
+    is null, and a located condition is appended truncated to 20 chars.
+    Unverified items keep going to 依頼候補（未確認）."""
+    joined = _render(db, {"requests": [
+        {"to": "不明", "from": "ケアマネ", "kind": "self_plan",
+         "action": "訪問して状況確認", "due": None, "due_text": "明日まで"},
+        {"to": "家族", "kind": "question", "action": "デイ利用希望の確認"},
+        {"to": "看護師", "kind": "request", "action": "医師へ連絡",
+         "condition": "血圧が160を超えるようなら翌朝までに必ず"},
+        {"to": "医師", "kind": "self_plan", "action": "再診",
+         "unverified": True}]})
+    assert _request_rows(joined) == [
+        "依頼: 予定:ケアマネ→訪問して状況確認(期限:明日まで) / "
+        "確認依頼:家族へデイ利用希望の確認 / "
+        "看護師へ医師へ連絡(条件:血圧が160を超えるようなら翌朝までに必)",
+        "依頼候補（未確認）: 予定:医師へ再診"]
+    assert len("血圧が160を超えるようなら翌朝までに必ず") == 21  # cut at 20
+
+
 def test_malformed_unverified_flag_fails_closed(db):
     """A non-bool flag (string, number, null) is never shown as confirmed;
     items missing both to/action are dropped as before."""

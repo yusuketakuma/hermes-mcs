@@ -310,6 +310,11 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
     return lines
 
 
+# per-item prefix inside the 依頼: line — a plan of the poster or a
+# question is not an order to somebody (#20 order 3)
+_REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
+
+
 def _request_lines(llm: dict, v1: dict) -> list[str]:
     reqs, cands = [], []
     for r in llm.get("requests") or []:
@@ -319,13 +324,19 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             frm = str(r.get("from") or "")
             prefix = "" if frm in ("", "不明", "unknown", "-") \
                 else f"{frm}→"
-            due = r.get("due")
+            # a relative deadline (due null, due_text kept verbatim) is
+            # still a deadline to the reader
+            due = r.get("due") or r.get("due_text")
             suffix = f"(期限:{due})" if isinstance(due, str) and due \
                 else ""
+            cond = r.get("condition")
+            if isinstance(cond, str) and cond:
+                suffix += f"(条件:{cond[:20]})"
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
             (cands if item_unverified(r) else reqs).append(
-                prefix + to + str(r.get("action") or "")[:30] + suffix)
+                _REQ_KIND_PREFIX.get(r.get("kind"), "") + prefix + to
+                + str(r.get("action") or "")[:30] + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:
         reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"
