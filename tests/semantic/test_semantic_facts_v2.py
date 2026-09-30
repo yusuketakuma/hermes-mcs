@@ -556,6 +556,24 @@ def test_malformed_cache_rows_are_ignored_and_reextracted(field, bad):
     assert result["reused_chunks"] == []
 
 
+@pytest.mark.parametrize("change", [None, "model", "prompt"])
+def test_cached_chunks_require_same_model_and_prompt(monkeypatch, change):
+    import semantic
+    import semantic_llm
+    ledger = _FakeLedger()
+    member = _member("合成観察文です。")
+    extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
+    if change == "model":
+        monkeypatch.setattr(semantic, "llm_model",
+                            lambda cfg=None: "synthetic-other-model")
+    elif change == "prompt":
+        monkeypatch.setattr(semantic_llm, "_FACT_V2_PROMPT",
+                            semantic_llm._FACT_V2_PROMPT + "\n")
+    result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
+    assert result["complete"]
+    assert bool(result["reused_chunks"]) is (change is None)
+
+
 def test_new_chunk_layout_is_persisted_for_same_source():
     ledger = _FakeLedger()
     member = _member("合成観察文です。" * 10)

@@ -37,6 +37,11 @@ def _source_fingerprint(member: dict, supplied: str | None) -> str:
                                sort_keys=True, separators=(",", ":")))
 
 
+def _chunk_generation(model: str, prompt_template: str) -> str:
+    """Return the model + prompt identity a cached chunk must match."""
+    return f"{model}|{_sha256(prompt_template)[:16]}"
+
+
 def _chunk_specs(source: str, chunk_size: int, chunker) -> list[dict]:
     if type(chunk_size) is not int or chunk_size <= 0:
         raise ValueError("chunk_size_invalid")
@@ -368,7 +373,7 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
                    revision, specs, source: str, *,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
-                   extra=None) -> dict[int, dict]:
+                   extra=None, generation: str | None = None) -> dict[int, dict]:
     if ledger is None:
         return {}
     cached = {}
@@ -383,6 +388,7 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
             index = meta["chunk_index"]
             spec = wanted[index]
             if (meta.get("schema") != schema
+                    or meta.get("generation") != generation
                     or meta.get("status") != "complete"
                     or meta.get("source_fingerprint") != source_fp
                     or meta.get("source_hash") != body_hash
@@ -529,7 +535,7 @@ def _chunk_progress(specs, completed, reused, failed, failure_reason,
 def _persist_chunk(ledger, project_id, message_id, model, source_fp,
                    body_hash, revision, spec, facts, dropped, chunk_count,
                    *, kind: str = KIND_CHUNK, schema: str = SCHEMA_VERSION,
-                   extra_content=None):
+                   extra_content=None, generation: str | None = None):
     if ledger is None:
         return
     content = {
@@ -554,6 +560,7 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         "end_codepoint": spec["end"],
         "chunk_hash": spec["hash"],
         "dropped": dropped,
+        "generation": generation,
     }
     ledger.artifact_add(
         kind, json.dumps(content, ensure_ascii=False, allow_nan=False),
@@ -585,8 +592,10 @@ def extract_facts_resumable(llm_fn, member: dict,
         specs = _chunk_specs(source, chunk_size, chunker)
     _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
+    generation = _chunk_generation(semantic.llm_model(), semantic._FACT_PROMPT)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
-                            body_hash, revision, specs, source)
+                            body_hash, revision, specs, source,
+                            generation=generation)
 
     facts = []
     completed = []
@@ -630,7 +639,7 @@ def extract_facts_resumable(llm_fn, member: dict,
         _persist_chunk(ledger, project_id, message_id, semantic.llm_model(),
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
-                       len(specs))
+                       len(specs), generation=generation)
         facts.extend(chunk_facts)
         completed.append(index)
 
@@ -934,10 +943,12 @@ def extract_facts_v2(llm_fn, member: dict,
     _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
+    generation = _chunk_generation(semantic.llm_model(),
+                                   semantic_llm._FACT_V2_PROMPT)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
-                            extra=_v2_chunk_ok)
+                            extra=_v2_chunk_ok, generation=generation)
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -1027,7 +1038,8 @@ def extract_facts_v2(llm_fn, member: dict,
         _persist_chunk(ledger, project_id, message_id, model, source_fp,
                        body_hash, revision, spec, chunk_facts,
                        chunk_dropped, len(specs), kind=KIND_CHUNK_V2,
-                       schema=cache_schema, extra_content=extra)
+                       schema=cache_schema, extra_content=extra,
+                       generation=generation)
         facts.extend(chunk_facts)
         presence[cid] = clean_verdicts
         chunk_status[cid] = "complete"
