@@ -174,3 +174,38 @@ def test_observation_skips_invalid_job_json(tmp_path):
             "eligible_pending"] == 0
     finally:
         db.close()
+
+
+def test_recent_drain_window_and_llm_p90(tmp_path):
+    from semantic_evaluation import _percentile
+    db_path = str(tmp_path / "ledger.db")
+    db = Ledger(db_path)
+    try:
+        def run(job_llm_s, age_days=0):
+            metrics = [{"llm_s": v} for v in job_llm_s] if job_llm_s is not None else None
+            rid = db.artifact_add("semantic_drain_run", json.dumps(
+                {"v": 1, "done": len(job_llm_s or []), "job_metrics": metrics}))
+            with db.db:
+                db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?",
+                              (time.time() - age_days * 86400, rid))
+        run([1.0, 3.0])
+        run([2.0, 10.0], age_days=13)
+        run([500.0], age_days=15)  # outside the 14-day window
+
+        recent = semantic_observe.observe(db_path, days=14)["recent_drain"]
+        assert recent["runs"] == 2 and recent["done"] == 4
+        assert recent["llm_s"] == 16.0
+        # pinned to the module's existing interpolating percentile helper
+        assert recent["llm_s_p90"] == _percentile([1.0, 3.0, 2.0, 10.0], 0.90)
+        assert recent["jev_s"] is None and recent["post_s"] is None
+        assert semantic_observe.observe(db_path, days=30)["recent_drain"]["runs"] == 3
+        assert semantic_observe.observe(db_path, days=30)["recent_drain"]["llm_s"] == 516.0
+
+        with db.db:
+            db.db.execute("DELETE FROM artifacts")
+        run(None)
+        recent = semantic_observe.observe(db_path)["recent_drain"]
+        assert recent["runs"] == 1 and recent["llm_s_p90"] is None
+        assert recent["llm_s"] is None
+    finally:
+        db.close()
