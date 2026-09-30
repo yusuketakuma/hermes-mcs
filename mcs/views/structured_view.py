@@ -326,7 +326,8 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 else f"{frm}→"
             # a relative deadline (due null, due_text kept verbatim) is
             # still a deadline to the reader
-            due = r.get("due") or r.get("due_text")
+            due = r.get("due")
+            due = due if isinstance(due, str) and due else r.get("due_text")
             suffix = f"(期限:{due})" if isinstance(due, str) and due \
                 else ""
             cond = r.get("condition")
@@ -334,8 +335,10 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 suffix += f"(条件:{cond[:20]})"
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
+            kind = r.get("kind")
             (cands if item_unverified(r) else reqs).append(
-                _REQ_KIND_PREFIX.get(r.get("kind"), "") + prefix + to
+                (_REQ_KIND_PREFIX.get(kind, "") if isinstance(kind, str)
+                 else "") + prefix + to
                 + str(r.get("action") or "")[:30] + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:

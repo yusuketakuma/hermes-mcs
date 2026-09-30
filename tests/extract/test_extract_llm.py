@@ -169,11 +169,19 @@ def test_validate_reply_requires_kind_and_located_evidence():
         {"reply": {"kind": "done", "evidence": "明日の往診で確認します"},
          "summary": "s"}, body)
     assert done["reply"]["kind"] == "done"
-    # unlocated / missing evidence: the typed reply is dropped whole
-    for r in ({"kind": "ack", "evidence": "本文にない"},
-              {"kind": "ack"}):
-        out = extract_llm._validate({"reply": r, "summary": "s"}, body)
-        assert "reply" not in out
+    # unlocated evidence: the typed reply is dropped whole (counted as
+    # an evidence drop); a missing quote is a counted item drop so the
+    # repair asks for it instead of losing it silently
+    out = extract_llm._validate(
+        {"reply": {"kind": "ack", "evidence": "本文にない"}, "summary": "s"},
+        body)
+    assert "reply" not in out and out["_evidence_dropped"] == 1
+    out = extract_llm._validate({"reply": {"kind": "ack"}, "summary": "s"},
+                                body)
+    assert "reply" not in out and out["_items_dropped"] == 1
+    # null = no reply: nothing dropped, nothing counted
+    out = extract_llm._validate({"reply": None, "summary": "s"}, body)
+    assert "reply" not in out and "_items_dropped" not in out
     # invalid or missing kind: dropped and counted
     for r in ({"kind": "maybe", "evidence": "承知しました"},
               {"evidence": "承知しました"}, "ack"):

@@ -1,5 +1,6 @@
 """extract_bench scoring contract tests — pure function, no LLM."""
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -180,24 +181,24 @@ def test_forbidden_request_is_reported_with_extracted_items():
     assert score["raw"]["requests"] == [request]
 
 
-def test_case_file_validates_offline():
-    import extract_llm
+def test_case_file_validates_offline(tmp_path):
     cases = extract_bench._load_cases(extract_bench.DEFAULT_CASES)
     assert len(cases) >= 10
     for c in cases:
+        # production passes messages.posted_at verbatim (ISO-8601 with
+        # offset): the date rule is measured on that shape only
+        assert "posted_at" not in c or c["posted_at"].endswith("+09:00"), c["id"]
         for key in ("expect", "forbid"):
-            section = c.get(key, {})
-            assert extract_bench._section_valid(section), \
+            # _section_valid carries the kind/reply-kind typo guard
+            assert extract_bench._section_valid(c.get(key, {})), \
                 f"{c['id']}: {key} fails _validate"
-            # typo guard: _validate only omits a bad kind KEY, so a
-            # misspelt label would silently match any kind
-            for r in section.get("requests") or []:
-                if "kind" in r:
-                    assert r["kind"] in extract_llm._REQ_KINDS, c["id"]
-            reply = section.get("reply")
-            for r in (reply if isinstance(reply, list) else [reply]):
-                if r is not None:
-                    assert r["kind"] in extract_llm._REPLY_KINDS, c["id"]
+    # a non-string context/posted_at is rejected offline, not mid-run
+    for key in ("context", "posted_at"):
+        bad = tmp_path / f"{key}.json"
+        bad.write_text(json.dumps({"cases": [
+            {"id": "x", "body": "合成", key: ["合成"]}]}))
+        with pytest.raises(ValueError, match=key):
+            extract_bench._load_cases(str(bad))
 
 
 def test_case_bodies_do_not_leak_from_few_shot_examples():
@@ -214,6 +215,9 @@ def test_case_bodies_do_not_leak_from_few_shot_examples():
 def test_section_valid_rejects_misspelt_kinds(section):
     assert not extract_bench._section_valid(section)
     assert extract_bench._section_valid({"reply": None, "requests": []})
+    # explicit null pins 'no kind' (module docstring), never a typo
+    assert extract_bench._section_valid(
+        {"requests": [{"action": "確認", "kind": None}]})
 
 
 # U05-F06: a dropped item must fail, not become "expect nothing".
@@ -286,7 +290,7 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
                     'posted_at': '2026-09-01 10:00'}
     assert report['model'] == extract_llm.MODEL
     assert report['prompt_sha256'] == hashlib.sha256(
-        extract_llm._PROMPT_HEAD.encode('utf-8')).hexdigest()
+        (extract_llm._PROMPT_HEAD + extract_llm._CTX_HEAD).encode('utf-8')).hexdigest()
     assert report['reply_confusion'] == {}
     assert report['cases'][0]['performance']['calls'] == 2
     assert report['cases'][0]['performance']['usage']['total_tokens'] == 12

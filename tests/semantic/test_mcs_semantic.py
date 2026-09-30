@@ -1681,17 +1681,21 @@ def test_transition_rescues_null_payload_row(tmp_path):
     db.close()
 
 
-def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path):
+@pytest.mark.parametrize("code", [
+    "change_kind:choice_invalid", "change_kind:probabilities_invalid",
+    "change_kind:unknown_type"])
+def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path,
+                                                                     code):
     """2026-09-30: one malformed medication-detail reply (choice outside
-    the criteria) must not kill the job after a single attempt — it
-    retries within the bounded budget; a whole-envelope protocol error
-    (test_nonretryable_jev_error_fails_bounded) still fails at once."""
+    the criteria, a bad distribution, ...) must not kill the job after a
+    single attempt — it retries within the bounded budget; a
+    whole-envelope protocol error (test_nonretryable_jev_error_fails_bounded)
+    still fails at once. Every per-answer code is ``qid:reason``."""
     class DetailFlaky(_FakeJev):
         def evaluate(self, state, questions, deadline):
             if set(questions) & set(jev.MED_DETAIL_QUESTIONS):
                 self.requests_made += 1
-                self.last_error = jev.JevError(
-                    "protocol_error", "change_kind:choice_invalid")
+                self.last_error = jev.JevError("protocol_error", code)
                 raise self.last_error
             return super().evaluate(state, questions, deadline)
 

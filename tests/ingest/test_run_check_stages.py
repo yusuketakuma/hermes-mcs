@@ -249,7 +249,7 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
         fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
             messages=[_message(unread=True)], reached=True),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
-        mark_patient_read=lambda *args: marks.append(args),
+        mark_patient_read=lambda *a, **k: marks.append(a),
     )
 
     def run():
@@ -476,7 +476,7 @@ def test_snippet_parent_blocks_mark_read(tmp_path):
             messages=[_message(mid=10, unread=True, state="snippet")],
             reached=True),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
-        mark_patient_read=lambda *a: marks.append(a),
+        mark_patient_read=lambda *a, **k: marks.append(a),
     )
     result = {"errors": [], "incomplete": [], "messages": 0,
               "new_messages": 0, "marked_read": []}
@@ -2134,7 +2134,7 @@ def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
             messages=[_message(mid=90, unread=True)], reached=True, capped=True),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
         oldest_unread_id=lambda pid: oldest["id"],
-        mark_patient_read=lambda *args: marks.append(args),
+        mark_patient_read=lambda *a, **k: marks.append(a),
     )
     result = _capped_run(db, adapter)
     row = db.db.execute(
@@ -2193,9 +2193,14 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     """F-5: the unread route itself fails past the screen cap. The
     patient stays incomplete (walk seeded) until the history walk has
     certified down to the oldest unread; then it is acknowledged through
-    the plain list read, never through the failing unread-filtered one."""
+    the plain list read, never through the failing unread-filtered one.
+    Nothing in that branch fetches the TOP of the range either: a post
+    newer than the walk's last page stays unacknowledged until it is
+    stored, since the plain read would clear it unfetched (and the walk
+    would then import it read, never notified)."""
     db = _ledger(tmp_path)
     marks = []
+    latest = {"id": 5}
     adapter = SimpleNamespace(
         list_unread=lambda: mcs_adapter.UnreadSnapshot(
             timestamp=123, patients=[_unread_patient(1)]),
@@ -2203,6 +2208,8 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
             messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=400)),
         fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
         oldest_unread_id=lambda pid: 5,
+        fetch_latest=lambda pid: {"message_id": latest["id"],
+                                  "is_self_only": False},
         mark_patient_read=lambda *a, **k: marks.append((a, k)),
     )
     result = _capped_run(db, adapter)
@@ -2214,6 +2221,15 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     db.save_messages([_message(mid=5, unread=True,
                                posted_at="2026-09-01T00:00:00+09:00")], project_id=1)
     db.set_history_floor(1, 0)
+    # the bottom is certified but a newer post (id 7) is not stored yet
+    latest["id"] = 7
+    result = _capped_run(db, adapter)
+    assert marks == [] and result["incomplete"] == [1]
+    row = db.db.execute(
+        "SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()
+    assert row["fetch_reason"] == "unread_capped"
+    db.save_messages([_message(mid=7, unread=True,
+                               posted_at="2026-09-02T00:00:00+09:00")], project_id=1)
     result = _capped_run(db, adapter)
     assert marks == [((1, 123), {"fallback_plain": True})]
     assert result["marked_read"] == [1] and result["incomplete"] == []

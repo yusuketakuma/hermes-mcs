@@ -262,7 +262,14 @@ def main() -> int:
     from mcs_util import load_config
     days = 14
     if "--days" in sys.argv:
-        days = int(sys.argv[sys.argv.index("--days") + 1])
+        try:
+            days = int(sys.argv[sys.argv.index("--days") + 1])
+            if days < 1:
+                raise ValueError(days)
+        except (ValueError, IndexError):
+            print("usage: semantic_observe.py [--json] [--days N>=1]",
+                  file=sys.stderr)
+            return 2
     snap = observe(cfg=load_config(), days=days)
     if "--json" in sys.argv:
         print(json.dumps(snap, ensure_ascii=False))

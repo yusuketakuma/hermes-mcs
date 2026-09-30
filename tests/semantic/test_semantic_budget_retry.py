@@ -103,3 +103,40 @@ def test_next_call_short_of_reserve_defers_without_attempt(tmp_path, monkeypatch
         assert facts[0] == facts[1] >= 1
     finally:
         db.close()
+
+
+def test_budget_short_stops_the_pass_before_the_next_job(tmp_path, monkeypatch):
+    """After one job yields on the call reserve, the pass ends: the next
+    due job's FIRST call is exempt from the reserve gate and would be
+    dispatched into a budget that cannot fit a long generation (a
+    guaranteed timeout at the lane deadline, wasted model time)."""
+    clock = [100.0]
+    monkeypatch.setattr(semantic.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(semantic.runtime.time, 'monotonic', lambda: clock[0])
+    calls = []
+
+    def llm(prompt, timeout=None):
+        calls.append(prompt[:6])
+        clock[0] += 200
+        return _llm(prompt)
+
+    from semantic_testkit import _ledger, _message, _patient
+    db = _ledger(tmp_path)
+    try:
+        p = _patient(db)
+        p.messages = [_message(1), _message(3, body='別の投稿です。')]
+        p.messages[0].replies = [_message(2, parent=1)]
+        p.messages[1].replies = [_message(4, parent=3)]
+        db.save_patient(p, notify={'source': 'unread'}, semantic=True)
+        assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 2
+        out = semantic.run_due(db, _cfg('shadow', job_budget_seconds=450.0),
+                               {'errors': []}, clock[0] + 450,
+                               jev_client=_FakeJev(), llm_fn=llm)
+        # one long call, then the reserve is short: no second job starts
+        assert len(calls) == 1
+        assert out['deferred'] == 1 and out['done'] == 0 and out['failed'] == 0
+        assert [m['status'] for m in out['job_metrics']] == ['deferred_short']
+        rows = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchall()
+        assert [tuple(r) for r in rows] == [('pending', 0), ('pending', 0)]
+    finally:
+        db.close()

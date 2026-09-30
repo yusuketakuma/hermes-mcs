@@ -139,7 +139,8 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 
     endpoint = local_http(SlowHandler)
     monkeypatch.setattr(semantic, "LLM_ENDPOINT", endpoint)
-    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")   # no format probe
+    monkeypatch.setattr(semantic, "_probe_format",
+                        lambda *a: "plain")   # no format probe
     trickle_s = 0.25 * len(response)
     started_at = time.monotonic()
     # The worker is a fresh interpreter process whose spawn can take a
@@ -316,3 +317,56 @@ def test_not_sent_repair_is_an_unavailable_repair(tmp_path):
         assert audits.get(2) == "NEEDS_REVIEW"
     finally:
         db.close()
+
+
+def _response(text, finish="stop"):
+    return {"choices": [{"message": {"content": text},
+                         "finish_reason": finish}]}
+
+
+def test_semantic_llm_chat_requests_json_object_after_probe(monkeypatch):
+    """Every semantic prompt expects JSON: once the probe accepts
+    json_object, the constraint rides every call. The probe spends the
+    caller's timeout instead of adding up to 10 s on top of it."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
+    bodies, timeouts = [], []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        bodies.append(body)
+        timeouts.append(timeout)
+        text = '{"ok": true}' if "Reply with" in body["messages"][0]["content"] \
+            else '{"facts": []}'
+        return 200, {}, json.dumps(_response(text)).encode()
+
+    monkeypatch.setattr(local_llm, "bounded_request", send)
+    assert semantic.llm_chat("抽出 JSON:", timeout=4) == '{"facts": []}'
+    assert semantic._FMT_MODE == "object"
+    assert bodies[-1]["response_format"] == {"type": "json_object"}
+    assert bodies[-1]["id_slot"] == local_llm.BACKGROUND_SLOT
+    assert len(timeouts) == 2 and all(t <= 4 for t in timeouts)
+    # cached: a second call does not re-probe
+    semantic.llm_chat("次 JSON:")
+    assert sum("Reply with" in b["messages"][0]["content"] for b in bodies) == 1
+
+
+def test_semantic_llm_chat_degrades_to_plain_when_format_rejected(monkeypatch):
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", "object")
+    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
+    formats = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        formats.append(body.get("response_format"))
+        if body.get("response_format"):
+            return 422, {}, b""
+        return 200, {}, json.dumps(_response("{}")).encode()
+
+    monkeypatch.setattr(local_llm, "bounded_request", send)
+    assert semantic.llm_chat("p JSON:") == "{}"
+    assert formats == [{"type": "json_object"}, None]
+    assert semantic._FMT_MODE == "plain"
+    # the module cooldown restarts at the rejection (not a local binding)
+    assert semantic._FMT_TS != 10.0 ** 9
+    assert semantic._FMT_TS <= semantic.time.monotonic()

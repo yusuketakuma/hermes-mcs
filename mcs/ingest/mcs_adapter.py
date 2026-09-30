@@ -1126,17 +1126,27 @@ class MCSAdapter:
             or (total is not None and total > len(msgs)))
         return MessageBatch(msgs, pages, reached, error, capped)
 
-    def oldest_unread_id(self, project_id: int) -> int | None:
-        """``oldest_unread_message.id`` from the project detail — the
-        anchor an unread-capped patient must be walked down to before it
-        may be acknowledged. None when the server reports no unread; a
-        malformed detail is a SchemaError (never silently 'none')."""
+    def _project_detail(self, project_id: int) -> tuple[dict, dict | None]:
+        """(raw envelope, project object or None) of the project detail.
+        The object must carry a bool is_archived — a permanent detail
+        field — so an empty/malformed object never reads as a valid
+        detail; each caller decides what an invalid one means."""
         r = self._get(f"/projects/{project_id}", {})
         proj = r.get("project")
         if proj is None and isinstance(r.get("data"), dict):
             proj = r["data"].get("project")
         if not isinstance(proj, dict) \
                 or type(proj.get("is_archived")) is not bool:
+            proj = None
+        return r, proj
+
+    def oldest_unread_id(self, project_id: int) -> int | None:
+        """``oldest_unread_message.id`` from the project detail — the
+        anchor an unread-capped patient must be walked down to before it
+        may be acknowledged. None when the server reports no unread; a
+        malformed detail is a SchemaError (never silently 'none')."""
+        _, proj = self._project_detail(project_id)
+        if proj is None:
             raise SchemaError(f"project[{project_id}]: detail invalid")
         oldest = proj.get("oldest_unread_message")
         if oldest is None:
@@ -1535,14 +1545,7 @@ class MCSAdapter:
                 raise
             self._get(f"/projects/{project_id}/messages", {
                 "per_page": 1, "page": 1, "include_paginate_totals": 0})
-        r = self._get(f"/projects/{project_id}", {})
-        proj = r.get("project")
-        if proj is None and isinstance(r.get("data"), dict):
-            proj = r["data"].get("project")
-        # is_archived is a permanent detail field — requiring it keeps an
-        # empty/malformed project object from counting as confirmation
-        if isinstance(proj, dict) \
-                and type(proj.get("is_archived")) is bool \
-                and proj.get("oldest_unread_message") is None:
+        r, proj = self._project_detail(project_id)
+        if proj is not None and proj.get("oldest_unread_message") is None:
             return r
         raise MCSError("mark_result_unknown")

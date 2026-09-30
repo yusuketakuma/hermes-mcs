@@ -1,8 +1,8 @@
 # #20 チャットからのタスク候補抽出・v4 能力強化
 
-作成日: 2026-09-30。状態: 計画のみ・未着手。ユーザー要望は「チャット文面からタスク化する能力を、構造化データ・LLM 処理の強化を前提に引き上げる」。実データ・実 LLM による現状精度や性能は未計測。
+作成日: 2026-09-30。状態: 順序 1〜6 を `wip/roadmap20-ultracode` に実装済み（20-D/E は未着手、設定変更は無し）。ユーザー要望は「チャット文面からタスク化する能力を、構造化データ・LLM 処理の強化を前提に引き上げる」。実データ・実 LLM による現状精度や性能は未計測。
 
-改訂: 2026-09-30 第4版。第4版は実装判断（decision list）に合わせた行単位の訂正のみ（QC の走査範囲、kind 語彙、evidence 必須化、due_text 表示、rollup キー名、20-C の thread 単位・閲覧のみ、semantic_loops 判定文の保留、20-D の前提、容量ゲートの算出元、signals の kind ガード）。第3版は 第2版（同日）で利用者に届く経路を先に強化する順序へ組み替え、第3版で **shadow/off の機能は on にする** オーナー方針（2026-09-30）を取り込んだ。コード上のゲート（enforce の calibration、canonical の G6 token）は迂回せず満たして通す。初版・第2版の本文は git 履歴を参照。コード・設定の変更は未実施。
+改訂: 2026-09-30 第4版。第4版は実装判断（decision list）に合わせた行単位の訂正のみ（QC の走査範囲、kind 語彙、evidence 必須化、due_text 表示、rollup キー名、20-C の thread 単位・閲覧のみ、semantic_loops 判定文の保留、20-D の前提、容量ゲートの算出元、signals の kind ガード）。第3版は 第2版（同日）で利用者に届く経路を先に強化する順序へ組み替え、第3版で **shadow/off の機能は on にする** オーナー方針（2026-09-30）を取り込んだ。コード上のゲート（enforce の calibration、canonical の G6 token）は迂回せず満たして通す。初版・第2版の本文は git 履歴を参照。読み取り側の新項目（kind/condition/due_text/reply_state）は extract_llm 経路のみに出る — `canonical_projection` が投影する request_pending は to/from/action/due/unverified だけを持ち、投影が有効な投稿では #20 以前と同じ表示・集計になる。
 
 ## 目的と境界
 
@@ -43,9 +43,9 @@ hermes-mcs は抽出と候補提示を担当する。正式な担当割当・期
 
 | 領域 | 現状 | 本計画での扱い |
 |---|---|---|
-| カードに出る依頼 | `extract_llm.py` `requests`: to（職種 enum）/from/action（プロンプト 15 字、保存 60 字）/due/due_text。evidence はプロンプトで要求されておらず、全件 unverified（依頼候補（未確認））で表示されていた | 種別・条件を足し、evidence をプロンプトで必須にし、複数依頼の分割と除外規則を明示（20-B） |
+| カードに出る依頼 | `extract_llm.py` `requests`: to（職種 enum）/from/action（#20 以前はプロンプト 15 字、現在 30 字。保存 60 字）/due/due_text。evidence はプロンプトで要求されておらず、全件 unverified（依頼候補（未確認））で表示されていた | 種別・条件を足し、evidence をプロンプトで必須にし、複数依頼の分割と除外規則を明示（20-B） |
 | 文脈 | `_thread_context`: root + 直近 3 返信を参照専用で注入。evidence は対象本文に限定 | 変更しない。返信種別の判定材料に使う（20-C） |
-| 品質 | `extract_qc`（Jev、annotate）の走査は `_QC_SECTIONS`（vitals/meds/symptoms/labs/events）のみ。**`requests` は監査対象外**で 1 回の再抽出も他 section の所見で起きる | 新項目（kind/condition/reply）は Jev に届かない。`requests` を `_QC_SECTIONS` に加えるのは送信 payload の拡張なので別承認。再抽出の merge で `reply` を落とさない |
+| 品質 | `extract_qc`（Jev、annotate）の走査は `_QC_SECTIONS`（vitals/meds/symptoms/labs/events）のみ。**`requests` は監査対象外**で 1 回の再抽出も他 section の所見で起きる | 新項目（kind/condition/reply）は Jev に届かない。`requests` を `_QC_SECTIONS` に加えるのは送信 payload の拡張なので別承認。in-call repair と thin retry では `reply` を落とさない（QC 再抽出は従来どおり置換） |
 | 評価 | `extract_cases.json` + `extract_bench._match_request`（action 部分一致 + to/from/due/evidence）。`semantic_evaluation` + G6 + `semantic_blind` の人手ラベル手順（`evaluation/annotation-guide.md`） | 合成ケースと照合項目を追加（20-A）。人手ラベルに依頼・返信の項目を含め、G6 と共用（20-E） |
 | rollup | `recent_requests` に kind(=to)/ctx(=action)/flag を 15 件まで | 新キー `req_kind`/`condition`/`due_text`/`reply_state`（`reply_conflict`）を追加。`kind` は to のまま、既存キー不変 |
 | canonical v2 | `request_pending` fact は statement/workflow_status/event_time/根拠のみ | 加法改版で extract_llm と同じ項目を持たせる（20-D）。canonical 切替の前提 |
@@ -79,7 +79,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 
 ### 20-A 依頼の評価ケースと基準測定（S）
 
-- `evaluation/extract_cases.json` に依頼向けの完全合成ケースを 20〜30 件追加。層: 一投稿の複数依頼、間接依頼、自己予定、条件付き、相対期限、否定・取消、引用転載された旧依頼、家族への依頼、依頼なしの報告・挨拶、返信（受諾・途中経過・回答・完了報告・「ありがとうございます」だけ）。
+- `evaluation/extract_cases.json` に依頼向けの完全合成ケースを約 15 件追加（実装は 17 件）。層: 一投稿の複数依頼、間接依頼、自己予定、条件付き、相対期限、否定・取消、引用転載された旧依頼、家族への依頼、依頼なしの報告・挨拶、返信（受諾・途中経過・回答・完了報告・「ありがとうございます」だけ）。
 - `extract_bench._match_request` に `kind`・`condition`・`due_text` の照合と、`reply` の照合を追加（expected にある項目だけ照合する現行の流儀）。
 - 現行プロンプトでローカル LLM の基準を測る（承認済み範囲。mock 成功は精度にしない）。
 - 人手ラベル（20-E3）の記入項目に、依頼の to/from/kind/condition/due_text と返信種別を加える。G6 の facts/loops ラベルと同じ worksheet で一度に記入し、実データでの依頼精度を G6 と同じ 200 件で測る。
@@ -145,7 +145,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 | 20-E3 新着 | 同上 | 可能 |
 | 20-E3 履歴 | 17,978 件 × 393 秒 ≈ 78 日分の LLM 時間 | 不可。新着から・bounded cohort のみ |
 
-**切替条件（E2・E3 共通）**: 直近 2 週間で (1) semantic の LLM 時間が 1 日平均で日中の 50%（6.5 時間）以下、(2) job の LLM 時間 p90 が 900 秒以下、(3) tick の `semantic_lane.hold_until` 発動が週 1 回以下。算出元: (1) は `semantic_drain_run` artifact の `job_metrics.llm_s` の合計（`semantic_observe --json --days 14` の `recent_drain.llm_s`。`created_at` で 14 日窓）、(2) は同 `llm_s_p90`（job ごとの `job_metrics.llm_s` の線形補間 percentile — `semantic_evaluation._percentile`。ceil-rank ではないため job 数が少ないと ceil-rank より小さく出うる）、(3) は tick ログの JSON から `semantic_lane.hold_until` を grep して数える（耐久 marker は設けない）。**オーナー注意**: `maintenance.rotate_log` は >5MB で 1 世代（`.1`）しか残さず日数保証がないため、2 週間の読み出し前にログの保持期間を確認する。超えた場合は切替を進めず、下記の削減策を先に入れる。
+**切替条件（E2・E3 共通）**: 直近 2 週間で (1) semantic の LLM 時間が 1 日平均で日中の 50%（6.5 時間）以下、(2) job の LLM 時間 p90 が 900 秒以下、(3) tick の `semantic_lane.hold_until` 発動が週 1 回以下。算出元: (1) は `semantic_drain_run` artifact の `job_metrics.llm_s` の合計（`semantic_observe --json --days 14` の `recent_drain.llm_s`。`created_at` で 14 日窓）、(2) は同 `llm_s_p90`（job ごとの `job_metrics.llm_s` の線形補間 percentile — `semantic_evaluation._percentile`。線形補間なので ceil-rank と一致せず上下どちらにもずれうる）、(3) は tick ログの JSON から `semantic_lane.hold_until` の**異なる値**を数える（`grep -o '"hold_until": *[0-9.]*' data/run.log | sort -u | wc -l`。1 回の発動は SEMANTIC_HOLD_S の間、毎 tick 同じ値を再出力するので行数は発動回数ではない。耐久 marker は設けない）。**オーナー注意**: `maintenance.rotate_log` は >5MB で 1 世代（`.1`）しか残さず日数保証がないため、2 週間の読み出し前にログの保持期間を確認する。超えた場合は切替を進めず、下記の削減策を先に入れる。
 
 **削減策（効果順）**: canonical 切替で legacy `_FACT_PROMPT` を落とす（-25%）→ v2 抽出に `response_format` の JSON schema を使い冗長な出力を削る → 長文だけ job 予算を上げる → モデル軽量化（最後）。検討して見送り（2026-09-30）: preflight「全カテゴリ absent」の chunk で v2 生成を省く案は、了解文の生成が元々短く（約 20 秒、1 日 1.5 分相当）節約が小さい一方、Jev の誤判定で fact を取りこぼす経路になるため採用しない。
 
@@ -153,7 +153,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 
 | 観点 | 報告・判定 |
 |---|---|
-| 依頼の検出 | 種別別の適合率・再現率。陰性例で出た誤候補を分母に入れる。合成開発目標は各 95% 以上（提案）。実データは 20-E3 の 200 件で報告 |
+| 依頼の検出 | 種別別の適合率・再現率。陰性例で出た誤候補を分母に入れる。合成開発目標は固定コーパスで誤り 0 件（件数併記。95% 目標は実装判断で置換）。実データは 20-E3 の 200 件で報告 |
 | 項目 | to/from/action/due_text/condition の項目別正解率、不明を不明のまま保つ率。担当・期限・行動の捏造 0、根拠なし項目 0 |
 | 返信 | ack/intent/progress/answer/done/cancel の混同行列。誤 done 0、「ありがとう」だけの done 0 |
 | 既存機能 | 薬剤・否定・時制の固定コーパスで非劣化。G6 基準は下げない |
