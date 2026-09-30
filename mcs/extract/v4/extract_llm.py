@@ -1204,7 +1204,7 @@ def _merge(outs: list[dict]) -> dict:
     planned restart coexist; symptoms keep the LAST status per text —
     a later "resolved" must overwrite an earlier "new" or downstream
     resolvers never fire; vitals keep the latest reading per key;
-    requests dedupe on (to, from, action, due). urgency is high if any
+    requests dedupe on (to, from, action, due, condition, due_text). urgency is high if any
     chunk said high. `summary` is dropped — a first-chunk summary is a
     PARTIAL viewpoint and must not be displayed as the whole message's
     gist (points survive: they are additive facts, each still true).
@@ -1237,8 +1237,12 @@ def _merge(outs: list[dict]) -> dict:
                 lab_idx[name] = len(out.setdefault("labs", []))
                 out["labs"].append(lab)
         for rq in d.get("requests") or []:
+            # condition/due_text change what is asked: two chunks'
+            # requests differing only there are distinct, never merged
+            # (kind stays out — an overlap sentence may be labelled
+            # request in one chunk and question in the next)
             k = (rq.get("to"), rq.get("from"), rq.get("action"),
-                 rq.get("due"))
+                 rq.get("due"), rq.get("condition"), rq.get("due_text"))
             if k not in seen_requests:
                 seen_requests.add(k)
                 out.setdefault("requests", []).append(rq)
@@ -1652,6 +1656,9 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
 # the same body hash and REVIVE_MAX rows per pass, only after
 # REVIVE_COOLDOWN_S. A new body hash starts a fresh budget as before.
 REVIVE_MAX = 30
+# auto_retry as SQL, non-integers counting 0 like the Python check
+_AUTO_RETRY_SQL = ("(CASE WHEN json_type(meta,'$.auto_retry')='integer' "
+                   "THEN json_extract(meta,'$.auto_retry') ELSE 0 END)")
 REVIVE_PER_INPUT = 3
 REVIVE_COOLDOWN_S = 6 * 3600
 
@@ -1660,14 +1667,25 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     """Re-open exhausted current-version error rows for one more try."""
     now = time.time() if now is None else now
     out = {"revived": 0, "skipped_cap": 0}
+    # capped rows are excluded BEFORE the LIMIT — selecting them first
+    # let a capped prefix starve every eligible row behind it
     rows = ledger.db.execute(
         "SELECT artifact_id,meta FROM artifacts WHERE kind=? "
         "AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
         "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
         "AND COALESCE(json_extract(meta,'$.attempts'),0)>=5 "
-        "AND created_at<=? ORDER BY created_at LIMIT ?",
+        "AND created_at<=? AND " + _AUTO_RETRY_SQL + "<? "
+        "ORDER BY created_at LIMIT ?",
         (KIND, EXTRACT_VERSION, now - REVIVE_COOLDOWN_S,
-         REVIVE_MAX * 4)).fetchall()
+         REVIVE_PER_INPUT, REVIVE_MAX * 4)).fetchall()
+    out["skipped_cap"] = ledger.db.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE kind=? "
+        "AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
+        "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
+        "AND COALESCE(json_extract(meta,'$.attempts'),0)>=5 "
+        "AND created_at<=? AND " + _AUTO_RETRY_SQL + ">=?",
+        (KIND, EXTRACT_VERSION, now - REVIVE_COOLDOWN_S,
+         REVIVE_PER_INPUT)).fetchone()[0]
     for row in rows:
         if out["revived"] >= REVIVE_MAX:
             break

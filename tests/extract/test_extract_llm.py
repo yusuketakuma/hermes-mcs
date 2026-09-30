@@ -856,7 +856,8 @@ def test_merge_keeps_first_reply_and_dedupes_requests():
          "reply": {"kind": "done", "evidence": "完了"}}
     out = extract_llm._merge([{"summary": "x"}, a, b])
     assert out["reply"] == {"kind": "ack", "evidence": "承知"}
-    # dedupe key is (to, from, action, due) — kind is not part of it
+    # dedupe key is (to, from, action, due, condition, due_text) —
+    # kind is not part of it
     assert out["requests"] == [
         {"to": "医師", "action": "確認", "kind": "request"},
         {"to": "家族", "action": "連絡"}]

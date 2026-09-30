@@ -66,12 +66,11 @@ def patient_summary_text(db, project_id) -> tuple:
                              else "抽出されたバイタルなし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
-    # the 連携サマリー line stands on its own: with no rollup yet, or a
-    # rollup built before the summary was fetched, read the artifact
-    ks = roll.get("karte_summary")
-    if ks is None:
-        ks = _karte_summary_from_artifact(db, project_id)
-    lines.append(_karte_summary_line(ks))
+    # the 連携サマリー line always reads the newest artifact: the rollup
+    # holds a copy frozen at its last rebuild, which a newer fetch
+    # (updated or emptied summary) supersedes
+    lines.append(_karte_summary_line(
+        _karte_summary_from_artifact(db, project_id)))
     tasks = db.execute(
         "SELECT request_id,title,assignee,due_date FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
