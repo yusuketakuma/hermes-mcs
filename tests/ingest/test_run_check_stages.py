@@ -95,8 +95,11 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
         def _get(self, path, params=None, extend_session=True):
             if path == "/projects":
                 return {"projects": [{"id": 1, "is_unread": True,
-                                      "karte": {}}],
+                                      "karte": {"id": 5}}],
                         "paginate": {"has_next": False, "timestamp": 123}}
+            if path == "/kartes/5/memo_summary":
+                return {"memo_summary": {"is_editable": True, "is_read": True,
+                                         "read_style": "single_line"}}
             assert path == "/projects/1/messages"
             assert params["keep_read_status"] == 1
             return {"messages": [{"id": 1, "comment": "synthetic body",
@@ -151,6 +154,7 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM read_marks").fetchone()[0] == 0
+    assert db.db.execute("SELECT count(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM command_receipts WHERE outcome='applied'").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM runs WHERE status='running'").fetchone()[0] == 0
@@ -2233,4 +2237,158 @@ def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path)
     result = _capped_run(db, adapter)
     assert marks == [((1, 123), {"fallback_plain": True})]
     assert result["marked_read"] == [1] and result["incomplete"] == []
+    db.close()
+
+
+# ---------- stage: 連携サマリー ----------
+
+class _MemoAdapter:
+    def __init__(self, fail=(), empty=()):
+        self.calls = []
+        self.fail = set(fail)
+        self.empty = set(empty)
+        self.marked = []
+
+    def fetch_memo_summary(self, karte_id):
+        self.calls.append(karte_id)
+        if karte_id in self.fail:
+            raise mcs_adapter.MCSError("http_error", status=500)
+        if karte_id in self.empty:
+            return None
+        return {"comment": f"合成 {karte_id}", "updated_at": "", "is_editable": True,
+                "user": {"profession": "", "name": ""}}
+
+    def mark_patient_read(self, *a, **k):
+        self.marked.append(a)
+
+
+def _karte_db(tmp_path, n, artifact=False):
+    db = _ledger(tmp_path)
+    for pid in range(1, n + 1):
+        p = _unread_patient(pid)
+        p.karte_id = pid * 10
+        db.upsert_patient_info(p)
+        if artifact:
+            db.karte_summary_store(pid, pid * 10, None)
+    db.db.execute("UPDATE patients SET last_seen=project_id")
+    db.db.commit()
+    return db
+
+
+def _run_stage(adapter, db, targets=(), jobs_only=False, deadline=None):
+    result = {"errors": [], "incomplete": [],
+              "karte_summary_targets": list(targets)}
+    run_check.stage_karte_summary(
+        adapter, db, result, deadline or time.monotonic() + 300,
+        jobs_only=jobs_only)
+    return result
+
+
+def test_karte_summary_tick_fetches_only_projects_with_new_messages(tmp_path):
+    db = _karte_db(tmp_path, 5)
+    db.upsert_patient_info(_unread_patient(9))                   # no karte_id
+    adapter = _MemoAdapter(empty={30})
+    result = _run_stage(adapter, db, targets=[3, 1, 9, 3])
+
+    assert adapter.calls == [30, 10]                             # dedup, no id -> no GET
+    assert result["karte_summary"] == {
+        "fetched": 2, "stored": 2, "empty": 1, "skipped": 0, "deferred": 0,
+        "errors": []}
+    assert db.karte_summary_current(3)["empty"] is True
+    assert db.karte_summary_current(1)["comment"] == "合成 10"
+    assert db.karte_summary_current(2) is None                   # untouched
+    assert result["errors"] == []
+    db.close()
+
+
+def test_karte_summary_deep_run_fills_ten_oldest_missing(tmp_path):
+    db = _karte_db(tmp_path, 14)
+    db.karte_summary_store(1, 10, None)                          # already known
+    adapter = _MemoAdapter()
+    _run_stage(adapter, db)                                      # tick: nothing
+    assert adapter.calls == []
+    result = _run_stage(adapter, db, jobs_only=True)
+    assert adapter.calls == [pid * 10 for pid in range(2, 12)]   # 10 oldest
+    assert result["karte_summary"]["fetched"] == 10
+    assert db.karte_summary_missing(20) == [12, 13, 14]
+    db.close()
+
+
+def test_karte_summary_cap_twelve_and_carry_over(tmp_path):
+    db = _karte_db(tmp_path, 13, artifact=True)
+    db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.fetched_at',1.0)")
+    db.db.commit()
+    db.save_messages([_msg_at(pid * 100, pid, _iso(0)) for pid in range(1, 14)])
+    adapter = _MemoAdapter()
+    result = _run_stage(adapter, db, targets=range(1, 14))
+
+    assert len(adapter.calls) == run_check.KARTE_SUMMARY_TICK_CAP == 12
+    assert result["karte_summary"]["deferred"] == 1
+    assert result["karte_summary"]["stored"] == 12
+    # next tick: the 13th is stale (message newer than its fetch) and
+    # nothing already refreshed is fetched again
+    result = _run_stage(adapter, db)
+    assert adapter.calls[12:] == [130]
+    assert result["karte_summary"]["fetched"] == 1
+    assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 0
+    db.close()
+
+
+def test_karte_summary_deadline_stops_the_loop(tmp_path):
+    db = _karte_db(tmp_path, 3)
+    adapter = _MemoAdapter()
+    result = _run_stage(adapter, db, targets=[1, 2, 3],
+                        deadline=time.monotonic() - 1)
+    assert adapter.calls == []
+    assert result["karte_summary"]["deferred"] == 3
+    db.close()
+
+
+def test_karte_summary_project_error_is_recorded_not_partial(tmp_path):
+    db = _karte_db(tmp_path, 3)
+    adapter = _MemoAdapter(fail={20})
+    result = _run_stage(adapter, db, targets=[1, 2, 3])
+
+    assert adapter.calls == [10, 20, 30]                         # loop continues
+    assert result["karte_summary"]["errors"] == [{"project": 2, "kind": "http_error"}]
+    assert result["karte_summary"]["fetched"] == 2
+    assert result["errors"] == [] and result["incomplete"] == []
+    assert adapter.marked == []
+    assert db.karte_summary_current(2) is None
+    db.close()
+
+
+def test_karte_summary_session_expired_propagates(tmp_path):
+    db = _karte_db(tmp_path, 1)
+
+    class Adapter(_MemoAdapter):
+        def fetch_memo_summary(self, karte_id):
+            raise mcs_adapter.SessionExpired("gone")
+
+    with pytest.raises(mcs_adapter.SessionExpired):
+        _run_stage(Adapter(), db, targets=[1])
+    db.close()
+
+
+def test_new_message_paths_register_karte_summary_targets(tmp_path):
+    db = _karte_db(tmp_path, 2)
+    result = {"errors": []}
+    job_ops.note_new_messages(result, 1)
+    job_ops.note_new_messages(result, 1)
+    assert result["karte_summary_targets"] == [1]
+    # self probe path: a stored own post registers its project
+    db.save_messages([_msg_at(100, 2, _iso(1), unread=False)])
+    own = _msg_at(101, 2, _iso(0), unread=False)
+
+    class Adapter:
+        def fetch_latest(self, pid):
+            return {"message_id": 101, "is_self_only": True}
+
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            return mcs_adapter.MessageBatch([own], pages=1, reached=True)
+
+    result = {"errors": [], "new_messages": 0}
+    run_check.stage_self_probe(Adapter(), db, result,
+                               time.monotonic() + 300, run_id=1)
+    assert result["karte_summary_targets"] == [2]
     db.close()

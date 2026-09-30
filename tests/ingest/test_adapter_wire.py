@@ -82,7 +82,8 @@ def test_mark_read_empty_project_is_unknown():
 
 def _unread_project(pid: int, unread: bool = True) -> dict:
     return {"id": pid, "type": "medical", "is_unread": unread,
-            "karte": {"last_name": "T", "first_name": "P", "disease": "",
+            "karte": {"id": pid * 10, "last_name": "T", "first_name": "P",
+                      "disease": "",
                       "station": {"name": "st"}}}
 
 
@@ -692,7 +693,7 @@ def test_projects_malformed_last_message_timestamp_is_schema_error():
             return {
                 "projects": [{
                     "id": 1, "type": "medical",
-                    "karte": {"last_name": "S", "first_name": "T",
+                    "karte": {"id": 5, "last_name": "S", "first_name": "T",
                               "station": {"name": "st"}},
                     "last_message": {"created_at": "not-a-date"},
                 }],
@@ -712,7 +713,7 @@ def test_projects_without_last_message_get_zero_activity():
             return {
                 "projects": [{
                     "id": 1, "type": "medical",
-                    "karte": {"last_name": "S", "first_name": "T",
+                    "karte": {"id": 5, "last_name": "S", "first_name": "T",
                               "station": {"name": "st"}},
                 }],
                 "paginate": {"has_next": False},
@@ -1321,3 +1322,80 @@ def test_mark_read_without_fallback_or_other_kinds_raises():
     with pytest.raises(mcs_adapter.MCSError) as e:
         _mark_adapter("network_error", calls).mark_patient_read(1, 123, fallback_plain=True)
     assert e.value.kind == "network_error" and len(calls) == 1
+
+
+# ---------- 連携サマリー: GET /kartes/{id}/memo_summary ----------
+
+def _memo_adapter(memo_summary, calls=None):
+    adapter = mcs_adapter.MCSAdapter()
+
+    def _get(path, params=None, **k):
+        if calls is not None:
+            calls.append(path)
+        return {"memo_summary": memo_summary}
+    adapter._get = _get
+    return adapter
+
+
+def test_fetch_memo_summary_keeps_only_the_contract_fields():
+    calls = []
+    out = _memo_adapter({
+        "is_editable": True, "is_read": False, "read_style": "multi_line",
+        "comment": "合成サマリー", "updated_at": "2026-09-30T10:00:00+09:00",
+        "user": {"profession": "看護師", "name": "合成 花子", "id": 9,
+                 "email": "never@example.invalid"},
+        "extra": {"dropped": True},
+    }, calls).fetch_memo_summary(77)
+
+    assert calls == ["/kartes/77/memo_summary"]
+    assert out == {"comment": "合成サマリー",
+                   "updated_at": "2026-09-30T10:00:00+09:00",
+                   "is_editable": True,
+                   "user": {"profession": "看護師", "name": "合成 花子"}}
+
+
+def test_fetch_memo_summary_unregistered_form_is_none():
+    assert _memo_adapter({"is_editable": True, "is_read": True,
+                          "read_style": "single_line"}).fetch_memo_summary(1) is None
+
+
+def test_fetch_memo_summary_truncates_oversize_comment():
+    out = _memo_adapter({"is_editable": False, "is_read": True,
+                         "read_style": "single_line",
+                         "comment": "あ" * 1000}).fetch_memo_summary(1)
+    assert len(out["comment"]) == mcs_adapter.KARTE_SUMMARY_MAX_CHARS
+    assert out["updated_at"] == "" and out["user"] == {"profession": "",
+                                                        "name": ""}
+
+
+@pytest.mark.parametrize("memo", [
+    None,                                                   # object missing
+    {"is_read": True, "read_style": "single_line"},         # is_editable
+    {"is_editable": "yes", "is_read": True, "read_style": "single_line"},
+    {"is_editable": True, "is_read": 1, "read_style": "single_line"},
+    {"is_editable": True, "is_read": True},                 # read_style
+    {"is_editable": True, "is_read": True, "read_style": "single_line",
+     "comment": 5},
+    {"is_editable": True, "is_read": True, "read_style": "single_line",
+     "comment": "x", "user": "nurse"},
+    {"is_editable": True, "is_read": True, "read_style": "single_line",
+     "comment": "x", "updated_at": 7},
+])
+def test_fetch_memo_summary_rejects_bad_shapes(memo):
+    with pytest.raises(mcs_adapter.SchemaError):
+        _memo_adapter(memo).fetch_memo_summary(1)
+
+
+def test_project_row_without_karte_id_is_schema_error():
+    row = _unread_project(11)
+    del row["karte"]["id"]
+    with pytest.raises(mcs_adapter.SchemaError, match="karte id"):
+        _UnreadListAdapter([(100, False, [row])]).list_unread()
+    row["karte"]["id"] = "11"
+    with pytest.raises(mcs_adapter.SchemaError, match="karte id"):
+        _UnreadListAdapter([(100, False, [row])]).list_unread()
+
+
+def test_project_row_karte_id_lands_on_unread_patient():
+    snap = _UnreadListAdapter([(100, False, [_unread_project(11)])]).list_unread()
+    assert snap.patients[0].karte_id == 110

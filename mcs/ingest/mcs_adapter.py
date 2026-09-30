@@ -67,6 +67,9 @@ _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # the origin host), so it is handled manually in _open_download.
 _ALLOWED_REDIRECT_HOSTS = _ALLOWED_DOWNLOAD_HOSTS | {"files.medical-care.net"}
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+# 連携サマリー is a 150-char field on the MCS side; 600 bounds a misbehaving
+# response without ever truncating a legitimate one
+KARTE_SUMMARY_MAX_CHARS = 600
 
 
 class MCSError(Exception):
@@ -346,6 +349,8 @@ class UnreadPatient:
     # history walk certified every unread row — acknowledge through the
     # plain list read instead of the unread-filtered one
     ack_fallback: bool = False
+    # MCS karte id (patient record) — the 連携サマリー route is keyed by it
+    karte_id: int | None = None
 
 
 @dataclass
@@ -424,6 +429,8 @@ def _unread_patient(p, src: str) -> UnreadPatient:
     k = p.get("karte") or {}
     if not isinstance(k, dict):
         raise SchemaError(f"{src}: karte invalid")
+    if not _valid_id(k.get("id")):
+        raise SchemaError(f"{src}: karte id invalid")
     st = k.get("station") or {}
     if not isinstance(st, dict):
         raise SchemaError(f"{src}: station invalid")
@@ -436,7 +443,7 @@ def _unread_patient(p, src: str) -> UnreadPatient:
         ).strip(),
         disease=_text(k.get("disease"), f"{src}: disease"),
         station_name=_text(st.get("name"), f"{src}: station name"),
-        url=project_url(p['id']))
+        url=project_url(p['id']), karte_id=k["id"])
 
 
 def _attachments(files: list | None) -> list[Attachment]:
@@ -1015,6 +1022,41 @@ class MCSAdapter:
         return out
 
     # ---------- reads ----------
+
+    def fetch_memo_summary(self, karte_id: int) -> dict | None:
+        """Read the patient's 連携サマリー (memo_summary); None when none is registered.
+
+        GET only — the POST routes (update, read_status) are never called,
+        so other viewers' 更新 badges stay untouched. An unregistered
+        summary carries no comment/user/updated_at at all. Unknown keys
+        are dropped; comment is capped at KARTE_SUMMARY_MAX_CHARS."""
+        r = self._get(f"/kartes/{karte_id}/memo_summary")
+        ms = r.get("memo_summary")
+        if not isinstance(ms, dict):
+            raise SchemaError("memo_summary: object missing")
+        for key in ("is_editable", "is_read"):
+            if type(ms.get(key)) is not bool:
+                raise SchemaError(f"memo_summary: {key} invalid")
+        if not isinstance(ms.get("read_style"), str):
+            raise SchemaError("memo_summary: read_style invalid")
+        comment = ms.get("comment")
+        if comment is None:
+            return None
+        if not isinstance(comment, str):
+            raise SchemaError("memo_summary: comment invalid")
+        user = ms.get("user") or {}
+        if not isinstance(user, dict):
+            raise SchemaError("memo_summary: user invalid")
+        return {
+            "comment": comment[:KARTE_SUMMARY_MAX_CHARS],
+            "updated_at": _text(ms.get("updated_at"),
+                                "memo_summary: updated_at"),
+            "is_editable": ms["is_editable"],
+            "user": {
+                "profession": _text(user.get("profession"),
+                                    "memo_summary: user profession"),
+                "name": _text(user.get("name"), "memo_summary: user name")},
+        }
 
     def list_unread(self, per_page: int = 100,
                     max_pages: int = 50) -> UnreadSnapshot:

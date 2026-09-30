@@ -310,6 +310,14 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
 
 # ---------- job drains ----------
 
+def note_new_messages(result: dict, project_id: int):
+    """Remember a project that stored new chat this run — the 連携サマリー
+    stage refetches exactly these (dedup, JSON-serialisable list)."""
+    targets = result.setdefault("karte_summary_targets", [])
+    if project_id not in targets:
+        targets.append(project_id)
+
+
 def run_reply_jobs(adapter, ledger, result, deadline,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None):
@@ -369,11 +377,11 @@ def run_reply_jobs(adapter, ledger, result, deadline,
         replies = [m for m in full if m.message_id != job["parent_id"]]
         for m in replies:
             m.parent_id = job["parent_id"]
-        if replies:
-            ledger.save_thread_replies(
+        if replies and ledger.save_thread_replies(
                 replies, job["project_id"],
                 notify={"source": "reply_job"}, semantic=semantic,
-                notify_max_age_s=notify_max_age_s)
+                notify_max_age_s=notify_max_age_s):
+            note_new_messages(result, job["project_id"])
         if window_error:
             # Preserve the unwalked thread even if a target in an earlier
             # page already retired its individual reply job.

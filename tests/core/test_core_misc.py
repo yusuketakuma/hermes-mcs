@@ -1076,3 +1076,108 @@ def test_current_version_open_fills_newly_created_fts(tmp_path):
     db = _ledger(tmp_path)
     assert _fts_count(db) == 1
     db.close()
+
+
+# ---------- 連携サマリー: patients.karte_id + karte_summary artifacts ----------
+
+def _karte_patient(pid, karte_id):
+    p = _unread_patient(pid)
+    p.karte_id = karte_id
+    return p
+
+
+def _summary(comment="合成サマリー", updated="2026-09-30T10:00:00+09:00"):
+    return {"comment": comment, "updated_at": updated, "is_editable": True,
+            "user": {"profession": "看護師", "name": "合成 花子"}}
+
+
+def test_karte_id_migration_is_additive_and_idempotent(tmp_path):
+    path = str(tmp_path / "ledger.db")
+    db = ledger.Ledger(path)
+    db.db.execute("ALTER TABLE patients DROP COLUMN karte_id")  # pre-#21 shape
+    db.db.commit()
+    db.close()
+    for _ in range(2):  # reopen twice: column added once, then a no-op
+        db = ledger.Ledger(path)
+        cols = {r[1] for r in db.db.execute("PRAGMA table_info(patients)")}
+        assert "karte_id" in cols
+        assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
+        db.close()
+
+
+def test_karte_id_persisted_by_both_upserts_and_never_cleared(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_karte_patient(1, 10))
+    db.save_patient(_karte_patient(2, 20))
+    assert db.karte_id(1) == 10 and db.karte_id(2) == 20
+    db.save_patient(_unread_patient(1))          # no karte_id -> preserved
+    db.upsert_patient_info(_unread_patient(2))
+    assert db.karte_id(1) == 10 and db.karte_id(2) == 20
+    assert db.karte_id(3) is None
+    db.close()
+
+
+def test_karte_summary_store_dedups_by_sha_and_keeps_history(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_karte_patient(1, 10))
+    assert db.karte_summary_store(1, 10, _summary()) is True
+    first = db.karte_summary_current(1)
+    assert first["comment"] == "合成サマリー" and first["empty"] is False
+    assert first["updater"] == {"profession": "看護師", "name": "合成 花子"}
+    assert isinstance(first["fetched_at"], float)
+
+    time.sleep(0.01)
+    assert db.karte_summary_store(1, 10, _summary()) is False   # same sha
+    assert len(db.artifacts("karte_summary", project_id=1)) == 1
+    assert db.karte_summary_current(1)["fetched_at"] > first["fetched_at"]
+
+    assert db.karte_summary_store(1, 10, _summary(comment="変更後")) is True
+    rows = db.artifacts("karte_summary", project_id=1)
+    assert len(rows) == 2
+    assert db.karte_summary_current(1)["comment"] == "変更後"
+    meta = json.loads(rows[-1]["meta"])
+    assert meta["karte_id"] == 10 and len(meta["sha256"]) == 64
+    db.close()
+
+
+def test_karte_summary_empty_is_stored_distinct_from_never_fetched(tmp_path):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_karte_patient(1, 10))
+    assert db.karte_summary_current(1) is None                  # 未取得
+    assert db.karte_summary_store(1, 10, None) is True
+    cur = db.karte_summary_current(1)                            # 空
+    assert cur["empty"] is True and cur["comment"] is None
+    assert cur["updater"] == {"profession": "", "name": ""}
+    assert db.karte_summary_store(1, 10, None) is False
+    db.close()
+
+
+def test_karte_summary_missing_orders_oldest_first_and_limits(tmp_path):
+    db = _ledger(tmp_path)
+    for pid, karte in ((1, 10), (2, 20), (3, 30)):
+        db.upsert_patient_info(_karte_patient(pid, karte))
+    db.upsert_patient_info(_unread_patient(4))                   # no karte_id
+    db.db.execute("UPDATE patients SET last_seen=project_id*-1")  # 3 oldest
+    db.db.commit()
+    assert db.karte_summary_missing(10) == [3, 2, 1]
+    assert db.karte_summary_missing(2) == [3, 2]
+    db.karte_summary_store(2, 20, None)
+    assert db.karte_summary_missing(10) == [3, 1]
+    db.close()
+
+
+def test_karte_summary_stale_lists_projects_with_newer_messages(tmp_path):
+    db = _ledger(tmp_path)
+    for pid, karte in ((1, 10), (2, 20)):
+        db.upsert_patient_info(_karte_patient(pid, karte))
+        db.karte_summary_store(pid, karte, _summary())
+    db.upsert_patient_info(_karte_patient(3, 30))                # never fetched
+    assert db.karte_summary_stale() == []
+    db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.fetched_at',1.0) "
+                  "WHERE project_id=1")
+    db.db.commit()
+    db.save_messages([_msg_at(100, 1, _iso(0)), _msg_at(300, 3, _iso(0))])
+    assert db.karte_summary_stale() == [1]
+    db.karte_summary_store(1, 10, _summary())                    # refetched
+    assert db.karte_summary_stale() == []
+    db.close()
