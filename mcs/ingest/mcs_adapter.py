@@ -47,6 +47,10 @@ from mcs_util import atomic_write, env_value, load_config, no_proxy_opener
 from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
+# The MCS unread screen (and its unread=1 route) lists at most this many
+# messages per project — owner-confirmed 2026-09-30. Reaching it means
+# older unread rows may be invisible to the unread walk.
+UNREAD_SCREEN_CAP = 80
 API = f"{BASE}/api/v2t"
 
 
@@ -338,6 +342,10 @@ class UnreadPatient:
     messages: list[Message] = field(default_factory=list)
     fetch_state: str = "pending"   # pending | complete | incomplete
     fetch_reason: str = ""
+    # F-5: the unread route itself failed (server-side cap) but the
+    # history walk certified every unread row — acknowledge through the
+    # plain list read instead of the unread-filtered one
+    ack_fallback: bool = False
 
 
 @dataclass
@@ -352,6 +360,10 @@ class MessageBatch:
     pages: int = 0
     reached: bool = False
     error: MCSError | None = None
+    # the unread route showed its screen cap (UNREAD_SCREEN_CAP) or fewer
+    # rows than paginate.total_entries — older unread rows exist that this
+    # walk could not see, so the patient must not be acknowledged yet
+    capped: bool = False
 
 
 @dataclass
@@ -1059,11 +1071,19 @@ class MCSAdapter:
                               max_pages: int = 20) -> MessageBatch:
         """Partial-page resilience: if a mid-walk page fails, already-fetched
         completed pages and any terminal error are returned together so the
-        caller can save them and mark the patient incomplete (Oracle B04)."""
+        caller can save them and mark the patient incomplete (Oracle B04).
+
+        The unread screen lists at most UNREAD_SCREEN_CAP messages (owner
+        confirmed 2026-09-30); the route reports has_next=false at that
+        point even when older unread rows exist. A walk that ends on the
+        cap, or returns fewer rows than paginate.total_entries, is flagged
+        ``capped`` — the caller keeps the patient incomplete until the
+        history walk has stored everything down to the oldest unread."""
         msgs: list[Message] = []
         pages = 0
         reached = False
         error = None
+        total = None
         for page in range(1, max_pages + 1):
             try:
                 r = self._get(f"/projects/{project_id}/messages", {
@@ -1078,6 +1098,8 @@ class MCSAdapter:
                     raise SchemaError(
                         f"messages[{project_id}]: page schema invalid")
                 has_next = _has_next(pag, f"messages[{project_id}]")
+                if type(pag.get("total_entries")) is int:
+                    total = pag["total_entries"]
                 page_messages = []
                 for m in items:
                     if not isinstance(m, dict) or not _valid_id(m.get("id")):
@@ -1099,7 +1121,29 @@ class MCSAdapter:
         else:
             error = MCSError(
                 "pages_exceeded", f"messages[{project_id}]", retryable=True)
-        return MessageBatch(msgs, pages, reached, error)
+        capped = error is None and reached and (
+            len(msgs) >= UNREAD_SCREEN_CAP
+            or (total is not None and total > len(msgs)))
+        return MessageBatch(msgs, pages, reached, error, capped)
+
+    def oldest_unread_id(self, project_id: int) -> int | None:
+        """``oldest_unread_message.id`` from the project detail — the
+        anchor an unread-capped patient must be walked down to before it
+        may be acknowledged. None when the server reports no unread; a
+        malformed detail is a SchemaError (never silently 'none')."""
+        r = self._get(f"/projects/{project_id}", {})
+        proj = r.get("project")
+        if proj is None and isinstance(r.get("data"), dict):
+            proj = r["data"].get("project")
+        if not isinstance(proj, dict) \
+                or type(proj.get("is_archived")) is not bool:
+            raise SchemaError(f"project[{project_id}]: detail invalid")
+        oldest = proj.get("oldest_unread_message")
+        if oldest is None:
+            return None
+        if not isinstance(oldest, dict) or not _valid_id(oldest.get("id")):
+            raise SchemaError(f"project[{project_id}]: oldest_unread invalid")
+        return oldest["id"]
 
     def _thread_page(self, project_id: int, message_id: int,
                      page: int) -> tuple[list[Message], bool]:
@@ -1458,7 +1502,8 @@ class MCSAdapter:
 
     # ---------- write (guarded) ----------
 
-    def mark_patient_read(self, project_id: int, snapshot_ts: int) -> dict:
+    def mark_patient_read(self, project_id: int, snapshot_ts: int,
+                          fallback_plain: bool = False) -> dict:
         """snapshot_ts is still mandatory and still sent — but the POST
         /projects/{id}/mark_as_read route was retired server-side (403
         while every GET stayed 200). Read state now clears as a SIDE
@@ -1476,9 +1521,20 @@ class MCSAdapter:
         confirmed (Oracle B02)."""
         if type(snapshot_ts) is not int or snapshot_ts <= 0:
             raise MCSError("bad_snapshot_ts")
-        self._get(f"/projects/{project_id}/messages", {
-            "unread": 1, "timestamp": snapshot_ts,
-            "per_page": 1, "page": 1, "include_paginate_totals": 0})
+        try:
+            self._get(f"/projects/{project_id}/messages", {
+                "unread": 1, "timestamp": snapshot_ts,
+                "per_page": 1, "page": 1, "include_paginate_totals": 0})
+        except MCSError as e:
+            # F-5 fallback: the unread-filtered route can fail once a
+            # project holds more unread rows than the screen cap. Only a
+            # caller that verified ledger.unread_cap_cleared may clear
+            # through the plain list read (same side effect, verified
+            # live) — everything else keeps the strict route.
+            if not (fallback_plain and e.kind == "http_error"):
+                raise
+            self._get(f"/projects/{project_id}/messages", {
+                "per_page": 1, "page": 1, "include_paginate_totals": 0})
         r = self._get(f"/projects/{project_id}", {})
         proj = r.get("project")
         if proj is None and isinstance(r.get("data"), dict):

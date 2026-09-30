@@ -23,7 +23,7 @@ UNKNOWN_TIME = -(2**63)
 WARNINGS = ["history_completeness_unverified", "snapshot_may_lag_live_state"]
 REASONS = frozenset({
     "schema_error", "network_error", "http_error", "session_expired", "no_token",
-    "pages_exceeded", "thread_incomplete", "replies_missing", "body_incomplete",
+    "pages_exceeded", "unread_capped", "thread_incomplete", "replies_missing", "body_incomplete",
     "download_failed", "download_too_large", "url_not_allowed", "db_write_failed",
     "deadline_exceeded", "fs_OSError", "fs_PermissionError", "fs_FileNotFoundError",
     "OperationalError", "IntegrityError", "DatabaseError",

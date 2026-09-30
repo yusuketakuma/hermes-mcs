@@ -915,6 +915,24 @@ class Ledger:
             (project_id,)).fetchone()
         return (r and r["f"]) or 0
 
+    def unread_cap_cleared(self, project_id: int, oldest_id: int) -> bool:
+        """An unread-capped patient may be acknowledged only when the
+        history walk has certified everything the unread screen could
+        not show: the server's oldest unread message is stored with a
+        full body, the certified floor reaches at/below its posting
+        time (or the whole timeline, -1), and no reply fetch is pending.
+        Anything less keeps the patient incomplete (never acknowledged)."""
+        row = self.db.execute(
+            "SELECT posted_at_ts FROM messages WHERE project_id=? "
+            "AND message_id=? AND body_state='full'",
+            (project_id, oldest_id)).fetchone()
+        if row is None or type(row["posted_at_ts"]) is not int:
+            return False
+        floor = self.history_floor(project_id)
+        if not (floor == -1 or 0 < floor <= row["posted_at_ts"]):
+            return False
+        return self.pending_reply_jobs(project_id) == 0
+
     def set_history_floor(self, project_id: int, floor: int):
         # floor <= 0 means the walk reached the END of the timeline —
         # store -1 so "fully imported" stays distinguishable from

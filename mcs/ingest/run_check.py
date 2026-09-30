@@ -200,10 +200,14 @@ def _health(ledger, result: dict, status: str,
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     coll = _collection(result)
     free_mb = _free_mb()
+    lane = result.get("semantic_lane")
+    lane = lane if isinstance(lane, dict) else _semantic_lane_prev()
+    lane_held = _finite_number(lane.get("hold_until")) \
+        and now < lane["hold_until"]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (result.get("errors") or coll["collection"] != "ok"
-                   or notify_state == "incomplete")
+                   or notify_state == "incomplete" or lane_held)
                else "ok")
     return {
         "overall": overall, "run_status": status,
@@ -230,6 +234,7 @@ def _health(ledger, result: dict, status: str,
             "poison_gated": poison,
             "ratio": round(current / total, 4) if total else None},
         "cards": notify_cards.health_cards(ledger),
+        "semantic_lane": lane,
         "errors": list(result.get("errors") or []),
     }
 
@@ -456,7 +461,26 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                             parent_id=m.message_id)
                     p.fetch_state = "incomplete"
                     p.fetch_reason = "replies_missing"
-            if batch.error:
+            if batch.error and batch.error.kind == "http_error" \
+                    and not p.messages:
+                # F-5: the unread route rejects a project past the screen
+                # cap. The rows still arrive through the self probe and
+                # the history walk; acknowledge only once that walk has
+                # certified everything down to the server's oldest
+                # unread — otherwise stay incomplete and keep walking.
+                oldest = adapter.oldest_unread_id(p.project_id)
+                if oldest is not None and ledger.unread_cap_cleared(
+                        p.project_id, oldest):
+                    p.ack_fallback = True
+                    if p.fetch_state != "incomplete":
+                        p.fetch_state = "complete"
+                else:
+                    p.fetch_state = "incomplete"
+                    p.fetch_reason = "unread_capped"
+                    if not ledger.history_job(p.project_id):
+                        ledger.job_add("history", p.project_id, payload={
+                            "since": 0, "page": 1, "pages": 10})
+            elif batch.error:
                 p.fetch_state = "incomplete"
                 p.fetch_reason = batch.error.kind
                 if batch.error.kind == "pages_exceeded" \
@@ -466,6 +490,20 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                     # backlog to the durable cursor walk (F03)
                     ledger.job_add("history", p.project_id, payload={
                         "since": 0, "page": 1, "pages": 10})
+            elif getattr(batch, "capped", False):
+                # F-5: the unread screen caps at UNREAD_SCREEN_CAP rows —
+                # older unread rows are invisible here and mark-as-read
+                # would clear them unfetched. Stay incomplete until the
+                # history walk has stored down to the server's oldest
+                # unread message; only then is acknowledgement safe.
+                oldest = adapter.oldest_unread_id(p.project_id)
+                if oldest is None or not ledger.unread_cap_cleared(
+                        p.project_id, oldest):
+                    p.fetch_state = "incomplete"
+                    p.fetch_reason = "unread_capped"
+                    if not ledger.history_job(p.project_id):
+                        ledger.job_add("history", p.project_id, payload={
+                            "since": 0, "page": 1, "pages": 10})
             if p.fetch_state != "incomplete":
                 p.fetch_state = "complete"
         except SessionExpired:
@@ -508,7 +546,11 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
             # and record must read as unknown, never as confirmed
             ledger.mark_read(p.project_id, snap.timestamp, "unknown")
             try:
-                adapter.mark_patient_read(p.project_id, snap.timestamp)
+                if p.ack_fallback:
+                    adapter.mark_patient_read(p.project_id, snap.timestamp,
+                                              fallback_plain=True)
+                else:
+                    adapter.mark_patient_read(p.project_id, snap.timestamp)
                 ledger.mark_read(p.project_id, snap.timestamp, "confirmed")
                 result["marked_read"].append(p.project_id)
             except MCSError as e:
@@ -1145,22 +1187,124 @@ def _deliver(ledger, args, cfg, result, deadline):
         result["errors"].append(f"card_gc: {type(e).__name__}")
 
 
+# In-tick semantic lane guards (2026-09-30 incident: a daytime backlog
+# drainer held the LLM slot, every tick's semantic job waited 300-450 s
+# for it and completed nothing, and the tail cmd_int drain got no
+# budget for ~3 hours). The lane always leaves the tail its reserve,
+# and a run of starved ticks pauses the lane for a self-clearing hold
+# — health.json carries the streak/hold so the pause is visible.
+SEMANTIC_TAIL_RESERVE_S = 60
+SEMANTIC_STARVE_STREAK = 3
+SEMANTIC_HOLD_S = 3600
+SEMANTIC_YIELD_WAIT_S = 45.0   # > one typical drainer call (~30 s)
+
+
+def _semantic_lane_prev() -> dict:
+    lane = _prev_health().get("semantic_lane")
+    return lane if isinstance(lane, dict) else {}
+
+
+def _lane(streak: int, hold_until: float | None = None) -> dict:
+    lane = {"starved_streak": streak}
+    if hold_until is not None:
+        lane["hold_until"] = hold_until
+    return lane
+
+
+def _semantic_skipped(cfg, reason: str, **extra) -> dict:
+    """run_due-shaped block for a tick that did not run the lane, so
+    run-record consumers (semantic_evaluation) see an explicit skip
+    with zero elapsed rather than a mode-less blob."""
+    try:
+        import semantic
+        mode = semantic.semantic_config(cfg)[0]["mode"]
+    except Exception:
+        mode = "unknown"
+    return {"mode": mode, "skipped": reason, "done": 0, "deferred": 0,
+            "failed": 0, "elapsed_s": 0.0, "job_metrics": [],
+            "oldest_pending_job_age_s": None, **extra}
+
+
 def _run_semantic(ledger, args, cfg, result, deadline, sem_on):
     """Semantic layer drain (Phase J, feature-gated) — durable
     'semantic' jobs on the same lock + remaining deadline. OFF is a
     no-op here AND disables seeding above, so the flag truly stops
-    communication rather than only hiding output."""
-    if not sem_on:
-        return
-    try:
-        import semantic
-        result["semantic"] = semantic.run_due(
-            ledger, cfg, result, deadline, cfg_path=CONF_PATH,
-            max_jobs=12 if args.jobs_only else 4)
-    except Exception as e:
-        result["errors"].append(
-            f"semantic: {type(e).__name__}")
+    communication rather than only hiding output.
 
+    Guards: the lane raises extract_llm's yield flag and waits at most
+    SEMANTIC_YIELD_WAIT_S for the background slot (resident drainers
+    defer their next call while the flag is up; queueing behind them
+    is what starved the tick), always leaves the tail
+    SEMANTIC_TAIL_RESERVE_S, and a
+    lane that burns >= half of its own allowance completing nothing
+    for SEMANTIC_STARVE_STREAK ticks is held for SEMANTIC_HOLD_S. The
+    hold clears itself; durable jobs wait for it or the nightly
+    catch-up. Ticks that could not evaluate the lane (held, no budget,
+    slot busy, exception) carry the streak unchanged."""
+    if not sem_on:
+        result["semantic_lane"] = _lane(0)   # OFF clears any stale hold
+        return
+    prev = _semantic_lane_prev()
+    streak = prev.get("starved_streak")
+    streak = streak if type(streak) is int and streak >= 0 else 0
+    hold_until = prev.get("hold_until")
+    now = time.time()
+    if _finite_number(hold_until) and now < hold_until:
+        result["semantic"] = _semantic_skipped(cfg, "held",
+                                               hold_until=hold_until)
+        result["semantic_lane"] = _lane(streak, hold_until)
+        return
+    allowance = deadline - time.monotonic() - SEMANTIC_TAIL_RESERVE_S
+    if allowance <= 0:
+        result["semantic"] = _semantic_skipped(cfg, "no_budget")
+        result["semantic_lane"] = _lane(streak)
+        return
+    import extract_llm
+    # Tick priority: raise the yield flag so resident drainers defer
+    # their next call, then wait (bounded) for the background slot to
+    # free instead of queueing behind the drainer for the whole lane.
+    extract_llm.yield_request(True)
+    keep_flag = False
+    try:
+        until = time.monotonic() + min(SEMANTIC_YIELD_WAIT_S, allowance)
+        while extract_llm.pinned_slot_busy(deadline):
+            if time.monotonic() >= until:
+                # leave the flag up: the drainers finish their in-flight
+                # call and pause, so the next tick (20 min overnight)
+                # gets the slot — night arrivals are processed at night,
+                # just later (owner: latency is fine, 2026-09-30)
+                keep_flag = True
+                result["semantic"] = _semantic_skipped(cfg, "slot_busy")
+                result["semantic_lane"] = _lane(streak)
+                return
+            time.sleep(1.0)
+        allowance = deadline - time.monotonic() - SEMANTIC_TAIL_RESERVE_S
+        started = time.monotonic()
+        try:
+            import semantic
+            result["semantic"] = semantic.run_due(
+                ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
+                cfg_path=CONF_PATH, max_jobs=12 if args.jobs_only else 4)
+        except Exception as e:
+            result["errors"].append(
+                f"semantic: {type(e).__name__}")
+            result["semantic_lane"] = _lane(streak)
+            return
+    finally:
+        if not keep_flag:
+            extract_llm.yield_request(False)
+    spent = time.monotonic() - started
+    sem = result.get("semantic") or {}
+    done = sem.get("done") or 0
+    # a pass that persisted a new stage (progressed) is slow, not
+    # starved — long multi-call jobs legitimately span several ticks
+    progressed = sem.get("progressed") or 0
+    starved = spent >= allowance / 2 and not done and not progressed
+    streak = streak + 1 if starved else 0
+    if streak >= SEMANTIC_STARVE_STREAK:
+        result["semantic_lane"] = _lane(0, now + SEMANTIC_HOLD_S)
+    else:
+        result["semantic_lane"] = _lane(streak)
 
 def _housekeeping(result):
     """Daily backup, log rotation and attachment pruning — each failure

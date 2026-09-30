@@ -1954,3 +1954,267 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     assert result["station_staff"] == "failed: RuntimeError"
     assert mcs_signals.latest_station_staff(db.db) == roster
     db.close()
+
+
+
+# ---- in-tick semantic lane guards (2026-09-30 starvation incident) ----
+
+def _sem_args():
+    return SimpleNamespace(jobs_only=False)
+
+
+def _sem_setup(monkeypatch, tmp_path, prev_lane=None, busy=False):
+    """busy: False, True, or a list consumed one probe at a time."""
+    monkeypatch.setattr(run_check, "_prev_health",
+                        lambda: {"semantic_lane": prev_lane} if prev_lane is not None else {})
+    samples = list(busy) if isinstance(busy, list) else None
+    monkeypatch.setattr(extract_llm, "pinned_slot_busy",
+                        lambda deadline: samples.pop(0) if samples else bool(busy) if samples is None else False)
+    monkeypatch.setattr(extract_llm, "YIELD_FLAG", str(tmp_path / "flags" / "llm_yield"))
+    monkeypatch.setattr(run_check.time, "sleep", lambda s: None)
+
+
+def test_semantic_lane_leaves_tail_reserve(tmp_path, monkeypatch):
+    import semantic
+    seen = {}
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(semantic, "run_due", lambda ledger, cfg, result, deadline, **kw: (
+        seen.__setitem__("deadline", deadline) or {"done": 1, "deferred": 0, "failed": 0}))
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    deadline = time.monotonic() + 400
+    run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
+    assert seen["deadline"] <= deadline - run_check.SEMANTIC_TAIL_RESERVE_S
+    assert result["semantic_lane"] == {"starved_streak": 0}
+    db.close()
+
+
+def test_semantic_lane_yields_then_runs_when_drainer_frees_slot(tmp_path, monkeypatch):
+    """A drainer inside its window owns slot 0: the lane raises the
+    yield flag, waits for the slot, runs once it frees, and clears the
+    flag afterwards."""
+    import semantic
+    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2},
+               busy=[True, True, False])
+    seen = {}
+
+    def run_due(ledger, cfg, result, deadline, **kw):
+        seen["flag_up"] = extract_llm.tick_wants_slot()
+        return {"done": 1, "deferred": 0, "failed": 0}
+    monkeypatch.setattr(semantic, "run_due", run_due)
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 400, True)
+    assert seen["flag_up"] is True
+    assert result["semantic"]["done"] == 1
+    assert result["semantic_lane"] == {"starved_streak": 0}
+    assert extract_llm.tick_wants_slot() is False
+    db.close()
+
+
+def test_semantic_lane_skips_when_slot_never_frees(tmp_path, monkeypatch):
+    """Slot stays busy past SEMANTIC_YIELD_WAIT_S: explicit skip in
+    run_due's shape, streak untouched, flag cleared."""
+    import semantic
+    clock = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2}, busy=True)
+    monkeypatch.setattr(run_check.time, "sleep",
+                        lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(semantic, "run_due",
+                        lambda *a, **k: pytest.fail("busy slot must not run"))
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 400, True)
+    assert result["semantic"]["skipped"] == "slot_busy"
+    assert result["semantic"]["mode"] == "off" and result["semantic"]["elapsed_s"] == 0.0
+    assert result["semantic_lane"] == {"starved_streak": 2}
+    # the flag stays up so the drainers pause and the NEXT tick gets
+    # the slot (overnight arrivals are processed overnight)
+    assert extract_llm.tick_wants_slot() is True
+    db.close()
+
+
+def test_semantic_lane_starvation_streak_sets_self_clearing_hold(tmp_path, monkeypatch):
+    """Three ticks that burn >= half their allowance with nothing done
+    pause the lane; the next tick honours hold_until and health reports
+    degraded while it lasts; an expired hold restarts from zero."""
+    import semantic
+    clock = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2})
+
+    def starving(ledger, cfg, result, deadline, **kw):
+        clock[0] = deadline          # waited out the whole allowance
+        return {"done": 0, "deferred": 1, "failed": 0}
+    monkeypatch.setattr(semantic, "run_due", starving)
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    # a short allowance (180 s of budget left) still counts: relative, not absolute
+    run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 180, True)
+    lane = result["semantic_lane"]
+    assert lane["starved_streak"] == 0
+    assert lane["hold_until"] > time.time()
+    assert run_check._health(db, result, "ok")["overall"] == "degraded"
+
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {"semantic_lane": lane})
+    monkeypatch.setattr(semantic, "run_due",
+                        lambda *a, **k: pytest.fail("held lane must not run"))
+    held = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, held, clock[0] + 480, True)
+    assert held["semantic"]["skipped"] == "held" and held["errors"] == []
+
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {
+        "semantic_lane": {"starved_streak": 0, "hold_until": time.time() - 1}})
+    monkeypatch.setattr(semantic, "run_due",
+                        lambda *a, **k: {"done": 1, "deferred": 0, "failed": 0})
+    again = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, again, clock[0] + 480, True)
+    assert again["semantic"]["done"] == 1
+    assert again["semantic_lane"] == {"starved_streak": 0}
+    assert run_check._health(db, again, "ok")["overall"] == "ok"
+    db.close()
+
+
+def test_semantic_lane_off_clears_stale_hold(tmp_path, monkeypatch):
+    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 0,
+                                       "hold_until": time.time() + 3000})
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 480, False)
+    assert result["semantic_lane"] == {"starved_streak": 0}
+    assert run_check._health(db, result, "ok")["overall"] == "ok"
+    db.close()
+
+
+@pytest.mark.parametrize("outcome", ["done", "exception"])
+def test_semantic_lane_streak_only_counts_evaluated_starvation(tmp_path, monkeypatch, outcome):
+    """Completed work resets the streak; a crashing lane neither
+    increments nor resets it (it is reported through errors instead)."""
+    import semantic
+    clock = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path, prev_lane={"starved_streak": 2})
+
+    def run_due(ledger, cfg, result, deadline, **kw):
+        clock[0] = deadline
+        if outcome == "exception":
+            raise RuntimeError("boom")
+        return {"done": 1, "deferred": 0, "failed": 0}
+    monkeypatch.setattr(semantic, "run_due", run_due)
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 480, True)
+    if outcome == "done":
+        assert result["semantic_lane"] == {"starved_streak": 0}
+    else:
+        assert result["errors"] == ["semantic: RuntimeError"]
+        assert result["semantic_lane"] == {"starved_streak": 2}
+    db.close()
+
+
+# ---- F-5: unread-capped patients are never acknowledged early ----
+
+def _capped_run(db, adapter):
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": []}
+    run_check.stage_unread(adapter, db, SimpleNamespace(mark_read=True),
+                           result, time.monotonic() + 30, db.begin_run(None))
+    return result
+
+
+def test_unread_capped_patient_waits_for_history_then_acks(tmp_path):
+    db = _ledger(tmp_path)
+    marks = []
+    oldest = {"id": 5}
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[_message(mid=90, unread=True)], reached=True, capped=True),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        oldest_unread_id=lambda pid: oldest["id"],
+        mark_patient_read=lambda *args: marks.append(args),
+    )
+    result = _capped_run(db, adapter)
+    row = db.db.execute(
+        "SELECT fetch_state,fetch_reason FROM patients WHERE project_id=1").fetchone()
+    assert (row["fetch_state"], row["fetch_reason"]) == ("incomplete", "unread_capped")
+    assert result["incomplete"] == [1] and marks == []
+    assert db.history_job(1) is not None            # walk seeded once
+    _capped_run(db, adapter)
+    assert db.db.execute(
+        "SELECT COUNT(*) FROM fetch_jobs WHERE kind='history' AND project_id=1"
+    ).fetchone()[0] == 1
+
+    # the history walk stores the oldest unread and certifies the floor
+    db.save_messages([_message(mid=5, unread=True,
+                               posted_at="2026-09-01T00:00:00+09:00")],
+                     project_id=1)
+    db.set_history_floor(1, 0)                        # -1: whole timeline
+    result = _capped_run(db, adapter)
+    row = db.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=1").fetchone()
+    assert row["fetch_state"] == "complete" and marks == [(1, 123)]
+    assert result["incomplete"] == []
+
+    # server says nothing is unread while the walk still shows the cap:
+    # contradictory — stay incomplete rather than acknowledge
+    oldest["id"] = None
+    marks.clear()
+    result = _capped_run(db, adapter)
+    assert marks == [] and result["incomplete"] == [1]
+    db.close()
+
+
+@pytest.mark.parametrize(("floor", "reply_pending", "stored", "cleared"), [
+    (-1, False, True, True),
+    (0, False, True, False),         # never floored
+    (1_700_000_000, False, True, True),   # floor at/below the oldest unread
+    (1_800_000_000, False, True, False),  # floor still above it
+    (-1, True, True, False),         # replies still pending
+    (-1, False, False, False),       # oldest unread not stored
+])
+def test_unread_cap_cleared_rule(tmp_path, floor, reply_pending, stored, cleared):
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(1))     # floor lives on the patient row
+    if stored:
+        db.save_messages([_message(mid=5, posted_at="2026-09-01T00:00:00+09:00")],
+                         project_id=1)   # ~1.788e9
+    if floor:
+        db.set_history_floor(1, floor if floor > 0 else 0)
+    if reply_pending:
+        db.job_add("reply", 1, 6, parent_id=5)
+    assert db.unread_cap_cleared(1, 5) is cleared
+    db.close()
+
+
+def test_unread_route_error_acks_via_fallback_only_after_certification(tmp_path):
+    """F-5: the unread route itself fails past the screen cap. The
+    patient stays incomplete (walk seeded) until the history walk has
+    certified down to the oldest unread; then it is acknowledged through
+    the plain list read, never through the failing unread-filtered one."""
+    db = _ledger(tmp_path)
+    marks = []
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1)]),
+        fetch_unread_messages=lambda *_: mcs_adapter.MessageBatch(
+            messages=[], error=mcs_adapter.MCSError("http_error", "GET", status=400)),
+        fetch_unread_replies=lambda *_: mcs_adapter.ReplyBatch([], []),
+        oldest_unread_id=lambda pid: 5,
+        mark_patient_read=lambda *a, **k: marks.append((a, k)),
+    )
+    result = _capped_run(db, adapter)
+    row = db.db.execute(
+        "SELECT fetch_state,fetch_reason FROM patients WHERE project_id=1").fetchone()
+    assert (row["fetch_state"], row["fetch_reason"]) == ("incomplete", "unread_capped")
+    assert marks == [] and db.history_job(1) is not None and result["incomplete"] == [1]
+
+    db.save_messages([_message(mid=5, unread=True,
+                               posted_at="2026-09-01T00:00:00+09:00")], project_id=1)
+    db.set_history_floor(1, 0)
+    result = _capped_run(db, adapter)
+    assert marks == [((1, 123), {"fallback_plain": True})]
+    assert result["marked_read"] == [1] and result["incomplete"] == []
+    db.close()
