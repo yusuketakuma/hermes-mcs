@@ -846,6 +846,18 @@ def test_reply_rules_ride_context_only_and_root_posts_drop_reply(
     assert reply["reply"] == {"kind": "ack", "evidence": "承知しました"}
     assert "返信判定" in prompts[1]
     assert prompts[1].index("返信判定") < prompts[1].index("対象本文(投稿日時")
+    # a summary-only context is NOT a thread: the karte block is cut
+    # out of `context` before it, so the reply guard still fires closed
+    karte_only = (extract_llm._KARTE_HEAD + "合成サマリー"
+                  + extract_llm._KARTE_TAIL)
+    out = extract_llm.llm_extract(body, context=karte_only)
+    assert "reply" not in out
+    assert "返信判定" not in prompts[2]
+    # thread material after the summary block re-enables it
+    out = extract_llm.llm_extract(
+        body, context=karte_only + "[看護師] 確認をお願いします")
+    assert out["reply"]["kind"] == "ack"
+    assert "返信判定" in prompts[3]
 
 
 def test_merge_keeps_first_reply_and_dedupes_requests():
