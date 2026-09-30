@@ -392,3 +392,59 @@ def test_semantic_llm_chat_reject_retry_shares_remaining_budget(monkeypatch):
     monkeypatch.setattr(local_llm, "bounded_request", send)
     assert semantic.llm_chat("p JSON:", timeout=4) == "{}"
     assert timeouts == [4, 2.5]
+
+
+def _runaway_send(bodies, penalized_ok):
+    def send(endpoint, method, body, timeout, deadline=None):
+        bodies.append(body)
+        if "repeat_penalty" in body and penalized_ok:
+            return 200, {}, json.dumps(_response('{"facts": []}')).encode()
+        return 200, {}, json.dumps(_response('{"facts": [', "length")).encode()
+    return send
+
+
+@pytest.mark.parametrize("penalized_ok", [True, False])
+def test_runaway_retries_once_penalized_then_stops_spending(
+        monkeypatch, tmp_path, penalized_ok):
+    """temperature 0 reproduces a max_tokens runaway on every retry: a
+    length stop is retried once with repetition control, and a prompt
+    that runs away even then fails fast later without a model call."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
+    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
+    monkeypatch.setattr(semantic, "_RUNAWAY_PATH",
+                        str(tmp_path / "data" / "runaway.json"))
+    bodies = []
+    monkeypatch.setattr(local_llm, "bounded_request",
+                        _runaway_send(bodies, penalized_ok))
+    out = semantic.llm_chat("抽出 JSON:", timeout=300)
+    assert [("repeat_penalty" in b) for b in bodies] == [False, True]
+    assert out == ('{"facts": []}' if penalized_ok else None)
+    bodies.clear()
+    out = semantic.llm_chat("抽出 JSON:", timeout=300)
+    if penalized_ok:
+        # remembered: the next attempt starts penalized, no runaway call
+        assert [("repeat_penalty" in b) for b in bodies] == [True]
+        assert out == '{"facts": []}'
+    else:
+        assert bodies == [] and out is None
+    # another prompt is untouched
+    bodies.clear()
+    semantic.llm_chat("別 JSON:", timeout=300)
+    assert "repeat_penalty" not in bodies[0]
+
+
+def test_runaway_without_time_left_marks_and_retries_next_attempt(
+        monkeypatch, tmp_path):
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
+    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
+    monkeypatch.setattr(semantic, "_RUNAWAY_PATH",
+                        str(tmp_path / "data" / "runaway.json"))
+    bodies = []
+    monkeypatch.setattr(local_llm, "bounded_request",
+                        _runaway_send(bodies, True))
+    assert semantic.llm_chat("抽出 JSON:", timeout=30) is None
+    assert len(bodies) == 1          # < _RUNAWAY_MIN_RETRY_S left
+    assert semantic.llm_chat("抽出 JSON:", timeout=300) == '{"facts": []}'
+    assert "repeat_penalty" in bodies[-1]
