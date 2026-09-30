@@ -7,6 +7,7 @@ decide when assist/enforce is safe:
 
     python3 semantic_observe.py            # human-readable snapshot
     python3 semantic_observe.py --json     # one JSON line (appendable)
+    python3 semantic_observe.py --days 14  # recent_drain window (default 14)
 
 Gates to watch (phase-j-record §7):
 - current audit completion/PASS rate; historical outcomes are labelled separately
@@ -36,16 +37,16 @@ HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 
 
-def observe(db_path: str = DB, cfg: dict | None = None) -> dict:
+def observe(db_path: str = DB, cfg: dict | None = None, days: int = 14) -> dict:
     c = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
     try:
-        return _observe(c, cfg)
+        return _observe(c, cfg, days)
     finally:
         c.close()
 
 
-def _observe(c, cfg) -> dict:
+def _observe(c, cfg, days: int = 14) -> dict:
     from semantic_metrics import audit_history, current_quality
     ledger = SimpleNamespace(db=c)
 
@@ -82,7 +83,7 @@ def _observe(c, cfg) -> dict:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
     # ---- T14: queue ages, cohort split, scheduler, recent rates ----
     queue_ages, cohorts, scheduler = _queue_stats(c)
-    recent = _recent_runs(c)
+    recent = _recent_runs(c, days)
     extract_recent = _extract_recent(c)
     return {
         "ts": int(time.time()),
@@ -176,11 +177,14 @@ def _complete_total(values, *, reducer=sum, integer=False):
     return result if _nonnegative(result, integer=integer) else None
 
 
-def _recent_runs(c) -> dict:
-    """Aggregate measured phases over the last 100 semantic drain runs."""
+def _recent_runs(c, days: int = 14) -> dict:
+    """Aggregate measured phases over the semantic drain runs of the last
+    `days` days (capacity gate: llm_s per window + per-job llm_s p90)."""
+    from semantic_evaluation import _percentile
     rows = c.execute(
         "SELECT content FROM artifacts WHERE kind='semantic_drain_run' "
-        "ORDER BY artifact_id DESC LIMIT 100").fetchall()
+        "AND created_at >= ? ORDER BY artifact_id DESC",
+        (time.time() - days * 86400,)).fetchall()
     recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0}
     phases = {key: [] for key in ("llm_s", "jev_s", "post_s", "queue_wait_s")}
     tokens = []
@@ -212,6 +216,8 @@ def _recent_runs(c) -> dict:
     recent.update({key: _complete_total(phases[key])
                    for key in ("llm_s", "jev_s", "post_s")})
     recent["queue_wait_s_max"] = _complete_total(phases["queue_wait_s"], reducer=max)
+    recent["llm_s_p90"] = _percentile(
+        [v for v in phases["llm_s"] if _nonnegative(v)], 0.90)
     recent["usage_tokens"] = _complete_total(tokens, integer=True)
     return recent
 
@@ -252,7 +258,10 @@ def _daily_budget(cfg) -> int:
 
 def main() -> int:
     from mcs_util import load_config
-    snap = observe(cfg=load_config())
+    days = 14
+    if "--days" in sys.argv:
+        days = int(sys.argv[sys.argv.index("--days") + 1])
+    snap = observe(cfg=load_config(), days=days)
     if "--json" in sys.argv:
         print(json.dumps(snap, ensure_ascii=False))
         return 0
@@ -289,7 +298,8 @@ def main() -> int:
     print(f"recent drains: {r['runs']} runs, "
           f"done={r['done']} deferred={r['deferred']} "
           f"failed={r['failed']} "
-          f"(llm_s={r['llm_s']}, jev_s={r['jev_s']})")
+          f"(llm_s={r['llm_s']}, llm_s_p90={r['llm_s_p90']}, "
+          f"jev_s={r['jev_s']})")
     return 0
 
 
