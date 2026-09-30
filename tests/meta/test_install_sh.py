@@ -685,12 +685,12 @@ def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     assert _run(env, hermes_home).returncode == 0
     plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
-    plist.write_text(plist.read_text().replace("65536", "4096"))
+    plist.write_text(plist.read_text().replace("49152", "4096"))
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
-    assert "65536" in plist.read_text()
-    plist.write_text(plist.read_text().replace("65536", "4096"))
+    assert "49152" in plist.read_text()
+    plist.write_text(plist.read_text().replace("49152", "4096"))
     r = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
     assert r.returncode == 0, r.stderr
     assert "plist changed" in r.stderr and "launchctl bootout" in r.stderr

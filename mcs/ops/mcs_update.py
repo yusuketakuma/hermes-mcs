@@ -66,7 +66,7 @@ AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 WRAPPER = os.path.join(SCRIPTS_DIR, "mcs_update.sh")
 RECOVERY_TOOL = os.path.expanduser("~/.mcs-recovery/mcs_recover.py")
 
-RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-rt")
+RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
 # install.sh-owned labels the updater must never touch (S5).
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})

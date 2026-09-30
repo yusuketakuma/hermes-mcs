@@ -110,6 +110,7 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
     # endpoint-down just leaves it pending instead of an artifact
     assert result["extract_llm"]["selected"] == 1
     assert result["extract_llm"]["done"] == 0
+    assert "semantic" in result, result.get("errors")
     assert result["semantic"]["deferred"] == 1
     assert result["semantic"]["failed"] == 0
     assert _BudgetJev.instances and _BudgetJev.instances[0].calls > 0

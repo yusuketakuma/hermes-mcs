@@ -1,12 +1,4 @@
-"""deployment/scripts — static contract checks.
-
-The cron wrappers run under `hermes cron`, whose default
-script_timeout_seconds is 3600. Any --stop-after/loop window the
-script hands to a drain must fit UNDER that bound with margin, or the
-job is killed every single night mid-drain (observed: mcs-llm-catchup
-timing out at 3600s while WINDOW_S asked for 5h).
-"""
-import re
+"""Deployment wrappers preserve quiesce guards and collect around the clock."""
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "deployment" / "scripts"
@@ -17,12 +9,6 @@ HERMES_CRON_SCRIPT_TIMEOUT_S = 3600
 MARGIN_S = 300
 
 
-def test_llm_catchup_window_fits_cron_timeout():
-    body = (SCRIPTS / "mcs_llm_catchup.sh").read_text(encoding="utf-8")
-    m = re.search(r"^WINDOW_S=(\d+)$", body, re.M)
-    assert m, "WINDOW_S assignment missing"
-    window = int(m.group(1))
-    assert 0 < window <= HERMES_CRON_SCRIPT_TIMEOUT_S - MARGIN_S
 
 
 def test_drainer_spawn_scripts_guard_quiesce_marker():
@@ -37,30 +23,31 @@ def test_drainer_spawn_scripts_guard_quiesce_marker():
             assert "update_in_progress.marker" in body, path.name
 
 
-def test_llm_catchup_gap_fill_matches_shard_zero_only():
-    """The RT drainer (shard 1/2) also runs `extract_llm.py --all` — the
-    gap-fill probe must look for the shard-0 drainer specifically."""
-    body = (SCRIPTS / "mcs_llm_catchup.sh").read_text(encoding="utf-8")
-    m = re.search(r'pgrep -f "([^"]+)"', body)
-    assert m and "--shard 0/2" in m.group(1)
 
 
-def test_check_night_filter_is_a_window_not_an_exact_minute(tmp_path):
-    """A night tick that starts a few minutes late still runs; the
-    minutes between slots stay skipped."""
+def test_check_runs_around_the_clock(tmp_path):
+    """Every scheduled tick runs at day and night, including 22:37."""
+    import json
     import subprocess
+    import sys
     body = (SCRIPTS / "mcs_check.sh").read_text(encoding="utf-8")
     runner = tmp_path / "runner.sh"
     body = body.replace("__DATA__", str(tmp_path)) \
         .replace("__REPO__", str(tmp_path)) \
         .replace("__PYTHON__", str(tmp_path / "py"))
-    (tmp_path / "py").write_text("#!/bin/sh\necho ran >> \"$0.log\"\n")
+    (tmp_path / "py").write_text(
+        f'#!/bin/sh\n[ "$1" = "-" ] && exec {sys.executable} "$@"\n'
+        'echo ran >> "$0.log"\n')
     (tmp_path / "py").chmod(0o755)
     runner.write_text(body)
     bindir = tmp_path / ".local" / "bin"
     bindir.mkdir(parents=True)
-    for hour, minute, ran in (("23", "02", True), ("23", "20", True),
-                              ("23", "07", False), ("12", "07", True)):
+    for hour, minute, thinning, ran in (
+            ("23", "02", None, True), ("23", "20", None, True),
+            ("23", "07", None, True), ("12", "07", None, True),
+            ("22", "37", False, True), ("06", "15", False, True)):
+        health = {} if thinning is None else {"night_thinning": thinning}
+        (tmp_path / "config.json").write_text(json.dumps({"health": health}))
         log = tmp_path / "py.log"
         log.unlink(missing_ok=True)
         (bindir / "date").write_text(

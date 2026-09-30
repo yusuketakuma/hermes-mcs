@@ -221,11 +221,9 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 `health.json` がサブシステム状態を公開（`collection`/`notify`/
 `semantic`/`extract_qc`/`cards`…）。各状態の自動応答:
 
-`health_watch.py` は `mcs_check.sh` の通常5分・夜間（22:00–06:59）20分の
-実行予定を数え、既定で2回の欠落と最終予定回の最大実行時間480秒を許容して
-古い `health.json` を判定する。別の実行間隔を使う環境では
-`health.tick_interval_s` を設定し、夜間間引きを行わない場合は
-`health.night_thinning=false` にする。判定基準時刻は未読収集が最後に完了した
+`health_watch.py` は24時間同じ `health.tick_interval_s`（既定300秒）と
+`health.max_missed_runs`（既定2回）から古い `health.json` を判定する。
+判定基準時刻は未読収集が最後に完了した
 `unread_at`（無い旧形式では `at`）で、未読収集をしない `--jobs-only` の deep
 実行が `at` を更新しても停止した未読チェックを隠さない。
 
@@ -233,7 +231,7 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 |---|---|---|
 | collection=incomplete | mcs_check.sh の stdout 警報行（watchdog）+ 次回 tick で再試行 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
-| extract drainer 滞留 | `ai.mcs.extract-drainer` 常駐 drain・`mcs_llm_catchup` で夜間追走 | ✅ |
+| extract drainer 滞留 | 背景2枠の常駐 drain・6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
 | コマンド inbox 滞留 | `local.mcs-cmd`/`local.mcs-int` WatchPaths 常駐 + receipt 冪等で再送安全 | ✅ |
 | apply_failed📋 | tag 単位で記録・自動再試行せず人の再承認待ち | 📋 |

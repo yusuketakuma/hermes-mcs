@@ -209,8 +209,7 @@ def _validate_health(h: dict) -> list[str]:
     """Subkey checks for the health block consumed by health_watch:
     tick_interval_s is the producer's check cadence, max_missed_runs
     the missed-tick grace window before staleness is declared (the
-    schedule-based deadline requires an int in [0,100]), night_thinning
-    the optional day/night schedule switch."""
+    schedule settings require an int in [0,100])."""
     errors = []
     if "tick_interval_s" in h:
         v = h["tick_interval_s"]
@@ -221,8 +220,6 @@ def _validate_health(h: dict) -> list[str]:
         err = _int_range(0, 100)(h["max_missed_runs"])
         if err:
             errors.append(f"health.max_missed_runs: {err}")
-    if "night_thinning" in h and type(h["night_thinning"]) is not bool:
-        errors.append("health.night_thinning: must be a boolean")
     return errors
 
 
@@ -1599,13 +1596,13 @@ CRON_JOBS = [
     ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
     ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
     ("MCS durable drain", "7,37 * * * *", "mcs_deep.sh"),
-    ("MCS LLM catchup", "30 22 * * *", "mcs_llm_catchup.sh"),
+    ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),
 ]
 # RESIDENT = KeepAlive drainers the updater quiesces/restarts itself;
 # WATCHER = WatchPaths triggers — verified loaded, never keep-alive.
-RESIDENT_LABELS = ["ai.mcs.extract-drainer", "ai.mcs.extract-drainer-rt"]
+RESIDENT_LABELS = ["ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"]
 WATCHER_LABELS = ["local.mcs-cmd", "local.mcs-int"]
 AGENT_LABELS = WATCHER_LABELS + RESIDENT_LABELS
 # install.sh-owned labels that must never enter MCS ownership (S5).

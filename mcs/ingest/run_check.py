@@ -618,6 +618,7 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
             continue
         result["messages"] += len(p.messages)
         result["new_messages"] += len(new_ids)
+        result.setdefault("realtime_ids", []).extend(new_ids)
         if new_ids:
             ledger.karte_summary_mark_due(p.project_id)
 
@@ -799,6 +800,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             notify_max_age_s=notify_max_age_s, notify_all_new=True)
         if new_ids:
             result["new_messages"] += len(new_ids)
+            result.setdefault("realtime_ids", []).extend(new_ids)
             ledger.karte_summary_mark_due(pid)
         result.setdefault("self_probe_fetched", []).append(pid)
         # A page-limited walk has not established that the latest id is
@@ -945,11 +947,11 @@ def stage_derive(ledger, result, deadline, cfg=None,
         remain = (deadline - time.monotonic()) - 45
         budget = min(llm_budget_cap, max(0, remain))
         idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
-        if remain <= 10:
+        if budget < extract_llm._MIN_CALL_S or not result.get("realtime_ids"):
             result["extract_llm"] = idle
         elif extract_llm.pinned_slot_busy(deadline):
-            # the drainers hold the slot this tick would pin: the call
-            # would only queue server-side while we sit on the run lock
+            # Hermes is using realtime; the arrival stays durable for
+            # another pass while ingestion and background keep moving.
             result["extract_llm"] = {**idle, "skipped_busy": True}
         else:
             # T18: under the v4 engine (fact_source=canonical) the legacy
@@ -964,11 +966,11 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 # ponytail: assumes singles (_BATCH_K=0); revisit if
                 # batching comes back.
                 ledger, limit=max(1, int(budget // extract_llm._MIN_CALL_S)),
-                budget_s=budget, admitted_ids=admitted,
-                # drainers take the newest rows (DESC); the tick walks
-                # the tail so the two never re-process the same rows.
-                # batch_k follows the module default (_BATCH_K, 0 = singles).
-                oldest_first=True, batch_k=extract_llm._BATCH_K)
+                budget_s=budget, admitted_ids=(set(result.get("realtime_ids", [])) if admitted is None
+                              else set(result.get("realtime_ids", [])) & admitted),
+                # Only this collection's arrivals use realtime, newest
+                # first. Existing claim leases exclude in-flight work.
+                oldest_first=False, batch_k=extract_llm._BATCH_K)
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
@@ -1335,131 +1337,51 @@ def _deliver(ledger, args, cfg, result, deadline):
         result["errors"].append(f"card_gc: {type(e).__name__}")
 
 
-# In-tick semantic lane guards (2026-09-30 incident: a daytime backlog
-# drainer held the LLM slot, every tick's semantic job waited 300-450 s
-# for it and completed nothing, and the tail cmd_int drain got no
-# budget for ~3 hours). The lane always leaves the tail its reserve,
-# and a run of starved ticks pauses the lane for a self-clearing hold
-# — health.json carries the streak/hold so the pause is visible.
+# Realtime never waits for background slots or pauses on a night schedule.
 SEMANTIC_TAIL_RESERVE_S = 60
-SEMANTIC_STARVE_STREAK = 3
-SEMANTIC_HOLD_S = 3600
-SEMANTIC_YIELD_WAIT_S = 45.0   # > one typical drainer call (~30 s)
 
 
 def _semantic_lane_prev() -> dict:
-    lane = _prev_health().get("semantic_lane")
-    return lane if isinstance(lane, dict) else {}
+    return {}
 
 
 def _lane(streak: int, hold_until: float | None = None) -> dict:
-    lane = {"starved_streak": streak}
-    if hold_until is not None:
-        lane["hold_until"] = hold_until
-    return lane
+    return {"starved_streak": 0}
 
 
 def _semantic_skipped(cfg, reason: str, **extra) -> dict:
-    """run_due-shaped block for a tick that did not run the lane, so
-    run-record consumers (semantic_evaluation) see an explicit skip
-    with zero elapsed rather than a mode-less blob."""
-    try:
-        import semantic
-        mode = semantic.semantic_config(cfg)[0]["mode"]
-    except Exception:
-        mode = "unknown"
+    import semantic
+    mode = semantic.semantic_config(cfg)[0]["mode"]
     return {"mode": mode, "skipped": reason, "done": 0, "deferred": 0,
             "failed": 0, "elapsed_s": 0.0, "job_metrics": [],
             "oldest_pending_job_age_s": None, **extra}
 
 
-def _run_semantic(ledger, args, cfg, result, deadline, sem_on):
-    """Semantic layer drain (Phase J, feature-gated) — durable
-    'semantic' jobs on the same lock + remaining deadline. OFF is a
-    no-op here AND disables seeding above, so the flag truly stops
-    communication rather than only hiding output.
-
-    Guards: the lane raises extract_llm's yield flag and waits at most
-    SEMANTIC_YIELD_WAIT_S for the background slot (resident drainers
-    defer their next call while the flag is up; queueing behind them
-    is what starved the tick), always leaves the tail
-    SEMANTIC_TAIL_RESERVE_S, and a
-    lane that burns >= half of its own allowance completing nothing
-    for SEMANTIC_STARVE_STREAK ticks is held for SEMANTIC_HOLD_S. The
-    hold clears itself; durable jobs wait for it or the nightly
-    catch-up. Ticks that could not evaluate the lane (held, no budget,
-    slot busy, exception) carry the streak unchanged."""
+def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
+                  run_lock_fd=None):
+    """Serve arrival jobs on realtime while residents drain the backlog."""
+    result["semantic_lane"] = _lane(0)
     if not sem_on:
-        result["semantic_lane"] = _lane(0)   # OFF clears any stale hold
         return
-    prev = _semantic_lane_prev()
-    streak = prev.get("starved_streak")
-    streak = streak if type(streak) is int and streak >= 0 else 0
-    hold_until = prev.get("hold_until")
-    now = time.time()
-    if _finite_number(hold_until) and now < hold_until:
-        result["semantic"] = _semantic_skipped(cfg, "held",
-                                               hold_until=hold_until)
-        result["semantic_lane"] = _lane(streak, hold_until)
+    if args.jobs_only:
+        result["semantic"] = _semantic_skipped(cfg, "background_worker")
         return
-    allowance = deadline - time.monotonic() - SEMANTIC_TAIL_RESERVE_S
-    if allowance <= 0:
+    if deadline - time.monotonic() <= SEMANTIC_TAIL_RESERVE_S:
         result["semantic"] = _semantic_skipped(cfg, "no_budget")
-        result["semantic_lane"] = _lane(streak)
         return
     import extract_llm
-    # Tick priority: raise the yield flag so resident drainers defer
-    # their next call, then wait (bounded) for the background slot to
-    # free instead of queueing behind the drainer for the whole lane.
-    extract_llm.yield_request(True)
-    keep_flag = False
+    if extract_llm.pinned_slot_busy(deadline):
+        result["semantic"] = _semantic_skipped(cfg, "slot_busy")
+        return
     try:
-        until = time.monotonic() + min(SEMANTIC_YIELD_WAIT_S, allowance)
-        while extract_llm.pinned_slot_busy(deadline):
-            if time.monotonic() >= until:
-                # leave the flag up: the drainers finish their in-flight
-                # call and pause, so the next tick (20 min overnight)
-                # gets the slot — night arrivals are processed at night,
-                # just later (owner: latency is fine, 2026-09-30)
-                keep_flag = True
-                result["semantic"] = _semantic_skipped(cfg, "slot_busy")
-                result["semantic_lane"] = _lane(streak)
-                return
-            time.sleep(1.0)
-        allowance = deadline - time.monotonic() - SEMANTIC_TAIL_RESERVE_S
-        if allowance <= 0:
-            # the wait spent the lane's budget: same skip as the
-            # pre-wait guard — the streak stands (nothing evaluated)
-            # and the finally clause drops the flag so drainers resume
-            result["semantic"] = _semantic_skipped(cfg, "no_budget")
-            result["semantic_lane"] = _lane(streak)
-            return
-        started = time.monotonic()
-        try:
-            import semantic
-            result["semantic"] = semantic.run_due(
-                ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
-                cfg_path=CONF_PATH, max_jobs=12 if args.jobs_only else 4)
-        except Exception as e:
-            result["errors"].append(
-                f"semantic: {type(e).__name__}")
-            result["semantic_lane"] = _lane(streak)
-            return
-    finally:
-        if not keep_flag:
-            extract_llm.yield_request(False)
-    spent = time.monotonic() - started
-    sem = result.get("semantic") or {}
-    done = sem.get("done") or 0
-    # a pass that persisted a new stage (progressed) is slow, not
-    # starved — long multi-call jobs legitimately span several ticks
-    progressed = sem.get("progressed") or 0
-    starved = spent >= allowance / 2 and not done and not progressed
-    streak = streak + 1 if starved else 0
-    if streak >= SEMANTIC_STARVE_STREAK:
-        result["semantic_lane"] = _lane(0, now + SEMANTIC_HOLD_S)
-    else:
-        result["semantic_lane"] = _lane(streak)
+        import semantic
+        result["semantic"] = semantic.run_due(
+            ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
+            cfg_path=CONF_PATH, max_jobs=4, run_lock_fd=run_lock_fd,
+            lane="realtime")
+    except Exception as e:
+        result["errors"].append(f"semantic: {type(e).__name__}")
+
 
 def _housekeeping(result):
     """Daily backup, log rotation and attachment pruning — each failure
@@ -1544,6 +1466,12 @@ def _fail_run(ledger, args, result, run_id, status, detail,
 
 
 def main() -> int:
+    import local_llm
+    with local_llm.pinned_slot(local_llm.REALTIME_SLOT):
+        return _main()
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--mark-read", action="store_true",
@@ -1564,10 +1492,8 @@ def main() -> int:
     os.makedirs(ATTACH_DIR, mode=0o700, exist_ok=True)
     os.chmod(ATTACH_DIR, 0o700)
 
-    # a scheduled tick waits briefly for the lock: the nightly semantic
-    # drain releases it between batches, and a single lost night tick
-    # already spans 40 min — past the 30-min session expiry. The
-    # command watcher stays non-blocking (it runs every few seconds).
+    # Scheduled work waits briefly for a DB writer. Background transport
+    # releases this lock; command watchers stay non-blocking.
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None and not args.commands_only:
         lock_fd = _wait_run_lock(LOCK_WAIT_S)
@@ -1616,7 +1542,7 @@ def main() -> int:
         # RUN_DEADLINE_S so history/trickle stages keep their share.
         if not _code_changed(result):
             stage_derive(ledger, result, deadline, cfg,
-                         llm_budget_cap=240 if args.jobs_only else 90)
+                         llm_budget_cap=0 if args.jobs_only else 90)
 
         _deliver(ledger, args, cfg, result, deadline)
         # 連携サマリー GETs sit behind unread collection and notify (spec:
@@ -1626,7 +1552,8 @@ def main() -> int:
                       stage_karte_summary, adapter, ledger, result,
                       deadline, jobs_only=args.jobs_only)
         if not _code_changed(result):
-            _run_semantic(ledger, args, cfg, result, deadline, sem_on)
+            _run_semantic(ledger, args, cfg, result, deadline, sem_on,
+                          run_lock_fd=lock_fd)
         _housekeeping(result)
         status = _finish_run(ledger, cfg, result, run_id, deadline)
         _write_health(ledger, result, status, run_id=run_id)

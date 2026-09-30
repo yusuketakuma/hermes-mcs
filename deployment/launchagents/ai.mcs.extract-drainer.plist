@@ -9,9 +9,8 @@
     <string>__REPO__/mcs/extract/v4/extract_llm.py</string>
     <string>--all</string>
     <string>--workers</string><string>1</string>
-    <string>--shard</string><string>0/2</string>
     <string>--slot</string><string>0</string>
-    <string>--active-hours</string><string>20-07</string>
+    <string>--semantic</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

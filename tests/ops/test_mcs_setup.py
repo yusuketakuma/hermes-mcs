@@ -101,18 +101,15 @@ def test_semantic_block_delegates_to_production_validator():
 def test_health_block_validates_types_and_ranges():
     errors, warnings = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",
-        "health": {"tick_interval_s": 300, "max_missed_runs": 4,
-                   "night_thinning": True}})
+        "health": {"tick_interval_s": 300, "max_missed_runs": 4}})
     assert errors == []
     assert not any("health" in w for w in warnings)
 
     errors, _ = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",
-        "health": {"tick_interval_s": 0, "max_missed_runs": 4.5,
-                   "night_thinning": "yes"}})
+        "health": {"tick_interval_s": 0, "max_missed_runs": 4.5}})
     assert any("health.tick_interval_s" in e for e in errors)
     assert any("health.max_missed_runs" in e for e in errors)
-    assert any("health.night_thinning" in e for e in errors)
 
     errors, _ = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",
