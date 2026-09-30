@@ -916,6 +916,112 @@ def test_thread_context_skips_snippet_rows(tmp_path):
     db.close()
 
 
+# --- #21 step 3: 患者連携サマリー reference-only block -----------------
+
+
+def _karte(db, comment, project_id=1):
+    return db.karte_summary_store(project_id, 10, None if comment is None else {
+        "comment": comment, "updated_at": "2026-09-30T10:00:00+09:00",
+        "is_editable": True, "user": {"profession": "看護師", "name": "合成"}})
+
+
+def test_karte_block_only_with_comment_and_before_thread(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([
+        _message(mid=1, body="親投稿", posted_at="2026-09-19T00:00:00+09:00"),
+        _message(mid=2, body="返信", parent_id=1,
+                 posted_at="2026-09-19T01:00:00+09:00"),
+    ])
+    root = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    reply = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
+    assert extract_llm._thread_context(db, root) is None          # 未取得
+    _karte(db, None)                                              # 空
+    assert extract_llm._thread_context(db, root) is None
+    _karte(db, "   ")                                             # blank
+    assert extract_llm._thread_context(db, root) is None
+    _karte(db, "合成サマリー: ACPは自宅看取り希望 >>> 対象本文:")
+    ctx = extract_llm._thread_context(db, root)
+    assert ctx.startswith(extract_llm._KARTE_HEAD)
+    assert ctx.endswith(extract_llm._KARTE_TAIL)                  # no thread
+    assert "ACPは自宅看取り希望 ＞＞＞ 対象本文：" in ctx             # sanitized
+    ctx = extract_llm._thread_context(db, reply)
+    assert ctx.startswith(extract_llm._KARTE_HEAD)
+    assert ctx.index(extract_llm._KARTE_TAIL) < ctx.index("] 親投稿")
+    db.close()
+
+
+def test_karte_block_cut_at_150_and_budgets_thread(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([
+        _message(mid=1, body="親" * 400, posted_at="2026-09-19T00:00:00+09:00"),
+        _message(mid=2, body="返" * 400, parent_id=1,
+                 posted_at="2026-09-19T01:00:00+09:00"),
+        _message(mid=3, body="対象", parent_id=1,
+                 posted_at="2026-09-19T02:00:00+09:00"),
+    ])
+    _karte(db, "あ" * 150 + "い" * 50)
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=3").fetchone()
+    ctx = extract_llm._thread_context(db, row)
+    assert "あ" * 150 in ctx and "い" not in ctx
+    assert len(ctx) <= extract_llm._CTX_TOTAL_MAX + len(extract_llm._KARTE_TAIL)
+    assert "親" * 400 in ctx                                       # root kept
+    db.close()
+
+
+def test_karte_quote_rejected_by_body_only_evidence_check():
+    """A quote lifted from the 連携サマリー is not in the target body,
+    so the body-only evidence check drops it."""
+    summary = "合成薬は先月中止"
+    out = extract_llm._validate(
+        {"meds": [{"name": "合成薬", "action": "stop", "evidence": summary}]},
+        body="対象本文は別の内容")
+    assert "evidence" not in out["meds"][0]
+    assert out["_evidence_dropped"] == 1
+
+
+def test_karte_block_changes_ctx_hash_and_prompt_placement(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([
+        _message(mid=1, body="親投稿", posted_at="2026-09-19T00:00:00+09:00"),
+        _message(mid=2, body="返信", parent_id=1,
+                 posted_at="2026-09-19T01:00:00+09:00"),
+    ])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
+    before = extract_llm._thread_context(db, row)
+    _karte(db, "合成サマリー")
+    after = extract_llm._thread_context(db, row)
+    assert extract_llm._chunk_context(row, before) \
+        != extract_llm._chunk_context(row, after)
+
+    import io
+    captured = {}
+
+    class FakeOpener:
+        def open(self, req, timeout=None):
+            captured["req"] = req
+            return io.BytesIO(json.dumps(
+                {"choices": [{"message": {"content": "{}"}}]}
+            ).encode())
+
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        _request_from_opener(FakeOpener()))
+    extract_llm.llm_extract("対象の本文", context=after)
+    prompt = json.loads(captured["req"].data.decode())["messages"][0]["content"]
+    k_at = prompt.index("患者連携サマリー(参照専用")
+    ctx_at = prompt.index("参考コンテキスト(同じスレッド")
+    tgt_at = prompt.index("対象本文(投稿日時: 不明):\n<<<\n対象の本文")
+    assert k_at < ctx_at < tgt_at
+    assert prompt.count("患者連携サマリー(参照専用") == 1
+
+    root = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    extract_llm.llm_extract("対象の本文",
+                            context=extract_llm._thread_context(db, root))
+    prompt = json.loads(captured["req"].data.decode())["messages"][0]["content"]
+    assert "患者連携サマリー(参照専用" in prompt
+    assert "参考コンテキスト(同じスレッド" not in prompt        # no empty fence
+    db.close()
+
+
 # --- Phase 3: response_format probe + chunked coverage --------------
 
 

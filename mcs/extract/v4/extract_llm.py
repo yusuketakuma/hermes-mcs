@@ -151,6 +151,15 @@ _CTX_TAIL = """
 
 """
 
+# Reference-only 患者連携サマリー (#21 step 3): the patient-level shared
+# memo, rendered as its OWN fenced block before the thread context —
+# the thread fence describes past posts and carries the 返信判定 rule,
+# neither of which applies to the memo. It rides `context` (same
+# meta.ctx flag, same chunk-checkpoint hash) and shares _CTX_TOTAL_MAX.
+_KARTE_HEAD = "患者連携サマリー(参照専用 — ここからの項目抽出・evidence引用は禁止):\n<<<\n"
+_KARTE_TAIL = "\n>>>\n\n"
+_KARTE_MAX = 150   # the MCS form caps the memo at 150 chars
+
 # Deterministic rule-parser candidates, injected between _HINT_HEAD/
 # _HINT_TAIL BEFORE the target label — the v3 pass performs the v1/v2
 # (rule) work in the same pass: the parsed fields ride the prompt as
@@ -1320,6 +1329,10 @@ def llm_extract(body: str, *, context: str | None = None,
     complete, which is exactly the silent-coverage-loss failure mode
     the error+backoff path exists to avoid."""
     prompt = _PROMPT_HEAD
+    if context and context.startswith(_KARTE_HEAD):
+        cut = context.index(_KARTE_TAIL) + len(_KARTE_TAIL)
+        prompt += context[:cut]
+        context = context[cut:]
     if context:
         prompt += _CTX_HEAD + context + _CTX_TAIL
     if hints:
@@ -1454,7 +1467,7 @@ def _hint_block(hints: dict) -> str:
     return _sanitize_ctx(raw)
 
 
-def _ctx_lines(rows, root_id: int) -> list[str]:
+def _ctx_lines(rows, root_id: int, budget: int = _CTX_TOTAL_MAX) -> list[str]:
     """Select + format context lines from earlier-than-target thread
     member mappings (keys: message_id, body_text, posted_at_ts, who).
 
@@ -1474,7 +1487,7 @@ def _ctx_lines(rows, root_id: int) -> list[str]:
     for row in ([root_row] if root_row else []) + replies:
         line = f"[{row['who'] or '投稿者'}] " \
                f"{_sanitize_ctx(row['body_text'][:_CTX_ITEM_MAX])}"
-        if used + len(line) > _CTX_TOTAL_MAX:
+        if used + len(line) > budget:
             continue
         parts.append((row["posted_at_ts"] or 0,
                       row["message_id"], line))
@@ -1483,15 +1496,29 @@ def _ctx_lines(rows, root_id: int) -> list[str]:
     return [p[2] for p in parts]
 
 
+def _karte_block(ledger, project_id: int) -> str:
+    """Fenced 患者連携サマリー block for the prompt, "" when the project
+    has no stored summary or its comment is empty. The comment is
+    untrusted text of the same class as thread posts: sanitized and
+    hard-cut at _KARTE_MAX."""
+    ks = ledger.karte_summary_current(project_id) or {}
+    comment = ks.get("comment")
+    if not isinstance(comment, str) or not comment.strip():
+        return ""
+    return _KARTE_HEAD + _sanitize_ctx(comment[:_KARTE_MAX]) + _KARTE_TAIL
+
+
 def _thread_context(ledger, r) -> str | None:
-    """Reference-only context for a reply: earlier members of its
-    thread, selected and formatted by _ctx_lines.
+    """Reference-only context: the patient's 連携サマリー block (if any)
+    followed by earlier members of the message's thread, selected and
+    formatted by _ctx_lines within the remaining _CTX_TOTAL_MAX budget.
 
     A per-message snapshot: replies that arrive AFTER this message's
     extraction are not retro-fitted into it (the artifact stays a
     point-in-time read of what the extractor could see; meta.ctx on the
-    artifact records that context existed). Returns None when no
-    earlier thread material exists."""
+    artifact records that context existed). Returns None when neither
+    a summary nor earlier thread material exists."""
+    karte = _karte_block(ledger, r["project_id"])
     root = r["parent_id"] or r["message_id"]
     ts = r["posted_at_ts"] or 0
     rows = ledger.db.execute(
@@ -1508,9 +1535,8 @@ def _thread_context(ledger, r) -> str | None:
            ORDER BY posted_at_ts, message_id""",
         (r["project_id"], root, r["message_id"], root, ts, ts,
          r["message_id"])).fetchall()
-    if not rows:
-        return None
-    return "\n".join(_ctx_lines(rows, root)) or None
+    thread = "\n".join(_ctx_lines(rows, root, _CTX_TOTAL_MAX - len(karte)))
+    return (karte + thread) or None
 
 
 def _llm_up(deadline: float | None = None) -> bool:
