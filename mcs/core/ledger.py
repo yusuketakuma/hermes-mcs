@@ -314,6 +314,8 @@ class Ledger:
                           "ALTER TABLE patients ADD COLUMN coverage_ts INTEGER"),
                          ("history_target",
                           "ALTER TABLE patients ADD COLUMN history_target INTEGER"),
+                         ("karte_id",
+                          "ALTER TABLE patients ADD COLUMN karte_id INTEGER"),
                          ("is_archived",
                           "ALTER TABLE patients ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")]:
             if col not in c:
@@ -719,15 +721,16 @@ class Ledger:
         with self.db:  # commit on success, rollback on exception
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
-                station_name,url,fetch_state,fetch_reason,last_complete_fetch,
-                last_seen,created_at)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                station_name,url,karte_id,fetch_state,fetch_reason,
+                last_complete_fetch,last_seen,created_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(project_id) DO UPDATE SET
                 project_type=excluded.project_type,
                 patient_name=excluded.patient_name,
                 disease=excluded.disease,
                 station_name=excluded.station_name,
                 url=excluded.url,
+                karte_id=COALESCE(excluded.karte_id, patients.karte_id),
                 fetch_state=excluded.fetch_state,
                 fetch_reason=excluded.fetch_reason,
                 last_complete_fetch=COALESCE(excluded.last_complete_fetch,
@@ -737,7 +740,8 @@ class Ledger:
                 -- is positive proof of reactivation (Oracle F4)
                 is_archived=0
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
-                  p.station_name, p.url, p.fetch_state, p.fetch_reason,
+                  p.station_name, p.url, getattr(p, "karte_id", None),
+                  p.fetch_state, p.fetch_reason,
                   now if p.fetch_state == "complete" else None,
                   now, now))
             for m in p.messages:
@@ -857,18 +861,20 @@ class Ledger:
             # excluded.is_archived would never see NULL)
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
-                station_name,url,is_archived,last_seen,created_at)
-              VALUES(?,?,?,?,?,?,COALESCE(?,0),?,?)
+                station_name,url,karte_id,is_archived,last_seen,created_at)
+              VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?)
               ON CONFLICT(project_id) DO UPDATE SET
                 project_type=excluded.project_type,
                 patient_name=excluded.patient_name,
                 disease=excluded.disease,
                 station_name=excluded.station_name,
                 url=excluded.url,
+                karte_id=COALESCE(excluded.karte_id, patients.karte_id),
                 is_archived=COALESCE(?, patients.is_archived),
                 last_seen=excluded.last_seen
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
-                  p.station_name, p.url, flag, now, now, flag))
+                  p.station_name, p.url, getattr(p, "karte_id", None),
+                  flag, now, now, flag))
             if flag == 1 and not prev:
                 # live -> archived transition: the final head-sync
                 # reservation must be durable in the SAME commit —
@@ -1197,6 +1203,102 @@ class Ledger:
             "SELECT probe_mid FROM patients WHERE project_id=?",
             (project_id,)).fetchone()
         return r["probe_mid"] if r else None
+
+    # ---------- 連携サマリー (karte_summary artifacts) ----------
+
+    def karte_id(self, project_id: int) -> int | None:
+        r = self.db.execute(
+            "SELECT karte_id FROM patients WHERE project_id=?",
+            (project_id,)).fetchone()
+        return r["karte_id"] if r else None
+
+    def _karte_summary_row(self, project_id: int):
+        return self.db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE kind='karte_summary' AND project_id=? "
+            "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
+
+    def karte_summary_store(self, project_id: int, karte_id: int,
+                            payload: dict | None) -> bool:
+        """Persist a fetched 連携サマリー; False when it matches the stored one.
+
+        payload=None is the unregistered form and is stored as
+        empty=true/comment=null so 空 (fetched, nothing registered) stays
+        distinct from 未取得 (never fetched). An unchanged summary (same
+        sha256) writes no new artifact — only the newest row's
+        fetched_at moves, so the stale check does not refetch forever."""
+        p = payload or {}
+        user = p.get("user") or {}
+        content = {
+            "comment": p.get("comment"),
+            "updated_at": p.get("updated_at") or "",
+            "updater": {"profession": user.get("profession") or "",
+                        "name": user.get("name") or ""},
+            "is_editable": p.get("is_editable"),
+            "empty": payload is None,
+        }
+        text = json.dumps(content, ensure_ascii=False, sort_keys=True)
+        sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        now = time.time()
+        row = self._karte_summary_row(project_id)
+        if row:
+            with suppress(json.JSONDecodeError, TypeError):
+                meta = json.loads(row["meta"] or "{}")
+                if isinstance(meta, dict) and meta.get("sha256") == sha:
+                    meta["fetched_at"] = now
+                    self.db.execute(
+                        "UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                        (json.dumps(meta, ensure_ascii=False),
+                         row["artifact_id"]))
+                    self.db.commit()
+                    return False
+        self.artifact_add("karte_summary", text, project_id=project_id,
+                          meta={"karte_id": karte_id, "fetched_at": now,
+                                "sha256": sha})
+        return True
+
+    def karte_summary_current(self, project_id: int) -> dict | None:
+        """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
+        row = self._karte_summary_row(project_id)
+        if not row:
+            return None
+        try:
+            content = json.loads(row["content"])
+            meta = json.loads(row["meta"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(content, dict):
+            return None
+        content["fetched_at"] = (meta.get("fetched_at")
+                                 if isinstance(meta, dict) else None)
+        return content
+
+    def karte_summary_missing(self, limit: int) -> list:
+        """Projects with a karte_id and no karte_summary artifact, oldest last_seen first."""
+        return [r["project_id"] for r in self.db.execute("""
+            SELECT project_id FROM patients p
+            WHERE karte_id IS NOT NULL AND NOT EXISTS(
+              SELECT 1 FROM artifacts a
+              WHERE a.kind='karte_summary' AND a.project_id=p.project_id)
+            ORDER BY last_seen, project_id LIMIT ?""", (limit,))]
+
+    def karte_summary_stale(self) -> list:
+        """Projects whose newest message was stored after the last summary fetch.
+
+        This is the carry-over: a project cut off by the per-tick GET cap
+        or a failed fetch still shows a message newer than its artifact's
+        fetched_at, so it is offered again next run without extra state."""
+        return [r["project_id"] for r in self.db.execute("""
+            SELECT a.project_id FROM artifacts a
+            JOIN patients p ON p.project_id=a.project_id
+            WHERE a.kind='karte_summary' AND p.karte_id IS NOT NULL
+              AND a.artifact_id=(SELECT MAX(b.artifact_id) FROM artifacts b
+                                 WHERE b.kind='karte_summary'
+                                   AND b.project_id=a.project_id)
+              AND EXISTS(SELECT 1 FROM messages m
+                         WHERE m.project_id=a.project_id
+                           AND m.first_seen > json_extract(a.meta,'$.fetched_at'))
+            ORDER BY p.last_seen, a.project_id""")]
 
     def set_probe_marker(self, project_id: int, message_id: int):
         self.db.execute(

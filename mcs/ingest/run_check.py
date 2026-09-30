@@ -69,6 +69,8 @@ HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
 COVERAGE_STALL_S = 24 * 3600
 # attachments (up to 64 MiB x 30 per tick) defer below floor + this
 ATTACH_DISK_MARGIN_MB = 2048
+KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
+KARTE_SUMMARY_FILL = 10       # never-fetched projects filled per deep run
 
 
 def _err_str(e: Exception) -> str:
@@ -542,6 +544,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
             continue
         result["messages"] += len(p.messages)
         result["new_messages"] += len(new_ids)
+        if new_ids:
+            job_ops.note_new_messages(result, p.project_id)
 
         if session_error:
             raise session_error
@@ -719,6 +723,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             notify_max_age_s=notify_max_age_s, notify_all_new=True)
         if new_ids:
             result["new_messages"] += len(new_ids)
+            job_ops.note_new_messages(result, pid)
         result.setdefault("self_probe_fetched", []).append(pid)
         # A page-limited walk has not established that the latest id is
         # unfetchable. Only a completed walk may suppress later probes.
@@ -776,6 +781,54 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
                                      semantic=semantic)
             result["errors"].append(
                 f"attach {a['attachment_id']}: {kind}")
+
+
+# ---------- stage: 連携サマリー ----------
+
+def stage_karte_summary(adapter, ledger, result, deadline,
+                        jobs_only: bool = False):
+    """Read-only 連携サマリー refresh for projects that stored new chat.
+
+    Targets: projects that stored a new message this run (unread root,
+    reply job or self-probe import — note_new_messages), projects whose
+    newest message postdates their last fetch (carry-over past the cap or
+    a failed GET), and on deep runs up to KARTE_SUMMARY_FILL never-fetched
+    projects (oldest first). At most KARTE_SUMMARY_TICK_CAP GETs per run;
+    per-project MCSErrors are recorded under result["karte_summary"] and
+    never make the run partial. No mark-as-read, no POST."""
+    stats = {"fetched": 0, "stored": 0, "empty": 0, "skipped": 0,
+             "deferred": 0, "errors": []}
+    result["karte_summary"] = stats
+    targets = list(result.get("karte_summary_targets") or [])
+    # ponytail: carry-over rides on the stale check, so a never-fetched
+    # project cut by the cap waits for the deep fill or its next message;
+    # persist deferred ids if that window ever matters
+    targets += ledger.karte_summary_stale()
+    if jobs_only:
+        targets += ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
+    gets = 0
+    for pid in dict.fromkeys(targets):
+        karte_id = ledger.karte_id(pid)
+        if not karte_id:
+            continue
+        if gets >= KARTE_SUMMARY_TICK_CAP or time.monotonic() > deadline:
+            stats["deferred"] += 1
+            continue
+        gets += 1
+        try:
+            payload = adapter.fetch_memo_summary(karte_id)
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            stats["errors"].append({"project": pid, "kind": e.kind})
+            continue
+        stats["fetched"] += 1
+        if payload is None:
+            stats["empty"] += 1
+        if ledger.karte_summary_store(pid, karte_id, payload):
+            stats["stored"] += 1
+        else:
+            stats["skipped"] += 1
 
 
 # ---------- stage: derived data ----------
@@ -1460,6 +1513,9 @@ def main() -> int:
                      run_id, sem_on, notify_max_age_s)
         _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   notify_max_age_s)
+        _with_relogin(adapter, ledger, result, "karte_summary",
+                      stage_karte_summary, adapter, ledger, result,
+                      deadline, jobs_only=args.jobs_only)
 
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice

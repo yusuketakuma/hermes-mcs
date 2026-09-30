@@ -42,8 +42,11 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         def _get(self, path, params=None, extend_session=True):
             if path == "/projects":
                 return {"projects": [{"id": 1, "is_unread": True,
-                                      "karte": {}}],
+                                      "karte": {"id": 5}}],
                         "paginate": {"has_next": False, "timestamp": 123}}
+            if path == "/kartes/5/memo_summary":
+                return {"memo_summary": {"is_editable": True, "is_read": True,
+                                         "read_style": "single_line"}}
             assert path == "/projects/1/messages"
             return {"messages": [{
                 "id": 1, "comment": "synthetic body",
