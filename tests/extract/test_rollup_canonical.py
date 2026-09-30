@@ -301,3 +301,39 @@ def test_rollup_decodes_each_llm_blob_once(db, monkeypatch, shadow, decodes):
     rows = rollup.build_rollup(db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
     assert len(calls) == decodes
+
+
+# ---------- 連携サマリー (#21) ----------------------------------------------
+
+def _summary(comment="合成サマリー"):
+    return {"comment": comment, "updated_at": "2026-09-30T10:00:00+09:00",
+            "is_editable": True,
+            "user": {"profession": "看護師", "name": "合成 花子"}}
+
+
+def test_rollup_carries_karte_summary_or_none(db):
+    db.save_messages([_message(mid=1, body="合成本文",
+                               posted_at="2026-09-01T09:00:00+09:00")])
+    assert rollup.build_rollup(db, 1)["karte_summary"] is None
+    db.karte_summary_store(1, 10, None)                    # unregistered
+    ks = rollup.build_rollup(db, 1)["karte_summary"]
+    assert ks["empty"] is True and ks["comment"] is None
+    assert isinstance(ks["fetched_at"], float)
+    db.karte_summary_store(1, 10, _summary())
+    ks = rollup.build_rollup(db, 1)["karte_summary"]
+    assert ks == {"comment": "合成サマリー",
+                  "updated_at": "2026-09-30T10:00:00+09:00",
+                  "updater_profession": "看護師", "empty": False,
+                  "fetched_at": ks["fetched_at"]}
+    assert "合成 花子" not in json.dumps(ks, ensure_ascii=False)
+
+
+def test_new_karte_summary_dirties_rollup(db):
+    db.save_messages([_message(mid=1, body="合成本文",
+                               posted_at="2026-09-01T09:00:00+09:00")])
+    rollup.rebuild(db, 1)
+    assert rollup.dirty_projects(db) == []
+    db.karte_summary_store(1, 10, _summary())
+    assert rollup.dirty_projects(db) == [1]
+    rollup.rebuild(db, 1)
+    assert rollup.dirty_projects(db) == []
