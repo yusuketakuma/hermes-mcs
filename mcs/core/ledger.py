@@ -1267,21 +1267,25 @@ class Ledger:
             (flag, project_id))
         self.db.commit()
 
-    def karte_summary_mark_due(self, project_id: int):
-        """Flag a project for a 連携サマリー GET on the next run (durable).
+    def karte_summary_mark_due(self, project_id: int, due: bool = True):
+        """Flag (or unflag) a project for a 連携サマリー GET on the next run.
 
-        Set by the save paths that stored new chat (unread root, reply job,
-        self-probe import) and again when the stage defers or fails a GET,
-        so the carry-over survives the process; cleared by
-        karte_summary_store. The flag persists for a project whose
-        karte_id is still unknown and fires once it is."""
-        self._karte_summary_due(project_id, 1)
+        Durable: set by the save paths that stored new chat (unread root,
+        reply job, self-probe import) and kept when the stage defers or
+        fails a GET retryably; cleared by karte_summary_store, or by the
+        stage on a non-retryable failure (the next new message re-arms
+        it). The flag persists for a project whose karte_id is still
+        unknown and fires once it is."""
+        self._karte_summary_due(project_id, 1 if due else 0)
 
     def karte_summary_due(self) -> list:
-        """Projects flagged for a summary GET that have a karte_id, oldest last_seen first."""
+        """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
+
+        Newest first so a project that just stored chat wins the per-tick
+        cap over an older carry-over."""
         return [r["project_id"] for r in self.db.execute(
             "SELECT project_id FROM patients WHERE karte_summary_due=1 "
-            "AND karte_id IS NOT NULL ORDER BY last_seen, project_id")]
+            "AND karte_id IS NOT NULL ORDER BY last_seen DESC, project_id")]
 
     def karte_summary_current(self, project_id: int) -> dict | None:
         """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
@@ -1300,10 +1304,10 @@ class Ledger:
         return content
 
     def karte_summary_missing(self, limit: int) -> list:
-        """Projects with a karte_id and no karte_summary artifact, oldest last_seen first."""
+        """Live projects with a karte_id and no karte_summary artifact, oldest last_seen first."""
         return [r["project_id"] for r in self.db.execute("""
             SELECT project_id FROM patients p
-            WHERE karte_id IS NOT NULL AND NOT EXISTS(
+            WHERE karte_id IS NOT NULL AND is_archived=0 AND NOT EXISTS(
               SELECT 1 FROM artifacts a
               WHERE a.kind='karte_summary' AND a.project_id=p.project_id)
             ORDER BY last_seen, project_id LIMIT ?""", (limit,))]

@@ -693,7 +693,7 @@ def test_projects_malformed_last_message_timestamp_is_schema_error():
             return {
                 "projects": [{
                     "id": 1, "type": "medical",
-                    "karte": {"id": 5, "last_name": "S", "first_name": "T",
+                    "karte": {"last_name": "S", "first_name": "T",
                               "station": {"name": "st"}},
                     "last_message": {"created_at": "not-a-date"},
                 }],
@@ -713,7 +713,7 @@ def test_projects_without_last_message_get_zero_activity():
             return {
                 "projects": [{
                     "id": 1, "type": "medical",
-                    "karte": {"id": 5, "last_name": "S", "first_name": "T",
+                    "karte": {"last_name": "S", "first_name": "T",
                               "station": {"name": "st"}},
                 }],
                 "paginate": {"has_next": False},
@@ -1386,13 +1386,22 @@ def test_fetch_memo_summary_rejects_bad_shapes(memo):
         _memo_adapter(memo).fetch_memo_summary(1)
 
 
-def test_project_row_without_karte_id_is_schema_error():
+@pytest.mark.parametrize("karte_id", ["absent", None, "11", 0])
+def test_project_row_without_usable_karte_id_is_tolerated(karte_id):
+    # one legacy/unlinked row must not fail the whole /projects snapshot
+    # (every tick would go 'failed'); it just gets no 連携サマリー
     row = _unread_project(11)
-    del row["karte"]["id"]
-    with pytest.raises(mcs_adapter.SchemaError, match="karte id"):
-        _UnreadListAdapter([(100, False, [row])]).list_unread()
-    row["karte"]["id"] = "11"
-    with pytest.raises(mcs_adapter.SchemaError, match="karte id"):
+    if karte_id == "absent":
+        del row["karte"]["id"]
+    else:
+        row["karte"]["id"] = karte_id
+    snap = _UnreadListAdapter([(100, False, [row])]).list_unread()
+    assert snap.patients[0].karte_id is None
+    row["karte"] = None
+    snap = _UnreadListAdapter([(100, False, [row])]).list_unread()
+    assert snap.patients[0].karte_id is None
+    row["karte"] = "x"
+    with pytest.raises(mcs_adapter.SchemaError, match="karte invalid"):
         _UnreadListAdapter([(100, False, [row])]).list_unread()
 
 

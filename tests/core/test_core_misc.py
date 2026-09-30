@@ -1177,10 +1177,12 @@ def test_karte_summary_due_flag_is_durable_until_stored(tmp_path):
     assert db.karte_summary_due() == []
     for pid in (1, 2, 3, 1):
         db.karte_summary_mark_due(pid)
-    assert db.karte_summary_due() == [2, 1]                      # 3 has no karte_id
+    assert db.karte_summary_due() == [1, 2]                      # newest first; 3 has no karte_id
     db.karte_summary_store(1, 10, _summary())                    # new artifact clears
     assert db.karte_summary_due() == [2]
     db.karte_summary_mark_due(1)
     db.karte_summary_store(1, 10, _summary())                    # same sha clears too
     assert db.karte_summary_due() == [2]
+    db.karte_summary_mark_due(2, due=False)                      # non-retryable failure path
+    assert db.karte_summary_due() == []
     db.close()
