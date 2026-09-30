@@ -132,9 +132,10 @@ def build_text(db, cfg, since: float, until: float) -> str:
             continue
         if isinstance(c, dict) and c.get("empty") is not True:
             summaries.append(r["project_id"])
-    lines.append(f"■ 連携サマリー更新: {len(summaries)}件"
-                 + (": " + _ids(list(dict.fromkeys(summaries)), room)
-                    if summaries else ""))
+    # count rooms, not artifacts — one room refetched twice is one update
+    rooms = list(dict.fromkeys(summaries))
+    lines.append(f"■ 連携サマリー更新: {len(rooms)}件"
+                 + (": " + _ids(rooms, room) if rooms else ""))
 
     sig = cfg.get("signals")
     if isinstance(sig, dict) and sig.get("notify") is True:

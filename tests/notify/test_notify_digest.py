@@ -143,13 +143,13 @@ def test_karte_summary_count_and_ids_without_comment(led):
     _patient(led, 3, name="患者C")
     _patient(led, 4, name="患者D")
     _summary_at(led, 1, T - 3600)
-    _summary_at(led, 1, T - 60, comment="二度目の秘密")      # counted twice
+    _summary_at(led, 1, T - 60, comment="二度目の秘密")      # same room: counted once
     _summary_at(led, 2, T - 60, empty=True)                # 空: not counted
     _summary_at(led, 3, T - 2 * 86400)                     # before window
     _summary_at(led, 4, T + 5)                             # after window
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
-    assert "■ 連携サマリー更新: 2件: project 1" in text
+    assert "■ 連携サマリー更新: 1件: project 1" in text     # rooms, not artifacts
     assert "project 2" not in text and "project 3" not in text
     assert "project 4" not in text
     for secret in ("連携の秘密本文", "二度目の秘密", "職員X", "患者A"):
