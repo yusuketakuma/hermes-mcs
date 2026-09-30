@@ -213,7 +213,10 @@ def _long_marks() -> dict:
             marks = json.load(f)
     except (OSError, ValueError):
         return {}
-    return marks if isinstance(marks, dict) else {}
+    if not isinstance(marks, dict):
+        return {}
+    # hand-edited values (non-int) would raise at `level >= 2`
+    return {k: v for k, v in marks.items() if type(v) is int}
 
 
 def _long_mark(key: str, level: int) -> None:
