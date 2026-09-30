@@ -324,6 +324,9 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             frm = str(r.get("from") or "")
             prefix = "" if frm in ("", "不明", "unknown", "-") \
                 else f"{frm}→"
+            kind = r.get("kind")
+            if isinstance(kind, str):
+                prefix = _REQ_KIND_PREFIX.get(kind, "") + prefix
             # a relative deadline (due null, due_text kept verbatim) is
             # still a deadline to the reader
             due = r.get("due")
@@ -335,11 +338,8 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 suffix += f"(条件:{cond[:20]})"
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
-            kind = r.get("kind")
             (cands if item_unverified(r) else reqs).append(
-                (_REQ_KIND_PREFIX.get(kind, "") if isinstance(kind, str)
-                 else "") + prefix + to
-                + str(r.get("action") or "")[:30] + suffix)
+                prefix + to + str(r.get("action") or "")[:30] + suffix)
     # rule fallback only when the selected facts carry no request at all
     if not reqs and not cands:
         reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"

@@ -176,6 +176,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                         for rq in _dicts(v1.get("requests")))
         # negated/speculative/ungrounded requests stay flagged for the
         # readers; any flag other than a literal False fails closed
+        root = m["parent_id"] or m["message_id"]
         for rq in _dicts(lm.get("requests")):
             row = {"kind": rq.get("to"), "ctx": rq.get("action"),
                    "at": m["posted_at"], "mid": m["message_id"],
@@ -187,14 +188,12 @@ def build_rollup(ledger, project_id: int) -> dict:
                 if isinstance(rq.get(src), str) and rq[src]:
                     row[dst] = rq[src]
             requests.append(row)
-            req_thread.append((row, m["parent_id"] or m["message_id"],
-                               ts, m["sender_name"]))
+            req_thread.append((row, root, ts, m["sender_name"]))
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(blobs.get("extract_llm"))
         if kind in _REPLY_STAGE:
-            replies.setdefault(m["parent_id"] or m["message_id"], []) \
-                .append((ts, m["sender_name"], kind))
+            replies.setdefault(root, []).append((ts, m["sender_name"], kind))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
