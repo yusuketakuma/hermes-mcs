@@ -988,6 +988,14 @@ class Ledger:
         wm = self.high_watermark(project_id)
         if not (wm > 0 and self.coverage_ts(project_id) >= wm):
             return False
+        # a reply whose fetch gave up ('failed' is not pending) still
+        # holds only its snippet — acknowledging would hide it for good
+        if self.db.execute(
+                "SELECT 1 FROM messages WHERE project_id=? "
+                "AND COALESCE(parent_id,0)!=0 "
+                "AND COALESCE(body_state,'') NOT IN ('full','deleted') "
+                "LIMIT 1", (project_id,)).fetchone():
+            return False
         return self.pending_reply_jobs(project_id) == 0
 
     def set_history_floor(self, project_id: int, floor: int):

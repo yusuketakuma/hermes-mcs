@@ -232,6 +232,9 @@ def _health(ledger, result: dict, status: str,
             for r in ledger.db.execute(
                 "SELECT kind,COUNT(*) c,MIN(created_at) o "
                 "FROM fetch_jobs WHERE state='pending' "
+                # extract_claim rows are leases, not work — an expired
+                # one is a released claim awaiting the daily sweep
+                "AND kind!='extract_claim' "
                 "AND COALESCE(attempts,0)=0 AND updated_at<=created_at "
                 "AND next_try<=? GROUP BY kind", (now,)).fetchall()},
         "delivery_unsettled": {

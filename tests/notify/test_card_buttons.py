@@ -397,27 +397,32 @@ def test_summary_with_rollup_and_coverage(led):
 
 
 @pytest.mark.parametrize("ks, line", [
-    (None, "連携サマリー（MCS）: 未取得"),
-    ({"comment": None, "updated_at": "", "updater_profession": "",
-      "empty": True, "fetched_at": NOW}, "連携サマリー（MCS）: 空"),
+    ("never", "連携サマリー（MCS）: 未取得"),
+    (None, "連携サマリー（MCS）: 空"),       # fetched, nothing registered
     ({"comment": "病歴: 合成\n注意点 " + "あ" * 90,
       "updated_at": "2026-09-30T10:00:00+09:00",
-      "updater_profession": "看護師", "empty": False, "fetched_at": NOW},
+      "user": {"profession": "看護師"}},
      "連携サマリー（MCS・更新 09/30・看護師）: 病歴: 合成 注意点 "
      + "あ" * 68 + "…"),
 ])
 def test_summary_karte_summary_line(led, ks, line):
+    """The line reads the newest stored 連携サマリー, never the copy a
+    rollup froze at its last rebuild."""
     _patient(led, 1)
+    stale = {"comment": "古い要約", "updated_at": "2026-09-01T00:00:00+09:00"}
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,content,model,meta,"
         "created_at) VALUES('patient_rollup',1,?,'rules-v1','{}',?)",
-        (json.dumps({"medications": [], "karte_summary": ks},
+        (json.dumps({"medications": [], "karte_summary": stale},
                     ensure_ascii=False), NOW))
+    if ks != "never":
+        led.karte_summary_store(1, 1, ks)
     led.db.commit()
     body = notify_views.patient_summary_text(led.db, 1)[1]
+    assert "古い要約" not in body
     assert f"{line}\n" in body or body.endswith(line)   # nothing after it
     assert body.count("連携サマリー") == 1
-    if ks and ks["comment"]:
+    if isinstance(ks, dict):
         assert ks["comment"][:80] not in body      # cut, not the raw text
 
 

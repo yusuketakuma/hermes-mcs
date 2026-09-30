@@ -351,7 +351,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 # the model call — a crash leaves the 'started'
                 # receipt, which permanently consumes this generation's
                 # one dispatch (no second repair run)
-                ledger.artifact_add(
+                started = ledger.artifact_add(
                     KIND_FACT_REPAIR,
                     json.dumps({"status": "started",
                                 "rejected": rejected},
@@ -366,8 +366,33 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                 "s3_repair", "reserved",
                                 doc_hash=doc_hash)
                 from semantic_extraction import repair_facts_v2
-                repair = repair_facts_v2(
-                    llm_fn, member, v2_doc, rejected, deadline - 5)
+                sent = []
+
+                def repair_llm(prompt):
+                    try:
+                        value = llm_fn(prompt)
+                    except runtime.RuntimeGuardError as e:
+                        if not (isinstance(e, runtime.LLMNotSent)
+                                or e.stage in _PRE_DISPATCH_STAGES):
+                            sent.append(True)
+                        raise
+                    except Exception:
+                        sent.append(True)
+                        raise
+                    sent.append(True)
+                    return value
+                try:
+                    repair = repair_facts_v2(
+                        repair_llm, member, v2_doc, rejected, deadline - 5)
+                except runtime.RuntimeGuardError:
+                    if not sent:
+                        # stopped before any dispatch — the one repair
+                        # was never spent, so release its reservation
+                        with ledger.db:
+                            ledger.db.execute(
+                                "DELETE FROM artifacts WHERE artifact_id=?",
+                                (started,))
+                    raise
                 v4.record_stage(ledger, pid, mid, fp, policy,
                                 "s3_repair", "completed",
                                 repaired=repair["repaired"])
@@ -1194,6 +1219,9 @@ def _jev_error_brief(error) -> dict | None:
 # Scoped (kind + project) so a concurrent drainer's extract_llm rows or
 # another project's work never read as this job's progress (2026-09-30:
 # a job looped 19 passes 'progressing' on foreign writes).
+# guard stages raised before a local-model request leaves (runtime)
+_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
+
 _STAGE_KINDS = ("canonical_projection", "v4_stage", "loop_candidate",
                 "loop_event", "notify_plan")
 
@@ -1816,12 +1844,21 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     human retry command)."""
     now = time.time() if now is None else now
     out = {"revived": 0, "skipped_cap": 0}
+    # capped jobs are excluded BEFORE the LIMIT — selecting them first
+    # let a capped prefix starve every eligible job behind it
+    capped = ("(CASE WHEN json_valid(payload) AND "
+              "json_type(payload,'$.auto_retry')='integer' "
+              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
+    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
     rows = ledger.db.execute(
-        "SELECT job_id,attempts,payload FROM fetch_jobs "
-        "WHERE kind=? AND state='failed' AND updated_at<=? "
-        "ORDER BY updated_at LIMIT ?",
-        (JOB_KIND, now - REVIVE_COOLDOWN_S,
+        "SELECT job_id,attempts,payload FROM fetch_jobs " + where
+        + capped + "<? ORDER BY updated_at LIMIT ?",
+        (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT,
          REVIVE_MAX * 4)).fetchall()
+    out["skipped_cap"] = ledger.db.execute(
+        "SELECT COUNT(*) FROM fetch_jobs " + where + capped + ">=?",
+        (JOB_KIND, now - REVIVE_COOLDOWN_S,
+         REVIVE_PER_INPUT)).fetchone()[0]
     for row in rows:
         if out["revived"] >= REVIVE_MAX:
             break

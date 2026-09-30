@@ -2616,6 +2616,11 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
     db.db.execute(
         "UPDATE fetch_jobs SET created_at=? WHERE kind='reconcile'",
         (now - 1000,))
+    # nor is an expired extract claim lease (a lease, not work)
+    db.db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,state,attempts,"
+        "next_try,created_at,updated_at) VALUES('extract_claim',1,3,"
+        "'pending',0,?,?,?)", (now - 100, now - 1000, now - 1000))
     db.db.commit()
     att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
     assert att["pending_unstarted"] == {}
