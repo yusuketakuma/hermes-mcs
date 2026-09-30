@@ -279,6 +279,11 @@ def _load_corpus(path: str) -> tuple[list, str]:
     for c in cases:
         if not isinstance(c.get("body"), str) or not c.get("id"):
             raise ValueError("each case needs string 'body' and 'id'")
+        for key in ("context", "posted_at"):
+            # llm_extract concatenates these into the prompt — a list
+            # would pass --mock-ok and abort the real run mid-corpus
+            if key in c and not isinstance(c[key], str):
+                raise ValueError(f"{c['id']}: {key} must be a string")
     return cases, hashlib.sha256(raw).hexdigest()
 
 
@@ -311,7 +316,8 @@ def _section_valid(section) -> bool:
         if r is not None and _reply_kind(r) not in extract_llm._REPLY_KINDS:
             return False
     for r in section.get("requests") or []:
-        if isinstance(r, dict) and "kind" in r \
+        # an explicit null is the documented 'must be absent' pin
+        if isinstance(r, dict) and r.get("kind") is not None \
                 and r["kind"] not in extract_llm._REQ_KINDS:
             return False
     v = extract_llm._validate(section)
@@ -359,8 +365,11 @@ def cmd_run(args) -> int:
               "elapsed_s": round(time.time() - t0, 1),
               "corpus_sha256": corpus_sha256,
               "model": extract_llm.MODEL,
+              # head + the thread-context rules (reply cases measure
+              # wording that lives only in _CTX_HEAD)
               "prompt_sha256": hashlib.sha256(
-                  extract_llm._PROMPT_HEAD.encode("utf-8")).hexdigest(),
+                  (extract_llm._PROMPT_HEAD + extract_llm._CTX_HEAD)
+                  .encode("utf-8")).hexdigest(),
               "performance": _duration_percentiles(durations),
               "n_cases": len(cases),
               # end-to-end success: extraction completed at all, over

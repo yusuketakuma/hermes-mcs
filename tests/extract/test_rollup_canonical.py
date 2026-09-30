@@ -231,6 +231,16 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
     assert rows[0]["reply_state"] == "done"
 
 
+def test_rollup_ignores_non_string_reply_kind(db):
+    """A foreign/hand-written extract_llm row with reply.kind as a list
+    must not abort the patient's rollup (unhashable in the stage set)."""
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
+                  {"reply": {"kind": ["done"], "evidence": "x"}})])
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert rows[0].get("reply_state") is None
+
+
 def test_rollup_reply_with_unparseable_posted_at_is_never_later(db):
     """NULL posted_at_ts maps to 0 and can never be 'later' than the
     request, so a reply with an unparseable date sets nothing."""

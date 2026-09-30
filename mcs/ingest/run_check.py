@@ -397,6 +397,28 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
 
 # ---------- stage: unread pipeline ----------
 
+def _cap_cleared(adapter, ledger, p, top: bool = False) -> bool:
+    """F-5 acknowledgement gate for an unread-capped patient: the
+    history walk must have certified down to the server's oldest
+    unread (ledger.unread_cap_cleared) and, when nothing this tick
+    fetched the top of the range (``top``), the server's newest message
+    must already be stored. Anything less keeps the patient incomplete
+    and seeds the walk once."""
+    oldest = adapter.oldest_unread_id(p.project_id)
+    ok = oldest is not None and ledger.unread_cap_cleared(
+        p.project_id, oldest)
+    if ok and top:
+        latest = adapter.fetch_latest(p.project_id)["message_id"]
+        ok = latest is None or ledger.has_message(latest)
+    if not ok:
+        p.fetch_state = "incomplete"
+        p.fetch_reason = "unread_capped"
+        if not ledger.history_job(p.project_id):
+            ledger.job_add("history", p.project_id, payload={
+                "since": 0, "page": 1, "pages": 10})
+    return ok
+
+
 def stage_unread(adapter, ledger, args, result, deadline, run_id,
                  semantic: bool = False,
                  notify_max_age_s: float | None = None):
@@ -468,18 +490,12 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                 # the history walk; acknowledge only once that walk has
                 # certified everything down to the server's oldest
                 # unread — otherwise stay incomplete and keep walking.
-                oldest = adapter.oldest_unread_id(p.project_id)
-                if oldest is not None and ledger.unread_cap_cleared(
-                        p.project_id, oldest):
-                    p.ack_fallback = True
-                    if p.fetch_state != "incomplete":
-                        p.fetch_state = "complete"
-                else:
-                    p.fetch_state = "incomplete"
-                    p.fetch_reason = "unread_capped"
-                    if not ledger.history_job(p.project_id):
-                        ledger.job_add("history", p.project_id, payload={
-                            "since": 0, "page": 1, "pages": 10})
+                # Nothing in this branch fetched the TOP of the range,
+                # so the server's newest message must be stored too:
+                # the plain list read clears the whole project flag and
+                # a row imported later by the walk arrives read (never
+                # notified).
+                p.ack_fallback = _cap_cleared(adapter, ledger, p, top=True)
             elif batch.error:
                 p.fetch_state = "incomplete"
                 p.fetch_reason = batch.error.kind
@@ -490,20 +506,13 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                     # backlog to the durable cursor walk (F03)
                     ledger.job_add("history", p.project_id, payload={
                         "since": 0, "page": 1, "pages": 10})
-            elif getattr(batch, "capped", False):
+            elif batch.capped:
                 # F-5: the unread screen caps at UNREAD_SCREEN_CAP rows —
                 # older unread rows are invisible here and mark-as-read
                 # would clear them unfetched. Stay incomplete until the
                 # history walk has stored down to the server's oldest
                 # unread message; only then is acknowledgement safe.
-                oldest = adapter.oldest_unread_id(p.project_id)
-                if oldest is None or not ledger.unread_cap_cleared(
-                        p.project_id, oldest):
-                    p.fetch_state = "incomplete"
-                    p.fetch_reason = "unread_capped"
-                    if not ledger.history_job(p.project_id):
-                        ledger.job_add("history", p.project_id, payload={
-                            "since": 0, "page": 1, "pages": 10})
+                _cap_cleared(adapter, ledger, p)
             if p.fetch_state != "incomplete":
                 p.fetch_state = "complete"
         except SessionExpired:
@@ -546,11 +555,8 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
             # and record must read as unknown, never as confirmed
             ledger.mark_read(p.project_id, snap.timestamp, "unknown")
             try:
-                if p.ack_fallback:
-                    adapter.mark_patient_read(p.project_id, snap.timestamp,
-                                              fallback_plain=True)
-                else:
-                    adapter.mark_patient_read(p.project_id, snap.timestamp)
+                adapter.mark_patient_read(p.project_id, snap.timestamp,
+                                          fallback_plain=p.ack_fallback)
                 ledger.mark_read(p.project_id, snap.timestamp, "confirmed")
                 result["marked_read"].append(p.project_id)
             except MCSError as e:

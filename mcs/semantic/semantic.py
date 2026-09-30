@@ -166,7 +166,7 @@ _PROBE_RETRY_S = 600
 _FMT_REJECT_STATUSES = (400, 404, 422)
 
 
-def _probe_format(endpoint: str, model: str) -> str:
+def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
     global _FMT_MODE, _FMT_TS
     if _FMT_MODE == "object":
         return _FMT_MODE
@@ -175,7 +175,7 @@ def _probe_format(endpoint: str, model: str) -> str:
         return _FMT_MODE
     try:
         _FMT_MODE = local_llm.probe_format(
-            endpoint, model, None, timeout=10,
+            endpoint, model, None, timeout=min(10, timeout),
             request_fn=local_llm.bounded_request,
             slot=local_llm.request_slot(),
             verify=lambda text: _json_block(text) is not None) or "plain"
@@ -209,9 +209,13 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         if response is not None and response.get("admission"):
             raise runtime.LLMNotSent(f"llm_admission:{response['admission']}")
     else:
-        global _FMT_MODE
+        global _FMT_MODE, _FMT_TS
+        # the probe spends the caller's budget, never adds to it: the
+        # runtime sized ``timeout`` to the job deadline (absolute)
+        started = time.monotonic()
         rf = {"type": "json_object"} \
-            if _probe_format(endpoint, model) == "object" else None
+            if _probe_format(endpoint, model, timeout) == "object" else None
+        timeout = max(0.5, timeout - (time.monotonic() - started))
         while True:
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,

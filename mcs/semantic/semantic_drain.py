@@ -1124,8 +1124,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
     except runtime.RuntimeBudgetShort:
         # earlier calls of this pass completed and persisted; the next
         # one could not start in the remaining budget — resume next
-        # tick from the durable stages without charging an attempt
-        return "deferred"
+        # tick from the durable stages without charging an attempt.
+        # Distinct from "deferred" so run_due stops the pass: the
+        # remaining budget cannot fit another long generation either
+        return "deferred_short"
     except runtime.RuntimeBudget:
         return "retry" if jev_sent() or llm_started else "deferred"
 
@@ -1167,12 +1169,12 @@ def _malformed_answer(error) -> bool:
     model, not a contract break like auth/model_mismatch: the job
     retries within its bounded attempts and the already-persisted
     detail answers are reused. Response-shape errors on the whole
-    envelope (answers/usage missing) stay hard failures."""
-    return getattr(error, "kind", "") == "protocol_error" and any(
-        str(getattr(error, "detail", "") or "").endswith(suffix)
-        for suffix in (":choice_invalid", ":confidence_invalid",
-                       ":noul_invalid", ":probabilities_missing",
-                       ":not_object", ":type_invalid"))
+    envelope (answers/usage missing) stay hard failures. Every
+    per-answer code is ``{qid}:<reason>`` and no envelope code carries
+    a colon (semantic_jev.validate_answers), so the colon is the
+    discriminator."""
+    return getattr(error, "kind", "") == "protocol_error" \
+        and ":" in str(getattr(error, "detail", "") or "")
 
 
 def _jev_error_brief(error) -> dict | None:
@@ -1576,9 +1578,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             continue
         if status == "done":
             out["done"] += 1
-        elif status == "deferred":
+        elif status in ("deferred", "deferred_short"):
             out["deferred"] += 1
             runtime.transition(ledger, token, "defer", retry_in=60)
+            if status == "deferred_short":
+                # less than one call reserve is left: the next job's
+                # first call is exempt from the reserve gate and would
+                # be dispatched only to time out at the deadline
+                break
         elif status == "deferred_backoff":
             out["deferred"] += 1
             runtime.transition(ledger, token, "defer",

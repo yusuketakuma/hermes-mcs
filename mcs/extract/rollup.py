@@ -65,7 +65,8 @@ def _llm_reply_kind(blob):
     if not isinstance(lm, dict) or lm.get("_error"):
         return None
     reply = lm.get("reply")
-    return reply.get("kind") if isinstance(reply, dict) else None
+    kind = reply.get("kind") if isinstance(reply, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 def build_rollup(ledger, project_id: int) -> dict:

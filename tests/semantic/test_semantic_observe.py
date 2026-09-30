@@ -226,3 +226,12 @@ def test_recent_drain_window_and_llm_p90(tmp_path):
         assert recent["llm_s_p90"] is None
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("argv", [["--days"], ["--days", "2w"], ["--days", "0"]])
+def test_main_rejects_bad_days_with_usage(monkeypatch, capsys, argv):
+    """A bad --days is a usage error (exit 2), never a traceback or a
+    silently empty window that reads as 'no drains'."""
+    monkeypatch.setattr(semantic_observe.sys, "argv", ["semantic_observe.py"] + argv)
+    assert semantic_observe.main() == 2
+    assert "usage" in capsys.readouterr().err

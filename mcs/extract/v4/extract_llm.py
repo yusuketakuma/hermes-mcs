@@ -926,8 +926,8 @@ class _Validator:
         out["requests"] = reqs
 
     def reply(self, d: dict, out: dict):
-        if "reply" not in d:
-            return
+        if d.get("reply") is None:
+            return          # null = no reply (the object/plain rungs)
         r = d["reply"]
         kind = self.enum(r, "kind", _REPLY_KINDS) \
             if isinstance(r, dict) else False
@@ -936,9 +936,12 @@ class _Validator:
             return
         item = {"kind": kind}
         self.ev(item, r)
-        # a typed reply never surfaces without its located quote
+        # a typed reply never surfaces without its located quote — and
+        # a quote-less one is a counted drop so the repair asks for it
         if "evidence" in item:
             out["reply"] = item
+        else:
+            self.drop_item("reply")
 
     def vitals(self, d: dict, out: dict):
         if "vitals" not in d:
@@ -1349,6 +1352,11 @@ def llm_extract(body: str, *, context: str | None = None,
             return _DEFERRED
         drops: dict = {}
         v = _validate(d, body, drops) if d is not None else None
+        if v is not None and not context:
+            # a reply classification without the thread it answers is
+            # a guess (the rules live in _CTX_HEAD): drop it before it
+            # counts as a protected fact in the thin/repair decisions
+            v.pop("reply", None)
         # Thin-nudge only when the prompt covered the WHOLE body — a
         # sparse chunk legitimately yields few fields, and the nudge's
         # "extract everything" ask is only fair when one call saw the
@@ -1378,6 +1386,8 @@ def llm_extract(body: str, *, context: str | None = None,
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
                     rv = _validate(rd, body)
+                    if rv is not None and not context:
+                        rv.pop("reply", None)
                     if _improves(rv, v):
                         v = rv
                 if meta_out is not None:

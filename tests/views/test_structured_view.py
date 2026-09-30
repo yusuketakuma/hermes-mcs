@@ -91,6 +91,12 @@ def test_request_kind_prefix_due_text_and_condition(db):
         "看護師へ医師へ連絡(条件:血圧が160を超えるようなら翌朝までに必)",
         "依頼候補（未確認）: 予定:医師へ再診"]
     assert len("血圧が160を超えるようなら翌朝までに必ず") == 21  # cut at 20
+    # foreign/legacy artifacts: an unhashable kind and a non-string due
+    # neither abort the card nor hide a renderable due_text
+    joined = _render(db, {"requests": [
+        {"to": "医師", "action": "確認", "kind": ["self_plan"],
+         "due": 7, "due_text": "明日まで"}]})
+    assert _request_rows(joined) == ["依頼: 医師へ確認(期限:明日まで)"]
 
 
 def test_malformed_unverified_flag_fails_closed(db):
