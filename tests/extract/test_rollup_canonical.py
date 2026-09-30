@@ -278,3 +278,26 @@ def test_pre_flag_rollup_is_rebuilt_with_unverified_flag(db):
         assert [r["unverified"] for r in
                 json.loads(rows[0][0])["recent_requests"]] == [True]
         assert rollup.dirty_projects(db) == []
+
+
+@pytest.mark.parametrize("shadow, decodes", [(False, 2), (True, 4)])
+def test_rollup_decodes_each_llm_blob_once(db, monkeypatch, shadow, decodes):
+    """perf(#20): reply is read from the extract_llm row, but when that
+    row is also the fact source its dict is reused — one decode per
+    message (two only when a canonical_projection shadows it); the
+    reply_state read is identical either way."""
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
+                  _reply("done"))])
+    if shadow:
+        for mid in (1, 2):
+            db.artifact_add("canonical_projection", json.dumps(
+                {"requests": _REQ["requests"]} if mid == 1 else {}),
+                project_id=1, message_id=mid, meta={"hash": _hash(db, mid)})
+    calls = []
+    real = json.loads
+    monkeypatch.setattr(rollup.json, "loads",
+                        lambda s, *a, **k: calls.append(s) or real(s, *a, **k))
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert rows[0]["reply_state"] == "done"
+    assert len(calls) == decodes
