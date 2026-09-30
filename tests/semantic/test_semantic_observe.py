@@ -196,7 +196,9 @@ def test_recent_drain_window_and_llm_p90(tmp_path):
         assert recent["runs"] == 2 and recent["done"] == 4
         assert recent["llm_s"] == 16.0
         # pinned to the module's existing interpolating percentile helper
+        # (linear interpolation: 3 + (10 - 3) * 0.7 = 7.9; ceil-rank would give 10)
         assert recent["llm_s_p90"] == _percentile([1.0, 3.0, 2.0, 10.0], 0.90)
+        assert abs(recent["llm_s_p90"] - 7.9) < 1e-9
         assert recent["jev_s"] is None and recent["post_s"] is None
         assert semantic_observe.observe(db_path, days=30)["recent_drain"]["runs"] == 3
         assert semantic_observe.observe(db_path, days=30)["recent_drain"]["llm_s"] == 516.0
