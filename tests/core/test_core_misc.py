@@ -1096,12 +1096,13 @@ def test_karte_id_migration_is_additive_and_idempotent(tmp_path):
     db = ledger.Ledger(path)
     db.db.execute("ALTER TABLE patients DROP COLUMN karte_id")  # pre-#21 shape
     db.db.execute("ALTER TABLE patients DROP COLUMN karte_summary_due")
+    db.db.execute("ALTER TABLE patients DROP COLUMN karte_summary_failed_at")
     db.db.commit()
     db.close()
     for _ in range(2):  # reopen twice: columns added once, then a no-op
         db = ledger.Ledger(path)
         cols = {r[1] for r in db.db.execute("PRAGMA table_info(patients)")}
-        assert {"karte_id", "karte_summary_due"} <= cols
+        assert {"karte_id", "karte_summary_due", "karte_summary_failed_at"} <= cols
         assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
         db.close()
 
@@ -1163,6 +1164,12 @@ def test_karte_summary_missing_orders_oldest_first_and_limits(tmp_path):
     assert db.karte_summary_missing(10) == [3, 2, 1]
     assert db.karte_summary_missing(2) == [3, 2]
     db.karte_summary_store(2, 20, None)
+    assert db.karte_summary_missing(10) == [3, 1]
+    db.karte_summary_failed(3)                                   # backoff: skipped
+    assert db.karte_summary_missing(10) == [1]
+    db.db.execute("UPDATE patients SET karte_summary_failed_at=?",
+                  (time.time() - ledger.KARTE_SUMMARY_BACKOFF_S - 1,))
+    db.db.commit()
     assert db.karte_summary_missing(10) == [3, 1]
     db.close()
 

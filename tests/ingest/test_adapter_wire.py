@@ -1309,7 +1309,8 @@ def test_mark_read_fallback_uses_plain_list_only_when_allowed():
     adapter = _mark_adapter("http_error", calls)
     assert adapter.mark_patient_read(1, 123, fallback_plain=True)["project"]["is_archived"] is False
     plain = [p for path, p in calls if path.endswith("/messages") and "unread" not in p]
-    assert plain == [{"per_page": 1, "page": 1, "include_paginate_totals": 0}]
+    assert plain == [{"timestamp": 123, "per_page": 1, "page": 1,
+                      "include_paginate_totals": 0}]
     assert "keep_read_status" not in plain[0]        # the read must clear the flag
 
 
