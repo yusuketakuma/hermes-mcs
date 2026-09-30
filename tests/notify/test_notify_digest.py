@@ -123,6 +123,54 @@ def test_patient_names_only_when_opted_in(led):
         assert secret not in text
 
 
+def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):
+    led.karte_summary_store(pid, pid * 10, None if empty else
+                            {"comment": comment, "updated_at": "2026-10-01",
+                             "user": {"profession": "医師", "name": "職員X"},
+                             "is_editable": False})
+    led.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id="
+                   "(SELECT max(artifact_id) FROM artifacts WHERE "
+                   "kind='karte_summary' AND project_id=?)", (at, pid))
+    led.db.commit()
+
+
+def test_karte_summary_count_and_ids_without_comment(led):
+    """Registered summaries stored in the window are counted with their
+    project ids; empty stores and out-of-window ones are not; the
+    comment and updater never appear."""
+    _patient(led, 1, name="患者A")
+    _patient(led, 2, name="患者B")
+    _patient(led, 3, name="患者C")
+    _patient(led, 4, name="患者D")
+    _summary_at(led, 1, T - 3600)
+    _summary_at(led, 1, T - 60, comment="二度目の秘密")      # counted twice
+    _summary_at(led, 2, T - 60, empty=True)                # 空: not counted
+    _summary_at(led, 3, T - 2 * 86400)                     # before window
+    _summary_at(led, 4, T + 5)                             # after window
+    notify_digest.maybe_enqueue(led, ON, now=T)
+    text = _text(led)
+    assert "■ 連携サマリー更新: 2件: project 1" in text
+    assert "project 2" not in text and "project 3" not in text
+    assert "project 4" not in text
+    for secret in ("連携の秘密本文", "二度目の秘密", "職員X", "患者A"):
+        assert secret not in text
+
+
+def test_karte_summary_names_when_opted_in(led):
+    _patient(led, 1, name="患者A")
+    _summary_at(led, 1, T - 60)
+    cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
+    notify_digest.maybe_enqueue(led, cfg, now=T)
+    text = _text(led)
+    assert "■ 連携サマリー更新: 1件: project 1 患者A" in text
+    assert "連携の秘密本文" not in text and "職員X" not in text
+
+
+def test_karte_summary_zero_line(led):
+    notify_digest.maybe_enqueue(led, ON, now=T)
+    assert "■ 連携サマリー更新: 0件\n" in _text(led)
+
+
 def test_coverage_block_always_present(led):
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
