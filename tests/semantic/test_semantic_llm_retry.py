@@ -417,6 +417,37 @@ def _ceilings(bodies):
     return [b["max_tokens"] for b in bodies]
 
 
+@pytest.mark.parametrize("spent,expected_calls", [(51.0, 1), (50.0, 2)])
+def test_remembered_long_output_format_retry_rechecks_remaining_budget(
+        monkeypatch, tmp_path, spent, expected_calls):
+    import local_llm
+    _long_env(monkeypatch, tmp_path, [], True)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a: "object")
+    semantic._long_mark(semantic._long_key(semantic.llm_conf()[1], "synthetic"), 1)
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            clock[0] += spent
+            return {"status": 400}
+        return {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    out = semantic.llm_chat("synthetic", timeout=450)
+    assert len(calls) == expected_calls
+    assert out == (None if expected_calls == 1 else '{"facts": []}')
+    assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
+    if expected_calls == 2:
+        assert calls[1]["timeout"] == 400.0
+        assert calls[1]["response_format"] is None
+    assert semantic._long_marks()[semantic._long_key(
+        semantic.llm_conf()[1], "synthetic")] == 1
+
+
 @pytest.mark.parametrize("long_ok", [True, False])
 def test_length_stop_retries_once_at_long_ceiling_then_stops_spending(
         monkeypatch, tmp_path, long_ok):
