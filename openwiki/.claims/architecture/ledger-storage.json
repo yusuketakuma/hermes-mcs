@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:8470fabce9a2e3ab879eec7f64f84ed1b546157019cdaa8cc2c5842d9dfea564",
+  "claims": [
+    {
+      "id": "claim_7b3a61c5c09740439b7321b4d612634a",
+      "statement": "Opening a Ledger restricts file permissions to 0600, refuses a schema newer than SCHEMA_VERSION or an interrupted migration, and enables WAL with synchronous=FULL.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/ledger.py#L108-L135",
+          "version": "repo-lines-v1:sha256:c7102092ea6b6b9ac41a405ccbec9a8ec80c2d9e718ef87f3c4cc596ecdd7e3e:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRhMzBlM2FkMWM0ZjY1YWRkZmI2MGY2NzkzZDY3ZDBiMzRhODIyOTNhMzQ4ZTAwOTJiYzhmZmMwOGQ2NzczOTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhMzFlOTg1MTY0YzVlYzE2OWFjNTU2MjUyZGNmZDk3NjI4YzI4MGQ5YWY5YTY1YTQwZTBmMGExNzkwYTBkZjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVmNGJmNjQzMjkyYjkzMWFjMmJlOTRhNzNlNWMzNzQ5NjQyYWNmMDM3NzYzOThlYjdhNDgwOTkzNmM3NjZkNzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQyNzc4YTM1NTU0MjI5MTFjYzVmYWIxZjY0ZGVjMzdiOTkwOGM3NjA2ZTk2Y2UzZGQ3OWZlYTk2YTcxZjFhNjQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_fc9d5e705776454684200f7c5b7d168a",
+      "statement": "LedgerReader opens the database with mode=ro and runs no migration or writes, so it can serve sandboxed consumers.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/ledger.py#L1838-L1855",
+          "version": "repo-lines-v1:sha256:2a8bb0073b033574fcbce05cff8976f97de184a609edcb7cdc07760622ba00bc:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjYzhhY2EzY2Q3NTVhYWZiZTExNmRlM2M3MWUyYjQ3ODM3NWQ5ZjNmZTZkNTU3YTk4NWI0ODViODk1NjRlZmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVhYWRhZWE3OTMzZTJhYmNlOTQ2YmU1NDE3ZDdlMWJlMjIyZDBmODU0YTczYWM0MmY1NjM2MGExZjFlZWZhOWQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNiMzQ0NzRhNzM1MGQxOGU2MDQ2N2NhZTIxYjQzMzc4ZGJhMTczMDU5ZTVlOTUyYzQ2Y2U0ZWJkNDRkMWM0MTYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e46ed21bc0f94a14a9fb87830f885df5",
+      "statement": "daily_backup writes one verified backup per day via a temp file and atomic publish, keeps the newest 7, and a broken existing file does not block a fresh backup.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/maintenance.py#L47-L78",
+          "version": "repo-lines-v1:sha256:17a5a7d214ef2f97e17fabc7642405d7b011b9aaf0f48712566798eaabe1ad54:eyJzZWxlY3RlZExpbmVDb3VudCI6MzIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3NTg0ZjZlZTI2ZmM3MDhmOTY1ZjMwZTVkNWFlYWFjNTZjYzJiZWVhYTAzOWI4ODg3NjE1YjgzMzI5OGRhODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBhNjg0YzZlZWRiNzk0NGNiM2IwM2NjMzI4ZmJkN2YzNGE1YWE5ZDFhZWRjYzk1NjRhZTIxNDUyNDFjYmUyODMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBkZmZkOTk0OTFkMThhMWUzODBjMDNlMmY2MmNiNGZjMTU5OTE2ODA1YWQyMzY3OWJjNzA5OGI2MmU5YjY2YTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f0115e6b028841e1a893f552bd8a7392",
+      "statement": "mcs_queries provides a single shared definition of the current extraction artifact used by both statistics and signals.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/mcs_queries.py#L1-L12",
+          "version": "repo-lines-v1:sha256:3ea08265384b2604e4fcbe7ad55a47ceea1273cdfe919ee9395dbcfd838ed46e:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRlNjAzMmJmNDk3OGU0OGYxM2YwZjUyYzk0ODhmNDk5OWE0NDk2OTAxMzgxMjk2ZjE3OThjYTQ2YWMyMjllYTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMDNlY2RkNGE0ZDEwZjE5YzczZmQ0MmZkMTI0MzdmZDMzNTRhODI2ODE2MDVkYTUyNTVhOTdhMzkwNjhkYmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkwNzFjMThmZTdhYjI2MTRkMDQyMjBlZTdkNmNjODQ1MTY2ZjY0ZWU0OWE1NDBiYzQwOWUxMTMxODA5NDQxN2EifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_13a5a279fccf46679055c1a72bfbc8b8",
+      "statement": "The ledger stores messages deduplicated by message_id with content_hash edit detection, an FTS5 index, an artifacts store, a durable notify_outbox and read_marks where unknown is not success.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/ledger.py#L1-L25",
+          "version": "repo-lines-v1:sha256:d6447fb9be982dee73e4974cdbb201216a3503ee67e121732836a2089bea768f:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY5YjczYWJhNDYxNmY5MTVhZjdhZjA3YWU0ZDA4ZjZhMDQ4MjI5MzE0Mjc4Y2EyNWIxZDRhNjA4YWI2MjQ1ZjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiMmRkYjhhMmU2NGM2MTY2ZmVlZGFmMzBlZTUwYWM2MjE2NWZlMTQ5ZmRkOGIwZDdiNzc3ZWJlZTIxY2EzNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY4MDU0MmI1M2QzY2NiOWQ0MzM1MDQ4N2ZhMmVhY2VhMjA1ZmU4OTMxNGQ3MzAwZDI4YWUyZjllYTRhNzQzYmUifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

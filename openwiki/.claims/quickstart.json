@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:412fb1f693863471ec5c364a54c8d15d50949fac65428108bb3c4bd06b13dd09",
+  "claims": [
+    {
+      "id": "claim_10b1425ead4d4cdaa5df8b25800568c0",
+      "statement": "The scripted test runner defaults to tests and integration and isolates the environment, and Makefile targets wrap the same test, lint, readme and gate commands.",
+      "evidence": [
+        {
+          "resource": "repo://Makefile#L1-L30",
+          "version": "repo-lines-v1:sha256:07824a3f3e0ab0c66d42df8edc61ecaa6ffeccb6fc8ea90db39e40d40a95b336:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVjMzE0ZTU2N2EwYmRjZmViZGY3NTJiNjM5MDBmZjQzYzQ1NjdhOGJkZTcxNTNjODM0ZWI2OGVlNDgzYTU1NDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU4MzEyYjRmYjYzODQxOGJhYTFhNTUzODIwZDA4MWVmNDBiMjJmNTZiNTRiNmU5NWViODA0ZjJiNjlhYmIyMmIifQ"
+        },
+        {
+          "resource": "repo://scripts/run_tests.sh#L20-L46",
+          "version": "repo-lines-v1:sha256:00e62ccabba3dc75a2a9a19353c42ba3b5d5754d3b49c9022d68f32f5d399de5:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3OWM2NjM1ZmNjYjc1YjI0NTBkYzE1YmM4MDczNTQxNjAyZGQyMGFlYzIzYzgxYTcwMGM3ZTM5ZGZmODcxYmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3ZWVjOTMyYTVhMTVjMjAwYWY0MTYyZDI3MGQxYjQ5ZWQ1ZWViYzA2OTQ3ZDVkMTA3MzZlNjQzZGNjNGZlMTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjllNGUwNjg2NTk2MTk4ZTM5NDdjYzMzNmMwOWRkOWE5MDNkZTliNDZjMGE3MWQwNTJmZGJjNDRlMWE5NjUwNTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

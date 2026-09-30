@@ -19,3 +19,4 @@ uv.lock
 .codex/
 .debug-journal.md
 .senpi/
+.claude/

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:9acb429bdc05492ac21a8b86b4cb15e33968c9c3199dfec8716814559657da45",
+  "claims": [
+    {
+      "id": "claim_bcf70ea34241403fa00b97938a92daaf",
+      "statement": "The LLM admission broker enforces that BACKLOG and RT requests never overlap, deriving a client's class from its registered route rather than from the caller, and is only used when MCS_LLM_ADMISSION is set.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/llm_admission.py#L1-L60",
+          "version": "repo-lines-v1:sha256:764551c918dc8fd05266f12d0e5504cd28efc582df4fe405384c202dbb10264f:eyJzZWxlY3RlZExpbmVDb3VudCI6NjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIwZGJkNjE0MzA3YzM5MTU3M2E1YTdmMGNmMGYwYzg1NGY1Mjk0NjY3OWI1NjIwYTI1NzIwYTc3M2E1MjEyMTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2ZGU2Y2NhMDJlMjk1ODMxN2NiNjIwMDIyMDVlOTljOWYxZDRhM2YxYmM4NjlhNTIwMzNiYjcxNjUxN2MxNjciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAyOTYzZjFhNjRiNDE4NjAzODBhZjJiYzNmNGVkZWZlYTViOTRjZWRmN2VjNGIxYzEwZTE5MWFlZDFhNTkyYjUifQ"
+        },
+        {
+          "resource": "repo://mcs/core/llm_admission.py#L60-L80",
+          "version": "repo-lines-v1:sha256:b4550e38eeedbdde9fa7537ffd2b7cc07a4ecf60f64389af8fdaea8f34010bfe:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2ZGU2Y2NhMDJlMjk1ODMxN2NiNjIwMDIyMDVlOTljOWYxZDRhM2YxYmM4NjlhNTIwMzNiYjcxNjUxN2MxNjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhZDBhNzM0YzA3NDk4YWM3NmRjMzMzOTY0MWIyYzFhYjY3ZmM5YjM5MjEzMmNkOWQ2ZjRlNmQ5NGVmNjFmMTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImFjMDRmODZiNjE3NDc4OGM0M2JjN2E3YmY3OTMyOTM1MTNmOTRhMGNhZmRkZTNlMDc2ZGJjOWU1ZjQzNWRjZjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI3OGI2NGI0MGM0N2QxMWZkYTc4NGM3Nzc4MzRkODQ0ZTJmZjRjZDBhYzkzYjE5Njg4ODhiNzJjYzU2YjYyMTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_90cb9601cdd946fd95a77b0f3fa130c2",
+      "statement": "The send-time semantic gate signals its verdict through DeferredSend (keep pending), StaleSend (suppress terminally) and FreezeSend (quarantine remaining chunks).",
+      "evidence": [
+        {
+          "resource": "repo://mcs/semantic/semantic_send_gate.py#L29-L43",
+          "version": "repo-lines-v1:sha256:9d45a7302ca2344d4a4a8603e20a63567bbf0372833495dab243d58aeac0d912:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNiNzM3M2E2ZmVmNWQzNzMwMWZkZDZkM2I5YzBjODQxZWFlYzU3NTVjYWNhNDhmYWI4NTQzYzYxMTdiMGI3M2MiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM4MWIyZWJmMmVmOTk2MDNiYmVhMDJlNDBlMjQxN2NkMGMwMGQ0MDJlNjg5NDBkNmJiZjJjZTAwOTQ4YThhMDMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzZTFlNGI2OWI2MGM1YzZhOGEzNzZlZGU4ZTQ3NDMzZjY1MzAzZTQ4ZThlMGMwZmMxYTk4ODhkM2ZhYzVlYzkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4212a53859004cb297d8096a0d69ad67",
+      "statement": "semantic_drain.run_due returns immediately without creating jobs or making external calls when semantic mode is off, and re-validates config between jobs.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/semantic/semantic_drain.py#L1275-L1300",
+          "version": "repo-lines-v1:sha256:fb08caa350f44660176790dffccf43c5517b975ab628e6c89cd1a01ae833d675:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZmZTQwYzg4ZjVhZmQwZTIxYjk2NmU0NWQ0MzEzZGI1MjcwMmM5OThlZDRjMDc5MGE1MDBmNDQyMzllMDkwNmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU4OGY0NTcyYjRkNGE4ZDZlYTEzODg0YmM1YmEyMzVhYWVmMDZmOWE1OGI0OWRlNzYxMWM4MTA3OWZmZjU4NWYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE2ZmEyYzY2YTE5ZjY2ZTg5OTYzZmRlY2E3MDc5NTBjZjQ0M2QzZjlkMDJhMDNmOWIxYmM3NDM0Mzc3MDUxMDQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM1MzhiOGU1ZjQ5ZWQ0NWFjM2JmNmI3ZjljNWFmY2M3ZmIxYzliNDkwMGY2ODYxZTE3YjVlOTMzY2ExZjA4ZmYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_a364c1994f22409eabc0023470f35e81",
+      "statement": "The local LLM transport is loopback-only at 127.0.0.1:8080 and is shared by the semantic path and the legacy extract_llm path.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/local_llm.py#L1-L30",
+          "version": "repo-lines-v1:sha256:b6c3dc8c1ed0f6698163c046040594742c244c5d08041d9c24f32de957cf28e5:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjMwNzBiNDVhZmU3MDE3MDEwYmZiYjE4YzQ0ZWM4YmE0Y2FkOTkwYTE1MTM2OTEwZTAyMDQyMDY3ZjFkMTNlY2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4NGQ5NTY4OWJiNjFjZDNlMTIwMThkY2JkNDkwZjdlMDg3OGMxMTMwZGJiOWFiM2E3NGUwY2MxZDYxMGZiMzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjNhMGM2MTllMzRlOWRlYzFkZGY4YmU1ZDk0NDNlMmUzYmU3YzlmZTFjYmZkMzY2NzJhMTE3YWViZWY2NjhlNjMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e8c8235cdaf240a4815c6728ba786f83",
+      "statement": "Rule-based extract_v1 and LLM extract_llm artifacts are stored side by side so neither overwrites the other, and all extraction is local.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/extract/v1/extract.py#L1-L10",
+          "version": "repo-lines-v1:sha256:f025e3783e2bde114ec6f9ebfd6a3172d7c1b742ff18b3f0281633271689cf18:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhhYzY1ZDk0NWQ2YmI2OGUyZDllZjkwYWFhY2YzYTllNDJiYTQwOGViZjcwMzc5ZWU5YTBmYzUxZDY5N2IyMjUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVhYmE3ZWMxODFlMWExNjMzMDBiMmJiMDcwNThjNDY3MmY2Y2IyMDk2Mzg0OTE0OGUyMTNjYjg0NTUwNmU4N2UifQ"
+        },
+        {
+          "resource": "repo://mcs/extract/v4/extract_llm.py#L1-L20",
+          "version": "repo-lines-v1:sha256:71ea7838d7c3cae22e84b27a612d03bbacdc2e83c936144a3711e9c53bb7d736:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBjOTRkNjViOTAwMjJjMmNlMDk5ODEzYjI3ZDE1MDhiZDExOTZlZTMyZTQ3MzVkZmUyMDRkZmJkNzAzNGIwOTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjA3MDFjYmY1NTQ4NWNhNTBiOWU5NDAzOGQ0ODIzMzljZmFlYmU0MDY0ZTVhNWVjNjM5ZGEwY2Y5ZTU5ODA2MzUifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

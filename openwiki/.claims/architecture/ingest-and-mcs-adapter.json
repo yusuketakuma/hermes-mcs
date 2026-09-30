@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:79099f5bfa5b97d9333ff699b55005acbe86244f6a2d3df7b8aaca8d01fcf958",
+  "claims": [
+    {
+      "id": "claim_f55dc99f500141228292a0778ccf2cd3",
+      "statement": "run_check only orchestrates (args, lock, deadline, stage order, status) and delegates network access to mcs_adapter, the only MCS network surface.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ingest/run_check.py#L1-L30",
+          "version": "repo-lines-v1:sha256:ee21f08dfda942ec3257fababb270e02b48016f2f6644e78c5498665bfde07ea:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNlMmZhYmFlZTc3ZDc0MWYzMmQzMmNlZjc2OWNmYjM1ZWMzYjFjODYxMjZhOGM4NDcyMWFkYzZkYjY5M2M2YTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU1NjUwOWE4YTk5MWMzMDQ5MjQzMzUyYTU0NzM4ZjFkNmNiNDc0MjZkNmRjZjRkOTM3YjgwMDU0MmMxOGI5NmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_798a82e72f36456fb9c3b5f573a0e7e2",
+      "statement": "Read-marking happens only for a patient whose fetch_state is complete and whose ledger commit succeeded, always with the exact snapshot timestamp; an unparsable response records unknown, never confirmed.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ingest/mcs_adapter.py#L1-L40",
+          "version": "repo-lines-v1:sha256:f8bad6fd99283abc833081b5772268baee9f5a637738b363894897966ceee1fd:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3N2YwYWYxODc5Zjg1NDZjZmE3ZGM4NTZhNmJiNTQwNDc2ZDZkZTAyZjQxOWZlNTFlM2RjMmE3ZWY2M2ZmNTYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ3MjJiZjRmYmVkNWI2NDkxYjkyMzkzYjRlYjg2M2Q5ZTQ5ZGY5ZmYwN2QwYmNkNWYxNTY2M2M2OTY2NDQwOTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM1ZTJiZmY4M2Y3MjFiMjg4N2Q3MjNmNWRjM2NkNWJiYzQyZjZkOTExYWNmZGIwOTY0M2MzZjZjZDc2NTE2ODUifQ"
+        },
+        {
+          "resource": "repo://mcs/ingest/run_check.py#L27-L32",
+          "version": "repo-lines-v1:sha256:e70af8621f720e1df416b10d96448522f28c357b3b1e6e90b6d2116b062cdd54:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDFiYTQ3MTljODBiNmZlOTExYjA5MWE3YzA1MTI0YjY0ZWVlY2U5NjRlMDljMDU4ZWY4Zjk4MDVkYWNhNTQ2YiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTMwM2VjZGQ0YTRkMTBmMTljNzNmZDQyZmQxMjQzN2ZkMzM1NGE4MjY4MTYwNWRhNTI1NWE5N2EzOTA2OGRiYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDlmMDM0YWRmZmY1NThlOWE0NjEzZWFhZjY2ODk0NmNjNDkyMjlkMzc4ODU4MGJkNjczMzVkN2IyODVlMWNlYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMjllYWMwNzI4N2RkMjEyZTEyMzczZGRiZDI1YzIwYzYxMGYzMzkzZjE1M2Y5MzNlOWEzODg4ZmY1NTEyMWM0ZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_56a46ec1a3804bba9e25d96077bb98f4",
+      "statement": "The adapter forbids redirects and proxies, pins the host to www.medical-care.net, and keeps response bodies out of exceptions and logs.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ingest/mcs_adapter.py#L20-L40",
+          "version": "repo-lines-v1:sha256:b46bc852dbcb081035884b2b69a8c5f0784fea6a02a29dd2a3d9e2b54b6af305:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ3MjJiZjRmYmVkNWI2NDkxYjkyMzkzYjRlYjg2M2Q5ZTQ5ZGY5ZmYwN2QwYmNkNWYxNTY2M2M2OTY2NDQwOTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImFhOTBiZGQ1YmU1OGY0YjQ1MzI4YzNlNDMwMzM5OWU5OTg5ODk0NDlhMmI2NDdiM2RhMTc5ZWYxZTA5NTc2OTQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM1ZTJiZmY4M2Y3MjFiMjg4N2Q3MjNmNWRjM2NkNWJiYzQyZjZkOTExYWNmZGIwOTY0M2MzZjZjZDc2NTE2ODUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_13f1a3e3a2a8430f9c02b8513ea7ae9b",
+      "statement": "Each bounded HTTP request runs in a fresh subprocess with credentials passed over stdin, no proxy or redirect, a response size cap and an absolute deadline enforced by kill and reap.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/core/bounded_http.py#L1-L20",
+          "version": "repo-lines-v1:sha256:edb4914777f03d7c04de9c21ade3073b3bc12b0ce3b5b0c2c83e6b3afcf89ac2:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2MWE5MTEyYTI5MThlMmFiYTAzZTE5YTJmMjIxYTAyN2FiNGI2ZjllOTQ2YTZjMzk4MTRmNTRlMThlMDdkZmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIwYzIzYWNmYzg5NGUyNTQ3M2RjMjU3ZGYzNDNiMDBiZDk1N2RiOWRlM2NlNmY1MDczNzg3OThhMDI0YTcwMGMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0dbb4ef0ad7949f3893e1b7f52c6b193",
+      "statement": "job_ops records a command file as a durable fetch_job before consuming it, leaves unparsable files in place for retry, and resumes history jobs from their own page cursor.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ingest/job_ops.py#L1-L15",
+          "version": "repo-lines-v1:sha256:fab62180bc24f8bd20257c2b9deb9ae9ffdc5c289f5e5c635f593517be1d5c84:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdlNGQ5ZWZiMGFmNWI1YjY3MDg3NDA1N2M2ZDcxNmZjY2NiMWRjMzU3YzQ2ZmI5NWNhNmI3MGY5Y2RjZDAzNmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIyNTI2YTg2NGI1MjI1ZTFmZjg0Njg0ODg4MzRlNTlhYWM1MjVmZGM2MDA0ODhkNTAwM2MzYzcyMDg2NmI4MGUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c1827b2bf8774d2facb250c0710a0a44",
+      "statement": "The health watcher re-derives service status from health.json presence, parseability and freshness rather than trusting process exit codes, and counts actual scheduled ticks.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/ingest/health_watch.py#L1-L25",
+          "version": "repo-lines-v1:sha256:05dd56f815818314ca5f34349de2f665b43ef01c5187420230a26e154266b7a6:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ODJjYmRiNGM4YjA3NTE4YmY0ODZjNTg5OTBmYzM5MTc4M2FhMjBhOTE2YmZiMjdhZDIxMWViMWQ1YzM2NDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM1MTc1Nzc4NTFjNDg5ZTQ1YWJhZTI1OTEyNTZjNDA0MDRhMDVjNmQxOWNkNGQ1YWU3ZmQyMmIwMDg0Y2VjNmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYzYjgzZWU4MGJlY2Y1NmE0Yjc0NDc0ZGE4ODRlY2NiOWI0ZTg4MTk4ODRiNDg5ZTYxODliOGY3ZDY5ZTAwNTIifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}

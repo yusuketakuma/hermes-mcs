@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:71116014e8aa3508d38d3f453900727803b7e030cab9efc44f56d85a21d2e272",
+  "claims": [
+    {
+      "id": "claim_dd2e07b9bce14a70b8c322da1bef82c8",
+      "statement": "notify_flush drains notify_outbox through the standard `hermes send` path, with Hermes owning platform connection and credentials, and looks message content up in the ledger at send time.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/notify/notify_flush.py#L1-L25",
+          "version": "repo-lines-v1:sha256:adea4bc6667f4798a6d2da3b32d47ed6c4f11de0ec1853837568b8857c6f4396:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFiMjg2YmU1ZTliNmIxNzc4ZDVjNWQxNmZlMzAzNTk2MDhkY2M0ZjNlYjQ3ZDdjN2QzNDA4NmEyYzY2MDdmYjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3ZWE3NGJiNzliYTk2ZWRjMzlhODM4MmE5N2YyMjk5M2I4MGNjNDA4OGIzZTI3MTdhOTg5MTdjNjBjMWRkNWEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcwMjMyNGMwODc1NDFmYjgwNjE5ZDcyMjM5MTgyNjdlNWI1NjI0ZmIyZjI4YWI3NmY3ZjgxYmE2ZDFkM2Y5NmMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_a7c1b1050dab4533b72a58b46f101f03",
+      "statement": "Interactive cards are frozen into sealed batches and rendered as immutable specs; an unknown delivery outcome never becomes retryable by time alone, only via a factual receipt or an operator ops.card_resolve.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/notify/notify_cards.py#L1-L20",
+          "version": "repo-lines-v1:sha256:aa9ad1c6412f0483b6f806c2f1840676bd273d004a850a07a3ebca707150b017:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjYWNkNTY5MGU3NmFkNDU5NDE1ZTVjOTE2MDM1YWY3ZWZjMDExOWFmOTIyN2IxMDI4ZmI0NDVkMGNmM2M0OTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEwYmM4Nzk1ZDJlMGJmNTQ0N2QxMTNkOTZjMzk2NDYzZDRmNTk2MDdjYmQ0YzYwMTYyYTc4NmI5NzU3M2E1MmYifQ"
+        },
+        {
+          "resource": "repo://mcs/notify/notify_transport.py#L1-L6",
+          "version": "repo-lines-v1:sha256:4ec4d41961c2cfe4f0c49caf7d1ffa736f5f3ab1c95effc740795e51ed7b9406:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTgzOTFiZDg2YmU3Nzc5YTljMGEzZjYwM2Q3YWEwZDBiMjMyNzg5NjRkN2QzNDY1NmM4MTJlNmY5NDNiYWNkMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTMwM2VjZGQ0YTRkMTBmMTljNzNmZDQyZmQxMjQzN2ZkMzM1NGE4MjY4MTYwNWRhNTI1NWE5N2EzOTA2OGRiYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjAsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGRhZDM0MjljMDNkNGYwMmEyMTgyN2YyNjYxZmNkYWJkOTRiMDRlNTlhMmY1M2FkODBjODQ3Mjc0NmMxYTAwOCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_4ea15151bf804321b265cd9e40141667",
+      "statement": "The delivery worker journals each phase with fsync'd started and result rows, makes the grant durable before HTTP begins, and never retries an in-flight send; pre-HTTP crashes settle as not_sent while post-HTTP silence stays unknown.",
+      "evidence": [
+        {
+          "resource": "repo://hermes_plugin/mcs_delivery/worker.py#L1-L25",
+          "version": "repo-lines-v1:sha256:99d1549c09225d0d1e4493275d26a3e311d8c86bf054f797f63088b6e81425fb:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFiYzUxZDFjYzFjMTA5ZTUxY2E4YTY3NGFiZGNiZGY0MWM2Y2E4NjkwYTM5ODE2MjIxMDAwM2QyYTZiODQ4MjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE2Mzc2YmU2MDE5ZGYxYTM2MDYzOWY3MTI4YzBjNDk1NDM0YTk3NDM4M2M3MzU1MDAwOTgwNmI5YTY2MjI3NzkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMzYzgwODdjMmVlNTRmMmJkZmJjODM1OTFhODFmMGFlZjRmMmQwMzA1OTUzMTViMDUzNjk3Y2U1ODY3YzA5MzkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3f2fa9fc9fbb44f7af1dfb5b882c406e",
+      "statement": "Post-restore reconciliation holds any scope whose evidence is ambiguous instead of resending, and the restore_pending marker blocks all send grants until the receipt is durable.",
+      "evidence": [
+        {
+          "resource": "repo://mcs/notify/notify_reconcile.py#L1-L40",
+          "version": "repo-lines-v1:sha256:5fcbb0255601612b8c0042c96de826fb0197ec74c3283647eb58122118019b53:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNmYzNiODM2NDcyYWExMDQxNzNkMWE5ZjZmMTk0MjUwZWIzNjIwOThiNTIzMDVjMDkwMjdlZWVmZGJlOGE4MzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiMmRkYjhhMmU2NGM2MTY2ZmVlZGFmMzBlZTUwYWM2MjE2NWZlMTQ5ZmRkOGIwZDdiNzc3ZWJlZTIxY2EzNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyZjJmYjBlNmE0NDQ2OGNmYjYzYjc1NGE0M2QwMTNmNTAyNDVmMDNiY2M1ZmE2NjRlMjI2ZmYyNGUzYzdhNzcifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.6.1",
+    "at": "2026-09-29T03:50:50.528Z"
+  }
+}
