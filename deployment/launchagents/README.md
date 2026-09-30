@@ -20,8 +20,8 @@ services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わ�
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPaths（イベント駆動） | launchd `local.mcs-int` |
-| extract_llm 常駐drainer（shard 0/2・slot 0） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer` |
-| extract_llm RT貸与drainer（shard 1/2・`--lend-rt`） | KeepAlive・常駐poll(120s) | launchd `ai.mcs.extract-drainer-rt` |
+| extract_llm 常駐drainer（shard 0/2・slot 0） | KeepAlive・常駐poll(120s)・**稼働は 20-07 時のみ**（`--active-hours 20-07`。日中は idle） | launchd `ai.mcs.extract-drainer` |
+| extract_llm RT貸与drainer（shard 1/2・`--lend-rt`） | KeepAlive・常駐poll(120s)・稼働は 20-07 時のみ | launchd `ai.mcs.extract-drainer-rt` |
 
 wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO__`/`__DATA__`
 プレースホルダ付き）。実機の `~/.hermes/scripts/` へは下記の置換コマンドで
@@ -94,9 +94,38 @@ install.sh が作る venv インタプリタを使う）
 
 backlog drain は **shard 分割 + slot 制御** で多重化する（2026-09 導入）:
 
-- `ai.mcs.extract-drainer`: `--all --shard 0/2 --slot 0` — 日中も常駐し、
-  5分 tick は `oldest_first` で反対側から進むため選択が重ならない。
-- `ai.mcs.extract-drainer-rt`: `--all --shard 1/2 --lend-rt` — 全call前に
+- `ai.mcs.extract-drainer`: `--all --shard 0/2 --slot 0 --active-hours 20-07` —
+  常駐するが backlog を流すのは 20-07 時だけ（2026-09-30: 日中の backlog
+  stream が slot 0 を占有し、tick 内 semantic 段が 300-450s 待って毎 tick
+  480s に達したため）。窓の外は 60s 間隔で idle し、KeepAlive・watchdog・
+  updater の常駐前提はそのまま。新着の抽出は日中も tick 内 extract 段が
+  担う。5分 tick は `oldest_first` で反対側から進むため選択が重ならない。
+  再発防止と自動復旧は tick 側（`run_check._run_semantic`）: semantic 段は
+  `data/flags/llm_yield` を立てて最大 `SEMANTIC_YIELD_WAIT_S`（45s）だけ
+  slot 0 の空きを待つ。常駐 drainer（`--slot`/`--lend-rt` 経路）は call ごとに
+  この flag を見て、立っている間は送信せず defer するので、tick は drainer の
+  進行中 1 call 分（約 30s）待つだけで slot を得る（窓内でも tick 内 semantic
+  が動く）。flag は lane 終了時に消す。待っても空かなければ `skipped: slot_busy`
+  で見送るが flag は立てたままにし、drainer は進行中 call を終えて休止、次の
+  tick（夜間は 20 分後）が slot を得る — 夜間の新着も朝まで持ち越さず夜のうちに
+  処理する（遅れは許容、オーナー 2026-09-30）。30 分より古い flag は tick の
+  異常終了の残骸として無視する。末尾処理用に `SEMANTIC_TAIL_RESERVE_S`（60s）を
+  常に残し、「自分の持ち時間の半分以上を使って完了 0 件」が
+  `SEMANTIC_STARVE_STREAK`（3）tick 続くと
+  `SEMANTIC_HOLD_S`（1h）だけ tick 内 semantic を休止する。休止中は
+  health.json の `semantic_lane.hold_until` と `overall: degraded` で見え、
+  期限が来れば自動解除（運用操作は不要）。durable な semantic job は消えず、
+  休止明けか夜間 catch-up で処理される。
+  semantic job 側（2026-09-30 の失敗 15 件の原因: v2 fact doc は 1 生成が
+  約 300s で、1 job は生成 3〜4 回。450s の job 予算を超えるたび「retry」で
+  試行を 1 回消費し、進捗していても 6 回で failed になっていた）:
+  `semantic_runtime.LLM_CALL_RESERVE_S`（300s）— pass 内で先の呼び出しが
+  完了済みなら、残り予算がこれ未満のとき次の呼び出しを始めず
+  `RuntimeBudgetShort` → `deferred`（試行は消費しない）。stage 結果は
+  artifact に残るので次 tick は続きから再開し、1 tick に長い生成 1 回ずつ
+  進んで完了する。run_due は `progressed`（新しい stage artifact を残した
+  job 数）を返し、tick の飢餓判定は「完了も進捗もない」場合だけ数える。
+- `ai.mcs.extract-drainer-rt`: `--all --shard 1/2 --lend-rt --active-hours 20-07` — 全call前に
   `/slots` を照会し、RT slot が空いていれば借用する（polite lending）。
   RT 要求が来れば最大 1 call 分だけ queue 待ちさせる trade-off。
   RT が使用中なら slot 0 が idle の場合だけ slot 0 を使い、両方使用中

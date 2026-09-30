@@ -1845,6 +1845,44 @@ def _slots_busy(deadline: float | None) -> dict | None:
         return None
 
 
+# Tick-priority yield (2026-09-30): while the tick's semantic lane
+# wants the background slot it touches this flag; every resident
+# drainer call path (--slot / --lend-rt) checks it before choosing a
+# slot and defers instead of sending — so the tick gets the slot after
+# at most the drainer's in-flight call, without pinning a busy slot.
+# A flag older than YIELD_STALE_S is a crashed tick's leftover and is
+# ignored, so a dead tick can never park the drainers for good. A lane
+# that waited and still found the slot busy deliberately leaves the
+# flag up (run_check), so overnight arrivals are processed by the next
+# tick instead of being pushed to the morning.
+YIELD_FLAG = os.path.join(HOME, "data", "flags", "llm_yield")
+YIELD_STALE_S = 1800.0   # > the 20-min overnight tick cadence: a lane that
+                         # could not get the slot leaves the flag up so the
+                         # drainers pause and the NEXT tick runs it
+
+
+def yield_request(on: bool) -> None:
+    """Raise (touch) or clear the tick's slot-yield flag; best effort."""
+    try:
+        if on:
+            os.makedirs(os.path.dirname(YIELD_FLAG), exist_ok=True)
+            with open(YIELD_FLAG, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"pid": os.getpid(), "at": time.time()}))
+        else:
+            os.unlink(YIELD_FLAG)
+    except OSError:
+        pass
+
+
+def tick_wants_slot() -> bool:
+    """A fresh yield flag is present (a tick lane is waiting for the
+    background slot)."""
+    try:
+        return time.time() - os.path.getmtime(YIELD_FLAG) < YIELD_STALE_S
+    except OSError:
+        return False
+
+
 _LEND_WAIT_S = 300.0   # --lend-rt: longest wait for an idle slot when
                        # the caller has no deadline
 _LEND_POLL_S = 1.0
@@ -1853,6 +1891,8 @@ _LEND_POLL_S = 1.0
 def _choose_slot(deadline: float | None = None) -> int | None:
     """Wire id_slot for the next call. Per path:
 
+    - a fresh tick yield flag (tick_wants_slot) on a drainer path
+      (--slot / --lend-rt): None — defer, the tick goes first.
     - --slot: that fixed slot, always (wins over everything below).
     - admission (MCS_LLM_ADMISSION): local_llm.request_slot(), no peek.
     - --lend-rt: asks /slots each call and rides the real-time slot
@@ -1868,6 +1908,11 @@ def _choose_slot(deadline: float | None = None) -> int | None:
       the background slot WITHOUT checking busy — the GGML_ASSERT risk
       remains on these paths (mitigated server-side by --cache-ram 0;
       the tick also skips its lane via pinned_slot_busy())."""
+    if (_SLOT_OVERRIDE is not None or _LEND_RT) and tick_wants_slot():
+        # resident drainer paths only (the tick raises the flag for
+        # itself): defer this call without sending; the caller treats
+        # None as _DEFERRED and the row is re-selected later
+        return None
     if _SLOT_OVERRIDE is not None:
         # a stale/invalid override must not go unpinned on the wire —
         # bound it to the selected count exactly like --slot parsing
@@ -1913,6 +1958,27 @@ def pinned_slot_busy(deadline: float | None = None) -> bool:
         return bool(busy) and busy.get(local_llm.request_slot()) is True
     except Exception:
         return False
+
+
+def _parse_active_hours(spec: str) -> tuple[int, int] | None:
+    """'HH-HH' -> (start, end) local hours; None when malformed, or
+    when start == end — the wrap formula would make that ALWAYS active
+    (a 24 h window, i.e. no window at all), so it is rejected as a typo."""
+    m = re.fullmatch(r"\s*(\d{1,2})-(\d{1,2})\s*", spec or "")
+    if not m:
+        return None
+    start, end = int(m.group(1)), int(m.group(2))
+    if not (0 <= start <= 23 and 0 <= end <= 23) or start == end:
+        return None
+    return start, end
+
+
+def _in_active_hours(window: tuple[int, int], hour: int | None = None) -> bool:
+    """Half-open [start, end) in local hours; wraps past midnight when
+    start > end (22-06 = 22:00 through 05:59)."""
+    start, end = window
+    h = time.localtime().tm_hour if hour is None else hour
+    return start <= h < end if start < end else (h >= start or h < end)
 
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
@@ -2805,6 +2871,11 @@ def main() -> int:
                          "use the real-time slot while it is idle — an "
                          "RT request arriving mid-call queues behind at "
                          "most that one call")
+    ap.add_argument("--active-hours", default=None, metavar="HH-HH",
+                    help="with --all: only drain inside this local-time "
+                         "window (e.g. 22-06 wraps midnight); outside it "
+                         "the resident stays up but idles, so the LLM "
+                         "slots are free for the tick and semantic lanes")
     ap.add_argument("--batch", type=int, default=_BATCH_K,
                     help="context-free single-chunk messages per "
                          "batched LLM call (0-8; 0 disables — every "
@@ -2814,11 +2885,18 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "bad_batch"}))
         return 2
     if not args.all and (args.shard or args.slot is not None
-                         or args.stop_after or args.lend_rt):
+                         or args.stop_after or args.lend_rt
+                         or args.active_hours):
         print(json.dumps({"ok": False,
-                          "error": "shard/slot/stop_after/lend_rt "
-                                   "require --all"}))
+                          "error": "shard/slot/stop_after/lend_rt/"
+                                   "active_hours require --all"}))
         return 2
+    active_hours = None
+    if args.active_hours:
+        active_hours = _parse_active_hours(args.active_hours)
+        if active_hours is None:
+            print(json.dumps({"ok": False, "error": "bad_active_hours"}))
+            return 2
     if args.lend_rt and args.slot is not None:
         print(json.dumps({"ok": False,
                           "error": "lend_rt and slot are exclusive"}))
@@ -2873,6 +2951,7 @@ def main() -> int:
                     time.sleep(remaining)
 
             total = {"done": 0, "failed": 0, "left": 0}
+            idle_logged = False
             while True:
                 if stop is not None and time.monotonic() > stop:
                     total["stopped"] = "stop_after"
@@ -2886,6 +2965,19 @@ def main() -> int:
                     if budget <= 0:
                         total["stopped"] = "stop_after"
                         break
+                if active_hours and not _in_active_hours(active_hours):
+                    # night-only drainer (2026-09-30): the daytime
+                    # backlog stream monopolised slot 0 and starved the
+                    # tick's semantic lane (480 s ticks). Idle in place
+                    # rather than exit — KeepAlive would respawn us.
+                    if not idle_logged:
+                        print(json.dumps({"event": "idle_outside_window",
+                                          "active_hours": args.active_hours,
+                                          "ts": time.time()}), flush=True)
+                        idle_logged = True
+                    pause(60)
+                    continue
+                idle_logged = False
                 # Small batches keep DESC re-selection responsive: a
                 # whole-batch upfront claim holds ~50 rows for the serial
                 # processing time (~45-60 s each), so a new message

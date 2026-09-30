@@ -2464,3 +2464,41 @@ def test_human_report_thin_result_is_not_thin_retried(tmp_path,
     res2 = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res2["selected"] == 0 and len(calls) == 1
     db.close()
+
+
+@pytest.mark.parametrize(("spec", "hour", "active"), [
+    ("22-06", 23, True), ("22-06", 3, True), ("22-06", 6, False),
+    ("22-06", 12, False), ("06-22", 12, True), ("06-22", 22, False),
+])
+def test_active_hours_window_wraps_midnight(spec, hour, active):
+    window = extract_llm._parse_active_hours(spec)
+    assert window is not None
+    assert extract_llm._in_active_hours(window, hour) is active
+
+
+@pytest.mark.parametrize("spec", ["", "22", "22-24", "a-b", "6-6"])
+def test_active_hours_rejects_malformed(spec):
+    assert extract_llm._parse_active_hours(spec) is None
+
+
+def test_resident_idles_outside_active_hours(monkeypatch):
+    """Night-only drainer: outside the window the resident loop sleeps
+    and never selects work, so the LLM slot stays free for the tick."""
+    now = [0.0]
+    calls = []
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep",
+                        lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(extract_llm, "_in_active_hours",
+                        lambda window, hour=None: False)
+    monkeypatch.setattr(extract_llm.sys, "argv",
+                        ["extract_llm", "--all", "--stop-after", "130",
+                         "--active-hours", "22-06"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **k: calls.append(1) or {"done": 0, "failed": 0, "left": 0})
+    assert extract_llm.main() == 0
+    assert calls == []
+    assert now[0] >= 130

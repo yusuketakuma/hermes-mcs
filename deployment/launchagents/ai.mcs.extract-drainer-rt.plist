@@ -11,6 +11,7 @@
     <string>--workers</string><string>1</string>
     <string>--shard</string><string>1/2</string>
     <string>--lend-rt</string>
+    <string>--active-hours</string><string>20-07</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

@@ -152,3 +152,42 @@ def test_lock_lost_twice_defers_without_burning_attempts(tmp_path,
     assert db.artifacts("extract_llm", message_id=1) == []
     assert res["left"] == 1
     db.close()
+
+
+# ---- tick-priority yield flag (2026-09-30) ----
+
+def _yield_flag(monkeypatch, tmp_path, age_s=0.0):
+    flag = tmp_path / "flags" / "llm_yield"
+    monkeypatch.setattr(extract_llm, "YIELD_FLAG", str(flag))
+    extract_llm.yield_request(True)
+    assert flag.exists()
+    if age_s:
+        import os
+        old = flag.stat().st_mtime - age_s
+        os.utime(flag, (old, old))
+    return flag
+
+
+def test_fresh_yield_flag_defers_drainer_paths(monkeypatch, tmp_path):
+    _yield_flag(monkeypatch, tmp_path)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 0)
+    assert extract_llm._choose_slot() is None
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
+    monkeypatch.setattr(extract_llm, "_LEND_RT", True)
+    assert extract_llm._choose_slot() is None
+
+
+def test_yield_flag_never_defers_the_tick_itself(monkeypatch, tmp_path):
+    _yield_flag(monkeypatch, tmp_path)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
+    monkeypatch.setattr(extract_llm, "_LEND_RT", False)
+    assert extract_llm._choose_slot() == BG
+
+
+def test_stale_yield_flag_is_ignored_and_clear_removes_it(monkeypatch, tmp_path):
+    flag = _yield_flag(monkeypatch, tmp_path, age_s=extract_llm.YIELD_STALE_S + 5)
+    monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", 0)
+    assert extract_llm._choose_slot() == 0
+    extract_llm.yield_request(False)
+    assert not flag.exists()
+    assert extract_llm.tick_wants_slot() is False
