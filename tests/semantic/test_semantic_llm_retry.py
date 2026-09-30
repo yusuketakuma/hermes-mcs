@@ -139,6 +139,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 
     endpoint = local_http(SlowHandler)
     monkeypatch.setattr(semantic, "LLM_ENDPOINT", endpoint)
+    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")   # no format probe
     trickle_s = 0.25 * len(response)
     started_at = time.monotonic()
     # The worker is a fresh interpreter process whose spawn can take a

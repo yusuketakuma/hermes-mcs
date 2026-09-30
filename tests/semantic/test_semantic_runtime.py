@@ -307,3 +307,17 @@ def test_pre_audit_candidate_survives_interruption_and_is_not_replaced(tmp_path,
         assert db.artifacts("semantic_summary", message_id=1)
     finally:
         db.close()
+
+
+def test_guarded_llm_first_call_always_dispatches_next_needs_reserve(monkeypatch):
+    import semantic_runtime as runtime
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    calls = []
+    guarded = runtime.guarded_llm(lambda prompt: calls.append(prompt) or "ok",
+                                  lambda stage: None, clock[0] + 100)
+    assert guarded("first") == "ok"          # 100 s left < reserve: still sent
+    with pytest.raises(runtime.RuntimeBudgetShort):
+        guarded("second")                    # follow-up needs the reserve
+    assert calls == ["first"]
+    assert issubclass(runtime.RuntimeBudgetShort, runtime.RuntimeBudget)

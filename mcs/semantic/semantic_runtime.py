@@ -46,6 +46,14 @@ class RuntimeBudget(RuntimeGuardError):
     """The tick or per-job execution budget was exhausted."""
 
 
+class RuntimeBudgetShort(RuntimeBudget):
+    """Earlier model calls in this pass completed, but too little budget
+    is left to START the next one (2026-09-30: a v2 fact document is one
+    ~300 s generation, and a pass needs several). The work already
+    persisted stands; the job is deferred, not charged an attempt — an
+    executed call that overran its deadline still raises RuntimeBudget."""
+
+
 class LLMNotSent(RuntimeGuardError):
     """The local-model request was never dispatched — admission held or
     deferred it, or the backend refused the connection. Nothing was
@@ -409,17 +417,32 @@ def llm_call(fn, prompt: str, deadline: float,
             else fn(prompt))
 
 
+# Budget a follow-up local-model call must see before it is dispatched
+# — one long canonical generation measured 322 s (2026-09-27); a call
+# started with less would overrun the pass and burn a retry attempt on
+# work that was progressing.
+LLM_CALL_RESERVE_S = 300.0
+
+
 class _GuardedLLM:
-    def __init__(self, fn, guard, deadline, timeout_cap=None):
+    def __init__(self, fn, guard, deadline, timeout_cap=None,
+                 call_reserve=None):
         self._fn = fn
         self._guard = guard
         self._deadline = deadline
         self._timeout_cap = timeout_cap
+        self._reserve = (LLM_CALL_RESERVE_S if call_reserve is None
+                         else max(0.0, float(call_reserve)))
+        self._calls = 0
 
     def __call__(self, prompt):
         _call_guard(self._guard, "llm_attempt")
+        if self._calls and self._deadline - time.monotonic() \
+                < self._reserve:
+            raise RuntimeBudgetShort("llm_next_call")
         value = llm_call(self._fn, prompt, self._deadline,
                          timeout_cap=self._timeout_cap)
+        self._calls += 1
         _call_guard(self._guard, "llm_result")
         return value
 
@@ -482,8 +505,10 @@ class _HookedJev:
         return getattr(self._client, name)
 
 
-def guarded_llm(fn, guard, deadline, timeout_cap=None):
-    return _GuardedLLM(fn, guard, deadline, timeout_cap)
+def guarded_llm(fn, guard, deadline, timeout_cap=None, call_reserve=None):
+    """``call_reserve``: budget a follow-up call needs before dispatch
+    (None = LLM_CALL_RESERVE_S; callers scale it to their job budget)."""
+    return _GuardedLLM(fn, guard, deadline, timeout_cap, call_reserve)
 
 
 def bind_jev(client, guard, reserve=None):
@@ -553,7 +578,8 @@ def guard(ledger, token: JobToken, *, deadline: float,
 
 
 __all__ = [
-    "JobToken", "LLMNotSent", "RuntimeBudget", "RuntimeGuardError",
+    "JobToken", "LLMNotSent", "RuntimeBudget", "RuntimeBudgetShort",
+    "RuntimeGuardError",
     "RuntimeOff",
     "RuntimeStale", "bind_jev", "config_generation",
     "circuit_open", "record_circuit_result",
