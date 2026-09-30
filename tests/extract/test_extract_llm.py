@@ -154,10 +154,98 @@ def test_validate_request_condition_must_locate_in_body():
     assert reqs[2]["condition"] == long[:60]
     assert "condition" not in reqs[3]
     assert len(reqs) == 4
+    # an unlocated condition is a counted miss and leaves the request
+    # only as an unverified candidate
+    assert reqs[1]["unverified"] is True
+    assert out["_evidence_dropped"] == 1
+    # no condition key: a located request stays verified
+    plain = extract_llm._validate({"requests": [
+        {"to": "看護師", "action": "医師へ連絡",
+         "evidence": "医師へ連絡をお願いします"}]}, body)
+    assert "unverified" not in plain["requests"][0]
     # no body at all -> nothing to locate against -> key absent
     nobody = extract_llm._validate({"requests": [
         {"to": "看護師", "action": "連絡", "condition": "熱が出たら"}]})
     assert "condition" not in nobody["requests"][0]
+
+
+def test_unlocated_condition_triggers_repair_and_stays_unverified(monkeypatch):
+    calls = []
+    body = "医師へ連絡をお願いします。"
+
+    def fake(prompt, **kw):
+        calls.append(prompt)
+        return {"requests": [{"to": "看護師", "action": "医師へ連絡",
+                              "condition": "熱が出たら",
+                              "evidence": "医師へ連絡をお願いします"}],
+                "summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    out = extract_llm.llm_extract(body)
+    assert len(calls) == 2 and "熱が出たら" in calls[1]
+    (rq,) = out["requests"]
+    assert "condition" not in rq and rq["unverified"] is True
+
+
+def test_repair_that_locates_condition_is_adopted(monkeypatch):
+    body = "熱が出たら医師へ連絡をお願いします。"
+    conds = iter(["発熱時", "熱が出たら"])
+
+    def fake(prompt, **kw):
+        return {"requests": [{"to": "看護師", "action": "医師へ連絡",
+                              "kind": "request", "condition": next(conds),
+                              "evidence": "医師へ連絡をお願いします"}],
+                "summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    (rq,) = extract_llm.llm_extract(body)["requests"]
+    assert rq["condition"] == "熱が出たら" and "unverified" not in rq
+
+
+def test_repair_losing_located_condition_is_rejected():
+    prior = {"requests": [{"to": "看護師", "action": "連絡",
+                           "condition": "熱が出たら"}],
+             "_evidence_dropped": 1}
+    lost = {"requests": [{"to": "看護師", "action": "連絡",
+                          "unverified": True}]}
+    assert not extract_llm._improves(lost, prior)
+
+
+def test_request_from_and_due_text_must_be_in_body():
+    body = "ケアマネより: 明日までに医師へ連絡をお願いします。"
+    reqs = extract_llm._validate({"requests": [
+        {"to": "看護師", "from": "ケアマネ", "action": "連絡",
+         "due_text": "明日 までに"},                         # both located
+        {"to": "看護師", "from": "家族", "action": "連絡",
+         "due": "2026-10-01", "due_text": "来週"},           # neither
+        {"to": "看護師", "action": "連絡", "due": "2026-10-01"},
+    ]}, body)["requests"]
+    assert reqs[0]["from"] == "ケアマネ" and reqs[0]["due_text"] == "明日 までに"
+    assert "from" not in reqs[1] and "due_text" not in reqs[1]
+    assert "due" not in reqs[1]          # derived from an unlocated text
+    assert reqs[2]["due"] == "2026-10-01"   # no due_text: unaffected
+
+
+def test_lift_guard_drops_context_detail_keeps_body_detail(monkeypatch):
+    body = "カロナール５ｍｇ 1日3回 継続。アムロジピンも継続。咳が続く。"
+    reply = {"meds": [
+        {"name": "カロナール", "dose": "5mg", "freq": "1日3回",
+         "evidence": "カロナール５ｍｇ"},
+        {"name": "アムロジピン", "dose": "10mg", "freq": "朝1回",
+         "evidence": "アムロジピンも継続"}],
+        "symptoms": [{"text": "咳", "onset": "3日前", "duration": "続く",
+                      "evidence": "咳が続く"}],
+        "summary": "s"}
+    monkeypatch.setattr(extract_llm, "_llm_call",
+                        lambda p, **kw: json.loads(json.dumps(reply)))
+    out = extract_llm.llm_extract(body, context="[看護師] アムロジピン10mg 朝1回")
+    kal, aml = out["meds"]
+    assert kal["dose"] == "5mg" and kal["freq"] == "1日3回"
+    assert "dose" not in aml and "freq" not in aml
+    assert aml["name"] == "アムロジピン"                     # med kept
+    sym = out["symptoms"][0]
+    assert "onset" not in sym and sym["duration"] == "続く"
+    # without context in the prompt nothing could be lifted
+    plain = extract_llm.llm_extract(body)
+    assert plain["meds"][1]["dose"] == "10mg"
 
 
 def test_validate_reply_requires_kind_and_located_evidence():
@@ -919,9 +1007,9 @@ def test_thread_context_skips_snippet_rows(tmp_path):
 # --- #21 step 3: 患者連携サマリー reference-only block -----------------
 
 
-def _karte(db, comment, project_id=1):
+def _karte(db, comment, project_id=1, updated_at="2026-09-18T10:00:00+09:00"):
     return db.karte_summary_store(project_id, 10, None if comment is None else {
-        "comment": comment, "updated_at": "2026-09-30T10:00:00+09:00",
+        "comment": comment, "updated_at": updated_at,
         "is_editable": True, "user": {"profession": "看護師", "name": "合成"}})
 
 
@@ -947,6 +1035,23 @@ def test_karte_block_only_with_comment_and_before_thread(tmp_path):
     ctx = extract_llm._thread_context(db, reply)
     assert ctx.startswith(extract_llm._KARTE_HEAD)
     assert ctx.index(extract_llm._KARTE_TAIL) < ctx.index("] 親投稿")
+    db.close()
+
+
+def test_karte_block_only_when_not_newer_than_post(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([
+        _message(mid=1, body="親投稿", posted_at="2026-09-19T00:00:00+09:00"),
+        _message(mid=2, body="日時不明", posted_at="bad-date")])
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    bad = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
+    _karte(db, "合成サマリー", updated_at="2026-09-19T00:00:01+09:00")
+    assert extract_llm._thread_context(db, row) is None           # newer
+    _karte(db, "合成サマリー2", updated_at=None)
+    assert extract_llm._thread_context(db, row) is None           # missing
+    _karte(db, "合成サマリー3", updated_at="2026-09-18T15:00:00Z")  # == post
+    assert "合成サマリー3" in extract_llm._thread_context(db, row)
+    assert extract_llm._thread_context(db, bad) is None           # bad post
     db.close()
 
 
@@ -1730,6 +1835,8 @@ def test_prompt_head_is_byte_stable_and_batch_shares_spec():
     assert "例4:" in extract_llm._PROMPT_EXAMPLES
     assert extract_llm._PROMPT_HEAD.endswith("\n\n")
     assert '"kind": "request|question|self_plan"' in extract_llm._PROMPT_SPEC
+    assert "〜をお願いできますか 等、相手に行動を求める丁寧表現を含む）は request" \
+        in extract_llm._PROMPT_SPEC
     assert extract_llm._BATCH_HEAD.startswith(extract_llm._PROMPT_SPEC)
 
 
