@@ -140,3 +140,42 @@ def test_budget_short_stops_the_pass_before_the_next_job(tmp_path, monkeypatch):
         assert [tuple(r) for r in rows] == [('pending', 0), ('pending', 0)]
     finally:
         db.close()
+
+
+def test_short_defer_without_progress_charges_an_attempt(tmp_path, monkeypatch):
+    """2026-09-30: a job whose passes persisted nothing looped as a free
+    deferred_short (19 passes, attempts frozen, Jev spent each time).
+    With no stage artifact written for its project, the pass is charged
+    like any other overrun and the job fails after the bounded attempts."""
+    import semantic_drain
+    db = _seeded(tmp_path)
+    monkeypatch.setattr(semantic_drain, "_process_job",
+                        lambda *a, **k: "deferred_short")
+    monkeypatch.setattr(semantic, "_process_job",
+                        lambda *a, **k: "deferred_short")
+    try:
+        for _ in range(8):
+            with db.db:
+                db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            semantic.run_due(db, _cfg('shadow'), {'errors': []},
+                             time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert row['state'] == 'failed' and row['attempts'] >= 1
+    finally:
+        db.close()
+
+
+def test_foreign_artifacts_do_not_count_as_progress(tmp_path):
+    """An extract_llm row from a drainer, or another project's semantic
+    row, never reads as this job's progress."""
+    import semantic_drain
+    db = _seeded(tmp_path)
+    try:
+        base = semantic_drain._last_stage_artifact(db, 1)
+        db.artifact_add("extract_llm", "{}", project_id=1, message_id=1)
+        db.artifact_add("semantic_facts", "{}", project_id=2, message_id=9)
+        assert semantic_drain._last_stage_artifact(db, 1) == base
+        db.artifact_add("semantic_facts", "{}", project_id=1, message_id=1)
+        assert semantic_drain._last_stage_artifact(db, 1) > base
+    finally:
+        db.close()

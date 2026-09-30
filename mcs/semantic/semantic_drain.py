@@ -1189,13 +1189,25 @@ def _jev_error_brief(error) -> dict | None:
             "class": _jev_failure_class(error)}
 
 
-def _last_stage_artifact(ledger) -> int:
-    """Highest artifact id that is a stage result (not a Jev usage
-    receipt) — a pass that raised it made durable progress."""
+# Artifact kinds a semantic pass persists as durable stage results.
+# Scoped (kind + project) so a concurrent drainer's extract_llm rows or
+# another project's work never read as this job's progress (2026-09-30:
+# a job looped 19 passes 'progressing' on foreign writes).
+_STAGE_KINDS = ("canonical_projection", "v4_stage", "loop_candidate",
+                "loop_event", "notify_plan")
+
+
+def _last_stage_artifact(ledger, project_id) -> int:
+    """Highest id of a semantic stage artifact for this project (Jev
+    usage receipts and drain bookkeeping excluded) — a pass that raised
+    it made durable progress."""
+    ph = ",".join("?" * len(_STAGE_KINDS))
     return ledger.db.execute(
         "SELECT COALESCE(MAX(artifact_id),0) FROM artifacts "
-        "WHERE kind NOT IN (?,?,?)",
-        (KIND_USAGE, "semantic_drain_run", SCHED_KIND)).fetchone()[0]
+        "WHERE project_id=? AND (kind LIKE 'semantic\\_%' ESCAPE '\\' "
+        f"OR kind IN ({ph})) AND kind NOT IN (?,?,?)",
+        (project_id, *_STAGE_KINDS, KIND_USAGE, "semantic_drain_run",
+         SCHED_KIND)).fetchone()[0]
 
 
 def _timed_llm(fn):
@@ -1504,7 +1516,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         timed_jev = _TimedClient(jev_client) \
             if jev_client is not None else None
         timed_llm, llm_acc = _timed_llm(llm_fn)
-        art0 = _last_stage_artifact(ledger)
+        art0 = _last_stage_artifact(ledger, job["project_id"])
         try:
             if job["kind"] == QC_JOB_KIND:
                 status = _process_qc_job(
@@ -1525,8 +1537,15 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             out["failed"] += 1
             status = None
         job_elapsed = time.perf_counter() - job_started
-        if _last_stage_artifact(ledger) > art0:
+        job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
+        if job_progressed:
             out["progressed"] += 1
+        budget_short = status == "deferred_short"
+        if budget_short and not job_progressed:
+            # nothing persisted this pass: a free defer would loop
+            # forever (and re-spend Jev every minute) — charge a bounded
+            # attempt like any other overrun
+            status = "retry"
         # durable per-attempt request delta — the daily budget ledger
         # (jev_usage_today) is exact and covers claim-audit and loop
         # calls, not just the primary assessment
@@ -1594,6 +1613,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             runtime.transition(ledger, token, "retry", retry_in=300,
                                max_attempts=limit)
             out["deferred"] += 1
+            if budget_short:
+                break      # same reason as deferred_short: no call fits
         elif status == "failed":
             runtime.transition(ledger, token, "retry", max_attempts=1)
             out["failed"] += 1
