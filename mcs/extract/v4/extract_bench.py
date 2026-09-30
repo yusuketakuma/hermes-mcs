@@ -27,7 +27,9 @@ items matching nothing count as FP.
 
 Requests key on action containment; any other key a label carries
 (to/from/kind/condition/due/due_text/evidence) must match exactly, and
-an explicit null there means the output must NOT carry it. A case may
+an explicit null there means the output must NOT carry it. A request
+label may pin "unverified": false — then an item the extractor marked
+unverified (evidence not located) does not match. A case may
 give `context` (formatted thread block) and `posted_at`, passed through
 to llm_extract. `expect.reply` is {"kind": ...} or null (must be
 absent); `forbid.reply` is {"kind": ...} or a list of them; the run
@@ -91,12 +93,17 @@ _REQ_KEYS = ("to", "from", "kind", "condition", "due", "due_text",
 def _match_request(expected: dict, got: list) -> bool:
     action = expected.get("action", "")
     # a key the label carries must match exactly — an explicit null
-    # pins "absent" (from=null: the extractor must not invent a sender)
+    # pins "absent" (from=null: the extractor must not invent a sender).
+    # unverified=false pins "shown as confirmed": the extractor emits
+    # the flag only when true, so absence reads as false.
     return any(isinstance(item, dict) and action
                and action in (item.get("action") or "")
                and all(key not in expected
                        or expected[key] == item.get(key)
                        for key in _REQ_KEYS)
+               and ("unverified" not in expected
+                    or bool(expected["unverified"])
+                    == bool(item.get("unverified")))
                for item in got)
 
 

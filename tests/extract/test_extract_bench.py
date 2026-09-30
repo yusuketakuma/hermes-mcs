@@ -128,6 +128,13 @@ def test_request_expectations_contribute_to_recall(output, counts):
      {"action": "測定", "from": "医師"}, {"tp": 0, "fp": 1, "fn": 1}),
     ({"action": "測定", "from": None},
      {"action": "測定"}, {"tp": 1, "fp": 0, "fn": 0}),
+    # unverified=false pins "shown as confirmed"; unpinned ignores it
+    ({"action": "連絡", "unverified": False},
+     {"action": "連絡", "unverified": True}, {"tp": 0, "fp": 1, "fn": 1}),
+    ({"action": "連絡", "unverified": False},
+     {"action": "連絡"}, {"tp": 1, "fp": 0, "fn": 0}),
+    ({"action": "連絡"},
+     {"action": "連絡", "unverified": True}, {"tp": 1, "fp": 0, "fn": 0}),
 ])
 def test_request_kind_condition_due_text_are_scored(label, item, counts):
     case = {"id": "request", "expect": {"requests": [label]}}
@@ -202,9 +209,21 @@ def test_case_file_validates_offline(tmp_path):
 
 
 def test_case_bodies_do_not_leak_from_few_shot_examples():
+    import re
+    import unicodedata
     import extract_llm
+
+    def norm(text):
+        # NFKC + drop whitespace/punctuation so a re-spaced or
+        # re-punctuated copy of an example still counts as a leak
+        return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text))
+
+    examples = norm(extract_llm._PROMPT_EXAMPLES)
     for c in extract_bench._load_cases(extract_bench.DEFAULT_CASES):
-        assert c["body"][:20] not in extract_llm._PROMPT_EXAMPLES, c["id"]
+        body = norm(c["body"])
+        leaks = {body[i:i + 12] for i in range(max(len(body) - 11, 1))
+                 if body[i:i + 12] in examples}
+        assert not leaks, (c["id"], leaks)
 
 
 @pytest.mark.parametrize("section", [
