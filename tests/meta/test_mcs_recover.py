@@ -1179,3 +1179,35 @@ def test_marker_only_hold_survives_git_failure(rec, tmp_path,
     assert rec.recover() == 0
     state = json.loads(Path(rec.STATE_PATH).read_text())
     assert state["executed"]["cid-rb"]["result"] == "rolled_back"
+
+
+def test_notify_kills_a_wedged_standalone_sender(tmp_path, monkeypatch):
+    """communicate()'s 60s cap must reap the child — a wedged sender
+    must not outlive the watchdog."""
+    mod = _load()
+    monkeypatch.setattr(mod, "HOME", str(tmp_path))
+    repo = tmp_path / "repo"
+    (repo / "mcs_standalone").mkdir(parents=True)
+    (repo / "mcs_standalone" / "__main__.py").write_text("#")
+    monkeypatch.setattr(mod, "REPO", str(repo))
+    python = tmp_path / "venv" / "bin" / "python3"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!")
+    python.chmod(0o755)
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTH"}))
+    calls = []
+
+    class Wedged:
+        def communicate(self, *a, **k):
+            raise subprocess.TimeoutExpired("send", 60)
+
+        def kill(self):
+            calls.append("kill")
+
+        def wait(self):
+            calls.append("wait")
+
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **k: Wedged())
+    mod._notify("synthetic")
+    assert calls == ["kill", "wait"]

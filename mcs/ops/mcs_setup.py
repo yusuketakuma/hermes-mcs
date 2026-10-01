@@ -1466,6 +1466,8 @@ def cmd_init(args) -> int:
         # notify.<transport> when MCS serves Slack/Discord itself
         ntf = cfg.get("notify")
         scope = ntf.get(ntf.get("interactive")) if isinstance(ntf, dict) else None
+        ignored = ["--plugin-profile"] \
+            if getattr(args, "plugin_profile", None) else []
         if isinstance(scope, dict):
             for flag, key in (("plugin_user_ids", "allowed_user_ids"),
                               ("plugin_chat_ids", "allowed_chat_ids"),
@@ -1476,6 +1478,14 @@ def cmd_init(args) -> int:
                     items = _csv_list([value])
                     scope[key] = [int(v) for v in items if v.isdecimal()] \
                         if key == "project_ids" else items
+        else:
+            ignored += ["--plugin-" + f[7:].replace("_", "-") for f in
+                        ("plugin_user_ids", "plugin_chat_ids",
+                         "plugin_role_ids", "plugin_project_ids")
+                        if getattr(args, f, None)]
+        if ignored:
+            print(f"init: {', '.join(ignored)} は standalone では適用されません"
+                  " — カード権限は config.json の notify.<transport> に設定してください")
 
     if not args.yes:
         _wizard(cfg)

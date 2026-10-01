@@ -159,6 +159,42 @@ def test_init_reuses_a_hermes_token_only_with_consent(monkeypatch, tmp_path):
     assert env.read_text() == "DISCORD_BOT_TOKEN=from-hermes\n"
 
 
+def test_init_warns_when_plugin_flags_have_no_standalone_scope(
+        monkeypatch, tmp_path, capsys):
+    """--plugin-* grants move into notify.<transport> — with no slack/
+    discord interactive scope (or a --plugin-profile that standalone
+    never uses) the flags must not be dropped silently."""
+    from test_mcs_setup import _init_env
+    cfg = config()
+    cfg["notify"] = {}                       # no interactive scope at all
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes",
+                         "--plugin-user-ids", "1,2",
+                         "--plugin-profile", "work"])
+    assert mcs_setup.main() == 0
+    out = capsys.readouterr().out
+    assert "--plugin-user-ids" in out and "--plugin-profile" in out \
+        and "適用されません" in out
+    saved = json.loads((tmp_path / "c.json").read_text())
+    assert saved["notify"] == {}             # nothing silently invented
+
+
+def test_init_applies_plugin_flags_into_the_standalone_scope(
+        monkeypatch, tmp_path, capsys):
+    from test_mcs_setup import _init_env
+    _init_env(monkeypatch, tmp_path, config())
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes",
+                         "--plugin-user-ids", "4,5",
+                         "--plugin-project-ids", "7"])
+    assert mcs_setup.main() == 0
+    assert "適用されません" not in capsys.readouterr().out
+    saved = json.loads((tmp_path / "c.json").read_text())
+    assert saved["notify"]["discord"]["allowed_user_ids"] == ["4", "5"]
+    assert saved["notify"]["discord"]["project_ids"] == [7]
+
+
 def test_back_to_hermes_without_hermes_keeps_the_launchd_schedule(monkeypatch, tmp_path):
     calls, args = _standalone_services(monkeypatch, tmp_path, config())
     assert mcs_setup.cmd_services(args) == 0
