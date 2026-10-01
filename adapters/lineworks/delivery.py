@@ -11,9 +11,9 @@ import re
 import time
 from contextlib import contextmanager
 
-from hermes_plugin.mcs_delivery import paths
-from hermes_plugin.mcs_delivery.spec import token_map
-from hermes_plugin.mcs_delivery.worker import DeliveryWorker as BaseWorker
+from adapters.common import paths
+from adapters.common.spec import token_map
+from adapters.common.worker import DeliveryWorker as BaseWorker
 
 from . import cards
 from .client import ClientError

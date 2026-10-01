@@ -100,10 +100,10 @@ README「仕組み」「人工知能（AI）の使用箇所と情報の行き先
   同期先の運用と設定で管理する必要があります。
   機械向け `export.jsonl` は許可した集計項目・ID・状態へ限定し、省いた内容は
   `content_omitted` で示します。外部配送の契約と認可条件は
-  [外部エクスポート仕様](docs/external-export-contract.md)を参照してください。
+  [外部エクスポート仕様](docs/specs/external-export-contract.md)を参照してください。
 
 ローカルLLM の稼働構成・TypeSafe Jev の契約と再試行などの技術詳細は
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) の「付録B. AI・推論エンジンの技術詳細」を参照。
+[docs/development/DEVELOPMENT.md](docs/development/DEVELOPMENT.md) の「付録B. AI・推論エンジンの技術詳細」を参照。
 
 ## 報告
 

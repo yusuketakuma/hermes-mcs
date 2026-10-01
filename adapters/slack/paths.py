@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from hermes_plugin.mcs_delivery import paths
+from adapters.common import paths
 
 
 def notify_dirs(root: str) -> dict[str, str]:

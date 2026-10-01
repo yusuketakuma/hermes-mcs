@@ -19,7 +19,8 @@ Loop候補の採用も既存requestのpreview/confirmを使う。
 Slack・Discord の接続先固有処理の正本は `adapters/slack/` と
 `adapters/discord/` にあります。`hermes_plugin/mcs_slack/` と
 `hermes_plugin/mcs_discord/` は既存 import を維持する互換入口です。
-共通の配送・承認・receipt 基盤は `hermes_plugin/mcs_delivery/` に残しています。
+共通の配送・承認・receipt 基盤は `adapters/common/` にあります。
+`hermes_plugin/mcs_delivery/` は既存 import を維持する互換入口です。
 LINE WORKS を含む構成は [接続アダプター](../adapters/README.md)を参照してください。
 
 ## 配置と設定
@@ -281,7 +282,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   Slack は static_select）＋手入力欄、無ければ手入力のみ（既定値は押した人の
   表示名）。任意の `理由` 欄が空なら `text.TASK_REASON`
   （「通知カードからタスク作成」）を `reason` にし、preview には常に
-  理由行を出す。入力欄の定義は `mcs_delivery/text.py` の `modal_fields()` に
+  理由行を出す。入力欄の定義は `adapters/common/text.py` の `modal_fields()` に
   両 transport 共通でまとめてある。`確定` が command を
   書込み中に押された `取消`／二度目の `確定` は「処理中」と答え、取り消したとは
   報告しない（書込み失敗時は確認が再び有効になる）。
@@ -350,7 +351,7 @@ client を使って同じ durable worker（claim/grant/journal/receipt）で配�
 
 ## 合成入力での検証
 
-MCSから`scripts/run_tests.sh tests/plugin`を実行する。
+MCSから`scripts/run_tests.sh tests/adapters tests/plugin`を実行する。
 Hermes対応候補のcheckoutから結合テストを実行する：
 
 ```sh

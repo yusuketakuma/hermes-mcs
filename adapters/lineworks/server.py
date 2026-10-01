@@ -11,7 +11,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from hermes_plugin.mcs_delivery.paths import atomic_write, fsync_dir
+from adapters.common.paths import atomic_write, fsync_dir
 
 from .client import verify_signature
 

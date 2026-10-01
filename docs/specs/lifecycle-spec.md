@@ -2,7 +2,7 @@
 
 初期インストール・更新・バックアップ・復旧・エラー時自動メンテナンスを
 1つのライフサイクルとして規定する。各機能の詳細設計は個別文書に
-委ねる（更新機構は `docs/auto-update-plan.md`）。
+委ねる（更新機構は `docs/dev-records/auto-update-plan.md`）。
 
 凡例: ✅実装済み / 📋計画（未実装・auto-update-plan.md 参照）/
 🔶将来拡張
@@ -15,7 +15,7 @@ auto 有効化（§11 P3）は人の判断事項として残る。
 **2026-09-25 更新**: `git reset` 後に更新差分と同名の未追跡ファイルを
 追加で自動削除する処理は、updater/recovery ともに廃止した。以下の
 「外科的削除」は旧設計の記録であり、現行手順には含めない。
-詳細は `docs/auto-update-plan.md` 冒頭を参照する。
+詳細は `docs/dev-records/auto-update-plan.md` 冒頭を参照する。
 
 ## 1. 対象範囲と非目標
 
@@ -133,7 +133,7 @@ supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾�
 
 ## 5. 更新仕様 📋
 
-詳細は `docs/auto-update-plan.md`。要約:
+詳細は `docs/dev-records/auto-update-plan.md`。要約:
 
 - **検出**: 日次 `mcs_update` cron が `git ls-remote --tags` で semver
   最大 tag を検出 → release notes を GitHub API で取得 → sanitize して

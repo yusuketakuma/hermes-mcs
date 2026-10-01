@@ -652,7 +652,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 
 ジョブ・スケジュール・実行スクリプトの一覧表は
-[deployment/launchagents/README.md](../deployment/launchagents/README.md)
+[deployment/launchagents/README.md](../../deployment/launchagents/README.md)
 に一本化している。正本はコードの `mcs/ops/mcs_setup.py` の `CRON_JOBS`
 （hermes cron）と `AGENT_LABELS`（launchd）で、`services` はこれを
 登録する。未読収集は24時間5分間隔で、`mcs_check.sh` に夜間の間引きはない。

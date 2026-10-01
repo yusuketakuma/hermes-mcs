@@ -241,7 +241,8 @@ def test_impact_summary(updater, tmp_path):
 
 
 @pytest.mark.parametrize("path,gateway,lineworks", [
-    ("hermes_plugin/mcs_delivery/worker.py", True, False),
+    ("hermes_plugin/mcs_delivery/__init__.py", True, False),
+    ("adapters/common/worker.py", True, True),
     ("adapters/slack/actions.py", True, False),
     ("adapters/discord/delivery.py", True, False),
     ("adapters/lineworks/actions.py", False, True),
@@ -502,7 +503,8 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
 
 
 @pytest.mark.parametrize("path,needs_restart", [
-    ("hermes_plugin/mcs_delivery/worker.py", True),
+    ("hermes_plugin/mcs_delivery/__init__.py", True),
+    ("adapters/common/worker.py", True),
     ("adapters/slack/actions.py", True),
     ("adapters/discord/delivery.py", True),
     ("adapters/lineworks/actions.py", False),

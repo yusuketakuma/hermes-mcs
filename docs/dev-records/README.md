@@ -1,12 +1,13 @@
 # dev-records — 開発記録の索引
 
 当時の判断・検証・レビュー結果を残した証跡。現在の仕様や操作手順の正本ではない
-（現行は `docs/DEVELOPMENT.md` とコード）。ファイル名は変更しない — 他文書が
+（現行は `docs/development/DEVELOPMENT.md` とコード）。ファイル名は変更しない — 他文書が
 `file:line` で引用している。CI（`ci/gates.py`・`ci/mine_gates.py`）はこのディレクトリの
 `.md` / `.json` だけを許可し、再帰的に走査する。
 
 | 記録 | 日付 | 内容 |
 |---|---|---|
+| [auto-update-plan.md](auto-update-plan.md) | 2026-09-24〜2026-09-28 | 実装済みの自動更新・復旧の設計とレビュー履歴（旧 `docs/` 直下から移動） |
 | `r00-baseline.md` | 2026-09-20 | リファクタリングの基準点（R-00 manifest） |
 | `phase-r-record.md` | 2026-09-20 | Phase R（全体リファクタリング）の記録 |
 | `phase-j-record.md` | 2026-09-20 | Phase J（Jev 意味評価レイヤー）の実装記録 |
@@ -28,3 +29,5 @@
 | [lineworks-review-20261001.md](lineworks-review-20261001.md) | 2026-10-01 | LINE WORKS全経路・既存接続・導入の再レビューと修正・最終回帰 |
 | [lineworks-impact-20261001.md](lineworks-impact-20261001.md) | 2026-10-01 | LINE WORKS追加・adapter整理の他領域への集中影響レビューと回帰修正 |
 | [repo-review-20261001.md](repo-review-20261001.md) / [確認一覧](repo-review-20261001-progress.json) | 2026-10-01 | 全リポジトリへの追加レビュー・5件の修正・領域間契約と最終検証 |
+
+- [構成整理（2026-10-01）](structure-20261001.md) — 接続共通基盤・開発ツール・文書・テストの配置と検証。

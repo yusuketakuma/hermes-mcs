@@ -13,8 +13,7 @@ repo との drift になる。
 | `launchagents/` | launchd plist テンプレート 6件。ジョブ構成・プレースホルダ規則・drainer 設計は [launchagents/README.md](launchagents/README.md) |
 | `scripts/` | hermes cron 用 wrapper スクリプト 6件（`~/.hermes/scripts/` へレンダリング） |
 | `recovery/` | `mcs_recover.py` — 更新中断を自律復旧する独立 watchdog ツール（install.sh が `~/.mcs-recovery/` へコピーし `org.mcs.recovery` で定期起動） |
-| `cco-terminal.candidate.yaml` | CCO terminal/file 隔離の候補設定（terminal 節のみの差分） |
-| `cco-approval-scope.json` | 上記候補の適用範囲・検証・適用前後ハッシュの記録 |
+| `cco/` | [CCO terminal/file 隔離の候補設定・承認記録・検証説明](cco/cco-terminal-isolation.md) |
 
 ## セットアップ
 
@@ -23,9 +22,9 @@ repo との drift になる。
 
 ## CCO terminal/file 隔離の候補設定
 
-現在の `cco-terminal.candidate.yaml` は snapshot 読取専用と
+現在の `cco/cco-terminal.candidate.yaml` は snapshot 読取専用と
 `cmd-proposals` 書込み用の候補で、実行用 `cmd` は公開しない。
-`cco-approval-scope.json` は旧候補の設定適用記録であり、記録の候補hashは
+`cco/cco-approval-scope.json` は旧候補の設定適用記録であり、記録の候補hashは
 現在のファイルと一致しない。現在候補の承認・適用・実機検証の証拠には使わない。
-背景と過去の検証範囲は [cco-terminal-isolation.md](cco-terminal-isolation.md)
+背景と過去の検証範囲は [CCOの隔離設定と検証記録](cco/cco-terminal-isolation.md)
 を参照する。

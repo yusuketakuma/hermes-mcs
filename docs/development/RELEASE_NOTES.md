@@ -48,16 +48,16 @@ PRのCIは実行コードの変更・削除に変更記録を要求する。
 version・日本時間の日付は明示的に指定する。暗黙にversionを上げない。
 
 ```bash
-python3 scripts/release_notes.py check
-python3 scripts/release_notes.py build \
+python3 scripts/development/release_notes.py check
+python3 scripts/development/release_notes.py build \
   --version X.Y.Z --date YYYY-MM-DD \
   --headline 'その版で何が変わるか' \
   --summary '利用者への影響と適用範囲を説明する一文。'
-# README本文の5項目をソースと照合し、docs/readme-review.jsonを新versionへ更新する
-python3 scripts/update_readme.py
-python3 scripts/readme_release.py --check
+# README本文の5項目をソースと照合し、docs/development/readme-review.jsonを新versionへ更新する
+python3 scripts/development/update_readme.py
+python3 scripts/development/readme_release.py --check
 python3 -m unittest discover -s tests/release -v
-python3 scripts/release_notes.py export --version X.Y.Z \
+python3 scripts/development/release_notes.py export --version X.Y.Z \
   --output /tmp/release-notes.md --title-output /tmp/release-title.txt
 ```
 
@@ -65,7 +65,7 @@ python3 scripts/release_notes.py export --version X.Y.Z \
 既存versionの上書き、空の変更記録、手書きUnreleased、形式不正では停止する。
 生成後にソースと説明を照合する。CIは文章の事実性まで保証しない。
 毎回、README本文の機能・画面例・導入・安全・導線を見直し、確認内容と根拠を
-`docs/readme-review.json`の新しいversionに記録する。変更不要でも照合結果を残す。
+`docs/development/readme-review.json`の新しいversionに記録する。変更不要でも照合結果を残す。
 見直し記録が旧版のままならCIが停止する。詳細は[README運用](README_MAINTENANCE.md)。
 途中失敗した場合はCHANGELOG・README・changesのgit差分を確認し、すべてを復旧して再実行する。
 

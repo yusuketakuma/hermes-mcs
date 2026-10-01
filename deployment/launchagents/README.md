@@ -5,7 +5,7 @@
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
 
-下表がジョブ一覧の唯一の表（`docs/INSTALLATION.md` §6 はここを参照する）。
+下表がジョブ一覧の唯一の表（`docs/guides/INSTALLATION.md` §6 はここを参照する）。
 正本はコード — hermes cron は `mcs/ops/mcs_setup.py` の `CRON_JOBS`、
 services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わせる。
 
@@ -41,7 +41,7 @@ plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画�
 ため、このインタプリタが無ければ何も描画せず exit 1 で止まる
 （`./install.sh` の再実行で stage 2 が venv を作り直す）。
 描画される `__REPO__` は checkout の絶対パスなので、checkout を移動したら
-新しい場所で `./install.sh` を再実行する（`docs/INSTALLATION.md` §A-7）。
+新しい場所で `./install.sh` を再実行する（`docs/guides/INSTALLATION.md` §A-7）。
 配置・ロード状態の確認は `mcs_setup.py check`（drift・未ロードを
 エラー表示）/ `doctor`（各 label の loaded/not loaded 一覧）。
 

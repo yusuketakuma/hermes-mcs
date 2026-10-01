@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 
-from hermes_plugin.mcs_delivery.spec import validate as validate_display
+from adapters.common.spec import validate as validate_display
 from notify_render import display_text
 from notify_cards import _split_body_chunks
 

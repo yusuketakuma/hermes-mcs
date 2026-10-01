@@ -1,0 +1,23 @@
+{
+  "category": "changed",
+  "title": "接続共通コード・開発ツール・文書・テストの配置を整理",
+  "summary": "文書をガイド・開発資料・仕様から探せるようにし、開発ツールと接続先別テストをまとめました。Slack・Discord・LINE WORKSの共通配送コードをアダプター配下へ集約し、既存のimport入口は同じ実装を参照します。",
+  "upgrade": "開発用Pythonコマンドはscripts/development/配下、文書はdocs/guides・docs/development・docs/specsの新パスを使用してください。makeの既存ターゲット、scripts/run_tests.sh、install.sh、python -m lineworks_adapterの入口はそのままです。稼働中のHermes gatewayとLINE WORKS独立アダプターには更新後の再起動が必要です。共通コードの変更時は両方の再起動案内を表示します。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。",
+  "details": [
+    "transport中立の配送7モジュールをadapters/commonへ移し、hermes_plugin.mcs_deliveryの互換importは同一moduleと共有状態を維持します。",
+    "共通コードの変更をgatewayの診断・更新時の永続restart判定とLINE WORKSの更新影響案内へ含めます。",
+    "開発ツール6本とCCO候補・承認記録・説明3本を責務別に移動し、既存CCO記録の内容と適用状態を保持します。",
+    "文書13本と接続関連テスト18本を整理し、generator・CI・integration・相対リンク・import探索を新配置へ追従させます。",
+    "過去の検証hash台帳・Release原本・生成OpenWiki本文と実データを変更しません。"
+  ],
+  "refs": [
+    "adapters/common/",
+    "hermes_plugin/mcs_delivery/__init__.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "scripts/development/",
+    "tests/adapters/",
+    "docs/README.md",
+    "deployment/cco/"
+  ]
+}

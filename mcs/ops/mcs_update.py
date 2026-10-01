@@ -1,6 +1,6 @@
 """MCS self-update — detection, apply, rollback, interrupted recovery.
 
-Drives the update lifecycle documented in docs/auto-update-plan.md:
+Drives the update lifecycle documented in docs/dev-records/auto-update-plan.md:
 
   status    print update_state.json + current/latest tag summary
   check     daily cron driver: detect latest tag, notify once, scan the
@@ -387,9 +387,9 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
-    if any(n.startswith(("hermes_plugin/", "adapters/slack/", "adapters/discord/")) for n in names):
+    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/")) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart が必要です")
-    if any(n.startswith(("adapters/lineworks/", "lineworks_adapter/")) for n in names):
+    if any(n.startswith(("adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
 
@@ -1264,7 +1264,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             "tag": tag, "sha": sha, "prev_sha": _head_sha(),
             "plugin_changed": bool(_git_out(
                 ["diff", "--name-only", "-z", "HEAD", tag, "--",
-                 "hermes_plugin", "adapters/slack", "adapters/discord"]).strip("\0")),
+                 "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"]).strip("\0")),
             "schema_bump": bool(bump),
             "backup_path": bpath, "manifest_snapshot": snap,
             "command_id": command_id, "at": time.time()}

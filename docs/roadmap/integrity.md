@@ -36,7 +36,7 @@
 | `messages`（:164） | project_id → patients、parent_id → messages（自己参照） | 下表 |
 | `attachments`（:173、UNIQUE :228） | message_id → messages | 書込みは upsert 直後の同一 tx（`_save_tree`: :583-585） |
 | `artifacts`（:192） | (message_id, project_id) → messages | 書込み 12 箇所（`artifact_add_tx`: :1808、`mcs_operations.py`、`rollup.py:342`、`mcs_signals.py:148` ほか）。message_id NULL は rollup と signal |
-| `notify_outbox`（:179） | project_id → patients（NULL 可）。子表の FK は既存 | `event_id` は外部 spec の `intent_event_ids` が参照（`hermes_plugin/mcs_delivery/spec.py:63,139-142`） |
+| `notify_outbox`（:179） | project_id → patients（NULL 可）。子表の FK は既存 | `event_id` は外部 spec の `intent_event_ids` が参照（`adapters/common/spec.py:63,139-142`） |
 | `read_marks`（:188） | project_id → patients | 書込みは `run_check.py:458,461`（unknown / confirmed だけ） |
 | `fetch_jobs`（:197） | project_id / message_id | sentinel あり: `job_add("discovery", 0)`（`job_ops.py:659`）、`message_id DEFAULT 0`（`ledger.py:201`）、UNIQUE(kind, project_id, message_id) |
 | `runs`（:152） | なし | status は running / crashed / ok / partial / session_expired / failed |
@@ -49,7 +49,7 @@ migration 機構:
 - `_migrate`（:259-291）は `BEGIN IMMEDIATE` → `_migrate_body` → `user_version` 更新 → commit / 失敗時 rollback（Phase A の A2-2 で原子化）。`user_version` は DDL と一緒に rollback される（実測）。
 - `_script`（:252-257）は `;` で分割するため trigger は流せない。FTS trigger は `_init` 末尾で `executescript`（:231-248）。
 - `requests` と `notify` は module の SCHEMA を version 据え置きで追加している（:439-449。コメント :441-443 に「snapshot reader に拒否させない」）。reader の許可 version は `mcs_view.py:62-63` の `(5, 6, 7)`。
-- `mcs_update.py:494-517` と `:1207-1216` により、SCHEMA_VERSION が上がる release は auto 適用を止められる（「人の receipt のみ」）。rollback は DB 復元で消失を明示（`docs/auto-update-plan.md:556`、`docs/lifecycle-spec.md:215`）。
+- `mcs_update.py:494-517` と `:1207-1216` により、SCHEMA_VERSION が上がる release は auto 適用を止められる（「人の receipt のみ」）。rollback は DB 復元で消失を明示（`docs/dev-records/auto-update-plan.md:556`、`docs/specs/lifecycle-spec.md:215`）。
 - 既存の migration テスト: `tests/core/test_ledger_candidate_validation.py:10`（全 version を parametrize）、`tests/core/test_core_misc.py:133-186`、`tests/ops/test_mcs_features.py:59-66`。
 
 【実行確認】（合成、runtime SQLite 3.53.1）:
@@ -86,7 +86,7 @@ migration 機構:
 | messages.project_id → patients | 不採用 | 308 テスト破壊。本番は patient 先行のはず（`init_data.py:113,158`、`job_ops.py:179`）だが要監査 |
 | messages.parent_id → messages | 恒久不採用 | 親未取得の返信は「取得漏れ」として記録すべき状態。FK だと同一 tx の batch ごと rollback し収集が止まる |
 | fetch_jobs の FK | 不可 | sentinel 0 |
-| requests → messages | 不採用 | 元投稿の消失を許容する設計（`docs/DEVELOPMENT.md:515-516`）。将来の PHI purge とも衝突 |
+| requests → messages | 不採用 | 元投稿の消失を許容する設計（`docs/development/DEVELOPMENT.md:515-516`）。将来の PHI purge とも衝突 |
 | command_receipts → requests | 不可 | rejected receipt は不存在 ID を持ち得る |
 | notification_restore_holds の FK | 不可 | 巻き戻しで消えた行を意図的に参照する |
 | notify_outbox の再構築 | 禁止 | `event_id` が外部 spec と子表 FK に参照される |
@@ -118,9 +118,9 @@ Step 2（real FK）の手順:
 対象は `attachments` と `artifacts` だけ。`messages`（FTS と原本）と `notify_outbox` は触らない。
 
 **成果物**
-1. `mcs/views/ledger_audit.py`（AUDITS + read-only CLI、件数だけ出力）と `tests/views/test_ledger_audit.py`。新 module のため `scripts/update_readme.py` の再生成が必要。`ci/gates.py:223-263` により `mode=ro` で開くこと。
+1. `mcs/views/ledger_audit.py`（AUDITS + read-only CLI、件数だけ出力）と `tests/views/test_ledger_audit.py`。新 module のため `scripts/development/update_readme.py` の再生成が必要。`ci/gates.py:223-263` により `mode=ro` で開くこと。
 2. guard trigger（`ledger.py`）と `tests/core/test_ledger_guards.py`。fixture 修正 25 件（H2 の集合）。混入を作るテストは helper で `DROP TRIGGER` してから植える。
-3. `CHANGELOG.md` と `docs/DEVELOPMENT.md`。
+3. `CHANGELOG.md` と `docs/development/DEVELOPMENT.md`。
 4. 監査件数だけの実施記録を `docs/dev-records/` に sanitized で残す。
 
 監査クエリ（34 本を合成 DB で動作確認済み。抜粋）:
@@ -177,12 +177,12 @@ PRAGMA foreign_key_check; PRAGMA quick_check;
 - 現行判定は `meta.hash == messages.content_hash`（`mcs_queries.py:42-62`）。v1 は `_delete_stale`（`extract/v1/extract.py:310`）、v4 は `_replace_current`（`extract_llm.py:1534`）で古い artifact を消す。semantic は `_semantic_member` の revision = content_hash（`ledger.py:1351`）と `_invalidate_thread_projections`（:620）。通知は `_source_fp`（`notify_render.py:165`）、依頼は stale 表示（`mcs_view.py:388-390`）。履歴表は append-only でこれらは読まないため、影響なし。
 
 文書の限界と乖離:
-- `docs/DEVELOPMENT.md:279,515-517` は「hash だけでは編集前の原文は復元できない」と明記している。`docs/semantic-evaluation.md:327` の「原文revisionは保存し続ける」は現実装（最新のみ）と乖離しているので、文言の整理が要る。
+- `docs/development/DEVELOPMENT.md:279,515-517` は「hash だけでは編集前の原文は復元できない」と明記している。`docs/specs/semantic-evaluation.md:327` の「原文revisionは保存し続ける」は現実装（最新のみ）と乖離しているので、文言の整理が要る。
 
 名称:
 - `possibly_deleted`（`rollup.py:211-216`）は、`updated_seen` が「先頭メッセージの `updated_seen` − 21 日」より古い先頭 20 件。削除の証拠ではなく、tombstone（`body_state='deleted'`）も区別しない。reconcile が一巡していない履歴や NULL の旧行（`or 0`）も入る。挙動のテストがない（fixture の `[]` だけ: `tests/ops/test_brain_export.py:93,235`）。
 - `current_med_period`（`rollup.py:142-145,186,220-268`）は、extract_v1 の規則正規表現による日付範囲のうち、start ≤ 当日 ≤ end かつ前後 16 字に 予定 | 検討 がない最初の 1 件。どの薬かは不明で、後続の「中止」で取り消されない（`med_state` とは独立）。
-- 露出面: `brain_export.py:197-199,227-228`、`docs/USER_GUIDE.md:73,313-315`、`docs/DEVELOPMENT.md:208-209`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
+- 露出面: `brain_export.py:197-199,227-228`、`docs/guides/USER_GUIDE.md:73,313-315`、`docs/development/DEVELOPMENT.md:208-209`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
 - 接続側: `message` の allowlist は `export_schema.py:137-147`、`_BASE` の contract enum は :105。同一性は `type+project_id+message_id+content_hash`（ROADMAP §4）で、編集は新 identity になる。現状でも stale と新 hash で表現できる（`read_model.py:68-113,193-206`）。signal の note は「確定ではありません」と書くが（`mcs_signals.py:405-426`）、集約スコープでは出ないため、`rx_period_expiry` / `pharmacist_request_unanswered` / `med_change_no_followup` は enum 名だけが届く。
 
 **設計方針**
@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 **成果物**
 - `ledger.py`（DDL + 約 20 行）と `tests/core/test_message_revisions.py`。
 - `rollup.py` と `brain_export.py` の改名、docs（USER_GUIDE、DEVELOPMENT、CHANGELOG）、`possibly_deleted` の新テスト。
-- (4) は `docs/external-export-contract.md` への semantics 表。
+- (4) は `docs/specs/external-export-contract.md` への semantics 表。
 
 **受入条件とテスト（合成のみ）**
 - 遷移表: snippet → snippet、snippet → full（記録なし）、full の replay、full → snippet（無視）、full → full の編集（seq 1・2）、編集の replay（重複なし）、A → B → A、full → deleted、deleted → deleted、deleted → full、legacy NULL hash。
@@ -255,18 +255,18 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 
   - watchdog は通常 `mode=ro`、復元時だけ rw + checkpoint（`mcs_recover.py:638-662`）。Apple が backport 済みかは【未検証】。
 - hermes-agent v0.19.0 は uv 管理 Python に SQLite 3.50.4 を同梱していた（NousResearch/hermes-agent#69784。2026-07-23 報告、PR #70055 で closed）。runtime の更新で版が変わり得る。
-- repo に確認コードは 0 件（`sqlite_version` の grep）。`docs/INSTALLATION.md:93` は Python 版だけ。plugin / gateway は DELETE journal の snapshot を ro で読むだけ（`mcs_view.py:65`、`hermes_plugin/projects.py:30-33`）で対象外。
+- repo に確認コードは 0 件（`sqlite_version` の grep）。`docs/guides/INSTALLATION.md:93` は Python 版だけ。plugin / gateway は DELETE journal の snapshot を ro で読むだけ（`mcs_view.py:65`、`hermes_plugin/projects.py:30-33`）で対象外。
 - 既存の安全網は日次 backup と `quick_check`（`maintenance.py:47-77`、`ledger.py:1892+`、7 世代）。
 
 **設計方針**
-- `mcs_setup.py:383` の `check_environment` に probe を追加する（in-process と、HERMES_PY が別なら subprocess）。`docs/INSTALLATION.md:251` の実行は HERMES_PY で、Makefile の `setup-check` は ambient python になるため、両方を見る。
+- `mcs_setup.py:383` の `check_environment` に probe を追加する（in-process と、HERMES_PY が別なら subprocess）。`docs/guides/INSTALLATION.md:251` の実行は HERMES_PY で、Makefile の `setup-check` は ambient python になるため、両方を見る。
 - 判定は `v >= (3,51,3) or (3,50,7) <= v < (3,51,0) or (3,44,6) <= v < (3,45,0)`。重大度は **warn**（sqlite.org が緊急でないとしているため）。
 - 古い場合の是正: (1) runtime を更新する（hermes 更新、または fixed 版の Python）。(2) resident agent を再起動する（`mcs_setup.py services`）。(3) 再度 `check`。
 - 暫定対応: 日次 backup の quick_check に頼る。手動の `sqlite3` CLI で live DB に書かない（`-readonly` だけ）。DELETE journal への退避は最終手段（writer と reader が競合し、停止時だけ変更可なので、オーナー判断）。
 - watchdog は stdlib だけ・system Python で動く独立性が要件のため、差し替えず「restore 時だけ rw」として記録する。
 
 **成果物**
-- `wal_reset_safe()` と `_sqlite_probe()`、`check_environment` への追記（約 30 行）。`tests/ops/test_mcs_setup.py` への追加。`docs/INSTALLATION.md` に SQLite 要件の行と check 節（A-4）、`CHANGELOG.md`。
+- `wal_reset_safe()` と `_sqlite_probe()`、`check_environment` への追記（約 30 行）。`tests/ops/test_mcs_setup.py` への追加。`docs/guides/INSTALLATION.md` に SQLite 要件の行と check 節（A-4）、`CHANGELOG.md`。
 
 **受入条件とテスト（合成のみ）**
 - 15 ケースの表: (3,51,2) F、(3,51,3) T、(3,50,6) F、(3,50,7) T、(3,44,5) F、(3,44,6) T、(3,45,0) F ほか。

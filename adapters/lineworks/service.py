@@ -6,7 +6,7 @@ from pathlib import Path
 import plistlib
 import sys
 
-from hermes_plugin.mcs_delivery.paths import atomic_write
+from adapters.common.paths import atomic_write
 
 
 def _systemd_arg(value: str) -> str:

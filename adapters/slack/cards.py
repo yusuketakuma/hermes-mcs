@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from hermes_plugin.mcs_delivery.spec import validate as validate_v1
+from adapters.common.spec import validate as validate_v1
 
 _SECTION_MAX = 3000
 _HEADER_MAX = 150

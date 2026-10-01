@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 import zlib
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "docs/screenshots/slack-gallery"
 INK = "#202124"
 MUTED = "#66716f"

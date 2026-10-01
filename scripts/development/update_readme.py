@@ -11,12 +11,12 @@ the code itself, so the docs track feature additions automatically:
     <!-- BEGIN GENERATED:release -->  latest CHANGELOG for README
     <!-- END GENERATED:<name>    -->
 
-Technical tables live in docs/DEVELOPMENT.md; the release overview lives
+Technical tables live in docs/development/DEVELOPMENT.md; the release overview lives
 in README.md. Manual feature descriptions are reviewed at each release.
 
 Usage:
-    python3 scripts/update_readme.py           # rewrite docs in place
-    python3 scripts/update_readme.py --check   # exit 1 if any doc is stale
+    python3 scripts/development/update_readme.py           # rewrite docs in place
+    python3 scripts/development/update_readme.py --check   # exit 1 if any doc is stale
 
 CI runs --check on pull requests and auto-commits the rewrite on main.
 Keep module/function docstrings' first line a one-line summary — it is
@@ -28,9 +28,9 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
-DEV_DOC = ROOT / "docs" / "DEVELOPMENT.md"
+DEV_DOC = ROOT / "docs" / "development" / "DEVELOPMENT.md"
 MCS_DIR = ROOT / "mcs"
 TESTS_DIR = ROOT / "tests"
 
@@ -89,7 +89,7 @@ def gen_modules() -> str:
     n_tests = len(list(TESTS_DIR.rglob("test_*.py")))
     return "\n".join(
         [f"{len(rows)} modules / {n_tests} test files — auto-generated "
-         "by `scripts/update_readme.py`.", "",
+         "by `scripts/development/update_readme.py`.", "",
          "| モジュール | 概要 |", "|---|---|", *rows])
 
 
@@ -192,7 +192,7 @@ def main() -> int:
     if args.check:
         if stale:
             print("generated blocks are stale — "
-                  "run: python3 scripts/update_readme.py "
+                  "run: python3 scripts/development/update_readme.py "
                   f"({', '.join(p.name for p, _ in stale)})",
                   file=sys.stderr)
             return 1

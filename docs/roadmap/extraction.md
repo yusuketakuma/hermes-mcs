@@ -17,7 +17,7 @@
 1. **§3-15 は既存実装を書いていなかった**。本文由来の labs 抽出は extract v4 で実装済み: `extract_llm.py:95`（プロンプト）、`:293-303`（schema）、`:789-826`（`_Validator.labs`）、`rollup.py:137-141,183-184`（`recent_labs`）、`structured_view.py:195-208,336-337`（「検査:」行）、`semantic_qc.py:22`（QC 対象に labs）、テスト `tests/extract/test_extract_llm.py:2061-2118`。旧版の「#9 依存」（添付依存）は本文由来の検査値には無関係。実際にないのは、v1 ルール・日付・基準範囲・bench・値と evidence の突合・unverified の扱い（下記 #15）。
 2. **§3-11 の引用が弱かった**。`zaitaku-calender docs/operations.md:151` は 2026-09-05 時点の snapshot で、`:142` に「現在値として使用しない」とある。G-OPS-2 の定義は `docs/plans/implementation-plan.md:140,202`。利用条件の根拠は `docs/operations-common-master.md:111`（SSK の一般利用条件は無断使用・転載を制限）。`:113` の運営者「問題なし」は他薬局への配信・再配布の件で、根拠 URL もなく、hermes-mcs のローカル利用の許諾ではない。
    「YJ に体系を合わせる」も正確ではない。zaitaku 側の `code_system` は `ssk`（9 桁数字）と `yj`（12 桁 `[0-9A-Z]`）の 2 種だけ（`migrations/0028_master_drug_identifier_assertions.sql:17,24-25`）。YJ だけでは製品・有効期間が一意でない（`docs/operations-common-master.md:190`）。名前照合では製品レベル ID を返せない。
-3. **§3-16 は「ローカル」の中身が未整理だった**。実機の llama-server は vision 不可。添付の実体は 14 日で削除され（`maintenance.py:25,164-230`）、`pruned` は終端で再取得経路がない（`ledger.py:1657-1662` は `state='pending'` だけ）。`docs/lifecycle-spec.md:194` の「再 DL 可」は未実装の可能性がある。過去添付の OCR は §3-4 の補完とは別実装が要る。
+3. **§3-16 は「ローカル」の中身が未整理だった**。実機の llama-server は vision 不可。添付の実体は 14 日で削除され（`maintenance.py:25,164-230`）、`pruned` は終端で再取得経路がない（`ledger.py:1657-1662` は `state='pending'` だけ）。`docs/specs/lifecycle-spec.md:194` の「再 DL 可」は未実装の可能性がある。過去添付の OCR は §3-4 の補完とは別実装が要る。
 4. **§4 C2「型付き値（vital_lab 等）」の出所が未定義だった**。semantic 層の `vital_lab` は statement / quantity の自由文字列だけ（`semantic_facts.py:372-410`）。legacy 投影は labs / vitals を出さない（`semantic_projection.py:174-270`）。canonical 有効時は読み側が extract_llm を隠す（`mcs_queries.py:167-186`）。C2 の型付き値の正本は #15 の型付き labs にすべきで、C2 の「依存」に §3-15 が必要。
 5. 軽微: dev-records の O03「添付 OCR 未実装」（`docs/dev-records/review-20260923.md:82-83`）は ROADMAP の ID 体系にない。
 
@@ -32,9 +32,9 @@
 - v4（extract_llm）: meds は `{name, dose, action, status, subject, negated, route, freq, prn, evidence, unverified}`。name は本文の表記そのまま（`:232-254`、`:688-744`）。merge は (name, subject, action)（`:1094-1101`）。EXTRACT_VERSION=4（`:62`）。
 - semantic: FACT_KINDS に `medication_event` / `medication_exposure`（`semantic_facts.py:28-33`）。`validate_fact` は固定キーで薬剤 ID の欄がない（`:372-410`）。正規化は NFKC + casefold だけ（`:127-128`）。legacy 投影の name は最長カタカナ / 英数トークンで、特定不能は「処方薬」（`semantic_projection.py:50-57,209-232`）。v1 hint は `medication_exposure` 化（`semantic_extraction.py:827-832`）。
 - 読み側は `$.meds[].name` の表層一致で動く。優先順位は v4 > canonical > extract_llm（`mcs_queries.py:167-186`）。rollup `_med_states`（`rollup.py:255-293`）、stats `st_meds`（`mcs_stats.py:378-404`）・`st_med_mentions`（:407-422。`needs` に drug_map: :721-724、notes に「未実装」: :401-402）、signals は (room, 表層名) のエピソード（`mcs_signals.py:250-329`）、structured_view は「薬剤候補（未確認）」の規約（`structured_view.py:293`）、brain_export（`brain_export.py:201-205`）、semantic relation は表層トークンで同一実体を判定（`semantic_relations.py:43,78-87`）。
-- export: `_STATS.meds` は `action_totals` / `distinct_names`（整数）だけ（`export_schema.py:96-100`）。`_FACT` に薬剤欄なし（:107-115）。`read_model._fact_relations` は 5 キーだけをコピー（`read_model.py:229-240`）。stat は C1 で送らない。契約は aggregate 限定（`docs/external-export-contract.md:22,117,137`）。
-- 辞書・コード・アルゴリズムはリポジトリにない（`docs/USER_GUIDE.md:362`、`docs/DEVELOPMENT.md:341-342` が未整備を明記）。
-- 拘束: stdlib のみ（`ci/gates.py:96-129`）。ruff target は py310（`pyproject.toml:2`）。CCO / plugin は snapshot だけを読む（`docs/DEVELOPMENT.md:593-594`、`deployment/README.md`）ので、リーダー側で辞書ファイルを読める保証がない。
+- export: `_STATS.meds` は `action_totals` / `distinct_names`（整数）だけ（`export_schema.py:96-100`）。`_FACT` に薬剤欄なし（:107-115）。`read_model._fact_relations` は 5 キーだけをコピー（`read_model.py:229-240`）。stat は C1 で送らない。契約は aggregate 限定（`docs/specs/external-export-contract.md:22,117,137`）。
+- 辞書・コード・アルゴリズムはリポジトリにない（`docs/guides/USER_GUIDE.md:362`、`docs/development/DEVELOPMENT.md:341-342` が未整備を明記）。
+- 拘束: stdlib のみ（`ci/gates.py:96-129`）。ruff target は py310（`pyproject.toml:2`）。CCO / plugin は snapshot だけを読む（`docs/development/DEVELOPMENT.md:593-594`、`deployment/README.md`）ので、リーダー側で辞書ファイルを読める保証がない。
 
 **設計方針**
 1. **保存先は派生 artifact `med_ref`（新 kind。schema 変更なし。artifacts は汎用: `ledger.py:192-196`）**。writer 側で message 単位に生成する。
@@ -60,7 +60,7 @@
 - `mcs/extract/drug_map.py`（世代横断のモジュールなので `extract/` 直下。ライブラリだけで `Ledger(` を直接 open しないため `LEDGER_WRITERS` への追加は不要）。
 - tick の配線、`rollup.py` / `mcs_stats.py` / `brain_export.py` の注釈、バージョン更新。
 - `tests/extract/test_drug_map.py`（合成辞書は Python 定数。架空名）、`tests/views/test_mcs_stats.py` 追記、export の回帰テスト。
-- `docs/USER_GUIDE.md:362` と `docs/DEVELOPMENT.md:341-342` の更新、`scripts/update_readme.py` 実行。
+- `docs/guides/USER_GUIDE.md:362` と `docs/development/DEVELOPMENT.md:341-342` の更新、`scripts/development/update_readme.py` 実行。
 - コミットグループ案: ① fold / split / 辞書ロード ② `med_ref` の導出と tick の配線 ③ rollup / stats / brain_export の注釈と version bump ④ docs。
 
 **受入条件とテスト（合成のみ）**
@@ -136,7 +136,7 @@
 **オーナー判断・リスク**
 - `#15-D1` `recent_labs` の保持数（1 か N か。ROADMAP §6 の時系列廃止との境界）。
 - `#15-D2` weight / height を vitals に足すか。
-- `#15-D3` 型付き値を C2 で出すか（Q9。allowlist 変更 + `mcs-ext-auth/2` + `docs/external-export-contract.md` の改訂）。
+- `#15-D3` 型付き値を C2 で出すか（Q9。allowlist 変更 + `mcs-ext-auth/2` + `docs/specs/external-export-contract.md` の改訂）。
 - `#15-D4` RULE_VERSION bump の時期。
 - `#15-D5` Jev QC（外部）の適用範囲。
 - 誤値表示（A で緩和）、単位・基準の混在（HbA1c の NGSP / JDS、Cr の mg/dL と μmol/L）、前回値 / 今回値の取り違え、`bs`（血糖）が vitals と検査の境界にあること。

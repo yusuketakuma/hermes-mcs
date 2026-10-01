@@ -11,7 +11,7 @@ import subprocess
 from release_notes import check_changelog, release_title, section
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 IDENTITY = ("id", "tag_name", "draft", "prerelease", "target_commitish",
             "created_at", "published_at")
 

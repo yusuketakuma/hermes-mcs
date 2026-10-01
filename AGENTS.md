@@ -32,27 +32,31 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `extract_bench.py`)。`semantic/` は v4 canonical エンジン群と
   世代横断の QC・評価基盤のため世代分割しない。`rollup.py` は
   v1+v4 を読む世代横断集約で `extract/` 直下に残す。
-  個別モジュールの一覧は `docs/DEVELOPMENT.md` の生成表を参照。
+  個別モジュールの一覧は `docs/development/DEVELOPMENT.md` の生成表を参照。
   — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
   sys.path に挿れて `import _mcs_path`（.py を持つ全サブディレクトリを
   任意の深さで import root として登録）する2行ブートストラップを持つ。
   `mcs/` 直下に import 可能なモジュールは `_mcs_path.py` のみ
-- `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置
+- `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置。
+  `adapters/` は接続先別のテスト、`plugin/` はHermes連携のテスト
   （`conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
   テスト間ヘルパーimportを維持 + socket 遮断ガード）
 - `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
   rehearsal結果）
 - `adapters/` — `slack/`・`discord/`（Hermes公式接続を利用する表示・配送・操作） ·
-  `lineworks/`（独自Bot API・JWT認証・署名Callback・配送・DM入力/確定・CLI/サービス候補）
+  `lineworks/`（独自Bot API・JWT認証・署名Callback・配送・DM入力/確定・CLI/サービス候補） ·
+  `common/`（接続先共通のpaths・journal・registry・envelopes・spec・text・worker）
 - `lineworks_adapter/` — 独立LINE WORKS CLIの互換入口（`python -m lineworks_adapter`）
 - `hermes_plugin/` — `mcs_discord/`・`mcs_slack/`（`adapters/`への互換import入口） ·
-  `mcs_delivery/`(transport中立の配送基盤: paths・journal・registry・envelopes・spec・text・worker) ·
+  `mcs_delivery/`（`adapters/common/`への互換import入口） ·
   `card_workers.py`(worker 設定解決・factory) · `projects.py`
 - `integration/` — Hermes 連携・複数領域の統合テスト
 - `deployment/` — 配備用スクリプト・設定候補（変更だけでは実機適用しない）
-- `docs/` — 仕様・開発資料・検証記録
-- `scripts/` — `run_tests.sh`、`update_readme.py`、`keychain_to_env.py`、
-  `semantic_shadow_e2e.py`
+- `docs/` — `guides/`（利用・導入） · `development/`（開発・保守） ·
+  `specs/`（仕様） · `roadmap/`（計画） · `dev-records/`（検証・設計履歴） ·
+  `assets/`・`screenshots/`（図・完全合成の画面例）
+- `scripts/` — `run_tests.sh`・`keychain_to_env.py`（実行・運用入口） ·
+  `development/`（文書生成・リリース・画面生成・合成検証）
 
 `hermes_plugin/` は長寿命の Hermes gateway が起動時に読込む。変更を
 有効化するには `hermes gateway restart` が必要 — 再起動なしでは
@@ -60,15 +64,15 @@ runner が発行する新形式 spec を旧世代 worker が処理し、card は
 届くが companion thread の本文・添付が欠落する（2026-09 実例）。
 再起動は配備の明示範囲に含まれる場合に行い、未適用なら結果報告に残す。
 LINE WORKS の起動・更新は独立アダプターの再起動が必要で、Hermes gateway
-だけでは起動しない。導入・公開HTTPS Callback・常駐手順は `docs/LINEWORKS.md`。
+だけでは起動しない。導入・公開HTTPS Callback・常駐手順は `docs/guides/LINEWORKS.md`。
 
 ## コマンド
 
 ```bash
 scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
-python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
-python3 scripts/update_readme.py --check
+python3 scripts/development/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
+python3 scripts/development/update_readme.py --check
 python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
@@ -105,21 +109,21 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 ## README 自動生成
 
 `mcs/**/*.py` 追加・docstring 変更・検知器/統計/サブコマンド追加時は
-`python3 scripts/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
-生成ブロックは `docs/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
+`python3 scripts/development/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
+生成ブロックは `docs/development/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
 `README.md` は利用者向けなので生成表は持たない。最新の変更要約だけは
 `GENERATED:release`としてCHANGELOGから生成する。
 通知先の推奨とREADMEの先頭画面はSlack。Discordは対応する選択肢として残す。
 Slack画面例は完全合成の説明図を使い、`docs/screenshots/slack-gallery/README.md`の
 ソース対応を確認する。画面変更時はSVG・PNGを一緒に再生成し、
-`python3 scripts/generate_slack_gallery.py --check`で画像の整合を検証する。
+`python3 scripts/development/generate_slack_gallery.py --check`で画像の整合を検証する。
 新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
 
 ## リリースノート
 
-- CHANGELOGとGitHub Releaseは毎回`docs/RELEASE_NOTES.md`の共通ルールを守る。
+- CHANGELOGとGitHub Releaseは毎回`docs/development/RELEASE_NOTES.md`の共通ルールを守る。
   段落は「新機能」「改善」「不具合修正」「動作・設定の変更」「更新時の注意」
   の順。空の分類は出さず、技術詳細は末尾で折りたたむ。
   各項目は太字の短いタイトルと次行の説明（原則1〜3文）で記載する。
@@ -128,15 +132,15 @@ docstring 先頭文は公開されるので1文要約にする。
 - summaryは利用者への影響を先に書き、upgradeには必要な操作と適用条件を記録する。
   モデル・取得範囲・通知・既読化・承認条件・既定値の変更は省略しない。
   根拠のない性能数値、実患者情報、実投稿の匿名化例は使用しない。
-- リリース準備を依頼されたら、`docs/RELEASE_NOTES.md`の手順に従い、記録から
+- リリース準備を依頼されたら、`docs/development/RELEASE_NOTES.md`の手順に従い、記録から
   見出しと要約を作成し`release_notes.py build`でCHANGELOGを生成する。
   GitHub Release本文は同じversionのCHANGELOGからexportし、別に作文しない。
 - 毎回のリリース準備で、READMEの機能・画面例・導入・安全・ドキュメント導線を
-  新しい変更とソースに照らして見直す。`docs/README_MAINTENANCE.md`に従い、
-  `docs/readme-review.json`に新しいversion・各項目の確認内容と根拠を記録する。
+  新しい変更とソースに照らして見直す。`docs/development/README_MAINTENANCE.md`に従い、
+  `docs/development/readme-review.json`に新しいversion・各項目の確認内容と根拠を記録する。
   変更不要でも照合結果を書く。versionだけの更新で済ませない。
   buildはREADMEの最新変更も更新する。生成部分は手編集せず、
-  `python3 scripts/readme_release.py --check`で同期・記録・リンクを検証する。
+  `python3 scripts/development/readme_release.py --check`で同期・記録・リンクを検証する。
 - tag workflowは下書きを作り、mainのCHANGELOGを既存Releaseへ自動同期する。
   タイトル・本文以外は変更しない。公開済み本文の変更も先にCHANGELOGへ反映する。
   push・PR・tag・公開の承認は従来の規約に従う。

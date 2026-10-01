@@ -40,7 +40,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "mcs"))
 import _mcs_path  # noqa: E402,F401  registers mcs/* subdirs as roots
-for _d in ("plugin", "notify", "semantic", "ops", "core"):
+for _d in ("adapters/discord", "adapters/slack", "notify", "semantic", "ops", "core"):
     sys.path.insert(0, str(ROOT / "tests" / _d))
 sys.path.insert(0, str(ROOT))
 

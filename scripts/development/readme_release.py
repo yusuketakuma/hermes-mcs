@@ -10,7 +10,7 @@ import sys
 import release_notes
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BEGIN = "<!-- BEGIN GENERATED:release -->"
 END = "<!-- END GENERATED:release -->"
 REVIEW_SECTIONS = ("features", "demos", "quickstart", "safety", "docs")
@@ -83,7 +83,7 @@ def local_file(root, value):
 
 
 def check_review(root, version):
-    review = json.loads((root / "docs/readme-review.json").read_text(encoding="utf-8"))
+    review = json.loads((root / "docs/development/readme-review.json").read_text(encoding="utf-8"))
     if not isinstance(review, dict) or set(review) != {"version", "sections"}:
         raise ValueError("READMEの見直し記録の項目が不正です")
     if review["version"] != version:
@@ -126,7 +126,7 @@ def check(root, requested_version=None):
     if requested_version is not None and requested_version != version:
         raise ValueError("README・CHANGELOG・リリースtagのversionが一致しません")
     if render(readme, changelog) != readme:
-        raise ValueError("READMEの最新変更が古くなっています: scripts/readme_release.pyを実行してください")
+        raise ValueError("READMEの最新変更が古くなっています: scripts/development/readme_release.pyを実行してください")
     check_review(root, version)
     check_links(root, readme)
 

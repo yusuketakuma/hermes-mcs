@@ -52,7 +52,7 @@ hermes-mcs は抽出と候補提示を担当する。正式な担当割当・期
 | Loop 候補・返信関係 | 世代束縛・候補同一性・Jev 判定（同じ薬剤・行動・期間の一致を要求）。閲覧と人手採用の経路あり | 変更なし。判定文の修正は保留へ（下記） |
 | 要約の採用・配送 | `summary_review`（assist）、`semantic_notice`（enforce）、`semantic_observe` の日次観測 | 20-E で on 化。新規実装なし |
 
-根拠ファイル: `mcs/extract/v4/{extract_llm,extract_bench}.py`、`mcs/extract/rollup.py`、`mcs/views/{structured_view,summary_review,mcs_view}.py`、`mcs/semantic/{semantic_llm,semantic_facts,semantic_extraction,semantic_projection,semantic_loops,semantic_drain,semantic_policy,semantic_send_gate,semantic_bench,semantic_blind,semantic_observe}.py`、`mcs/notify/notify_flush.py`、`mcs/ops/{request_loops,mcs_setup}.py`、`evaluation/`、`docs/{semantic-facts-v2-rollout,semantic-evaluation}.md`。
+根拠ファイル: `mcs/extract/v4/{extract_llm,extract_bench}.py`、`mcs/extract/rollup.py`、`mcs/views/{structured_view,summary_review,mcs_view}.py`、`mcs/semantic/{semantic_llm,semantic_facts,semantic_extraction,semantic_projection,semantic_loops,semantic_drain,semantic_policy,semantic_send_gate,semantic_bench,semantic_blind,semantic_observe}.py`、`mcs/notify/notify_flush.py`、`mcs/ops/{request_loops,mcs_setup}.py`、`evaluation/`、`docs/specs/{semantic-facts-v2-rollout,semantic-evaluation}.md`。
 
 ## 進め方
 
@@ -122,11 +122,11 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 
 ### 20-E3 人手ラベル → G6 → canonical（オーナー作業 + 設定）
 
-- 対象: held-out test 200 件以上（患者・スレッドは dev/calibration と重複させない。`docs/semantic-evaluation.md` の split 規則）。分割と期間はオーナーが決める（`#20-D4`）。
+- 対象: held-out test 200 件以上（患者・スレッドは dev/calibration と重複させない。`docs/specs/semantic-evaluation.md` の split 規則）。分割と期間はオーナーが決める（`#20-D4`）。
 - 手順（既存ツールのみ）: 承認済み snapshot から `semantic_blind.py --snapshot … --generate-local-baseline` で worksheet を作る → `evaluation/annotation-guide.md` に沿って本人が記入（facts / claims / loops に加え、20-A の依頼・返信項目）→ `--unblind-key` → `--evaluation-records … --method audited` で結合 → `semantic_evaluation.py --criteria evaluation/g6-criteria-v1.json` → report。
 - G6 PASS かつ 20-D 完了なら `python3 mcs/ops/mcs_setup.py fact-source canonical --gate-evidence report.json`。G6 不合格なら基準を下げず、不合格項目を 20-B〜D の次版で直して次の固定集合で再評価する。
 - 同じ 200 件から依頼の適合率・再現率・項目正解率・返信の混同行列を報告し、合成ケースの結果と並記する。
-- **完了条件**: token が pin され、カードの「依頼:」行が canonical 由来でも to/from/due_text を保つ。`docs/semantic-facts-v2-rollout.md` の戻し手順（`fact-source shadow`）を確認済み。
+- **完了条件**: token が pin され、カードの「依頼:」行が canonical 由来でも to/from/due_text を保つ。`docs/specs/semantic-facts-v2-rollout.md` の戻し手順（`fact-source shadow`）を確認済み。
 
 ### 保留（A〜E の実測で必要と分かった場合だけ）
 

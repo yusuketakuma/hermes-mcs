@@ -1,7 +1,7 @@
 """Discord Components V2 rendering for validated card specs.
 
 The transport-neutral contract — schema, budgets, and token context —
-lives in ``mcs_delivery.spec`` (``validate``/``token_map``); this module
+lives in ``adapters.common.spec`` (``validate``/``token_map``); this module
 is only the LayoutView mapping plus the SDK-edge send helpers (file
 upload, the single-post retry guard). The discord import stays inside
 functions: registration and the /mcs command surface must work in an
@@ -14,7 +14,7 @@ import functools
 import re
 from typing import BinaryIO
 
-from hermes_plugin.mcs_delivery.spec import MAX_TEXT
+from adapters.common.spec import MAX_TEXT
 
 # discord.py releases whose HTTPClient.request retry loop and private
 # aiohttp session (``_HTTPClient__session``) the single-post guard was

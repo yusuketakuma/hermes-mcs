@@ -6,7 +6,7 @@ T15 machine read model. There is deliberately NO network code here: the
 only demonstrable destination is :class:`LocalSink`, an in-process fake
 consumer backed by a directory. Wiring a real connector requires a
 named provider, an access review and a separate permission — see
-``docs/external-export-contract.md``.
+``docs/specs/external-export-contract.md``.
 
 Guarantees enforced in code:
 

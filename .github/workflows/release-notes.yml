@@ -42,16 +42,16 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check all versions and pending change records
-        run: python3 scripts/release_notes.py check
+        run: python3 scripts/development/release_notes.py check
       - name: Check README release overview, review record and links
-        run: python3 scripts/readme_release.py --check
+        run: python3 scripts/development/readme_release.py --check
       - name: Check synthetic Slack SVG and PNG pairs
-        run: python3 scripts/generate_slack_gallery.py --check
+        run: python3 scripts/development/generate_slack_gallery.py --check
       - name: Require runtime change notes on PR
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/release_notes.py check --base "$BASE_SHA"
+        run: python3 scripts/development/release_notes.py check --base "$BASE_SHA"
       - name: Test generation, validation and safe synchronization
         run: python3 -m unittest discover -s tests/release -v
 
@@ -75,11 +75,11 @@ jobs:
       - name: Preview canonical title and body updates
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/sync_release_notes.py
+        run: python3 scripts/development/sync_release_notes.py
       - name: Synchronize existing release notes only
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/sync_release_notes.py --apply | tee release-sync-result.json
+        run: python3 scripts/development/sync_release_notes.py --apply | tee release-sync-result.json
       - name: Record execution result
         run: |
           echo '### Japanese release notes synchronization' >> "$GITHUB_STEP_SUMMARY"
@@ -114,10 +114,10 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           git show-ref --verify "refs/tags/$RELEASE_TAG"
-          python3 scripts/release_notes.py check
-          python3 scripts/readme_release.py --check --version "${RELEASE_TAG#v}"
+          python3 scripts/development/release_notes.py check
+          python3 scripts/development/readme_release.py --check --version "${RELEASE_TAG#v}"
           python3 -m unittest discover -s tests/release -v
-          python3 scripts/release_notes.py export --version "${RELEASE_TAG#v}" --output release-notes.md --title-output release-title.txt
+          python3 scripts/development/release_notes.py export --version "${RELEASE_TAG#v}" --output release-notes.md --title-output release-title.txt
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}

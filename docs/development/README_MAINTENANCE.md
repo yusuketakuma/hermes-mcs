@@ -12,7 +12,7 @@ READMEは、MCS通知を使うスタッフ・導入を判断する責任者・�
 - 通知先の推奨と先頭画面はSlack。Discordは対応する選択肢として残す。
 - Slackの7画面は実装に基づく完全合成の説明図を使い、実画面のキャプチャと区別する。
   画像内のボタンは説明用。SVGとPNGは生成スクリプトで一緒に更新する。
-  詳細は[画面画像の更新手順](screenshots/slack-gallery/README.md)。
+  詳細は[画面画像の更新手順](../screenshots/slack-gallery/README.md)。
 - データの外部送信・人承認・暫定集約の境界は、折りたたみだけに隠さない。
 - 導入コマンドを短くし、設定・復旧・技術資料へは目的別にリンクする。
 - ASCIIの固定アンカーで主要な導線を維持する。JavaScript、フォーム、実患者のデモを埋め込まない。
@@ -25,9 +25,9 @@ READMEは、MCS通知を使うスタッフ・導入を判断する責任者・�
 技術詳細とその他の変更はCHANGELOGへリンクする。生成部分を手で編集しない。
 
 ```bash
-python3 scripts/readme_release.py          # READMEの最新変更を同期
-python3 scripts/readme_release.py --check  # 同期・見直し記録・リンクを検査
-python3 scripts/update_readme.py           # README要約 + DEVELOPMENTの生成表
+python3 scripts/development/readme_release.py          # READMEの最新変更を同期
+python3 scripts/development/readme_release.py --check  # 同期・見直し記録・リンクを検査
+python3 scripts/development/update_readme.py           # README要約 + DEVELOPMENTの生成表
 ```
 
 `release_notes.py build`は新しいCHANGELOGとREADMEの要約を同じ作業で更新する。
@@ -48,7 +48,7 @@ READMEのマーカーが不正なら、CHANGELOG・README・変更記録を書�
 | `safety` | ローカル/外部送信・許可設定・既読化・承認・未取得/未解析/復旧の限界 |
 | `docs` | ページ内導線・相対リンク・移動/廃止したガイド・参照資料 |
 
-見直し結果は`docs/readme-review.json`へ記録する。
+見直し結果は`docs/development/readme-review.json`へ記録する。
 `version`を新しい版にし、5項目それぞれの`notes`に確認内容、`sources`に照合したリポジトリ内のファイルを記載する。
 内容を確認せずversionだけを上げたり、前版の確認文を機械的にコピーしたりしない。
 `demos`ではSlackを先頭にし、表示例の根拠・本人向け回答・人承認条件を再確認する。

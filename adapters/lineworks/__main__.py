@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     __package__ = "adapters.lineworks"
 
-from hermes_plugin.mcs_delivery import paths, registry
+from adapters.common import paths, registry
 from mcs_util import HOME
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, _text, valid_filename

@@ -1,5 +1,5 @@
 """Regression tests for the CI gates themselves — holes were found in
-ci/gates.py (FIX-G1/G2), ci/mine_gates.py and scripts/update_readme.py
+ci/gates.py (FIX-G1/G2), ci/mine_gates.py and scripts/development/update_readme.py
 (FIX-UR1). Each gate is imported as a module and driven against a
 synthetic tree."""
 import importlib.util
@@ -40,7 +40,7 @@ def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
          "from semantic import llm_chat; "
          "from semantic_evaluation import run_shadow_e2e; "
          "assert callable(llm_chat) and callable(run_shadow_e2e)",
-         str(ROOT / "scripts" / "semantic_shadow_e2e.py")],
+         str(ROOT / "scripts" / "development" / "semantic_shadow_e2e.py")],
         cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
@@ -49,7 +49,7 @@ def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
 
 
 def test_update_readme_check_fails_when_generator_fails(monkeypatch, capsys):
-    ur = _load("update_readme_check", "scripts/update_readme.py")
+    ur = _load("update_readme_check", "scripts/development/update_readme.py")
     monkeypatch.setitem(ur.GENERATORS, "signals", _boom)
     monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check"])
     assert ur.main() == 1
@@ -58,7 +58,7 @@ def test_update_readme_check_fails_when_generator_fails(monkeypatch, capsys):
 
 def test_update_readme_write_fails_without_partial_write(
         monkeypatch, tmp_path):
-    ur = _load("update_readme_write", "scripts/update_readme.py")
+    ur = _load("update_readme_write", "scripts/development/update_readme.py")
     readme = tmp_path / "README.md"
     readme.write_text(
         "x\n<!-- BEGIN GENERATED:signals -->\nold\n"
@@ -74,7 +74,7 @@ def test_update_readme_write_fails_without_partial_write(
 # ---------- generated blocks moved out of README into docs/ ----------
 
 def test_update_readme_check_flags_stale_dev_doc(monkeypatch, tmp_path):
-    ur = _load("update_readme_dev_check", "scripts/update_readme.py")
+    ur = _load("update_readme_dev_check", "scripts/development/update_readme.py")
     readme = tmp_path / "README.md"
     readme.write_text("no markers — user doc only\n")
     dev = tmp_path / "DEVELOPMENT.md"
@@ -89,7 +89,7 @@ def test_update_readme_check_flags_stale_dev_doc(monkeypatch, tmp_path):
 
 
 def test_update_readme_write_regenerates_dev_doc(monkeypatch, tmp_path):
-    ur = _load("update_readme_dev_write", "scripts/update_readme.py")
+    ur = _load("update_readme_dev_write", "scripts/development/update_readme.py")
     monkeypatch.setattr(ur, "README", tmp_path / "absent.md")  # skipped
     dev = tmp_path / "DEVELOPMENT.md"
     dev.write_text(
@@ -261,7 +261,7 @@ def test_suite_guard_denies_any_path_on_live_llm_authority():
 # ---------- module table: first sentence, name prefix only ----------
 
 def test_update_readme_module_description_keeps_hyphenated_words(tmp_path):
-    ur = _load("update_readme_docline", "scripts/update_readme.py")
+    ur = _load("update_readme_docline", "scripts/development/update_readme.py")
     cases = {
         "a.py": ('"""Durable medication-event detail assessment."""',
                  "Durable medication-event detail assessment."),
