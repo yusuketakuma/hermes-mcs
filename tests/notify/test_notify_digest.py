@@ -216,7 +216,7 @@ def test_signal_block_excludes_request_and_deadline_types(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
-    assert "■ 確認候補（open）1件: adherence_concern 1" in _text(led)
+    assert "■ アラート（open）1件: adherence_concern 1" in _text(led)
 
 
 def test_signal_block_needs_signals_notify(led):
@@ -224,7 +224,7 @@ def test_signal_block_needs_signals_notify(led):
     _signal_row(led, "a", stype="adherence_concern")
     led.db.commit()
     notify_digest.maybe_enqueue(led, ON, now=T)
-    assert "確認候補" not in _text(led)
+    assert "アラート" not in _text(led)
 
 
 def test_task_counts(led):

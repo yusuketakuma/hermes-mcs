@@ -75,7 +75,7 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 | 未読収集 → SQLite → `mcs_view` 閲覧 | ✓ | ✓ |
 | 全履歴アーカイブ・FTS5 検索 | ✓ | ✓ |
 | 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
-| レビュー候補シグナル（検出） | ✓ | ✓（`mcs_view signals` で閲覧のみ） |
+| アラートシグナル（検出） | ✓ | ✓（`mcs_view signals` で閲覧のみ） |
 | Discord/Slack への通知配送 | ✓ | ✗ — `hermes send` が必須 |
 | 対話カード・`/mcs` コマンド | ✓ | ✗ — gateway + plugin が必要 |
 | semantic v4（shadow/enforce） | ✓ | ✓（通知連携のみ不可） |
@@ -554,7 +554,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |
 | `job_budget_seconds` | num | 既定 | 内部処理の時間予算・秒 |
-| `signals.notify` | bool | `false` | 確認候補を通知に出す |
+| `signals.notify` | bool | `false` | アラートを通知に出す |
 | `signals.digest` | bool | `true`（キー未設定時。ウィザード既定は `false`） | 複数候補をダイジェストにまとめる |
 | `signals.digest_interval_h` | num | 既定 | ダイジェスト間隔・時間 |
 | `signals.self_organizations` | list[str] | 自動検出 | 自施設名（MCS プロフィールから自動検出を上書き） |

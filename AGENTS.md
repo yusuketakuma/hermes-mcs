@@ -16,7 +16,7 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 - 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`（外部送信なし）。
   抽出スキーマ、QC、再抽出、v4 の公開条件は `mcs/extract/`・`mcs/semantic/` と
   関連仕様を照合する。モデル名や既定値をこの要約から固定的に推定しない。
-- 読み取り専用統計・レビュー候補シグナル・人承認の依頼管理
+- 読み取り専用統計・アラートシグナル・人承認の依頼管理
 - Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送
 
 ## 構成

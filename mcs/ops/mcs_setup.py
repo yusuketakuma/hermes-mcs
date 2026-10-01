@@ -764,9 +764,9 @@ WIZARD = [
         ("local_llm.model", "opt", None,
          "モデル名（OpenAI互換 API の model フィールド）", None),
     ]),
-    ("レビュー候補シグナル（機械が確認候補を列挙）", [
+    ("アラート（機械が要確認箇所を列挙）", [
         ("signals.notify", "bool", False,
-         "確認候補を通知カードに出す", None),
+         "アラートを通知カードに出す", None),
         ("signals.digest", "bool", False,
          "複数候補をダイジェストにまとめて送る", _signals_on),
         ("signals.digest_interval_h", "num", None,
