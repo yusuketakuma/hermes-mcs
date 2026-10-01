@@ -12,6 +12,11 @@ import semantic
 from semantic_testkit import _FakeJev, _cfg, _seeded
 
 
+@pytest.fixture(autouse=True)
+def isolated_format_marks(monkeypatch, tmp_path):
+    monkeypatch.setattr(semantic, "_FMT_PATH", str(tmp_path / "format.json"))
+
+
 def _guard_original(owner, name):
     for module, attr, original in reversed(test_guard._ORIGINALS):
         if module is owner and attr == name:
@@ -417,9 +422,10 @@ def _ceilings(bodies):
     return [b["max_tokens"] for b in bodies]
 
 
+@pytest.mark.parametrize("status", [400, 404, 422])
 @pytest.mark.parametrize("spent,expected_calls", [(51.0, 1), (50.0, 2)])
 def test_remembered_long_output_format_retry_rechecks_remaining_budget(
-        monkeypatch, tmp_path, spent, expected_calls):
+        monkeypatch, tmp_path, spent, expected_calls, status):
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
@@ -433,11 +439,16 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
         calls.append(kwargs)
         if len(calls) == 1:
             clock[0] += spent
-            return {"status": 400}
+            return {"status": status}
         return {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}
 
     monkeypatch.setattr(local_llm, "chat", chat)
-    out = semantic.llm_chat("synthetic", timeout=450)
+    if status == 400 and expected_calls == 1:
+        with pytest.raises(semantic.runtime.LLMRejected):
+            semantic.llm_chat("synthetic", timeout=450)
+        out = None
+    else:
+        out = semantic.llm_chat("synthetic", timeout=450)
     assert len(calls) == expected_calls
     assert out == (None if expected_calls == 1 else '{"facts": []}')
     assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
@@ -530,3 +541,186 @@ def test_summarize_maps_llm_rejection_to_input_oversize(tmp_path):
         assert len(calls) == 1
     finally:
         db.close()
+
+
+def test_format_rejection_plain_survives_worker_restart(monkeypatch, tmp_path):
+    import local_llm
+    _long_env(monkeypatch, tmp_path, [], True)
+    monkeypatch.setattr(semantic, "_FMT_PATH", str(tmp_path / "format"), raising=False)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "probe_format", lambda *a, **kw: "object")
+    model = semantic.llm_conf()[1]
+    semantic._long_mark(semantic._long_key(model, "synthetic"), 1)
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs["response_format"] is not None:
+            clock[0] += 51.0
+            return {"status": 422}
+        return {"status": 200, "text": "{}", "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    assert semantic.llm_chat("synthetic", timeout=450) is None
+    assert len(calls) == 1
+    # A separate worker has no in-memory probe result. The durable mark
+    # must avoid spending another constrained request on the same server.
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
+    assert semantic.llm_chat("synthetic", timeout=450) == "{}"
+    assert len(calls) == 2
+    assert calls[-1]["response_format"] is None
+    assert calls[-1]["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS
+
+
+def test_durable_format_cooldown_scope_expiry_and_corruption(monkeypatch, tmp_path):
+    import local_llm
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "time", lambda: clock[0])
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    probes = []
+    monkeypatch.setattr(local_llm, "probe_format",
+                        lambda *a, **kw: probes.append(a) or "object")
+    semantic._remember_plain("http://127.0.0.1:1", "synthetic-model")
+    assert semantic._probe_format("http://127.0.0.1:1", "synthetic-model") == "plain"
+    assert not probes
+    assert semantic._probe_format("http://127.0.0.1:2", "synthetic-model") == "object"
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    assert semantic._probe_format("http://127.0.0.1:1", "other-model") == "object"
+    clock[0] += semantic._PROBE_RETRY_S
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    assert semantic._probe_format("http://127.0.0.1:1", "synthetic-model") == "object"
+    from pathlib import Path
+    Path(semantic._FMT_PATH).write_text("broken")
+    assert semantic._format_marks() == {}
+    key = semantic._format_key("http://127.0.0.1:1", "synthetic-model")
+    Path(semantic._FMT_PATH).write_text(json.dumps({key: clock[0] + 1000}))
+    assert semantic._format_marks() == {}
+
+
+def test_fresh_process_reads_format_cooldown(monkeypatch, tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    semantic._remember_plain("http://127.0.0.1:1", "synthetic-model")
+    code = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import _mcs_path
+import semantic
+semantic._FMT_PATH = sys.argv[2]
+semantic.local_llm.probe_format = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("probe must not run"))
+assert semantic._probe_format("http://127.0.0.1:1", "synthetic-model") == "plain"
+"""
+    root = Path(__file__).resolve().parents[2] / "mcs"
+    result = subprocess.run([sys.executable, "-c", code, str(root),
+                             semantic._FMT_PATH],
+                            env={"HOME": os.environ["HOME"],
+                                 "PATH": os.environ["PATH"]},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_constrained_long_rejection_returns_terminal_summary(monkeypatch, tmp_path):
+    import local_llm
+    _long_env(monkeypatch, tmp_path, [], True)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a: "object")
+    # All generated synthetic summary prompts are remembered as long.
+    monkeypatch.setattr(semantic, "_long_marks", lambda: {"synthetic-key": 1})
+    monkeypatch.setattr(semantic, "_long_key", lambda *a: "synthetic-key")
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        clock[0] += 51.0
+        return {"status": 400}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        summary, reason = semantic.summarize(
+            lambda prompt: semantic.llm_chat(prompt, timeout=450),
+            bundle, 1, [], {}, return_reason=True)
+        assert summary["_input_oversize"] is True
+        assert summary["claims"] == []
+        assert reason is None  # not the retryable "model" failure
+        assert len(calls) == 1
+    finally:
+        db.close()
+
+
+def test_format_persistence_time_is_charged_to_retry_budget(monkeypatch, tmp_path):
+    import local_llm
+    _long_env(monkeypatch, tmp_path, [], True)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a: "object")
+    semantic._long_mark(semantic._long_key(semantic.llm_conf()[1], "synthetic"), 1)
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        clock[0] += 50.0
+        return {"status": 422}
+
+    def remember(*args):
+        clock[0] += 1.0
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    monkeypatch.setattr(semantic, "_remember_plain", remember)
+    assert semantic.llm_chat("synthetic", timeout=450) is None
+    assert len(calls) == 1  # 399s, not the pre-persistence 400s
+
+
+def test_format_persistence_io_failure_keeps_same_call_fallback(monkeypatch, tmp_path):
+    import local_llm
+    # An existing regular file cannot become the state directory.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("synthetic")
+    monkeypatch.setattr(semantic, "_FMT_PATH", str(blocked / "format.json"))
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a: "object")
+    monkeypatch.setattr(semantic, "_long_marks", lambda: {})
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs["response_format"] is not None:
+            return {"status": 422}
+        return {"status": 200, "text": "{}", "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    assert semantic.llm_chat("synthetic", timeout=10) == "{}"
+    assert len(calls) == 2
+
+
+def test_format_mark_lock_contention_preserves_previous_state(monkeypatch, tmp_path):
+    import fcntl
+    from pathlib import Path
+    semantic._remember_plain("http://127.0.0.1:1", "synthetic-model")
+    original = Path(semantic._FMT_PATH).read_bytes()
+    with open(semantic._FMT_PATH + ".lock", "a") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        semantic._remember_plain("http://127.0.0.1:2", "synthetic-model")
+    assert Path(semantic._FMT_PATH).read_bytes() == original
+
+
+def test_format_mark_retention_is_bounded(monkeypatch, tmp_path):
+    from pathlib import Path
+    now = semantic.time.time()
+    marks = {f"synthetic-{i}": now for i in range(500)}
+    Path(semantic._FMT_PATH).write_text(json.dumps(marks))
+    semantic._remember_plain("http://127.0.0.1:1", "synthetic-model")
+    kept = semantic._format_marks()
+    assert len(kept) == 500
+    assert "synthetic-0" not in kept
+    assert semantic._format_key("http://127.0.0.1:1", "synthetic-model") in kept
