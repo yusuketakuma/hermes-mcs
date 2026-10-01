@@ -1,0 +1,104 @@
+# リリースノートの共通ルール
+
+CHANGELOG.mdを正本とし、GitHub Releaseのタイトル・本文を同じ内容から生成する。
+対象読者は通知を利用するスタッフと、導入・保守する担当者。
+各版は公開当時の仕様を記載し、現在の仕様と混同しない。
+
+## 段落と順番
+
+| 見出し | 記載する内容 |
+|---|---|
+| 新機能 | これまでできなかった操作・表示・設定を追加した変更 |
+| 改善 | 既存機能の使いやすさ、処理、説明、運用を改善した変更 |
+| 不具合修正 | 発生条件と、修正後の動作。セキュリティ修正もここに含める |
+| 動作・設定の変更 | 既定値、互換性、収集範囲、通知、既読化、承認条件の変更 |
+| 更新時の注意 | 再起動・再設定・移行・有効化・適用条件。不要なら不要と明記 |
+| 技術詳細 | 内部用語、ファイル、schema、根拠、計測条件を折りたたみに記載 |
+
+変更がない分類は表示しない。「更新時の注意」と「技術詳細」は必須。
+version見出しは `## [X.Y.Z] — YYYY-MM-DD`、新しい順に並べる。
+冒頭は100文字以内の太字の見出しと、その版の要約。
+更新前に必要な操作やセキュリティ上の注意は、冒頭にも示す。
+
+## 文章と見せ方
+
+- 各項目は太字の短いタイトルを置き、次の行で利用者への影響を説明する。
+- 1項目につき1つの変更を扱い、説明は原則1〜3文。
+- 見出しと本文、項目同士の間に空行を入れる。
+- 有効化の操作、既定値、対象範囲、上限、例外条件は該当項目に明記する。
+- 「実装した処理」だけでなく「何ができる／使いやすくなる／直るか」を書く。
+- 性能や精度の数値は根拠と測定条件がある場合だけ書く。
+- AIが投稿から抽出した「完了」と、人が確認したタスク完了を区別する。
+- 患者情報・秘密情報・実投稿由来の例を入れない。例は完全合成のみ。
+- 未実装の計画、別versionの機能、現在の既定値を過去版の変更に混ぜない。
+- READMEの変更や内部整理は改善に記載できる。運用操作を変更しない場合も明記する。
+
+## 開発時の記録
+
+実行時の挙動を変更する作業では、同じcommitに`changes/<識別子>.json`を追加する。
+形式は`changes/README.md`。実装エージェントが日本語の説明を作り、生成器が集約する。
+categoryは`added/changed/fixed/breaking/security`。
+securityは「不具合修正」に分類し、冒頭に更新前の注意を出す。
+PRのCIは実行コードの変更・削除に変更記録を要求する。
+文書のみ・テストのみの作業には記録を強制しない。
+
+## リリース準備
+
+リリースを依頼されたエージェントは、未リリースの記録を確認して見出しと要約を作る。
+version・日本時間の日付は明示的に指定する。暗黙にversionを上げない。
+
+```bash
+python3 scripts/release_notes.py check
+python3 scripts/release_notes.py build \
+  --version X.Y.Z --date YYYY-MM-DD \
+  --headline 'その版で何が変わるか' \
+  --summary '利用者への影響と適用範囲を説明する一文。'
+python3 -m unittest discover -s tests/release -v
+python3 scripts/release_notes.py export --version X.Y.Z \
+  --output /tmp/release-notes.md --title-output /tmp/release-title.txt
+```
+
+`build`はCHANGELOGへ追加し、入力記録を`changes/archive/<version>/`へ移す。
+既存versionの上書き、空の変更記録、手書きUnreleased、形式不正では停止する。
+生成後にソースと説明を照合する。CIは文章の事実性まで保証しない。
+途中失敗した場合はCHANGELOGとchangesのgit差分を確認し、両方を復旧して再実行する。
+
+## GitHubとの自動同期
+
+`.github/workflows/release-notes.yml`が次を行う。
+
+1. PR・main更新・リリース時に、全versionの見出し・順番・空段落・必須段落・折りたたみを検査する。
+2. `vX.Y.Z`タグのpushではタグ内のCHANGELOGから新しいRelease下書きを作る。公開はしない。
+3. main更新、既存Releaseの公開・編集、手動の`sync_existing`実行では、mainのCHANGELOGから既存Releaseのタイトル・本文を同期する。
+4. 全対象を事前確認し、内容が同じReleaseは書き換えない。途中の競合編集を検出した場合は停止する。
+5. 更新後に本文一致を読み直して検証する。tag・公開日時・draft・prerelease・添付資産を更新しない。
+
+標準のGitHub Actions用GITHUB_TOKENとcontents:writeを使う。追加のLLM API・API課金は不要。
+GitHubの通常のActions利用条件は適用される。repo権限やbranch保護は変更しない。
+旧tagのコードにはこの生成器がないため、過去版の変更はmainからの同期を使う。
+対応するCHANGELOGがない既存の安定版は、勝手に作文せずエラーとする。
+プレリリースtagと自動version決定は対象外。
+公開済みRelease本文を手動編集する場合も、先にCHANGELOGを修正する。
+本文の手動編集だけでは、自動同期でCHANGELOGの内容へ戻る。
+
+## 過去記録の移行
+
+2026-10-01に、v1.0.0〜v1.0.8の9版をこの形式へ再編集した。
+移行元のmainは`c0e1c0ff0a6dd6102909289c9c09454dee69567e`。
+編集前のCHANGELOGとGitHub Release本文は`docs/releases/archive/`に保存。
+公開当時の詳細は各版の技術詳細にも保持する。
+v1.0.3の夜間20分収集は歴史上の変更として残し、後の廃止を明記した。
+v1.0.5のgateway再起動不要と、他の版の再起動必須を区別している。
+
+取り消す場合は変更commitをrevertし、元のCHANGELOGを正本に同期する。
+元のReleaseタイトル・本文を厳密に戻す必要がある場合は保存したJSONを参照する。
+業務DB・モデル・MCSデータの移行はない。
+
+## 設計の参考
+
+2026-10-01に、[VS Code](https://code.visualstudio.com/updates/v1_140)のハイライト、
+[Codex](https://github.com/openai/codex/releases/tag/rust-v0.159.0)の機能分類と根拠、
+[GitHub CLI](https://github.com/cli/cli/releases/tag/v2.102.0)の更新注意、
+[Hermes Agent](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.24)の対象範囲と更新方法、
+[Keep a Changelog日本語版](https://keepachangelog.com/ja/1.1.0/)を比較して構成した。
+API仕様は[GitHub Releases公式文書](https://docs.github.com/en/rest/releases/releases#update-a-release)を参照。
