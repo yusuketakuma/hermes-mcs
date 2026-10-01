@@ -130,3 +130,18 @@ Hermes Agent をインストールしない環境で、収集・保存・検索�
   （SECURITY.md・INSTALLATION.md・lifecycle-spec・STANDALONE.md・変更記録）。
   修正後に指摘ごとの独立検証（11エージェント）を行い、残った4件と完了度の指摘を追加修正。
   却下: Discord のスレッド指定先（文書化済みの制限）、Socket Mode の死活監視（SDK が再接続）。
+- レビュー指摘の追加修正（2026-10-02、5件すべて非ブロッキングだったが解消）:
+  - `notify_flush` の送信失敗リトライに5回上限を追加。75（受理なし確実）を返す
+    恒久的失敗（revoked token・削除済みチャンネル等）が無限に再試行されていた問題を、
+    汎用パスと同じ天井で送信保留へ移行するようにした。未受理の receipt を持つ
+    digest/new_messages のメンバーは従来どおり救済キューへ移る。
+  - `requirements-standalone.txt` を直接依存+解決済み推移的依存の完全固定にした
+    （`audioop-lts` は py>=3.13、`typing-extensions` は py<3.13 の条件付きピン）。
+    `_sdk_problem` のピン検証はマーカー付き行をスキップする（条件付き依存は
+    全環境に導入されるとは限らないため）。
+  - Slack `_mrkdwn` で `**bold**` 以外の単独 `*` を全角 `＊` に変換し、本文中の
+    偶発的なペアが Slack の太字として解釈されないようにした。
+  - `init` の `--plugin-*` フラグは standalone では `notify.<transport>` のスコープへ
+    移すが、スコープが無い場合（と Hermes profile 指定）は警告するようにした。
+  - `mcs_recover._notify` の送信が 60 秒を超えた場合、子プロセスを kill して回収する
+    ようにした（watchdog 配下に残留子プロセスを残さない）。
