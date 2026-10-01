@@ -637,7 +637,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     verdicts: dict[int, dict] = {}
     incomplete = False
     hard_fail = False   # non-retryable Jev error — bound the retries
-    not_sent = None     # LLMNotSent from a target summary (see below)
+    not_sent = None     # a summary/repair could not dispatch (see below)
     retryable_failure = False
     resource_wait = False
     for mid in all_targets:
@@ -901,7 +901,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                       repaired)
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
-                ledger.artifact_add(
+                repair_id = ledger.artifact_add(
                     "semantic_repair", json.dumps({"target_message_id": mid}),
                     project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
@@ -912,17 +912,29 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         feedback=[f.get("code", "") + " " +
                                   f.get("statement", f.get("claim", ""))
                                   for f in code_f + jev_f])
-                except runtime.LLMNotSent:
-                    # same outcome as an unavailable repair (the one-shot
-                    # reservation is already durable) — never let it
-                    # discard sibling targets audited in this pass
-                    summary2 = None
+                except runtime.RuntimeGuardError as error:
+                    if (isinstance(error, runtime.LLMNotSent)
+                            or error.stage in _PRE_DISPATCH_STAGES):
+                        # A proven pre-dispatch stop did not spend the one
+                        # repair. A crash or post-dispatch stop still does.
+                        with ledger.db:
+                            ledger.db.execute(
+                                "DELETE FROM artifacts WHERE artifact_id=?",
+                                (repair_id,))
+                    if isinstance(error, (runtime.LLMNotSent,
+                                          runtime.RuntimeBudgetShort)):
+                        not_sent = error
+                        incomplete = True
+                        break
+                    raise
                 if summary2 is not None:
                     summary = summary2
                     summary["_facts"] = facts
                     continue
                 status = "NEEDS_REVIEW"
                 findings.append({"code": "repair_unavailable"})
+            break
+        if not_sent is not None:
             break
         v2_doc = v2_docs_by_target.get(mid)
         if fact_source == "canonical" and v2_doc is not None:

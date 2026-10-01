@@ -372,3 +372,20 @@ def test_artifact_binding_is_checked(tmp_path):
             lifecycle.attach_lifecycle(str(tmp_path / "ledger.db"), [record])
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("fact_ids", [[{}], [[]], [1], [None], [""]])
+def test_malformed_page_fact_ids_leave_rendered_unobserved(tmp_path, fact_ids):
+    db, final_id, _, _, summary = _chain(tmp_path, [v2_fact("f1")], notice=False)
+    try:
+        summary["mandatory_pages"][0]["fact_ids"] = fact_ids
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(summary), final_id))
+        result = _read(tmp_path, final_id)
+        assert "rendered" not in result["fact_ids"]
+        assert "delivered" not in result["fact_ids"]
+        assert result["observations"]["rendered"] == "pages_invalid"
+        assert result["observations"]["delivered"] == "rendered_unobserved"
+    finally:
+        db.close()

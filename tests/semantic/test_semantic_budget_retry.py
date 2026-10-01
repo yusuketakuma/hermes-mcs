@@ -210,3 +210,52 @@ def test_nightly_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
         assert out == {"revived": 0, "skipped_cap": 1}
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("failure", ["budget_short", "not_sent", "post_dispatch"])
+def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch, failure):
+    import semantic_drain
+    import semantic_runtime as runtime
+    db = _seeded(tmp_path)
+    with db.db:
+        row = db.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        payload = json.loads(row["payload"])
+        payload["targets"] = [1]
+        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                      (json.dumps(payload), row["job_id"]))
+    calls = []
+    failure_type = {"budget_short": runtime.RuntimeBudgetShort,
+                    "not_sent": runtime.LLMNotSent,
+                    "post_dispatch": runtime.RuntimeBudget}[failure]
+    real_summarize = semantic_drain.summarize
+    blocked = [True]
+
+    def summarize(*args, **kwargs):
+        if kwargs.get("feedback"):
+            calls.append("repair")
+            if blocked[0]:
+                raise failure_type("llm_result" if failure == "post_dispatch" else "llm_next_call")
+        return real_summarize(*args, **kwargs)
+
+    monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic, "audit_claims",
+                        lambda *a, **k: ([{"code": "claim_not_supported", "claim": "synthetic"}], True))
+    try:
+        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                               time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert calls == ["repair"]
+        assert out["deferred"] == 1 and not out["done"]
+        reservations = db.artifacts("semantic_repair", message_id=1)
+        assert bool(reservations) == (failure == "post_dispatch")
+        if failure != "post_dispatch":
+            assert not db.artifacts("semantic_summary", message_id=1)
+        blocked[0] = False
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        resumed = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                                   time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert resumed["done"] == 1
+        assert calls == ["repair"] * (1 if failure == "post_dispatch" else 2)
+        assert len(db.artifacts("semantic_repair", message_id=1)) == 1
+    finally:
+        db.close()
