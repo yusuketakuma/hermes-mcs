@@ -9,7 +9,9 @@ under that Hermes profile so posts arrive under that bot's identity.
 Attachments ride as MEDIA:<path> references in the message text; the
 platform adapter owns upload limits.
 LINE WORKS uses hermes-mcs's independent adapter CLI with JSON text and
-verified attachment metadata, without a Hermes platform adapter.
+verified attachment metadata, without a Hermes platform adapter; with
+runtime_mode "standalone" Slack/Discord use `mcs_standalone send` the
+same way.
 
 Events carry message_ids; message content is looked up in the local
 ledger at send time so the outbox payload itself stays tiny.
@@ -30,6 +32,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import mcs_runtime
 import mcs_signals
 import semantic_send_gate
 import structured_view
@@ -83,11 +86,24 @@ def _target(cfg: dict, kind: str) -> str | None:
     return t.strip() if isinstance(t, str) and t.strip() else None
 
 
+def _hermes_free(cfg: dict, target: str | None) -> bool:
+    """Targets delivered by MCS's own sender instead of `hermes send`."""
+    return mcs_runtime.standalone(cfg) or (target or "").startswith("lineworks:")
+
+
 def _send_argv(cfg: dict, target: str) -> list[str]:
-    """`hermes [-p profile] send --to <target> --quiet` argv."""
-    if target.startswith("lineworks:"):
-        entry = Path(__file__).resolve().parents[2] / "lineworks_adapter" / "__main__.py"
-        return [sys.executable, str(entry), "send", "--root",
+    """`hermes [-p profile] send --to <target> --quiet` argv, or the
+    independent sender's equivalent (same sealed stdin contract)."""
+    if _hermes_free(cfg, target):
+        lineworks = target.startswith("lineworks:")
+        package = "lineworks_adapter" if lineworks else "mcs_standalone"
+        entry = Path(__file__).resolve().parents[2] / package / "__main__.py"
+        # the Slack/Discord SDKs exist only in the standalone venv — a
+        # manual run on another Python must still send through it
+        python = mcs_runtime.python_executable(cfg)
+        if lineworks or not os.access(python, os.X_OK):
+            python = sys.executable
+        return [python, str(entry), "send", "--root",
                 str(Path(CONF_PATH).parent), "--to", target, "--quiet"]
     argv = [_hermes_exe(cfg)]
     profile = cfg.get("notify_bot_profile")
@@ -649,7 +665,8 @@ def _send(argv: list[str], content: str,
           attachment_pins: dict[str, str] | None = None) -> None:
     """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
     references — the adapter owns upload limits and mention policy)."""
-    if len(argv) > 1 and argv[1].endswith("/lineworks_adapter/__main__.py"):
+    if len(argv) > 1 and argv[1].endswith(
+            ("/lineworks_adapter/__main__.py", "/mcs_standalone/__main__.py")):
         sealed = []
         for name, path in files or []:
             try:
@@ -683,6 +700,10 @@ def _send(argv: list[str], content: str,
     detail = (r.stderr or r.stdout or "").strip()[:400]
     if r.returncode == 2:
         raise _SendUsage(detail or "hermes send usage error")
+    if r.returncode == 75 and argv[1:2] and argv[1].endswith("/mcs_standalone/__main__.py"):
+        # EX_TEMPFAIL from the standalone sender: the platform provably
+        # accepted nothing (failed before the post, or a definitive reject).
+        raise _SendFailed(detail or "standalone send not accepted")
     if r.returncode != 0:
         # A failed child can have delivered text or some attachments
         # before losing its response. Its exit status is not a negative ACK.
@@ -981,7 +1002,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
             _route(e) == "interactive"
-            or (_target(cfg, e["kind"]) or "").startswith("lineworks:") for e in due):
+            or _hermes_free(cfg, _target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
     for event_index, ev in enumerate(due):
@@ -998,7 +1019,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if _route(ev) == "interactive" \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
-        if not exe_ok and not (_target(cfg, ev["kind"]) or "").startswith("lineworks:"):
+        if not exe_ok and not _hermes_free(cfg, _target(cfg, ev["kind"])):
             # no hermes exe — text events can't send, but an interactive
             # event later in the queue still dispatches (cards don't
             # need the exe), so skip per-event rather than break
