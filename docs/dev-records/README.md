@@ -21,3 +21,10 @@
 | `review-20260925.md` / `coverage-20260925.json` | 2026-09-25 | 全体レビューと対象一覧 |
 | `refactor-20260927.md` / `refactor-20260927-progress.json` | 2026-09-27 | 全体確認とローカル改善、確認一覧 |
 | `extraction-review-20260928.md` | 2026-09-28 | 抽出レビュー対応 |
+| [stability-20261001.md](stability-20261001.md) / [確認一覧](stability-20261001-progress.json) | 2026-10-01 | 全リポジトリの安定性改善・導入手順の整理と検証 |
+| [hermes-sdk-20261001.md](hermes-sdk-20261001.md) | 2026-10-01 | Hermes固定版・実Discord/Slack SDKの隔離検証14件成功 |
+| [openwiki-update-path-20261001.md](openwiki-update-path-20261001.md) | 2026-10-01 | 生成brief・次回生成要件と外部送信の境界 |
+| [lineworks-20261001.md](lineworks-20261001.md) | 2026-10-01 | LINE WORKS独立接続・アダプター整理・オフライン検証と導入条件 |
+| [lineworks-review-20261001.md](lineworks-review-20261001.md) | 2026-10-01 | LINE WORKS全経路・既存接続・導入の再レビューと修正・最終回帰 |
+| [lineworks-impact-20261001.md](lineworks-impact-20261001.md) | 2026-10-01 | LINE WORKS追加・adapter整理の他領域への集中影響レビューと回帰修正 |
+| [repo-review-20261001.md](repo-review-20261001.md) / [確認一覧](repo-review-20261001-progress.json) | 2026-10-01 | 全リポジトリへの追加レビュー・5件の修正・領域間契約と最終検証 |
