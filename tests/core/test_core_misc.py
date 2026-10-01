@@ -32,6 +32,23 @@ def test_job_due_filters_before_limit(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("payload", [
+    '{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}',
+    '{"integer":' + '9' * 10000 + '}',
+], ids=["deep_json", "oversized_integer"])
+def test_job_payload_rejects_unparseable_stored_objects(tmp_path, payload):
+    db = _ledger(tmp_path)
+    try:
+        db.job_add("history_head", 1, payload={"since": 0, "page": 1})
+        db.job_add("history_head", 2, payload={"since": 123, "page": 2})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE project_id=1", (payload,))
+        assert db.job_payload("history_head", 1) is None
+        assert db.job_payload("history_head", 2) == {"since": 123, "page": 2}
+    finally:
+        db.close()
+
+
 def test_incomplete_command_is_retained(tmp_path):
     cmd_dir = tmp_path / "cmd"
     cmd_dir.mkdir()

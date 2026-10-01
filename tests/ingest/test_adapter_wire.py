@@ -28,6 +28,29 @@ class _ProjectsAdapter(mcs_adapter.MCSAdapter):
         return {"projects": [], "paginate": {"has_next": self.has_next}}
 
 
+@pytest.mark.parametrize("body", [
+    b"\xff",
+    b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}',
+    b'{"integer":' + b'9' * 10000 + b'}',
+], ids=["invalid_utf8", "deep_json", "oversized_integer"])
+def test_bad_api_json_is_a_local_failure_and_the_next_patient_can_be_fetched(body):
+    adapter = mcs_adapter.MCSAdapter()
+    replies = iter([body, b'{"messages":[],"paginate":{"has_next":false}}'])
+    adapter._request = lambda *args, **kwargs: (200, next(replies), {})
+    bad = adapter.fetch_unread_messages(1, 123)
+    assert isinstance(bad.error, mcs_adapter.SchemaError)
+    assert bad.error.detail == "invalid json payload" and bad.messages == []
+    good = adapter.fetch_unread_messages(2, 123)
+    assert good.error is None and good.reached and good.messages == []
+
+
+def test_login_html_response_keeps_the_session_recovery_contract():
+    adapter = mcs_adapter.MCSAdapter()
+    adapter._request = lambda *args, **kwargs: (200, b"<html>synthetic login</html>", {})
+    with pytest.raises(mcs_adapter.SessionExpired):
+        adapter._get("/synthetic")
+
+
 def test_project_inventory_fails_when_page_cap_is_incomplete():
     with pytest.raises(mcs_adapter.MCSError) as error:
         _ProjectsAdapter(True).list_projects(max_pages=1)

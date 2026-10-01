@@ -406,6 +406,13 @@ _PROBE_RETRY_S = 600
 _NEXT_FMT = {"schema": "object", "object": "plain"}
 
 
+def _resolved_llm() -> tuple[str, str]:
+    """Resolve the configured server for generation and its health/format probes."""
+    endpoint, model = local_llm.resolve(load_config())
+    return (ENDPOINT if ENDPOINT != _ENDPOINT_PIN else endpoint,
+            MODEL if MODEL != _MODEL_PIN else model)
+
+
 def _probe_format(deadline: float | None = None) -> str | None:
     """Detect the best response_format the server accepts, via the
     shared loopback adapter.  Fallback order: json_schema -> json_object
@@ -419,11 +426,12 @@ def _probe_format(deadline: float | None = None) -> str | None:
     if _FMT_MODE is not None \
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
+    endpoint, model = _resolved_llm()
     if local_llm.admission_enabled():
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
         _FMT_MODE = local_llm.admitted_probe_format(
-            "mcs.extract", ENDPOINT, MODEL, _SCHEMA, timeout=10,
+            "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=_choose_slot(deadline=deadline),
             verify=lambda text: json_object(text) is not None)
@@ -434,7 +442,7 @@ def _probe_format(deadline: float | None = None) -> str | None:
             # unprobed: _llm_call defers) and re-probe on the next call
             return _FMT_MODE
         _FMT_MODE = local_llm.probe_format(
-            ENDPOINT, MODEL, _SCHEMA, timeout=10,
+            endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
             slot=slot,
             verify=lambda text: json_object(text) is not None)
@@ -1126,13 +1134,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
     fmt = _probe_format(deadline=deadline)
     if fmt is None:
         return _DEFERRED   # no idle slot to probe on — nothing sent
-    # resolve per call so a config.json local_llm.url/model change
-    # takes effect without a code edit; patched constants still win
-    endpoint, model = local_llm.resolve(load_config())
-    if ENDPOINT != _ENDPOINT_PIN:
-        endpoint = ENDPOINT
-    if MODEL != _MODEL_PIN:
-        model = MODEL
+    endpoint, model = _resolved_llm()
     while True:
         # the same floor gates retries: a format degrade (4xx) loops
         # back here and would otherwise re-fire a full call that can
@@ -1619,9 +1621,9 @@ def _thread_context(ledger, r) -> str | None:
 def _llm_up(deadline: float | None = None) -> bool:
     try:
         status, _headers, raw = _opener_request(
-            ENDPOINT.split("/v1/")[0] + "/v1/models", "GET", None, 3, deadline)
+            local_llm.probe_urls(_resolved_llm()[0])[0], "GET", None, 3, deadline)
         return status == 200 and len(raw) <= bounded_http.MAX_RESPONSE_BYTES
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -2018,9 +2020,8 @@ _SLOT_OVERRIDE = None  # --slot: pin this process to a specific id_slot
 def _slots_busy(deadline: float | None) -> dict | None:
     """/slots -> {id: is_processing}, or None when the probe fails."""
     try:
-        base = ENDPOINT.split("/v1/")[0]
         status, _headers, raw = _opener_request(
-            base + "/slots", "GET", None, 2, deadline)
+            local_llm.probe_urls(_resolved_llm()[0])[1], "GET", None, 2, deadline)
         if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
             return None
         return {s.get("id"): bool(s.get("is_processing"))
@@ -2392,16 +2393,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # behind the LIMIT.
     adm_sql = ""
     adm_params: list = []
-    adm_post = None
     if admitted_ids is not None:
         if len(admitted_ids) <= 30000:
             marks = ",".join("?" * len(admitted_ids)) or "NULL"
             adm_sql = f" AND m.message_id IN ({marks})"
             adm_params = sorted(admitted_ids)
         else:
-            # beyond the SQLite variable limit — degrade to a
-            # post-filter rather than fail the whole scan open
-            adm_post = admitted_ids
+            # One JSON parameter keeps the admission gate before LIMIT
+            # even when the manifest exceeds SQLite's variable limit.
+            adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
+            adm_params = [json.dumps(sorted(admitted_ids))]
     # QC-flagged rows keep their current artifact but re-enter pending
     # for exactly one feedback re-extract — a meta.qc_fix artifact
     # (applied or declined) ends the loop. Thin artifacts re-pend once
@@ -2451,8 +2452,6 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
           shard[0] if shard else 0,
           now,
           limit or 20)).fetchall()
-    if adm_post is not None:
-        rows = [r for r in rows if r["message_id"] in adm_post]
     done = failed = deferred = lock_lost = 0
     done_pids = set()
     endpoint_down = False

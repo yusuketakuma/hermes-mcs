@@ -1018,6 +1018,8 @@ class MCSAdapter:
         except json.JSONDecodeError as e:
             raise SessionExpired(
                 f"{path} non-json (login redirect?)") from e
+        except (ValueError, RecursionError):
+            raise SchemaError("invalid json payload") from None
         if not isinstance(out, dict):
             raise SchemaError(f"{path} -> non-object json")
         return out

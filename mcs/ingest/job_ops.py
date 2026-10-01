@@ -21,7 +21,6 @@ Responsibilities:
 - merge_full_replies: shared thread-body merge used by init_data and the
   job drains; missing bodies/failed threads become durable reply jobs.
 """
-import json
 import os
 import time
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from contextlib import suppress
 
 from mcs_adapter import MCSError, SessionExpired
 from ledger import TERMINAL_BODY_STATES
+from mcs_util import loads_dict
 import mcs_requests
 
 CMD_DIR = os.path.join(os.path.expanduser("~/.mcs"), "data", "cmd")
@@ -188,10 +188,10 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 existing = ledger.history_job(req["project_id"])
                 if existing:
                     try:
-                        pl = json.loads(existing["payload"] or "{}")
+                        pl = loads_dict(existing["payload"] or "{}")
                         if not _valid_history_payload(pl):
                             raise ValueError
-                    except (json.JSONDecodeError, TypeError, ValueError):
+                    except ValueError:
                         ledger.job_fail(existing["job_id"])
                         existing = None
                 if existing:
@@ -330,13 +330,13 @@ def run_reply_jobs(adapter, ledger, result, deadline,
         if time.monotonic() > deadline - 20:
             break
         try:
-            pl = json.loads(job["payload"] or "{}")
+            pl = loads_dict(job["payload"] or "{}")
             if not isinstance(pl, dict):
                 raise ValueError
             page = pl.get("page", 1)
             if type(page) is not int or page < 1:
                 raise ValueError
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except ValueError:
             ledger.job_fail(job["job_id"])
             result["errors"].append("reply: invalid_payload")
             continue
@@ -446,10 +446,10 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
     # updated_at, rotating the job back for the NEXT drain (Oracle F8)
     for job in ledger.history_jobs_due():
         try:
-            pl = json.loads(job["payload"] or "{}")
+            pl = loads_dict(job["payload"] or "{}")
             if not _valid_history_payload(pl):
                 raise ValueError
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except ValueError:
             ledger.job_fail(job["job_id"])
             result["errors"].append("import job: invalid_payload")
             continue
@@ -593,13 +593,13 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
         if time.monotonic() > deadline - 30:
             break
         try:
-            pl = json.loads(job["payload"] or "{}")
+            pl = loads_dict(job["payload"] or "{}")
             if not isinstance(pl, dict):
                 raise ValueError
             page = pl.get("page")
             if type(page) is not int or page < 1:
                 raise ValueError
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except ValueError:
             ledger.job_fail(job["job_id"])
             result["errors"].append("reconcile: invalid_payload")
             continue

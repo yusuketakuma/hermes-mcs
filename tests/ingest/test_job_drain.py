@@ -60,6 +60,63 @@ def test_explicit_command_promotes_existing_trickle_job(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("kind", ["reply", "history", "reconcile"])
+def test_deep_job_payload_does_not_starve_the_next_patient(tmp_path, kind):
+    db = _ledger(tmp_path)
+    try:
+        for pid in (1, 2):
+            db.ensure_patient(pid)
+            db.job_add(kind, pid, message_id=pid * 10 + 1 if kind == "reply" else 0,
+                       parent_id=pid * 10 if kind == "reply" else None,
+                       payload={"since": 0, "page": 1})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,updated_at=0 WHERE project_id=1",
+                          ('{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}',))
+        calls = []
+
+        class Adapter:
+            def fetch_thread(self, pid, mid):
+                calls.append(pid)
+                return [_message(mid=21, project_id=pid, parent_id=mid)]
+
+            def fetch_history(self, pid, since, **kwargs):
+                calls.append(pid)
+                return mcs_adapter.MessageBatch(
+                    [_message(mid=21, project_id=pid)], pages=1, reached=True)
+
+        result = {"errors": []}
+        drain = {"reply": job_ops.run_reply_jobs, "history": job_ops.run_history_jobs,
+                 "reconcile": job_ops.run_reconcile_jobs}[kind]
+        drain(Adapter(), db, result, time.monotonic() + 100)
+        assert db.job_state(kind, 1, message_id=11 if kind == "reply" else 0) == "failed"
+        assert calls == [2] and db.has_message(21)
+        assert len(result["errors"]) == 1 and "invalid_payload" in result["errors"][0]
+    finally:
+        db.close()
+
+
+def test_import_command_recovers_a_deep_existing_job_payload(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.ensure_patient(1)
+        db.job_add("history", 1, payload={"since": 0, "page": 7})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE project_id=1",
+                          ('{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}',))
+        cmd_dir = tmp_path / "cmd"
+        cmd_dir.mkdir()
+        command = cmd_dir / "synthetic.json"
+        command.write_text(json.dumps({"cmd": "import", "project_id": 1, "pages": 20}))
+        result = {"errors": []}
+        job_ops.drain_commands(db, result, str(cmd_dir))
+        payload = db.job_payload("history", 1)
+        assert payload["page"] == 1 and payload["pages"] == 20
+        assert db.job_state("history", 1) == "pending"
+        assert not command.exists() and result["errors"] == []
+    finally:
+        db.close()
+
+
 def test_trickle_revives_done_but_not_failed_job(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)

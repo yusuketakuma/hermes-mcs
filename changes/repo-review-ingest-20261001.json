@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "取得ジョブとAPI応答の異常JSONによる収集停止を修正",
+  "summary": "取得ジョブやAPI応答の異常JSONで全体の収集が止まらず、異常な患者応答は未完了として既読化を抑止します。",
+  "upgrade": "次回の収集実行から反映されます。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。破損した取得ジョブは既存のinvalid_payload分類で隔離され、再取得は既存の操作手順を使います。",
+  "details": [
+    "取得ジョブの4解析箇所とLedger.job_payloadに既存loads_dictを再利用し、深いJSON・巨大整数を既存の失敗分類へ戻して後続ジョブの処理を続けます。",
+    "HTTP200応答の不正UTF8・深いJSON・巨大整数を固定文言のSchemaErrorへ分類し、患者単位で未完了を記録して既読化を抑止します。既存の非JSONログイン復旧は維持します。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/ingest/job_ops.py",
+    "mcs/ingest/mcs_adapter.py"
+  ]
+}
