@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "不正な抽出結果で閲覧・集計出力が停止する問題を修正",
+  "summary": "保存された事実・関係の配列やIDの型が不正な場合は、読み取りモデルでunknownとして扱います。入れ子の内容が集計出力へ混入せず、同じ本文に対応する利用可能な過去の結果があればその結果を保持します。",
+  "upgrade": "追加操作やDB移行は不要です。不正な結果の状態はcurrentからunknownに変わります。",
+  "details": [
+    "canonical_projectionとsemantic_facts_v4の読み取り時に配列・識別子・根拠IDの形を検査する。",
+    "構造化表示と閲覧CLIのJSONオブジェクト読み取りは既存loads_dictに統一する。",
+    "深すぎるJSONを含む閲覧履歴は空のmetaまたはnullのcontentとして扱い、他の履歴を表示する。"
+  ],
+  "refs": ["mcs/views/read_model.py", "mcs/views/structured_view.py", "mcs/views/mcs_view.py"]
+}

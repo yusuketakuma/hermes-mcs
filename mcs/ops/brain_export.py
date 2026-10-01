@@ -9,7 +9,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -22,6 +21,7 @@ import mcs_view
 import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
+from mcs_util import loads_dict
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -295,6 +295,26 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
 def run(out_dir: Path, snapshot: Path) -> dict:
     view = mcs_view.View(str(snapshot))
     try:
+        info = {r["project_id"]: dict(r) for r in view.db.execute(
+            "SELECT project_id,patient_name,project_type,disease,station_name"
+            " FROM patients")}
+        rolls = {r["project_id"]: r["content"] for r in view.db.execute(
+            "SELECT project_id,content FROM artifacts "
+            "WHERE kind='patient_rollup' ORDER BY artifact_id")}
+        # Validate/render every latest rollup before replacing or pruning any
+        # export. Corrupt input is not evidence that a patient disappeared.
+        pages = {}
+        for pid, content in rolls.items():
+            roll = loads_dict(content)
+            if roll is None:
+                raise ValueError("patient_rollup_invalid")
+            name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"
+            try:
+                pages[f"p{pid}.md"] = (
+                    _patient_md(pid, name, info.get(pid) or {}, roll)
+                    + "\n---\n\n" + _banner(view))
+            except (AttributeError, TypeError, ValueError, RecursionError):
+                raise ValueError("patient_rollup_invalid") from None
         today = time.strftime("%Y-%m-%d")
         sig_res = mcs_signals.current_open(view.db, limit=200)
         model = read_model.read_model(view.db, scope="aggregate")
@@ -314,22 +334,9 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         records = _records_jsonl(view, sig_res, stats_results, model)
         _write(out_dir, "export.jsonl", records)
         _write(out_dir, f"export-{today}.jsonl", records)
-        info = {r["project_id"]: dict(r) for r in view.db.execute(
-            "SELECT project_id,patient_name,project_type,disease,station_name"
-            " FROM patients")}
-        rolls = {}
-        for row in view.db.execute(
-                "SELECT project_id,content FROM artifacts "
-                "WHERE kind='patient_rollup' ORDER BY artifact_id"):
-            with suppress(json.JSONDecodeError, TypeError):
-                rolls[row["project_id"]] = json.loads(row["content"])
-        seen = set()
-        for pid, roll in rolls.items():
-            name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"
-            _write(out_dir, f"patients/p{pid}.md",
-                   _patient_md(pid, name, info.get(pid) or {}, roll)
-                   + "\n---\n\n" + _banner(view))
-            seen.add(f"p{pid}.md")
+        seen = set(pages)
+        for filename, text in pages.items():
+            _write(out_dir, f"patients/{filename}", text)
         pdir = out_dir / "patients"
         if pdir.is_dir():
             for stale in pdir.glob("p*.md"):

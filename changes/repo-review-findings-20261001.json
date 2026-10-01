@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "所見の短縮表示でも否定・推測・家族・予定の条件を保持",
+  "summary": "所見の否定・推測・家族・予定を短縮表示でも保持し、解釈条件を本文より前に確認できます。",
+  "upgrade": "次回の表示から反映されます。追加操作は不要です。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。",
+  "details": [
+    "canonical所見の対象・極性・確度・状態・時点等を短縮した本文より前へ表示し、保存形式と公開条件を変えずに資格情報を保持します。"
+  ],
+  "refs": [
+    "mcs/views/structured_view.py",
+    "tests/views/test_structured_view.py"
+  ]
+}

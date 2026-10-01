@@ -65,7 +65,28 @@ def _snapshot_meta(db) -> dict:
             "published": True}
 
 
-def _kind_state(rows, content_hash: str, *, engine_version=None) -> dict:
+def _canonical_shape(content: dict) -> bool:
+    for key, fields in (
+            ("canonical_facts", ("fact_id", "kind", "validation_status",
+                                 "workflow_status", "statement", "evidence_quote")),
+            ("canonical_relations", ("left_fact_id", "right_fact_id", "type", "kind"))):
+        items = content.get(key, [])
+        if not isinstance(items, list):
+            return False
+        for item in items:
+            if not isinstance(item, dict) or any(
+                    item.get(field) is not None and not isinstance(item[field], str)
+                    for field in fields):
+                return False
+            if key == "canonical_facts":
+                ids = item.get("evidence_ids", [])
+                if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                    return False
+    return True
+
+
+def _kind_state(rows, content_hash: str, *, engine_version=None,
+                canonical=False) -> dict:
     """Classify one message's artifacts of one extraction kind.
     `rows` = artifact rows (newest-first) as mappings; the first valid
     hash-current non-invalidated row wins — an older row matching the
@@ -81,9 +102,11 @@ def _kind_state(rows, content_hash: str, *, engine_version=None) -> dict:
                 r["meta"], str) else r["meta"]
             content = json.loads(r["content"]) if isinstance(
                 r["content"], str) else r["content"]
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         if not isinstance(meta, dict) or not isinstance(content, dict):
+            continue
+        if canonical and not _canonical_shape(content):
             continue
         if (meta.get("error") not in (None, False, 0)
                 or content.get("_error") not in (None, False, 0)):
@@ -175,7 +198,8 @@ def _kind_map(art_rows, content_hash) -> dict:
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
         st = _kind_state(kind_rows, content_hash,
-                         engine_version=4 if kind == "semantic_facts_v4" else None)
+                         engine_version=4 if kind == "semantic_facts_v4" else None,
+                         canonical=kind in ("canonical_projection", "semantic_facts_v4"))
         entry = {"state": st["state"],
                  "artifact_id": st["artifact_id"]}
         if st["last_error"]:

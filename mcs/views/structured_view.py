@@ -26,22 +26,16 @@ Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
 """
 from __future__ import annotations
 
-import json
-
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
+from mcs_util import loads_dict
+from semantic_render import _LINE_ATTRS
 
 
 def _content_dict(r) -> dict | None:
     """json.loads an artifact content blob — non-object or corrupt JSON
     is simply absent, never a view-killing error."""
-    if not r:
-        return None
-    try:
-        d = json.loads(r["content"])
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return d if isinstance(d, dict) else None
+    return loads_dict(r["content"]) if r else None
 
 
 def latest_artifact(db, kind: str, mid: int) -> dict | None:
@@ -118,9 +112,22 @@ _FINDING_LABEL = {"allergy_intolerance": "アレルギー・不耐",
                   "other_observation": "所見"}
 
 
+def _items(doc: dict, key: str) -> list:
+    value = doc.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _label(labels: dict, value):
+    return labels.get(value) if isinstance(value, str) else None
+
+
+def _empty_field(doc: dict, key: str) -> bool:
+    return key not in doc or (isinstance(doc[key], list) and not doc[key])
+
+
 def _canonical_finding_lines(llm: dict) -> list[str]:
     """Structured lines for verified facts that no legacy slot can
-    carry. Kind is labelled so a vital never reads as a symptom."""
+    carry. Interpretation qualifiers precede the shortened statement."""
     out = []
     facts = llm.get("canonical_facts")
     if not isinstance(facts, list):
@@ -129,7 +136,7 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
     for f in facts:
         if not isinstance(f, dict):
             continue
-        label = _FINDING_LABEL.get(f.get("kind"))
+        label = _label(_FINDING_LABEL, f.get("kind"))
         statement = f.get("statement")
         fid = f.get("fact_id")
         if label is None or not isinstance(statement, str) \
@@ -137,7 +144,11 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
                 or not fid.strip() or fid in seen:
             continue
         seen.add(fid)
-        line = f"{label}｜{statement.strip()[:60]}"
+        attrs = [f"{name}:{f[key]}" for key, name in
+                 (("subject", "対象"), *_LINE_ATTRS, ("event_time", "時点"))
+                 if isinstance(f.get(key), str) and f[key].strip()]
+        qualifier = f"（{'、'.join(attrs)}）" if attrs else ""
+        line = f"{label}｜{qualifier}{statement.strip()[:60]}"
         quote = f.get("evidence_quote")
         if isinstance(quote, str) and quote.strip():
             line += f"（根拠:{quote.strip()[:40]}）"
@@ -169,18 +180,20 @@ def _head_lines(llm: dict, v1: dict, urgency: str | None = None) -> list[str]:
     lines: list[str] = []
     if urgency in URGENCY_LABEL:
         lines.append(URGENCY_LABEL[urgency])
-    if (llm.get("summary") or "").strip():
-        lines.append(f"要約: {llm['summary'].strip()[:80]}")
-    pts = [str(p).strip() for p in (llm.get("points") or [])
+    summary = llm.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        lines.append(f"要約: {summary.strip()[:80]}")
+    pts = [p.strip() for p in _items(llm, "points")
            if isinstance(p, str) and p.strip()]
     if pts:
         lines.append("要点: " + " / ".join(p[:40] for p in pts[:3]))
     # LLM omissions can encode negation, subject or temporal exclusions.
-    rule_events = list(v1.get("events") or [])
+    rule_events = _items(v1, "events")
     if llm:
         rule_events = [event for event in rule_events if event == "media_ref"]
-    events = list(llm.get("events") or []) + rule_events
-    evs = [event for event in dict.fromkeys(events) if event in EVT_LABEL]
+    events = _items(llm, "events") + rule_events
+    evs = list(dict.fromkeys(event for event in events
+                             if _label(EVT_LABEL, event)))
     if evs:
         lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs[:5]))
     return lines
@@ -208,25 +221,33 @@ def _vital_line(llm: dict, v1: dict):
     return "バイタル: " + "  ".join(parts) if parts else None
 
 
-def _lab_line(llm: dict):
+def _lab_lines(llm: dict) -> list[str]:
     """Reported lab values (v4) — name+value+unit plus the body's own
     out-of-range marker; the view never invents reference ranges."""
-    out = []
-    for lb in llm.get("labs") or []:
-        if not isinstance(lb, dict) or not lb.get("name"):
+    confirmed, candidates = [], []
+    for lb in _items(llm, "labs"):
+        if not isinstance(lb, dict) or not isinstance(lb.get("name"), str) \
+                or not lb["name"]:
             continue
         d = f"{lb['name']} {lb.get('value')}"
         if isinstance(lb.get("unit"), str) and lb["unit"]:
             d += lb["unit"]
-        if lb.get("flag") in _LAB_FLAG_JP:
-            d += f"({_LAB_FLAG_JP[lb['flag']]})"
-        out.append(d)
-    return "検査: " + "・".join(out[:6]) if out else None
+        if (flag := _label(_LAB_FLAG_JP, lb.get("flag"))):
+            d += f"({flag})"
+        (candidates if item_unverified(lb) else confirmed).append(d)
+        if len(confirmed) + len(candidates) == 6:
+            break
+    lines = []
+    if confirmed:
+        lines.append("検査: " + "・".join(confirmed))
+    if candidates:
+        lines.append("検査候補（未確認）: " + "・".join(candidates))
+    return lines
 
 
 def _symptom_line(llm: dict, v1: dict):
     syms, neg, seen, neg_seen = [], [], set(), set()
-    llm_symptoms = [s for s in llm.get("symptoms") or []
+    llm_symptoms = [s for s in _items(llm, "symptoms")
                     if isinstance(s, dict) and isinstance(s.get("text"), str)
                     and s["text"]]
     for s in llm_symptoms:
@@ -241,14 +262,18 @@ def _symptom_line(llm: dict, v1: dict):
         elif s["text"] not in seen:
             seen.add(s["text"])
             parts = []
-            sev = _SEVERITY_JP.get(s.get("severity"))
+            sev = _label(_SEVERITY_JP, s.get("severity"))
             if sev:
                 parts.append(sev)
             parts += [x.strip() for x in (s.get("onset"), s.get("duration"))
                       if isinstance(x, str) and x.strip()]
             syms.append(s["text"]
                         + (f"({'・'.join(parts)})" if parts else ""))
-    for s in v1.get("symptoms") or []:
+    # An unreadable selected field can carry exclusions; do not revive rules.
+    raw_symptoms = llm.get("symptoms", [])
+    rule_symptoms = _items(v1, "symptoms") if isinstance(raw_symptoms, list) \
+        and len(llm_symptoms) == len(raw_symptoms) else []
+    for s in rule_symptoms:
         if not isinstance(s, str):
             continue
         if any(x["text"] in s or s in x["text"] for x in llm_symptoms):
@@ -266,7 +291,7 @@ def _symptom_line(llm: dict, v1: dict):
 
 def _med_lines(llm: dict, v1: dict) -> list[str]:
     meds = []
-    for m in llm.get("meds") or []:
+    for m in _items(llm, "meds"):
         if not isinstance(m, dict) or not m.get("name"):
             continue
         # negated / other-person / historical meds must not read as the
@@ -274,13 +299,13 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
         if not med_is_patient_current(m):
             continue
         d = str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
-        if m.get("action") in RX_LABEL:
-            d += f"[{RX_LABEL[m['action']]}]"
+        if (action := _label(RX_LABEL, m.get("action"))):
+            d += f"[{action}]"
         if m.get("status") == "planned":
             d += "[予定]"
         tail = []
-        if m.get("route") in _ROUTE_JP:
-            tail.append(_ROUTE_JP[m["route"]])
+        if (route := _label(_ROUTE_JP, m.get("route"))):
+            tail.append(route)
         if isinstance(m.get("freq"), str) and m["freq"]:
             tail.append(m["freq"])
         if m.get("prn") is True:
@@ -289,19 +314,19 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
             d += f"({'・'.join(tail)})"
         meds.append(d)
     unverified_meds = []
-    if not llm.get("meds"):
+    if _empty_field(llm, "meds"):
         # v1 fallback only when the LLM saw NO meds — if it saw meds
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
         unverified_meds.extend(
             str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
-            for m in v1.get("medications") or []
+            for m in _items(v1, "medications")
             if isinstance(m, dict) and m.get("name"))
         unverified_meds.extend(
             f"{RX_LABEL[a['action']]}:{a['ctx'][:18]}"
-            for a in v1.get("rx_actions") or []
-            if isinstance(a, dict) and a.get("action") in RX_LABEL
-            and a.get("ctx"))
+            for a in _items(v1, "rx_actions")
+            if isinstance(a, dict) and _label(RX_LABEL, a.get("action"))
+            and isinstance(a.get("ctx"), str) and a["ctx"])
     lines = []
     if meds:
         lines.append("薬剤: " + "、".join(meds[:6]))
@@ -322,7 +347,7 @@ def _clip(text: str, cap: int) -> str:
 
 def _request_lines(llm: dict, v1: dict) -> list[str]:
     reqs, cands = [], []
-    for r in llm.get("requests") or []:
+    for r in _items(llm, "requests"):
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
             to = str(r.get("to") or "")
             to = "" if to in ("", "不明", "unknown", "-") else f"{to}へ"
@@ -352,11 +377,12 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             (cands if item_unverified(r) else reqs).append(
                 prefix + to + action + suffix)
     # rule fallback only when the selected facts carry no request at all
-    if not reqs and not cands:
-        reqs.extend(f"{REQ_LABEL.get(r.get('kind'), '依頼')}:"
+    if _empty_field(llm, "requests"):
+        reqs.extend(f"{_label(REQ_LABEL, r.get('kind')) or '依頼'}:"
                     f"{r['ctx'][:24]}"
-                    for r in v1.get("requests") or []
-                    if isinstance(r, dict) and r.get("ctx"))
+                    for r in _items(v1, "requests")
+                    if isinstance(r, dict) and isinstance(r.get("ctx"), str)
+                    and r["ctx"])
     lines = ["依頼: " + " / ".join(reqs[:3])] if reqs else []
     if cands:
         lines.append("依頼候補（未確認）: " + " / ".join(cands[:3]))
@@ -374,14 +400,14 @@ def structured_lines(db, mid: int) -> list[str]:
     lines: list[str] = _head_lines(llm, v1, message_urgency(db, mid))
     if (line := _vital_line(llm, v1)) is not None:
         lines.append(line)
-    if (line := _lab_line(llm)) is not None:
-        lines.append(line)
+    lines.extend(_lab_lines(llm))
     if (line := _symptom_line(llm, v1)) is not None:
         lines.append(line)
     lines.extend(_med_lines(llm, v1))
     lines.extend(_request_lines(llm, v1))
-    if v1.get("med_periods"):
-        mp = v1["med_periods"][0]
+    periods = _items(v1, "med_periods")
+    if periods:
+        mp = periods[0]
         if isinstance(mp, dict) and mp.get("start"):
             lines.append(f"服薬期間: {mp['start']}〜{mp.get('end') or '?'}")
     if v1.get("next_planned"):

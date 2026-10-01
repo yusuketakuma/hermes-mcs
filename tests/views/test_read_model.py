@@ -333,3 +333,40 @@ def test_read_model_rejects_bad_limit(tmp_path, limit):
     with pytest.raises(ValueError, match="bad_limit"):
         read_model.read_model(db.db, limit=limit)
     db.close()
+
+
+@pytest.mark.parametrize("content", [
+    {"canonical_facts": 1},
+    {"canonical_relations": True},
+    {"canonical_facts": [{"fact_id": {"raw": SECRET}}]},
+    {"canonical_facts": [{"fact_id": "f1", "evidence_ids": {"raw": SECRET}}]},
+    {"canonical_relations": [{"left_fact_id": [SECRET]}]},
+])
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+def test_malformed_canonical_content_is_unknown(tmp_path, content, kind):
+    db = _db(tmp_path, (1,))
+    try:
+        _artifact(db, kind, 1, content,
+                  {"hash": _hash_of(db, 1), "engine_version": 4})
+        model = read_model.read_model(db.db)
+        rec = model["records"][0]
+        assert rec["extraction"][kind]["state"] == "unknown"
+        assert rec["facts"] == [] and rec["relations"] == []
+        assert SECRET not in json.dumps(model)
+    finally:
+        db.close()
+
+
+def test_malformed_newer_projection_keeps_usable_current_row(tmp_path):
+    db = _db(tmp_path, (1,))
+    try:
+        meta = {"hash": _hash_of(db, 1)}
+        _artifact(db, "canonical_projection", 1,
+                  {"canonical_facts": [{"fact_id": "valid"}]}, meta)
+        _artifact(db, "canonical_projection", 1,
+                  {"canonical_facts": 1}, meta)
+        rec = read_model.read_model(db.db)["records"][0]
+        assert rec["extraction"]["canonical_projection"]["state"] == "current"
+        assert [f["fact_id"] for f in rec["facts"]] == ["valid"]
+    finally:
+        db.close()

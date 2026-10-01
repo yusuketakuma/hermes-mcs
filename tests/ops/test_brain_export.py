@@ -129,6 +129,25 @@ def _all_text(out: Path) -> str:
     return "\n".join(p.read_text() for p in sorted(out.rglob("*.md")))
 
 
+@pytest.mark.parametrize("content", ["{broken", "[]", "7",
+                                   '{"summary":7}',
+                                   '{"medications":[7]}',
+                                   '{"top_senders":[["synthetic"]]}'])
+def test_invalid_rollup_preserves_existing_export(env, content, capsys):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
+                     (content,))
+        conn.execute("UPDATE snapshot_meta SET generation_id='synthetic-next'")
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+
+
 def test_layout_and_content(env):
     snap, out = env
     res = brain_export.run(out, snap)
