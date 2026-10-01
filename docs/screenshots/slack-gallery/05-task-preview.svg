@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="800" viewBox="0 0 1100 800" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title>登録前に、内容と理由を確認。 — 完全合成のSlack表示例</title>
+<desc>現行のカード・フォーム・本人向け回答の実装に基づく説明図。実患者・実投稿・匿名化データは使用していません。実画面のキャプチャではありません。</desc>
+<rect x="0" y="0" width="1100" height="800" rx="0" fill="#f6f4ef"/>
+<text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  05</text>
+<text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">登録前に、内容と理由を確認。</text>
+<text x="28" y="107" font-size="18" fill="#66716f">本人だけに表示される確認画面で「確定する」を選びます。</text>
+<rect x="24" y="134" width="1052" height="585" rx="12" fill="#fff" stroke="#dce2dd"/>
+<rect x="24" y="134" width="142" height="585" rx="12" fill="#351638"/>
+<rect x="148" y="134" width="18" height="585" rx="0" fill="#351638"/>
+<text x="44" y="176" font-size="22" fill="#fff" font-weight="bold">MCSデモ</text>
+<text x="44" y="218" font-size="14" fill="#cbbfcf">チャンネル</text>
+<rect x="34" y="232" width="122" height="36" rx="6" fill="#64406a"/>
+<text x="44" y="256" font-size="15" fill="#fff"># mcs-demo</text>
+<text x="44" y="300" font-size="14" fill="#cbbfcf">合成データ</text>
+<path d="M166 194 L1076 194" stroke="#e1e5e2" fill="none"/>
+<text x="192" y="172" font-size="22" fill="#202124" font-weight="bold"># mcs-demo</text>
+<text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">完全合成の表示例</text>
+<text x="28" y="755" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
+<text x="28" y="780" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
+<rect x="192" y="228" width="36" height="36" rx="8" fill="#087f5b"/>
+<text x="201" y="254" font-size="22" fill="#fff" font-weight="bold">M</text>
+<text x="240" y="244" font-size="19" fill="#202124" font-weight="bold">MCS</text>
+<rect x="292" y="228" width="38" height="20" rx="4" fill="#edf0ee"/>
+<text x="298" y="243" font-size="11" fill="#66716f">APP</text>
+<text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
+<text x="240" y="270" font-size="15" fill="#66716f">操作した本人にだけ表示</text>
+<text x="240" y="304" font-size="24" fill="#202124" font-weight="bold">確認 — タスク作成</text>
+<text x="240" y="350" font-size="21" fill="#202124">内容: 次回訪問で残薬を確認</text>
+<text x="240" y="383.6" font-size="21" fill="#202124">担当: 合成スタッフA（合成薬局）</text>
+<text x="240" y="417.20000000000005" font-size="21" fill="#202124">期限: 2026-10-03</text>
+<text x="240" y="450.80000000000007" font-size="21" fill="#202124">理由: 訪問看護からの依頼を確認するため</text>
+<rect x="240" y="504.4000000000001" width="144" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="254" y="531.4000000000001" font-size="18" fill="#202124">確定する</text>
+<rect x="402" y="504.4000000000001" width="96" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="416" y="531.4000000000001" font-size="18" fill="#202124">取消</text>
+<text x="240" y="602.4000000000001" font-size="18" fill="#087f5b">内容・担当・期限・理由を照合してから確定します。</text>
+<text x="240" y="635.4000000000001" font-size="17" fill="#66716f">タスクの作成とMCSへの投稿は別です。</text>
+</svg>

@@ -45,6 +45,8 @@ jobs:
         run: python3 scripts/release_notes.py check
       - name: Check README release overview, review record and links
         run: python3 scripts/readme_release.py --check
+      - name: Check synthetic Slack SVG and PNG pairs
+        run: python3 scripts/generate_slack_gallery.py --check
       - name: Require runtime change notes on PR
         if: github.event_name == 'pull_request'
         env:

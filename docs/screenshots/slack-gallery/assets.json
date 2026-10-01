@@ -1,0 +1,30 @@
+{
+  "01-overview": {
+    "svg": "c166ff3bded800b992bf16186295b2b3e2c219c5390b3e3a565ca264c916cc02",
+    "png": "0a80cba44fadffd6bd350c155c071bfa13c70c3e558426aba579c9a52c4ba456"
+  },
+  "02-notification": {
+    "svg": "ec9ed6fbedef0f6b62731b253bd01e17ee3c62a61cbc3db56272c48c64e43059",
+    "png": "8ca049752323f1ee4d9c5bd8707c962e27d1dfa5f90e02b762196c214088eaba"
+  },
+  "03-actions": {
+    "svg": "efc6c434c9721546c5a9d45b400fded5f1cccfc07cb23acc3a480ba4f1f7f9fb",
+    "png": "87129cad46ff5e05000fbbb7ccb1ced618a05a46e4434e66ab3000e30ce504d9"
+  },
+  "04-task-form": {
+    "svg": "3b9652e8902d0f016fae5cf77604f4269b9af83b0d3ba3bf231eecb02f507265",
+    "png": "1a205dc6914ff79c16b7d7403c2d1e34b041d95dc8677105d0c9e8716c8dcce5"
+  },
+  "05-task-preview": {
+    "svg": "33527c074225149018bec5ffb6f0ae83574d4f08fccb5b1c8a2923492fc0837d",
+    "png": "11ac369e7fb58bfcf866524e50b0762cf46aca2f6af20f6e83f6d845ae6a7af1"
+  },
+  "06-task-list": {
+    "svg": "19068e1b507e0e8fe30ae21b458adc773c8fd33af6c4502d53298b5e2a9d30e4",
+    "png": "9584347d408f8bea72cf08e1a9163b95e1b197fe1cc1d0fa0fa10db22f703d39"
+  },
+  "07-patient-summary": {
+    "svg": "82240094824ad0d021261d52f50e147a21e1e1c503a1bb4252452302bfb4b07b",
+    "png": "58440c2d808c77fac172803fa0d96270c978e87a59b6b690781ab97bd05e48b0"
+  }
+}
