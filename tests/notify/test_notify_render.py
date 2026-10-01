@@ -22,11 +22,11 @@ def test_signal_evidence_cannot_read_another_patient(led):
     _msg(led, 200, pid=2, body="SYNTHETIC-OTHER-PATIENT")
     sig = {"project_id": 1, "type": "med_followup", "note": "合成候補",
            "evidence": {"message_ids": [200]}}
-    blocks = notify_render._signal_display(led.db, sig)
+    face = notify_render._signal_compact(led.db, 1, [sig])
     body = notify_render._signal_body(led.db, sig)
     text = notify_flush._signal_text(
         led, {"text": "候補\n場所", "project_id": 1}, sig)
-    assert "SYNTHETIC-OTHER-PATIENT" not in json.dumps(blocks) + body + text
+    assert "SYNTHETIC-OTHER-PATIENT" not in json.dumps(face) + body + text
 
 
 def test_thread_manifest_cannot_read_another_patient(led):
@@ -102,7 +102,7 @@ def test_invalid_card_state_falls_back_safely(raw):
     ("message_ids", "expected"),
     [([100, 101], "後の投稿"), ([100, "invalid"], "退院時の投稿")],
 )
-def test_signal_display_and_body_select_same_evidence(
+def test_signal_face_compact_body_selects_evidence(
         led, message_ids, expected):
     _patient(led)
     _msg(led, 100, body="最初の投稿")
@@ -113,14 +113,16 @@ def test_signal_display_and_body_select_same_evidence(
         "message_ids": message_ids, "discharge_message_id": 102,
         "message_id": 100}}
 
-    blocks = notify_render._signal_display(led.db, sig)
+    face = notify_render._signal_compact(led.db, 1, [sig])
     body = notify_render._signal_body(led.db, sig)
 
-    quotes = [block["text"] for block in blocks if block["type"] == "quote"]
-    assert len(quotes) == 1 and expected in quotes[0]
     assert expected in body
     assert all(other not in body for other in
                ("最初の投稿", "後の投稿", "退院時の投稿") if other != expected)
+    face_text = json.dumps(face, ensure_ascii=False)
+    assert "合成候補" in face_text
+    assert all(t not in face_text for t in
+               ("最初の投稿", "後の投稿", "退院時の投稿"))
 
 
 def test_deleted_signal_evidence_differs_between_card_and_body(led):
@@ -131,10 +133,10 @@ def test_deleted_signal_evidence_differs_between_card_and_body(led):
     sig = {"project_id": 1, "type": "med_followup", "note": "合成候補",
            "evidence": {"message_id": 100}}
 
-    blocks = notify_render._signal_display(led.db, sig)
+    face = notify_render._signal_compact(led.db, 1, [sig])
     body = notify_render._signal_body(led.db, sig)
 
-    assert all(block["type"] != "quote" for block in blocks)
+    assert "消された本文" not in json.dumps(face, ensure_ascii=False)
     assert "（削除済み）" in body and "消された本文" not in body
 
 

@@ -44,7 +44,7 @@ FOLLOWUP_MAX_AGE_D = 90    # only mentions within this horizon — older
                            # ones are historical, not prospective
 CONC_WINDOW_H = 72         # comm_concentration window
 CONC_MIN_POSTS = 10        # comm_concentration threshold
-EXPIRY_AHEAD_DAYS = 14     # rx_period_expiry horizon
+EXPIRY_AHEAD_DAYS = 3      # rx_period_expiry horizon
 REQ_AGE_DAYS = 30          # request_aging: open register items older than this
 REQ_RESPONSE_DAYS = 3      # pharmacist_request_unanswered response window
 FYI_MAX_AGE_D = 30         # horizon for FYI-type signals (request

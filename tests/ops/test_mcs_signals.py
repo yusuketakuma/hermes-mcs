@@ -269,15 +269,17 @@ def test_transition_requires_med_change(led):
 def test_rx_period_expiry(led):
     _msg(led.db, 1)
     _extract_v1(led.db, 1, "h1",
-                [{"start": "2026-09-01", "end": "2026-09-30",
-                  "raw": "9/1-9/30"},
+                [{"start": "2026-09-01", "end": "2026-09-24",
+                  "raw": "9/1-9/24"},
+                 {"start": "2026-09-01", "end": "2026-09-25",
+                  "raw": "9/1-9/25"},
                  {"start": "2020-01-01", "end": "2020-02-01",
                   "raw": "old"}])
     res = _ev(led)
     assert res["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
     assert sig["type"] == "rx_period_expiry"
-    assert sig["context"]["days_left"] == 9
+    assert sig["context"]["days_left"] == 3     # 4日先はまだ通知しない
     assert "確定ではありません" in sig["note"]
 
 
