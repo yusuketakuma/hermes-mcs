@@ -17,6 +17,7 @@ import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader
 from mcs_queries import incomplete_reply_roots
+from mcs_util import loads_dict
 import mcs_requests as requests
 
 UNKNOWN_TIME = -(2**63)
@@ -38,15 +39,10 @@ def _artifact_json(r):
     """meta/content decode for artifact view rows — a corrupt blob
     renders as empty meta / null content rather than breaking the
     whole listing."""
-    try:
-        meta = json.loads(r["meta"] or "{}")
-    except (json.JSONDecodeError, TypeError):
-        meta = {}
-    if not isinstance(meta, dict):
-        meta = {}
+    meta = loads_dict(r["meta"]) or {}
     try:
         content = json.loads(r["content"])
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         content = None
     return meta, content
 

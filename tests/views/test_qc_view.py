@@ -91,6 +91,24 @@ def test_signals_view_counts_dismissal_reasons(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("reason", [{"raw": "synthetic note"}, ["duplicate"], "synthetic note"])
+def test_signals_view_holds_unknown_dismissal_reason_codes(tmp_path, reason):
+    import json
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add("signal_v1", json.dumps({
+            "type": "med_followup", "state": "dismissed",
+            "dismiss_reason_code": reason}), project_id=1, meta={"key": "k"})
+        view = _view(db, tmp_path)
+        try:
+            assert view.signals({})["dismissals"] == {
+                "med_followup": {"unclassified": 1}}
+        finally:
+            view.close()
+    finally:
+        db.close()
+
+
 def test_per_message_detail_marks_stale(tmp_path):
     db = _seeded(tmp_path)
     try:

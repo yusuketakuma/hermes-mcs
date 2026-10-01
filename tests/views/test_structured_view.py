@@ -220,7 +220,67 @@ def test_canonical_facts_do_not_duplicate_legacy_slots(db):
     _fact_artifact(db, "canonical_projection", content)
     joined = "\n".join(structured_view.structured_lines(db.db, 1))
     assert "現行薬を継続" not in joined      # shown via 薬剤 slot only
-    assert "アレルギー・不耐｜ペニシリンアレルギー" in joined
+    assert "アレルギー・不耐｜（対象:patient:1）ペニシリンアレルギー" in joined
+
+
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+@pytest.mark.parametrize("attrs,marker", [
+    ({"polarity": "negated"}, "極性:negated"),
+    ({"epistemic": "speculated"}, "確度:speculated"),
+    ({"subject": "role:family"}, "対象:role:family"),
+    ({"workflow_status": "planned"}, "状態:planned"),
+    ({"polarity": "unknown", "epistemic": "unknown"}, "極性:unknown、確度:unknown"),
+    ({"event_time": "2026-09-01"}, "時点:2026-09-01"),
+])
+def test_projected_findings_keep_qualifiers_before_truncated_text(db, kind, attrs, marker):
+    """Evidence-verified findings preserve subject, negation, certainty and time."""
+    from semantic_facts import validate_facts_doc
+    from semantic_projection import project_v2_doc_legacy
+    from semantic_testkit import v2_doc, v2_fact
+    import notify_render
+
+    quote = "合成記録の内容について関連資料と過去の確認記録を参照しながら補足説明を記入しました。末尾に限定条件。"
+    statement = "合成所見" * 25
+    source = {"message_id": "1", "revision": "synthetic-hash",
+              "content_hash": "synthetic-hash", "body_codepoints": len(quote),
+              "content_quality": "full", "attachments_complete": True,
+              "source_fingerprint": "sf-synthetic"}
+    atom = {"atom_id": "atom-a", "kind": "clause", "start": 0,
+            "end": len(quote), "text_hash": "synthetic-atom-hash"}
+    evidence = {"evidence_id": "ev-a", "message_id": "1",
+                "revision": "synthetic-hash", "start": 0, "end": len(quote),
+                "quote": quote, "atom_id": "atom-a"}
+    fact = v2_fact("fact-a", kind="other_observation", statement=statement,
+                   evidence_ids=["ev-a"], **attrs)
+    doc = validate_facts_doc(v2_doc(
+        [fact], [evidence], source=source, atoms=[atom],
+        chunks=[{"chunk_id": "chunk-a", "core_atom_ids": ["atom-a"], "status": "done"}]))
+    content = project_v2_doc_legacy(doc)
+    db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", "engine_version": 4})
+    text = "\n".join(structured_view.structured_lines(db.db, 1))
+    assert marker in text and text.index(marker) < text.index(statement[:60])
+    assert statement not in text and "末尾に限定条件" not in text
+    assert text in notify_render._structured_block(db.db, 1)["text"]
+
+
+def test_legacy_canonical_finding_without_qualifiers_keeps_display(db):
+    _fact_artifact(db, "canonical_projection", {"canonical_facts": [
+        {"fact_id": "f1", "kind": "other_observation",
+         "statement": "合成所見", "evidence_quote": "合成根拠"}]})
+    assert structured_view.structured_lines(db.db, 1) == ["所見｜合成所見（根拠:合成根拠）"]
+
+
+@pytest.mark.parametrize("value", [None, 7, False, [], {}, "", " "])
+def test_malformed_canonical_qualifiers_preserve_readable_finding(db, value):
+    fact = {"fact_id": "f1", "kind": "other_observation",
+            "statement": "合成所見", "epistemic": "reported"}
+    fact.update({key: value for key in ("subject", "polarity", "workflow_status",
+                                      "event_time", "quantity", "action",
+                                      "valid_time", "actor")})
+    _fact_artifact(db, "canonical_projection", {"canonical_facts": [fact]})
+    assert structured_view.structured_lines(db.db, 1) == [
+        "所見｜（確度:reported）合成所見"]
 
 
 @pytest.mark.parametrize("kind", ["extract_v1", "extract_llm",
@@ -253,3 +313,90 @@ def test_legacy_artifact_without_project_uses_message_scope(db):
     db.artifact_add("extract_llm", json.dumps({"summary": "旧形式の合成結果"}),
                     message_id=1, meta={"hash": "synthetic-hash"})
     assert structured_view.structured_lines(db.db, 1) == ["要約: 旧形式の合成結果"]
+
+
+@pytest.mark.parametrize("field", ["summary", "points", "events", "labs",
+                                 "symptoms", "meds", "requests",
+                                 "canonical_facts"])
+@pytest.mark.parametrize("value", [7, "wrong-shape", {"bad": 1}, None])
+def test_malformed_selected_fields_keep_other_structured_content(db, field, value):
+    content = {"summary": "合成要約", "points": ["合成要点"], field: value}
+    joined = _render(db, content)
+    expected = "合成要点" if field == "summary" else "合成要約"
+    assert expected in joined
+
+
+@pytest.mark.parametrize("value", [7, "wrong-shape", {"bad": 1}, None, [None]])
+def test_unreadable_selected_fields_never_restore_rule_mentions(db, value):
+    joined = _render(db, {"summary": "合成要約", "symptoms": value,
+                          "meds": value, "requests": value}, {
+        "symptoms": ["合成除外症状"],
+        "medications": [{"name": "合成除外薬"}],
+        "requests": [{"kind": "confirm", "ctx": "合成除外依頼"}]})
+    assert joined == "要約: 合成要約"
+
+
+def test_unhashable_labels_and_event_items_do_not_hide_valid_facts(db):
+    joined = _render(db, {
+        "events": [{"bad": "visit"}, ["visit"], "visit"],
+        "labs": [{"name": "合成検査", "value": 1, "flag": ["high"]}],
+        "symptoms": [{"text": "合成症状", "severity": ["severe"]}],
+        "meds": [{"name": "合成薬", "action": ["start"], "route": ["oral"]}],
+        "canonical_facts": [
+            {"fact_id": "bad", "kind": ["preference"], "statement": "不正所見"},
+            {"fact_id": "valid", "kind": "preference", "statement": "合成所見"}]})
+    for text in ["区分: 訪問", "検査: 合成検査 1", "症状: 合成症状",
+                 "薬剤: 合成薬", "希望｜合成所見"]:
+        assert text in joined
+    assert "不正所見" not in joined
+
+
+def test_malformed_rule_collections_and_contexts_do_not_stop_display(db):
+    joined = _render(db, {}, {
+        "events": [{"bad": 1}, "media_ref"], "symptoms": 7,
+        "medications": 7, "med_periods": {"start": "2026-10-01"},
+        "rx_actions": [{"action": ["start"], "ctx": "合成文脈"},
+                       {"action": "start", "ctx": 7}],
+        "requests": [{"kind": ["confirm"], "ctx": "合成依頼"}, {"ctx": 7}]})
+    assert joined == "区分: 添付\n依頼: 依頼:合成依頼"
+
+
+def test_empty_selected_collections_keep_supported_rule_fallback(db):
+    joined = _render(db, {"symptoms": [], "meds": [], "requests": []}, {
+        "symptoms": ["合成症状"], "medications": [{"name": "合成薬"}],
+        "requests": [{"kind": "confirm", "ctx": "合成依頼"}]})
+    assert "症状: 合成症状" in joined
+    assert "薬剤候補（未確認）: 合成薬" in joined
+    assert "依頼: 確認:合成依頼" in joined
+
+
+@pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection"])
+@pytest.mark.parametrize("flag", [True, "false", 0, None, [], {}])
+def test_unverified_labs_render_apart_from_confirmed(db, kind, flag):
+    _fact_artifact(db, kind, {"labs": [
+        {"name": "合成確認検査", "value": 1, "unverified": False},
+        {"name": "合成候補検査", "value": 2, "unit": "mg/dL",
+         "flag": "high", "unverified": flag},
+        {"name": "合成旧形式検査", "value": 3}]})
+    assert structured_view.structured_lines(db.db, 1) == [
+        "検査: 合成確認検査 1・合成旧形式検査 3",
+        "検査候補（未確認）: 合成候補検査 2mg/dL(高)"]
+
+
+def test_unverified_only_labs_keep_candidate_label_and_total_limit(db):
+    joined = _render(db, {"labs": [
+        {"name": f"合成候補{n}", "value": n, "unverified": True}
+        for n in range(7)]})
+    assert joined.startswith("検査候補（未確認）: ")
+    assert "合成候補5 5" in joined
+    assert "合成候補6" not in joined
+    assert "\n検査: " not in joined
+
+
+def test_mixed_labs_preserve_total_limit(db):
+    joined = _render(db, {"labs": [
+        {"name": f"合成検査{n}", "value": n, "unverified": n % 2 == 0}
+        for n in range(7)]})
+    assert joined.splitlines() == [
+        "検査: 合成検査1 1・合成検査3 3・合成検査5 5",
+        "検査候補（未確認）: 合成検査0 0・合成検査2 2・合成検査4 4"]

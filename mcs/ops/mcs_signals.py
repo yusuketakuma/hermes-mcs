@@ -1359,6 +1359,7 @@ def dismiss_reason_counts(db) -> dict:
     'dismissed' transition counts once; rows from before reason codes
     existed count as 'unclassified'. Read-only; no actor or free text.
     A dismissal is a label, not proof the signal was wrong."""
+    from mcs_operations import DISMISS_REASON_CODES
     out: dict = {}
     for (content_s,) in db.execute(
             "SELECT content FROM artifacts WHERE kind=? AND json_valid(content)"
@@ -1367,7 +1368,9 @@ def dismiss_reason_counts(db) -> dict:
         c = json.loads(content_s)
         if not isinstance(c, dict):
             continue
-        code = c.get("dismiss_reason_code") or "unclassified"
+        code = c.get("dismiss_reason_code")
+        if code not in DISMISS_REASON_CODES:
+            code = "unclassified"
         by_type = out.setdefault(str(c.get("type") or "unknown"), {})
         by_type[code] = by_type.get(code, 0) + 1
     return out

@@ -142,6 +142,18 @@ def test_rollup_keeps_item_unverified_flag(db, flag):
             ("フラグ無し依頼", False)]
 
 
+@pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection"])
+@pytest.mark.parametrize("flag", [True, "false", 0, None, [], {}])
+def test_rollup_keeps_lab_verification_markers(db, kind, flag):
+    labs = [{"name": "合成確認検査", "value": 1, "unverified": False},
+            {"name": "合成候補検査", "value": 2, "unverified": flag},
+            {"name": "合成旧形式検査", "value": 3}]
+    _add(db, 1, kind, {"labs": labs}, "2026-10-01T00:00:00+09:00")
+    out = rollup.build_rollup(db, 1)
+    assert out["recent_labs"] == [
+        {"at": "2026-10-01T00:00:00+09:00", **lab} for lab in labs]
+
+
 def test_rollup_carries_request_kind_condition_due_text(db):
     """#20 order 3: LLM request rows expose kind/condition/due_text under
     NEW keys (req_kind/condition/due_text); kind (=to) and ctx are

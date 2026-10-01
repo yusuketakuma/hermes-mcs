@@ -7,6 +7,37 @@ import ledger
 import mcs_view
 
 
+@pytest.mark.parametrize("field", ["meta", "content"])
+def test_deep_artifact_json_preserves_other_history(tmp_path, field):
+    db_path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(db_path))
+    try:
+        with store.db:
+            store.db.execute(
+                "INSERT INTO messages(message_id,project_id,body_state,body_text,content_hash) "
+                "VALUES(1,1,'full','synthetic message',?)", ("a" * 64,))
+        store.artifact_add("semantic_summary", '{"summary":"synthetic valid"}',
+                           project_id=1, message_id=1)
+        corrupt_id = store.artifact_add("semantic_summary", "{}",
+                                        project_id=1, message_id=1)
+        with store.db:
+            store.db.execute(f"UPDATE artifacts SET {field}=? WHERE artifact_id=?",
+                             ('[' * 10000 + '0' + ']' * 10000, corrupt_id))
+        snapshot = ledger.publish_snapshot(str(db_path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    view = mcs_view.View(snapshot)
+    try:
+        rows = view.read("semantic", project=1, message_id=1)["semantic"]["semantic_summary"]
+        assert len(rows) == 2
+        assert any(r["content"] == {"summary": "synthetic valid"} for r in rows)
+        corrupt = next(r for r in rows if r["artifact_id"] == corrupt_id)
+        assert corrupt[field] == ({} if field == "meta" else None)
+        assert corrupt["current"] is False
+    finally:
+        view.close()
+
+
 @pytest.mark.parametrize("metadata", [[], None, True, 7, "synthetic"])
 def test_semantic_view_preserves_history_with_non_object_metadata(tmp_path, metadata):
     db_path = tmp_path / "ledger.db"
