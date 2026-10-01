@@ -479,8 +479,16 @@ def _notify(text):
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, close_fds=True,
                     start_new_session=True)
-                proc.communicate(json.dumps({"text": text[:2000]}).encode(),
-                                 timeout=60)
+                try:
+                    proc.communicate(
+                        json.dumps({"text": text[:2000]}).encode(),
+                        timeout=60)
+                except subprocess.TimeoutExpired:
+                    # a wedged sender must not outlive the watchdog —
+                    # kill and reap it rather than orphaning a child
+                    proc.kill()
+                    proc.wait()
+                    raise
         except Exception:
             pass
         return
