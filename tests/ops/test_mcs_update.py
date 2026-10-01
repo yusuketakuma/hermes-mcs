@@ -5,6 +5,7 @@ network. No real MCS, Discord, Keychain, or external repo access.
 """
 import json
 import os
+import py_compile
 import sqlite3
 import subprocess
 import sys
@@ -1532,14 +1533,22 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     ("extract_llm.py", False, True),
     ("semantic_drain.py", False, True),
     ("extract_llm.pyc", False, False),
+    ("not_extract_llm.py", False, False),
+    ("not_semantic_drain.py", False, False),
     ("extract_llm.py", True, False),
+    ("extract_llm.py", "embedded", False),
 ])
 def test_native_pgrep_stray_script_contract(updater, tmp_path, name, via_c, expected):
     """Native pgrep must find only interpreter + exact drainer scripts."""
     script = tmp_path / name
-    script.write_text("import time; time.sleep(30)\n")
+    source = tmp_path / "worker_source.py" if name.endswith(".pyc") else script
+    source.write_text("import time; time.sleep(30)\n")
+    if name.endswith(".pyc"):
+        py_compile.compile(str(source), cfile=str(script), doraise=True)
     argv = ([sys.executable, "-c", "import time; time.sleep(30)", str(script)]
             if via_c else [sys.executable, str(script)])
+    if via_c == "embedded":
+        argv[-1] = "/python " + str(script)
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
