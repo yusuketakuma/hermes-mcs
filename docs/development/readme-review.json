@@ -2,16 +2,19 @@
   "version": "1.0.8",
   "sections": {
     "features": {
-      "notes": "現行Slackカード・操作メニューとDiscordの/mcs対応を照合。READMEの推奨と先頭画面をSlackへ統一し、通知・暫定集約・人承認タスクの説明を保持した。",
+      "notes": "現行Slackカード・操作メニューとDiscordの/mcs対応を照合。READMEの推奨と先頭画面をSlackへ統一し、通知・暫定集約・人承認タスクの説明を保持した。 LINE WORKS独立接続・連続投稿・本人1:1入力確認を照合し、3接続の通知先表とスレッドの条件を整合した。",
       "sources": [
         "docs/guides/USER_GUIDE.md",
         "adapters/slack/cards.py",
         "adapters/slack/actions.py",
-        "hermes_plugin/README.md"
+        "hermes_plugin/README.md",
+        "adapters/lineworks/cards.py",
+        "adapters/lineworks/delivery.py",
+        "adapters/lineworks/actions.py"
       ]
     },
     "demos": {
-      "notes": "Slackの全体像・確認と担当・操作メニュー・タスク入力・本人向け確定・一覧・患者サマリーの7画面を現行実装と照合。完全合成の説明図と明記し、PNG描画の日本語・文字切れ・重なりを確認した。SVG/PNGとハッシュ記録を同期。Discord例は折りたたみに保持した。",
+      "notes": "Slackの全体像・確認と担当・操作メニュー・タスク入力・本人向け確定・一覧・患者サマリーの7画面を現行実装と照合。完全合成の説明図と明記し、PNG描画の日本語・文字切れ・重なりを確認した。SVG/PNGとハッシュ記録を同期。Discord例は折りたたみに保持した。 LINE WORKSの配信と本人1:1入力確認の2画面をDiscordと同じ折りたたみへ追加。完全合成のSVG/PNGを実装・公式ボタン仕様へ照合し、日本語と文字切れを視認、組のhashを同期した。",
       "sources": [
         "scripts/development/generate_slack_gallery.py",
         "docs/screenshots/slack-gallery/assets.json",
@@ -19,33 +22,41 @@
         "adapters/slack/cards.py",
         "adapters/slack/actions.py",
         "adapters/common/text.py",
-        "mcs/notify/notify_views.py"
+        "mcs/notify/notify_views.py",
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md"
       ]
     },
     "quickstart": {
-      "notes": "導入ガイドにあるSlack推奨と接続・許可ユーザー設定に合わせて導線を追加。macOS前提とpreflight/init/services/check/doctorの既存手順を保持した。",
+      "notes": "導入ガイドにあるSlack推奨と接続・許可ユーザー設定に合わせて導線を追加。macOS前提とpreflight/init/services/check/doctorの既存手順を保持した。 LINE WORKSではHermes同期を行わない条件を明示し、独立接続ガイドへの導線を照合した。",
       "sources": [
         "install.sh",
         "docs/guides/INSTALLATION.md",
-        "docs/guides/SETUP_AGENT.md"
+        "docs/guides/SETUP_AGENT.md",
+        "docs/guides/LINEWORKS.md"
       ]
     },
     "safety": {
-      "notes": "Slack推奨でも外部送信があることを明示する既存の説明を保持。確認済みとタスク完了、本人向けの回答、タスク作成前の内容・理由確認、暫定集約と未取得範囲を画像にも反映した。Jev・既読化・添付未解析・復旧の境界も保持した。",
+      "notes": "Slack推奨でも外部送信があることを明示する既存の説明を保持。確認済みとタスク完了、本人向けの回答、タスク作成前の内容・理由確認、暫定集約と未取得範囲を画像にも反映した。Jev・既読化・添付未解析・復旧の境界も保持した。 LINE WORKSを患者名・本文・要約・添付の外部送信先へ追加し、画像にも抽出候補・人確定・添付未解析を反映した。",
       "sources": [
         "SECURITY.md",
         "adapters/slack/actions.py",
         "mcs/notify/notify_views.py",
-        "docs/specs/lifecycle-spec.md"
+        "docs/specs/lifecycle-spec.md",
+        "adapters/lineworks/actions.py",
+        "docs/guides/LINEWORKS.md"
       ]
     },
     "docs": {
-      "notes": "Slackの5つのページ内導線、7画面のPNG、画像の更新手順、Slack設定の導線を追加。既存のガイド・技術資料とCHANGELOG生成部分へのリンクを保持した。",
+      "notes": "Slackの5つのページ内導線、7画面のPNG、画像の更新手順、Slack設定の導線を追加。既存のガイド・技術資料とCHANGELOG生成部分へのリンクを保持した。 LINE WORKSの折りたたみ画像・接続ガイド・画像生成手順を導線へ追加し、通知のフロー図を3接続へ整合した。",
       "sources": [
         "README.md",
         "docs/development/README_MAINTENANCE.md",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/guides/INSTALLATION.md"
+        "docs/guides/INSTALLATION.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "docs/assets/flow-overview.svg"
       ]
     }
   }

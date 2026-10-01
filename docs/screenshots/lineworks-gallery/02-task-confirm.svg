@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1100" viewBox="0 0 1100 1100" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title>タスクは、本人との1:1トークで入力・確定。 — 完全合成のLINE WORKS表示例</title>
+<desc>独自アダプターの連続投稿と本人との1:1入力・確認に基づく説明図。実画面のキャプチャではなく、実患者・実投稿・匿名化データは使用していません。</desc>
+<rect x="0" y="0" width="1100" height="1100" rx="0" fill="#f6f4ef"/>
+<text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  LINE WORKS  /  02</text>
+<text x="28" y="78" font-size="31" fill="#202124" font-weight="bold">タスクは、本人との1:1トークで入力・確定。</text>
+<text x="28" y="112" font-size="17" fill="#66716f">共有カードの「タスク作成」から開始。項目ごとに返信し、最後に内容を確認します。</text>
+<text x="28" y="1000" font-size="19" fill="#087f5b" font-weight="bold">抽出は候補。原文を確認し、人が判断・確定します。</text>
+<text x="28" y="1038" font-size="16" fill="#66716f">完全合成の説明図 / 実画面のキャプチャではありません</text>
+<text x="28" y="1070" font-size="15" fill="#66716f">実データ不使用 / 画像内のボタンは操作できません</text>
+<rect x="24" y="146" width="508" height="804" rx="12" fill="#edf3f5" stroke="#d1dce1"/>
+<rect x="24" y="146" width="508" height="78" rx="12" fill="#fff"/>
+<text x="44" y="177" font-size="21" fill="#202124" font-weight="bold">① Botとの1:1トークで入力</text>
+<text x="44" y="206" font-size="15" fill="#66716f">許可ユーザー本人だけのトーク / 入力の抜粋</text>
+<path d="M24 225 L532 225" stroke="#d1dce1" fill="none"/>
+<rect x="568" y="146" width="508" height="804" rx="12" fill="#edf3f5" stroke="#d1dce1"/>
+<rect x="568" y="146" width="508" height="78" rx="12" fill="#fff"/>
+<text x="588" y="177" font-size="21" fill="#202124" font-weight="bold">② Botとの1:1トークで確認</text>
+<text x="588" y="206" font-size="15" fill="#66716f">「確定する」を選ぶまで登録されません</text>
+<path d="M568 225 L1076 225" stroke="#d1dce1" fill="none"/>
+<rect x="44" y="245" width="30" height="30" rx="8" fill="#087f5b"/>
+<text x="51" y="267" font-size="18" fill="#fff" font-weight="bold">M</text>
+<text x="86" y="266" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>
+<rect x="66" y="286" width="422" height="83" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="81" y="314" font-size="17" fill="#202124">タスク内容</text>
+<text x="81" y="341.2" font-size="17" fill="#202124">中止する場合は「取消」。</text>
+<rect x="88" y="388" width="422" height="64" rx="9" fill="#dbf3e3" stroke="#d5e1e5"/>
+<text x="103" y="416" font-size="17" fill="#202124">次回訪問時に残薬を確認</text>
+<rect x="66" y="473" width="422" height="83" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="81" y="501" font-size="17" fill="#202124">担当者（任意）</text>
+<text x="81" y="528.2" font-size="17" fill="#202124">省略する場合は「なし」。</text>
+<rect x="88" y="575" width="422" height="64" rx="9" fill="#dbf3e3" stroke="#d5e1e5"/>
+<text x="103" y="603" font-size="17" fill="#202124">合成スタッフA</text>
+<rect x="66" y="660" width="422" height="83" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="81" y="688" font-size="17" fill="#202124">期限 YYYY-MM-DD（任意）</text>
+<text x="81" y="715.2" font-size="17" fill="#202124">省略する場合は「なし」。</text>
+<rect x="88" y="762" width="422" height="64" rx="9" fill="#dbf3e3" stroke="#d5e1e5"/>
+<text x="103" y="790" font-size="17" fill="#202124">2026-10-02</text>
+<text x="44" y="874" font-size="16" fill="#66716f">続いて理由を入力します。</text>
+<text x="44" y="899.6" font-size="16" fill="#66716f">例: 次回訪問で確認するため（完全合成）</text>
+<rect x="588" y="245" width="30" height="30" rx="8" fill="#087f5b"/>
+<text x="595" y="267" font-size="18" fill="#fff" font-weight="bold">M</text>
+<text x="630" y="266" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>
+<rect x="610" y="286" width="422" height="279" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="626" y="321" font-size="21" fill="#202124" font-weight="bold">確認 — タスク作成</text>
+<text x="626" y="366" font-size="18" fill="#202124">内容: 次回訪問時に残薬を確認</text>
+<text x="626" y="394.8" font-size="18" fill="#202124">担当: 合成スタッフA</text>
+<text x="626" y="423.6" font-size="18" fill="#202124">期限: 2026-10-02</text>
+<text x="626" y="452.40000000000003" font-size="18" fill="#202124">理由: 次回訪問で確認するため</text>
+<rect x="610" y="565" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<text x="821" y="588" font-size="16" fill="#176cc2" text-anchor="middle">確定する</text>
+<rect x="610" y="598" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<text x="821" y="621" font-size="16" fill="#176cc2" text-anchor="middle">取消</text>
+<text x="588" y="685" font-size="17" fill="#087f5b" font-weight="bold">本人が「確定する」を選んだ後</text>
+<rect x="610" y="710" width="422" height="64" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="625" y="738" font-size="17" fill="#202124">受け付けました。</text>
+<text x="588" y="814" font-size="17" fill="#66716f">処理結果を取得した後</text>
+<rect x="610" y="839" width="422" height="64" rx="9" fill="#fff" stroke="#d5e1e5"/>
+<text x="625" y="867" font-size="17" fill="#202124">反映しました。</text>
+</svg>
