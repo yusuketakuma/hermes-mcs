@@ -89,7 +89,8 @@ case "$1" in
         echo "error: venv already exists at $last (use --clear)" >&2; exit 2
     fi
     mkdir -p "$last/bin"
-    cp "$STUB_ROOT/venv-python" "$last/bin/python"; exit 0 ;;
+    cp "$STUB_ROOT/venv-python" "$last/bin/python"
+    ln -sf python "$last/bin/python3"; exit 0 ;;   # as real venvs do
   pip)
     [ -z "$STUB_FAIL_PIP" ] || { echo "error: build failed" >&2; exit 1; }
     cp "$STUB_ROOT/venv-hermes" "$(dirname "$py")/hermes"; exit 0 ;;
