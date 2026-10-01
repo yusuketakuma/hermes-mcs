@@ -101,6 +101,24 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
 
+## リリースノート
+
+- CHANGELOGとGitHub Releaseは毎回`docs/RELEASE_NOTES.md`の共通ルールを守る。
+  段落は「新機能」「改善」「不具合修正」「動作・設定の変更」「更新時の注意」
+  の順。空の分類は出さず、技術詳細は末尾で折りたたむ。
+  各項目は太字の短いタイトルと次行の説明（原則1〜3文）で記載する。
+- 実行時の挙動を追加・変更・修正・削除するときは、同じ作業内で
+  `changes/<識別子>.json`を日本語で作成する。形式は`changes/README.md`。
+- summaryは利用者への影響を先に書き、upgradeには必要な操作と適用条件を記録する。
+  モデル・取得範囲・通知・既読化・承認条件・既定値の変更は省略しない。
+  根拠のない性能数値、実患者情報、実投稿の匿名化例は使用しない。
+- リリース準備を依頼されたら、`docs/RELEASE_NOTES.md`の手順に従い、記録から
+  見出しと要約を作成し`release_notes.py build`でCHANGELOGを生成する。
+  GitHub Release本文は同じversionのCHANGELOGからexportし、別に作文しない。
+- tag workflowは下書きを作り、mainのCHANGELOGを既存Releaseへ自動同期する。
+  タイトル・本文以外は変更しない。公開済み本文の変更も先にCHANGELOGへ反映する。
+  push・PR・tag・公開の承認は従来の規約に従う。
+
 <!-- BEGIN DEVFLOW MANAGED -->
 ## Devflow 共通運用（managed block — この block 内のみ devflow が更新する）
 
