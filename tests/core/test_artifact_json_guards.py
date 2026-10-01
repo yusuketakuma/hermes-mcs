@@ -86,7 +86,7 @@ def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
         _msg(lg.db, 1)
         _msg(lg.db, 2, chash="h2")
         _extract_v1(lg.db, 1, "h1", [
-            {"start": "2026-09-01", "end": "2026-09-30", "raw": "9/1-9/30"}])
+            {"start": "2026-09-01", "end": "2026-09-24", "raw": "9/1-9/24"}])
         for raw in MALFORMED:
             _bad_content_rows(lg.db, raw)
         lg.db.commit()
@@ -100,7 +100,7 @@ def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
         assert (second["open"], second["opened"]) == (1, 0)
         [sig] = mcs_signals.current_open(lg.db)["items"]
         assert sig["type"] == "rx_period_expiry"
-        assert sig["context"]["days_left"] == 9
+        assert sig["context"]["days_left"] == 3
     finally:
         lg.db.close()
 
