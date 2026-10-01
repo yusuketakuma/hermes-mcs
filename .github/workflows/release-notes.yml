@@ -24,7 +24,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: japanese-release-notes
+  # PR checks have separate queues; release writes remain serialized.
+  group: japanese-release-notes-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
   cancel-in-progress: false
 
 jobs:
@@ -42,6 +43,8 @@ jobs:
           python-version: '3.13'
       - name: Check all versions and pending change records
         run: python3 scripts/release_notes.py check
+      - name: Check README release overview, review record and links
+        run: python3 scripts/readme_release.py --check
       - name: Require runtime change notes on PR
         if: github.event_name == 'pull_request'
         env:
@@ -110,6 +113,7 @@ jobs:
         run: |
           git show-ref --verify "refs/tags/$RELEASE_TAG"
           python3 scripts/release_notes.py check
+          python3 scripts/readme_release.py --check --version "${RELEASE_TAG#v}"
           python3 -m unittest discover -s tests/release -v
           python3 scripts/release_notes.py export --version "${RELEASE_TAG#v}" --output release-notes.md --title-output release-title.txt
       - name: Create a draft release

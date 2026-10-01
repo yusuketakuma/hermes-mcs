@@ -226,8 +226,14 @@ def main(argv=None):
                            + body.rstrip())
             new_text = text.replace("## [Unreleased]", replacement, 1)
             check_changelog(new_text)
+            import readme_release
+            readme = args.root / "README.md"
+            new_readme = readme_release.render(
+                readme.read_text(encoding="utf-8"), new_text)
+            readme_release.check_links(args.root, new_readme)
             archive.mkdir(parents=True)
             path.write_text(new_text, encoding="utf-8")
+            readme.write_text(new_readme, encoding="utf-8")
             for source, _ in fragments:
                 source.rename(archive / source.name)
         return 0

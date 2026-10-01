@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "READMEを目的別に読みやすくし、リリース時の更新を定着",
+  "summary": "Discord/Slackの画面例、目的別の使い方、FAQを開閉できるREADMEへ更新しました。最新の変更はCHANGELOGから自動生成し、毎回のリリースで機能説明・画面例・導入・安全・導線を見直す記録を検査します。",
+  "upgrade": "利用者の追加設定・データ移行は不要です。リリース準備ではdocs/readme-review.jsonの5項目をソースと照合して新しいversionへ更新してください。",
+  "details": ["release_notes.py buildでCHANGELOGとREADMEの最新変更を同時に更新します。", "PR・main・tagで見直し記録とリンクを検査し、tagとREADMEのversion不一致を拒否します。"],
+  "refs": ["README.md", "scripts/readme_release.py", "docs/README_MAINTENANCE.md"]
+}

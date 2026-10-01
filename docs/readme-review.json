@@ -1,0 +1,25 @@
+{
+  "version": "1.0.8",
+  "sections": {
+    "features": {
+      "notes": "mainの収集・検索・暫定集約・アラート・人承認タスクを確認。アラート面の要点と本文スレッド、確認とタスク完了の区別を保持した。",
+      "sources": ["docs/USER_GUIDE.md", "mcs/notify/notify_render.py", "mcs/ops/mcs_signals.py", "hermes_plugin/README.md"]
+    },
+    "demos": {
+      "notes": "既存の完全合成Discord/Slackカード図を採用。実データ不使用と、画像内ボタンは操作できないことを明記した。",
+      "sources": ["docs/screenshots/discord-card.svg", "docs/screenshots/slack-card.svg", "docs/USER_GUIDE.md"]
+    },
+    "quickstart": {
+      "notes": "macOS前提、preflight、install、表示されたvenvでのinit/services/check、doctorの順序を導入ガイドと照合した。",
+      "sources": ["install.sh", "docs/INSTALLATION.md", "docs/SETUP_AGENT.md"]
+    },
+    "safety": {
+      "notes": "通知の外部送信、Jevの既定OFF・匿名化なし、知識ストア出力の別経路、既読化・人承認・暫定集約・添付未解析・同一端末バックアップの境界を維持した。",
+      "sources": ["SECURITY.md", "docs/lifecycle-spec.md", "docs/external-export-contract.md"]
+    },
+    "docs": {
+      "notes": "目的別の導線とページ内アンカーを整理し、既存の各ガイド・技術資料・ロードマップへのリンクを保持した。",
+      "sources": ["README.md", "docs/DEVELOPMENT.md", "docs/ROADMAP.md", "docs/RELEASE_NOTES.md", "docs/README_MAINTENANCE.md"]
+    }
+  }
+}
