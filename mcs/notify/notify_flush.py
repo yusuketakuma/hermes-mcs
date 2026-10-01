@@ -975,8 +975,16 @@ def _fail_event(ledger, ev, cfg, res, exc):
         _hold_event(ledger, ev, cfg)
         res["failed"] += 1
     elif isinstance(exc, OSError | TimeoutError | KeyError):
-        backoff = min(3600, 60 * (2 ** ev["attempts"]))
-        ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
+        # Same 5-attempt ceiling as the generic path: a permanent
+        # pre-send failure (revoked token, deleted channel, missing
+        # attach) quarantines — with the never-began receipt its digest
+        # members still salvage — while a transient fault self-heals on
+        # the backoff retries instead of either looping forever.
+        if ev["attempts"] >= 4:
+            _hold_event(ledger, ev, cfg)
+        else:
+            backoff = min(3600, 60 * (2 ** ev["attempts"]))
+            ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
         res["failed"] += 1
     else:
         # Per-event containment: an unexpected failure inside
