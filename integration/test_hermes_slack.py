@@ -187,7 +187,25 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
         "result": "delivered", "message_id": "1790000000.000001",
     }
     assert len(fresh_client.calls) == 2
-    assert len(fresh_handlers) == 2
+    # The native app exposes all four protocol actions, exactly once.
+    # Keeping the earlier disabled-app assertions protects opt-in semantics.
+    from hermes_plugin.mcs_slack.cards import LINK_ACTION, MENU_ACTION
+
+    assert len(fresh_handlers) == 4
+    for action_id, expected_callback in (
+        ("mcs:a:" + "0" * 32, "_action"),
+        (LINK_ACTION, "_link"),
+        (MENU_ACTION, "_action"),
+        ("mcs:c:" + "0" * 16, "_confirm"),
+        ("mcs:c:" + "0" * 16 + ":cancel", "_confirm"),
+    ):
+        matches = [callback for matcher, callback in fresh_handlers
+                   if matcher.fullmatch(action_id)]
+        assert len(matches) == 1
+        assert matches[0].__name__ == expected_callback
+    for invalid_id in ("unrelated", "mcs:a:invalid", "mcs:c:invalid"):
+        assert not any(matcher.fullmatch(invalid_id)
+                       for matcher, _ in fresh_handlers)
 
 
 def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, monkeypatch):

@@ -108,7 +108,7 @@ def _make_repo(tmp_path):
     (work / "f.txt").write_text("two")
     _git(work, "commit", "-qam", "c2")
     _git(work, "tag", "-a", "v1.1.0", "-m", "release")   # annotated
-    _git(work, "init", "-q", "--bare", str(bare))
+    _git(work, "init", "-q", "--bare", "-b", "main", str(bare))
     _git(work, "push", "-q", str(bare), "main",
          "v1.0.0", "v1.1.0")
 
