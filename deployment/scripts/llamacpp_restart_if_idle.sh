@@ -11,7 +11,7 @@
 # "processing" once — that variant always saw 0 busy and restarted
 # mid-request every day).
 set -u
-LOG="$HOME/.hermes/logs/llamacpp-restart.log"
+LOG=__DATA__/llamacpp-restart.log
 mkdir -p "$(dirname "$LOG")"
 ts() { date -u +%FT%TZ; }
 

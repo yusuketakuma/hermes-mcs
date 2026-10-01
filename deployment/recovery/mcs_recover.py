@@ -71,6 +71,13 @@ KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
+# runtime_mode=standalone (mcs_setup._agent_labels): launchd calendar
+# agents replace hermes cron, ai.mcs.standalone replaces the gateway
+STANDALONE_LABEL = "ai.mcs.standalone"
+CRON_LABEL_PREFIX = "ai.mcs.cron."
+KNOWN_AGENT_LABELS |= frozenset(
+    {STANDALONE_LABEL} | {CRON_LABEL_PREFIX + s[:-3].replace("_", "-")
+                          for s in KNOWN_CRON_SCRIPTS})
 STALE_S = 1800
 ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
 GIT_LOCK_MIN_AGE_S = 600
@@ -258,8 +265,20 @@ def _try_lock(path):
         return None
 
 
+def _standalone():
+    """config.json runtime_mode — read directly: the repo may be broken."""
+    try:
+        with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
+            return json.load(f).get("runtime_mode") == "standalone"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def _setup_python():
     """Interpreter able to run mcs_setup (>= 3.10), or None."""
+    venv = os.path.join(HOME, "venv", "bin", "python3")
+    if _standalone() and os.access(venv, os.X_OK):
+        return venv
     if os.access(HERMES_PY, os.X_OK):
         return HERMES_PY
     if sys.version_info >= (3, 10):
@@ -336,10 +355,15 @@ def _restart_drainers(bounce=True):
 def _restart_gateway():
     # runs after durable bookkeeping — never undo it (mirrors
     # mcs_update.restart_gateway)
+    label = "ai.hermes.gateway"
+    if _standalone():
+        label = STANDALONE_LABEL
+        if not os.path.exists(os.path.join(AGENTS_DIR, label + ".plist")):
+            return
     with suppress(OSError):
         subprocess.Popen(
             ["launchctl", "kickstart", "-k",
-             f"gui/{os.getuid()}/ai.hermes.gateway"],
+             f"gui/{os.getuid()}/{label}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, close_fds=True,
             start_new_session=True)
@@ -377,8 +401,9 @@ def _reconcile_membership(snapshot):
                       if isinstance(a, dict)}
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
-        owned = (label.startswith("local.mcs-")
-                 or label.startswith("ai.mcs.extract-")) \
+        owned = (label.startswith(("local.mcs-", "ai.mcs.extract-",
+                                   CRON_LABEL_PREFIX))
+                 or label == STANDALONE_LABEL) \
             and label not in EXCLUDED_LABELS
         if owned and label not in desired_agents \
                 and label not in KNOWN_AGENT_LABELS:
@@ -391,7 +416,9 @@ def _reconcile_membership(snapshot):
     # snapshot nor in the current desired set
     hermes = shutil.which("hermes") \
         or os.path.expanduser("~/.local/bin/hermes")
-    if os.path.isfile(hermes):
+    if _standalone():
+        pass        # no hermes cron in standalone mode
+    elif os.path.isfile(hermes):
         try:
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
@@ -437,6 +464,26 @@ def _reconcile_membership(snapshot):
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
+    if _standalone():
+        # best-effort to the system-alert channel (notify_flush's choice)
+        try:
+            with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
+                cfg = json.load(f)
+            target = cfg.get("notify_system_target") or cfg.get("notify_target")
+            python = os.path.join(HOME, "venv", "bin", "python3")
+            entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
+            if isinstance(target, str) and os.access(python, os.X_OK) \
+                    and os.path.isfile(entry) and not target.startswith("lineworks:"):
+                proc = subprocess.Popen(
+                    [python, entry, "send", "--to", target.strip(), "--quiet"],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, close_fds=True,
+                    start_new_session=True)
+                proc.communicate(json.dumps({"text": text[:2000]}).encode(),
+                                 timeout=60)
+        except Exception:
+            pass
+        return
     try:
         import shutil
         hermes = shutil.which("hermes") \
