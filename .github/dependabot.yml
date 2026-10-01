@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # standalone connector SDKs (deployment/requirements-standalone.txt).
+  # discord.py bumps are gated by design: adapters/discord/cards.py runs its
+  # single-post guard only for versions in _VERIFIED_SDK, so a bump PR fails
+  # the standalone-sdk job until the SDK retry loop is re-verified.
+  - package-ecosystem: "pip"
+    directory: "/deployment"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7    # let brand-new releases age before proposing
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
