@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text, publish_tmp
+from mcs_util import html_to_text, loads_dict, publish_tmp
 
 
 SCHEMA_VERSION = 7
@@ -1559,11 +1559,7 @@ class Ledger:
         ).fetchone()
         if not r:
             return None
-        try:
-            pl = json.loads(r["payload"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            return None
-        return pl if isinstance(pl, dict) else None
+        return loads_dict(r["payload"] or "{}")
 
     def job_pending(self, kind: str, project_id: int,
                     message_id: int = 0) -> dict | None:

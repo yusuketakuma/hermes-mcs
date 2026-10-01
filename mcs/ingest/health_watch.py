@@ -84,9 +84,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             raw = f.read()
     except OSError:
         return {"status": "missing"}
+    except UnicodeError:
+        return {"status": "corrupt"}
     try:
         h = json.loads(raw)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {"status": "corrupt"}
     if not isinstance(h, dict) or not _finite_number(h.get("at")):
         return {"status": "corrupt"}
@@ -114,15 +116,6 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report["evidence_at"] = (binding if report["status"] == "stale"
                              else h["at"])
     return report
-
-
-def _load_state(path: str) -> dict:
-    try:
-        with open(path, encoding="utf-8") as f:
-            s = json.load(f)
-        return s if isinstance(s, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
 
 
 def _dedup_stamp(record: dict):
@@ -160,7 +153,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     status_path = os.path.join(home, STATUS_REL)
 
     obs = classify_health(health_path, now, deadline)
-    state = _load_state(state_path)
+    state = load_config(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
     key = (obs["status"],

@@ -135,3 +135,47 @@ def test_thin_retry_preserves_legacy_source_without_project(
     assert json.loads(rows[0]["content"])["urgency"] == "routine"
     assert json.loads(rows[0]["meta"])["thin_retried"] is True
     assert extract_llm.run_pending(db, budget_s=300)["selected"] == 0
+
+
+def test_configured_local_llm_is_used_for_every_extract_probe(monkeypatch):
+    endpoint = "http://127.0.0.1:8089/v1/chat/completions"
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {
+        "local_llm": {"url": endpoint, "model": "synthetic-model"}})
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0)
+    monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
+    calls = []
+
+    def send(url, method, body, *args):
+        calls.append((url, body))
+        if url.endswith("/slots"):
+            return 200, {}, b'[{"id":0,"is_processing":false}]'
+        if method == "GET":
+            return 200, {}, b"{}"
+        return 200, {}, json.dumps({"choices": [{"message": {
+            "content": '{"probe":"schema"}'}, "finish_reason": "stop"}]}).encode()
+
+    monkeypatch.setattr(extract_llm, "_opener_request", send)
+    assert extract_llm._probe_format() == "schema"
+    assert extract_llm._llm_up()
+    assert extract_llm._slots_busy(None) == {0: False}
+    assert all(url.startswith("http://127.0.0.1:8089/") for url, _ in calls)
+    assert calls[0][1]["model"] == "synthetic-model"
+
+
+def test_large_admission_set_filters_before_selection_limit(db, monkeypatch):
+    db.save_messages([
+        _message(mid=1, body="合成の許可投稿です", posted_at="2026-09-18T00:00:00+09:00"),
+        _message(mid=2, body="合成の対象外投稿です", posted_at="2026-09-19T00:00:00+09:00")])
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kw: {"summary": "合成"})
+    admitted = {1, *range(10000, 40000)}
+    result = extract_llm.run_pending(db, limit=1, admitted_ids=admitted)
+    assert result["selected"] == result["done"] == 1
+    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    assert db.artifacts("extract_llm", message_id=2) == []
+
+
+def test_disallowed_local_llm_endpoint_is_unavailable_without_a_request(monkeypatch):
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {
+        "local_llm": {"url": "https://example.invalid/v1/chat/completions"}})
+    assert extract_llm._llm_up() is False

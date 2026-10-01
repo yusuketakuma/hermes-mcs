@@ -707,3 +707,18 @@ def test_interrupted_rt_wait_is_not_masked_by_a_failing_cancel(
     monkeypatch.setattr(b, "cancel", broken_cancel)
     with pytest.raises(KeyboardInterrupt):
         local_llm.admitted_chat("gbrain.query", "p", wait_s=1)
+
+
+def test_admitted_probe_rt_deferral_releases_waiting_flag(admitted_env):
+    import local_llm
+    broker = _live_broker(admitted_env)
+    backlog = broker.acquire("mcs.extract", "BACKLOG")
+    assert broker.sent(backlog["permit_id"])["sent"]
+    calls = []
+    assert local_llm.admitted_probe_format(
+        "gbrain.query", local_llm.ENDPOINT, "synthetic", None,
+        request_fn=lambda *args: calls.append(args)) == "plain"
+    assert calls == []
+    broker.terminal(backlog["permit_id"], "done")
+    assert broker.status()["rt_waiting"] == 0
+    assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]

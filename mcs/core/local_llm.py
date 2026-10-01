@@ -264,6 +264,8 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         return "plain"
     acq = broker.acquire(client_route, cls)
     if not acq.get("admitted"):
+        if acq.get("reason") == "waiting" and acq.get("permit_id") is not None:
+            broker.cancel(acq["permit_id"])
         return "plain"
     pid = acq["permit_id"]
     sent = broker.sent(pid)
@@ -406,7 +408,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
                 "status": status}
     try:
         out = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return None
     if not isinstance(out, dict) \
             or not isinstance(out.get("choices"), list) \

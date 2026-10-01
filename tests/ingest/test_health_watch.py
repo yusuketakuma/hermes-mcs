@@ -352,3 +352,16 @@ def test_non_numeric_state_timestamps_do_not_stop_watcher(tmp_path):
     r = _eval(tmp_path, 1000.0)
     assert r["status"] == "degraded"
     assert r["alert"] is True
+
+
+@pytest.mark.parametrize("raw", [b"\xff", b"[" * 10000 + b"]" * 10000],
+                         ids=["invalid_utf8", "deep_json"])
+def test_corrupt_bytes_do_not_stop_health_watch(tmp_path, raw):
+    p = tmp_path / "health.json"
+    p.write_bytes(raw)
+    assert health_watch.classify_health(str(p), 1000, 900)["status"] == "corrupt"
+    state = tmp_path / health_watch.STATE_REL
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(raw)
+    report = health_watch.evaluate(str(tmp_path), now=1000, cfg={})
+    assert report["status"] == "missing" and report["alert"]

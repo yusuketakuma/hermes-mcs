@@ -320,3 +320,8 @@ def test_probe_urls_follow_endpoint_authority():
         "http://localhost:1234/v1/chat/completions")
     assert models == "http://localhost:1234/v1/models"
     assert slots == "http://localhost:1234/slots"
+
+
+def test_deep_json_response_is_a_protocol_failure():
+    deep = b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}'
+    assert local_llm.chat("synthetic", request_fn=lambda *args: (200, {}, deep)) is None

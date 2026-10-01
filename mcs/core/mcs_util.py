@@ -152,11 +152,7 @@ def circuit_state_path(ledger):
 
 
 def _circuit_state(ledger) -> dict:
-    try:
-        d = json.loads(circuit_state_path(ledger).read_text())
-    except (OSError, json.JSONDecodeError, TypeError):
-        return {}
-    return d if isinstance(d, dict) else {}
+    return load_config(circuit_state_path(ledger))
 
 
 def circuit_open_s(ledger) -> float:
@@ -236,7 +232,7 @@ def loads_dict(raw) -> dict | None:
     JSON TEXT columns (not LLM output; that is ``json_object``)."""
     try:
         value = json.loads(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -251,7 +247,7 @@ def json_object(text: str) -> dict | None:
     for m in re.finditer(r"\{", text):
         try:
             d, _end = decoder.raw_decode(text, m.start())
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(d, dict):
             return d

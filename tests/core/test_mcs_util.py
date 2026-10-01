@@ -58,3 +58,20 @@ def test_whitespace_only_quote_has_no_evidence_span():
 def test_invalid_chunk_size_is_rejected(size):
     with pytest.raises(ValueError, match="chunk_size"):
         util.text_chunks("synthetic", size)
+
+
+def test_deep_json_is_not_a_stored_object():
+    deep = '{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}'
+    assert util.loads_dict(deep) is None
+    assert util.json_object(deep) is None
+
+
+@pytest.mark.parametrize("raw", [b"\xff", b"[" * 10000 + b"]" * 10000],
+                         ids=["invalid_utf8", "deep_json"])
+def test_corrupt_circuit_bytes_do_not_stop_lane(tmp_path, monkeypatch, raw):
+    path = tmp_path / "circuit.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(util, "circuit_state_path", lambda _: path)
+    assert util.circuit_open_s(None) == 0
+    util.circuit_failure(None)
+    assert json.loads(path.read_text())["failures"] == 1
