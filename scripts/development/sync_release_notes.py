@@ -25,8 +25,10 @@ def api(repo, endpoint, payload=None):
     command = ["gh", "api", "--hostname", "github.com", f"repos/{repo}/{endpoint}",
                "--method", "PATCH" if payload is not None else "GET"]
     if payload is not None:
-        if set(payload) != {"name", "body"}:
-            raise ValueError("更新できるのはnameとbodyのみです")
+        if (set(payload) != {"name", "body", "tag_name"}
+                or not isinstance(payload["tag_name"], str)
+                or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", payload["tag_name"])):
+            raise ValueError("name・bodyと保持する安定版tag_nameのみ指定できます")
         command += ["--input", "-"]
     result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None,
                             text=True, capture_output=True, check=True, timeout=60)
@@ -68,10 +70,13 @@ def synchronize(text, request, apply=False):
             if any(current.get(k) != old.get(k)
                    for k in (*IDENTITY, "name", "body", "updated_at")):
                 raise ValueError(f"{old['tag_name']}: 取得後に変更されたため停止します")
-            updated = request(endpoint, desired)
+            # Omitting tag_name can detach a draft from its existing tag.
+            updated = request(endpoint, desired | {"tag_name": old["tag_name"]})
             if any(updated.get(k) != old.get(k) for k in IDENTITY):
                 raise ValueError("Releaseの識別・公開状態が変わったため停止します")
             verified = request(endpoint)
+            if any(verified.get(k) != old.get(k) for k in IDENTITY):
+                raise ValueError("再取得時にReleaseの識別・公開状態が変わったため停止します")
             if any(verified.get(k) != v for k, v in desired.items()):
                 raise ValueError(f"{old['tag_name']}: 更新後の本文が一致しません")
         results.append(old["tag_name"])

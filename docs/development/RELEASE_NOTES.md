@@ -80,6 +80,9 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
 4. 全対象を事前確認し、内容が同じReleaseは書き換えない。途中の競合編集を検出した場合は停止する。
 5. 更新後に本文一致を読み直して検証する。tag・公開日時・draft・prerelease・添付資産を更新しない。
 
+本文更新のAPIには、競合確認済みの既存tag名も同じ値で明示し、下書きとtagの紐付けを保持する。
+API応答と再取得の両方で識別・公開状態を検査し、同期エラーはworkflowを失敗させる。
+
 標準のGitHub Actions用GITHUB_TOKENとcontents:writeを使う。追加のLLM API・API課金は不要。
 GitHubの通常のActions利用条件は適用される。repo権限やbranch保護は変更しない。
 旧tagのコードにはこの生成器がないため、過去版の変更はmainからの同期を使う。

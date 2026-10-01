@@ -62,7 +62,7 @@
       ]
     },
     "docs": {
-      "notes": "配置整理後のREADME導線をdocs索引と移動記録へ照合した。guides・development・specsの現行正本とSlack/LINE WORKS画像の更新手順へ到達できる。未リリース記録とCHANGELOG冒頭の旧パスを現在の正本へ更新し、過去版の記録は当時の仕様として保持する。install.sh、make、テストrunner、独立LINE WORKSの互換入口は維持され、README本文への追加修正は不要と判断した。",
+      "notes": "配置整理後のREADME導線をdocs索引と移動記録へ照合した。guides・development・specsの現行正本とSlack/LINE WORKS画像の更新手順へ到達できる。未リリース記録とCHANGELOG冒頭の旧パスを現在の正本へ更新し、過去版の記録は当時の仕様として保持する。install.sh、make、テストrunner、独立LINE WORKSの互換入口は維持され、README本文への追加修正は不要と判断した。 Release同期の既存タグ保持・公開状態検査・エラー伝播を共有手順とソースへ照合し、1.0.9の変更履歴へ反映した。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
@@ -72,7 +72,10 @@
         "docs/dev-records/structure-20261001.md",
         "changes/archive/1.0.9/repository-layout-20261001.json",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/lineworks-gallery/README.md"
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/sync_release_notes.py",
+        ".github/workflows/release-notes.yml",
+        "changes/archive/1.0.9/release-sync-tag-preservation.json"
       ]
     }
   }
