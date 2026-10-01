@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from . import _config_ids, _settings
@@ -46,6 +47,22 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
             "guild_id": guild_id}
 
 
+def _standalone_owned(data_root) -> bool:
+    """MCS's own connector (runtime_mode=standalone) owns the cards —
+    a Hermes gateway on the same host must not also serve them. Reads the
+    flags file directly: Hermes loads this plugin without the repo root on
+    sys.path, and a failed probe must never block registration."""
+    try:
+        if not isinstance(data_root, str) or not data_root.strip():
+            return False
+        with open(os.path.join(data_root.strip(), "flags", "notify.json"),
+                  "rb") as handle:
+            flags = json.loads(handle.read().decode("utf-8"))
+        return isinstance(flags, dict) and flags.get("runtime_mode") == "standalone"
+    except Exception:
+        return False
+
+
 def _event_logger(name: str):
     """The worker's structured log sink: '<name> <event> <json>'."""
     import logging
@@ -66,7 +83,7 @@ def make_discord_factory(ctx):
         interaction listener and the supervised delivery worker. SDK
         imports stay inside so /mcs works without discord.py."""
         settings = _interactive_settings(ctx, native)
-        if settings is None:
+        if settings is None or _standalone_owned(settings["data_root"]):
             return None
         from .mcs_discord.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, bot=native, settings=settings,
@@ -121,7 +138,8 @@ def make_slack_factory(ctx):
         from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
         if flags.get("interactive") is not True \
-                or flags.get("transport") != "slack":
+                or flags.get("transport") != "slack" \
+                or flags.get("runtime_mode") == "standalone":
             return None
         from .mcs_slack.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
