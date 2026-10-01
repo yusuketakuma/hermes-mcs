@@ -164,10 +164,54 @@ _FMT_MODE = None      # None=unprobed | "object" | "plain"
 _FMT_TS = 0.0
 _PROBE_RETRY_S = 600
 _FMT_REJECT_STATUSES = (400, 404, 422)
+_FMT_PATH = os.path.join(HOME, "data", "semantic_format_rejections.json")
+
+
+def _format_key(endpoint: str, model: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{endpoint}\0{model}".encode("utf-8")).hexdigest()
+
+
+def _format_marks() -> dict:
+    try:
+        with open(_FMT_PATH, encoding="utf-8") as f:
+            marks = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(marks, dict):
+        return {}
+    now = time.time()
+    return {k: v for k, v in marks.items()
+            if type(v) in (int, float) and 0 <= now - v < _PROBE_RETRY_S}
+
+
+def _remember_plain(endpoint: str, model: str) -> None:
+    # Hashes + rejection times only, never prompts or server error bodies.
+    # Serialize the read/merge/publish across workers; atomic replacement
+    # alone would lose another endpoint's cooldown on a concurrent write.
+    import fcntl
+    import maintenance
+    try:
+        os.makedirs(os.path.dirname(_FMT_PATH), exist_ok=True)
+        with open(_FMT_PATH + ".lock", "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            marks = _format_marks()
+            key = _format_key(endpoint, model)
+            marks.pop(key, None)
+            marks[key] = time.time()
+            while len(marks) > 500:
+                marks.pop(next(iter(marks)))
+            maintenance.atomic_publish_text(_FMT_PATH, json.dumps(marks))
+    except OSError:
+        # Persistence is an optimization; the same-call retry and the
+        # existing in-memory cooldown still work on read-only/full disks.
+        pass
 
 
 def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
     global _FMT_MODE, _FMT_TS
+    if _format_key(endpoint, model) in _format_marks():
+        return "plain"
     if _FMT_MODE == "object":
         return _FMT_MODE
     if _FMT_MODE is not None \
@@ -290,12 +334,15 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                 # swap): degrade to plain for this and later calls —
                 # the retry shares what is left of the caller's budget
                 _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+                remember_at = time.monotonic()
+                _remember_plain(endpoint, model)
+                timeout = max(0.5, timeout - (time.monotonic() - remember_at))
                 rf = None
                 if level and timeout < _LONG_MIN_CALL_S:
                     # The rejected request already left: do not report a
                     # free not-sent defer, or send a long call that cannot
                     # fit. Keep the mark for a later adequately sized try.
-                    return None
+                    break  # retain HTTP 400 for the terminal check below
                 continue
             if response is not None \
                     and response.get("finish_reason") == "length":
