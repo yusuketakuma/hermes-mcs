@@ -6,7 +6,7 @@
   "details": [
     "Slack/Discordの公式SDK（固定版）を ~/.mcs/venv にだけ導入し、収集・解析コアは標準ライブラリのままにした。",
     "Botトークンは ~/.mcs/.env（0600）からのみ読み、~/.hermes/.env やproxy環境変数は使わない。",
-    "テキスト通知は mcs_standalone send が送り、受理されていないことが確実な失敗は再試行、成否不明は従来どおり保留する。",
+    "テキスト通知は mcs_standalone send が送り、受理されていないことが確実な失敗は再試行（5回失敗で送信保留へ移行）、成否不明は従来どおり保留する。",
     "定期ジョブ6件はlaunchdのカレンダーagent（ai.mcs.cron.*）、カード接続は常駐agent ai.mcs.standalone が担う。",
     "standalone選択中はHermes pluginのカード処理を起動しない。",
     "llama-server再起動スクリプトのログを ~/.hermes/logs から ~/.mcs/data/llamacpp-restart.log へ移した（両モード共通）。"
