@@ -23,6 +23,16 @@ auto 有効化（§11 P3）は人の判断事項として残る。
 link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 **このマシンの稼働系**の、導入から更新・障害復旧までの全局面。
 
+`runtime_mode: "standalone"`（[STANDALONE.md](../guides/STANDALONE.md)）では `~/.hermes` を
+使わない: 定期ジョブは launchd `ai.mcs.cron.*`（wrapper は `~/.mcs/data/scripts`、
+3600秒上限）、インタプリタは `~/.mcs/venv`、更新後の再起動対象は `ai.mcs.standalone`、
+復旧ツールは同 venv で services を再同期し通知を `mcs_standalone send` で送る。
+`deployment/requirements-standalone.txt` が変わるタグは自動適用しない
+（`standalone_requirements_changed`）。venv が使えない場合は
+`standalone_python_unavailable`、standalone 導入前のコミットへのロールバックは
+`standalone_rollback_unsupported` で止まる。updater 自身の launchd job の再読込は、
+その job の終了後に detached helper が行う（`MCS_JOB_PID`）。
+
 非目標: hermes-agent 自体の更新（install.sh pin は手動）、brew 等の
 依存物の自動更新、他マシンへの展開、MCS サーバ側への書き込み操作。
 
