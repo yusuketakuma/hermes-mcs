@@ -10,11 +10,11 @@ import sys
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "development"))
 
 
 SPEC = importlib.util.spec_from_file_location(
-    "release_notes", Path(__file__).resolve().parents[2] / "scripts/release_notes.py")
+    "release_notes", Path(__file__).resolve().parents[2] / "scripts/development/release_notes.py")
 notes = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(notes)
 

@@ -125,7 +125,7 @@ class _NoWireSession:
 
 class FakeHTTPClient:
     """Verified-SDK shape the single-post guard requires before a
-    create POST (as in tests/plugin/test_mcs_discord_delivery.py)."""
+    create POST (as in tests/adapters/discord/test_mcs_discord_delivery.py)."""
 
     user_agent = ("DiscordBot (https://github.com/Rapptz/discord.py 2.7.1)"
                   " Python/3.11 aiohttp/3.14.3")

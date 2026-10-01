@@ -26,10 +26,10 @@
    - 新 signal 型を `DETECTORS` に足すと、signal_type enum（:123-128）にないため `aggregate_field_type_invalid`（:161）。
    - 既存 stat の形を変えても同様（例 :85）。
    - どれも `brain_export.run` 全体が失敗する。`PRESETS` / `DETECTORS` と allowlist の整合を直接検証するテストはない（rg 0 件）。**共通ガードテストを先に入れる（F-4、S）**。
-3. **plugin**: 変更すると `hermes gateway restart` が必要（`AGENTS.md`）。spec は未知キーを丸ごと拒否する（`hermes_plugin/mcs_delivery/spec.py:57-73`）。カード表示の追加は既存の container 型（heading / text / field / quote / meta: :73）で表現し、plugin 無変更にする。`notification_cards.kind` は CHECK 制約（`notify_cards.py:80`）で固定され、新 kind はテーブル再作成が要る。新機能は text route（`hermes send`）に載せる。
-4. **config**: 新キーは `mcs_setup.CONFIG_RULES`（`mcs_setup.py:101-118`）と `docs/INSTALLATION.md` の設定表に追加する。未知キーは warn のみ（`mcs_setup.py:233`）。送信先の直書きは禁止（`gate_notify_fail_closed`: `ci/gates.py:333`）。
+3. **plugin**: 変更すると `hermes gateway restart` が必要（`AGENTS.md`）。spec は未知キーを丸ごと拒否する（`adapters/common/spec.py:57-73`）。カード表示の追加は既存の container 型（heading / text / field / quote / meta: :73）で表現し、plugin 無変更にする。`notification_cards.kind` は CHECK 制約（`notify_cards.py:80`）で固定され、新 kind はテーブル再作成が要る。新機能は text route（`hermes send`）に載せる。
+4. **config**: 新キーは `mcs_setup.CONFIG_RULES`（`mcs_setup.py:101-118`）と `docs/guides/INSTALLATION.md` の設定表に追加する。未知キーは warn のみ（`mcs_setup.py:233`）。送信先の直書きは禁止（`gate_notify_fail_closed`: `ci/gates.py:333`）。
 5. **tick 粒度**: 昼 5 分・夜 20 分（`deployment/scripts/mcs_check.sh:13-24`）。`--jobs-only`（7・37 分）も derive → deliver を通る（`run_check.py:1195-1198`）。分単位の閾値の下限はこれ。
-6. **完了時の共通チェック**: `python3 scripts/update_readme.py --check`、`python3 ci/gates.py`、ruff、`scripts/run_tests.sh tests/<領域>/`。`tests/views/views_testkit.SCHEMA` は最小スキーマ（patients に `history_floor` 等がない）なので、coverage / feedback 系は実 `Ledger`（tmp）か SCHEMA 拡張で書く。
+6. **完了時の共通チェック**: `python3 scripts/development/update_readme.py --check`、`python3 ci/gates.py`、ruff、`scripts/run_tests.sh tests/<領域>/`。`tests/views/views_testkit.SCHEMA` は最小スキーマ（patients に `history_floor` 等がない）なので、coverage / feedback 系は実 `Ledger`（tmp）か SCHEMA 拡張で書く。
 7. **文言**: 「記録が見つからない ≠ 対応がなかった」を全出力で保持する（`mcs_signals.py:11-13`）。未取得・不明を 0 にしない（`mcs_stats.py:14-15`）。
 
 ## #12 緊急度エスカレーション
@@ -170,7 +170,7 @@
 - `_med_followup`（`mcs_signals.py:250-340`）: エピソード = (room, 空白正規化した薬表記)（:332）。「後続」は room の**任意の後続投稿**か依頼登録（:307-321）。窓は `followup_days`=7、対象 90 日、変更は `ops.signal_policy` だけ（`THRESHOLDS` :62-74）。【実行確認】変更言及の 9 日後（窓外）に同薬の観察言及（action none）を置いても open のまま。これが「閉じる側」の具体的な FP。
 - 関連検知: `symptom_after_med_change` は同一投稿内の結合だけ（:729-787）。`transition_reconciliation` は discharge / transfer と薬変更の ±14 日共起（:431-459、`mcs_queries.py:282-325`）。
 - 統計側 `st_med_change_followup`（`mcs_stats.py:513-562`）が同じ窓ロジックを独立実装している。signal と stat は同一述語であるべき（`mcs_queries.py` の docstring）。
-- episode 用の artifact / table は存在しない。`open_loop_aging.needs` に名前があるだけ（`mcs_stats.py:732-734`）。USER_GUIDE は interaction_links だけに言及（`docs/USER_GUIDE.md:361-363`）。adapter が保存する参照情報は `parent_id` と `reply_count` だけ（`mcs_adapter.py:439-485`）。
+- episode 用の artifact / table は存在しない。`open_loop_aging.needs` に名前があるだけ（`mcs_stats.py:732-734`）。USER_GUIDE は interaction_links だけに言及（`docs/guides/USER_GUIDE.md:361-363`）。adapter が保存する参照情報は `parent_id` と `reply_count` だけ（`mcs_adapter.py:439-485`）。
 - 旧 ROADMAP の訂正: (1) 旧 v2 #16 は #3 drug_map 依存だが、新 #14 は依存を落としている。薬名は表記ゆれ未統合（`mcs_stats.py:378-380`）。(2) `open_loop_aging.needs=[interaction_links, episode_links]` は #14 と #17 を結合しているが、コード docstring（:585-587）と USER_GUIDE は interaction_links だけが必要と述べている。needs を分離する。(3) 「誤検知の削減」を測るラベルがない（#19 が前提）。
 
 **設計方針**
@@ -301,7 +301,7 @@
 **現状**
 - `signal_v1` は append-only。open / superseded / resolved / dismissed が各 1 行（`meta.key`、`created_at`）。open 更新は `mcs_signals.py:887-910`。resolved（条件消失）は :911-926 で、**原因を記録しない**。dismissed は同証跡の間は抑止し、証跡変化で再 open（:888-899）。dismissed も条件消失で resolved になる（:916-926）。再 open 率は行履歴（resolved → open）から導出できる。
 - 人手行動:
-  - (a) 却下 `ops.signal_dismiss`（検証 `mcs_operations.py:124-136`、適用 :488-538）。dismissed 行に `dismissed_by` / `dismiss_reason`（**自由文 ≤2000**）/ `dismiss_command_id`。理由は構造化されていない。モーダルは単一テキスト（`mcs_discord/actions.py:371-376`、Slack `mcs_slack/actions.py:22`、envelope `mcs_delivery/envelopes.py:198-209`）。
+  - (a) 却下 `ops.signal_dismiss`（検証 `mcs_operations.py:124-136`、適用 :488-538）。dismissed 行に `dismissed_by` / `dismiss_reason`（**自由文 ≤2000**）/ `dismiss_command_id`。理由は構造化されていない。モーダルは単一テキスト（`mcs_discord/actions.py:371-376`、Slack `mcs_slack/actions.py:22`、envelope `adapters/common/envelopes.py:198-209`）。
   - (b) ack / 担当 / 保留（`notify_cards.py:1548-1565, 1656-1700`）。ack は manifest（shown = signal_keys）単位。
   - (c) 依頼登録 `request.create`。検知器は登録済み依頼を「応答」とみなして自動 resolved にする（`mcs_signals.py:234-239`）が、signal ↔ request の紐付けも resolved 原因も記録しない。
 - **却下ボタンは単一キーの signal カードだけ**（`notify_cards.py:628-630`）。digest カード（既定で 11 型中 8 型: `mcs_signals.py:997-1009`）は「ページ確認」だけ（:597-598）。主要な型は Discord から却下できず CLI だけ。

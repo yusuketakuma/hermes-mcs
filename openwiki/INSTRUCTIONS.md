@@ -2,8 +2,8 @@
 
 This is the user-authored source brief, not a generated wiki page. Preserve it
 during normal OpenWiki initialization and updates. Ground the wiki in current
-code and tests, with `README.md`, `SECURITY.md`, `docs/INSTALLATION.md` and
-`docs/SETUP_AGENT.md` as the maintained user-facing documentation. Historical
+code and tests, with `README.md`, `SECURITY.md`, `docs/guides/INSTALLATION.md` and
+`docs/guides/SETUP_AGENT.md` as the maintained user-facing documentation. Historical
 plans and deployment records describe their stated dates, not current runtime
 state. Do not read patient data, credentials, local configuration, exported
 patient pages or live service outputs to write this wiki.
@@ -23,7 +23,7 @@ the corresponding Claims against current source:
   path and preserve Discord and notification-free configurations.
 - Slack/Discord use Hermes-owned native connections. LINE WORKS uses the
   independent `adapters/lineworks/` transport and `lineworks_adapter/` CLI;
-  Hermes Agent source is unchanged. Check `docs/LINEWORKS.md`, including
+  Hermes Agent source is unchanged. Check `docs/guides/LINEWORKS.md`, including
   explicit credentials/scope, public HTTPS Callback, service candidates,
   unknown-send fences and its documented differences from native threads.
   Path B supports this independent delivery; notification-enabled runners

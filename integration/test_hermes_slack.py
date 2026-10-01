@@ -15,7 +15,7 @@ import yaml
 
 MCS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MCS_ROOT))
-sys.path.insert(0, str(MCS_ROOT / "tests" / "plugin"))
+sys.path.insert(0, str(MCS_ROOT / "tests" / "adapters" / "slack"))
 
 from hermes_cli.plugins import PluginManager  # noqa: E402
 from gateway.platforms.base import BasePlatformAdapter  # noqa: E402

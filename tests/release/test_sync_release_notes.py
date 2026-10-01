@@ -7,7 +7,7 @@ import sys
 import unittest
 
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "development"
 sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("sync_release_notes", SCRIPTS / "sync_release_notes.py")
 sync = importlib.util.module_from_spec(SPEC)

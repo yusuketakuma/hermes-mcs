@@ -25,7 +25,7 @@ SCOPE = {"profile": "mcs", "application_id": "app1",
          "guild_id": "g1", "channel_id": "ch1"}
 ORIGIN = {**SCOPE, "message_id": "mid-1"}
 # Canonical Discord worker settings for the notify/plugin test family —
-# test_perf_cards shares this dict (tests/plugin/discord_testkit.py
+# test_perf_cards shares this dict (tests/adapters/discord/discord_testkit.py
 # keeps its own copy).
 SETTINGS = {"profile": "mcs", "application_id": "1", "channel_id": "42",
             "guild_id": "7",

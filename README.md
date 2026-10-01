@@ -5,7 +5,7 @@
 **MedicalCareStation（MCS）の記録を、自分のMacで収集・整理・検索。**
 **Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
 在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのHermes addonです。
-Discordと[LINE WORKS（独自アダプター）](docs/LINEWORKS.md)にも対応しています。
+Discordと[LINE WORKS（独自アダプター）](docs/guides/LINEWORKS.md)にも対応しています。
 LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 
 [画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
@@ -80,7 +80,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 `🧾 患者サマリー`から、取得済み投稿の薬・最新バイタル・次回予定・未完了タスク・履歴取得状況を本人に表示します。
 **暫定集約であり、確定した処方一覧ではありません。未取得の記録も「無い」とは扱いません。**
 
-[Slackの導入・接続・許可ユーザー設定](docs/INSTALLATION.md) · [操作の詳しい使い方](docs/USER_GUIDE.md) · [画面画像のソースと更新手順](docs/screenshots/slack-gallery/README.md)
+[Slackの導入・接続・許可ユーザー設定](docs/guides/INSTALLATION.md) · [操作の詳しい使い方](docs/guides/USER_GUIDE.md) · [画面画像のソースと更新手順](docs/screenshots/slack-gallery/README.md)
 
 <details>
 <summary><strong>Discordを使う場合の画面例を開く</strong></summary>
@@ -88,7 +88,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 ![Discord通知カードの完全合成例](docs/screenshots/discord-card.svg)
 
 Discordでも通知カードと本文・添付のスレッドを利用できます。
-詳細は[利用者ガイド](docs/USER_GUIDE.md)を参照してください。
+詳細は[利用者ガイド](docs/guides/USER_GUIDE.md)を参照してください。
 
 </details>
 
@@ -107,7 +107,7 @@ Discordでも通知カードと本文・添付のスレッドを利用できま�
 | 全体の傾向を把握する | 投稿量・職種別内訳・未解決依頼などの読み取り専用統計。任意の日次ダイジェスト |
 
 Slackでは通知カードと操作メニューから閲覧・依頼操作を行えます。Discordでは通知カードに加えて`/mcs`コマンドも使えます。
-詳細は[利用者ガイド](docs/USER_GUIDE.md)と[プラグインガイド](hermes_plugin/README.md)を参照してください。
+詳細は[利用者ガイド](docs/guides/USER_GUIDE.md)と[プラグインガイド](hermes_plugin/README.md)を参照してください。
 
 **AIの抽出は候補です。患者サマリーは確定した処方一覧ではなく、カードの確認済み表示もタスク完了を意味しません。**
 
@@ -123,7 +123,7 @@ Slackでは通知カードと操作メニューから閲覧・依頼操作を行
 3. 作業が必要ならタスクを作り、確認画面で内容・担当・期限・理由を確認して確定します。
 
 新しい返信で表示内容が変わると、確認状態も更新されます。確認記録と実作業の完了は別に扱います。
-[カードの操作と表示条件](docs/USER_GUIDE.md)
+[カードの操作と表示条件](docs/guides/USER_GUIDE.md)
 
 </details>
 
@@ -133,7 +133,7 @@ Slackでは通知カードと操作メニューから閲覧・依頼操作を行
 患者サマリーで暫定集約を確認し、検索やタイムラインで根拠となる投稿をたどれます。
 薬の変更、症状、相談、判断、実施、再評価を、保存済みの記録から確認します。
 まだ取得していない範囲は検索されません。履歴の取得状況も合わせて確認してください。
-[患者サマリー・検索・タイムライン](docs/USER_GUIDE.md)
+[患者サマリー・検索・タイムライン](docs/guides/USER_GUIDE.md)
 
 </details>
 
@@ -144,7 +144,7 @@ Slackでは通知カードと操作メニューから閲覧・依頼操作を行
 薬の期間表現や依頼・経過の記録を根拠に、原文を読み、人が確認・判断します。
 日次ダイジェストを有効にすると、未完了タスクや滞留アラートなどもまとめて確認できます。
 機械がMCSへ依頼を自動送信することはありません。
-[アラートの意味・対象・限界](docs/USER_GUIDE.md)
+[アラートの意味・対象・限界](docs/guides/USER_GUIDE.md)
 
 </details>
 
@@ -165,7 +165,7 @@ Slackでは通知カードと操作メニューから閲覧・依頼操作を行
 
 投稿数は重症度を、薬剤名の記載は現在の服用を、記録上の前後関係は因果関係を証明しません。
 多職種の多さは連携の質を保証せず、アラートがないことも患者の安全を保証しません。
-未来を予測する機能ではありません。[データ一覧と解釈の限界](docs/USER_GUIDE.md)
+未来を予測する機能ではありません。[データ一覧と解釈の限界](docs/guides/USER_GUIDE.md)
 
 </details>
 
@@ -190,18 +190,18 @@ cd hermes-mcs
 **AIに導入を任せる場合**は、リポジトリを開いたエージェントに次のように依頼できます。
 
 ```text
-docs/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してください。
+docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してください。
 既存設定と回答を再利用し、まず通知先を選んで進めてください。
 認証情報は私が端末へ直接入力します。投稿の収集・通知・既読化は開始前に範囲を確認してください。
 ```
 
 | 次に進む先 | 内容 |
 |---|---|
-| [Slackを設定する（推奨）](docs/INSTALLATION.md) | Slack app・接続・カード操作・許可ユーザーの設定 |
-| [LINE WORKSを設定する](docs/LINEWORKS.md) | 独自接続アダプター・秘密値入力・Callback・許可範囲の設定 |
-| [導入ガイド](docs/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
-| [AIエージェント向け導入手順](docs/SETUP_AGENT.md) | エージェントに導入を任せるときの確認・実行手順 |
-| [更新・バックアップ・復旧](docs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |
+| [Slackを設定する（推奨）](docs/guides/INSTALLATION.md) | Slack app・接続・カード操作・許可ユーザーの設定 |
+| [LINE WORKSを設定する](docs/guides/LINEWORKS.md) | 独自接続アダプター・秘密値入力・Callback・許可範囲の設定 |
+| [導入ガイド](docs/guides/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
+| [AIエージェント向け導入手順](docs/guides/SETUP_AGENT.md) | エージェントに導入を任せるときの確認・実行手順 |
+| [更新・バックアップ・復旧](docs/specs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |
 
 困ったときは、表示された同じインタープリターで`mcs_setup.py doctor`を実行します。
 
@@ -256,7 +256,7 @@ docs/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してくだ�
 <summary><strong>バックアップがあれば端末故障にも対応できる？</strong></summary>
 
 日次SQLiteバックアップは同じMac上の保存です。端末喪失時の復旧保証にはなりません。
-別媒体への退避と復元手順の確認は運用側で行います。[復旧の限界と手順](docs/lifecycle-spec.md)
+別媒体への退避と復元手順の確認は運用側で行います。[復旧の限界と手順](docs/specs/lifecycle-spec.md)
 
 </details>
 
@@ -307,14 +307,14 @@ docs/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してくだ�
 
 | 読む目的 | 文書 |
 |---|---|
-| 使い方・画面・データの読み方 | [利用者ガイド](docs/USER_GUIDE.md) |
-| 導入・接続・設定・トラブル対応 | [導入ガイド](docs/INSTALLATION.md) · [エージェント向け手順](docs/SETUP_AGENT.md) |
+| 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
+| 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [ライフサイクル仕様](docs/lifecycle-spec.md) · [配備資産](deployment/README.md) |
-| 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
-| エクスポート・意味解析の評価 | [外部出力契約](docs/external-export-contract.md) · [意味解析の評価](docs/semantic-evaluation.md) · [rollout](docs/semantic-facts-v2-rollout.md) |
+| 更新・バックアップ・復旧 | [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [配備資産](deployment/README.md) |
+| 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
+| エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
-| リリースとREADMEの更新ルール | [リリースノート規則](docs/RELEASE_NOTES.md) · [README運用](docs/README_MAINTENANCE.md) |
+| リリースとREADMEの更新ルール | [リリースノート規則](docs/development/RELEASE_NOTES.md) · [README運用](docs/development/README_MAINTENANCE.md) |
 
 ## ライセンス
 

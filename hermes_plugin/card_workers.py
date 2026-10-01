@@ -118,7 +118,7 @@ def make_slack_factory(ctx):
         settings = _slack_adapter_settings(ctx)
         if settings is None:
             return None
-        from .mcs_delivery import paths
+        from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
         if flags.get("interactive") is not True \
                 or flags.get("transport") != "slack":

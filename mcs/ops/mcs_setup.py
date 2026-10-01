@@ -397,7 +397,7 @@ def _plugin_newer_than_gateway(status_out: str) -> bool:
     # loads (Python sources and the plugin manifest) represent code the
     # running process hasn't picked up; a docs-only edit (README) never
     # needs a restart.
-    for source in ("hermes_plugin", "adapters/slack", "adapters/discord"):
+    for source in ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"):
         for base, dirs, files in os.walk(os.path.join(REPO_ROOT, source)):
             dirs[:] = [d for d in dirs if d != "__pycache__"]
             for name in files:
@@ -528,7 +528,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         r = _run([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
-            errors.append("LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and follow docs/LINEWORKS.md to repair the existing credentials")
+            errors.append("LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and follow docs/guides/LINEWORKS.md to repair the existing credentials")
     elif not _hermes_ok(exe):
         errors.append(f"hermes CLI not resolvable ({exe}) — "
                       "notifications cannot be sent")

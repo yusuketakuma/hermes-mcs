@@ -23,12 +23,12 @@ _TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TESTS.parent / "mcs"))
 import _mcs_path  # noqa: E402,F401  registers every subdir as import root
 
-# tests/ mirrors mcs/'s area subdirs; register each as an import root so
-# shared area testkits (`from semantic_testkit import _seeded`)
-# keep working regardless of which area dir a test lives in.
-for _d in sorted(_TESTS.iterdir()):
-    if _d.is_dir() and not _d.name.startswith((".", "_")):
-        sys.path.insert(0, str(_d))
+# Register module directories at every depth so area testkits remain
+# importable when adapter tests are grouped by transport.
+for _root, _dirs, _files in os.walk(_TESTS):
+    _dirs[:] = sorted(d for d in _dirs if not d.startswith((".", "_")))
+    if _root != str(_TESTS) and any(f.endswith(".py") for f in _files):
+        sys.path.insert(0, _root)
 
 
 _SENSITIVE_ENV = (

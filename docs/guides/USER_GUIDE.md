@@ -3,7 +3,7 @@
 利用者・責任者向けの詳細ガイド（画面イメージ・できること・仕組み・MCS データで何が追えるのか）。
 README.md を短くした際に、README にあった利用者向けの詳細（記述は移設時点のまま）をここへ移した。
 導入・運用は [INSTALLATION.md](INSTALLATION.md)、開発・運用リファレンスは
-[DEVELOPMENT.md](DEVELOPMENT.md)、データの行き先と限界は [SECURITY.md](../SECURITY.md) を参照。
+[DEVELOPMENT.md](../development/DEVELOPMENT.md)、データの行き先と限界は [SECURITY.md](../../SECURITY.md) を参照。
 
 ## 画面イメージ
 
@@ -15,19 +15,19 @@ Slack ではモバイルで場所を取らないよう、ボタンは「☐ 確�
 
 **Discord — 通知カード（送信者行・構造化・操作ボタン）**
 
-![Discord通知カード](screenshots/discord-card.svg)
+![Discord通知カード](../screenshots/discord-card.svg)
 
 **Discord — 本文・添付はコンパニオンスレッドへ配送**
 
-![Discordカードとコンパニオンスレッド](screenshots/discord-thread.svg)
+![Discordカードとコンパニオンスレッド](../screenshots/discord-thread.svg)
 
 **Slack — 通知カード（構造化フィールド・操作ボタン）**
 
-![Slack通知カード](screenshots/slack-card.svg)
+![Slack通知カード](../screenshots/slack-card.svg)
 
 **Slack — 本文・添付はスレッドへ配送**
 
-![Slackカードとスレッド](screenshots/slack-thread.svg)
+![Slackカードとスレッド](../screenshots/slack-thread.svg)
 
 `📋 構造化` ブロックはローカルLLMの抽出（要約・要点・区分・バイタル・
 検査・症状・薬剤・依頼）をコンパクトに提示する「候補」です。本文はカードには
@@ -110,11 +110,11 @@ Slack は表示名の文字列で、取得できない場合は「メンバー�
 
 **CLI — 取込状況・タイムライン（`mcs_view.py status` / `timeline`）**
 
-![status/timelineイメージ](screenshots/view-status.svg)
+![status/timelineイメージ](../screenshots/view-status.svg)
 
 **CLI — アラートシグナル（`mcs_view.py signals`）**
 
-![シグナル出力イメージ](screenshots/signals-cli.svg)
+![シグナル出力イメージ](../screenshots/signals-cli.svg)
 
 ## このシステムが助けること
 
@@ -148,7 +148,7 @@ Slack は表示名の文字列で、取得できない場合は「メンバー�
 
 ## 仕組み
 
-![全体の流れ](assets/flow-overview.svg)
+![全体の流れ](../assets/flow-overview.svg)
 
 1. **収集** — 5分ごとに MCS を確認し、新しい記録をマシン上の
    データベースに保存します
@@ -165,12 +165,12 @@ Slack は表示名の文字列で、取得できない場合は「メンバー�
 
 **実際に稼働している構成**
 
-![稼働中のシステム構成](assets/runtime-topology.svg)
+![稼働中のシステム構成](../assets/runtime-topology.svg)
 
 情報の行き先（AI の使用箇所・外部送信の有無）の詳細と現在の機能・運用上の制約は
-[SECURITY.md](../SECURITY.md)「人工知能（AI）の使用箇所と情報の行き先」「復旧と解析の限界」、
+[SECURITY.md](../../SECURITY.md)「人工知能（AI）の使用箇所と情報の行き先」「復旧と解析の限界」、
 技術的な構成（システム構成図・ローカルLLM と TypeSafe Jev の技術詳細）は
-[DEVELOPMENT.md](DEVELOPMENT.md) の「付録: README から移設した技術詳細」を参照。
+[DEVELOPMENT.md](../development/DEVELOPMENT.md) の「付録: README から移設した技術詳細」を参照。
 
 ## MCS データで何が追えるのか
 
@@ -193,7 +193,7 @@ Slack は表示名の文字列で、取得できない場合は「メンバー�
 
 ### メディカルチャットから縦断データへ
 
-![パイプライン図](assets/flow-pipeline.svg)
+![パイプライン図](../assets/flow-pipeline.svg)
 
 ### 測定できること
 
@@ -419,7 +419,7 @@ POST・既読化は一切なし・失敗しても収集は止まりません）�
 件名・担当者・期限・状態（未着手/対応中/完了/取消）・版・元記録へのリンク・
 操作記録（誰が・いつ・理由）。機械が勝手に登録・変更することはない。
 
-#### F. 集計統計（一覧は [DEVELOPMENT.md](DEVELOPMENT.md)「統計（読み取り専用）」参照）
+#### F. 集計統計（一覧は [DEVELOPMENT.md](../development/DEVELOPMENT.md)「統計（読み取り専用）」参照）
 
 投稿量・職種内訳・曜日×時間帯の分布・投稿の集中度・薬剤の月別言及・
 後続記録が確認できない件数・依頼の滞留・退院前後の薬変更の重なり 等。
@@ -447,7 +447,7 @@ POST・既読化は一切なし・失敗しても収集は止まりません）�
 
 ### メッセージではなく症例経過
 
-![症例経過シーケンス図](assets/flow-journey.svg)
+![症例経過シーケンス図](../assets/flow-journey.svg)
 
 hermes-mcs はこの流れを単なる6投稿としてではなく、
 **症状 → 評価 → 提案 → 判断 → 実施 → 再評価** という一つの症例経過として
@@ -456,7 +456,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 多職種連携の解析
 
-![多職種連携ネットワーク図](assets/flow-network.svg)
+![多職種連携ネットワーク図](../assets/flow-network.svg)
 
 すべての職種が同じ患者の記録に書き込むため、「誰が誰に相談したか」
 「相談から回答までの時間」「依頼が回答・実施まで完結したか」
@@ -469,7 +469,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 縦断症例解析
 
-![症例タイムライン図](assets/flow-timeline.svg)
+![症例タイムライン図](../assets/flow-timeline.svg)
 
 解析可能な軸: 症状→薬剤変更までの時間、薬剤変更→再評価までの時間、
 退院→薬剤照合までの時間、同一問題の再発、薬剤変更・多職種連携が
@@ -492,7 +492,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 | 期間終了後の更新なし | 期間表現の終了日を過ぎても新しい期間表現の記録がないもの（内服切れの可能性） |
 | 退院前後の薬変更 | 退院・転院の±14日に薬の変更言及が重なるもの |
 
-![アラートフロー図](assets/flow-signals.svg)
+![アラートフロー図](../assets/flow-signals.svg)
 
 **「未来を予測する」機能ではありません。** 過去の統計から条件を
 学習する仕組みはなく、条件は固定値または人が承認した変更のみ
@@ -503,7 +503,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 出力イメージ
 
-![解析概要イメージ](assets/analytics-overview.svg)
+![解析概要イメージ](../assets/analytics-overview.svg)
 
 *Synthetic example — 架空データ。実患者データではない。*
 

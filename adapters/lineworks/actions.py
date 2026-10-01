@@ -5,7 +5,7 @@ import asyncio
 import re
 
 from hermes_plugin import projects
-from hermes_plugin.mcs_delivery import envelopes, paths, registry, text
+from adapters.common import envelopes, paths, registry, text
 
 from .cards import buttons
 

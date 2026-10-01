@@ -880,7 +880,7 @@ def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
 def test_standalone_worker_documented_render_preserves_literal_paths(tmp_path, monkeypatch):
     """Run only the documented renderer; never launchctl or a real service."""
     import sys
-    guide = (ROOT / "docs/INSTALLATION.md").read_text()
+    guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
     marker = "$PY - <<'PYDRAIN'\n"
     snippet = guide.split(marker, 1)[1].split("\nPYDRAIN", 1)[0]
     repo = tmp_path / "checkout & space"

@@ -8,7 +8,7 @@ local LLM (real Qwen when running) and, when TYPESAFE_API_KEY is set, a
 real Jev client.
 
 Usage:
-  python3 scripts/semantic_shadow_e2e.py \
+  python3 scripts/development/semantic_shadow_e2e.py \
       --cases evaluation/semantic_completeness_cases.json \
       --out /tmp/shadow-e2e.json [--jev] [--deadline 300]
 
@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "mcs"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401  registers every subdir as an import root
 
 

@@ -6,9 +6,9 @@ import copy
 import re
 from collections.abc import Mapping
 
-from hermes_plugin.mcs_delivery.paths import read_verified_attachment
-from hermes_plugin.mcs_delivery.spec import token_map
-from hermes_plugin.mcs_delivery.worker import DeliveryWorker as _BaseWorker
+from adapters.common.paths import read_verified_attachment
+from adapters.common.spec import token_map
+from adapters.common.worker import DeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import mention_ids, render, validate

@@ -1,7 +1,7 @@
 """Discord wire edge of the card delivery worker.
 
 The durable claim -> transport_begin -> grant -> send ->
-transport_receipt loop lives in ``mcs_delivery.worker``; this subclass
+transport_receipt loop lives in ``adapters.common.worker``; this subclass
 supplies only the Discord operations the neutral loop calls into:
 channel/message sends and edits, revoke deletes, and the durable
 per-part deliveries (companion thread, body chunks, attachments) a
@@ -13,7 +13,7 @@ import asyncio
 import io
 from functools import partial
 
-from hermes_plugin.mcs_delivery import paths, registry, worker
+from adapters.common import paths, registry, worker
 from . import cards
 
 # Discord delete of an already-gone message achieves the revoke goal.

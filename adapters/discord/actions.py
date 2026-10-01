@@ -20,7 +20,7 @@ import time
 from typing import Any
 
 from hermes_plugin import projects
-from hermes_plugin.mcs_delivery import envelopes, paths, registry, text
+from adapters.common import envelopes, paths, registry, text
 from .cards import no_pings
 
 ACTION_PREFIX = "mcs:a:"

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "development"))
 readme = __import__("readme_release")
 notes = __import__("release_notes")
 
@@ -30,14 +30,14 @@ class ReadmeReleaseTest(unittest.TestCase):
                 + readme.BEGIN + "\nold\n" + readme.END + "\nFooter\n")
 
     def fixture(self, root):
-        (root / "docs").mkdir()
+        (root / "docs/development").mkdir(parents=True)
         (root / "synthetic.py").write_text("# synthetic\n", encoding="utf-8")
         (root / "CHANGELOG.md").write_text(self.changelog(), encoding="utf-8")
         (root / "README.md").write_text(readme.render(self.template(), self.changelog()), encoding="utf-8")
         review = {"version": "1.0.8", "sections": {
             name: {"notes": "合成のソースを照合しました。", "sources": ["synthetic.py"]}
             for name in readme.REVIEW_SECTIONS}}
-        (root / "docs/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
+        (root / "docs/development/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
         return review
 
     def test_latest_release_excerpt_preserves_all_upgrade_notes_and_manual_text(self):
@@ -81,7 +81,7 @@ class ReadmeReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "見直し"):
                 readme.check(root)
             review["version"] = "1.0.9"
-            (root / "docs/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
+            (root / "docs/development/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
             readme.check(root, "1.0.9")
             with self.assertRaisesRegex(ValueError, "tag"):
                 readme.check(root, "1.0.8")
@@ -95,11 +95,11 @@ class ReadmeReleaseTest(unittest.TestCase):
                           {"notes": "確認", "sources": ["missing.py"]},
                           {"notes": "確認", "sources": ["../outside.py"]}):
                 review["sections"]["features"] = entry
-                (root / "docs/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
+                (root / "docs/development/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
                 with self.subTest(entry=entry), self.assertRaises(ValueError):
                     readme.check(root)
             review["sections"].pop("features")
-            (root / "docs/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
+            (root / "docs/development/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
             with self.assertRaises(ValueError):
                 readme.check(root)
 

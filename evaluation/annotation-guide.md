@@ -14,7 +14,7 @@
 
 現時点の制約：正解factは本人が原文から定義する必要がある。固定構造データのfacts/loops/usage/latencyは生成時の観測から準備し、結合処理で補作しない。自由記述だけの評価を定量labelへ自動変換しない。
 
-評価器schema v3の fact lifecycle 観測集合（verified/rendered/delivered_fact_ids）は注釈者が記入しない。管理者が`semantic_blind.py --lifecycle-snapshot`で生成する。仕様と採点は`docs/semantic-evaluation.md`を参照。
+評価器schema v3の fact lifecycle 観測集合（verified/rendered/delivered_fact_ids）は注釈者が記入しない。管理者が`semantic_blind.py --lifecycle-snapshot`で生成する。仕様と採点は`docs/specs/semantic-evaluation.md`を参照。
 
 
 定量評価に使う評価票は、作成前に各outputsへ`evaluation_candidate`として評価器用candidate全体（facts/claims/loops/status/usage/latency/version）を渡す。claimsのIDと本文は表示主張に一致させる。評価票にはpredictionsとしてfacts/loops/statusも表示されるため、本文だけでなくこの予測も確認する。管理者用キーにはcandidate全体のhashを保存し、結合時に差し替えを拒否する。

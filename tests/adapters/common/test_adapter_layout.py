@@ -16,7 +16,7 @@ def test_lineworks_compatibility_entry_uses_canonical_classes_and_cli_wrapper():
     assert lineworks_adapter.Credentials is lineworks.Credentials
     assert lineworks_adapter.LineWorksClient is lineworks.LineWorksClient
     assert Path(importlib.util.find_spec("lineworks_adapter.__main__").origin) == (
-        Path(__file__).resolve().parents[2] / "lineworks_adapter" / "__main__.py")
+        Path(__file__).resolve().parents[3] / "lineworks_adapter" / "__main__.py")
 
 
 @pytest.mark.parametrize("transport,module", [
@@ -27,13 +27,25 @@ def test_lineworks_compatibility_entry_uses_canonical_classes_and_cli_wrapper():
 def test_canonical_and_legacy_adapter_imports_share_instance(transport, module):
     canonical = importlib.import_module(f"adapters.{transport}.{module}")
     legacy = importlib.import_module(f"hermes_plugin.mcs_{transport}.{module}")
-    expected = Path(__file__).resolve().parents[2] / "adapters" / transport / (module + ".py")
+    expected = Path(__file__).resolve().parents[3] / "adapters" / transport / (module + ".py")
     assert Path(canonical.__file__).resolve() == expected
     assert Path(legacy.__file__).resolve() == expected
     assert canonical is legacy
 
 
-@pytest.mark.parametrize("transport", ["slack", "discord"])
+@pytest.mark.parametrize("module", [
+    "envelopes", "journal", "paths", "registry", "spec", "text", "worker",
+])
+def test_canonical_and_legacy_delivery_imports_share_instance(module):
+    canonical = importlib.import_module(f"adapters.common.{module}")
+    legacy = importlib.import_module(f"hermes_plugin.mcs_delivery.{module}")
+    expected = Path(__file__).resolve().parents[3] / "adapters" / "common" / (module + ".py")
+    assert Path(canonical.__file__).resolve() == expected
+    assert Path(legacy.__file__).resolve() == expected
+    assert canonical is legacy
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "common"])
 @pytest.mark.parametrize("legacy_first", [False, True])
 def test_adapter_aliases_work_in_either_import_order_without_sdks(tmp_path, transport,
                                                                legacy_first):
@@ -47,16 +59,21 @@ sys.path.insert(0, sys.argv[1])
 for sdk in ('discord', 'slack_sdk', 'slack_bolt'):
     sys.modules[sdk] = None
 transport = sys.argv[2]
-prefixes = ['adapters.' + transport, 'hermes_plugin.mcs_' + transport]
+legacy = ('hermes_plugin.mcs_delivery' if transport == 'common'
+          else 'hermes_plugin.mcs_' + transport)
+prefixes = ['adapters.' + transport, legacy]
 if sys.argv[3] == 'True':
     prefixes.reverse()
-for name in ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if transport == 'slack' else ()):
+names = (('envelopes', 'journal', 'paths', 'registry', 'spec', 'text', 'worker')
+         if transport == 'common' else
+         ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if transport == 'slack' else ()))
+for name in names:
     first = importlib.import_module(prefixes[0] + '.' + name)
     second = importlib.import_module(prefixes[1] + '.' + name)
     assert first is second
 """
     result = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parents[2]),
+        [sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parents[3]),
          transport, str(legacy_first)],
         cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
@@ -109,6 +126,9 @@ def test_slack_reconnect_hands_off_across_import_names(monkeypatch):
     ("discord/cards.py", "def bot():\n    import discord\n    return discord.Client()\n", True),
     ("discord/new.py", "def view():\n    import discord\n    return discord.ui.LayoutView()\n", True),
     ("slack/delivery.py", "import socket\n", True),
+    ("common/worker.py", "import asyncio\nasync def wait():\n    await asyncio.sleep(0)\n", False),
+    ("common/worker.py", "import asyncio\nasync def connect():\n    await asyncio.open_connection('synthetic', 1)\n", True),
+    ("common/paths.py", "import socket\n", True),
     ("slack/actions.py", "import asyncio\nasync def wait():\n    await asyncio.sleep(0)\n", False),
     ("slack/actions.py", "import asyncio\nasync def connect():\n    await asyncio.open_connection('synthetic', 1)\n", True),
     ("lineworks/client.py", "import urllib.request\nimport subprocess\n", False),
@@ -136,12 +156,13 @@ def test_canonical_adapter_keeps_sdk_and_network_boundaries(tmp_path, monkeypatc
     assert bool(violations) is expected
 
 
-@pytest.mark.parametrize("transport", ["slack", "discord"])
+@pytest.mark.parametrize("transport", ["slack", "discord", "common"])
 def test_legacy_adapter_bootstraps_when_host_loads_another_namespace(tmp_path, transport):
     import subprocess
     import sys
 
-    shim = Path(__file__).resolve().parents[2] / "hermes_plugin" / ("mcs_" + transport) / "__init__.py"
+    package = "mcs_delivery" if transport == "common" else "mcs_" + transport
+    shim = Path(__file__).resolve().parents[3] / "hermes_plugin" / package / "__init__.py"
     # -I removes checkout/PYTHONPATH/user site paths. The host may discover
     # a symlinked plugin under its own package name rather than hermes_plugin.
     code = """
@@ -155,7 +176,10 @@ spec = importlib.util.spec_from_file_location('synthetic_host_adapter', shim,
 package = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = package
 spec.loader.exec_module(package)
-for name in ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if sys.argv[2] == 'slack' else ()):
+names = (('envelopes', 'journal', 'paths', 'registry', 'spec', 'text', 'worker')
+         if sys.argv[2] == 'common' else
+         ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if sys.argv[2] == 'slack' else ()))
+for name in names:
     module = importlib.import_module(spec.name + '.' + name)
     assert Path(module.__file__).resolve().parent == shim.parents[2] / 'adapters' / sys.argv[2]
     assert module is importlib.import_module('adapters.' + sys.argv[2] + '.' + name)

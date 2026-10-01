@@ -7,4 +7,4 @@
 
 DB 上の `extract_version=3` artifact は引き続き読み取り可能で、
 有限 cohort による v4 置換の対象となる。仕様の正本は
-`docs/semantic-evaluation.md` の v4 移行節。
+`docs/specs/semantic-evaluation.md` の v4 移行節。

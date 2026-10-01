@@ -33,7 +33,7 @@ _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapte
 # without an SDK installed. No new client/token ownership is delegated.
 _SDK_FILES = {"mcs_discord/actions.py", "mcs_discord/cards.py"}
 _ASYNC_FILES = {"mcs_discord/actions.py", "mcs_discord/delivery.py",
-                "mcs_discord/tasks.py", "mcs_delivery/worker.py",
+                "mcs_discord/tasks.py", "common/worker.py",
                 "mcs_slack/actions.py", "mcs_slack/delivery.py",
                 "mcs_slack/tasks.py"}
 _ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
