@@ -177,6 +177,25 @@ def test_refused_payload_and_missing_sdk_exit_codes(tmp_path, monkeypatch):
     assert _send(tmp_path, monkeypatch, {"text": "x"})[0] == 75
 
 
+def test_slack_mrkdwn_never_forms_emphasis_from_a_lone_asterisk():
+    from mcs_standalone.slack_runtime import _mrkdwn
+    # **bold** still becomes Slack *bold*, and pings stay escaped
+    assert _mrkdwn("**患者** <!here> & <@U1>") == \
+        "*患者* &lt;!here&gt; &amp; &lt;@U1&gt;"
+    # stray * could pair up into Slack bold on the wrong span
+    assert _mrkdwn("2*3 and *odd and a *b* c") == "2＊3 and ＊odd and a ＊b＊ c"
+
+
+def test_pinned_skips_marker_gated_dependencies(tmp_path, monkeypatch):
+    req = tmp_path / "requirements-standalone.txt"
+    req.write_text("# comment\n"
+                   'gated==1.0 ; python_version >= "3.13"\n'
+                   "with-comment==2.0   # via gated\n"
+                   "plain==3.0\n\n")
+    monkeypatch.setattr(cli, "_REQUIREMENTS", req)
+    assert cli._pinned() == {"with-comment": "2.0", "plain": "3.0"}
+
+
 def test_unfinished_setup_is_retried_not_held(tmp_path, monkeypatch):
     write_root(tmp_path, env="")                        # init not run yet: no tokens
     assert _send(tmp_path, monkeypatch, {"text": "x"})[0] == 75

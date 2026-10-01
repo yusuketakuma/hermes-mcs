@@ -147,8 +147,13 @@ def send(root: str, target: str) -> int:
 def _pinned() -> dict[str, str]:
     pins = {}
     for line in _REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or ";" in line:
+            # marker-gated pins (python_version conditionals) are not
+            # installed on every interpreter — they cannot be verified
+            continue
         name, sep, version = line.partition("==")
-        if sep and not line.startswith("#"):
+        if sep:
             pins[name.strip()] = version.strip()
     return pins
 
