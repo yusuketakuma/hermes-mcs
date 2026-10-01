@@ -283,6 +283,37 @@ def test_rx_period_expiry(led):
     assert "確定ではありません" in sig["note"]
 
 
+def test_rx_period_lapsed(led):
+    """furthest-out period end has passed and nothing renews it —
+    '内服切れ'の可能性として人が原記録を確認する候補。"""
+    _msg(led.db, 1)
+    _msg(led.db, 2, pid=2)
+    _extract_v1(led.db, 1, "h1",
+                [{"start": "2026-09-01", "end": "2026-09-20",
+                  "raw": "9/1-9/20"}])
+    _extract_v1(led.db, 2, "h2",
+                [{"start": "2026-09-01", "end": "2026-09-28",
+                  "raw": "9/1-9/28"}])
+    res = _ev(led)
+    assert res["open"] == 1
+    sig = mcs_signals.current_open(led.db)["items"][0]
+    assert sig["type"] == "rx_period_lapsed"
+    assert sig["project_id"] == 1
+    assert sig["context"]["days_since_end"] == 1
+    assert "原記録で確認" in sig["note"]
+
+
+def test_rx_period_lapsed_window_bound(led):
+    """終了から rx_lapsed_days（既定14日）を超える沈黙は記録様式の
+    問題であり、アラートにしない。"""
+    _msg(led.db, 1)
+    _extract_v1(led.db, 1, "h1",
+                [{"start": "2026-08-01", "end": "2026-09-05",
+                  "raw": "8/1-9/5"}])
+    res = _ev(led)
+    assert res["open"] == 0
+
+
 # --- lifecycle (append-only transitions) ---
 
 def test_signal_resolves_when_condition_clears(led):
