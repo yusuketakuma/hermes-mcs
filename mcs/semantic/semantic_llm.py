@@ -9,6 +9,7 @@ import re
 import time
 
 import semantic_jev as jev
+import semantic_runtime as runtime
 from mcs_util import json_object as _json_block
 # generic text utilities live in core/mcs_util.py; the private aliases
 # keep the semantic_llm/semantic facade patch surface stable
@@ -195,7 +196,24 @@ def _verdicts_brief(verdicts: dict) -> str:
 # Safety ceiling for one local-LLM prompt. Above it the model's context
 # window could silently drop input — an oversize target is flagged
 # input_oversize -> NEEDS_REVIEW instead of being chopped (§12.3).
-PROMPT_CHAR_LIMIT = 28000
+# Sized for the deployed -c 49152 -np 3 layout (16384 tokens/slot):
+# CJK-dense text can approach 1 token/char, so 12000 chars keeps the
+# prompt under the slot window with headroom for the output budget.
+PROMPT_CHAR_LIMIT = 12000
+
+
+def _oversize_stub(bundle: dict, target_id: int) -> dict:
+    """Terminal no-claims summary for a prompt the slot context cannot
+    hold — audit flags _input_oversize -> NEEDS_REVIEW, never a silent
+    partial PASS."""
+    return {"summary_id": f"sum_{bundle['bundle_id']}",
+            "input_bundle_id": bundle["bundle_id"],
+            "schema_version": SCHEMA_VERSION,
+            "target_message_id": target_id,
+            "claims": [],
+            "limitations": ["対象投稿または文脈が大きすぎるため"
+                            "要約を生成できませんでした"],
+            "audit_status": "pending", "_input_oversize": True}
 
 
 def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
@@ -235,15 +253,14 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
     if deadline is not None and time.monotonic() > deadline:
         return result(None, "deadline")
     if len(prompt) > PROMPT_CHAR_LIMIT:
-        return result({"summary_id": f"sum_{bundle['bundle_id']}",
-                       "input_bundle_id": bundle["bundle_id"],
-                       "schema_version": SCHEMA_VERSION,
-                       "target_message_id": target_id,
-                       "claims": [],
-                       "limitations": ["対象投稿または文脈が大きすぎるため"
-                                       "要約を生成できませんでした"],
-                       "audit_status": "pending", "_input_oversize": True})
-    response = llm_fn(prompt)
+        return result(_oversize_stub(bundle, target_id))
+    try:
+        response = llm_fn(prompt)
+    except runtime.LLMRejected:
+        # the backend refused the prompt (context window) — same
+        # terminal oversize outcome as the local char gate, reached
+        # without burning a retry on an input that can never pass
+        return result(_oversize_stub(bundle, target_id))
     if deadline is not None and time.monotonic() > deadline:
         return result(None, "deadline")
     raw = _json_block(response or "")

@@ -60,6 +60,15 @@ class LLMNotSent(RuntimeGuardError):
     consumed, so the job waits instead of spending a retry attempt."""
 
 
+class LLMRejected(RuntimeError):
+    """The backend definitively refused the request itself — e.g. the
+    prompt exceeds the slot's context window. Deterministic: retrying
+    the same input can never succeed, so the caller maps it to a
+    terminal outcome instead of burning retry attempts. NOT a
+    RuntimeGuardError: a refusal must not abort the pass, and must not
+    be confused with LLMNotSent (which waits because nothing ran)."""
+
+
 def parse_payload(row: dict | object) -> dict:
     raw = row.get("payload") if isinstance(row, dict) else row["payload"]
     return loads_dict(raw) or {}
@@ -578,7 +587,8 @@ def guard(ledger, token: JobToken, *, deadline: float,
 
 
 __all__ = [
-    "JobToken", "LLMNotSent", "RuntimeBudget", "RuntimeBudgetShort",
+    "JobToken", "LLMNotSent", "LLMRejected", "RuntimeBudget",
+    "RuntimeBudgetShort",
     "RuntimeGuardError",
     "RuntimeOff",
     "RuntimeStale", "bind_jev", "config_generation",

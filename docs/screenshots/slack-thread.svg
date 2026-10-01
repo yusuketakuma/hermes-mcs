@@ -23,39 +23,46 @@
   <text x="186" y="112" font-size="10" fill="#ababad">10:02</text>
 
   <!-- card attachment -->
-  <rect x="60" y="122" width="4" height="252" fill="#1d9bd1"/>
-  <rect x="64" y="122" width="356" height="252" rx="4" fill="#222529" stroke="#35373c"/>
-  <text x="80" y="148" font-size="12" fill="#d1d2d3" font-weight="bold">📋 山田 太郎（合成例）— 09-28</text>
-  <text x="80" y="168" font-size="9" fill="#ababad">09:40 訪問看護 佐藤 · 09:50 ケアマネ 鈴木（合成）</text>
-  <text x="80" y="192" font-size="10" fill="#d1d2d3" font-weight="bold">区分</text>
-  <text x="80" y="210" font-size="10" fill="#d1d2d3">服薬変更</text>
-  <text x="230" y="192" font-size="10" fill="#d1d2d3" font-weight="bold">バイタル</text>
-  <text x="230" y="210" font-size="10" fill="#d1d2d3">BP 142/88・脈76・SpO2 96%</text>
-  <text x="80" y="240" font-size="10" fill="#d1d2d3" font-weight="bold">依頼</text>
-  <text x="80" y="258" font-size="10" fill="#d1d2d3">次回訪問で残薬を確認</text>
-  <rect x="80" y="272" width="74" height="26" rx="5" fill="#007a5a"/>
-  <text x="117" y="289" font-size="10" fill="#fff" text-anchor="middle">✅ 確認済み</text>
-  <rect x="162" y="272" width="74" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="199" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">👤 担当中</text>
-  <rect x="244" y="272" width="74" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="281" y="289" font-size="10" fill="#d1d2d3" text-anchor="middle">🔗 MCSで開く</text>
-  <rect x="80" y="306" width="110" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="135" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">📝 タスク作成</text>
-  <rect x="198" y="306" width="110" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
-  <text x="253" y="323" font-size="10" fill="#d1d2d3" text-anchor="middle">🧾 患者サマリー</text>
-  <text x="80" y="356" font-size="9" fill="#6e7681">カード本体は要約と操作だけ</text>
+  <rect x="60" y="122" width="4" height="288" fill="#1d9bd1"/>
+  <rect x="64" y="122" width="356" height="288" rx="4" fill="#222529" stroke="#35373c"/>
+  <text x="80" y="146" font-size="12" fill="#d1d2d3" font-weight="bold">💬 山田 太郎 — 09-28</text>
+
+  <text x="80" y="168" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤（合成）</text>
+  <text x="80" y="186" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="80" y="202" font-size="9" fill="#d1d2d3">・バイタル: BP 142/88  HR 76  SpO2 96%</text>
+  <text x="80" y="218" font-size="9" fill="#d1d2d3">・症状: めまい(中等度・起立時)</text>
+
+  <text x="80" y="244" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木（合成）</text>
+  <text x="80" y="262" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="80" y="278" font-size="9" fill="#d1d2d3">・薬剤: フェロキシピン[中止]、カルベジロール 2.5mg[開始]</text>
+  <text x="80" y="294" font-size="9" fill="#d1d2d3">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
+
+  <line x1="80" y1="310" x2="404" y2="310" stroke="#3a3d42" stroke-width="1"/>
+
+  <!-- actions: 2 quick buttons + select -->
+  <rect x="80" y="322" width="74" height="26" rx="5" fill="#007a5a"/>
+  <text x="117" y="339" font-size="10" fill="#fff" text-anchor="middle">✅ 確認済み</text>
+  <rect x="162" y="322" width="74" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
+  <text x="199" y="339" font-size="10" fill="#d1d2d3" text-anchor="middle">👤 担当中</text>
+  <rect x="244" y="322" width="120" height="26" rx="5" fill="#222529" stroke="#565a5e"/>
+  <text x="258" y="339" font-size="10" fill="#ababad">操作を選ぶ…</text>
+  <text x="352" y="339" font-size="9" fill="#ababad" text-anchor="middle">▾</text>
+
+  <!-- link as context text -->
+  <text x="80" y="372" font-size="10" fill="#1d9bd1">🔗 MCSで開く</text>
+  <text x="80" y="394" font-size="9" fill="#6e7681">カード本体は送信者行と構造化だけ — 本文はスレッドへ</text>
 
   <!-- Slack reply bar -->
-  <rect x="60" y="390" width="356" height="44" rx="6" fill="#1a1d21" stroke="#35373c"/>
-  <circle cx="78" cy="412" r="10" fill="#248046"/>
-  <text x="78" y="416" font-size="8" fill="#fff" text-anchor="middle">佐</text>
-  <circle cx="96" cy="412" r="10" fill="#6e40c9"/>
-  <text x="96" y="416" font-size="8" fill="#fff" text-anchor="middle">鈴</text>
-  <text x="116" y="408" font-size="10" fill="#1d9bd1">2件の返信</text>
-  <text x="116" y="424" font-size="9" fill="#6e7681">最新 09:50 — クリックでスレッドを表示</text>
+  <rect x="60" y="420" width="356" height="44" rx="6" fill="#1a1d21" stroke="#35373c"/>
+  <circle cx="78" cy="442" r="10" fill="#248046"/>
+  <text x="78" y="446" font-size="8" fill="#fff" text-anchor="middle">佐</text>
+  <circle cx="96" cy="442" r="10" fill="#6e40c9"/>
+  <text x="96" y="446" font-size="8" fill="#fff" text-anchor="middle">鈴</text>
+  <text x="116" y="438" font-size="10" fill="#1d9bd1">2件の返信</text>
+  <text x="116" y="454" font-size="9" fill="#6e7681">最新 09:50 — クリックでスレッドを表示</text>
 
   <!-- arrow to thread panel -->
-  <path d="M 420 412 C 440 412, 442 300, 456 290" fill="none" stroke="#1d9bd1" stroke-width="2" marker-end="url(#st_ar)"/>
+  <path d="M 420 442 C 440 442, 442 300, 456 290" fill="none" stroke="#1d9bd1" stroke-width="2" marker-end="url(#st_ar)"/>
 
   <!-- right: thread panel (Slack sidebar) -->
   <rect x="452" y="0" width="508" height="560" fill="#1a1d21" stroke="#3a3d42"/>
@@ -70,13 +77,13 @@
   <text x="482" y="83" font-size="10" fill="#fff" text-anchor="middle">M</text>
   <text x="502" y="78" font-size="11" fill="#d1d2d3" font-weight="bold">MCSボット</text>
   <text x="566" y="78" font-size="9" fill="#ababad">10:02</text>
-  <text x="502" y="96" font-size="9" fill="#ababad">📋 山田 太郎（合成例）— 09-28 の記録（構造化カード）</text>
+  <text x="502" y="96" font-size="9" fill="#ababad">💬 山田 太郎 — 09-28（構造化カード）</text>
 
   <!-- replies divider -->
   <line x1="472" y1="122" x2="830" y2="122" stroke="#3a3d42" stroke-width="1"/>
   <text x="846" y="126" font-size="9" fill="#ababad">2件の返信</text>
 
-  <!-- reply 1: body -->
+  <!-- reply 1: body (one post per reply) -->
   <rect x="470" y="140" width="24" height="24" rx="5" fill="#248046"/>
   <text x="482" y="157" font-size="10" fill="#fff" text-anchor="middle">佐</text>
   <text x="502" y="152" font-size="11" fill="#d1d2d3" font-weight="bold">訪問看護 佐藤（合成）</text>
@@ -110,15 +117,15 @@
 
   <!-- thread notes -->
   <line x1="472" y1="428" x2="944" y2="428" stroke="#3a3d42" stroke-width="1"/>
-  <text x="472" y="450" font-size="9" fill="#6e7681">関連する新着も同じスレッドに続きます</text>
-  <text x="472" y="468" font-size="9" fill="#6e7681">配送は parts ジャーナルで管理 — 中断後も中断点から再開・重複投稿なし</text>
+  <text x="472" y="450" font-size="9" fill="#6e7681">返信ごとに1投稿 — 関連する新着も同じスレッドに続きます</text>
+  <text x="472" y="468" font-size="9" fill="#6e7681">後から届いた返信・抽出結果は投稿を増やさず書き換え（parts ジャーナルで中断点から再開・重複なし）</text>
 
   <!-- reply input -->
   <rect x="472" y="486" width="472" height="40" rx="8" fill="#222529" stroke="#565a5e"/>
   <text x="488" y="510" font-size="10" fill="#6e7681">スレッド 山田 太郎 — 09-28 への返信…</text>
 
   <!-- left captions -->
-  <text x="219" y="478" font-size="10" fill="#8b949e" text-anchor="middle">カードは読みやすく — 要約と操作</text>
-  <text x="219" y="496" font-size="10" fill="#8b949e" text-anchor="middle">本文・添付はスレッドへ</text>
-  <text x="219" y="540" font-size="9" fill="#6e7681" text-anchor="middle">Discord と同じ内容が Slack に届きます（合成例）</text>
+  <text x="219" y="500" font-size="10" fill="#8b949e" text-anchor="middle">カードは読みやすく — 要約と操作だけ</text>
+  <text x="219" y="518" font-size="10" fill="#8b949e" text-anchor="middle">本文・添付はスレッドへ</text>
+  <text x="219" y="546" font-size="9" fill="#6e7681" text-anchor="middle">Discord と同じ内容が Slack に届きます（合成例）</text>
 </svg>
