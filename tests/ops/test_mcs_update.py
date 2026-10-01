@@ -18,6 +18,19 @@ from ops_testkit import (_git, _make_repo, _mk_schema, _receipts_db,
                          _seed_consent)
 
 
+def test_repo_fixture_clones_main_with_master_default(tmp_path, monkeypatch):
+    """Fixture HEAD must be valid independently of the host Git default."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "init.defaultBranch")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "master")
+    repo, bare = _make_repo(tmp_path)
+    assert _git(bare, "symbolic-ref", "HEAD").stdout.strip() == "refs/heads/main"
+    assert _git(repo, "branch", "--show-current").stdout.strip() == "main"
+    assert (_git(repo, "rev-parse", "HEAD").stdout
+            == _git(repo, "rev-parse", "v1.1.0^{commit}").stdout)
+    assert (repo / "f.txt").read_text() == "two"
+
+
 @pytest.fixture
 def updater(tmp_path, monkeypatch):
     """mcs_update pointed at temp dirs — REPORT_PATH included so a
