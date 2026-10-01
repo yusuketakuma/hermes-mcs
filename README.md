@@ -22,9 +22,9 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 ## 画面イメージ — Slack
 
 **通知先とカード操作はSlackを推奨します。** 要点の確認からタスクの確定まで、7画面で紹介します。
-すべて現行実装に基づく**完全合成の説明図**です。実画面のキャプチャではなく、実患者・実投稿・匿名化データも使用していません。
+掲載画像の名前・投稿・数値はすべて架空です。実データや実投稿の匿名化例は使用していません。現行実装に基づく説明図で、実画面のキャプチャではありません。
 
-![Slackの全体像：通知カードと本文・添付のスレッドを並べた完全合成例](docs/screenshots/slack-gallery/01-overview.png)
+![Slackの全体像：通知カードと本文・添付のスレッドを並べた画面例](docs/screenshots/slack-gallery/01-overview.png)
 
 カードで要点を読み、スレッドで原文と添付を確認します。
 画像を開くと拡大できます。画像内のボタンは説明用で、実際の操作はSlackの許可ユーザーが行います。
@@ -35,7 +35,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 ### 確認・担当を、カードから共有
 
-![Slack通知カード：確認済み・担当中と操作した人を表示する完全合成例](docs/screenshots/slack-gallery/02-notification.png)
+![Slack通知カード：確認済み・担当中と操作した人を表示する画面例](docs/screenshots/slack-gallery/02-notification.png)
 
 `☐ 確認`・`👤 担当する`の結果をカードに反映します。新しい返信で表示内容が変わると、確認状態も更新されます。
 **カードの確認済み表示は、タスク完了を意味しません。**
@@ -44,7 +44,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 ### 必要な操作を、メニューから選ぶ
 
-![Slackの操作メニュー：タスク作成・患者サマリー・検索などの完全合成例](docs/screenshots/slack-gallery/03-actions.png)
+![Slackの操作メニュー：タスク作成・患者サマリー・検索などの画面例](docs/screenshots/slack-gallery/03-actions.png)
 
 タスク作成、患者サマリー、抽出の誤り報告、自分のタスク、未確認一覧、検索を`操作を選ぶ…`にまとめています。
 `☑ タスク完了`などの表示は、カードの状態や設定で変わります。
@@ -55,7 +55,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 | ① 入力フォーム | ② 本人だけに表示される確認画面 |
 |---|---|
-| [![Slackのタスク入力フォーム：内容・担当者・期限・理由の完全合成例](docs/screenshots/slack-gallery/04-task-form.png)](docs/screenshots/slack-gallery/04-task-form.png) | [![Slackのタスク確認画面：内容と理由を照合して確定する完全合成例](docs/screenshots/slack-gallery/05-task-preview.png)](docs/screenshots/slack-gallery/05-task-preview.png) |
+| [![Slackのタスク入力フォーム：内容・担当者・期限・理由の画面例](docs/screenshots/slack-gallery/04-task-form.png)](docs/screenshots/slack-gallery/04-task-form.png) | [![Slackのタスク確認画面：内容と理由を照合して確定する画面例](docs/screenshots/slack-gallery/05-task-preview.png)](docs/screenshots/slack-gallery/05-task-preview.png) |
 | 投稿に由来する下書きを確認し、担当者・期限・理由を入力して`確認へ`。 | 内容・担当・期限・理由を照合し、`確定する`を選ぶまで登録しません。 |
 
 スタッフ一覧を取得できる場合は担当者を選択できます。一覧がない場合は手入力になります。
@@ -66,7 +66,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 ### スレッドのタスクを、対応中・完了へ
 
-![Slackの本人向けタスク一覧：タスクごとに対応中・完了を記録する完全合成例](docs/screenshots/slack-gallery/06-task-list.png)
+![Slackの本人向けタスク一覧：タスクごとに対応中・完了を記録する画面例](docs/screenshots/slack-gallery/06-task-list.png)
 
 未完了タスクがあるカードの`☑ タスク完了`から、このスレッドの一覧を本人に表示します。
 対象のタスクを選び、人が`対応中`・`完了`を記録します。本文からAIが抽出した「完了」とも区別します。
@@ -75,7 +75,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 ### 訪問前に、患者サマリーで記録をたどる
 
-![Slackの本人向け患者サマリー：薬・次回予定・未完了タスク・履歴取得状況の完全合成例](docs/screenshots/slack-gallery/07-patient-summary.png)
+![Slackの本人向け患者サマリー：薬・次回予定・未完了タスク・履歴取得状況の画面例](docs/screenshots/slack-gallery/07-patient-summary.png)
 
 `🧾 患者サマリー`から、取得済み投稿の薬・最新バイタル・次回予定・未完了タスク・履歴取得状況を本人に表示します。
 **暫定集約であり、確定した処方一覧ではありません。未取得の記録も「無い」とは扱いません。**
@@ -85,7 +85,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 <details>
 <summary><strong>Discordを使う場合の画面例を開く</strong></summary>
 
-![Discord通知カードの完全合成例](docs/screenshots/discord-card.svg)
+![Discord通知カードの画面例](docs/screenshots/discord-card.svg)
 
 Discordでも通知カードと本文・添付のスレッドを利用できます。
 詳細は[利用者ガイド](docs/guides/USER_GUIDE.md)を参照してください。
@@ -95,18 +95,16 @@ Discordでも通知カードと本文・添付のスレッドを利用できま�
 <details>
 <summary><strong>LINE WORKSを使う場合の画面例を開く</strong></summary>
 
-すべて現行実装に基づく**完全合成の説明図**です。実画面のキャプチャではなく、実患者・実投稿・匿名化データも使用していません。
-
 **要約・原文・添付を、トークルームへ連続投稿**
 
-![LINE WORKS通知：要約カード・原文・添付をトークルームへ連続投稿する完全合成例](docs/screenshots/lineworks-gallery/01-delivery.png)
+![LINE WORKS通知：要約カード・原文・添付をトークルームへ連続投稿する画面例](docs/screenshots/lineworks-gallery/01-delivery.png)
 
 同じ要約・原文・送信対象の添付を、共有トークルームへ順に配信します。
 表示の更新は新しい投稿になり、古いボタンと開いている確認画面は無効になります。
 
 **タスクは、本人との1:1トークで入力・確認・確定**
 
-![LINE WORKSのタスク操作：本人との1:1トークで入力し、内容と理由を確認して確定する完全合成例](docs/screenshots/lineworks-gallery/02-task-confirm.png)
+![LINE WORKSのタスク操作：本人との1:1トークで入力し、内容と理由を確認して確定する画面例](docs/screenshots/lineworks-gallery/02-task-confirm.png)
 
 許可ユーザーがカードから操作すると、入力や回答は本人との1:1トークへ届きます。
 タスクは内容・担当・期限・理由を照合し、本人が`確定する`を選ぶまで登録しません。画像内のボタンは説明用です。
@@ -253,7 +251,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 - **人承認を記録。** 依頼登録・更新、アラートの却下、閾値変更は所定の承認とreceiptの記録を伴います。MCSへの依頼送信を自動化しません。
 - **保存完了後に既読化。** 取得完了・DBへのcommit・snapshot timestampを条件にします。
 - **認証とログの境界。** no-redirect / no-proxy。定期実行のログへ本文・氏名を出しません。明示的な閲覧出力は別に扱います。
-- **合成データだけをリポジトリへ。** 患者データ・秘密情報・実投稿の匿名化例を入れません。
+- **説明用の架空データだけをリポジトリへ。** 患者データ・秘密情報・実投稿の匿名化例を入れません。
 
 <a name="faq"></a>
 
@@ -301,7 +299,7 @@ LINE WORKSへ要約・原文・添付を配信し、本人との1:1トークで�
   LINE WORKSのトークルームへSlackと同じ要約・原文・送信対象の添付を配信できます。許可ユーザーだけが操作でき、入力・プレビュー・本人による確定は1:1トークで行います。Slack・Discordは引き続きHermes公式接続を使います。
 
 - **改善 · LINE WORKSの画面例と接続別の案内をREADMEへ追加**
-  LINE WORKSの連続投稿と本人との1:1入力・確定を、完全合成の2画面で確認できます。Discordと同じ折りたたみ表示で、通知先・データの行き先・スレッドの説明も3接続に合わせました。
+  LINE WORKSの連続投稿と本人との1:1入力・確定を、架空の名前・投稿を使った2画面で確認できます。Discordと同じ折りたたみ表示で、通知先・データの行き先・スレッドの説明も3接続に合わせました。
 
 - **不具合修正 · 不正な患者集約からの出力で既存ファイルを失わないよう修正**
   患者集約のJSONや表示に必要な構造が壊れている場合は、エクスポートをエラーとして停止し、既存の出力を保持します。不正な集約を「患者がいなくなった」と扱って患者ページを削除したり、一部だけ新しい出力に置き換えたりしません。
@@ -326,7 +324,7 @@ LINE WORKSへ要約・原文・添付を配信し、本人との1:1トークで�
 
 - 追加操作やDB移行は不要です。不正な結果の状態はcurrentからunknownに変わります。
 
-- 設定変更は不要です。画像は現行実装に基づく完全合成の説明図で、実画面のキャプチャではありません。通知・取得範囲・既読化・人承認・理由・receiptの実行条件は変更しません。
+- 設定変更は不要です。画像は現行実装に基づく架空データの説明図で、実画面のキャプチャではありません。通知・取得範囲・既読化・人承認・理由・receiptの実行条件は変更しません。
 
 - 利用者の追加設定・データ移行は不要です。リリース準備ではdocs/development/readme-review.jsonの5項目をソースと照合して新しいversionへ更新してください。
 

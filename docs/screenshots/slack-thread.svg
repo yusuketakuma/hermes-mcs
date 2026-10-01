@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" font-family="'Hiragino Sans', sans-serif">
-  <title>完全合成の Slack カード＋スレッド表示例</title>
+  <title>架空データを使った Slack カード＋スレッド表示例</title>
   <desc>実患者・実投稿を参照せずに新規作成した、Slack カードとスレッドパネルの図。</desc>
   <rect width="960" height="560" fill="#1a1d21"/>
   <defs>
@@ -7,12 +7,12 @@
       <path d="M0,0 L9,4.5 L0,9 z" fill="#1d9bd1"/>
     </marker>
   </defs>
-  <text x="16" y="24" font-size="10" fill="#6e7681">完全合成の表示例（実患者・実投稿の匿名化データは不使用）</text>
+  <text x="16" y="24" font-size="10" fill="#6e7681">名前・投稿・数値は架空です（実データ・実投稿の匿名化例は不使用）</text>
 
   <!-- left: channel -->
   <rect x="0" y="34" width="438" height="46" fill="#19171d"/>
   <line x1="0" y1="80" x2="438" y2="80" stroke="#3a3d42" stroke-width="1"/>
-  <text x="16" y="62" font-size="14" fill="#d1d2d3" font-weight="bold">#  mcs-synthetic</text>
+  <text x="16" y="62" font-size="14" fill="#d1d2d3" font-weight="bold">#  mcs-demo</text>
 
   <!-- message -->
   <rect x="16" y="96" width="34" height="34" rx="7" fill="#611f69"/>
@@ -27,12 +27,12 @@
   <rect x="64" y="122" width="356" height="288" rx="4" fill="#222529" stroke="#35373c"/>
   <text x="80" y="146" font-size="12" fill="#d1d2d3" font-weight="bold">💬 山田 太郎 — 09-28</text>
 
-  <text x="80" y="168" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤（合成）</text>
+  <text x="80" y="168" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤さん</text>
   <text x="80" y="186" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
   <text x="80" y="202" font-size="9" fill="#d1d2d3">・バイタル: BP 142/88  HR 76  SpO2 96%</text>
   <text x="80" y="218" font-size="9" fill="#d1d2d3">・症状: めまい(中等度・起立時)</text>
 
-  <text x="80" y="244" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木（合成）</text>
+  <text x="80" y="244" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木さん</text>
   <text x="80" y="262" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
   <text x="80" y="278" font-size="9" fill="#d1d2d3">・薬剤: フェロキシピン[中止]、カルベジロール 2.5mg[開始]</text>
   <text x="80" y="294" font-size="9" fill="#d1d2d3">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
@@ -69,7 +69,7 @@
   <rect x="452" y="0" width="508" height="52" fill="#19171d"/>
   <line x1="452" y1="52" x2="960" y2="52" stroke="#3a3d42" stroke-width="1"/>
   <text x="472" y="32" font-size="15" fill="#d1d2d3" font-weight="bold">スレッド</text>
-  <text x="540" y="32" font-size="10" fill="#ababad">#mcs-synthetic</text>
+  <text x="540" y="32" font-size="10" fill="#ababad">#mcs-demo</text>
   <text x="944" y="32" font-size="14" fill="#ababad" text-anchor="end">✕</text>
 
   <!-- parent preview -->
@@ -86,7 +86,7 @@
   <!-- reply 1: body (one post per reply) -->
   <rect x="470" y="140" width="24" height="24" rx="5" fill="#248046"/>
   <text x="482" y="157" font-size="10" fill="#fff" text-anchor="middle">佐</text>
-  <text x="502" y="152" font-size="11" fill="#d1d2d3" font-weight="bold">訪問看護 佐藤（合成）</text>
+  <text x="502" y="152" font-size="11" fill="#d1d2d3" font-weight="bold">訪問看護 佐藤さん</text>
   <text x="676" y="152" font-size="9" fill="#ababad">09:40</text>
   <text x="502" y="176" font-size="9" fill="#d1d2d3">夕方バイタルを測定しました。BP142/88、脈76、SpO2 96%。</text>
   <text x="502" y="192" font-size="9" fill="#d1d2d3">起立時にめまいの訴え。転倒・外傷なし。</text>
@@ -110,7 +110,7 @@
   <!-- reply 2 -->
   <rect x="470" y="350" width="24" height="24" rx="5" fill="#6e40c9"/>
   <text x="482" y="367" font-size="10" fill="#fff" text-anchor="middle">鈴</text>
-  <text x="502" y="362" font-size="11" fill="#d1d2d3" font-weight="bold">ケアマネ 鈴木（合成）</text>
+  <text x="502" y="362" font-size="11" fill="#d1d2d3" font-weight="bold">ケアマネ 鈴木さん</text>
   <text x="676" y="362" font-size="9" fill="#ababad">09:50</text>
   <text x="502" y="386" font-size="9" fill="#d1d2d3">かかりつけ医より服薬変更の連絡。</text>
   <text x="502" y="402" font-size="9" fill="#d1d2d3">フェロキシピンは中止、カルベジロール2.5mgを開始します。</text>
@@ -127,5 +127,5 @@
   <!-- left captions -->
   <text x="219" y="500" font-size="10" fill="#8b949e" text-anchor="middle">カードは読みやすく — 要約と操作だけ</text>
   <text x="219" y="518" font-size="10" fill="#8b949e" text-anchor="middle">本文・添付はスレッドへ</text>
-  <text x="219" y="546" font-size="9" fill="#6e7681" text-anchor="middle">Discord と同じ内容が Slack に届きます（合成例）</text>
+  <text x="219" y="546" font-size="9" fill="#6e7681" text-anchor="middle">Discord と同じ内容が Slack に届きます</text>
 </svg>

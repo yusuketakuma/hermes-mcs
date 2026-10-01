@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="940" height="560" viewBox="0 0 940 560" font-family="'Hiragino Sans', sans-serif">
-  <title>完全合成の Discord カード＋コンパニオンスレッド表示例</title>
+  <title>架空データを使った Discord カード＋コンパニオンスレッド表示例</title>
   <desc>実患者・実投稿を参照せずに新規作成した、カードとコンパニオンスレッドの図。</desc>
   <rect width="940" height="560" fill="#0d1117"/>
   <defs>
@@ -7,12 +7,12 @@
       <path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/>
     </marker>
   </defs>
-  <text x="30" y="28" font-size="11" fill="#8b949e">完全合成の表示例（実患者・実投稿の匿名化データは不使用）</text>
+  <text x="30" y="28" font-size="11" fill="#8b949e">名前・投稿・数値は架空です（実データ・実投稿の匿名化例は不使用）</text>
 
   <!-- card (left) -->
   <rect x="30" y="46" width="310" height="330" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
   <text x="48" y="72" font-size="12" fill="#e6edf3" font-weight="bold">📋 カード（患者ごとに1枚）</text>
-  <text x="48" y="94" font-size="10" fill="#e6edf3">山田 太郎（合成例）· 09-28</text>
+  <text x="48" y="94" font-size="10" fill="#e6edf3">山田さん· 09-28</text>
   <text x="48" y="110" font-size="9" fill="#8b949e">09:40 訪問看護 佐藤 / 09:50 ケアマネ 鈴木</text>
   <rect x="44" y="122" width="282" height="118" rx="6" fill="#0d1117" stroke="#30363d"/>
   <text x="56" y="142" font-size="10" fill="#58a6ff">📋 構造化</text>
@@ -35,12 +35,12 @@
   <!-- companion thread (right) -->
   <rect x="428" y="46" width="482" height="440" rx="10" fill="#161b22" stroke="#1f6feb" stroke-width="1.5"/>
   <text x="446" y="72" font-size="13" fill="#e6edf3" font-weight="bold">💬 山田 太郎 — 09-28</text>
-  <text x="446" y="90" font-size="9" fill="#6e7681">コンパニオンスレッド（カードごとに自動作成・合成例）</text>
+  <text x="446" y="90" font-size="9" fill="#6e7681">コンパニオンスレッド（カードごとに自動作成）</text>
 
   <!-- post 1 -->
   <circle cx="456" cy="112" r="10" fill="#248046"/>
   <text x="456" y="116" font-size="8" fill="#fff" text-anchor="middle">佐</text>
-  <text x="474" y="116" font-size="10" fill="#e6edf3">訪問看護 佐藤（合成）</text>
+  <text x="474" y="116" font-size="10" fill="#e6edf3">訪問看護 佐藤さん</text>
   <text x="630" y="116" font-size="9" fill="#6e7681">09:40</text>
   <text x="456" y="140" font-size="9" fill="#b5bac1">夕方バイタルを測定しました。BP142/88、脈76、SpO2 96%。</text>
   <text x="456" y="156" font-size="9" fill="#b5bac1">起立時にめまいの訴え。転倒・外傷なし。</text>
@@ -64,7 +64,7 @@
   <!-- post 2 -->
   <circle cx="456" cy="330" r="10" fill="#6e40c9"/>
   <text x="456" y="334" font-size="8" fill="#fff" text-anchor="middle">鈴</text>
-  <text x="474" y="334" font-size="10" fill="#e6edf3">ケアマネ 鈴木（合成）</text>
+  <text x="474" y="334" font-size="10" fill="#e6edf3">ケアマネ 鈴木さん</text>
   <text x="640" y="334" font-size="9" fill="#6e7681">09:50</text>
   <text x="456" y="358" font-size="9" fill="#b5bac1">かかりつけ医より服薬変更の連絡。</text>
   <text x="456" y="374" font-size="9" fill="#b5bac1">フェロキシピンは中止、カルベジロール2.5mgを開始します。</text>

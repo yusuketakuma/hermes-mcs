@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="800" viewBox="0 0 1100 800" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
-<title>登録前に、内容と理由を確認。 — 完全合成のSlack表示例</title>
-<desc>現行のカード・フォーム・本人向け回答の実装に基づく説明図。実患者・実投稿・匿名化データは使用していません。実画面のキャプチャではありません。</desc>
+<title>登録前に、内容と理由を確認。 — 架空のSlack表示例</title>
+<desc>架空の名前・投稿・数値を使った説明図。実データ・実投稿の匿名化例は使用していません。実画面のキャプチャではありません。</desc>
 <rect x="0" y="0" width="1100" height="800" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  05</text>
 <text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">登録前に、内容と理由を確認。</text>
@@ -12,10 +12,10 @@
 <text x="44" y="218" font-size="14" fill="#cbbfcf">チャンネル</text>
 <rect x="34" y="232" width="122" height="36" rx="6" fill="#64406a"/>
 <text x="44" y="256" font-size="15" fill="#fff"># mcs-demo</text>
-<text x="44" y="300" font-size="14" fill="#cbbfcf">合成データ</text>
+<text x="44" y="300" font-size="14" fill="#cbbfcf">説明用データ</text>
 <path d="M166 194 L1076 194" stroke="#e1e5e2" fill="none"/>
 <text x="192" y="172" font-size="22" fill="#202124" font-weight="bold"># mcs-demo</text>
-<text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">完全合成の表示例</text>
+<text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">架空の表示例</text>
 <text x="28" y="755" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
 <text x="28" y="780" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
 <rect x="192" y="228" width="36" height="36" rx="8" fill="#087f5b"/>
@@ -27,7 +27,7 @@
 <text x="240" y="270" font-size="15" fill="#66716f">操作した本人にだけ表示</text>
 <text x="240" y="304" font-size="24" fill="#202124" font-weight="bold">確認 — タスク作成</text>
 <text x="240" y="350" font-size="21" fill="#202124">内容: 次回訪問で残薬を確認</text>
-<text x="240" y="383.6" font-size="21" fill="#202124">担当: 合成スタッフA（合成薬局）</text>
+<text x="240" y="383.6" font-size="21" fill="#202124">担当: 田中さん（みどり薬局）</text>
 <text x="240" y="417.20000000000005" font-size="21" fill="#202124">期限: 2026-10-03</text>
 <text x="240" y="450.80000000000007" font-size="21" fill="#202124">理由: 訪問看護からの依頼を確認するため</text>
 <rect x="240" y="504.4000000000001" width="144" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
