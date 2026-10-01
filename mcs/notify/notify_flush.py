@@ -251,7 +251,7 @@ def _signal_notice_text(ledger, payload: dict) -> str:
         units = mcs_signals.sig_units(
             [(mcs_signals.med_group_key(s), s) for s in open_sigs])
         parts = [_signal_unit_text(ledger, us) for us in units]
-        text = (f"[MCS] レビュー候補ダイジェスト"
+        text = (f"[MCS] アラートダイジェスト"
                 f"（{len(open_sigs)}件）\n\n" + "\n\n".join(parts))
     else:
         text = _signal_unit_text(ledger, open_sigs)

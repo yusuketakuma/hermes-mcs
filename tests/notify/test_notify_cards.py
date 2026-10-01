@@ -616,7 +616,8 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
-    """Signal cards' 最新言及 evidence quote carries the sender tag."""
+    """The signal's 最新言及 evidence quote carries the sender tag in
+    the thread/body view — the card face itself is compact."""
     _patient(led, 1)
     _msg(led, 100, 1, body="退院後フォローの記録", prof="薬剤師",
          org="薬局Y")
@@ -625,14 +626,19 @@ def test_signal_quote_shows_sender_metadata(led, tmp_path):
                  payload={"signal_keys": ["sig-meta"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev)
-    c = notify_render._card_content(led.db, _card(led))
+    card = _card(led)
+    c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "薬剤師・薬局Y" in joined
+    assert "薬剤師・薬局Y" not in joined
+    _, body = notify_render._card_body_text(
+        led.db, card, {"shown": json.dumps(c["shown"])})
+    assert "薬剤師・薬局Y" in body
 
 
 def test_card_signal_structured_evidence(led, tmp_path):
-    """Signal/digest cards show the evidence message's structured block
-    (LLM summary labelled as such via the shared formatter)."""
+    """The evidence message's structured block rides the companion
+    thread (LLM summary labelled as such via the shared formatter);
+    the card face shows only the key point."""
     _patient(led, 1)
     _msg(led, 100, 1, body="退院後フォローの記録")
     _signal_row(led, "sig-x", mids=[100])
@@ -645,8 +651,36 @@ def test_card_signal_structured_evidence(led, tmp_path):
     card = _card(led)
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "📋 構造化" in joined and "要約: 状態安定" in joined
-    assert "退院後フォローの記録" in joined        # raw body still there
+    assert "note sig-x" in joined
+    assert "📋 構造化" not in joined and "退院後フォローの記録" not in joined
+    _, body = notify_render._card_body_text(
+        led.db, card, {"shown": json.dumps(c["shown"])})
+    assert "📋 構造化" in body and "要約: 状態安定" in body
+    assert "退院後フォローの記録" in body        # raw body still there
+
+
+def test_digest_face_groups_signals_per_patient(led):
+    """Digest card shows one item per patient — a patient with several
+    signals still occupies a single face block, and ``shown`` keeps the
+    underlying signal keys so thread bodies and actions still resolve
+    per signal."""
+    _patient(led, 1, "患者A")
+    _patient(led, 2, "患者B")
+    _signal_row(led, "sig-a1", pid=1)
+    _signal_row(led, "sig-a2", pid=1, stype="adherence_concern")
+    _signal_row(led, "sig-b1", pid=2)
+    ev = _intent(led, kind="signal", pid=None,
+                 payload={"digest": True, "type": "signal_digest",
+                          "signal_keys": ["sig-a1", "sig-a2", "sig-b1"]})
+    _dispatch(led, ev)
+    card = _card(led)
+    c = notify_render._card_content(led.db, card)
+    texts = [b.get("text") or "" for b in c["containers"]
+             if b["type"] == "text"]
+    assert texts.count("患者A") == 1 and texts.count("患者B") == 1
+    a_block = texts[texts.index("患者A") + 1]
+    assert "note sig-a1" in a_block and "note sig-a2" in a_block
+    assert c["shown"] == ["sig-a1", "sig-a2", "sig-b1"]
 
 
 def test_body_action_signal_full_evidence(led, tmp_path):

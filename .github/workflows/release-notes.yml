@@ -1,0 +1,122 @@
+name: Japanese release notes
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Release operation
+        required: true
+        default: sync_existing
+        type: choice
+        options: [sync_existing, draft]
+      tag:
+        description: Existing stable tag for draft (vX.Y.Z)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: japanese-release-notes
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # PRs test their merge ref; non-PR events use the canonical main.
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Check all versions and pending change records
+        run: python3 scripts/release_notes.py check
+      - name: Require runtime change notes on PR
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/release_notes.py check --base "$BASE_SHA"
+      - name: Test generation, validation and safe synchronization
+        run: python3 -m unittest discover -s tests/release -v
+
+  sync-existing:
+    needs: check
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'sync_existing')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Preview canonical title and body updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/sync_release_notes.py
+      - name: Synchronize existing release notes only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/sync_release_notes.py --apply | tee release-sync-result.json
+      - name: Record execution result
+        run: |
+          echo '### Japanese release notes synchronization' >> "$GITHUB_STEP_SUMMARY"
+          cat release-sync-result.json >> "$GITHUB_STEP_SUMMARY"
+
+  draft:
+    needs: check
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'draft')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Validate requested tag
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$REQUESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Only stable vX.Y.Z tags are supported'; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Generate notes from tagged CHANGELOG
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          git show-ref --verify "refs/tags/$RELEASE_TAG"
+          python3 scripts/release_notes.py check
+          python3 -m unittest discover -s tests/release -v
+          python3 scripts/release_notes.py export --version "${RELEASE_TAG#v}" --output release-notes.md --title-output release-title.txt
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft \
+            --title "$(cat release-title.txt)" --notes-file release-notes.md

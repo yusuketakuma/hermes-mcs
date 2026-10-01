@@ -256,37 +256,27 @@ def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
     return mid, message
 
 
-def _signal_display(db, sig: dict) -> list:
-    """Neutral display blocks for one signal row — shared by the signal
-    card and the digest's per-candidate rendering. The evidence quote
-    carries the full message body; the whole item is bounded to the
-    page budget (the quote yields first)."""
-    import mcs_signals
-    pid = sig.get("project_id")
-    blocks = [{"type": "text",
-               "text": mcs_signals.signal_notice_text(sig)}]
-    name = _patient_name(db, pid)
-    if name:
-        blocks.append({"type": "field", "name": "患者", "value": name})
-    mid, m = _signal_evidence(db, sig)
-    if m and m["body_state"] != "deleted" and m["body_text"]:
-        quote = (f"最新言及 {m['posted_at'] or '?'} "
-                 f"{_sender_tag(m)}: {m['body_text']}")
-        blocks.append({"type": "quote", "text": quote})
-        sblk = _structured_block(db, mid)
-        if sblk:
-            blocks.append(sblk)
-    state = sig.get("state")
-    if state and state != "open":
-        blocks.append({"type": "field", "name": "状態",
-                       "value": state})
-    return _fit_item(blocks)
+def _signal_compact(db, pid, contents: list) -> list:
+    """Card-face item for one patient's candidate signals — the
+    patient name plus each signal's note (the key point). The
+    evidence quote and 📋構造化 stay on the companion thread
+    (or behind the 📄本文 action when no thread carries them)."""
+    name = _patient_name(db, pid) or f"project {pid}"
+    lines = []
+    for s in contents:
+        line = "・" + (s.get("note") or s["type"])
+        state = s.get("state")
+        if state and state != "open":
+            line += f"（{state}）"
+        lines.append(line)
+    return _fit_item([{"type": "text", "text": name},
+                      {"type": "text", "text": "\n".join(lines)}])
 
 
 def _signal_body(db, sig: dict) -> str:
-    """Full-text view of one signal for the 'body' action — the same
-    fields _signal_display shows on the card, but the evidence quote is
-    the untruncated message body."""
+    """Full-text view of one signal — the thread post and 'body'
+    action surface: notice text, patient, the untruncated evidence
+    quote and the 📋構造化 block."""
     import mcs_signals
     lines = [mcs_signals.signal_notice_text(sig)]
     name = _patient_name(db, sig.get("project_id"))
@@ -351,7 +341,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
         text = "\n\n— — —\n\n".join(
             _signal_body(db, sigs[k]["content"]) for k in shown
             if k in sigs)
-        title = ("レビュー候補 — 本文" if card["kind"] == "digest"
+        title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
     if max_chars is not None and len(text) > max_chars:
         text = text[:max_chars - 1] + "…\n（省略 — 原本を参照）"
@@ -404,21 +394,31 @@ def _card_content(db, card) -> dict:
         keys = _anchor_keys(card)
         sigs = _latest_signals(db, keys, card["project_id"])
         ordered = [k for k in keys if k in sigs]
-        sig_blocks = {k: _signal_display(db, sigs[k]["content"])
-                      for k in ordered}
+        # one face item per patient — the card stays at key points;
+        # the evidence quote and 📋構造化 ride the companion thread
+        # (or the 📄本文 action when no thread carries them)
+        groups, gidx = [], {}
+        for k in ordered:
+            pid = sigs[k]["content"].get("project_id")
+            if pid not in gidx:
+                gidx[pid] = len(groups)
+                groups.append((pid, []))
+            groups[gidx[pid]][1].append(k)
+        sig_blocks = [_signal_compact(
+            db, pid, [sigs[k]["content"] for k in ks])
+            for pid, ks in groups]
         containers = [{"type": "heading", "text":
-                       (f"💬 レビュー候補（{len(ordered)}件）"
-                        if kind == "digest" else "レビュー候補")}]
-        # full quotes make fixed-count paging unsafe — pack by the
-        # rendered length each signal actually occupies
+                       (f"💬 アラート（{len(groups)}名 / "
+                         f"{len(ordered)}件）"
+                        if kind == "digest" else "アラート")}]
         pages_idx = _pack_pages(
-            [_blocks_len(sig_blocks[k]) for k in ordered],
+            [_blocks_len(b) for b in sig_blocks],
             PAGE_DIGEST if kind == "digest" else PAGE_THREAD)
         pages = len(pages_idx)
         page = _page(ui, pages)
-        shown = [ordered[i] for i in pages_idx[page]]
-        for k in shown:
-            containers.extend(sig_blocks[k])
+        shown = [k for i in pages_idx[page] for k in groups[i][1]]
+        for i in pages_idx[page]:
+            containers.extend(sig_blocks[i])
         shown_kind = "signal_keys"
     source_fp = _source_fp(db, card)
     footer, toggles = _footer(db, card, shown,
@@ -430,7 +430,7 @@ def _card_content(db, card) -> dict:
         if shown_kind == "message_ids":
             pos = f"{idx[0] + 1}〜{idx[-1] + 1}件目 / 全{len(msgs)}件"
         else:
-            pos = f"候補 {idx[0] + 1}〜{idx[-1] + 1} / {len(ordered)}件"
+            pos = f"アラート {idx[0] + 1}〜{idx[-1] + 1} / {len(groups)}名"
         footer.append({"type": "text",
                        "text": f"{page + 1}/{pages} ページ（{pos}）"})
     return {"containers": containers, "footer": footer,
