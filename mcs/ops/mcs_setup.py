@@ -7,9 +7,10 @@ Mac mini this is the same login keychain Chrome uses). Existing values
 are merged, never silently overwritten. An interactive run walks EVERY
 config key as a guided wizard (sectioned, defaults shown, Enter keeps
 the current value); `--yes` runs flags only and `--set KEY=JSON` covers
-any key non-interactively. With notify.interactive="discord", init also
-mirrors the plugin settings + bot token into hermes through the public
-`hermes [-p profile] config set` CLI — never hermes-agent internals.
+any key non-interactively. With notify.interactive="slack"/"discord",
+init also mirrors the plugin settings + bot token into hermes through
+the public `hermes [-p profile] config set` CLI — never hermes-agent
+internals.
 
 `check` is the typesafe gate: every required key must exist with the
 right type, optional keys are range-checked, the semantic block is
@@ -695,20 +696,12 @@ WIZARD = [
         ("mcs_login_id", "req", None,
          "MCS のログインID", None),
         ("notify_target", "req", None,
-         "通知の送り先（hermes send target。例: discord:<チャンネルID>、"
-         "slack:#mcs）", None),
+         "通知の送り先（hermes send target。例: slack:<チャンネルID>、"
+         "discord:<チャンネルID>）", None),
     ]),
-    ("カード通知（interactive=discord/slack でボタン付きカード）", [
-        ("notify.interactive", "choice:off,discord,slack", "off",
-         "通知形式 — discord/slack=カード / off=従来テキストのみ", None),
-        ("notify.discord.profile", "req", None,
-         "配送に使う hermes プロファイル名", _discord_on),
-        ("notify.discord.application_id", "req", None,
-         "Discord アプリケーションID", _discord_on),
-        ("notify.discord.guild_id", "req", None,
-         "Discord サーバーID", _discord_on),
-        ("notify.discord.channel_id", "req", None,
-         "カードの投稿先チャンネルID", _discord_on),
+    ("カード通知（interactive=slack/discord でボタン付きカード）", [
+        ("notify.interactive", "choice:off,slack,discord", "off",
+         "通知形式 — slack/discord=カード / off=従来テキストのみ", None),
         ("notify.slack.profile", "req", None,
          "配送に使う hermes プロファイル名", _slack_on),
         ("notify.slack.application_id", "req", None,
@@ -717,6 +710,14 @@ WIZARD = [
          "Slack ワークスペース（team）ID", _slack_on),
         ("notify.slack.channel_id", "req", None,
          "カードの投稿先チャンネルID", _slack_on),
+        ("notify.discord.profile", "req", None,
+         "配送に使う hermes プロファイル名", _discord_on),
+        ("notify.discord.application_id", "req", None,
+         "Discord アプリケーションID", _discord_on),
+        ("notify.discord.guild_id", "req", None,
+         "Discord サーバーID", _discord_on),
+        ("notify.discord.channel_id", "req", None,
+         "カードの投稿先チャンネルID", _discord_on),
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
         ("notify.card_thread", "bool", True,
@@ -765,7 +766,7 @@ WIZARD = [
     ]),
     ("レビュー候補シグナル（機械が確認候補を列挙）", [
         ("signals.notify", "bool", False,
-         "確認候補をDiscord通知に出す", None),
+         "確認候補を通知カードに出す", None),
         ("signals.digest", "bool", False,
          "複数候補をダイジェストにまとめて送る", _signals_on),
         ("signals.digest_interval_h", "num", None,
@@ -2211,22 +2212,22 @@ def main() -> int:
         epilog="non-interactive example (secrets via environment):\n"
                "  MCS_SETUP_PASSWORD=... python3 mcs/ops/mcs_setup.py init "
                "--yes \\\n"
-               "    --login-id you@example.com --notify-target slack:#mcs "
-               "\\\n"
+               "    --login-id you@example.com "
+               "--notify-target slack:C0CHANNELID \\\n"
                "    --set self_posts=true "
-               "--set 'notify.interactive=\"discord\"'\n"
+               "--set 'notify.interactive=\"slack\"'\n"
                "--set values are JSON (strings need inner quotes); a "
                "config.json that is\nnot valid JSON stops init — --yes "
                "moves it to config.json.corrupt-<ts> first.")
     p.add_argument("--login-id")
     p.add_argument("--notify-target",
                    help="hermes send target for notifications "
-                        "(e.g. slack, slack:#mcs, discord:1234)")
+                        "(e.g. slack:C0CHANNELID, discord:1234)")
     p.add_argument("--set", action="append", metavar="KEY=JSON",
                    help="set any config key (repeatable; dotted keys "
                         "nest, values are JSON — e.g. "
                         "--set self_posts=true "
-                        '--set notify.interactive=\'"discord"\')')
+                        '--set notify.interactive=\'"slack"\')')
     p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"])
     p.add_argument("--project-ids", type=int, nargs="*")
     p.add_argument("--signals-notify", action=argparse.BooleanOptionalAction)

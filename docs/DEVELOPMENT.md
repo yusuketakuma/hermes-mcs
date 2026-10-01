@@ -699,10 +699,13 @@ README「人工知能（AI）の使用箇所と情報の行き先」の「技術
   kill される生成の浪費を避け、行は pending のまま次サイクルへ。
   バッチ自体が deferred の場合も各行は単発レーンへ回り、バッチ分に
   足りない残り時間で収まる単発だけが走る
-- 構造化抽出 v3: 薬剤は `action`(start/stop/…/none)・`status`
-  (current/past/planned)・`subject`(patient/family/other)・`negated`、
-  症状は `status`(new/ongoing/resolved/past)・`negated`、依頼は
-  `to`/`from`/`due` を持ち、各項目は本文内の `evidence` スパンで
+- 構造化抽出 v4: 薬剤は `action`(start/stop/…/none)・`status`
+  (current/past/planned)・`subject`(patient/family/other)・
+  `route`/`freq`/`prn`・`negated`、症状は `status`
+  (new/ongoing/resolved/past)・`severity`・`onset`・`duration`・
+  `subject`・`negated`、依頼は `to`/`from`/`kind`(request/question/
+  self_plan)/`condition`/`due`/`due_text`、検査 `labs`、スレッド返信
+  `reply` を持ち、各項目は本文内の `evidence` スパンで
   一意照合される(本文に存在しない引用は破棄)
 - 出力は JSON schema 検証済みのみ保存。失敗は `meta.error`+指数 backoff で
   retry(上限5)。サーバ死活は `/v1/models` で3秒プローブ

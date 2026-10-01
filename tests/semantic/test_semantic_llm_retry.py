@@ -486,3 +486,47 @@ def test_length_stop_without_time_left_uses_long_ceiling_next_attempt(
     assert len(bodies) == 1
     assert semantic.llm_chat("抽出 JSON:", timeout=450) == '{"facts": []}'
     assert _ceilings(bodies)[-1] == semantic.LLM_LONG_MAX_TOKENS
+
+
+def test_llm_chat_context_reject_is_terminal(monkeypatch):
+    """A plain-mode HTTP 400 (e.g. the prompt exceeds the slot's context
+    window) can never succeed on retry — llm_chat raises LLMRejected
+    instead of returning a retryable model failure."""
+    import local_llm
+    import semantic_runtime as runtime
+    monkeypatch.setattr(semantic, "_FMT_MODE", "plain")
+    monkeypatch.setattr(semantic, "_FMT_TS", 10.0 ** 9)
+    bodies = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        bodies.append(body)
+        return 400, {}, json.dumps(
+            {"error": {"message": "request exceeds the available "
+                       "context size",
+                       "type": "exceed_context_size_error"}}).encode()
+
+    monkeypatch.setattr(local_llm, "bounded_request", send)
+    with pytest.raises(runtime.LLMRejected):
+        semantic.llm_chat("synthetic prompt", timeout=10)
+    assert len(bodies) == 1        # deterministic: no retry burn
+
+
+def test_summarize_maps_llm_rejection_to_input_oversize(tmp_path):
+    """A backend context refusal lands on the designed oversize path —
+    a NEEDS_REVIEW stub, not a burned attempt."""
+    import semantic_runtime as runtime
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        calls = []
+
+        def rejected(_prompt):
+            calls.append(_prompt)
+            raise runtime.LLMRejected("prompt_rejected")
+
+        summary = semantic.summarize(rejected, bundle, 1, [], {})
+        assert summary["_input_oversize"] is True
+        assert summary["claims"] == []
+        assert len(calls) == 1
+    finally:
+        db.close()
