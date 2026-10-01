@@ -341,7 +341,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
         text = "\n\n— — —\n\n".join(
             _signal_body(db, sigs[k]["content"]) for k in shown
             if k in sigs)
-        title = ("レビュー候補 — 本文" if card["kind"] == "digest"
+        title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
     if max_chars is not None and len(text) > max_chars:
         text = text[:max_chars - 1] + "…\n（省略 — 原本を参照）"
@@ -408,9 +408,9 @@ def _card_content(db, card) -> dict:
             db, pid, [sigs[k]["content"] for k in ks])
             for pid, ks in groups]
         containers = [{"type": "heading", "text":
-                       (f"💬 レビュー候補（{len(groups)}名 / "
+                       (f"💬 アラート（{len(groups)}名 / "
                          f"{len(ordered)}件）"
-                        if kind == "digest" else "レビュー候補")}]
+                        if kind == "digest" else "アラート")}]
         pages_idx = _pack_pages(
             [_blocks_len(b) for b in sig_blocks],
             PAGE_DIGEST if kind == "digest" else PAGE_THREAD)
@@ -430,7 +430,7 @@ def _card_content(db, card) -> dict:
         if shown_kind == "message_ids":
             pos = f"{idx[0] + 1}〜{idx[-1] + 1}件目 / 全{len(msgs)}件"
         else:
-            pos = f"候補 {idx[0] + 1}〜{idx[-1] + 1} / {len(groups)}名"
+            pos = f"アラート {idx[0] + 1}〜{idx[-1] + 1} / {len(groups)}名"
         footer.append({"type": "text",
                        "text": f"{page + 1}/{pages} ページ（{pos}）"})
     return {"containers": containers, "footer": footer,

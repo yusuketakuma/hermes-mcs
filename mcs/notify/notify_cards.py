@@ -1267,7 +1267,7 @@ def _thread_name(db, card) -> str:
 
 
 def _digest_thread_name() -> str:
-    return f"💬 レビュー候補 — {time.strftime('%m-%d')}"
+    return f"💬 アラート — {time.strftime('%m-%d')}"
 
 
 def _source_hash(db, mid, project_id) -> str | None:

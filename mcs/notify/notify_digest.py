@@ -148,7 +148,7 @@ def build_text(db, cfg, since: float, until: float) -> str:
             if c and c["state"] == "open" \
                     and c["type"] not in EXCLUDED_SIGNALS:
                 by_type[c["type"]] = by_type.get(c["type"], 0) + 1
-        lines.append(f"■ 確認候補（open）{sum(by_type.values())}件"
+        lines.append(f"■ アラート（open）{sum(by_type.values())}件"
                      + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
                                         sorted(by_type.items()))
                         if by_type else ""))

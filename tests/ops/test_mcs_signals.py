@@ -396,7 +396,7 @@ def test_signal_notice_degrades_without_patient_or_message(
     monkeypatch.setattr(notify_flush, "_config",
                         lambda: {"signals": {"notify": True}})
     content, _ = notify_flush._format_event(led, ev)
-    assert "レビュー候補" in content and "request_overdue" in content
+    assert "アラート" in content and "request_overdue" in content
 
 
 def test_notify_only_on_new_open_not_refresh(led):
@@ -485,7 +485,7 @@ def test_send_gate_open_signal_formats(led, monkeypatch):
     _ev(led, cfg=cfg)
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     text, files = notify_flush._format_event(led, _sig_ev(led))
-    assert "レビュー候補" in text and files == []
+    assert "アラート" in text and files == []
 
 
 # --- human dismissal (ops.signal_dismiss via the command path) ---

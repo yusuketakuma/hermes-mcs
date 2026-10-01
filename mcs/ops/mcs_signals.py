@@ -999,7 +999,7 @@ def signal_notice_text(sig: dict) -> str:
         mids = ev.get("message_ids")
         if mids:
             where += f" / message {mids[0]}"
-    return (f"[MCS] レビュー候補 ({sig['type']})\n"
+    return (f"[MCS] アラート ({sig['type']})\n"
             f"{where}\n{sig['note']}")
 
 
@@ -1025,7 +1025,7 @@ def med_followup_group_notice(sigs):
     if len(meds) < 2 or days is None:
         return None
     sig = sigs[0]
-    return (f"[MCS] レビュー候補 ({sig['type']})\n"
+    return (f"[MCS] アラート ({sig['type']})\n"
             f"project {sig['project_id']} / med {'・'.join(meds)}\n"
             + _med_followup_note(meds, days))
 
@@ -1098,7 +1098,7 @@ def _urgency_high(db, sig):
 
 
 def _digest_text(n):
-    return f"[MCS] レビュー候補ダイジェスト（{n}件）"
+    return f"[MCS] アラートダイジェスト（{n}件）"
 
 
 def open_signal_rows(db, keys):

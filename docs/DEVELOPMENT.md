@@ -381,7 +381,7 @@ $PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unv
   導くため、別ディレクトリの pending は承認対象に届かない。
 - 参照ファイルは集計値のみを含み、メッセージ本文を含まない。
 
-### レビュー候補シグナル（T2）
+### アラートシグナル（T2）
 
 ```bash
 $PY mcs/views/mcs_view.py signals                # openな候補一覧
@@ -432,7 +432,7 @@ $PY mcs/views/mcs_view.py signals --project 123
   対応の欠如を意味しない。文言もその旨を明記する。
 - 自己同一性: 毎回のチェックで MCS の `GET /users/self` から氏名・
   職種・所属施設を取得し `self_profile_v1` artifact として記録する
-  （変化時のみ追記）。その施設の投稿由来の言及はレビュー候補にせず、
+  （変化時のみ追記）。その施設の投稿由来の言及はアラートにせず、
   その施設・職種の投稿は応答者として数える。config `signals.*` は
   手動オーバーライドとして優先される: `self_organizations`・
   `self_professions`（既定 薬剤師）・`request_targets`（「薬剤師宛」
@@ -470,7 +470,7 @@ $PY mcs/views/mcs_view.py signals --project 123
   （ID と件数。`include_names` が true のときだけ患者名を ID に添える）し、送信時は `daily_digest` がオフなら
   `StaleSend` で破棄する。取得状況は `mcs_queries.coverage_gaps()`
   （incomplete ルームと理由コード・待機/失敗ジョブ・本文未取得・返信未取得）を
-  使い、0件でも欄を出す。確認候補は `signals.notify` がオンのときだけ、
+  使い、0件でも欄を出す。アラートは `signals.notify` がオンのときだけ、
   `request_overdue`/`request_aging`/`rx_period_expiry` を除外して型別件数。
 - 緊急度: `structured_view.message_urgency()` が唯一の判定 —
   現行 extract_llm が `urgency:high` なら `llm`、ルール抽出（extract_v1）
