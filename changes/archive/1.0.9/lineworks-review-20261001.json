@@ -2,7 +2,7 @@
   "category": "fixed",
   "title": "LINE WORKSの導入・操作結果・更新適用を安定化",
   "summary": "通常のcheckoutから本体と共通の設定でLINE WORKSを導入できます。再クリックで古い閲覧結果を返さず、ローカル発行失敗後も同じ操作を再試行でき、カード更新後も本人の確定結果を受け取れます。添付の内容と処理開始の永続化を確認し、無効化・期限切れ時の入力処理を停止します。",
-  "upgrade": "LINE WORKS利用時は更新後にlineworks_adapter checkを実行し、独立プロセスを再起動してください。設定・dataの既定保存先は本体と同じ~/.mcsです。旧実装でcheckout側へ認証情報を作った場合は、本体の保存先を確認して所有者のみ読める権限で配置を揃えてください。サービス候補の配置先・起動パスが変わる場合はserviceで再生成します。Slack/Discordのadapter変更は既存のgateway再起動判定に含めます。既定通知先・モデル・取得範囲・既読化・人承認条件は変更しません。",
+  "upgrade": "LINE WORKS利用時は更新後にpython -m lineworks_adapter checkを実行し、独立プロセスを再起動してください。設定・dataの既定保存先は本体と同じ~/.mcsです。旧実装でcheckout側へ認証情報を作った場合は、本体の保存先を確認して所有者のみ読める権限で配置を揃えてください。サービス候補の配置先・起動パスが変わる場合はserviceで再生成します。Slack/Discordのadapter変更は既存のgateway再起動判定に含めます。既定通知先・モデル・取得範囲・既読化・人承認条件は変更しません。",
   "details": [
     "ソースcheckoutと設定/dataを分離し、LINE CLI既定保存先・本体診断・常駐候補を揃えます。既存認証設定はinitで上書きせず、診断・保護した退避・再入力の手順を示します。",
     "Slack/Discordの移動先を旧worker検知・更新影響・永続化したplugin_changedへ含めます。LINE WORKS変更は独立プロセスの診断・再起動として案内し、Hermes Agent本体は変更しません。",
@@ -15,7 +15,7 @@
     "mcs/notify/notify_flush.py",
     "mcs/ops/mcs_setup.py",
     "mcs/ops/mcs_update.py",
-    "docs/LINEWORKS.md",
+    "docs/guides/LINEWORKS.md",
     "docs/dev-records/lineworks-review-20261001.md"
   ]
 }

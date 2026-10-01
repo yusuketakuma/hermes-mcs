@@ -3,7 +3,7 @@
 実行時の挙動を変えるPRでは、`changes/<課題番号または短い識別子>.json`を追加する。
 PRを使わないエージェント作業でも、変更と同じcommitで記録する。説明は
 「何を実装したか」より「利用者にとって何が変わるか」を先に書く。
-schema・運用手順・著名リポジトリとの比較は`docs/RELEASE_NOTES.md`を参照。
+schema・運用手順・著名リポジトリとの比較は`docs/development/RELEASE_NOTES.md`を参照。
 
 ```json
 {

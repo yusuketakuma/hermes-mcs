@@ -2,9 +2,314 @@
 
 利用者向けの変更履歴です。各版は公開当時の仕様を記載しています。
 更新手順・既定値・取得範囲は、導入する版の記録を確認してください。
-記載ルールと自動生成の手順は [RELEASE_NOTES.md](docs/RELEASE_NOTES.md) を参照してください。
+記載ルールと自動生成の手順は [RELEASE_NOTES.md](docs/development/RELEASE_NOTES.md) を参照してください。
 
 ## [Unreleased]
+
+## [1.0.9] — 2026-10-01
+
+**LINE WORKS接続を追加し、導入・表示・収集・更新の安定性を改善**
+
+LINE WORKSへ要約・原文・添付を配信し、本人との1:1トークで入力・確認・確定できます。Slack・Discordの公式接続を維持し、導入手順と画面例を充実させ、収集・解析・通知・出力・更新時の異常処理を改善しました。更新後は利用中の接続プロセスを再起動してください。LINE WORKSの新規導入は専用の接続ガイドで進めます。
+
+### 新機能
+
+- **LINE WORKSに要約・原文・添付と本人確認付き操作を配信**
+  LINE WORKSのトークルームへSlackと同じ要約・原文・送信対象の添付を配信できます。許可ユーザーだけが操作でき、入力・プレビュー・本人による確定は1:1トークで行います。Slack・Discordは引き続きHermes公式接続を使います。
+
+### 改善
+
+- **LINE WORKSの画面例と接続別の案内をREADMEへ追加**
+  LINE WORKSの連続投稿と本人との1:1入力・確定を、完全合成の2画面で確認できます。Discordと同じ折りたたみ表示で、通知先・データの行き先・スレッドの説明も3接続に合わせました。
+
+- **READMEを目的別に読みやすくし、リリース時の更新を定着**
+  Discord/Slackの画面例、目的別の使い方、FAQを開閉できるREADMEへ更新しました。最新の変更はCHANGELOGから自動生成し、毎回のリリースで機能説明・画面例・導入・安全・導線を見直す記録を検査します。
+
+- **Slackを推奨とするREADMEへ更新し、7画面の表示例を追加**
+  先頭の画面と導入導線をSlackへ変更しました。通知とスレッド、確認・担当、操作メニュー、タスク入力・確定・一覧、患者サマリーを、実装に基づく完全合成の画像で紹介します。
+
+- **接続共通コード・開発ツール・文書・テストの配置を整理**
+  文書をガイド・開発資料・仕様から探せるようにし、開発ツールと接続先別テストをまとめました。Slack・Discord・LINE WORKSの共通配送コードをアダプター配下へ集約し、既存のimport入口は同じ実装を参照します。
+
+- **初回導入の案内を設定と最終確認まで一本化**
+  通常導入はインストーラーと設定ウィザードで完了し、重複していたサービス再登録とチェックを更新・復旧時だけ案内します。AI向け手順は未決事項だけを確認し、Chromeの起動確認を収集直前に移しました。スタンドアロンで抽出を使う場合の常駐worker配置も補いました。
+
+### 不具合修正
+
+- **不正な患者集約からの出力で既存ファイルを失わないよう修正**
+  患者集約のJSONや表示に必要な構造が壊れている場合は、エクスポートをエラーとして停止し、既存の出力を保持します。不正な集約を「患者がいなくなった」と扱って患者ページを削除したり、一部だけ新しい出力に置き換えたりしません。
+
+- **LINE WORKS追加後も既存接続とテキスト通知の動作を維持**
+  Slack・Discordの新旧import入口で再送防止・再接続の状態を共有し、移動後も同じ接続処理が動きます。LINE WORKSの操作をoffにしてもテキスト通知を継続でき、別通知先として指定したLINE WORKSにも配信できます。
+
+- **LINE WORKSの導入・操作結果・更新適用を安定化**
+  通常のcheckoutから本体と共通の設定でLINE WORKSを導入できます。再クリックで古い閲覧結果を返さず、ローカル発行失敗後も同じ操作を再試行でき、カード更新後も本人の確定結果を受け取れます。添付の内容と処理開始の永続化を確認し、無効化・期限切れ時の入力処理を停止します。
+
+- **通知の不正ファイルとSlack履歴確認失敗を安全に処理**
+  深すぎる不正JSONの結果ファイルで通知の処理が中断せず、不正な表示ファイルは隔離します。Slackの既存返信履歴を確認できない場合は本文や添付を追加投稿せず、不明な配送結果として記録して重複を防ぎます。
+
+- **長文解析の再試行で残り時間を再確認**
+  長文出力が必要な解析でJSON形式が拒否された場合、残り時間が400秒未満なら追加のモデル呼び出しを止めます。長文出力の記録を保持し、後続の十分な時間を確保した試行で再処理します。
+
+- **macOSで更新時の残存解析プロセスを検出**
+  macOSのpgrepでも認識できる検索式に変更し、更新時に残った解析プロセスを見つけられるようにします。対象スクリプト名を正確に照合し、別のプログラムやコマンド中の文字列を誤検出しないようにします。
+
+- **長文解析の拒否判定と形式切替を維持**
+  形式拒否後に再送時間が不足したHTTP400は、通常の再試行ではなく要確認の終端結果として扱います。形式拒否の記録を共有し、別workerや再起動後にも600秒間は制約なしの形式を選びます。
+
+- **不正な抽出結果で閲覧・集計出力が停止する問題を修正**
+  保存された事実・関係の配列やIDの型が不正な場合は、読み取りモデルでunknownとして扱います。入れ子の内容が集計出力へ混入せず、同じ本文に対応する利用可能な過去の結果があればその結果を保持します。
+
+- **一覧取得に失敗したcronジョブの削除を防止**
+  更新・復旧時にcronジョブ一覧の取得が失敗した場合、残された出力を根拠にジョブを削除しません。確認できなかった状態は従来どおり復旧の問題として報告します。
+
+- **特殊文字を含むDBパスの更新・復旧判定を修正**
+  DBやバックアップのパスに #・?・% などが含まれていても、指定したファイルのスキーマ・承認記録・復元による影響を確認します。別のファイルを参照して復旧を完了扱いにする問題を防ぎます。
+
+- **所見の短縮表示でも否定・推測・家族・予定の条件を保持**
+  所見の否定・推測・家族・予定を短縮表示でも保持し、解釈条件を本文より前に確認できます。
+
+- **取得ジョブとAPI応答の異常JSONによる収集停止を修正**
+  取得ジョブやAPI応答の異常JSONで全体の収集が止まらず、異常な患者応答は未完了として既読化を抑止します。
+
+- **診断DBパスとLINE WORKSの破損処理記録を安全に処理**
+  診断が特殊文字を含む正しいDBを読みます。LINE WORKSの破損した処理記録は成否不明として再実行を抑止しながら後続入力を処理します。
+
+- **意味解析の未送信修復と壊れた保存記録への耐性を改善**
+  要約の修復が予算不足やモデル受付待ちで送信されなかった場合、修復回数を消費せず次回再開します。同じ処理で確認済みの投稿は保存され、実行済み修復の再実行は引き続き防ぎます。壊れた意味解析の保存記録があっても状態表示や評価用の配送段階確認を中断しません。
+
+- **不正な却下理由の記録でアラート一覧が停止する問題を修正**
+  保存済みの却下理由区分が不正な型や未知の値でも、アラート一覧は停止せず未分類として数えます。自由なメモを理由区分として集計出力に含めません。
+
+- **監視とローカル解析が不正な入力で停止する問題を修正**
+  監視・解析のJSONが深すぎる場合や監視状態の文字コードが壊れた場合も、失敗を判定して処理を継続します。別ポートに設定したローカルAIサーバーの稼働・形式確認も設定先に統一し、対話用の形式確認を見送った際に待機状態が残ってバックログを止める問題を修正します。 大きな対象指定でも選択件数の上限より先に対象を絞るため、許可された古い投稿が処理から取り残されません。
+
+- **型の壊れた抽出結果でも構造化表示を継続**
+  抽出結果の配列・文字列・区分値の型が壊れていても、通知の構造化表示を停止せず、読める項目を表示します。読み取れない症状・薬剤・依頼からルール抽出へ戻して、除外された記載を復活させることを防ぎます。
+
+- **未確認の検査値を候補として表示**
+  抽出時に未確認とされた検査値は、通知の「検査候補（未確認）」行に表示します。「検査」行と分けることで、未確認フラグのない項目と混同することを防ぎます。
+
+### 更新時の注意
+
+- 追加設定やDB移行は不要です。不正な集約がある場合はpatient_rollup_invalidを返します。集約を再生成してからエクスポートを再実行してください。
+
+- 利用する場合だけnotify.interactive=lineworksとBot・ドメイン・部屋・許可ユーザー・MCSプロジェクト範囲を設定し、端末でpython -m lineworks_adapter initとcheckを実行してください。Botの管理者登録、公開HTTPS Callbackと独立プロセスの起動が必要です。常駐サービス候補はserviceで生成できますが自動登録・起動はしません。既存Slack/Discordのフォルダ移動を反映する場合は対象Hermes gatewayの再起動が必要です。既定の通知先・モデル・取得範囲・既読化・人承認条件は変更しません。
+
+- Slack/Discordを利用する場合は対象Hermes gatewayを再起動してください。LINE WORKS利用時は独立プロセスへ更新を反映してください。offは従来通りカード・人承認操作を停止し、テキスト通知を維持します。全通知を止める実行には--no-notifyを使います。接続scope・認証設定・既読化・理由・本人確定・モデル・取得範囲の既定値は変更しません。
+
+- LINE WORKS利用時は更新後にpython -m lineworks_adapter checkを実行し、独立プロセスを再起動してください。設定・dataの既定保存先は本体と同じ~/.mcsです。旧実装でcheckout側へ認証情報を作った場合は、本体の保存先を確認して所有者のみ読める権限で配置を揃えてください。サービス候補の配置先・起動パスが変わる場合はserviceで再生成します。Slack/Discordのadapter変更は既存のgateway再起動判定に含めます。既定通知先・モデル・取得範囲・既読化・人承認条件は変更しません。
+
+- pluginの変更を適用するにはHermes gatewayの再起動が必要です。Slackの履歴取得に失敗した配送は、原本と通知先を確認して既存の配送不明の解決手順で対応してください。モデル・取得範囲・通知先・既読化・人承認条件・既定設定の変更はありません。
+
+- 通常のコード更新手順で反映します。モデル・タイムアウトの既定値・設定変更・データ移行は不要です。
+
+- 通常のコード更新手順で反映します。設定変更・データ移行は不要です。検出できない場合に更新を中止する既存の安全動作を維持します。
+
+- 通常の検証済みコード更新で反映します。設定変更・データ移行は不要です。形式拒否の共有記録は書込不能やlock競合時には保存を省略し、既存の処理を維持します。
+
+- 追加操作やDB移行は不要です。不正な結果の状態はcurrentからunknownに変わります。
+
+- 設定変更は不要です。画像は現行実装に基づく完全合成の説明図で、実画面のキャプチャではありません。通知・取得範囲・既読化・人承認・理由・receiptの実行条件は変更しません。
+
+- 利用者の追加設定・データ移行は不要です。リリース準備ではdocs/development/readme-review.jsonの5項目をソースと照合して新しいversionへ更新してください。
+
+- 利用者の設定・データ移行は不要です。Slackを導入する場合は導入ガイドの接続・許可ユーザー設定を確認してください。画面例の更新では生成スクリプトでSVG・PNGを一緒に再生成します。
+
+- 通常のコード更新に加え、配備済みの独立復旧ツールへ反映するには install.sh の再実行が必要です。設定変更は不要です。成功した一覧に対する所有範囲の確認と復旧条件は変わりません。
+
+- 通常のコード更新に加え、配備済みの独立復旧ツールへ反映するには install.sh の再実行が必要です。DBの移行や設定変更は不要です。復元には従来どおり対象バックアップと損失報告に一致する人の承認が必要です。
+
+- 次回の表示から反映されます。追加操作は不要です。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。
+
+- 次回の収集実行から反映されます。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。破損した取得ジョブは既存のinvalid_payload分類で隔離され、再取得は既存の操作手順を使います。
+
+- 診断は次回実行から反映されます。稼働中のLINE WORKS独立プロセスは更新後に再起動してください。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。破損したLINE処理記録は成否不明のまま保持し、自動再実行しません。
+
+- 開発用Pythonコマンドはscripts/development/配下、文書はdocs/guides・docs/development・docs/specsの新パスを使用してください。makeの既存ターゲット、scripts/run_tests.sh、install.sh、python -m lineworks_adapterの入口はそのままです。稼働中のHermes gatewayとLINE WORKS独立アダプターには更新後の再起動が必要です。共通コードの変更時は両方の再起動案内を表示します。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。
+
+- 追加操作・設定変更は不要です。既存の監査・公開条件、既読化・通知承認条件、抽出範囲・モデルの既定値は変更しません。
+
+- 既存の設定・通知先・モデル・収集範囲・既読化条件は変わりません。初回はinstall.shの後にinitを実行してください。--no-servicesを指定した場合や配置差分がある場合は従来どおりservicesとcheckを実行します。実機への適用やサービス再起動はこの変更だけでは行われません。
+
+- 追加操作やDB移行は不要です。既存の正しい理由区分と、人承認の条件は変わりません。
+
+- 追加操作・設定変更は不要です。常駐抽出ワーカーと監視は次回起動時から修正が反映されます。既定のモデル・ポート・通知・取得範囲・既読化・人承認条件は変更しません。
+
+- 追加の設定変更は不要です。抽出モデル・取得範囲・通知先・既読化・人承認条件・既定設定は変更しません。型が壊れた抽出項目は表示せず、原本本文は既存の経路で確認できます。
+
+- 追加の設定変更や再抽出は不要です。保存済みの未確認フラグを表示時に使用します。フラグがない旧形式の表示と、合計6件の表示上限は維持します。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 不正な患者集約からの出力で既存ファイルを失わないよう修正
+
+- 最新の患者集約をすべて読み取り・描画してから、出力ファイルの更新と保持期限の整理を行う。
+- JSONオブジェクトの読取りは既存loads_dictを再利用する。
+- 根拠: mcs/ops/brain_export.py、tests/ops/test_brain_export.py
+
+#### LINE WORKSに要約・原文・添付と本人確認付き操作を配信
+
+- 各接続実装をadapters/slack・discord・lineworksへ整理し、既存importとLINE WORKS CLIの入口を維持します。Hermes Agent本体は変更しません。
+- 公式JWT RS256認証・Bot送信・添付upload・生HTTP本文のHMAC署名検証を実装し、配送grant/journal/receiptを共通化します。本文・表示末尾・追加ボタンは封印済み配送パーツで分割し、配信前に整合と範囲を確認します。
+- 編集・削除・履歴照合・スレッド指定がない公式Bot APIに合わせて更新を新規投稿し、旧ボタンを無効化します。HTTP 201は受理であり閲覧を示しません。
+- 応答喪失・処理中クラッシュは不明として保持し、自動再送しません。429の後はプロセス間でも60秒の待機を共有します。Callbackは公式仕様で再送されないため、statusで不明件数を確認します。
+- 導入手順とAI向け手順に、秘密値を会話やargvへ出さない入力、許可範囲設定、ローカル診断、常駐候補生成、実接続の確認範囲を記載します。
+- 根拠: adapters/lineworks/、adapters/README.md、mcs/notify/notify_cards.py、mcs/notify/notify_transport.py、mcs/notify/notify_flush.py、mcs/ops/mcs_setup.py、docs/guides/LINEWORKS.md
+
+#### LINE WORKS追加後も既存接続とテキスト通知の動作を維持
+
+- canonical adaptersとhermes_pluginの互換入口を同一moduleへaliasし、DiscordのContextVar再送抑止とSlackの常駐worker引継ぎ状態を共有します。SDK importは関数内のまま、Hermes本体の変更や独自Slack/Discord認証はありません。
+- LINE WORKSのtext send/checkは接続設定と対話設定を分けて検証します。off又は他の対話接続を使う場合も、明示した有効なLINE設定とexactdestinationが必須です。LINE Callback・操作・サービス起動はactive LINE必須を維持します。
+- 変更記録チェックにadapters/とlineworks_adapter/の実行時ファイルを含め、移動先だけの変更も日本語記録なしで通しません。
+- 独立daemonの待機タイムアウトはasyncio.TimeoutErrorで扱い、Python 3.10の例外別名でも通常の待機で終了しないようにします。CIの例外型許可はLINEの起動入口だけに限定します。
+- 導入手順のHermes依存の説明をSlack/Discordへ限定し、独立LINE接続とoffの意味を明確にします。
+- 根拠: hermes_plugin/mcs_slack/__init__.py、hermes_plugin/mcs_discord/__init__.py、adapters/lineworks/config.py、adapters/lineworks/__main__.py、scripts/development/release_notes.py、ci/gates.py、docs/dev-records/lineworks-impact-20261001.md
+
+#### LINE WORKSの導入・操作結果・更新適用を安定化
+
+- ソースcheckoutと設定/dataを分離し、LINE CLI既定保存先・本体診断・常駐候補を揃えます。既存認証設定はinitで上書きせず、診断・保護した退避・再入力の手順を示します。
+- Slack/Discordの移動先を旧worker検知・更新影響・永続化したplugin_changedへ含めます。LINE WORKS変更は独立プロセスの診断・再起動として案内し、Hermes Agent本体は変更しません。
+- 新しい閲覧には新しい応答IDを使い、処理中の明示再クリックだけ同じIDで冪等発行します。人承認の結果追跡はコマンド発行前に永続化し、現在の本人・配送範囲・route epoch・対象プロジェクトを再確認します。
+- Callbackの処理開始renameをディレクトリfsyncで永続化します。設定の無効化で旧serverを終了し、20分超の未処理入力は実行前に内容を削除して不明記録を残します。
+- LINEテキスト配送の添付はledgerのSHAを送信直前まで保持し、途中のファイル置換や未保管ファイルを子プロセス起動前に拒否します。曖昧な実送信は自動再送しません。
+- 根拠: adapters/lineworks/、mcs/notify/notify_flush.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py、docs/guides/LINEWORKS.md、docs/dev-records/lineworks-review-20261001.md
+
+#### 通知の不正ファイルとSlack履歴確認失敗を安全に処理
+
+- 共通の結果読取りと表示ファイル走査でRecursionErrorを不正JSONとして扱います。
+- Slackの本文照合・既存返信の更新・添付照合が使う履歴読取りで、通信失敗または不正応答を空の履歴へ変換しません。
+- 根拠: adapters/common/paths.py、adapters/common/worker.py、adapters/slack/delivery.py
+
+#### 長文解析の再試行で残り時間を再確認
+
+- 形式拒否前の呼び出しは送信済みとして扱い、未送信の延期とは区別します。
+- 残り399秒で追加送信を抑止し、400秒では制約なしの形式で再試行する境界を合成テストで検証します。
+- 根拠: #2、mcs/semantic/semantic.py、tests/semantic/test_semantic_llm_retry.py
+
+#### macOSで更新時の残存解析プロセスを検出
+
+- POSIX EREの文字クラスを使用し、Pythonインタープリターとextract_llm.pyまたはsemantic_drain.pyの完全な名前を照合します。
+- 同じユーザーIDへの制限・自プロセスの除外・pgrepエラー時の中止を維持します。
+- 実際のpgrepと完全合成の子プロセスで対象2種と非対象5種を検証します。
+- 根拠: #4、mcs/ops/mcs_update.py、tests/ops/test_mcs_update.py
+
+#### 長文解析の拒否判定と形式切替を維持
+
+- admission無効時のfallback経路のみが対象で、admission有効時の経路は変更しません。
+- HTTP404/422は従来の再試行可能な分類を維持し、残り400秒の再送境界とHTTP400の要確認分類を合成テストで検証します。
+- endpoint/modelのハッシュと拒否時刻だけを保存し、本文・患者情報・応答本文・認証情報は記録しません。
+- 600秒期限・500件保持・atomic publish・非blocking lockを使い、保存時間も再送予算から差し引きます。
+- 根拠: #6、#2、mcs/semantic/semantic.py、tests/semantic/test_semantic_llm_retry.py
+
+#### 不正な抽出結果で閲覧・集計出力が停止する問題を修正
+
+- canonical_projectionとsemantic_facts_v4の読み取り時に配列・識別子・根拠IDの形を検査する。
+- 構造化表示と閲覧CLIのJSONオブジェクト読み取りは既存loads_dictに統一する。
+- 深すぎるJSONを含む閲覧履歴は空のmetaまたはnullのcontentとして扱い、他の履歴を表示する。
+- 根拠: mcs/views/read_model.py、mcs/views/structured_view.py、mcs/views/mcs_view.py
+
+#### LINE WORKSの画面例と接続別の案内をREADMEへ追加
+
+- LINE WORKSのSVG/PNG・生成元・hash記録を追加し、CIで同期と画像形式を検証します。
+- 利用者ガイド・README運用規則・文書索引・送信先表・全体フローを現行接続方式へ整合します。
+- 根拠: README.md、docs/screenshots/lineworks-gallery/、scripts/development/generate_lineworks_gallery.py、docs/guides/USER_GUIDE.md
+
+#### READMEを目的別に読みやすくし、リリース時の更新を定着
+
+- release_notes.py buildでCHANGELOGとREADMEの最新変更を同時に更新します。
+- PR・main・tagで見直し記録とリンクを検査し、tagとREADMEのversion不一致を拒否します。
+- 根拠: README.md、scripts/development/readme_release.py、docs/development/README_MAINTENANCE.md
+
+#### Slackを推奨とするREADMEへ更新し、7画面の表示例を追加
+
+- 画像は実画面のキャプチャではなく、実患者・実投稿・匿名化データを使わない説明図です。
+- リリース時のREADME見直しにSlack優先と画面例のソース照合を追加し、CIで7組のSVG・PNG・ハッシュ記録を検査します。
+- 根拠: README.md、scripts/development/generate_slack_gallery.py、docs/screenshots/slack-gallery/README.md
+
+#### 一覧取得に失敗したcronジョブの削除を防止
+
+- mcs_updateと独立復旧ツールの両方で、cron listが成功した場合だけジョブ除去の候補を判定する。
+- 一覧取得の失敗報告、復元承認の待機条件、独立復旧ツールの世代隔離を維持する。
+- 根拠: deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py
+
+#### 特殊文字を含むDBパスの更新・復旧判定を修正
+
+- SQLiteの読み取り用URIを実ファイルのパスからエンコードし、URI区切り文字やエスケープ文字が参照先を変えないようにする。
+- 更新時のスキーマ事前確認、承認キュー、復旧時のスキーマ・損失報告・復元承認の参照先を一致させる。
+- 独立復旧ツールの世代隔離、読み取り専用モード、復元承認と待機中の停止条件を維持する。
+- 根拠: deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py
+
+#### 所見の短縮表示でも否定・推測・家族・予定の条件を保持
+
+- canonical所見の対象・極性・確度・状態・時点等を短縮した本文より前へ表示し、保存形式と公開条件を変えずに資格情報を保持します。
+- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py
+
+#### 取得ジョブとAPI応答の異常JSONによる収集停止を修正
+
+- 取得ジョブの4解析箇所とLedger.job_payloadに既存loads_dictを再利用し、深いJSON・巨大整数を既存の失敗分類へ戻して後続ジョブの処理を続けます。
+- HTTP200応答の不正UTF8・深いJSON・巨大整数を固定文言のSchemaErrorへ分類し、患者単位で未完了を記録して既読化を抑止します。既存の非JSONログイン復旧は維持します。
+- 根拠: mcs/core/ledger.py、mcs/ingest/job_ops.py、mcs/ingest/mcs_adapter.py
+
+#### 診断DBパスとLINE WORKSの破損処理記録を安全に処理
+
+- 診断用SQLite URIを既存Path.resolve().as_uri方式へ統一し、#・?・%を含むパスでも正しいDBを読取り専用で開きます。
+- LINE Callbackの完了記録を容量制限付きで読み、不正形式・読取り失敗をunknownとして保管と状態表示に共通利用します。後続入力を止めず、同じCallbackを再実行しません。
+- 安全文書・AI導入手順・文書索引・生成Wikiの正本briefを3接続先の構成に整合させます。生成Wiki本文、Hermes Agent本体、実データ・配備は変更しません。
+- 根拠: mcs/ops/mcs_setup.py、adapters/lineworks/server.py、adapters/lineworks/__main__.py、docs/guides/SETUP_AGENT.md、SECURITY.md
+
+#### 接続共通コード・開発ツール・文書・テストの配置を整理
+
+- transport中立の配送7モジュールをadapters/commonへ移し、hermes_plugin.mcs_deliveryの互換importは同一moduleと共有状態を維持します。
+- 共通コードの変更をgatewayの診断・更新時の永続restart判定とLINE WORKSの更新影響案内へ含めます。
+- 開発ツール6本とCCO候補・承認記録・説明3本を責務別に移動し、既存CCO記録の内容と適用状態を保持します。
+- 文書13本と接続関連テスト18本を整理し、generator・CI・integration・相対リンク・import探索を新配置へ追従させます。
+- 過去の検証hash台帳・Release原本・生成OpenWiki本文と実データを変更しません。
+- 根拠: adapters/common/、hermes_plugin/mcs_delivery/__init__.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py、scripts/development/、tests/adapters/、docs/README.md、deployment/cco/
+
+#### 意味解析の未送信修復と壊れた保存記録への耐性を改善
+
+- 送信前と証明できる停止時だけ要約修復の予約を解除し、実行済み・成否不明の予約を維持する。
+- 状態表示の集計は共通JSONオブジェクト読取を使い、配列やスカラーのmetaを未判定として扱う。
+- 保存ページのfact ID型を読取境界で検証し、壊れた段階を未観測として保持する。
+- 根拠: mcs/semantic/semantic.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_lifecycle.py
+
+#### 初回導入の案内を設定と最終確認まで一本化
+
+- 導入診断のローカルLLM通信を既存の上限付きHTTP処理に統一し、proxy・redirectを許可しない。
+- 壊れたサービスmanifestを共通JSON loaderで扱い、UTF-8不正や深いJSONで診断・再同期が停止しない。
+- gateway同期に失敗したinitは、後続チェックが成功しても非0で終了する。
+- Path Bで既存plistを標準ライブラリで描画する合成検証を追加し、slot 0/2とowner-only権限を保持する。
+- 根拠: install.sh、mcs/ops/mcs_setup.py、docs/guides/INSTALLATION.md、docs/guides/SETUP_AGENT.md
+
+#### 不正な却下理由の記録でアラート一覧が停止する問題を修正
+
+- 人承認コマンドと集計で同じDISMISS_REASON_CODESを参照する。
+- 根拠: mcs/ops/mcs_signals.py
+
+#### 監視とローカル解析が不正な入力で停止する問題を修正
+
+- JSON辞書の読取りと形式確認に既存の共有処理を再利用する。
+- 送信前に見送ったRT形式確認の待機permitだけを解放し、送信済み処理の不確実性は保持する。
+- 30,000件を超える抽出対象はSQLite json_eachでSQL内絞込みを保ち、LIMIT後の絞込みを廃止する。
+- 根拠: mcs/core/mcs_util.py、mcs/core/local_llm.py、mcs/ingest/health_watch.py、mcs/extract/v4/extract_llm.py
+
+#### 型の壊れた抽出結果でも構造化表示を継続
+
+- 構造化表示の配列反復と区分辞書参照を共通の型検証に統一します。
+- 未指定または正しい空配列の場合のルール補完は維持し、型不正や読めない選択済み項目は除外契約を維持して補完しません。
+- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py
+
+#### 未確認の検査値を候補として表示
+
+- 依頼や薬剤と共通の未確認判定を検査表示にも使用し、フラグがfalse以外の値なら候補として扱います。
+- 患者集約は検査項目のフラグを保持しており、保存形式・抽出処理・数値や根拠の再検証は変更しません。
+- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py、tests/extract/test_rollup_canonical.py
+
+</details>
 
 ## [1.0.8] — 2026-10-01
 

@@ -2,7 +2,7 @@
   "category": "added",
   "title": "LINE WORKSに要約・原文・添付と本人確認付き操作を配信",
   "summary": "LINE WORKSのトークルームへSlackと同じ要約・原文・送信対象の添付を配信できます。許可ユーザーだけが操作でき、入力・プレビュー・本人による確定は1:1トークで行います。Slack・Discordは引き続きHermes公式接続を使います。",
-  "upgrade": "利用する場合だけnotify.interactive=lineworksとBot・ドメイン・部屋・許可ユーザー・MCSプロジェクト範囲を設定し、端末でlineworks_adapter init/checkを実行してください。Botの管理者登録、公開HTTPS Callbackと独立プロセスの起動が必要です。常駐サービス候補はserviceで生成できますが自動登録・起動はしません。既存Slack/Discordのフォルダ移動を反映する場合は対象Hermes gatewayの再起動が必要です。既定の通知先・モデル・取得範囲・既読化・人承認条件は変更しません。",
+  "upgrade": "利用する場合だけnotify.interactive=lineworksとBot・ドメイン・部屋・許可ユーザー・MCSプロジェクト範囲を設定し、端末でpython -m lineworks_adapter initとcheckを実行してください。Botの管理者登録、公開HTTPS Callbackと独立プロセスの起動が必要です。常駐サービス候補はserviceで生成できますが自動登録・起動はしません。既存Slack/Discordのフォルダ移動を反映する場合は対象Hermes gatewayの再起動が必要です。既定の通知先・モデル・取得範囲・既読化・人承認条件は変更しません。",
   "details": [
     "各接続実装をadapters/slack・discord・lineworksへ整理し、既存importとLINE WORKS CLIの入口を維持します。Hermes Agent本体は変更しません。",
     "公式JWT RS256認証・Bot送信・添付upload・生HTTP本文のHMAC署名検証を実装し、配送grant/journal/receiptを共通化します。本文・表示末尾・追加ボタンは封印済み配送パーツで分割し、配信前に整合と範囲を確認します。",
@@ -17,6 +17,6 @@
     "mcs/notify/notify_transport.py",
     "mcs/notify/notify_flush.py",
     "mcs/ops/mcs_setup.py",
-    "docs/LINEWORKS.md"
+    "docs/guides/LINEWORKS.md"
   ]
 }
