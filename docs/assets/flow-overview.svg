@@ -29,6 +29,6 @@
   <text x="556" y="92" font-size="11" fill="#8b949e">・ 全文検索と患者タイムライン</text>
   <text x="556" y="114" font-size="11" fill="#8b949e">・ 患者ごとの状態一覧</text>
   <text x="556" y="136" font-size="11" fill="#8b949e">・ 統計（読み取り専用）</text>
-  <text x="556" y="158" font-size="11" fill="#8b949e">・ 「確認候補」の一覧</text>
+  <text x="556" y="158" font-size="11" fill="#8b949e">・ 「アラート」の一覧</text>
   <text x="556" y="178" font-size="10" fill="#6e7681">（判断・登録は人が行う）</text>
 </svg>
