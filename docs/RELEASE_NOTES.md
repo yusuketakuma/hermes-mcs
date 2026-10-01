@@ -53,21 +53,28 @@ python3 scripts/release_notes.py build \
   --version X.Y.Z --date YYYY-MM-DD \
   --headline 'その版で何が変わるか' \
   --summary '利用者への影響と適用範囲を説明する一文。'
+# README本文の5項目をソースと照合し、docs/readme-review.jsonを新versionへ更新する
+python3 scripts/update_readme.py
+python3 scripts/readme_release.py --check
 python3 -m unittest discover -s tests/release -v
 python3 scripts/release_notes.py export --version X.Y.Z \
   --output /tmp/release-notes.md --title-output /tmp/release-title.txt
 ```
 
-`build`はCHANGELOGへ追加し、入力記録を`changes/archive/<version>/`へ移す。
+`build`はCHANGELOGとREADMEの最新変更要約を更新し、入力記録を`changes/archive/<version>/`へ移す。
 既存versionの上書き、空の変更記録、手書きUnreleased、形式不正では停止する。
 生成後にソースと説明を照合する。CIは文章の事実性まで保証しない。
-途中失敗した場合はCHANGELOGとchangesのgit差分を確認し、両方を復旧して再実行する。
+毎回、README本文の機能・画面例・導入・安全・導線を見直し、確認内容と根拠を
+`docs/readme-review.json`の新しいversionに記録する。変更不要でも照合結果を残す。
+見直し記録が旧版のままならCIが停止する。詳細は[README運用](README_MAINTENANCE.md)。
+途中失敗した場合はCHANGELOG・README・changesのgit差分を確認し、すべてを復旧して再実行する。
 
 ## GitHubとの自動同期
 
 `.github/workflows/release-notes.yml`が次を行う。
 
 1. PR・main更新・リリース時に、全versionの見出し・順番・空段落・必須段落・折りたたみを検査する。
+   README要約・見直し記録・参照リンクも検査し、tagではversionの一致も確認する。
 2. `vX.Y.Z`タグのpushではタグ内のCHANGELOGから新しいRelease下書きを作る。公開はしない。
 3. main更新、既存Releaseの公開・編集、手動の`sync_existing`実行では、mainのCHANGELOGから既存Releaseのタイトル・本文を同期する。
 4. 全対象を事前確認し、内容が同じReleaseは書き換えない。途中の競合編集を検出した場合は停止する。

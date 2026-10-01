@@ -23,7 +23,7 @@ readme:         ## regenerate the auto-generated doc blocks
 	python3 scripts/update_readme.py
 
 check:          ## lint + readme drift check (PR-gate equivalent)
-	$(RUFF) check $(LINT_PATHS) && python3 scripts/update_readme.py --check
+	$(RUFF) check $(LINT_PATHS) && python3 scripts/update_readme.py --check && python3 scripts/readme_release.py --check
 
 gates:          ## incident-derived static gates + dev-record coverage
 	python3 ci/gates.py && python3 ci/mine_gates.py --check
