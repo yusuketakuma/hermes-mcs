@@ -62,6 +62,40 @@ def test_standalone_tempfail_retries_but_unknown_holds(tmp_path, monkeypatch, re
         assert row["next_try"] is None and result["uncertain"] == 1
 
 
+def test_standalone_permanent_failure_quarantines_after_five_attempts(
+        tmp_path, monkeypatch):
+    """A permanently-refused send (revoked token, deleted channel) keeps
+    the backoff retries — a short outage self-heals — then quarantines
+    like every deterministic fault instead of retrying hourly forever."""
+    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC"}
+    monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_format_event",
+                        lambda *a: ("合成通知", []))
+    monkeypatch.setattr(notify_flush.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(
+                            returncode=75, stdout="", stderr=""))
+    (tmp_path / "data").mkdir(parents=True)
+    led = Ledger(str(tmp_path / "data" / "ledger.db"))
+    eid = led.outbox_add("run_failed", None, {})
+    for _ in range(4):
+        res = notify_flush.flush(led)
+        row = led.db.execute(
+            "SELECT state,next_try FROM notify_outbox WHERE event_id=?",
+            (eid,)).fetchone()
+        assert res["failed"] == 1 and row["next_try"] is not None
+        led.db.execute("UPDATE notify_outbox SET next_try=0 WHERE event_id=?",
+                       (eid,))
+        led.db.commit()
+    res = notify_flush.flush(led)
+    row = led.db.execute(
+        "SELECT state,next_try FROM notify_outbox WHERE event_id=?",
+        (eid,)).fetchone()
+    led.close()
+    assert res["failed"] == 1 and row["state"] == "failed" \
+        and row["next_try"] is None            # held — never re-armed
+
+
 def test_hermes_mode_is_unchanged(tmp_path, monkeypatch):
     cfg = {"notify_target": "discord:1000000000000000001", "hermes_bin": "/opt/hermes"}
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
