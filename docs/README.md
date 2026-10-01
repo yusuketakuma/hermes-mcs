@@ -2,7 +2,7 @@
 
 | 種別 | 文書 |
 |---|---|
-| 利用・導入 | `USER_GUIDE.md`（利用者・責任者向け: 画面イメージ・MCS データで何が追えるか）· `INSTALLATION.md`（導入手順）· `SETUP_AGENT.md`（AI エージェント向け実行手順） |
+| 利用・導入 | `USER_GUIDE.md`（利用者・責任者向け: 画面イメージ・MCS データで何が追えるか）· `INSTALLATION.md`（導入手順）· `SETUP_AGENT.md`（AI エージェント向け実行手順）· [LINEWORKS.md](LINEWORKS.md)（独立LINE WORKS接続） |
 | 開発・運用 | `DEVELOPMENT.md`（生成表を含む。`scripts/update_readme.py` が更新） |
 | 仕様 | `lifecycle-spec.md` · `external-export-contract.md` · `semantic-evaluation.md` |
 | 運用ガイド | `semantic-facts-v2-rollout.md` |

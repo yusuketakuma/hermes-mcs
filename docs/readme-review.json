@@ -5,8 +5,8 @@
       "notes": "現行Slackカード・操作メニューとDiscordの/mcs対応を照合。READMEの推奨と先頭画面をSlackへ統一し、通知・暫定集約・人承認タスクの説明を保持した。",
       "sources": [
         "docs/USER_GUIDE.md",
-        "hermes_plugin/mcs_slack/cards.py",
-        "hermes_plugin/mcs_slack/actions.py",
+        "adapters/slack/cards.py",
+        "adapters/slack/actions.py",
         "hermes_plugin/README.md"
       ]
     },
@@ -16,8 +16,8 @@
         "scripts/generate_slack_gallery.py",
         "docs/screenshots/slack-gallery/assets.json",
         "docs/screenshots/slack-gallery/README.md",
-        "hermes_plugin/mcs_slack/cards.py",
-        "hermes_plugin/mcs_slack/actions.py",
+        "adapters/slack/cards.py",
+        "adapters/slack/actions.py",
         "hermes_plugin/mcs_delivery/text.py",
         "mcs/notify/notify_views.py"
       ]
@@ -34,7 +34,7 @@
       "notes": "Slack推奨でも外部送信があることを明示する既存の説明を保持。確認済みとタスク完了、本人向けの回答、タスク作成前の内容・理由確認、暫定集約と未取得範囲を画像にも反映した。Jev・既読化・添付未解析・復旧の境界も保持した。",
       "sources": [
         "SECURITY.md",
-        "hermes_plugin/mcs_slack/actions.py",
+        "adapters/slack/actions.py",
         "mcs/notify/notify_views.py",
         "docs/lifecycle-spec.md"
       ]

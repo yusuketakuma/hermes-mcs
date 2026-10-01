@@ -69,8 +69,8 @@ jobs:
           fi
       - name: no stale adapter/ references
         run: |
-          bad=$(grep -rn "adapter/" --include='*.py' --include='*.sh' \
-                mcs/ tests/ hermes_plugin/ integration/ install.sh || true)
+          bad=$(grep -rnE '(^|[^[:alnum:]_])adapter/' --include='*.py' --include='*.sh' \
+                mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ install.sh || true)
           if [ -n "$bad" ]; then
             echo "::error::stale adapter/ references:"; echo "$bad"; exit 1
           fi

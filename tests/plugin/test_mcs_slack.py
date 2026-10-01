@@ -768,6 +768,41 @@ def _updates(w):
     return [kw for kind, kw in w.client.calls if kind == "update"]
 
 
+@pytest.mark.parametrize("kind", ["body_part", "attachment_part"])
+@pytest.mark.parametrize("failure", ["timeout", "rejected", "malformed"])
+def test_unverified_slack_history_never_posts_or_uploads_again(
+        led, monkeypatch, kind, failure):
+    w, spec, _ = _rewrite_world(led)
+    spec["delivery_id"] = "00000000-0000-4000-8000-00000000face"
+    posted, uploaded = len(w.client.thread_posts), len(w.client.upload_calls)
+
+    async def unreadable_replies(self, **kwargs):
+        if failure == "timeout":
+            raise TimeoutError("synthetic")
+        if failure == "rejected":
+            return {"ok": False, "error": "missing_scope"}
+        return {"ok": True, "messages": [None]}
+
+    monkeypatch.setattr(FakeClient, "conversations_replies", unreadable_replies)
+    part = {"part_id": "body:0001" if kind == "body_part" else "file:0001",
+            "kind": kind, "name": "synthetic.txt", "bytes": 1,
+            "sha256": "a" * 64}
+    claim = {"spec": spec, "payload_hash": envelopes.payload_hash(spec)}
+    ctx = {"card_message_id": ROOT_TS, "thread_id": ROOT_TS,
+           "history": None, "consumed": set()}
+
+    async def scenario():
+        await w.worker._attempt_part(claim, part, ctx)
+        records = w.worker._jview.refresh()
+        rows = records[envelopes.part_attempt_id(spec["delivery_id"], part["part_id"])]
+        assert next(r for r in rows if r["phase"] == "result")["result"] == "unknown"
+        await w.worker._drive_parts(claim, [part], ctx, records)
+
+    asyncio.run(scenario())
+    assert len(w.client.thread_posts) == posted
+    assert len(w.client.upload_calls) == uploaded
+
+
 def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     """The chunk's text changed after its first post (the extraction
     arrived): the update rewrites that reply — one reply per chunk, the

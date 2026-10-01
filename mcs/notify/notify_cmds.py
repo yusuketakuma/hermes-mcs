@@ -52,7 +52,7 @@ def _id_str(v, n=64) -> bool:
 
 
 def _fields(req, allowed) -> str | None:
-    if req.get("version") == 2:
+    if req.get("version") in (2, 3):
         allowed = (allowed - {"guild_id"}) | {"transport"}
         if req.get("op") in TRANSPORT_OPS:
             allowed |= {"team_id"}
@@ -129,17 +129,17 @@ def _result_fields(req, remote_key) -> str | None:
     return None
 
 
-def _origin(v, slack=False) -> bool:
+def _origin(v, transport="discord") -> bool:
     """Verified native origin the plugin supplies from the interaction —
     application/channel/message identify the card; guild/profile pin
     the deployment; thread_id records a companion-thread click for
     audit only."""
     if not isinstance(v, dict):
         return False
-    if slack:
+    if transport != "discord":
         return v.keys() <= {"transport", "profile", "application_id", "team_id",
                             "channel_id", "message_id"} \
-            and v.get("transport") == "slack" \
+            and v.get("transport") == transport \
             and all(_text(v.get(k), 200 if k == "profile" else 64)
                     for k in ("profile", "application_id", "team_id",
                               "channel_id", "message_id"))
@@ -151,6 +151,13 @@ def _origin(v, slack=False) -> bool:
         and _opt_text(v.get("guild_id"), 64) \
         and _opt_text(v.get("thread_id"), 64) \
         and _opt_text(v.get("profile"), 200)
+
+
+def _lineworks_actor(req) -> bool:
+    prefix = f"lineworks:{req['origin']['team_id']}:"
+    user_id = req["actor"].removeprefix(prefix)
+    return (req["actor"].startswith(prefix) and _id_str(user_id)
+            and ":" not in user_id and not any(ord(c) < 32 for c in user_id))
 
 
 SCOPE_MAX = 1000
@@ -178,12 +185,12 @@ def validate_int(req) -> str | None:
     UUID validator must never see."""
     if not isinstance(req, dict):
         return "bad_command"
-    if type(req.get("version")) is not int or req["version"] not in (1, 2):
+    if type(req.get("version")) is not int or req["version"] not in (1, 2, 3):
         return "bad_version"
     op = req.get("op")
-    slack = req["version"] == 2
-    if slack:
-        if req.get("transport") != "slack":
+    transport = {1: "discord", 2: "slack", 3: "lineworks"}[req["version"]]
+    if transport != "discord":
+        if req.get("transport") != transport:
             return "bad_transport"
         if not isinstance(op, str) or op not in _VALID_OPS:
             return "unknown_op"
@@ -198,9 +205,9 @@ def validate_int(req) -> str | None:
         return "unknown_op"
     cid = req.get("command_id")
     if op == "notification":
-        return _val_notification(req, cid, slack)
+        return _val_notification(req, cid, transport)
     if op == "refresh":
-        return _val_refresh(req, cid, slack)
+        return _val_refresh(req, cid, transport)
     if op == "transport_begin":
         return _val_transport_begin(req, cid)
     if op == "transport_receipt":
@@ -208,11 +215,11 @@ def validate_int(req) -> str | None:
     if op == "part_receipt":
         return _val_part_receipt(req, cid)
     if op == "thread_receipt":
-        return _val_thread_receipt(req, cid, slack)
+        return _val_thread_receipt(req, cid, transport != "discord")
     return None  # human cmd — validated by mcs_requests
 
 
-def _val_notification(req, cid, slack: bool) -> str | None:
+def _val_notification(req, cid, transport: str) -> str | None:
     if _fields(req, {"version", "op", "command_id", "actor",
                      "token", "origin", "request_id", "input"}):
         return "unknown_field"
@@ -232,12 +239,14 @@ def _val_notification(req, cid, slack: bool) -> str | None:
         # applies — a mismatched pair could otherwise replay one
         # token under another action's receipt identity
         return "command_id_mismatch"
-    if not _origin(req.get("origin"), slack):
+    if not _origin(req.get("origin"), transport):
         return "bad_origin"
+    if transport == "lineworks" and not _lineworks_actor(req):
+        return "bad_actor"
     return None
 
 
-def _val_refresh(req, cid, slack: bool) -> str | None:
+def _val_refresh(req, cid, transport: str) -> str | None:
     if _fields(req, {"version", "op", "command_id", "actor",
                      "origin"}):
         return "unknown_field"
@@ -245,8 +254,10 @@ def _val_refresh(req, cid, slack: bool) -> str | None:
         return "bad_command_id"
     if not _text(req.get("actor"), 120):
         return "bad_actor"
-    if not _origin(req.get("origin"), slack):
+    if not _origin(req.get("origin"), transport):
         return "bad_origin"
+    if transport == "lineworks" and not _lineworks_actor(req):
+        return "bad_actor"
     return None
 
 

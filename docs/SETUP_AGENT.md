@@ -5,6 +5,20 @@
 > 実行手順書です。** 人間向けの設定リファレンス・経路説明は
 > [INSTALLATION.md](INSTALLATION.md) を参照してください。
 
+**LINE WORKS が指定された場合:** [LINEWORKS.md](LINEWORKS.md)を併読し、
+本体の依存導入後に MCS の `notify.interactive=lineworks` と明示した操作範囲を
+設定します。`lineworks_adapter init` は秘密値をユーザー自身の端末で入力し、
+`check`（ローカル診断）→`run`（独自プロセス）の順に進めます。
+公開 HTTPS Callback の配備・テナントへの試験送信は、その範囲の承認を使います。
+Hermes の plugin 設定・gateway を LINE WORKS 用に追加しません。
+常駐させる場合は `python -m lineworks_adapter service` で候補を生成し、
+[常駐サービス手順](LINEWORKS.md#常駐サービスの候補を作る)に従って
+plist/unit を検証します。サービス配置・起動は既存承認の範囲で行います。
+候補生成だけでは常駐開始と報告しません。checkout と Python の絶対パスを
+確認し、手動 `run` との二重起動を避けます。設定・dataの既定保存先は
+本体と同じ `~/.mcs` で、checkoutと分離できます。`--root`を使う場合は
+全コマンド・サービス候補・本体の保存先を揃えます。
+
 ## 0. エージェントへの実行契約（最初に読むこと）
 
 セットアップ実行が依頼された範囲で適用する。文書の閲覧・レビューだけでは、
@@ -27,17 +41,23 @@
    原因を報告してユーザー判断を待つ。自己判断でスキップしない。
 6. **完了時。** §7 の完了報告フォーマットで結果を出力する。
 
+作業ディレクトリはこの checkout のリポジトリルートに揃える。開いている
+cwd に `./install.sh` があれば、その checkout をそのまま使う。無い場合だけ
+既存の clone 先を探すか、許可済みの clone を行ってそのルートへ移動する。
+以後のコマンドはすべて同じルートで実行し、`cd hermes-mcs` を繰り返さない。
+
 ### 0-1. 秘密情報プロトコル
 
 対象: **MCS パスワード・Discord bot token・Slack token・
-TYPESAFE_API_KEY**。
+TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
 
 - **禁止:** ユーザーにチャットへ平文で貼らせること。自分で生成した
   値を入れること。argv（`ps` に残る）に直接渡すこと。
 - **方法 X（ユーザーが直接入力できる安全な tty がある場合）:**
   ユーザーの端末の bash 内で `read -rs` で受け取り、同じシェルプロセス内で
   `export` して使う。`init` の非対話実行が secrets を env で
-  読む（`MCS_SETUP_PASSWORD`・`TYPESAFE_API_KEY`・`DISCORD_BOT_TOKEN`）。
+  読む（`MCS_SETUP_PASSWORD`・`TYPESAFE_API_KEY`・`DISCORD_BOT_TOKEN`・
+  `SLACK_BOT_TOKEN`・`SLACK_APP_TOKEN`）。
 
   ```bash
   read -rs -p "MCS パスワード: " MCS_SETUP_PASSWORD; echo; export MCS_SETUP_PASSWORD
@@ -50,7 +70,12 @@ TYPESAFE_API_KEY**。
 
 ## Phase 1 — 前提条件の確認
 
-以下を順に実行し、全て合格してから Phase 2 へ。不合格は【失敗時】
+既存の回答・導入形態・通知先・操作範囲を最初にまとめ、未決事項だけを
+一度に確認する。依存導入と収集開始は分けて進める。Chrome の CDP 起動や
+MCS ログインは依存導入を妨げないため、初回収集の直前に確認する。
+
+以下を順に確認する。Path B と決まっている場合は install.sh の
+Path A 向け preflight を必須にせず、Phase 6 の前提を確認する。不合格は【失敗時】
 の指示に従う。**Python の事前確認はしない** — 新規 Mac の `python3` は
 3.9 系で、Path A では `install.sh` が `python@3.13` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
@@ -60,10 +85,9 @@ Path B は `python3.13`）。
 | # | チェック | コマンド | 合格条件 |
 |---|---|---|---|
 | 1 | macOS である | `uname -s` | `Darwin` |
-| 2 | リポジトリがある | `ls hermes-mcs/install.sh` — 無ければ `git clone https://github.com/yusuketakuma/hermes-mcs.git`（git が無ければ先に `xcode-select --install`） | 存在 |
-| 3 | 前提一式（読取り専用） | `cd hermes-mcs && ./install.sh --preflight` | exit 0・最終行 `preflight: 0 blocker(s), N warning(s)` |
-| 4 | CDP :9333 が開いている | `curl -sf -m 3 http://127.0.0.1:9333/json/version` | JSON が返る |
-| 5 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば【ユーザー確認】で再設定か維持かを聞く |
+| 2 | 現 checkout のルート | `ls ./install.sh`。無ければ既存 clone 先へ移動する。新規取得が必要なら `git clone https://github.com/yusuketakuma/hermes-mcs.git` → `cd hermes-mcs`（git が無ければ先に `xcode-select --install`） | ルートの `./install.sh` が存在 |
+| 3 | 前提一式（読取り専用） | `./install.sh --preflight` | exit 0・最終行 `preflight: 0 blocker(s), N warning(s)` |
+| 4 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば既存の指示で維持/再設定を決め、未決の場合だけ確認 |
 
 `--preflight` は何も書き込まず、root 実行・macOS 版・Xcode CLT・
 Homebrew・Python（brew が入れられない場合のみ NG）・git・空き容量・
@@ -86,22 +110,20 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
   - `running as root` → エージェント自身が sudo/root で動いていないか確認
   WARN は続行可。内容はユーザーに伝える（例: `Google Chrome missing` は
   stage 1 が入れない構成なら `brew install --cask google-chrome`）
-- 4: Chrome が CDP で起動していない → ユーザーに「MCS ログイン済み
-  プロファイルで `--remote-debugging-port=9333` 付きで起動して
-  ください」と依頼。起動確認できてから継続
-- 5: 既存 `~/.mcs/config.json` がある → **【ユーザー確認】**
+- 4: 既存 `~/.mcs/config.json` がある → 指示・回答から維持/再設定が
+  決まっていればその方針を使う。未決の場合だけ **【ユーザー確認】**:
   「既存の MCS 設定が見つかりました。上書きせず維持して確認のみ
   進めますか？それとも `init` で再設定しますか？」
 
 ## Phase 2 — 導入形態の選択【ユーザー確認】
 
-ユーザーに次を尋ねる:
+導入形態がまだ決まっていなければ、ユーザーに次を尋ねる:
 
 > 導入形態を選んでください:
 > **A**: hermes-agent アドオン（推奨・全機能 — Discord/Slack 通知・
 > 対話カード・`/mcs` コマンドあり）
-> **B**: スタンドアロン（収集・保存・閲覧のみ — 通知は送られません。
-> 後から A に移行できます）
+> **B**: スタンドアロン（収集・保存・閲覧・抽出。
+> LINE WORKSは独立接続で通知できます。Slack/Discord通知には A が必要です）
 
 - A → Phase 3
 - B → Phase 6
@@ -115,7 +137,7 @@ Phase 1 の `--preflight` が exit 0 であることが前提。
 【実行】
 
 ```bash
-cd hermes-mcs
+# Phase 1 で確認した同じリポジトリルートで実行
 ./install.sh --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
 ./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
@@ -147,14 +169,17 @@ install を止めないが、表示されたコマンドをユーザーに案内
 
 ### 4-1. 通知先の選択
 
-【ユーザー確認】
+【ユーザー確認】未決の場合のみ確認。既に指定されていればその経路へ進む。
 
 > 通知先を選んでください:
-> **slack**（推奨）/ **discord** / **off**（通知なし —
+> **slack**（推奨）/ **discord** / **lineworks** / **off**（通知なし —
 > テキスト通知も含め配送しない）
 
 - `slack` → 4-2
 - `discord` → 4-3
+- `lineworks` → [専用導入手順](LINEWORKS.md)。Phase 5のMCS設定では
+  `notify.lineworks`の許可範囲を指定し、専用CLIで秘密値を入力・診断する。
+  Slack/Discord用plugin設定・gateway同期は行わない
 - `off` → Phase 6 の通知を送らない構成を使う。`interactive=off` は
   テキスト配送を止めないため、全 runner に `--no-notify` が必要。
   既存の Hermes 定期ジョブがある場合は、承認範囲内で停止・置換を確認する
@@ -214,8 +239,7 @@ INSTALLATION.md 付録A を案内する（Developer Portal での手順を
 - **非対話:** エージェントが収集した値で実行（secrets は §0-1 経由）:
 
   ```bash
-  MCS_SETUP_PASSWORD=<sec> TYPESAFE_API_KEY=<key> \
-  SLACK_BOT_TOKEN=<tok> SLACK_APP_TOKEN=<tok2> \
+  # secrets は §0-1 に従って同じ端末の環境変数に準備済み
   ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
       --login-id <ID> --notify-target slack:<channel_id> \
       --set 'notify.interactive="slack"' \
@@ -229,6 +253,11 @@ INSTALLATION.md 付録A を案内する（Developer Portal での手順を
   `notify.discord={"profile","application_id","guild_id","channel_id"}`
   と `--notify-target discord:<channel_id>`・`--plugin-chat-ids` を使い、
   トークンは `DISCORD_BOT_TOKEN` で渡す。
+
+LINE WORKSは[専用導入手順](LINEWORKS.md#3-mcs-の配送先と操作範囲を設定する)の
+設定を使い、`--plugin-*`やSlack/Discordトークンを指定しません。
+MCS `init`の後に、ユーザー端末で`python -m lineworks_adapter init/check`を
+行ってからMCS `check`を再実行します。秘密値を`--set`や環境変数へ渡しません。
 
 `init` は既存の `~/.mcs/config.json` が壊れていると何も書かずに止まる
 （`config: ... is unreadable or invalid ... nothing written`）。
@@ -249,7 +278,11 @@ ls -l ~/.mcs/.env                    # 0600・中身は見せない
 security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 ```
 
-### 5-2. サービス登録
+### 5-2. サービスの再同期（必要時のみ）
+
+通常の初回導入では install.sh が cron/launchd を登録済みで、`init` が
+gateway を同期するため、この操作は不要。`--no-services` を使った場合、
+または最終チェックが配置 drift・未登録を報告した場合だけ実行する。
 
 【実行】
 
@@ -265,6 +298,9 @@ launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```
 
+LINE WORKSにはgateway状態の検証を適用せず、独立プロセスと公開Callback経路を
+検証します。常駐用候補の生成・配置は[専用サービス手順](LINEWORKS.md#常駐サービスの候補を作る)。
+
 ### 5-3. Slack の手動設定（`init` を使わない場合のみ）
 
 ```bash
@@ -276,8 +312,10 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 
 ### 5-4. 必須条件の検証
 
-【実行】`~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check` — exit 0・最終行
-`check: OK (0 errors, N warnings)` を期待
+【検証】`init` の自動チェックで exit 0・最終行
+`check: OK (0 errors, N warnings)` を確認する。設定・サービスを後から
+直した場合だけ `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check`
+を再実行する。
 
 【失敗時】`check` はエラーを優先度順（実行基盤 → config → マシン →
 配置 drift）に並べ、最後に `blockers (N) — fix in this order:` として
@@ -311,6 +349,12 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 
 ### 5-5. 動作確認
 
+Chrome を MCS ログイン済みプロファイルで `--remote-debugging-port=9333`
+付きで起動し、`curl -sf -m 3 http://127.0.0.1:9333/json/version` が JSON を
+返すことを確認する。未起動ならユーザーの端末で起動を案内する。
+実データの取得・通知・既読化が既存の承認範囲に含まれることを確認し、
+範囲外ならその操作の承認だけを得てから実行する。
+
 【実行】
 
 ```bash
@@ -335,7 +379,7 @@ $PY mcs/views/mcs_view.py status
 ```bash
 brew install python@3.13 llama.cpp       # 未導入のみ
 brew install --cask google-chrome        # 未導入のみ
-cd hermes-mcs                            # Phase 1 で clone 済み
+# Phase 1 で確認した同じリポジトリルートで実行
 PY=python3.13                            # 以後の MCS コマンドはすべて $PY で実行
 $PY -V                                   # Python 3.13.x
 ```
@@ -344,9 +388,14 @@ $PY -V                                   # Python 3.13.x
 `mcs_setup requires Python >= 3.10` で止まる。以後のコマンドは同じ
 シェルで `PY` を設定した前提。
 
-### 6-2. init（通知は送らない前提の設定）
+### 6-2. 設定
 
-【ユーザー確認】以下の値を尋ねる:
+LINE WORKSを選んだ場合は[専用設定](LINEWORKS.md#3-mcs-の配送先と操作範囲を設定する)で
+`notify_target`・`notify.lineworks`と秘密ファイルを設定し、ローカル診断を行う。
+カード・操作を使う場合は`interactive=lineworks`、テキストだけなら`off`にする。
+以下は通知を送らない構成の例なので、LINE WORKS設定を`local`へ置き換えない。
+
+【ユーザー確認】未取得の値だけをまとめて尋ねる:
 
 1. `mcs_login_id`
 2. MCS パスワード（§0-1）
@@ -355,7 +404,8 @@ $PY -V                                   # Python 3.13.x
 【実行】
 
 ```bash
-MCS_SETUP_PASSWORD=<sec> $PY mcs/ops/mcs_setup.py init --yes \
+# MCS_SETUP_PASSWORD は §0-1 に従って環境変数に準備済み
+$PY mcs/ops/mcs_setup.py init --yes \
     --login-id <ID> --notify-target local \
     --set 'notify.interactive="off"'
 ```
@@ -367,7 +417,8 @@ MCS_SETUP_PASSWORD=<sec> $PY mcs/ops/mcs_setup.py init --yes \
 【ユーザー確認】構造化抽出・semantic を使いますか？（約6GBの
 モデルDLが必要）
 
-使う場合は INSTALLATION.md §B-3 の手順を実行。
+使う場合は INSTALLATION.md §B-3 のサーバ導入と §B-4「抽出worker」の
+2件の plist 配置・ロードを実行する。retry 登録だけでは解析は進まない。
 
 ### 6-4. スケジューリング
 
@@ -379,14 +430,20 @@ MCS_SETUP_PASSWORD=<sec> $PY mcs/ops/mcs_setup.py init --yes \
 7,37 * * * * $HOME/.mcs/scripts/mcs_deep.sh
 ```
 
-（`mcs_check.sh` には `--no-notify` を付与）
+通知を送らない場合は`mcs_check.sh`へ`--no-notify`を付与する。
+LINE WORKSへ送る場合はINSTALLATION.md §B-4のLINE条件に従い、付与しない。
+カード・操作を使う場合は[独立プロセスの常駐設定](LINEWORKS.md#常駐サービスの候補を作る)も行う。
 
 この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
-併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
+併用しない。既定の起動経路には `--no-notify` がなく、配送先を設定した環境では
 通知を送信し得る。既存ジョブの停止・置換が必要な場合は、その対象を確認し、
 許可済みの範囲で行う。
 
 ### 6-5. 検証
+
+Phase 5-5 と同じく CDP 起動・MCS ログインを確認し、取得・既読化が
+承認範囲内であることを確認する。通知を送らない場合は`--no-notify`で抑止する。
+LINE WORKSへ送る場合は次のコマンドから`--no-notify`を省く。
 
 ```bash
 $PY mcs/ingest/run_check.py --json --download-files --mark-read --no-notify
@@ -396,7 +453,7 @@ $PY mcs/ops/mcs_setup.py check
 
 `check` はスタンドアロンでは exit 1 になる。次は想定内（一覧は
 INSTALLATION.md §B-5）: `interpreter ~/.hermes/hermes-agent/venv/bin/python
-is missing` と `hermes CLI not resolvable` のエラー、LaunchAgent 4件・
+is missing`、Slack/Discord通知先の場合の`hermes CLI not resolvable`のエラー、LaunchAgent 4件・
 `org.mcs.recovery`・`~/.hermes/scripts` 未配置の警告。それ以外のエラーは
 対処する。
 
@@ -411,11 +468,12 @@ is missing` と `hermes CLI not resolvable` のエラー、LaunchAgent 4件・
 - install.sh: Installed（使用フラグ: …）/ B のため未使用
 - 設定: ~/.mcs/config.json（notify_target=…、interactive=…）
 - 秘密情報: Keychain mcs-adapter=登録済み / .env=設定済み
+- LINE WORKS利用時: 認証ファイル=権限確認済み、独立プロセス=稼働/不要/未起動
 - スケジュール: hermes cron=N件 / launchd=N件 / crontab=N件
 - 検証: mcs_setup check = exit 0 / 警告N件（内容: …）
 - 初回 run: 成功（messages=N, patients=N）/ 失敗（原因: …）
-- 通知先: discord:… / slack:… / なし
-- 次の注意: hermes_plugin 変更時は `hermes gateway restart` が必要
+- 通知先: discord:… / slack:… / lineworks:… / なし
+- 次の注意: Slack/Discord plugin更新はgateway、LINE WORKS更新は独立プロセスへ反映
 ```
 
 未達項目があれば完了報告の末尾に「残タスク」として列挙する。

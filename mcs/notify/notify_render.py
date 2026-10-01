@@ -28,6 +28,21 @@ PAGE_TEXT_BUDGET = 3200
 BODY_MAX_CHARS = 6000
 
 
+def display_text(parts: dict) -> str:
+    """カードの可視本文を順序どおり連結し、通知を発生させるメンションを除く。"""
+    lines = []
+    for item in parts["containers"]:
+        kind = item["type"]
+        if kind == "meta":
+            continue
+        value = (f"{item['name']}: {item['value']}"
+                 if kind == "field" else item["text"])
+        lines.append(f"引用: {value}" if kind == "quote" else value)
+    lines.extend(item["text"] for item in parts.get("footer") or []
+                 if item["type"] == "text")
+    return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+
+
 def _latest_signals(db, keys: list, project_id=None) -> dict:
     """key -> {'artifact_id','content'} of the newest signal_v1 row."""
     out = {}

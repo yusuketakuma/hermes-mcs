@@ -770,8 +770,8 @@ discord it also, through the public hermes CLI only:
   - stores DISCORD_BOT_TOKEN (or SLACK_BOT_TOKEN + SLACK_APP_TOKEN)
     in the profile .env (env var or prompt — never an argv flag),
     skipping tokens already configured
-  - and 'services' (already run above) installs the gateway via
-    'hermes gateway install' when interactive is configured
+  - syncs the supervised gateway when interactive is configured
+  - runs the final required-condition check and reports blockers
 
 Non-interactive equivalent (slack):
 
@@ -790,7 +790,9 @@ cat <<'EOF'
     #   application_id, guild_id, channel_id}; the token comes from
     #   DISCORD_BOT_TOKEN in the environment
 
-Then re-run services + validate:
+init already syncs the gateway and validates the install.
+Only when services were skipped, or check reports deployed-script drift,
+run services and check again:
 
 EOF
 printf '    %s %s services   # picks up gateway\n' "$PYQ" "$SETUPQ"

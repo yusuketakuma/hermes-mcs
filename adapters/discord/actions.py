@@ -19,8 +19,8 @@ import functools
 import time
 from typing import Any
 
-from .. import projects
-from ..mcs_delivery import envelopes, paths, registry, text
+from hermes_plugin import projects
+from hermes_plugin.mcs_delivery import envelopes, paths, registry, text
 from .cards import no_pings
 
 ACTION_PREFIX = "mcs:a:"

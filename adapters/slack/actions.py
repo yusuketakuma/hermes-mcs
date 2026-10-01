@@ -5,9 +5,9 @@ import asyncio
 import re
 import time
 
-from .. import projects
-from ..mcs_delivery import envelopes, paths, registry
-from ..mcs_delivery.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
+from hermes_plugin import projects
+from hermes_plugin.mcs_delivery import envelopes, paths, registry
+from hermes_plugin.mcs_delivery.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  ja, modal_fields, preview_text,
                                  search_query, task_list_text, view_answer)
 from .cards import LINK_ACTION, MENU_ACTION, _sections

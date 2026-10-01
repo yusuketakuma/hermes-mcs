@@ -68,7 +68,7 @@ Keychain 'mcs-adapter'               MCS パスワード
 ```
 
 常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
-`ai.mcs.extract-drainer{,-rt}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
+`ai.mcs.extract-drainer{,-2}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
 `org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
 定期: cron `mcs_check`（5分）・`mcs_deep`（durable drain）・
 `mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
@@ -102,17 +102,18 @@ pip install・モデル DL の `.part`）は続きから収束する。
 
 - 全 config キーを5節で網羅（Enter=現状/既定・ゲートで不要項目を skip・
   `-` で任意キー削除・`--set KEY=JSON` で非対話も可）
-- `interactive=discord` 選択時は公開 CLI のみで: plugin settings を
+- `interactive=discord|slack` 選択時は公開 CLI のみで: plugin settings を
   `hermes -p <profile> config set`（serving profile・allowlist は質問）、
-  `DISCORD_BOT_TOKEN` を profile .env へ（env または getpass）
+  Discord または Slack の token を profile .env へ（env または getpass）
 - Keychain `mcs-adapter` 登録 + `.env` フォールバック併記
 - `data/`・`data/cmd`・`chrome-profile/` を作成
-- 終了時に `check` 自動実行
+- 対話通知の gateway 同期と、終了時の `check` を自動実行。
+  初回は `services`・`check` の手動再実行は不要（未登録・drift の復旧時は別）
 
 `services`（冪等）: `deployment/scripts/*.sh` レンダリング →
 launchd 4件 bootstrap（差分は bootout+bootstrap 案内）→ cron を
 script 名で dedup 登録（現行5件 + 📋`mcs_update`）→
-`interactive=discord` なら gateway を `status`→未 supervised なら
+`interactive=discord|slack` なら gateway を `status`→未 supervised なら
 `install`+`start`。📋manifest 記録・reconcile・atomic render は
 更新仕様で追加。
 

@@ -66,8 +66,10 @@ def transport_begin(claim: dict) -> dict:
            "channel_id": delivery.get("channel_id")}
     if delivery.get("guild_id"):
         env["guild_id"] = delivery["guild_id"]
-    if delivery.get("transport") == "slack":
-        env.update(version=2, transport="slack", team_id=delivery["team_id"])
+    if delivery.get("transport") in ("slack", "lineworks"):
+        transport = delivery["transport"]
+        env.update(version=2 if transport == "slack" else 3,
+                   transport=transport, team_id=delivery["team_id"])
     return env
 
 
@@ -92,9 +94,10 @@ def _receipt_env(claim: dict, op: str, result: str, attempt_id: str,
     env["result"] = result
     if delivery.get("guild_id"):
         env["guild_id"] = delivery["guild_id"]
-    if delivery.get("transport") == "slack":
-        env.update(version=2, transport="slack",
-                   team_id=delivery["team_id"])
+    if delivery.get("transport") in ("slack", "lineworks"):
+        transport = delivery["transport"]
+        env.update(version=2 if transport == "slack" else 3,
+                   transport=transport, team_id=delivery["team_id"])
     return env
 
 
@@ -161,9 +164,12 @@ def notification(token: str, actor: str, origin: dict,
     click with typed input (🔎 keyword, 📋 display name) folds the input
     into the hash: a different input is a different command, never a
     command_id_conflict against the earlier receipt."""
-    slack = origin.get("transport") == "slack"
-    env = {"version": 2 if slack else 1,
-           **({"transport": "slack"} if slack else {}),
+    transport = origin.get("transport", "discord")
+    version = {"discord": 1, "slack": 2, "lineworks": 3}.get(transport)
+    if version is None:
+        raise ValueError("bad_transport")
+    env = {"version": version,
+           **({"transport": transport} if transport != "discord" else {}),
            "op": "notification",
            "command_id": f"{token}:{actor_hash(actor)}",
            "request_id": str(uuid.uuid4()),
@@ -177,9 +183,12 @@ def notification(token: str, actor: str, origin: dict,
 
 def refresh(actor: str, origin: dict,
             command_id: str | None = None) -> dict:
-    slack = origin.get("transport") == "slack"
-    return {"version": 2 if slack else 1,
-            **({"transport": "slack"} if slack else {}),
+    transport = origin.get("transport", "discord")
+    version = {"discord": 1, "slack": 2, "lineworks": 3}.get(transport)
+    if version is None:
+        raise ValueError("bad_transport")
+    return {"version": version,
+            **({"transport": transport} if transport != "discord" else {}),
             "op": "refresh",
             "command_id": command_id or str(uuid.uuid4()),
             "actor": actor, "origin": origin}

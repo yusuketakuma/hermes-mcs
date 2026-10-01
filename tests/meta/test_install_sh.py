@@ -289,6 +289,7 @@ def test_install_run_then_rerun_converges(tmp_path):
     # the pinned clone is reported pinned; final summary lists next steps
     assert "hermes-agent cloned (pinned" in r1.stdout
     assert "Installed. Summary:" in r1.stdout
+    assert "init already syncs the gateway and validates" in r1.stdout
 
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
@@ -874,3 +875,32 @@ def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
     assert r.returncode == 0, r.stderr
     assert STOPPED not in r.stderr
     assert "recovery watchdog loaded" in r.stdout
+
+
+def test_standalone_worker_documented_render_preserves_literal_paths(tmp_path, monkeypatch):
+    """Run only the documented renderer; never launchctl or a real service."""
+    import sys
+    guide = (ROOT / "docs/INSTALLATION.md").read_text()
+    marker = "$PY - <<'PYDRAIN'\n"
+    snippet = guide.split(marker, 1)[1].split("\nPYDRAIN", 1)[0]
+    repo = tmp_path / "checkout & space"
+    source = repo / "deployment/launchagents"
+    source.mkdir(parents=True)
+    for label in ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"):
+        shutil.copyfile(ROOT / "deployment/launchagents" / (label + ".plist"),
+                        source / (label + ".plist"))
+    home = tmp_path / "home & space"
+    home.mkdir()
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(sys, "executable", "/synthetic/python & space")
+    exec(compile(snippet, "INSTALLATION.md:PYDRAIN", "exec"), {})
+    for label, slot in (("ai.mcs.extract-drainer", "0"),
+                        ("ai.mcs.extract-drainer-2", "2")):
+        target = home / "Library/LaunchAgents" / (label + ".plist")
+        spec = plistlib.loads(target.read_bytes())
+        assert spec["ProgramArguments"][:2] == [sys.executable, str(repo / "mcs/extract/v4/extract_llm.py")]
+        assert slot == spec["ProgramArguments"][spec["ProgramArguments"].index("--slot") + 1]
+        assert str(home / ".mcs/data") in spec["StandardOutPath"]
+        assert "__" not in target.read_text()
+        assert target.stat().st_mode & 0o777 == 0o600

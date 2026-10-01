@@ -221,6 +221,11 @@ def world(tmp_path, monkeypatch):
 
 # ---------- paths / envelopes / journal / registry -----------------------
 
+
+def test_deeply_nested_result_is_unreadable_without_stopping_poll(tmp_path):
+    (tmp_path / "synthetic.json").write_text("[" * 10000 + "]" * 10000)
+    assert paths.read_result(str(tmp_path), "synthetic") is None
+
 def test_publish_and_result_roundtrip(tmp_path):
     d = tmp_path / "cmd_int"
     r = tmp_path / "cmd_results"
@@ -1812,7 +1817,9 @@ def test_revoke_delete_404_is_delivered(world):
     assert attempt["state"] == "delivered"
 
 
-def test_corrupt_spec_quarantined(world):
+@pytest.mark.parametrize("contents", ["{not json", "[" * 10000 + "]" * 10000],
+                         ids=["syntax", "deep_nesting"])
+def test_corrupt_spec_quarantined(world, contents):
     """A readable spec file that fails to parse is permanent
     corruption (publication is atomic) — quarantine it like a corrupt
     cmd_int instead of re-reading it every tick."""
@@ -1821,7 +1828,7 @@ def test_corrupt_spec_quarantined(world):
     worker, reg, bot = world.mkworker()
     bad = world.data / "discord_render" / \
         "00000000-0000-4000-8000-00000000dead.json"
-    bad.write_text("{not json")
+    bad.write_text(contents)
 
     async def run():
         await worker.tick()

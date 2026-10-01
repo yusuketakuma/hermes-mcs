@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKS追加後も既存接続とテキスト通知の動作を維持",
+  "summary": "Slack・Discordの新旧import入口で再送防止・再接続の状態を共有し、移動後も同じ接続処理が動きます。LINE WORKSの操作をoffにしてもテキスト通知を継続でき、別通知先として指定したLINE WORKSにも配信できます。",
+  "upgrade": "Slack/Discordを利用する場合は対象Hermes gatewayを再起動してください。LINE WORKS利用時は独立プロセスへ更新を反映してください。offは従来通りカード・人承認操作を停止し、テキスト通知を維持します。全通知を止める実行には--no-notifyを使います。接続scope・認証設定・既読化・理由・本人確定・モデル・取得範囲の既定値は変更しません。",
+  "details": [
+    "canonical adaptersとhermes_pluginの互換入口を同一moduleへaliasし、DiscordのContextVar再送抑止とSlackの常駐worker引継ぎ状態を共有します。SDK importは関数内のまま、Hermes本体の変更や独自Slack/Discord認証はありません。",
+    "LINE WORKSのtext send/checkは接続設定と対話設定を分けて検証します。off又は他の対話接続を使う場合も、明示した有効なLINE設定とexactdestinationが必須です。LINE Callback・操作・サービス起動はactive LINE必須を維持します。",
+    "変更記録チェックにadapters/とlineworks_adapter/の実行時ファイルを含め、移動先だけの変更も日本語記録なしで通しません。",
+    "独立daemonの待機タイムアウトはasyncio.TimeoutErrorで扱い、Python 3.10の例外別名でも通常の待機で終了しないようにします。CIの例外型許可はLINEの起動入口だけに限定します。",
+    "導入手順のHermes依存の説明をSlack/Discordへ限定し、独立LINE接続とoffの意味を明確にします。"
+  ],
+  "refs": [
+    "hermes_plugin/mcs_slack/__init__.py",
+    "hermes_plugin/mcs_discord/__init__.py",
+    "adapters/lineworks/config.py",
+    "adapters/lineworks/__main__.py",
+    "scripts/release_notes.py",
+    "ci/gates.py",
+    "docs/dev-records/lineworks-impact-20261001.md"
+  ]
+}

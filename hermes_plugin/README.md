@@ -14,6 +14,14 @@ optional `command_context` とnative入力provenanceの対応が必要。
 現状の範囲はstatus、snapshot閲覧、正式依頼と限定運用操作のpreview/confirm、receipt閲覧。
 Loop候補の採用も既存requestのpreview/confirmを使う。
 
+## アダプターの配置
+
+Slack・Discord の接続先固有処理の正本は `adapters/slack/` と
+`adapters/discord/` にあります。`hermes_plugin/mcs_slack/` と
+`hermes_plugin/mcs_discord/` は既存 import を維持する互換入口です。
+共通の配送・承認・receipt 基盤は `hermes_plugin/mcs_delivery/` に残しています。
+LINE WORKS を含む構成は [接続アダプター](../adapters/README.md)を参照してください。
+
 ## 配置と設定
 
 MCS checkout全体を読める配置で、対象Hermes profileの`plugins/mcs-discord-commands`を
@@ -332,6 +340,9 @@ client を使って同じ durable worker（claim/grant/journal/receipt）で配�
   retry handler を外した単発 client を使う。
 - Slack adapter が同一プロセス内で再接続し app を作り直した場合、新しい app に
   結線された supervisor が旧 supervisor を止めて scope lock を引き継ぐ。
+- 更新時に既存返信の履歴を取得できない、または応答を検証できない場合は、本文・
+  添付を追加投稿せず配送結果を `unknown` として保持する。通知先の投稿を確認し、
+  上記の配送不明の解決手順で対応する。
 - 更新 render で同じ添付を再送しないための突合せは、返信の file object の
   name・size・sha256 一致を条件にしている。Slack の file object が sha256 を
   返さない場合は突合せが成立せず、更新時に同じファイルが再 upload され得る

@@ -13,10 +13,10 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `docs/USER_GUIDE.md`、`hermes_plugin/mcs_slack/delivery.py`（カード・本文・添付の配送） |
-| `02-notification` | `hermes_plugin/mcs_slack/cards.py`、`mcs/notify/notify_cards.py`（確認・担当・無音の表示名） |
+| `01-overview` | `docs/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送） |
+| `02-notification` | `adapters/slack/cards.py`、`mcs/notify/notify_cards.py`（確認・担当・無音の表示名） |
 | `03-actions` | 同カード実装（確認・担当以外を選択メニューへ。表示項目は状態・設定に依存） |
-| `04-task-form` | `hermes_plugin/mcs_delivery/text.py`の`modal_fields`、`hermes_plugin/mcs_slack/actions.py`の`_open_modal` |
+| `04-task-form` | `hermes_plugin/mcs_delivery/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | 同`task_list_text`と`_task_blocks`（本人向けの一覧・タスクごとの状態操作） |
 | `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（暫定集約・取得範囲・原本確認） |

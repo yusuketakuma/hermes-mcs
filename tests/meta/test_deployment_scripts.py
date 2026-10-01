@@ -3,14 +3,6 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "deployment" / "scripts"
 
-# hermes cron default script_timeout_seconds — keep a real margin for
-# interpreter startup, lock waits, and the gap-fill spawn.
-HERMES_CRON_SCRIPT_TIMEOUT_S = 3600
-MARGIN_S = 300
-
-
-
-
 def test_drainer_spawn_scripts_guard_quiesce_marker():
     """Any wrapper that can spawn drainer work (extract_llm /
     semantic_drain) must exit on the update-in-progress marker — a

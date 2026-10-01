@@ -95,7 +95,7 @@ def read_result(results_dir: str, command_id: str) -> dict | None:
             import json
             data = json.loads(handle.read().decode("utf-8"))
             return data if isinstance(data, dict) else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
 
 

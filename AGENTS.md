@@ -6,7 +6,7 @@
 
 MedicalCareStation (MCS) の医療・介護チャットを収集・解析するローカルシステム:
 
-- 24時間5分間隔で未読収集。LLM は新着・対話用1枠とバックログ用2枠→ SQLite(`data/ledger.db`) → Discord / Slack 通知
+- 24時間5分間隔で未読収集。LLM は新着・対話用1枠とバックログ用2枠→ SQLite(`data/ledger.db`) → Slack / Discord / LINE WORKS 通知
 - `self_posts` 設定で自投稿・他者先読み投稿を毎 tick `latest` probe →
   未保管の最新 id があれば bounded 履歴取得して取り込み・新着通知
   （`stage_self_probe`。`latest` は `{is_self_only,message:{id}}` のみ返し
@@ -17,7 +17,8 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   抽出スキーマ、QC、再抽出、v4 の公開条件は `mcs/extract/`・`mcs/semantic/` と
   関連仕様を照合する。モデル名や既定値をこの要約から固定的に推定しない。
 - 読み取り専用統計・アラートシグナル・人承認の依頼管理
-- Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送
+- Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送。
+  LINE WORKS は `adapters/lineworks/` の独立プロセスで同じ配送・人承認契約を使う
 
 ## 構成
 
@@ -41,7 +42,10 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   テスト間ヘルパーimportを維持 + socket 遮断ガード）
 - `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
   rehearsal結果）
-- `hermes_plugin/` — `mcs_discord/`(Discord worker) · `mcs_slack/`(Slack worker) ·
+- `adapters/` — `slack/`・`discord/`（Hermes公式接続を利用する表示・配送・操作） ·
+  `lineworks/`（独自Bot API・JWT認証・署名Callback・配送・DM入力/確定・CLI/サービス候補）
+- `lineworks_adapter/` — 独立LINE WORKS CLIの互換入口（`python -m lineworks_adapter`）
+- `hermes_plugin/` — `mcs_discord/`・`mcs_slack/`（`adapters/`への互換import入口） ·
   `mcs_delivery/`(transport中立の配送基盤: paths・journal・registry・envelopes・spec・text・worker) ·
   `card_workers.py`(worker 設定解決・factory) · `projects.py`
 - `integration/` — Hermes 連携・複数領域の統合テスト
@@ -55,12 +59,14 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 runner が発行する新形式 spec を旧世代 worker が処理し、card は
 届くが companion thread の本文・添付が欠落する（2026-09 実例）。
 再起動は配備の明示範囲に含まれる場合に行い、未適用なら結果報告に残す。
+LINE WORKS の起動・更新は独立アダプターの再起動が必要で、Hermes gateway
+だけでは起動しない。導入・公開HTTPS Callback・常駐手順は `docs/LINEWORKS.md`。
 
 ## コマンド
 
 ```bash
 scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
-ruff check mcs/ tests/ hermes_plugin/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
+ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
 python3 scripts/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
 python3 scripts/update_readme.py --check
 python3 ci/gates.py
@@ -77,11 +83,16 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 ## 絶対ルール
 
 - **収集・解析コアの依存は標準ライブラリのみ**。新しい外部依存を加えない。
-  `hermes_plugin/mcs_discord/{actions,cards}.py` だけは Hermes 同梱の
+  `adapters/discord/{actions,cards}.py` だけは Hermes 同梱の
   `discord.py` を関数内で遅延 import し、UI と既存 interaction の
-  followup に使う。独自 Bot・認証情報・REST 接続は作らない。
-  adapter の `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する
-- テストは一時DB+スタブのみ。実 MCS・Discord・Keychain・原本DB・
+  followup に使う。Slack/Discord の独自 Bot・認証情報・REST 接続は作らない。
+  LINE WORKS はHermesに接続機能がないため `adapters/lineworks/` だけが独自の
+  認証・Bot REST・署名Callbackを所有する（stdlib・OpenSSL、固定公式URL、
+  no-redirect/no-proxy、期限・容量制限、秘密値の環境自動取得なし）。
+  adapter の `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する。
+  独立LINE WORKSの `__main__.py` だけは常駐起動/停止用の
+  `Event`・`get_running_loop`・`wait_for`・`run` も使う
+- テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・
   ローカルLLM・Jev へ**一切アクセスしない**
 - 患者データ・秘密情報は repo に入れない（`data/`・`.env`・`config.json`等は ignore 済み）
   — ベンチ・few-shot・テスト fixture は**完全合成のみ**（実投稿の匿名化も不可）

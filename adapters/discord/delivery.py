@@ -13,7 +13,7 @@ import asyncio
 import io
 from functools import partial
 
-from ..mcs_delivery import paths, registry, worker
+from hermes_plugin.mcs_delivery import paths, registry, worker
 from . import cards
 
 # Discord delete of an already-gone message achieves the revoke goal.

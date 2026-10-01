@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "診断DBパスとLINE WORKSの破損処理記録を安全に処理",
+  "summary": "診断が特殊文字を含む正しいDBを読みます。LINE WORKSの破損した処理記録は成否不明として再実行を抑止しながら後続入力を処理します。",
+  "upgrade": "診断は次回実行から反映されます。稼働中のLINE WORKS独立プロセスは更新後に再起動してください。DB schema、モデル、取得範囲、通知先、既定値、既読化・人承認・理由・receiptの条件は変更しません。破損したLINE処理記録は成否不明のまま保持し、自動再実行しません。",
+  "details": [
+    "診断用SQLite URIを既存Path.resolve().as_uri方式へ統一し、#・?・%を含むパスでも正しいDBを読取り専用で開きます。",
+    "LINE Callbackの完了記録を容量制限付きで読み、不正形式・読取り失敗をunknownとして保管と状態表示に共通利用します。後続入力を止めず、同じCallbackを再実行しません。",
+    "安全文書・AI導入手順・文書索引・生成Wikiの正本briefを3接続先の構成に整合させます。生成Wiki本文、Hermes Agent本体、実データ・配備は変更しません。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "adapters/lineworks/server.py",
+    "adapters/lineworks/__main__.py",
+    "docs/SETUP_AGENT.md",
+    "SECURITY.md"
+  ]
+}

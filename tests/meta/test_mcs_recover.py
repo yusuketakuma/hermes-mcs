@@ -388,6 +388,32 @@ def test_membership_reconcile_removes_undesired_agents(rec, tmp_path,
     assert (agents / "unrelated.other.plist").exists()
 
 
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_cron_job_removal_requires_successful_list(
+        rec, tmp_path, monkeypatch, returncode):
+    hermes = tmp_path / "synthetic-hermes"
+    hermes.write_text("# synthetic executable placeholder")
+    monkeypatch.setattr(rec.shutil, "which", lambda name: str(hermes))
+    calls = []
+
+    def list_result(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:] == ["cron", "list", "--all"]:
+            return subprocess.CompletedProcess(
+                argv, returncode,
+                "  abcdef [disabled]\n    Script:  /synthetic/mcs_removed.sh\n",
+                "synthetic listing failure")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(rec.subprocess, "run", list_result)
+    problems = rec._reconcile_membership({"cron": [], "agents": []})
+    assert ("cron_list_unverifiable" in problems) == (returncode != 0)
+    expected = [[str(hermes), "cron", "list", "--all"]]
+    if returncode == 0:
+        expected.append([str(hermes), "cron", "remove", "abcdef"])
+    assert calls == expected
+
+
 # ---------------------------------------------------- _restore_db contract
 # Rollback recovery must FAIL CLOSED: an unreadable backup/live DB or a
 # failed copy can never be a silent "nothing to do" — that would report
@@ -518,6 +544,57 @@ def test_restore_db_holds_without_consent(rec, tmp_path, monkeypatch):
     assert marker["report_id"] == report["report_id"]
     assert report["report_id"] == err.split(":", 1)[1]
     assert report["backup_schema"] == 7
+
+
+@pytest.mark.parametrize("separator", ["#", "?", "%23"])
+def test_restore_uses_exact_backup_path_with_uri_delimiters(
+        rec, tmp_path, monkeypatch, separator):
+    live = tmp_path / "data" / "ledger.db"
+    prefix = tmp_path / "data" / "backup"
+    back = Path(str(prefix) + separator + "snapshot.db")
+    _mk_db(live, 8)
+    decoy = Path(str(prefix) + "#snapshot.db") if separator == "%23" else prefix
+    _mk_db(decoy, 8)
+    _mk_db(back, 7)
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    before = live.read_bytes()
+
+    err = rec._restore_db(str(back))
+    assert err and err.startswith("restore_consent_pending:")
+    assert rec._db_version(str(back)) == 7
+    assert live.read_bytes() == before
+    report = json.loads((tmp_path / "data" / "restore_report.json").read_text())
+    assert report["backup_schema"] == 7
+    _consent(rec, live, back)
+    assert rec._restore_db(str(back)) is None
+    assert rec._db_version(str(live)) == 7
+
+
+def test_restore_measures_and_approves_exact_live_uri_path(
+        rec, tmp_path, monkeypatch):
+    import sqlite3
+    live = tmp_path / "data" / "ledger#?%23.db"
+    back = tmp_path / "data" / "backup.db"
+    decoy = tmp_path / "data" / "ledger"
+    _mk_db(live, 8)
+    _mk_db(decoy, 8)
+    _mk_db(back, 7)
+    with sqlite3.connect(live) as con:
+        con.execute("CREATE TABLE messages(message_id INTEGER, posted_at_ts REAL)")
+        con.executemany("INSERT INTO messages VALUES(?, ?)", [(1, 10), (2, 20)])
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    before = live.read_bytes()
+    decoy_before = decoy.read_bytes()
+
+    err = rec._restore_db(str(back))
+    assert err and err.startswith("restore_consent_pending:")
+    report = json.loads((tmp_path / "data" / "restore_report.json").read_text())
+    assert report["stored_since_backup"]["messages"] == 2
+    assert live.read_bytes() == before
+    _consent(rec, live, back)
+    assert rec._restore_db(str(back)) is None
+    assert rec._db_version(str(live)) == 7
+    assert decoy.read_bytes() == decoy_before
 
 
 def test_restore_db_stale_consent_rejected(rec, tmp_path, monkeypatch):

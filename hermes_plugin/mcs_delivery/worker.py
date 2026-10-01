@@ -608,7 +608,7 @@ class DeliveryWorker:
             # runner still needs it to mark an unknown thread 'failed').
             # Slack skips it: that v1 envelope has no transport/team_id
             # and the runner can only answer scope_mismatch.
-            if self.transport != "slack":
+            if self.transport == "discord":
                 with suppress(OSError):
                     env2 = envelopes.thread_receipt(
                         spec["delivery_id"], ctx["card_message_id"],
@@ -788,7 +788,7 @@ class DeliveryWorker:
             try:
                 with open(path, "rb") as handle:
                     spec = json.loads(handle.read().decode("utf-8"))
-            except ValueError:
+            except (ValueError, RecursionError):
                 # publication is atomic — a readable file that fails to
                 # parse is permanently corrupt; quarantine instead of
                 # re-reading it every tick (the runner re-publishes a

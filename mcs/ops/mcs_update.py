@@ -387,8 +387,10 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
-    if any(n.startswith("hermes_plugin/") for n in names):
+    if any(n.startswith(("hermes_plugin/", "adapters/slack/", "adapters/discord/")) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart が必要です")
+    if any(n.startswith(("adapters/lineworks/", "lineworks_adapter/")) for n in names):
+        notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
 
 
@@ -504,7 +506,7 @@ def precheck_tag(tag: str) -> list[str]:
             new_ver = int(m.group(1))
             try:
                 con = sqlite3.connect(
-                    "file:" + LEDGER + "?mode=ro", uri=True)
+                    Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
                 try:
                     cur_ver = con.execute(
                         "PRAGMA user_version").fetchone()[0]
@@ -797,7 +799,8 @@ def scan_pending_approvals(state: dict
       consumed — (command_id, result) pairs to record as executed
         without running (superseded / vetoed applies)."""
     try:
-        con = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+        con = sqlite3.connect(
+            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return [], []
     try:
@@ -1261,7 +1264,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             "tag": tag, "sha": sha, "prev_sha": _head_sha(),
             "plugin_changed": bool(_git_out(
                 ["diff", "--name-only", "-z", "HEAD", tag, "--",
-                 "hermes_plugin"]).strip("\0")),
+                 "hermes_plugin", "adapters/slack", "adapters/discord"]).strip("\0")),
             "schema_bump": bool(bump),
             "backup_path": bpath, "manifest_snapshot": snap,
             "command_id": command_id, "at": time.time()}
@@ -1354,7 +1357,8 @@ def _reconcile_membership(desired: dict) -> list[str]:
                 problems.append("cron_list_unverifiable")
             for block in re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)", r.stdout, re.M):
+                    r"((?:\s{4}\S[^\n]*\n?)+)",
+                    r.stdout if r.returncode == 0 else "", re.M):
                 jid, body = block.group(1), block.group(2)
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
@@ -1539,7 +1543,8 @@ def rollback(command_id: str | None = None) -> int:
 
 def _db_version(path: str) -> int | None:
     try:
-        con = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+        con = sqlite3.connect(
+            Path(path).resolve().as_uri() + "?mode=ro", uri=True)
         try:
             return con.execute("PRAGMA user_version").fetchone()[0]
         finally:
@@ -1599,12 +1604,13 @@ def _restore_loss_report(backup_path: str) -> dict:
     Binds backup bytes/schema, row deltas, and the contents of the stored-data
     and delivery tables. Changes to an existing row invalidate stale consent."""
     try:
-        live = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+        live = sqlite3.connect(
+            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as e:
         raise UpdateError(f"restore_report_live_db: {e}") from e
     try:
         back = sqlite3.connect(
-            "file:" + backup_path + "?mode=ro", uri=True)
+            Path(backup_path).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as e:
         live.close()
         raise UpdateError(f"restore_report_backup_db: {e}") from e
@@ -1652,7 +1658,8 @@ def _restore_consent(report: dict) -> str | None:
     to THIS exact loss report — an earlier update/rollback approval
     does not substitute (the human must see the loss numbers first)."""
     try:
-        con = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+        con = sqlite3.connect(
+            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return None
     try:

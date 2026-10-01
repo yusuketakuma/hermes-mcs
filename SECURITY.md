@@ -19,10 +19,17 @@
   snapshot timestamp 必須の三重ゲート
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
-- 対話カード addon は Hermes が接続済みの Discord client と interaction
-  だけを使う。SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
+- Slack/Discord の対話カード addon は Hermes が接続済みの client と interaction
+  だけを使う。Discord SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
-  cancellation に限定し、process 起動や別の network transport は許可しない
+  cancellation に限定する
+- LINE WORKS は `adapters/lineworks/` の独立接続だけが Bot REST・JWT 認証を所有する。
+  通信先は固定の公式 URL、proxy・redirect・送信の自動再試行は無効。
+  秘密値は明示した権限制限付きファイルから読み、環境から自動取得しない。
+  Callback は公開 HTTPS の reverse proxy から loopback へ転送し、署名・Bot・
+  ドメイン・部屋・許可ユーザー・時刻を検証してから保管する。
+  成否不明の送信・操作は自動再実行しない。起動・停止用の asyncio API は
+  この独立プロセスの入口に限定し、Slack/Discord の権限を増やさない
 - 通知を設定した場合、本文・要約・送信対象の添付は Discord 等の設定先へ送る。
   対話カードを有効にすると、タスクの期限リマインドも `notify_target` へ
   患者名・タスク内容・担当者名を含むテキストで送る。

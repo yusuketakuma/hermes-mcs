@@ -240,6 +240,22 @@ def test_impact_summary(updater, tmp_path):
     assert mcs_update.impact_summary(cur, "v1.1.0") == []
 
 
+@pytest.mark.parametrize("path,gateway,lineworks", [
+    ("hermes_plugin/mcs_delivery/worker.py", True, False),
+    ("adapters/slack/actions.py", True, False),
+    ("adapters/discord/delivery.py", True, False),
+    ("adapters/lineworks/actions.py", False, True),
+    ("lineworks_adapter/__main__.py", False, True),
+    ("adapters/README.md", False, False),
+])
+def test_impact_summary_distinguishes_gateway_and_independent_adapter(
+        updater, monkeypatch, path, gateway, lineworks):
+    monkeypatch.setattr(updater, "_git_out", lambda args: "M\t" + path + "\n")
+    impact = updater.impact_summary("synthetic-before", "v1.1.0")
+    assert any("gateway restart" in line for line in impact) is gateway
+    assert any("LINE WORKS" in line and "再起動" in line for line in impact) is lineworks
+
+
 # ------------------------------------------------------- protected paths
 
 def test_precheck_tag_rejects_protected_and_symlink(updater, tmp_path,
@@ -260,6 +276,48 @@ def test_precheck_tag_rejects_protected_and_symlink(updater, tmp_path,
     errors = mcs_update.precheck_tag("v9.9.9")
     assert any("protected_path" in e for e in errors)
     assert any("bad_entry_type" in e for e in errors)
+
+
+def test_precheck_schema_uses_exact_live_uri_path(updater, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger#?%23.db"
+    _mk_schema(live, 8)
+    _mk_schema(tmp_path / "data" / "ledger", 9)
+    monkeypatch.setattr(updater, "LEDGER", str(live))
+    monkeypatch.setattr(updater, "_ls_tree_paths", lambda *args: [])
+    monkeypatch.setattr(updater, "_git", lambda argv:
+                        subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(updater, "_git_out", lambda argv:
+                        "SCHEMA_VERSION = 8" if argv[0] == "show" else "")
+    monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kwargs:
+                        subprocess.CompletedProcess(argv, 0, "[]", ""))
+
+    assert updater.precheck_tag("v1.1.0") == []
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returncode):
+    import mcs_setup
+    script = mcs_setup.CRON_JOBS[0][2]
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    calls = []
+
+    def list_result(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:] == ["cron", "list", "--all"]:
+            return subprocess.CompletedProcess(
+                argv, returncode, f"  abcdef [disabled]\n    Script:  {script}\n",
+                "synthetic listing failure")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(updater.subprocess, "run", list_result)
+    problems = updater._reconcile_membership({"cron": [], "agents": []})
+    assert problems == (["cron_list_unverifiable"] if returncode != 0 else [])
+    expected = [["synthetic-hermes", "cron", "list", "--all"]]
+    if returncode == 0:
+        expected.append(["synthetic-hermes", "cron", "remove", "abcdef"])
+    assert calls == expected
 
 
 @pytest.mark.parametrize("name", ["user-added.txt", "新規ファイル.txt", "sp ace.txt"])
@@ -376,6 +434,22 @@ def test_scan_missing_ledger(updater, tmp_path):
     assert cand == [] and consumed == []
 
 
+def test_scan_approvals_uses_exact_live_uri_path(updater, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger#?%23.db"
+    decoy = tmp_path / "data" / "ledger"
+    for path, cid in ((live, "actual"), (decoy, "decoy")):
+        with _receipts_db(path) as con:
+            con.execute(
+                "INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+                (cid, "h" * 64, _rec(cid, "ops.update_rollback", 1), 1))
+        con.close()
+    monkeypatch.setattr(updater, "LEDGER", str(live))
+
+    candidates, consumed = updater.scan_pending_approvals(updater._default_state())
+    assert [candidate["command_id"] for candidate in candidates] == ["actual"]
+    assert consumed == []
+
+
 def test_scan_same_tag_newest_receipt_wins(updater, tmp_path):
     """Two approvals of the same tag: the NEWER receipt wins — it
     carries the freshest sha pin; the older is superseded (B)."""
@@ -425,6 +499,45 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
     monkeypatch.setattr(maintenance, "preupdate_backup",
                         lambda db: str(db) + ".bak")
     return repo
+
+
+@pytest.mark.parametrize("path,needs_restart", [
+    ("hermes_plugin/mcs_delivery/worker.py", True),
+    ("adapters/slack/actions.py", True),
+    ("adapters/discord/delivery.py", True),
+    ("adapters/lineworks/actions.py", False),
+    ("lineworks_adapter/__main__.py", False),
+])
+def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
+        updater, tmp_path, monkeypatch, path, needs_restart):
+    repo = _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    changed = remote_work / path
+    changed.parent.mkdir(parents=True)
+    changed.write_text("# synthetic adapter update\n")
+    _git(remote_work, "add", path)
+    _git(remote_work, "commit", "-qm", "adapter update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: sha)
+    monkeypatch.setattr(updater, "_run_post_merge",
+                        lambda expected: updater._post_merge(updater.load_state()))
+    restarts = []
+
+    def restart(cfg):
+        saved = updater.load_state()
+        assert saved["applying"] is None
+        assert saved["applied"][-1]["plugin_changed"] is True
+        assert saved["executed"]["cid-adapter"]["result"] == "applied"
+        restarts.append(True)
+
+    monkeypatch.setattr(updater, "restart_gateway", restart)
+    assert updater.apply("v1.2.0", sha, "cid-adapter") == 0
+    saved = updater.load_state()
+    assert saved["applied"][-1]["plugin_changed"] is needs_restart
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == sha
+    assert restarts == ([True] if needs_restart else [])
 
 
 def test_bail_consumes_failed_receipt(updater, tmp_path, monkeypatch):
@@ -859,6 +972,54 @@ def _live_version(path):
         return con.execute("PRAGMA user_version").fetchone()[0]
     finally:
         con.close()
+
+
+@pytest.mark.parametrize("separator", ["#", "?", "%23"])
+def test_restore_uses_exact_backup_path_with_uri_delimiters(
+        updater, tmp_path, monkeypatch, separator):
+    live = tmp_path / "data" / "ledger.db"
+    prefix = tmp_path / "data" / "backup"
+    back = Path(str(prefix) + separator + "snapshot.db")
+    decoy = Path(str(prefix) + "#snapshot.db") if separator == "%23" else prefix
+    _mk_schema(live, 8, messages=3)
+    _mk_schema(decoy, 8, messages=3)
+    _mk_schema(back, 7, messages=1)
+    monkeypatch.setattr(updater, "LEDGER", str(live))
+    monkeypatch.setattr(updater, "_reconcile_restored", lambda: None)
+    before = live.read_bytes()
+
+    with pytest.raises(updater.RestoreConsentPending) as error:
+        updater._restore_db(str(back))
+    assert updater._db_version(str(back)) == 7
+    assert error.value.report["backup_schema"] == 7
+    assert error.value.report["stored_since_backup"]["messages"] == 2
+    assert live.read_bytes() == before
+    _seed_consent(str(live), str(back))
+    updater._restore_db(str(back))
+    assert updater._db_version(str(live)) == 7
+
+
+def test_restore_measures_and_approves_exact_live_uri_path(
+        updater, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger#?%23.db"
+    back = tmp_path / "data" / "backup.db"
+    decoy = tmp_path / "data" / "ledger"
+    _mk_schema(live, 8, messages=3)
+    _mk_schema(decoy, 8, messages=0)
+    _mk_schema(back, 7, messages=1)
+    monkeypatch.setattr(updater, "LEDGER", str(live))
+    monkeypatch.setattr(updater, "_reconcile_restored", lambda: None)
+    before = live.read_bytes()
+    decoy_before = decoy.read_bytes()
+
+    with pytest.raises(updater.RestoreConsentPending) as error:
+        updater._restore_db(str(back))
+    assert error.value.report["stored_since_backup"]["messages"] == 2
+    assert live.read_bytes() == before
+    _seed_consent(str(live), str(back))
+    updater._restore_db(str(back))
+    assert updater._db_version(str(live)) == 7
+    assert decoy.read_bytes() == decoy_before
 
 
 def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,

@@ -5,7 +5,8 @@
 **MedicalCareStation（MCS）の記録を、自分のMacで収集・整理・検索。**
 **Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
 在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのHermes addonです。
-Discordにも対応しています。
+Discordと[LINE WORKS（独自アダプター）](docs/LINEWORKS.md)にも対応しています。
+LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 
 [画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
 
@@ -182,11 +183,22 @@ cd hermes-mcs
 ```
 
 事前チェックのNG行に表示される`fix:`を確認し、`0 blocker(s)`になってから導入します。
-最後の`Installed. Summary:`に表示される`mcs_setup.py init` → `services` → `check`を、表示されたvenvインタープリターのフルパスで順に実行してください。
+最後の`Installed. Summary:`に表示される`mcs_setup.py init`を、そのままコピーして実行してください。
+設定ウィザードが通知先・認証情報の設定、Hermesとの同期、最終チェックまで案内します。
+初回導入で`services`や`check`を重ねて実行する必要はありません。ブラウザーの準備など、チェックで残った項目だけを解消します。
+
+**AIに導入を任せる場合**は、リポジトリを開いたエージェントに次のように依頼できます。
+
+```text
+docs/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してください。
+既存設定と回答を再利用し、まず通知先を選んで進めてください。
+認証情報は私が端末へ直接入力します。投稿の収集・通知・既読化は開始前に範囲を確認してください。
+```
 
 | 次に進む先 | 内容 |
 |---|---|
 | [Slackを設定する（推奨）](docs/INSTALLATION.md) | Slack app・接続・カード操作・許可ユーザーの設定 |
+| [LINE WORKSを設定する](docs/LINEWORKS.md) | 独自接続アダプター・秘密値入力・Callback・許可範囲の設定 |
 | [導入ガイド](docs/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
 | [AIエージェント向け導入手順](docs/SETUP_AGENT.md) | エージェントに導入を任せるときの確認・実行手順 |
 | [更新・バックアップ・復旧](docs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |

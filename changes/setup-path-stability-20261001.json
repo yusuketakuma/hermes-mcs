@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "初回導入の案内を設定と最終確認まで一本化",
+  "summary": "通常導入はインストーラーと設定ウィザードで完了し、重複していたサービス再登録とチェックを更新・復旧時だけ案内します。AI向け手順は未決事項だけを確認し、Chromeの起動確認を収集直前に移しました。スタンドアロンで抽出を使う場合の常駐worker配置も補いました。",
+  "upgrade": "既存の設定・通知先・モデル・収集範囲・既読化条件は変わりません。初回はinstall.shの後にinitを実行してください。--no-servicesを指定した場合や配置差分がある場合は従来どおりservicesとcheckを実行します。実機への適用やサービス再起動はこの変更だけでは行われません。",
+  "details": [
+    "導入診断のローカルLLM通信を既存の上限付きHTTP処理に統一し、proxy・redirectを許可しない。",
+    "壊れたサービスmanifestを共通JSON loaderで扱い、UTF-8不正や深いJSONで診断・再同期が停止しない。",
+    "gateway同期に失敗したinitは、後続チェックが成功しても非0で終了する。",
+    "Path Bで既存plistを標準ライブラリで描画する合成検証を追加し、slot 0/2とowner-only権限を保持する。"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_setup.py",
+    "docs/INSTALLATION.md",
+    "docs/SETUP_AGENT.md"
+  ]
+}

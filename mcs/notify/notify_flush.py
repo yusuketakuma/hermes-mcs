@@ -1,6 +1,6 @@
-"""Outbox notifier — drains notify_outbox through `hermes send`.
+"""Outbox notifier — drains notify_outbox through the configured delivery CLI.
 
-Delivery is delegated to Hermes's standard send path: the destination
+Slack/Discord delivery is delegated to Hermes's standard send path: the destination
 comes from ~/.mcs/config.json {notify_target} in `hermes send --to`
 syntax (e.g. "slack", "slack:#mcs", "discord:1234"), and Hermes owns
 platform connection, credentials, channel resolution and mentions
@@ -8,6 +8,8 @@ policy. When config sets "notify_bot_profile" (e.g. "cco"), sends run
 under that Hermes profile so posts arrive under that bot's identity.
 Attachments ride as MEDIA:<path> references in the message text; the
 platform adapter owns upload limits.
+LINE WORKS uses hermes-mcs's independent adapter CLI with JSON text and
+verified attachment metadata, without a Hermes platform adapter.
 
 Events carry message_ids; message content is looked up in the local
 ledger at send time so the outbox payload itself stays tiny.
@@ -23,8 +25,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
+from pathlib import Path
 
 import mcs_signals
 import semantic_send_gate
@@ -81,6 +85,10 @@ def _target(cfg: dict, kind: str) -> str | None:
 
 def _send_argv(cfg: dict, target: str) -> list[str]:
     """`hermes [-p profile] send --to <target> --quiet` argv."""
+    if target.startswith("lineworks:"):
+        entry = Path(__file__).resolve().parents[2] / "lineworks_adapter" / "__main__.py"
+        return [sys.executable, str(entry), "send", "--root",
+                str(Path(CONF_PATH).parent), "--to", target, "--quiet"]
     argv = [_hermes_exe(cfg)]
     profile = cfg.get("notify_bot_profile")
     if isinstance(profile, str) and re.fullmatch(r"[a-z0-9_-]+", profile):
@@ -637,10 +645,28 @@ def _compose_body(content: str,
 
 def _send(argv: list[str], content: str,
           files: list[tuple[str, str]] | None = None,
-          deadline: float | None = None) -> None:
+          deadline: float | None = None,
+          attachment_pins: dict[str, str] | None = None) -> None:
     """One chunk via `hermes send` (body on stdin; attachments as MEDIA:
     references — the adapter owns upload limits and mention policy)."""
-    body = _compose_body(content, files)
+    if len(argv) > 1 and argv[1].endswith("/lineworks_adapter/__main__.py"):
+        sealed = []
+        for name, path in files or []:
+            try:
+                with open(path, "rb") as handle:
+                    blob = handle.read(_MAX_FILE_BYTES + 1)
+            except OSError:
+                raise _SendFailed("attachment_unavailable") from None
+            if len(blob) > _MAX_FILE_BYTES:
+                raise _SendFailed("attachment_too_large")
+            digest = hashlib.sha256(blob).hexdigest()
+            if attachment_pins is not None and attachment_pins.get(path) != digest:
+                raise _SendFailed("attachment_mismatch")
+            sealed.append({"name": name, "path": path, "bytes": len(blob),
+                           "sha256": digest})
+        body = json.dumps({"text": content, "files": sealed}, ensure_ascii=False)
+    else:
+        body = _compose_body(content, files)
     timeout = 180
     if deadline is not None:
         remain = deadline - time.monotonic()
@@ -681,12 +707,14 @@ def _delivery_fingerprint(target: str, chunks: list[str],
 def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  fingerprint: str, argv: list[str], chunk: str,
                  files: list[tuple[str, str]] | None,
-                 deadline: float | None) -> None:
+                 deadline: float | None,
+                 attachment_pins: dict[str, str] | None = None) -> None:
     """Retain the in-flight marker unless non-delivery is established."""
     ledger.outbox_progress(ev["event_id"], i, list(sent_ids),
                            fingerprint, i + 1)
     try:
-        _send(argv, chunk, files, deadline=deadline)
+        kwargs = {"attachment_pins": attachment_pins} if attachment_pins is not None else {}
+        _send(argv, chunk, files, deadline=deadline, **kwargs)
     except (_SendFailed, _SendUsage):
         ledger.outbox_progress(ev["event_id"], len(sent_ids),
                                list(sent_ids), fingerprint)
@@ -796,6 +824,15 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
     chunk rather than duplicating accepted posts. Returns False when
     the deadline cut the chunk loop short (caller ends the flush)."""
     content, files = _format_event(ledger, ev)
+    attachment_pins = None
+    if target.startswith("lineworks:"):
+        attachment_pins = {}
+        for _, path in files:
+            hashes = {r[0] for r in ledger.db.execute(
+                "SELECT sha256 FROM attachments WHERE local_path=? AND state='downloaded'", (path,))}
+            if len(hashes) != 1 or not re.fullmatch(r"[0-9a-f]{64}", next(iter(hashes)) or ""):
+                raise _SendFailed("attachment_unverified")
+            attachment_pins[path] = next(iter(hashes))
     render_state = (_semantic_render_state(ledger, ev)
                     if ev["kind"] == "new_messages" else ())
     chunks = (_semantic_chunks(content)
@@ -853,7 +890,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             _send_marked(ledger, ev, i, sent_ids, fingerprint,
                          argv, chunks[i],
                          post_files if i == 0 else None,
-                         deadline)
+                         deadline, attachment_pins=attachment_pins)
         except _SendUsage:
             if i != 0 or not post_files:
                 raise
@@ -861,7 +898,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             if not gate(i, payload):
                 return True
             _send_marked(ledger, ev, i, sent_ids, fingerprint,
-                         argv, chunks[i], None, deadline)
+                         argv, chunks[i], None, deadline, attachment_pins=attachment_pins)
         sent_ids.append(str(i + 1))
         ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                fingerprint)
@@ -943,7 +980,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     exe = _hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
-            _route(e) == "interactive" for e in due):
+            _route(e) == "interactive"
+            or (_target(cfg, e["kind"]) or "").startswith("lineworks:") for e in due):
         res["skipped"] = len(due)
         return res
     for event_index, ev in enumerate(due):
@@ -960,7 +998,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if _route(ev) == "interactive" \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
-        if not exe_ok:
+        if not exe_ok and not (_target(cfg, ev["kind"]) or "").startswith("lineworks:"):
             # no hermes exe — text events can't send, but an interactive
             # event later in the queue still dispatches (cards don't
             # need the exe), so skip per-event rather than break
