@@ -1,17 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1100" viewBox="0 0 1100 1100" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
-<title>同じトークルームで、要約・原文・添付を確認。 — 完全合成のLINE WORKS表示例</title>
+<title>同じトークルームで、要約・原文・添付を確認。 — 架空のLINE WORKS表示例</title>
 <desc>独自アダプターの連続投稿と本人との1:1入力・確認に基づく説明図。実画面のキャプチャではなく、実患者・実投稿・匿名化データは使用していません。</desc>
 <rect x="0" y="0" width="1100" height="1100" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  LINE WORKS  /  01</text>
 <text x="28" y="78" font-size="31" fill="#202124" font-weight="bold">同じトークルームで、要約・原文・添付を確認。</text>
 <text x="28" y="112" font-size="17" fill="#66716f">カードに続いて原文と添付を連続投稿。入力・確認は本人との1:1トークへ。</text>
 <text x="28" y="1000" font-size="19" fill="#087f5b" font-weight="bold">抽出は候補。原文を確認し、人が判断・確定します。</text>
-<text x="28" y="1038" font-size="16" fill="#66716f">完全合成の説明図 / 実画面のキャプチャではありません</text>
+<text x="28" y="1038" font-size="16" fill="#66716f">架空の名前・投稿を使った説明図 / 実画面のキャプチャではありません</text>
 <text x="28" y="1070" font-size="15" fill="#66716f">実データ不使用 / 画像内のボタンは操作できません</text>
 <rect x="24" y="146" width="508" height="804" rx="12" fill="#edf3f5" stroke="#d1dce1"/>
 <rect x="24" y="146" width="508" height="78" rx="12" fill="#fff"/>
 <text x="44" y="177" font-size="21" fill="#202124" font-weight="bold">① 共有トークルーム</text>
-<text x="44" y="206" font-size="15" fill="#66716f">合成デモ / MCS Botからの新着通知</text>
+<text x="44" y="206" font-size="15" fill="#66716f">操作例 / MCS Botからの新着通知</text>
 <path d="M24 225 L532 225" stroke="#d1dce1" fill="none"/>
 <rect x="568" y="146" width="508" height="804" rx="12" fill="#edf3f5" stroke="#d1dce1"/>
 <rect x="568" y="146" width="508" height="78" rx="12" fill="#fff"/>
@@ -22,8 +22,8 @@
 <text x="51" y="267" font-size="18" fill="#fff" font-weight="bold">M</text>
 <text x="86" y="266" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>
 <rect x="66" y="286" width="422" height="243" rx="9" fill="#fff" stroke="#d5e1e5"/>
-<text x="82" y="318" font-size="20" fill="#202124" font-weight="bold">💬 合成患者A — 10-01</text>
-<text x="82" y="350" font-size="15" fill="#66716f">10-01 09:40 合成スタッフB（訪問看護）</text>
+<text x="82" y="318" font-size="20" fill="#202124" font-weight="bold">💬 山田さん — 10-01</text>
+<text x="82" y="350" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護）</text>
 <text x="82" y="406" font-size="18" fill="#087f5b" font-weight="bold">📋 構造化</text>
 <text x="82" y="439" font-size="18" fill="#202124">依頼: 次回訪問時に残薬を確認</text>
 <text x="82" y="467.8" font-size="18" fill="#202124">期限表現: 次回訪問時</text>
@@ -52,7 +52,7 @@
 <text x="630" y="266" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>
 <rect x="610" y="286" width="422" height="251" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <text x="626" y="320" font-size="19" fill="#087f5b" font-weight="bold">MCS 1234abcd（1/1）</text>
-<text x="626" y="356" font-size="17" fill="#202124">10-01 09:40 合成スタッフB（訪問看護）</text>
+<text x="626" y="356" font-size="17" fill="#202124">10-01 09:40 佐藤さん（訪問看護）</text>
 <text x="626" y="383.2" font-size="17" fill="#202124">本文: 次回訪問時に残薬を確認してください。</text>
 <text x="626" y="410.4" font-size="17" fill="#202124"></text>
 <text x="626" y="437.59999999999997" font-size="17" fill="#202124">構造化（抽出候補）</text>
@@ -63,7 +63,7 @@
 <rect x="610" y="610" width="422" height="218" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <rect x="626" y="630" width="390" height="98" rx="8" fill="#f0f5f1"/>
 <text x="646" y="670" font-size="20" fill="#202124" font-weight="bold">添付ファイル</text>
-<text x="646" y="704" font-size="17" fill="#66716f">合成の服薬カレンダー.jpg</text>
+<text x="646" y="704" font-size="17" fill="#66716f">服薬カレンダー.jpg</text>
 <text x="626" y="765" font-size="15" fill="#66716f">保存・通知のみ。添付の内容解析は行いません。</text>
 <text x="588" y="872" font-size="16" fill="#66716f">説明用に本文を短縮しています。</text>
 <text x="588" y="897.6" font-size="16" fill="#66716f">長い本文や追加の操作は、別の投稿に分割します。</text>

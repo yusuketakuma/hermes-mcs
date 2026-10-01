@@ -15,7 +15,7 @@
       ]
     },
     "demos": {
-      "notes": "Slackの7画面を先頭に置き、DiscordとLINE WORKSの2画面を折りたたむ構成を照合した。検証済みの完全合成画像を再利用し、LINE WORKSの連続投稿、更新による旧ボタン・確認画面の無効化、本人1:1での入力と確定を現行実装で確認した。カード確認済みとタスク完了、患者サマリーの暫定集約を区別する説明は一致し、リリース準備で画像の変更は不要と判断した。",
+      "notes": "Slackを先頭に、DiscordとLINE WORKSを折りたたむ構成と現行の表示・本人確定条件を照合した。9画面の患者・スタッフ・施設・添付名を山田さん、田中さん、佐藤さんなど架空の名称へ統一し、SVG・PNG・ハッシュを生成元から同期して日本語・文字切れ・比率を視認した。既存のDiscord/Slack SVG例も表記を揃えた。架空データであり実データ・匿名化例を使わない説明を冒頭にまとめ、画像説明での繰り返しを削減した。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -25,7 +25,13 @@
         "adapters/lineworks/actions.py",
         "adapters/lineworks/delivery.py",
         "adapters/common/text.py",
-        "mcs/notify/notify_views.py"
+        "mcs/notify/notify_views.py",
+        "scripts/development/generate_slack_gallery.py",
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/discord-card.svg",
+        "docs/screenshots/discord-thread.svg",
+        "docs/screenshots/slack-card.svg",
+        "docs/screenshots/slack-thread.svg"
       ]
     },
     "quickstart": {

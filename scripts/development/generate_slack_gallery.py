@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate source-based, fully synthetic Slack illustrations for README."""
+"""Generate source-based, fictional Slack illustrations for README."""
 
 import argparse
 import hashlib
@@ -28,9 +28,9 @@ class Screen:
         self.parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="{height}" '
             f'viewBox="0 0 1100 {height}" font-family="{FONT}">',
-            f"<title>{escape(title)} — 完全合成のSlack表示例</title>",
-            "<desc>現行のカード・フォーム・本人向け回答の実装に基づく説明図。"
-            "実患者・実投稿・匿名化データは使用していません。実画面のキャプチャではありません。</desc>",
+            f"<title>{escape(title)} — 架空のSlack表示例</title>",
+            "<desc>架空の名前・投稿・数値を使った説明図。"
+            "実データ・実投稿の匿名化例は使用していません。実画面のキャプチャではありません。</desc>",
         ]
         self.rect(0, 0, 1100, height, "#f6f4ef")
         self.text(28, 34, f"HERMES-MCS  /  SLACK  /  {number:02}", 14, GREEN, True)
@@ -43,10 +43,10 @@ class Screen:
         self.text(44, 218, "チャンネル", 14, "#cbbfcf")
         self.rect(34, 232, 122, 36, "#64406a", 6)
         self.text(44, 256, "# mcs-demo", 15, "#fff")
-        self.text(44, 300, "合成データ", 14, "#cbbfcf")
+        self.text(44, 300, "説明用データ", 14, "#cbbfcf")
         self.line(166, 194, 1076, 194, "#e1e5e2")
         self.text(192, 172, "# mcs-demo", 22, INK, True)
-        self.text(1050, 172, "完全合成の表示例", 15, MUTED, end=True)
+        self.text(1050, 172, "架空の表示例", 15, MUTED, end=True)
         self.text(28, height - 45, "説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。", 16, MUTED)
         self.text(28, height - 20, "実データ不使用 / 画像内の操作はできません", 15, GREEN)
 
@@ -102,9 +102,9 @@ class Screen:
         self.button(x + 252, y, "操作を選ぶ… ▾", 173)
 
     def card(self, x, y, width=770, compact=False):
-        self.text(x, y, "合成患者A — 10-01", 23, INK, True)
+        self.text(x, y, "山田さん — 10-01", 23, INK, True)
         y += 35
-        self.text(x, y, "10-01 09:40 訪問看護 合成スタッフB", 17, MUTED)
+        self.text(x, y, "10-01 09:40 訪問看護 佐藤さん", 17, MUTED)
         y += 32
         self.text(x, y, "構造化（抽出候補）", 17, GREEN, True)
         y += 30
@@ -132,12 +132,12 @@ def overview():
     s.text(x, y + 146, "MCSで開く", 18, "#1264a3")
     s.text(x, y + 182, "本文・添付はスレッドに投稿済み", 16, MUTED)
     s.text(689, 227, "スレッド", 23, INK, True)
-    s.text(689, 257, "合成患者A — 10-01", 16, MUTED)
+    s.text(689, 257, "山田さん — 10-01", 16, MUTED)
     s.line(682, 275, 1059, 275)
     s.text(689, 313, "MCS / 原文の配送", 18, INK, True)
-    y = s.paragraph(689, 350, "訪問看護 合成スタッフB\n次回訪問時に残薬を確認してください。\n服薬カレンダーの写真を共有します。", 354, 18)
+    y = s.paragraph(689, 350, "訪問看護 佐藤さん\n次回訪問時に残薬を確認してください。\n服薬カレンダーの写真を共有します。", 354, 18)
     s.rect(689, y + 9, 352, 105, "#f3f6f4", 8, "#dce2dd")
-    s.text(707, y + 43, "添付: 合成の服薬カレンダー.jpg", 16)
+    s.text(707, y + 43, "添付: 服薬カレンダー.jpg", 16)
     s.text(707, y + 76, "説明用の添付表示 / 内容解析なし", 15, MUTED)
     s.text(689, y + 156, "原文を読んで、人が確認・判断します。", 16, GREEN)
     return s.finish()
@@ -148,7 +148,7 @@ def notification():
     x, y = s.app()
     y = s.card(x, y)
     s.line(x, y + 8, 1028, y + 8)
-    s.text(x, y + 45, "確認: 合成スタッフA / 担当: 合成スタッフA", 18, MUTED)
+    s.text(x, y + 45, "確認: 田中さん / 担当: 田中さん", 18, MUTED)
     s.actions(x, y + 68, confirmed=True)
     s.text(x, y + 148, "MCSで開く", 19, "#1264a3")
     s.text(x, y + 185, "本文・添付はスレッドに投稿済み", 17, MUTED)
@@ -182,7 +182,7 @@ def task_form():
     s.line(293, 278, 909, 278)
     fields = [
         ("タスク内容", "次回訪問で残薬を確認", 83),
-        ("担当者（一覧から）", "合成スタッフA（合成薬局）  ▾", 45),
+        ("担当者（一覧から）", "田中さん（みどり薬局）  ▾", 45),
         ("担当者（その他・手入力）", "", 45),
         ("期限 YYYY-MM-DD（任意）", "2026-10-03", 45),
         ("理由（任意）", "訪問看護からの依頼を確認するため", 78),
@@ -205,7 +205,7 @@ def task_preview():
     x, y = s.app(private=True)
     s.text(x, y, "確認 — タスク作成", 24, INK, True)
     y += 46
-    y = s.paragraph(x, y, "内容: 次回訪問で残薬を確認\n担当: 合成スタッフA（合成薬局）\n期限: 2026-10-03\n理由: 訪問看護からの依頼を確認するため", 767, 21)
+    y = s.paragraph(x, y, "内容: 次回訪問で残薬を確認\n担当: 田中さん（みどり薬局）\n期限: 2026-10-03\n理由: 訪問看護からの依頼を確認するため", 767, 21)
     s.button(x, y + 20, "確定する", 144)
     s.button(x + 162, y + 20, "取消", 96)
     s.text(x, y + 118, "内容・担当・期限・理由を照合してから確定します。", 18, GREEN)
@@ -219,10 +219,10 @@ def task_list():
     s.text(x, y, "**タスク**（このスレッド）", 23, INK, True)
     s.rect(x, y + 27, 13, 13, "#fff", 2, "#a9b5ae")
     s.text(x + 25, y + 43, "#101 次回訪問で残薬を確認", 21)
-    s.text(x + 25, y + 78, "担当: 合成スタッフA / 期限: 2026-10-03", 19, MUTED)
+    s.text(x + 25, y + 78, "担当: 田中さん / 期限: 2026-10-03", 19, MUTED)
     s.rect(x, y + 121, 13, 13, "#fff", 2, "#a9b5ae")
     s.text(x + 25, y + 137, "#102 添付された記録を確認", 21)
-    s.text(x + 25, y + 172, "担当: 合成スタッフA / 期限: 2026-10-04", 19, MUTED)
+    s.text(x + 25, y + 172, "担当: 田中さん / 期限: 2026-10-04", 19, MUTED)
     s.button(x, y + 212, "対応中 #101", 166)
     s.button(x + 184, y + 212, "完了 #101", 153, True)
     s.button(x, y + 266, "対応中 #102", 166)
@@ -234,7 +234,7 @@ def task_list():
 def patient_summary():
     s = Screen(7, "訪問前に、患者の記録をたどる。", "取得済み投稿の暫定集約。未取得の記録を「無い」と扱いません。", 1080)
     x, y = s.app(private=True)
-    s.text(x, y, "合成患者A — 患者サマリー（暫定集約）", 23, INK, True)
+    s.text(x, y, "山田さん — 患者サマリー（暫定集約）", 23, INK, True)
     y += 38
     y = s.paragraph(x, y, "※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・訂正前の記録があり得るため、確定した処方一覧や依頼台帳の代わりにはなりません。原本で確認してください。", 758, 18, MUTED)
     y += 12
@@ -242,12 +242,12 @@ def patient_summary():
     y += 19
     rows = [
         "■ 薬（投稿から抽出。確定した処方ではありません）",
-        "・合成薬A（最終言及 2026-10-01）",
+        "・薬剤A（最終言及 2026-10-01）",
         "■ 抽出されたバイタルなし",
         "■ 次回予定（抽出表現）: 10月3日の訪問",
         "連携サマリー（MCS）: 未取得",
         "■ 未完了タスク",
-        "・#101 次回訪問で残薬を確認 — 担当 合成スタッフA",
+        "・#101 次回訪問で残薬を確認 — 担当 田中さん",
         "  期限 2026-10-03",
     ]
     for row in rows:
@@ -352,7 +352,7 @@ def main():
                 return 1
         else:
             manifest.write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
-    print(f"{len(SCREENS)} synthetic Slack illustrations {'verified' if args.check else 'generated'}")
+    print(f"{len(SCREENS)} fictional Slack illustrations {'verified' if args.check else 'generated'}")
     return 0
 
 

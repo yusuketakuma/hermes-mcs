@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="940" viewBox="0 0 1100 940" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
-<title>次の操作を、ひとつのメニューから。 — 完全合成のSlack表示例</title>
-<desc>現行のカード・フォーム・本人向け回答の実装に基づく説明図。実患者・実投稿・匿名化データは使用していません。実画面のキャプチャではありません。</desc>
+<title>次の操作を、ひとつのメニューから。 — 架空のSlack表示例</title>
+<desc>架空の名前・投稿・数値を使った説明図。実データ・実投稿の匿名化例は使用していません。実画面のキャプチャではありません。</desc>
 <rect x="0" y="0" width="1100" height="940" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  03</text>
 <text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">次の操作を、ひとつのメニューから。</text>
@@ -12,10 +12,10 @@
 <text x="44" y="218" font-size="14" fill="#cbbfcf">チャンネル</text>
 <rect x="34" y="232" width="122" height="36" rx="6" fill="#64406a"/>
 <text x="44" y="256" font-size="15" fill="#fff"># mcs-demo</text>
-<text x="44" y="300" font-size="14" fill="#cbbfcf">合成データ</text>
+<text x="44" y="300" font-size="14" fill="#cbbfcf">説明用データ</text>
 <path d="M166 194 L1076 194" stroke="#e1e5e2" fill="none"/>
 <text x="192" y="172" font-size="22" fill="#202124" font-weight="bold"># mcs-demo</text>
-<text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">完全合成の表示例</text>
+<text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">架空の表示例</text>
 <text x="28" y="895" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
 <text x="28" y="920" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
 <rect x="192" y="228" width="36" height="36" rx="8" fill="#087f5b"/>
@@ -24,8 +24,8 @@
 <rect x="292" y="228" width="38" height="20" rx="4" fill="#edf0ee"/>
 <text x="298" y="243" font-size="11" fill="#66716f">APP</text>
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
-<text x="240" y="283" font-size="23" fill="#202124" font-weight="bold">合成患者A — 10-01</text>
-<text x="240" y="318" font-size="17" fill="#66716f">10-01 09:40 訪問看護 合成スタッフB</text>
+<text x="240" y="283" font-size="23" fill="#202124" font-weight="bold">山田さん — 10-01</text>
+<text x="240" y="318" font-size="17" fill="#66716f">10-01 09:40 訪問看護 佐藤さん</text>
 <text x="240" y="350" font-size="17" fill="#087f5b" font-weight="bold">構造化（抽出候補）</text>
 <text x="240" y="380" font-size="19" fill="#202124">要約: 次回訪問時に残薬を確認してほしいとの連絡</text>
 <text x="240" y="415.4" font-size="19" fill="#202124">区分: 依頼</text>

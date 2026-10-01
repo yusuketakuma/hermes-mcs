@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="700" viewBox="0 0 880 700" font-family="'Hiragino Sans', sans-serif">
-  <title>完全合成の Slack 通知カード表示例</title>
+  <title>架空データを使った Slack 通知カード表示例</title>
   <desc>実患者・実投稿を参照せずに新規作成した、Slack 通知カードと操作後状態の図。</desc>
   <rect width="880" height="700" fill="#1a1d21"/>
 
   <!-- channel header -->
   <rect width="880" height="44" fill="#19171d"/>
   <line x1="0" y1="44" x2="880" y2="44" stroke="#3a3d42" stroke-width="1"/>
-  <text x="20" y="28" font-size="14" fill="#d1d2d3" font-weight="bold">#  mcs-synthetic</text>
-  <text x="856" y="28" font-size="11" fill="#ababad" text-anchor="end">完全合成の通知表示例</text>
+  <text x="20" y="28" font-size="14" fill="#d1d2d3" font-weight="bold">#  mcs-demo</text>
+  <text x="856" y="28" font-size="11" fill="#ababad" text-anchor="end">架空の表示例</text>
 
   <!-- message 1 -->
   <rect x="16" y="60" width="36" height="36" rx="8" fill="#611f69"/>
@@ -25,7 +25,7 @@
   <text x="745" y="117" font-size="10" fill="#fff" text-anchor="middle">1</text>
 
   <!-- message 1 sender line + structured block -->
-  <text x="82" y="144" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤（訪問看護ステーション・合成）</text>
+  <text x="82" y="144" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤さん（あおぞら訪問看護）</text>
   <text x="82" y="166" font-size="11" fill="#ababad" font-weight="bold">📋 構造化</text>
   <text x="82" y="184" font-size="11" fill="#d1d2d3">・要約: 夕方バイタル測定と添付共有の報告</text>
   <text x="82" y="202" font-size="11" fill="#d1d2d3">・区分: 訪問・添付</text>
@@ -35,7 +35,7 @@
   <text x="745" y="196" font-size="10" fill="#fff" text-anchor="middle">2</text>
 
   <!-- message 2 sender line + structured block -->
-  <text x="82" y="268" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木（居宅介護支援・合成）</text>
+  <text x="82" y="268" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木さん（ひなた居宅介護支援）</text>
   <text x="82" y="290" font-size="11" fill="#ababad" font-weight="bold">📋 構造化</text>
   <text x="82" y="308" font-size="11" fill="#d1d2d3">・要約: かかりつけ医より服薬変更の連絡</text>
   <text x="82" y="326" font-size="11" fill="#d1d2d3">・薬剤: フェロキシピン[中止]、カルベジロール 2.5mg[開始](内服・1日1回)</text>
@@ -58,7 +58,7 @@
   <text x="82" y="432" font-size="11" fill="#1d9bd1">🔗 MCSで開く</text>
 
   <!-- context footer -->
-  <text x="82" y="458" font-size="10" fill="#ababad">✅ 確認: 田中（合成） · 👤 担当: 田中（合成） — フッターは表示名（通知は鳴りません）</text>
+  <text x="82" y="458" font-size="10" fill="#ababad">✅ 確認: 田中さん · 👤 担当: 田中さん — フッターは表示名（通知は鳴りません）</text>
   <circle cx="745" cy="454" r="9" fill="#1d9bd1"/>
   <text x="745" y="458" font-size="10" fill="#fff" text-anchor="middle">4</text>
   <text x="82" y="480" font-size="10" fill="#6e7681">💬 本文・添付はスレッドに投稿済み — 抽出はローカルLLM（候補扱い）</text>

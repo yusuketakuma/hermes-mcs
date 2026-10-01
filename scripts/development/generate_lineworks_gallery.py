@@ -27,7 +27,7 @@ class TalkScreen(Screen):
         self.parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1100" '
             f'viewBox="0 0 1100 1100" font-family="{FONT}">',
-            f"<title>{escape(title)} — 完全合成のLINE WORKS表示例</title>",
+            f"<title>{escape(title)} — 架空のLINE WORKS表示例</title>",
             "<desc>独自アダプターの連続投稿と本人との1:1入力・確認に基づく説明図。"
             "実画面のキャプチャではなく、実患者・実投稿・匿名化データは使用していません。</desc>",
         ]
@@ -36,7 +36,7 @@ class TalkScreen(Screen):
         self.text(28, 78, title, 31, INK, True)
         self.text(28, 112, subtitle, 17, MUTED)
         self.text(28, 1000, "抽出は候補。原文を確認し、人が判断・確定します。", 19, GREEN, True)
-        self.text(28, 1038, "完全合成の説明図 / 実画面のキャプチャではありません", 16, MUTED)
+        self.text(28, 1038, "架空の名前・投稿を使った説明図 / 実画面のキャプチャではありません", 16, MUTED)
         self.text(28, 1070, "実データ不使用 / 画像内のボタンは操作できません", 15, MUTED)
 
     def panel(self, x, title, subtitle):
@@ -66,12 +66,12 @@ class TalkScreen(Screen):
 def delivery():
     s = TalkScreen(1, "同じトークルームで、要約・原文・添付を確認。",
                    "カードに続いて原文と添付を連続投稿。入力・確認は本人との1:1トークへ。")
-    s.panel(24, "① 共有トークルーム", "合成デモ / MCS Botからの新着通知")
+    s.panel(24, "① 共有トークルーム", "操作例 / MCS Botからの新着通知")
     s.panel(568, "②・③ 同じトークルームの続き", "スレッドではなく、通常のトークとして届きます")
     s.bot(44, 245)
     s.rect(66, 286, 422, 243, "#fff", 9, "#d5e1e5")
-    s.text(82, 318, "💬 合成患者A — 10-01", 20, INK, True)
-    s.paragraph(82, 350, "10-01 09:40 合成スタッフB（訪問看護）", 390, 15, MUTED)
+    s.text(82, 318, "💬 山田さん — 10-01", 20, INK, True)
+    s.paragraph(82, 350, "10-01 09:40 佐藤さん（訪問看護）", 390, 15, MUTED)
     s.text(82, 406, "📋 構造化", 18, GREEN, True)
     s.paragraph(82, 439, "依頼: 次回訪問時に残薬を確認\n期限表現: 次回訪問時", 390, 18)
     s.template(66, 529, ["☐ 確認", "👤 担当する", "📝 タスク作成", "🧾 患者サマリー",
@@ -81,12 +81,12 @@ def delivery():
     s.bot(588, 245)
     s.rect(610, 286, 422, 251, "#fff", 9, "#d5e1e5")
     s.text(626, 320, "MCS 1234abcd（1/1）", 19, GREEN, True)
-    s.paragraph(626, 356, "10-01 09:40 合成スタッフB（訪問看護）\n本文: 次回訪問時に残薬を確認してください。\n\n構造化（抽出候補）\n依頼: 残薬確認", 390, 17)
+    s.paragraph(626, 356, "10-01 09:40 佐藤さん（訪問看護）\n本文: 次回訪問時に残薬を確認してください。\n\n構造化（抽出候補）\n依頼: 残薬確認", 390, 17)
     s.bot(588, 568)
     s.rect(610, 610, 422, 218, "#fff", 9, "#d5e1e5")
     s.rect(626, 630, 390, 98, "#f0f5f1", 8)
     s.text(646, 670, "添付ファイル", 20, INK, True)
-    s.text(646, 704, "合成の服薬カレンダー.jpg", 17, MUTED)
+    s.text(646, 704, "服薬カレンダー.jpg", 17, MUTED)
     s.text(626, 765, "保存・通知のみ。添付の内容解析は行いません。", 15, MUTED)
     s.paragraph(588, 872, "説明用に本文を短縮しています。\n長い本文や追加の操作は、別の投稿に分割します。", 468, 16, MUTED)
     return s.finish()
@@ -101,14 +101,14 @@ def task_confirm():
     s.bubble(66, 286, "タスク内容\n中止する場合は「取消」。", height=83)
     s.bubble(88, 388, "次回訪問時に残薬を確認", user=True)
     s.bubble(66, 473, "担当者（任意）\n省略する場合は「なし」。", height=83)
-    s.bubble(88, 575, "合成スタッフA", user=True)
+    s.bubble(88, 575, "田中さん", user=True)
     s.bubble(66, 660, "期限 YYYY-MM-DD（任意）\n省略する場合は「なし」。", height=83)
     s.bubble(88, 762, "2026-10-02", user=True)
-    s.paragraph(44, 874, "続いて理由を入力します。\n例: 次回訪問で確認するため（完全合成）", 468, 16, MUTED)
+    s.paragraph(44, 874, "続いて理由を入力します。\n例: 次回訪問で確認するため", 468, 16, MUTED)
     s.bot(588, 245)
     s.rect(610, 286, 422, 279, "#fff", 9, "#d5e1e5")
     s.text(626, 321, "確認 — タスク作成", 21, INK, True)
-    s.paragraph(626, 366, "内容: 次回訪問時に残薬を確認\n担当: 合成スタッフA\n期限: 2026-10-02\n理由: 次回訪問で確認するため", 390, 18)
+    s.paragraph(626, 366, "内容: 次回訪問時に残薬を確認\n担当: 田中さん\n期限: 2026-10-02\n理由: 次回訪問で確認するため", 390, 18)
     s.template(610, 565, ["確定する", "取消"])
     s.text(588, 685, "本人が「確定する」を選んだ後", 17, GREEN, True)
     s.bubble(610, 710, "受け付けました。")
