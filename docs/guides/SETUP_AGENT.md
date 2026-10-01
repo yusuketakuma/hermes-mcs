@@ -122,10 +122,15 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 > 導入形態を選んでください:
 > **A**: hermes-agent アドオン（推奨・全機能 — Discord/Slack 通知・
 > 対話カード・`/mcs` コマンドあり）
-> **B**: スタンドアロン（収集・保存・閲覧・抽出。
-> LINE WORKSは独立接続で通知できます。Slack/Discord通知には A が必要です）
+> **S**: スタンドアローンモード（Hermes なしで全機能 — Slack/Discord の
+> 通知・対話カード・`/mcs` も MCS が直接接続）
+> **B**: 手動の最小構成（収集・保存・閲覧・抽出。
+> LINE WORKSは独立接続で通知できます。Slack/Discord は使いません）
 
 - A → Phase 3
+- S → [STANDALONE.md](STANDALONE.md) の「導入」をそのまま実行する
+  （`./install.sh --mode standalone` → `~/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init`
+  → `services` → `check`）。Bot トークンは init の非表示入力でユーザー自身が入力する
 - B → Phase 6
 
 ## Phase 3 — Path A: 依存の自動導入

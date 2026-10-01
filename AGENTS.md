@@ -19,6 +19,9 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
 - 読み取り専用統計・アラートシグナル・人承認の依頼管理
 - Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送。
   LINE WORKS は `adapters/lineworks/` の独立プロセスで同じ配送・人承認契約を使う
+- `runtime_mode`: 未指定/`hermes` は上記の Hermes 経由。`standalone` は Hermes なしで
+  全機能を動かす（`mcs_standalone/` が Slack/Discord 接続・送信、定期ジョブは
+  launchd `ai.mcs.cron.*`、接続は `ai.mcs.standalone`）。`docs/guides/STANDALONE.md`
 
 ## 構成
 
@@ -47,6 +50,9 @@ MedicalCareStation (MCS) の医療・介護チャットを収集・解析する�
   `lineworks/`（独自Bot API・JWT認証・署名Callback・配送・DM入力/確定・CLI/サービス候補） ·
   `common/`（接続先共通のpaths・journal・registry・envelopes・spec・text・worker）
 - `lineworks_adapter/` — 独立LINE WORKS CLIの互換入口（`python -m lineworks_adapter`）
+- `mcs_standalone/` — `runtime_mode=standalone` の Slack/Discord 接続（run）・
+  テキスト送信（send）・診断（check）。既存 `adapters/` の Supervisor と
+  `hermes_plugin` の `/mcs` handler を Hermes の代わりに起動する
 - `hermes_plugin/` — `mcs_discord/`・`mcs_slack/`（`adapters/`への互換import入口） ·
   `mcs_delivery/`（`adapters/common/`への互換import入口） ·
   `card_workers.py`(worker 設定解決・factory) · `projects.py`
@@ -70,7 +76,7 @@ LINE WORKS の起動・更新は独立アダプターの再起動が必要で、
 
 ```bash
 scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
-ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
+ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
 python3 scripts/development/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
 python3 scripts/development/update_readme.py --check
 python3 ci/gates.py
@@ -89,7 +95,11 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 - **収集・解析コアの依存は標準ライブラリのみ**。新しい外部依存を加えない。
   `adapters/discord/{actions,cards}.py` だけは Hermes 同梱の
   `discord.py` を関数内で遅延 import し、UI と既存 interaction の
-  followup に使う。Slack/Discord の独自 Bot・認証情報・REST 接続は作らない。
+  followup に使う。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST
+  接続は作らない。例外は `runtime_mode=standalone` の `mcs_standalone/` だけで、
+  `deployment/requirements-standalone.txt` の固定版公式 SDK（独立 venv）で接続し、
+  トークンは `~/.mcs/.env`（0600）からのみ読む。SDK import は関数内に限り、
+  proxy 環境変数は起動時に除去する。
   LINE WORKS はHermesに接続機能がないため `adapters/lineworks/` だけが独自の
   認証・Bot REST・署名Callbackを所有する（stdlib・OpenSSL、固定公式URL、
   no-redirect/no-proxy、期限・容量制限、秘密値の環境自動取得なし）。

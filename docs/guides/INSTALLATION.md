@@ -73,25 +73,29 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 
 - **Path A — hermes-agent アドオン**（推奨・全機能）: 収集→SQLite→
   Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
-- **Path B — スタンドアロン**（hermes-agent なし）: 収集→SQLite→
-  `mcs_view` 閲覧＋構造化抽出。Slack/Discord通知の配送は `hermes send` 必須のため
-  この形態では送られない。後から Path A へ移行できる（§3-6）。
-  LINE WORKSは[独立接続手順](LINEWORKS.md)を参照し、収集の定期実行はこの形態の設定を使う
+- **Path B — スタンドアロン**（hermes-agent なし・全機能）:
+  `./install.sh --mode standalone`。Slack/Discord の通知・対話カード・`/mcs` も
+  MCS 自身が接続して動かす。手順は[スタンドアローンモード](STANDALONE.md)。
+  下の §3（B-1〜B-6）は install.sh を使わない手動の最小構成（Slack/Discord なし）。
+  LINE WORKSは[独立接続手順](LINEWORKS.md)を参照
 
 ## 0. 導入形態の選択
+
+B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場合。
+§3 の手動最小構成では Slack/Discord の配送・カードは使えない。
 
 | 機能 | A: hermes アドオン | B: スタンドアロン |
 |---|---|---|
 | 未読収集 → SQLite → `mcs_view` 閲覧 | ✓ | ✓ |
 | 全履歴アーカイブ・FTS5 検索 | ✓ | ✓ |
 | 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
-| アラートシグナル（検出） | ✓ | ✓（`mcs_view signals` で閲覧のみ） |
-| Discord/Slack への通知配送 | ✓ | ✗ — `hermes send` が必須 |
-| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✗ — gateway + plugin が必要 |
+| アラートシグナル（検出・通知） | ✓ | ✓ |
+| Discord/Slack への通知配送 | ✓ | ✓ — `mcs_standalone send` |
+| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✓ — 常駐 `ai.mcs.standalone` |
 | LINE WORKSへの通知・本人1:1での操作 | ✓ — 独立接続を設定 | ✓ — 独立接続を設定 |
-| semantic v4（shadow/enforce） | ✓ | ✓（通知連携のみ不可） |
-| 定期実行の仕組み | hermes cron + launchd | launchd / crontab |
-| `mcs_setup.py check` | 全項目検証 | `hermes CLI`・services 用インタプリタ等のエラーは想定内（§3 B-5） |
+| semantic v4（shadow/enforce） | ✓ | ✓ |
+| 定期実行の仕組み | hermes cron + launchd | launchd（`ai.mcs.cron.*`） |
+| `mcs_setup.py check` | 全項目検証 | 全項目検証（Hermes 項目は対象外） |
 
 ## 1. 共通の前提条件
 
@@ -125,6 +129,7 @@ cd hermes-mcs
 |---|---|
 | `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `OK`/`WARN`/`NG` を表示。NG には `fix:` 行で直し方が付く。NG が1つでもあれば exit 1。何も書き込まない |
 | `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[new]`/`[exists]`）を表示。何も書き込まない。NG があれば exit 1 |
+| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=hermes）。非対話は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
 | `--force-repo` | 別の checkout から導入済みの環境（plugin symlink・`~/.mcs-recovery/repo_path`・services）を、この checkout に切り替えることを許可する（§A-7） |
 | `--no-brew` / `--no-llm` / `--no-plugin` / `--no-services` / `--no-recovery` | ステージ 1 / 4 / 3 / 5 / 6 をスキップ（下記） |
 | `[HERMES_HOME]`（位置引数） | 既定 `~/.hermes`。既定以外は services ステージが非対応のため `--no-services` 併用が必須（無いと exit 2） |
@@ -371,7 +376,11 @@ wrapper・plist（`__REPO__`）、復旧ツールが復旧する checkout を記
 - 記録のずれは `check` が
   `recovery watchdog recovers <パス>, not this checkout <パス>` として警告する
 
-## 3. Path B — スタンドアロン（hermes-agent なし）
+## 3. Path B — 手動の最小構成（hermes-agent・install.sh なし）
+
+Slack/Discord も含めて Hermes なしで動かす場合は
+[スタンドアローンモード](STANDALONE.md)（`install.sh --mode standalone`）を使う。
+以下は install.sh を使わず crontab で収集だけを動かす最小構成。
 
 収集・保存・閲覧・抽出は hermes-agent なしで動く。**Slack/Discord通知は
 `hermes send` 経由のためこの形態では送られない**（outbox に pending
@@ -642,8 +651,8 @@ outbox に残った pending は次回 flush で配送対象になる。
 | 場所 | 内容 | 備考 |
 |---|---|---|
 | Keychain `mcs-adapter` | MCS パスワード | `auto_login` がフォーム投入時に読む |
-| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY` | 平文 — FileVault/物理セキュリティ前提 |
-| hermes profile `.env` | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
+| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`。`runtime_mode=standalone` では `init` が `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` もここへ書く | 平文 — FileVault/物理セキュリティ前提 |
+| hermes profile `.env`（Path A のみ） | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
 
 ## 6. スケジュール構成（Path A 導入後）
 
