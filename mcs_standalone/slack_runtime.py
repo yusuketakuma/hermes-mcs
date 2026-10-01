@@ -11,21 +11,25 @@ from adapters.slack.tasks import Supervisor
 from .host import Host, NotSent, log, raise_ended
 
 
-_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_BOLD = re.compile(r"\*\*(.+?)\*\*|\*")
 
 
 def _mrkdwn(text: str) -> str:
     """Notification text as Slack mrkdwn: escaped like Hermes's
     format_message, so MCS content can never form <!channel>/<!here> or
-    <@user> pings (mentions are off, as on Discord), and **bold** -> *bold*."""
+    <@user> pings (mentions are off, as on Discord), and **bold** -> *bold*.
+    A lone * can pair with another and bold a span that was never meant
+    as emphasis, so it is displayed as the fullwidth ＊ instead."""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def bold(m):
+    def repl(m):
+        if m.group(1) is None:          # the lone-* alternative
+            return "＊"
         inner = m.group(1)
         # Slack misses a closing * after a non-word char (Hermes's U+200B guard)
         zw = "\u200b" if inner and not (inner[-1].isalnum() or inner[-1] == "_") else ""
         return f"*{inner}{zw}*"
-    return _BOLD.sub(bold, text)
+    return _BOLD.sub(repl, text)
 
 
 def _client(token: str):
