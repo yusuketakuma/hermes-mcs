@@ -291,6 +291,11 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                 # the retry shares what is left of the caller's budget
                 _FMT_MODE, _FMT_TS = "plain", time.monotonic()
                 rf = None
+                if level and timeout < _LONG_MIN_CALL_S:
+                    # The rejected request already left: do not report a
+                    # free not-sent defer, or send a long call that cannot
+                    # fit. Keep the mark for a later adequately sized try.
+                    return None
                 continue
             if response is not None \
                     and response.get("finish_reason") == "length":
