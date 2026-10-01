@@ -301,6 +301,12 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
             break
     if response is None and err_out.get("kind") == "unreachable":
         raise runtime.LLMNotSent("llm_unreachable")
+    if response is not None and response.get("status") == 400:
+        # the server definitively rejected the request (context
+        # oversize under a fixed slot, or a malformed body) — retrying
+        # the same input can never succeed, so this is terminal, not a
+        # retryable model failure
+        raise runtime.LLMRejected("prompt_rejected")
     # canonical acceptance: a length-truncated or empty completion is an
     # incomplete result, never a success payload — even when its text
     # happens to parse (C05)
