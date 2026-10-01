@@ -8,11 +8,11 @@ the code itself, so the docs track feature additions automatically:
     <!-- BEGIN GENERATED:signals -->  mcs_signals.DETECTORS
     <!-- BEGIN GENERATED:stats   -->  mcs_stats.REGISTRY + PRESETS
     <!-- BEGIN GENERATED:cli     -->  mcs_view subcommands
+    <!-- BEGIN GENERATED:release -->  latest CHANGELOG for README
     <!-- END GENERATED:<name>    -->
 
-The markers currently live in docs/DEVELOPMENT.md; every file listed in
-TARGETS is processed, so adding a marked block to a new doc only needs a
-TARGETS entry.
+Technical tables live in docs/DEVELOPMENT.md; the release overview lives
+in README.md. Manual feature descriptions are reviewed at each release.
 
 Usage:
     python3 scripts/update_readme.py           # rewrite docs in place
@@ -131,8 +131,14 @@ def gen_cli() -> str:
          "| コマンド | アクション |", "|---|---|", *rows])
 
 
+def gen_release() -> str:
+    import readme_release
+    return readme_release.render_block(
+        (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+
 GENERATORS = {"modules": gen_modules, "signals": gen_signals,
-              "stats": gen_stats, "cli": gen_cli}
+              "stats": gen_stats, "cli": gen_cli, "release": gen_release}
 
 
 def render(readme: str) -> tuple[str, list[str]]:
@@ -141,6 +147,11 @@ def render(readme: str) -> tuple[str, list[str]]:
     for name, gen in GENERATORS.items():
         begin = f"<!-- BEGIN GENERATED:{name} -->"
         end = f"<!-- END GENERATED:{name} -->"
+        if name == "release" and (begin in out or end in out) and (
+                out.count(begin) != 1 or out.count(end) != 1
+                or out.index(begin) > out.index(end)):
+            failed.append(name)
+            continue
         if begin not in out or end not in out:
             continue  # marker absent — section not enabled
         pre, rest = out.split(begin, 1)

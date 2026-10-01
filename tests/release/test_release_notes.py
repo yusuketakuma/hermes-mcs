@@ -6,6 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import sys
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -55,11 +59,16 @@ class ReleaseNotesTest(unittest.TestCase):
             prior = notes.render([self.item()], "旧版", "旧版の変更です。")
             changelog.write_text("# Changelog\n\n## [Unreleased]\n\n## [1.0.7] — 2026-09-29\n\n" + prior,
                                  encoding="utf-8")
+            readme = root / "README.md"
+            readme.write_text("# Preserved intro\n<!-- BEGIN GENERATED:release -->\n"
+                              "<!-- END GENERATED:release -->\nPreserved footer\n", encoding="utf-8")
             args = ["--root", tmp, "build", "--version", "1.0.8", "--date", "2026-10-01",
                     "--headline", "通知の改善", "--summary", "返信を更新します。"]
             self.assertEqual(notes.main(args), 0)
             self.assertTrue((root / "changes/archive/1.0.8/001.json").is_file())
             text = changelog.read_text(encoding="utf-8")
+            self.assertIn("v1.0.8", readme.read_text(encoding="utf-8"))
+            self.assertIn("Preserved footer", readme.read_text(encoding="utf-8"))
             output = root / "release.md"
             title = root / "title.txt"
             self.assertEqual(notes.main(["--root", tmp, "export", "--version", "1.0.8",

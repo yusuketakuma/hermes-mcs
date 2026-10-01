@@ -96,7 +96,8 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 `mcs/**/*.py` 追加・docstring 変更・検知器/統計/サブコマンド追加時は
 `python3 scripts/update_readme.py` を実行（`GENERATED:*` マーカー内を再生成）。
 生成ブロックは `docs/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
-`README.md` は利用者向けなので生成表は持たない。
+`README.md` は利用者向けなので生成表は持たない。最新の変更要約だけは
+`GENERATED:release`としてCHANGELOGから生成する。
 新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
@@ -115,6 +116,12 @@ docstring 先頭文は公開されるので1文要約にする。
 - リリース準備を依頼されたら、`docs/RELEASE_NOTES.md`の手順に従い、記録から
   見出しと要約を作成し`release_notes.py build`でCHANGELOGを生成する。
   GitHub Release本文は同じversionのCHANGELOGからexportし、別に作文しない。
+- 毎回のリリース準備で、READMEの機能・画面例・導入・安全・ドキュメント導線を
+  新しい変更とソースに照らして見直す。`docs/README_MAINTENANCE.md`に従い、
+  `docs/readme-review.json`に新しいversion・各項目の確認内容と根拠を記録する。
+  変更不要でも照合結果を書く。versionだけの更新で済ませない。
+  buildはREADMEの最新変更も更新する。生成部分は手編集せず、
+  `python3 scripts/readme_release.py --check`で同期・記録・リンクを検証する。
 - tag workflowは下書きを作り、mainのCHANGELOGを既存Releaseへ自動同期する。
   タイトル・本文以外は変更しない。公開済み本文の変更も先にCHANGELOGへ反映する。
   push・PR・tag・公開の承認は従来の規約に従う。
