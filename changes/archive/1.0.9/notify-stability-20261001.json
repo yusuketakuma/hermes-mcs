@@ -7,5 +7,5 @@
     "共通の結果読取りと表示ファイル走査でRecursionErrorを不正JSONとして扱います。",
     "Slackの本文照合・既存返信の更新・添付照合が使う履歴読取りで、通信失敗または不正応答を空の履歴へ変換しません。"
   ],
-  "refs": ["hermes_plugin/mcs_delivery/paths.py", "hermes_plugin/mcs_delivery/worker.py", "adapters/slack/delivery.py"]
+  "refs": ["adapters/common/paths.py", "adapters/common/worker.py", "adapters/slack/delivery.py"]
 }

@@ -1,62 +1,72 @@
 {
-  "version": "1.0.8",
+  "version": "1.0.9",
   "sections": {
     "features": {
-      "notes": "現行Slackカード・操作メニューとDiscordの/mcs対応を照合。READMEの推奨と先頭画面をSlackへ統一し、通知・暫定集約・人承認タスクの説明を保持した。 LINE WORKS独立接続・連続投稿・本人1:1入力確認を照合し、3接続の通知先表とスレッドの条件を整合した。",
+      "notes": "1.0.9の新機能と修正をLINE WORKSの配送・操作、構造化表示のソースへ照合した。LINE WORKSは要約・原文・添付を連続投稿し、許可ユーザーの1:1入力と本人確定を使う。Slack/DiscordはHermes公式接続を維持する。未確認検査値・所見の解釈条件・壊れた抽出結果への耐性改善は、候補と原本確認を区別する本文説明と整合している。",
       "sources": [
-        "docs/guides/USER_GUIDE.md",
-        "adapters/slack/cards.py",
-        "adapters/slack/actions.py",
-        "hermes_plugin/README.md",
-        "adapters/lineworks/cards.py",
+        "changes/archive/1.0.9/lineworks-adapter-20261001.json",
+        "changes/archive/1.0.9/unverified-lab-display-20261001.json",
+        "changes/archive/1.0.9/structured-display-shapes-20261001.json",
+        "adapters/lineworks/actions.py",
         "adapters/lineworks/delivery.py",
-        "adapters/lineworks/actions.py"
+        "mcs/notify/notify_cards.py",
+        "mcs/views/structured_view.py",
+        "docs/guides/USER_GUIDE.md"
       ]
     },
     "demos": {
-      "notes": "Slackの全体像・確認と担当・操作メニュー・タスク入力・本人向け確定・一覧・患者サマリーの7画面を現行実装と照合。完全合成の説明図と明記し、PNG描画の日本語・文字切れ・重なりを確認した。SVG/PNGとハッシュ記録を同期。Discord例は折りたたみに保持した。 LINE WORKSの配信と本人1:1入力確認の2画面をDiscordと同じ折りたたみへ追加。完全合成のSVG/PNGを実装・公式ボタン仕様へ照合し、日本語と文字切れを視認、組のhashを同期した。",
+      "notes": "Slackの7画面を先頭に置き、DiscordとLINE WORKSの2画面を折りたたむ構成を照合した。検証済みの完全合成画像を再利用し、LINE WORKSの連続投稿、更新による旧ボタン・確認画面の無効化、本人1:1での入力と確定を現行実装で確認した。カード確認済みとタスク完了、患者サマリーの暫定集約を区別する説明は一致し、リリース準備で画像の変更は不要と判断した。",
       "sources": [
-        "scripts/development/generate_slack_gallery.py",
-        "docs/screenshots/slack-gallery/assets.json",
+        "README.md",
         "docs/screenshots/slack-gallery/README.md",
-        "adapters/slack/cards.py",
-        "adapters/slack/actions.py",
-        "adapters/common/text.py",
-        "mcs/notify/notify_views.py",
-        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md",
         "docs/screenshots/lineworks-gallery/assets.json",
-        "docs/screenshots/lineworks-gallery/README.md"
+        "adapters/lineworks/actions.py",
+        "adapters/lineworks/delivery.py",
+        "adapters/common/text.py",
+        "mcs/notify/notify_views.py"
       ]
     },
     "quickstart": {
-      "notes": "導入ガイドにあるSlack推奨と接続・許可ユーザー設定に合わせて導線を追加。macOS前提とpreflight/init/services/check/doctorの既存手順を保持した。 LINE WORKSではHermes同期を行わない条件を明示し、独立接続ガイドへの導線を照合した。",
+      "notes": "初回導入の一本化をinstall.shのSummaryとmcs_setupのinit処理へ照合した。Slack/DiscordだけがHermes同期を行い、LINE WORKSは端末での秘密値入力・ローカルcheck・公開HTTPS Callback・独立常駐のガイドへ進む。導入形態表を接続別に明確化し、LINE WORKSはHermesなしでも独立接続できることを記載した。更新時の接続プロセス再起動と配備済み復旧ツールの再導入を1.0.9の更新注意へ掲載する。",
       "sources": [
         "install.sh",
+        "mcs/ops/mcs_setup.py",
+        "changes/archive/1.0.9/setup-path-stability-20261001.json",
+        "changes/archive/1.0.9/repository-layout-20261001.json",
+        "changes/archive/1.0.9/recovery-cron-list-20261001.json",
         "docs/guides/INSTALLATION.md",
         "docs/guides/SETUP_AGENT.md",
         "docs/guides/LINEWORKS.md"
       ]
     },
     "safety": {
-      "notes": "Slack推奨でも外部送信があることを明示する既存の説明を保持。確認済みとタスク完了、本人向けの回答、タスク作成前の内容・理由確認、暫定集約と未取得範囲を画像にも反映した。Jev・既読化・添付未解析・復旧の境界も保持した。 LINE WORKSを患者名・本文・要約・添付の外部送信先へ追加し、画像にも抽出候補・人確定・添付未解析を反映した。",
+      "notes": "3接続への患者名・本文・要約・送信対象添付の外部送信を安全文書と独立LINE WORKSの許可範囲・本人確認に照合した。署名Callback、秘密値の分離、成否不明時の自動再実行抑止、理由とreceiptを伴う人承認を維持する。未取得と対応なしの区別、添付未解析、復旧の限界、任意Jev送信を本文から確認できる。収集・集約・復旧の異常入力への修正は既読化・承認・通知範囲を緩めない。",
       "sources": [
         "SECURITY.md",
-        "adapters/slack/actions.py",
-        "mcs/notify/notify_views.py",
+        "docs/guides/LINEWORKS.md",
         "docs/specs/lifecycle-spec.md",
         "adapters/lineworks/actions.py",
-        "docs/guides/LINEWORKS.md"
+        "adapters/lineworks/config.py",
+        "changes/archive/1.0.9/repo-review-ingest-20261001.json",
+        "changes/archive/1.0.9/repo-review-lineworks-setup-20261001.json",
+        "changes/archive/1.0.9/export-rollup-stability-20261001.json",
+        "changes/archive/1.0.9/recovery-sqlite-paths-20261001.json"
       ]
     },
     "docs": {
-      "notes": "Slackの5つのページ内導線、7画面のPNG、画像の更新手順、Slack設定の導線を追加。既存のガイド・技術資料とCHANGELOG生成部分へのリンクを保持した。 LINE WORKSの折りたたみ画像・接続ガイド・画像生成手順を導線へ追加し、通知のフロー図を3接続へ整合した。",
+      "notes": "配置整理後のREADME導線をdocs索引と移動記録へ照合した。guides・development・specsの現行正本とSlack/LINE WORKS画像の更新手順へ到達できる。未リリース記録とCHANGELOG冒頭の旧パスを現在の正本へ更新し、過去版の記録は当時の仕様として保持する。install.sh、make、テストrunner、独立LINE WORKSの互換入口は維持され、README本文への追加修正は不要と判断した。",
       "sources": [
         "README.md",
+        "CHANGELOG.md",
+        "docs/README.md",
         "docs/development/README_MAINTENANCE.md",
+        "docs/development/RELEASE_NOTES.md",
+        "docs/dev-records/structure-20261001.md",
+        "changes/archive/1.0.9/repository-layout-20261001.json",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/guides/INSTALLATION.md",
-        "docs/screenshots/lineworks-gallery/README.md",
-        "docs/assets/flow-overview.svg"
+        "docs/screenshots/lineworks-gallery/README.md"
       ]
     }
   }

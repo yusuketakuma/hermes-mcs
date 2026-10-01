@@ -12,7 +12,7 @@
   "refs": [
     "install.sh",
     "mcs/ops/mcs_setup.py",
-    "docs/INSTALLATION.md",
-    "docs/SETUP_AGENT.md"
+    "docs/guides/INSTALLATION.md",
+    "docs/guides/SETUP_AGENT.md"
   ]
 }

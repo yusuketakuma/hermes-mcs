@@ -15,7 +15,7 @@
     "hermes_plugin/mcs_discord/__init__.py",
     "adapters/lineworks/config.py",
     "adapters/lineworks/__main__.py",
-    "scripts/release_notes.py",
+    "scripts/development/release_notes.py",
     "ci/gates.py",
     "docs/dev-records/lineworks-impact-20261001.md"
   ]

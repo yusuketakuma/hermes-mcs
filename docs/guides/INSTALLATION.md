@@ -21,7 +21,7 @@ LINE WORKS 通知には Hermes の通知 plugin・gateway は不要です。
 - 空きディスク約 12 GB（LLM モデル 5.7 GB を含む）と、github.com・
   huggingface.co へ接続できるネットワーク
 - MCS のログイン ID とパスワード
-- 通知を使う場合: Slack app（推奨・作り方は付録B）または Discord bot（付録A）
+- 通知を使う場合: Slack app（推奨・作り方は付録B）、Discord bot（付録A）、または[LINE WORKS Bot](LINEWORKS.md)
 
 **手順**:
 
@@ -43,13 +43,14 @@ cd hermes-mcs
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ops/mcs_setup.py init       # 4. 設定・通知プラグイン・gateway同期・最終チェックまで実行
+$PY mcs/ops/mcs_setup.py init       # 4. 本体設定・最終チェック。Slack/Discordではplugin・gatewayも同期
 $PY mcs/ops/mcs_setup.py doctor     #    （困ったとき）check + インタプリタ・launchd の状態一覧
 ```
 
 `init` が `check: OK` で終われば初回設定は完了です。`--no-services` で
 導入した場合や、更新後に配置 drift が出た場合だけ、`services` → `check`
-を実行します。収集開始前に Chrome を MCS にログインしたプロファイルで
+を実行します。LINE WORKSでは[接続ガイド](LINEWORKS.md)で認証・Callback・独立常駐を設定し、再診断してください。
+収集開始前に Chrome を MCS にログインしたプロファイルで
 CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 **成功の目安**:
@@ -86,7 +87,8 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 | 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
 | アラートシグナル（検出） | ✓ | ✓（`mcs_view signals` で閲覧のみ） |
 | Discord/Slack への通知配送 | ✓ | ✗ — `hermes send` が必須 |
-| 対話カード・`/mcs` コマンド | ✓ | ✗ — gateway + plugin が必要 |
+| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✗ — gateway + plugin が必要 |
+| LINE WORKSへの通知・本人1:1での操作 | ✓ — 独立接続を設定 | ✓ — 独立接続を設定 |
 | semantic v4（shadow/enforce） | ✓ | ✓（通知連携のみ不可） |
 | 定期実行の仕組み | hermes cron + launchd | launchd / crontab |
 | `mcs_setup.py check` | 全項目検証 | `hermes CLI`・services 用インタプリタ等のエラーは想定内（§3 B-5） |
@@ -104,7 +106,7 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 | ディスク | 約 12 GB（LLM モデル約 5.7 GB + DB・添付・ログ。`--preflight` が確認する） |
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | semantic/Jev 連携を使う場合のみ（`~/.mcs/.env` に保存） |
-| 通知先アプリ | Path A のみ — Discord bot または Slack app（付録A/B で作成） |
+| 通知先アプリ | Slack app・Discord botはPath Aで設定（付録A/B）。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
 ## 2. Path A — hermes-agent アドオン（全機能）
 

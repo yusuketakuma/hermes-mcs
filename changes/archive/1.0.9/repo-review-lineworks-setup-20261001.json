@@ -12,7 +12,7 @@
     "mcs/ops/mcs_setup.py",
     "adapters/lineworks/server.py",
     "adapters/lineworks/__main__.py",
-    "docs/SETUP_AGENT.md",
+    "docs/guides/SETUP_AGENT.md",
     "SECURITY.md"
   ]
 }
