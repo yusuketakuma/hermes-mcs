@@ -67,6 +67,9 @@ def test_wizard_collects_authority_and_keeps_thread_settings_hidden():
 
 @pytest.mark.parametrize("result", [0, 1, 124])
 def test_local_diagnostic_has_no_hermes_gateway_or_secret_output(monkeypatch, tmp_path, result):
+    chrome = tmp_path / "synthetic-chrome"
+    chrome.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path / ".mcs"))
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: None)
@@ -99,6 +102,9 @@ def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(m
     cfg = config()
     cfg["notify"]["interactive"] = "off"
     (tmp_path / "config.json").write_text(json.dumps(cfg))
+    chrome = tmp_path / "synthetic-chrome"
+    chrome.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup, "CHROME_BIN", str(chrome))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *args: None)
