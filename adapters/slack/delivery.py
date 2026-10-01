@@ -6,9 +6,9 @@ import copy
 import re
 from collections.abc import Mapping
 
-from ..mcs_delivery.paths import read_verified_attachment
-from ..mcs_delivery.spec import token_map
-from ..mcs_delivery.worker import DeliveryWorker as _BaseWorker
+from hermes_plugin.mcs_delivery.paths import read_verified_attachment
+from hermes_plugin.mcs_delivery.spec import token_map
+from hermes_plugin.mcs_delivery.worker import DeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import mention_ids, render, validate
@@ -462,17 +462,16 @@ class DeliveryWorker(_BaseWorker):
 
     async def _replies(self, thread_ts: str):
         """One bounded conversations.replies read through the send-safe
-        client. A failed read yields no matches — the part then posts
-        fresh rather than silently binding to unverifiable content."""
+        client. Unverified history must not authorize a fresh post: the
+        journaled part stays unknown instead of duplicating a reply."""
         sender = self._sender.single_attempt()
         if sender is None:
-            return []
-        try:
-            data = _payload(await sender.conversations_replies(
-                channel=self._settings["channel_id"], ts=thread_ts,
-                limit=200))
-        except Exception:
-            return []
+            raise RuntimeError("reply_history_unverified")
+        data = _payload(await sender.conversations_replies(
+            channel=self._settings["channel_id"], ts=thread_ts,
+            limit=200))
         msgs = data.get("messages")
-        return [m for m in msgs if isinstance(m, dict)] \
-            if isinstance(msgs, list) else []
+        if data.get("ok") is not True or not isinstance(msgs, list) \
+                or not all(isinstance(m, dict) for m in msgs):
+            raise RuntimeError("reply_history_unverified")
+        return msgs

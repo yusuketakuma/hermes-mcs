@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ..mcs_delivery import paths, registry
-from ..mcs_delivery.worker import POLL_S
+from hermes_plugin.mcs_delivery import paths, registry
+from hermes_plugin.mcs_delivery.worker import POLL_S
 from . import actions, delivery
 from contextlib import suppress
 

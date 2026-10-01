@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import subprocess
 import sys
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -121,6 +122,25 @@ class ReleaseNotesTest(unittest.TestCase):
             git("add", ".")
             git("commit", "-m", "document deletion")
             notes.require_fragment(root, base)
+
+    def test_adapter_runtime_changes_require_fragment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = ("adapters/slack/delivery.py", "adapters/discord/actions.py",
+                     "adapters/lineworks/client.py", "lineworks_adapter/__main__.py")
+            for path in paths:
+                with self.subTest(path=path):
+                    result = subprocess.CompletedProcess([], 0, path + "\n", "")
+                    with patch.object(notes.subprocess, "run", return_value=result), self.assertRaises(ValueError):
+                        notes.require_fragment(root, "base")
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            result = subprocess.CompletedProcess([], 0, "\n".join(paths) + "\nchanges/001.json\n", "")
+            with patch.object(notes.subprocess, "run", return_value=result):
+                notes.require_fragment(root, "base")
+            result = subprocess.CompletedProcess([], 0, "adapters/README.md\n", "")
+            with patch.object(notes.subprocess, "run", return_value=result):
+                notes.require_fragment(root, "base")
 
 
 if __name__ == "__main__":

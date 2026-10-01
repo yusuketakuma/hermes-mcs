@@ -48,7 +48,7 @@ _TERMINAL = ("delivered", "not_sent", "cancelled")
 
 
 def _journal_dirs(dirs: dict) -> list:
-    return [dirs[t + "_state"] for t in ("discord", "slack")]
+    return [dirs[t + "_state"] for t in cards.SUPPORTED_TRANSPORTS]
 
 
 def scan_journals(dirs: dict) -> tuple[dict, bool]:
@@ -108,7 +108,7 @@ def _read_spec(dirs: dict, delivery_id) -> dict | None:
         return None
     safe = "".join(c if c.isalnum() or c in "._-" else "_"
                    for c in delivery_id)
-    for t in ("discord", "slack"):
+    for t in cards.SUPPORTED_TRANSPORTS:
         try:
             with open(os.path.join(dirs[t + "_render"], safe + ".json"),
                       "rb") as fh:
@@ -306,8 +306,9 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
                "channel_id": render["channel_id"]}
         if render["guild_id"]:
             env["guild_id"] = render["guild_id"]
-        if render["transport"] == "slack":
-            env.update(version=2, transport="slack",
+        if render["transport"] in ("slack", "lineworks"):
+            env.update(version=cards.TRANSPORT_VERSIONS[render["transport"]],
+                       transport=render["transport"],
                        team_id=render["team_id"])
     receipt = dict(env)
     receipt["command_id"] = str(uuid.uuid4())

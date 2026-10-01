@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from ..mcs_delivery import paths as shared_paths
-from ..mcs_delivery import registry
-from ..mcs_delivery.worker import POLL_S
+from hermes_plugin.mcs_delivery import paths as shared_paths
+from hermes_plugin.mcs_delivery import registry
+from hermes_plugin.mcs_delivery.worker import POLL_S
 
 from . import paths
 from .actions import Actions

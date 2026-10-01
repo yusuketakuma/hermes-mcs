@@ -34,8 +34,8 @@ def scope_key(scope: dict) -> str:
     # Preserve the deployed lock namespace across upgrades.
     raw = "|".join(str(scope.get(k) or "-") for k in
                    ("profile", "application_id", "channel_id"))
-    if scope.get("transport") == "slack":
-        raw = f"slack|{scope['team_id']}|{raw}"
+    if scope.get("transport") in ("slack", "lineworks"):
+        raw = f"{scope['transport']}|{scope['team_id']}|{raw}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -276,6 +276,16 @@ class Registry:
 
     def token(self, token: str) -> dict | None:
         return self._data["tokens"].get(token)
+
+    @_locked
+    def retire_card_tokens(self, card_key: str) -> None:
+        """Invalidate every old card pin before a transport replaces an uneditable post."""
+        stale = [token for token, context in self._data["tokens"].items()
+                 if context.get("card_key") == card_key]
+        for token in stale:
+            del self._data["tokens"][token]
+        if stale:
+            self.save(immediate=True)
 
     # -- pending modal / confirm flows -----------------------------
 

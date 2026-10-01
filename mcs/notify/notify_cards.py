@@ -46,12 +46,15 @@ from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
-    plain_notice)
+    display_text, plain_notice)
 from notify_views import (
     my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
+LINEWORKS_RENDER_SCHEMA = "mcs-card-render/v3"
+TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
+SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
 
 # outbox kinds that become interactive cards when notify.interactive is
 # on; everything else (ops alerts, semantic notices) stays legacy text.
@@ -74,9 +77,6 @@ RESTORE_RECEIPT = "restore_reconcile.json"
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
 _TRUNCATED_PART = "（上限を超えたため残りは省略 — 原本を参照）"
-_ATTACHMENT_UNAVAILABLE = frozenset(
-    {"failed", "deleted", "withdrawn", "pruned"})
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_cards(
   card_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,7 +301,8 @@ def data_root(ledger) -> str:
 
 def notify_dirs(root: str) -> dict:
     return {name: os.path.join(root, name) for name in
-            ("discord_render", "discord_state", "slack_render", "slack_state", "flags",
+            ("discord_render", "discord_state", "slack_render", "slack_state",
+             "lineworks_render", "lineworks_state", "flags",
              "cmd_int", "cmd_results")}
 
 
@@ -316,7 +317,7 @@ def notify_cfg(cfg: dict) -> dict:
 
 
 def interactive_enabled(cfg: dict) -> bool:
-    return notify_cfg(cfg).get("interactive") in ("discord", "slack")
+    return notify_cfg(cfg).get("interactive") in SUPPORTED_TRANSPORTS
 
 
 def signals_notify(cfg: dict) -> bool:
@@ -325,18 +326,19 @@ def signals_notify(cfg: dict) -> bool:
 
 
 def active_transport(cfg) -> str:
-    return "slack" if notify_cfg(cfg).get("interactive") == "slack" else "discord"
+    transport = notify_cfg(cfg).get("interactive")
+    return transport if transport in SUPPORTED_TRANSPORTS else "discord"
 
 
 def scope_fields(transport: str) -> tuple[str, ...]:
     return ("profile", "application_id",
-            "team_id" if transport == "slack" else "guild_id", "channel_id")
+            "guild_id" if transport == "discord" else "team_id", "channel_id")
 
 
 def stored_scope(row) -> dict[str, str | None]:
     transport = row["transport"]
     scope = {k: row[k] for k in scope_fields(transport)}
-    if transport == "slack":
+    if transport in ("slack", "lineworks"):
         scope["transport"] = transport
     return scope
 
@@ -359,7 +361,7 @@ def delivery_scope(cfg: dict) -> dict | None:
         if not isinstance(v, str) or not v.strip():
             return None
         out[k] = v.strip()
-    if transport == "slack":
+    if transport in ("slack", "lineworks"):
         if "guild_id" in d:
             return None
         out["transport"] = transport
@@ -545,7 +547,7 @@ def _find_signal_card(db, pid, keys, scope):
             (pid,)).fetchall():
         if r["transport"] != scope.get("transport", "discord"):
             continue
-        if r["transport"] == "slack" and not _scope_match(r, scope):
+        if r["transport"] in ("slack", "lineworks") and not _scope_match(r, scope):
             continue
         if keyset & set(_anchor_keys(r)):
             return r["card_id"]
@@ -570,8 +572,10 @@ def _card_for(db, target, scope, now) -> int:
                                        ensure_ascii=False), now, found))
             return found
     key = target["card_key"]
-    if scope.get("transport") == "slack":
-        key = f"v2|slack|{payload_hash(scope)}|{key.removeprefix('v1|')}"
+    if scope.get("transport") in ("slack", "lineworks"):
+        transport = scope["transport"]
+        version = TRANSPORT_VERSIONS[transport]
+        key = f"v{version}|{transport}|{payload_hash(scope)}|{key.removeprefix('v1|')}"
     row = db.execute("SELECT card_id FROM notification_cards "
                      "WHERE card_key=?", (key,)).fetchone()
     if row is not None:
@@ -900,6 +904,15 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     update = spec["op"] == "update"
     posts = _prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
+    if card["transport"] == "lineworks":
+        # LINE WORKS button-template text is bounded at 1000 characters.
+        # Preserve the exact remainder as durable body parts, never truncate.
+        overflow = display_text(parts)[1000:]
+        keyed.extend((f"display#{i}", chunk)
+                     for i, chunk in enumerate(_split_body_chunks(overflow), 1))
+        button_count = sum(len(row) for row in parts.get("action_rows") or [])
+        keyed.extend((f"actions#{i}", "MCS 追加操作")
+                     for i in range(1, (button_count + 9) // 10))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
         body = _card_body_text(db, card, man, max_chars=None)[1]
@@ -989,7 +1002,7 @@ def _render_gates(db, card_id, cfg):
         return None
     if card["transport"] != active_transport(cfg):
         return None
-    if card["transport"] == "slack" \
+    if card["transport"] in ("slack", "lineworks") \
             and not _scope_match(card, delivery_scope(cfg) or {}):
         return None
     if _unsettled_attempt(db, card_id):
@@ -1110,6 +1123,12 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     delivery scope, minted action tokens and the journaled parts
     manifest — a worker never needs a registry/snapshot lookup to aim."""
     card.update(gens)
+    if card["transport"] == "lineworks":
+        # Older cards cannot be edited or deleted remotely. Retire their
+        # buttons locally before minting any replacement render tokens.
+        db.execute("UPDATE notification_action_tokens SET expires_at=? "
+                   "WHERE card_id=? AND expires_at>?",
+                   (now, card["card_id"], now))
     cur = db.execute(
         """INSERT INTO notification_view_manifests(
              card_id,render_rev,source_generation,presentation_generation,
@@ -1120,7 +1139,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
          json.dumps(content["shown"], ensure_ascii=False), now))
     content["manifest_id"] = cur.lastrowid
     scope = (stored_scope(card)
-             if card["transport"] == "slack"
+             if card["transport"] in ("slack", "lineworks")
              or (card["message_id"] and card["channel_id"])
              else (delivery_scope(cfg) or {}))
     event_ids = sorted(
@@ -1129,7 +1148,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
             "WHERE card_id=? AND state='pending'", (card["card_id"],)))
     correlation = secrets.token_hex(16)
     spec = {
-        "schema": SLACK_RENDER_SCHEMA if card["transport"] == "slack" else RENDER_SCHEMA,
+        "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[card['transport']]}",
         "delivery_id": str(uuid.uuid4()),
         "logical_intent_id": card["card_key"],
         "card_key": card["card_key"], "kind": card["kind"], "op": op,
@@ -1152,7 +1171,8 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # the same card_thread switch: its posted ts is the thread root, so
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
-    thread_on = notify_cfg(cfg).get("card_thread") is True
+    thread_on = (notify_cfg(cfg).get("card_thread") is True
+                 or card["transport"] == "lineworks")
     in_thread_body = (thread_on
                       and card["thread_state"] not in ("failed", "deleted"))
     spec["parts"] = {
@@ -1593,7 +1613,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
         if batch is not None:
             if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
                 return {"error": "transport_mismatch"}
-            if batch["transport"] == "slack" \
+            if batch["transport"] in ("slack", "lineworks") \
                     and batch["scope_json"] != canonical(scope).decode():
                 return {"error": "scope_mismatch"}
             # sealed already — a flush re-entry only repairs + completes
@@ -1630,7 +1650,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
                 (event_id, canonical(frozen).decode(),
                  payload_hash(frozen), epoch, now, active_transport(cfg),
-                 canonical(scope).decode() if active_transport(cfg) == "slack" else None))
+                 canonical(scope).decode() if active_transport(cfg) in ("slack", "lineworks") else None))
             card_ids = []
             for target in _resolve_targets(db, row, frozen):
                 cid = _card_for(db, target, scope, now)
@@ -1698,11 +1718,12 @@ def _origin_card(db, origin):
 def _scope_match(card, origin) -> bool:
     origin = origin or {}
     transport = card["transport"]
-    if transport != origin.get("transport", "discord"):
+    if transport not in SUPPORTED_TRANSPORTS \
+            or transport != origin.get("transport", "discord"):
         return False
-    if transport == "slack" and "guild_id" in origin:
+    if transport in ("slack", "lineworks") and "guild_id" in origin:
         return False
-    if transport == "slack":
+    if transport in ("slack", "lineworks"):
         return all(card[k] and card[k] == origin.get(k)
                    for k in scope_fields(transport))
     return all(not card[k] or card[k] == origin.get(k)
@@ -2486,7 +2507,7 @@ def recover(ledger, cfg, result) -> dict:
                 fixed["republished"] += 1
         try:
             claimed = [os.path.join(dirs[t + "_render"], n)
-                       for t in ("discord", "slack")
+                       for t in SUPPORTED_TRANSPORTS
                        for n in os.listdir(dirs[t + "_render"])
                        if n.endswith(".json.claimed")]
         except OSError:

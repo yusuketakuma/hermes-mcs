@@ -14,7 +14,7 @@ import functools
 import re
 from typing import BinaryIO
 
-from ..mcs_delivery.spec import MAX_TEXT
+from hermes_plugin.mcs_delivery.spec import MAX_TEXT
 
 # discord.py releases whose HTTPClient.request retry loop and private
 # aiohttp session (``_HTTPClient__session``) the single-post guard was

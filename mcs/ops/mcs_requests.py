@@ -132,6 +132,13 @@ def _request_extras(req):
 def validate(req):
     if not isinstance(req, dict):
         return "bad_command"
+    if req.get("cmd") == "ops.card_resolve":
+        # Scope is derived from the stored render/coverage, not the
+        # envelope — the positive project_id rule does not apply and a
+        # supplied one is rejected as an unknown field by the dedicated
+        # validator.
+        from notify_transport import validate_card_resolve
+        return validate_card_resolve(req)
     common = {"version", "cmd", "command_id", "actor", "human_confirmed", "project_id"}
     if type(req.get("version")) is not int or req["version"] != 1:
         return "bad_version"
@@ -141,13 +148,6 @@ def validate(req):
         return "human_confirmation_required"
     if not _text(req.get("actor"), 120):
         return "bad_actor"
-    if req.get("cmd") == "ops.card_resolve":
-        # Scope is derived from the stored render/coverage, not the
-        # envelope — the positive project_id rule does not apply and a
-        # supplied one is rejected as an unknown field by the dedicated
-        # validator.
-        from notify_transport import validate_card_resolve
-        return validate_card_resolve(req)
     if req.get("cmd") in ("ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve"):
         # System-wide lifecycle ops are projectless — they govern the

@@ -400,7 +400,8 @@ def _reconcile_membership(snapshot):
                 problems.append("cron_list_unverifiable")
             for block in re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)", r.stdout, re.M):
+                    r"((?:\s{4}\S[^\n]*\n?)+)",
+                    r.stdout if r.returncode == 0 else "", re.M):
                 jid, body = block.group(1), block.group(2)
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
@@ -453,7 +454,8 @@ def _notify(text):
 
 def _db_version(path):
     try:
-        con = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+        con = sqlite3.connect(
+            Path(path).resolve().as_uri() + "?mode=ro", uri=True)
         try:
             return con.execute("PRAGMA user_version").fetchone()[0]
         finally:
@@ -547,12 +549,13 @@ def _loss_report(backup_path):
     — a drift between report and live state invalidates every consent
     receipt bound to the stale report_id."""
     try:
-        live = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+        live = sqlite3.connect(
+            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return None
     try:
         back = sqlite3.connect(
-            "file:" + backup_path + "?mode=ro", uri=True)
+            Path(backup_path).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         live.close()
         return None
@@ -609,7 +612,8 @@ def _consent_for(report):
     """The newest ops.restore_approve receipt bound to this exact loss
     report, or None — an earlier update/rollback approval never counts."""
     try:
-        con = sqlite3.connect("file:" + LEDGER + "?mode=ro", uri=True)
+        con = sqlite3.connect(
+            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return None
     try:

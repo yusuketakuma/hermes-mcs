@@ -5,6 +5,11 @@
 > エージェントに読み込ませれば、前提確認→形態選択→設定投入→検証
 > までを対話的に実行します。
 
+**LINE WORKS を使う場合:** 独自接続アダプターの
+[導入・接続手順](LINEWORKS.md)へ進んでください。本体の依存導入後に
+`mcs_setup.py init` と `python -m lineworks_adapter init/check/run` で設定します。
+LINE WORKS 通知には Hermes の通知 plugin・gateway は不要です。
+
 ## 最短手順（Path A・初めての方向け）
 
 **事前に用意するもの**（Python は不要 — `install.sh` が導入する）:
@@ -38,11 +43,14 @@ cd hermes-mcs
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ops/mcs_setup.py init       # 4. 設定ウィザード（ID・パスワード・通知先など）
-$PY mcs/ops/mcs_setup.py services   # 5. 定期実行の登録を最新設定で再同期
-$PY mcs/ops/mcs_setup.py check      # 6. 検証。問題は "blockers (N) — fix in this order" に順番付きで出る
+$PY mcs/ops/mcs_setup.py init       # 4. 設定・通知プラグイン・gateway同期・最終チェックまで実行
 $PY mcs/ops/mcs_setup.py doctor     #    （困ったとき）check + インタプリタ・launchd の状態一覧
 ```
+
+`init` が `check: OK` で終われば初回設定は完了です。`--no-services` で
+導入した場合や、更新後に配置 drift が出た場合だけ、`services` → `check`
+を実行します。収集開始前に Chrome を MCS にログインしたプロファイルで
+CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 **成功の目安**:
 
@@ -65,8 +73,9 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 - **Path A — hermes-agent アドオン**（推奨・全機能）: 収集→SQLite→
   Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
 - **Path B — スタンドアロン**（hermes-agent なし）: 収集→SQLite→
-  `mcs_view` 閲覧＋構造化抽出。通知の配送は `hermes send` 必須のため
-  この形態では送られない。後から Path A へ移行できる（§3-6）
+  `mcs_view` 閲覧＋構造化抽出。Slack/Discord通知の配送は `hermes send` 必須のため
+  この形態では送られない。後から Path A へ移行できる（§3-6）。
+  LINE WORKSは[独立接続手順](LINEWORKS.md)を参照し、収集の定期実行はこの形態の設定を使う
 
 ## 0. 導入形態の選択
 
@@ -167,7 +176,7 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 
 最後に `Installed. Summary:` として各ステージの結果と、次に実行する
 コマンド（venv インタプリタのフルパス付きの `init`・非対話版の例・
-`services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
+復旧用の `services`・`check`）が表示される。手動で残るのは `mcs_setup.py init`
 （秘密情報と選択が必要）だけ。
 
 ### A-2. 通知先（Slack / Discord）側の準備
@@ -225,8 +234,7 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 非対話でも実行できる（CI・再現用）:
 
 ```bash
-MCS_SETUP_PASSWORD=<mcs-pass> TYPESAFE_API_KEY=<key> \
-SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token2> \
+# secrets は対話入力か安全な端末で環境変数に準備し、履歴に平文を残さない
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
     --login-id <ID> --notify-target slack:<チャンネルID> \
     --set 'notify.interactive="slack"' \
@@ -246,11 +254,12 @@ SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token2> \
   オブジェクトでない）場合、`init` は何も書かずに停止する（exit 1）。
   手で直すか、`init --yes` で `config.json.corrupt-<日時>`（0600・
   中身はそのまま）へ退避して既定値から作り直す
-- `init` は終了時に `check` を自動実行し、その結果を終了コードにする
+- `init` は通知プラグイン設定の後、対話通知を使うときは gateway を同期し、
+  `check` を自動実行する。設定書込み・同期・チェックの失敗は成功扱いにしない
 
 設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`off`/`shadow`/`enforce`）で指定できる。
 
-### A-4. サービス登録と検証
+### A-4. サービスの再同期と再検証（更新・復旧時）
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services   # launchd + hermes cron + gateway
@@ -294,6 +303,11 @@ SLACK_BOT_TOKEN=<token> SLACK_APP_TOKEN=<token2> \
   （終了コードも `check` と同じ）
 
 ### A-5. 動作確認
+
+Chrome を MCS にログインしたプロファイルで CDP ポート `:9333` 付きで
+起動し、`curl -sf -m 3 http://127.0.0.1:9333/json/version` が JSON を返す
+ことを確認します。以下は実データの取得・通知・既読化を伴うので、実行する
+範囲を決めてから進めます。
 
 ```bash
 # 収集（手動で1回実行 — 以後は cron が定期実行）
@@ -357,10 +371,11 @@ wrapper・plist（`__REPO__`）、復旧ツールが復旧する checkout を記
 
 ## 3. Path B — スタンドアロン（hermes-agent なし）
 
-収集・保存・閲覧・抽出は hermes-agent なしで動く。**通知系は全て
+収集・保存・閲覧・抽出は hermes-agent なしで動く。**Slack/Discord通知は
 `hermes send` 経由のためこの形態では送られない**（outbox に pending
 として残る。`--no-notify` で送信試行自体を抑止できる）。後から
-hermes-agent を追加して Path A に移行できる（§3-6）。
+hermes-agent を追加して Path A に移行できる（§3-6）。LINE WORKSの接続は
+[独自アダプターの手順](LINEWORKS.md)に従い、`--no-notify`を付けず本体の配送処理を動かす。
 
 ### B-1. 依存の手動導入
 
@@ -388,14 +403,18 @@ $PY mcs/ops/mcs_setup.py init
 ```
 
 - `mcs_login_id` — MCS のログインID
-- `notify_target` — config 検証上の必須キー。通知を送らない運用でも
+- `notify_target` — config 検証上の必須キー。通知を送らない運用では
   便宜値を入れる（例: `local`）。実際の送信は `--no-notify` で抑止
-- `notify.interactive` は `off` のまま — Discord/Slack カードは
+- 通知を送らない場合の `notify.interactive` は `off` のまま — Discord/Slack カードは
   gateway なしでは動かない
 - MCS パスワードは Keychain `mcs-adapter` + `~/.mcs/.env`
   `MCS_PASSWORD` フォールバックに保存（自動再ログイン用）
 - Chrome は MCS ログイン済みプロファイルで `--remote-debugging-port=9333`
   を付けて起動しておく
+
+LINE WORKSへ通知する場合は[接続手順](LINEWORKS.md)で
+`notify_target=lineworks:<トークルームID>`と`notify.lineworks`を設定する。
+カード・操作を使う場合は`notify.interactive=lineworks`、テキストだけなら`off`にする。
 
 ### B-3. ローカルLLM（extract_llm / semantic を使う場合のみ）
 
@@ -439,6 +458,10 @@ LLM endpoint の警告を出すが収集自体は動く）。
 通知を送らない wrapper を生成し、主要ジョブを crontab で実行する。
 既存の収集ジョブがある場合は、重複して登録せず、その起動経路も確認する:
 
+LINE WORKSへ通知する場合は、下の`body.replace`の1行を省き、
+runnerに`--no-notify`を追加しない。カード・操作を使う場合は
+[独立アダプターの常駐設定](LINEWORKS.md#常駐サービスの候補を作る)も行う。
+
 ```bash
 # スタンドアロン用 wrapper を正本からレンダリングする。
 # shell 引数を引用し、通知を送らない runner の起動に --no-notify を追加する。
@@ -476,8 +499,45 @@ crontab -e
 `mcs_check.sh` は24時間5分間隔で収集する。`mcs_llm_catchup.sh` は
 上限・クールダウンを保持した再試行の登録のみ行う。解析は常駐workerが行う。
 この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
-併用しない。既定の起動経路には `--no-notify` がなく、Hermes がある環境では
-通知を送信し得る。抽出は上記の定期ジョブから実行される。
+併用しない。既定の起動経路には `--no-notify` がなく、配送先を設定した環境では
+通知を送信し得る。LLM 抽出を使う場合は、以下の常駐workerも配置する。
+`mcs_llm_catchup.sh` だけでは解析は進まない。
+
+#### 抽出worker（LLM を使う場合のみ）
+
+同じシェルの `$PY` を使い、既存の抽出用 plist 2件だけを描画する。
+MCS の cmd watcher・Hermes cron・gateway は登録しない。
+
+```bash
+$PY - <<'PYDRAIN'
+import os
+import plistlib
+import sys
+from pathlib import Path
+repo = Path.cwd()
+data = Path.home() / ".mcs/data"
+data.mkdir(parents=True, exist_ok=True, mode=0o700)
+agents = Path.home() / "Library/LaunchAgents"
+agents.mkdir(parents=True, exist_ok=True)
+for label in ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"):
+    source = repo / "deployment/launchagents" / (label + ".plist")
+    spec = plistlib.loads(source.read_bytes())
+    spec["ProgramArguments"][:2] = [sys.executable, str(repo / "mcs/extract/v4/extract_llm.py")]
+    for key in ("StandardOutPath", "StandardErrorPath"):
+        spec[key] = spec[key].replace("__DATA__", str(data))
+    target = agents / (label + ".plist")
+    target.write_bytes(plistlib.dumps(spec))
+    os.chmod(target, 0o600)
+PYDRAIN
+for label in ai.mcs.extract-drainer ai.mcs.extract-drainer-2; do
+  launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || \
+    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$label.plist"
+done
+```
+
+`launchctl print "gui/$(id -u)/ai.mcs.extract-drainer"` と `-2` の両方が成功すれば
+登録完了。既存workerがロード済みで plist の内容を変えた場合は、そのworkerの
+再読込が必要なので、処理終了後に該当 label の `bootout` → `bootstrap` を行う。
 
 ### B-5. 動作確認と `check` の読み方
 
@@ -487,6 +547,8 @@ $PY mcs/views/mcs_view.py status
 $PY mcs/ops/mcs_setup.py check
 ```
 
+LINE WORKSへ通知する場合は、上の収集コマンドから`--no-notify`を省く。
+
 `mcs_setup.py check` はスタンドアロンでは次をエラー/警告として報告
 する — **想定内**（Path A 用の実行基盤が無いだけで、収集・閲覧・
 抽出は動作する）:
@@ -495,7 +557,7 @@ $PY mcs/ops/mcs_setup.py check
   or not executable`（Path A の services が使うインタプリタ。B-4 の crontab 構成では
   使わない）
 - error `hermes CLI not resolvable (...) — notifications cannot be sent`
-  （配送経路が無い）
+  （Slack/Discord通知先の場合は配送経路が無い。LINE WORKSの独立配送には不要）
 - warn `LaunchAgent local.mcs-cmd not installed` 等 4件、
   `update recovery watchdog (org.mcs.recovery) not installed`、
   `scripts not deployed to ~/.hermes/scripts`
@@ -512,7 +574,7 @@ $PY mcs/ops/mcs_setup.py check
 ./install.sh                                    # hermes-agent + plugin + services
 PY=~/.hermes/hermes-agent/venv/bin/python       # 以後は install.sh が作った venv を使う
 $PY mcs/ops/mcs_setup.py init                   # notify.interactive=discord 等を設定
-$PY mcs/ops/mcs_setup.py services && $PY mcs/ops/mcs_setup.py check
+# init が gateway 同期と最終 check を実行する
 ```
 
 移行後は B-4 の crontab 行を削除する（services が登録する hermes cron と
@@ -530,13 +592,14 @@ outbox に残った pending は次回 flush で配送対象になる。
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|
 | `mcs_login_id` | str | — （必須） | MCS のログインID |
-| `notify_target` | str | — （必須） | 通知の送り先。`discord:<チャンネルID>`・`slack:#ch` 等 `hermes send --to` 形式。スタンドアロンでは便宜値 |
-| `notify.interactive` | choice | `off` | `discord`/`slack`=対話カード / `off`=テキストのみ |
+| `notify_target` | str | — （必須） | 通知の送り先。`discord:<チャンネルID>`・`slack:#ch` 等 `hermes send --to` 形式、又は独自接続の `lineworks:<トークルームID>`。通知を送らない運用では便宜値 |
+| `notify.interactive` | choice | `off` | `discord`/`slack`/`lineworks`=対話カード / `off`=テキストのみ |
 | `notify.discord.profile` | str | — | 配送に使う hermes プロファイル（interactive=discord 時必須） |
 | `notify.discord.application_id` | str | — | Discord アプリケーションID（同上） |
 | `notify.discord.guild_id` | str | — | Discord サーバーID（同上） |
 | `notify.discord.channel_id` | str | — | カードの投稿先チャンネルID（同上） |
 | `notify.slack.profile/application_id/team_id/channel_id` | str | — | Slack 版の配送スコープ（interactive=slack 時必須。guild_id 不可） |
+| `notify.lineworks` | object | — | 独自アダプターの Bot・ドメイン・部屋・許可ユーザー・プロジェクト範囲。[設定手順](LINEWORKS.md) |
 | `notify.operator` | str | なし | 運用者の Discord ユーザーID |
 | `notify.card_thread` | bool | `true`（ウィザード既定。キー未設定のconfigではオフ） | 患者スレッドごとにカードのコンパニオンスレッドを立て本文・添付を配送 |
 | `notify.card_thread_archive_min` | int | `10080` | 設定キーのみ（自動アーカイブは未実装） |
@@ -592,8 +655,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 [deployment/launchagents/README.md](../deployment/launchagents/README.md)
 に一本化している。正本はコードの `mcs/ops/mcs_setup.py` の `CRON_JOBS`
 （hermes cron）と `AGENT_LABELS`（launchd）で、`services` はこれを
-登録する。22-06時の未読チェック間引き（:00/:20/:40 起点の各5分窓 —
-30分のセッション失効上限を下回るため）は `mcs_check.sh` 内で行う。
+登録する。未読収集は24時間5分間隔で、`mcs_check.sh` に夜間の間引きはない。
 
 ## 7. トラブルシューティング
 

@@ -1,13 +1,12 @@
-"""Interactive MCS card delivery for the Discord gateway.
+"""既存 import の互換入口。実装の正本は adapters/discord/。"""
+from importlib import import_module
+import sys
+from pathlib import Path
 
-Worker side of the D1 pipeline: claims render specs from
-``data/discord_render``, asks the runner for a durable send grant
-(``transport_begin``), delivers through the live discord.py client,
-journals every phase transition, and settles each attempt with a
-factual ``transport_receipt``. Component interactions route through a
-single ``on_interaction`` listener — views and modals carry no business
-logic of their own.
-
-Every discord.py import is deferred into the functions that need it so
-the plugin still registers ``/mcs`` on hosts without the messaging SDK.
-"""
+_repo_root = Path(__file__).resolve().parents[2]
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+for _name in ("cards", "actions", "delivery", "tasks"):
+    _module = import_module(f"adapters.discord.{_name}")
+    globals()[_name] = _module
+    sys.modules[f"{__name__}.{_name}"] = _module

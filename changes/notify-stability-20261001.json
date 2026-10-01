@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "通知の不正ファイルとSlack履歴確認失敗を安全に処理",
+  "summary": "深すぎる不正JSONの結果ファイルで通知の処理が中断せず、不正な表示ファイルは隔離します。Slackの既存返信履歴を確認できない場合は本文や添付を追加投稿せず、不明な配送結果として記録して重複を防ぎます。",
+  "upgrade": "pluginの変更を適用するにはHermes gatewayの再起動が必要です。Slackの履歴取得に失敗した配送は、原本と通知先を確認して既存の配送不明の解決手順で対応してください。モデル・取得範囲・通知先・既読化・人承認条件・既定設定の変更はありません。",
+  "details": [
+    "共通の結果読取りと表示ファイル走査でRecursionErrorを不正JSONとして扱います。",
+    "Slackの本文照合・既存返信の更新・添付照合が使う履歴読取りで、通信失敗または不正応答を空の履歴へ変換しません。"
+  ],
+  "refs": ["hermes_plugin/mcs_delivery/paths.py", "hermes_plugin/mcs_delivery/worker.py", "adapters/slack/delivery.py"]
+}

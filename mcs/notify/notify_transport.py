@@ -308,7 +308,7 @@ def _begin_check(db, req, cfg) -> str | None:
         return "epoch_mismatch"
     if not cards._scope_match(render, req):
         return "scope_mismatch"
-    if render["transport"] == "slack" \
+    if render["transport"] in ("slack", "lineworks") \
             and not cards._scope_match(render, cards.delivery_scope(cfg)):
         return "scope_mismatch"
     if render["state"] == "cancelled":
@@ -356,7 +356,7 @@ def _begin_result(db, attempt) -> dict:
                    payload_hash=render["payload_hash"],
                    route_epoch=render["route_epoch"],
                    correlation=render["correlation"], op=render["op"])
-        if render["transport"] == "slack":
+        if render["transport"] in ("slack", "lineworks"):
             out.update(cards.stored_scope(render))
     if not granted:
         out["error"] = attempt["error_code"] or attempt["state"]
@@ -565,7 +565,7 @@ def apply_thread_receipt(ledger, req, cfg, now=None) -> dict:
         if render is None or render["card_id"] is None:
             return {"applied": False, "error": "unknown_delivery"}
         if render["transport"] != req.get("transport", "discord") \
-                or (render["transport"] == "slack"
+                or (render["transport"] in ("slack", "lineworks")
                     and not cards._scope_match(render, req)):
             return {"applied": False, "error": "scope_mismatch"}
         card = cards._card_row(db, render["card_id"])
@@ -607,16 +607,16 @@ def validate_card_resolve(req) -> str | None:
                "reason", "delivery_id", "attempt_id", "result",
                "profile", "application_id", "guild_id", "channel_id",
                "message_id", "evidence"}
-    slack = req.get("version") == 2
-    if slack:
+    tenant = req.get("version") in (2, 3)
+    if tenant:
         allowed = (allowed - {"guild_id"}) | {"transport", "team_id"}
     if req.keys() - allowed:
         return "unknown_field"
     if req.get("cmd") != "ops.card_resolve":
         return "unknown_cmd"
-    if type(req.get("version")) is not int or req["version"] not in (1, 2):
+    if type(req.get("version")) is not int or req["version"] not in (1, 2, 3):
         return "bad_version"
-    if slack and req.get("transport") != "slack":
+    if tenant and req.get("transport") != {2: "slack", 3: "lineworks"}[req["version"]]:
         return "bad_transport"
     if not valid_uuid(req.get("command_id")):
         return "bad_command_id"
@@ -633,7 +633,7 @@ def validate_card_resolve(req) -> str | None:
         return "bad_attempt_id"
     if req.get("result") not in _RESOLVE_RESULTS:
         return "bad_result"
-    for k in cards.scope_fields("slack" if slack else "discord"):
+    for k in cards.scope_fields(req["transport"] if tenant else "discord"):
         if not _text(req.get(k), 200):
             return f"bad_{k}"
     if req["result"] == "mark_delivered" \
@@ -782,7 +782,8 @@ def _rebind_check(hold, card, req) -> str | None:
     except (json.JSONDecodeError, TypeError):
         return "hold_scope_corrupt"
     transport = scope.get("transport", "discord")
-    if (transport == "slack") != (req.get("version") == 2):
+    if cards.TRANSPORT_VERSIONS.get(transport) != req.get("version") \
+            or transport != req.get("transport", "discord"):
         return "scope_mismatch"
     for k in cards.scope_fields(transport):
         if scope.get(k) != req.get(k):

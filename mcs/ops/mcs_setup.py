@@ -42,7 +42,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 from contextlib import closing, suppress
 from pathlib import Path
 
@@ -59,6 +58,8 @@ if sys.version_info < (3, 10):
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+
+import bounded_http
 
 from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
                       load_config)
@@ -153,9 +154,9 @@ def _validate_notify(ntf: dict) -> list[str]:
     all-or-nothing, and scope is required when cards are on."""
     errors = []
     if "interactive" in ntf \
-            and ntf["interactive"] not in ("discord", "slack", "off"):
+            and ntf["interactive"] not in ("discord", "slack", "lineworks", "off"):
         errors.append('notify.interactive: must be "discord", '
-                      '"slack" or "off"')
+                      '"slack", "lineworks" or "off"')
     if "card_thread" in ntf and type(ntf["card_thread"]) is not bool:
         errors.append("notify.card_thread: must be a boolean")
     for key in ("route_epoch", "card_thread_archive_min"):
@@ -168,7 +169,8 @@ def _validate_notify(ntf: dict) -> list[str]:
         if err:
             errors.append(f"notify.operator: {err}")
     for transport, tenant in (("discord", "guild_id"),
-                              ("slack", "team_id")):
+                              ("slack", "team_id"),
+                              ("lineworks", "team_id")):
         d = ntf.get(transport)
         if d is None:
             if ntf.get("interactive") == transport:
@@ -184,9 +186,33 @@ def _validate_notify(ntf: dict) -> list[str]:
                 if not isinstance(d.get(k), str) or not d[k].strip())
             # delivery_scope() rejects a slack block carrying
             # guild_id outright — flag it at config time too
-            if transport == "slack" and "guild_id" in d:
-                errors.append("notify.slack.guild_id: not allowed "
-                              "(slack scope uses team_id)")
+            if transport in ("slack", "lineworks") and "guild_id" in d:
+                errors.append(f"notify.{transport}.guild_id: not allowed "
+                              f"({transport} scope uses team_id)")
+            if transport == "lineworks":
+                for key in ("application_id", "team_id"):
+                    v = d.get(key)
+                    if not (isinstance(v, str) and re.fullmatch(r"[1-9][0-9]{0,18}", v)
+                            and 0 < int(v) < 2**63):
+                        errors.append(f"notify.lineworks.{key}: must be a positive decimal string")
+                for key in ("channel_id", "profile"):
+                    v = d.get(key)
+                    pattern = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}" if key == "channel_id" else r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
+                    if not isinstance(v, str) or not re.fullmatch(pattern, v):
+                        errors.append(f"notify.lineworks.{key}: invalid identifier")
+                users = d.get("allowed_user_ids")
+                if not (isinstance(users, list) and users
+                        and all(isinstance(v, str) and re.fullmatch(
+                            r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}", v) for v in users)):
+                    errors.append("notify.lineworks.allowed_user_ids: non-empty identifier list required")
+                automatic = d.get("project_ids_auto", False)
+                if type(automatic) is not bool:
+                    errors.append("notify.lineworks.project_ids_auto: must be a boolean")
+                projects = d.get("project_ids", [])
+                if not (isinstance(projects, list)
+                        and all(type(v) is int and 0 < v < 2**63 for v in projects)
+                        and (projects or automatic is True)):
+                    errors.append("notify.lineworks.project_ids: positive integer list required (or project_ids_auto=true)")
     return errors
 
 
@@ -278,7 +304,7 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         # keep it as a warning so a discord->slack switch leaves a
         # visible note instead of a silently ignored config
         act = cfg["notify"].get("interactive")
-        for other in ("discord", "slack"):
+        for other in ("discord", "slack", "lineworks"):
             if other != act and isinstance(cfg["notify"].get(other),
                                            dict):
                 warnings.append(
@@ -349,8 +375,9 @@ def _hermes_config_get(exe: str, profile: str, key: str):
 
 
 def _plugin_newer_than_gateway(status_out: str) -> bool:
-    """True when hermes_plugin/ holds a file newer than the running
-    gateway process — a stale-worker signal. Unparseable states fail
+    """Detect gateway-loaded plugin or adapter sources newer than the running process.
+
+    Unparseable states fail
     open to False (no warning) rather than a false alarm."""
     m = re.search(r"PID\s+(\d+)", status_out or "")
     if not m:
@@ -364,21 +391,21 @@ def _plugin_newer_than_gateway(status_out: str) -> bool:
             time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
     except (ValueError, OverflowError):
         return False
-    plugin_dir = os.path.join(REPO_ROOT, "hermes_plugin")
     newest = 0.0
     # __pycache__/*.pyc are regenerated BY the gateway at plugin load —
     # counting them makes the warning permanent. Only files the gateway
     # loads (Python sources and the plugin manifest) represent code the
     # running process hasn't picked up; a docs-only edit (README) never
     # needs a restart.
-    for base, dirs, files in os.walk(plugin_dir):
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
-        for name in files:
-            if not name.endswith((".py", ".yaml", ".yml")):
-                continue
-            with suppress(OSError):
-                newest = max(newest, os.path.getmtime(
-                    os.path.join(base, name)))
+    for source in ("hermes_plugin", "adapters/slack", "adapters/discord"):
+        for base, dirs, files in os.walk(os.path.join(REPO_ROOT, source)):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                if not name.endswith((".py", ".yaml", ".yml")):
+                    continue
+                with suppress(OSError):
+                    newest = max(newest, os.path.getmtime(
+                        os.path.join(base, name)))
     return newest > started
 
 
@@ -456,7 +483,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     except Exception:
         models_url, slots_url = LLM_MODELS_URL, None
     try:
-        urllib.request.urlopen(models_url, timeout=3).close()
+        status, _, raw = local_llm.bounded_request(models_url, "GET", None, 3)
+        if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+            raise ValueError("models probe failed")
     except Exception:
         warnings.append(f"local LLM endpoint not reachable "
                         f"({models_url}) — extract_llm/semantic jobs "
@@ -467,8 +496,14 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         # unpinned and can land on the real-time slot. Flag it; never
         # run unpinned.
         try:
-            raw = urllib.request.urlopen(slots_url, timeout=3).read()
-            advertised = len(json.loads(raw.decode("utf-8")))
+            status, _, raw = local_llm.bounded_request(slots_url, "GET", None, 3)
+            if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+                raise ValueError("slots response too large")
+            slots = json.loads(raw.decode("utf-8"))
+            if status != 200 or not isinstance(slots, list) \
+                    or not all(isinstance(slot, dict) for slot in slots):
+                raise ValueError("invalid slots response")
+            advertised = len(slots)
             if advertised < local_llm.SLOT_COUNT:
                 errors.append(
                     f"llama-server advertises {advertised} slots but the "
@@ -486,7 +521,15 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
     # standard user-local install (launchd PATH is minimal).
     exe = _hermes_exe(cfg)
-    if not _hermes_ok(exe):
+    ntf = cfg.get("notify") or {}
+    lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
+    target = cfg.get("notify_target", "")
+    if lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
+        r = _run([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
+                  "check", "--root", HOME], timeout=20)
+        if r.returncode:
+            errors.append("LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and follow docs/LINEWORKS.md to repair the existing credentials")
+    elif not _hermes_ok(exe):
         errors.append(f"hermes CLI not resolvable ({exe}) — "
                       "notifications cannot be sent")
     elif isinstance(cfg.get("notify"), dict) \
@@ -673,9 +716,13 @@ def _slack_on(cfg):
     return (cfg.get("notify") or {}).get("interactive") == "slack"
 
 
+def _lineworks_on(cfg):
+    return (cfg.get("notify") or {}).get("interactive") == "lineworks"
+
+
 def _cards_on(cfg):
     return (cfg.get("notify") or {}).get("interactive") \
-        in ("discord", "slack")
+        in ("discord", "slack", "lineworks")
 
 
 def _signals_on(cfg):
@@ -697,11 +744,25 @@ WIZARD = [
          "MCS のログインID", None),
         ("notify_target", "req", None,
          "通知の送り先（hermes send target。例: slack:<チャンネルID>、"
-         "discord:<チャンネルID>）", None),
+         "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
     ]),
-    ("カード通知（interactive=slack/discord でボタン付きカード）", [
-        ("notify.interactive", "choice:off,slack,discord", "off",
-         "通知形式 — slack/discord=カード / off=従来テキストのみ", None),
+    ("カード通知（Slack / Discord / LINE WORKS）", [
+        ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
+         "通知形式 — slack/discord/lineworks=カード / off=従来テキストのみ", None),
+        ("notify.lineworks.profile", "req", "default",
+         "独自アダプターの配送プロファイル名", _lineworks_on),
+        ("notify.lineworks.application_id", "req", None,
+         "LINE WORKS Bot ID", _lineworks_on),
+        ("notify.lineworks.team_id", "req", None,
+         "LINE WORKS ドメインID", _lineworks_on),
+        ("notify.lineworks.channel_id", "req", None,
+         "配信先トークルームのチャンネルID", _lineworks_on),
+        ("notify.lineworks.allowed_user_ids", "reqcsv", None,
+         "操作を許可するユーザーID・カンマ区切り（必須）", _lineworks_on),
+        ("notify.lineworks.project_ids", "reqintlist", None,
+         "配信・操作を許可するMCSプロジェクトID・カンマ区切り（必須）", _lineworks_on),
+        ("notify.lineworks.project_ids_auto", "bool", False,
+         "公開済みscope snapshotからプロジェクトを解決（通常はオフ）", _lineworks_on),
         ("notify.slack.profile", "req", None,
          "配送に使う hermes プロファイル名", _slack_on),
         ("notify.slack.application_id", "req", None,
@@ -721,9 +782,9 @@ WIZARD = [
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
         ("notify.card_thread", "bool", True,
-         "患者スレッドごとにカードをまとめる", _cards_on),
+         "患者スレッドごとにカードをまとめる", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
         ("notify.card_thread_archive_min", "int", 10080,
-         "カードスレッドをアーカイブするまでの分数", _cards_on),
+         "カードスレッドをアーカイブするまでの分数", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
         ("notify.route_epoch", "int", 1,
          "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
         ("notify_bot_profile", "opt", None,
@@ -856,10 +917,10 @@ def _parse_answer(kind: str, raw: str):
         if _num(v) is not None:
             return False, "0より大きく10億以下の有限の数値で入力してください"
         return True, int(v) if v == int(v) else v
-    if kind in ("csv", "intlist", "reqintlist"):
+    if kind in ("csv", "reqcsv", "intlist", "reqintlist"):
         parts = [x.strip() for x in raw.split(",") if x.strip()]
-        if kind == "reqintlist" and not parts:
-            return False, "1件以上の整数をカンマ区切りで入力してください"
+        if kind.startswith("req") and not parts:
+            return False, "1件以上の値をカンマ区切りで入力してください"
         if "intlist" in kind:
             try:
                 return True, [int(x) for x in parts]
@@ -1276,18 +1337,25 @@ def cmd_init(args) -> int:
     # interactive, so sync just the gateway here rather than leaving
     # a manual `services` rerun as the last step
     ntf = cfg.get("notify")
+    gateway_result = 0
+    if isinstance(ntf, dict) and ntf.get("interactive") == "lineworks" \
+            and not _validate_notify(ntf):
+        # Provision runner-owned directories/flags before the independent worker starts.
+        import notify_cards
+        notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+        notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
     if isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = _hermes_exe(cfg)
         if _hermes_ok(exe):
-            _sync_gateway(cfg, exe, lambda m: print(f"  {m}"),
-                          dry=False)
+            gateway_result = _sync_gateway(
+                cfg, exe, lambda m: print(f"  {m}"), dry=False)
     check_result = cmd_check(args)
     if not integration_ok:
         print("init: FAIL — Hermes plugin settings were not fully "
               "written; repair the serving profile/CLI and re-run init")
         return 1
-    return check_result
+    return 1 if gateway_result else check_result
 
 
 def _shipped_g6_criteria() -> tuple[dict, str]:
@@ -1481,7 +1549,7 @@ def _extract_queue_warnings(db):
     ).fetchone()[0]
     if backlog > 500:
         yield (f"extract_llm backlog={backlog} messages — "
-               "drainers (ai.mcs.extract-drainer*) chew DESC; "
+               "drainers (ai.mcs.extract-drainer*) serve oldest eligible first; "
                "review eligible backlog and recent progress")
 
 
@@ -1521,7 +1589,8 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
         return out
     try:
         import sqlite3
-        with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as db:
+        with closing(sqlite3.connect(
+                Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             now = time.time()
             sem = (cfg or {}).get("semantic") or {}
             out.extend(_semantic_queue_warnings(db, sem, now))
@@ -1795,12 +1864,7 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
 
 
 def _load_manifest() -> dict:
-    try:
-        with open(MANIFEST_PATH, encoding="utf-8") as f:
-            m = json.load(f)
-        return m if isinstance(m, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return load_config(MANIFEST_PATH)
 
 
 def _save_manifest(manifest: dict) -> None:

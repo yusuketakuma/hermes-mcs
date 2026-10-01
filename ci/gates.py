@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MCS = ROOT / "mcs"
 PLUGIN = ROOT / "hermes_plugin"
+ADAPTERS = ROOT / "adapters"
 
 # Files allowed to construct a write-mode Ledger. Anything else opening
 # the ledger read-write is a regression of the snapshot/read-only contract.
@@ -25,7 +26,7 @@ LEDGER_WRITERS = {
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
 }
 
-_LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin"}
+_LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter"}
 
 # These adapters use the messaging SDK already owned by Hermes. Core
 # collectors must remain dependency-free, and importing /mcs must work
@@ -49,7 +50,14 @@ _SDK_MEMBERS = {
 
 
 def _plugin_path(path: Path) -> str:
-    return path.relative_to(PLUGIN).as_posix() if path.is_relative_to(PLUGIN) else ""
+    if path.is_relative_to(PLUGIN):
+        return path.relative_to(PLUGIN).as_posix()
+    if path.is_relative_to(ADAPTERS):
+        rel = path.relative_to(ADAPTERS)
+        if rel.parts[0] in ("slack", "discord"):
+            return "mcs_" + rel.as_posix()
+        return rel.as_posix()
+    return ""
 
 
 def _lazy_sdk_import(path, node, parents) -> bool:
@@ -99,7 +107,7 @@ def gate_stdlib_only() -> list[str]:
     """Stdlib/local only, except deferred Hermes-owned Discord UI imports."""
     bad = []
     stdlib = sys.stdlib_module_names
-    for path in _py_files(MCS, PLUGIN):
+    for path in _py_files(MCS, PLUGIN, ADAPTERS):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as e:
@@ -125,14 +133,15 @@ def gate_stdlib_only() -> list[str]:
 
 
 _PLATFORM_URLS = re.compile(
-    r"discord\.com/api|api\.telegram\.org|slack\.com/api|discordapp\.com")
+    r"discord\.com/api|api\.telegram\.org|slack\.com/api|discordapp\.com|"
+    r"worksapis\.com|auth\.worksmobile\.com|(?:apis-)?storage\.worksmobile\.com")
 _PLATFORM_TOKENS = re.compile(
     r"DISCORD_BOT_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|"
     r"SLACK_BOT_TOKEN|SLACK_APP_TOKEN")
 
 
 def gate_no_direct_platform_api() -> list[str]:
-    """Delivery goes through `hermes send`. Direct platform REST/env-token
+    """Delivery goes through the configured CLI. Direct platform REST/env-token
     code in mcs/ is the removed pre-standard implementation — forbid it."""
     bad = []
     for path in _py_files(MCS):
@@ -172,19 +181,40 @@ _PLUGIN_FORBIDDEN_IMPORTS = {
 }
 _PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
 
+# User-requested independent LINE WORKS transport; native Hermes adapters
+# retain their exact existing sandbox. Privileges belong only to these files.
+_LINEWORKS_IMPORTS = {
+    "lineworks/client.py": {"subprocess", "urllib"},
+    "lineworks/server.py": {"http"},
+    "lineworks/__main__.py": {"asyncio"},
+    "lineworks/actions.py": {"asyncio"},
+    "lineworks/delivery.py": {"asyncio"},
+}
+
 
 def gate_plugin_sandbox() -> list[str]:
     """The Hermes plugin is an untrusted-context adapter: no ambient env,
     no direct network, no subprocess; the native Discord adapter uses
     only the host's client plus sleep/to_thread/cancellation primitives."""
     bad = []
-    for path in _py_files(PLUGIN):
+    for path in _py_files(PLUGIN, ADAPTERS):
         text = path.read_text(encoding="utf-8")
         try:
             tree = ast.parse(text)
         except SyntaxError:
             bad.append(f"{path.name}: unparseable")
             continue
+        identity = _plugin_path(path)
+        permitted = _LINEWORKS_IMPORTS.get(identity, set())
+        environment_lines = set()
+        if identity == "lineworks/client.py":
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and node.name == "_runtime_environment":
+                    allowed_keys = {"PATH", "LANG", "LC_ALL", "SYSTEMROOT"}
+                    literals = {n.value for n in ast.walk(node)
+                                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                    if literals == allowed_keys:
+                        environment_lines.update(range(node.lineno, node.end_lineno + 1))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 mods = [a.name.split(".")[0] for a in node.names]
@@ -195,16 +225,20 @@ def gate_plugin_sandbox() -> list[str]:
             else:
                 continue
             for m in mods:
+                if m in permitted:
+                    continue
                 if (m == "asyncio" and _plugin_path(path) in _ASYNC_FILES
                         and isinstance(node, ast.Import)
                         and all(a.name == "asyncio" for a in node.names)):
                     continue
                 if m in _PLUGIN_FORBIDDEN_IMPORTS:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
+        async_members = _ASYNC_MEMBERS | ({"Event", "get_running_loop", "wait_for", "run", "TimeoutError"}
+                                         if identity == "lineworks/__main__.py" else set())
         bad.extend(f"{path.name}:{v}" for v in
-                   _module_surface(tree, "asyncio", _ASYNC_MEMBERS))
+                   _module_surface(tree, "asyncio", async_members))
         for i, line in enumerate(text.splitlines(), 1):
-            if _PLUGIN_FORBIDDEN_TEXT.search(line):
+            if _PLUGIN_FORBIDDEN_TEXT.search(line) and i not in environment_lines:
                 bad.append(f"{path.name}:{i} forbidden surface: "
                            f"{line.strip()[:60]}")
             if re.search(r"\bLedger\s*\(", line):
@@ -226,7 +260,7 @@ def gate_snapshot_readonly() -> list[str]:
     sqlite3.connect elsewhere must carry mode=ro/immutable (snapshot
     contract — mcs_view/brain_export/plugin read published snapshots)."""
     bad = []
-    for path in _py_files(MCS, PLUGIN):
+    for path in _py_files(MCS, PLUGIN, ADAPTERS):
         text = path.read_text(encoding="utf-8")
         if path.is_relative_to(MCS) \
                 and path.name in LEDGER_WRITERS | {"ledger.py"}:
@@ -336,7 +370,7 @@ def gate_notify_fail_closed() -> list[str]:
     """No hardcoded delivery destination: a missing notify_target must
     skip, never fall back to a baked-in channel (patient-content risk)."""
     bad = []
-    for path in _py_files(MCS, PLUGIN):
+    for path in _py_files(MCS, PLUGIN, ADAPTERS):
         for i, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), 1):
             if _CHANNEL_LITERAL.search(line) and "test" not in path.name:

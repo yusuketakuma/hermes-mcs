@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 import mcs_setup
+import local_llm
+import mcs_util
 
 
 def test_missing_required_keys():
@@ -142,12 +144,11 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
     does: config hermes_bin wins, else PATH, else the user-local
     fallback — an unresolvable binary is an error because notifications
     cannot be sent."""
-    from types import SimpleNamespace
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
     monkeypatch.setattr(
-        mcs_setup.urllib.request, "urlopen",
-        lambda *a, **k: SimpleNamespace(close=lambda: None))
+        local_llm, "bounded_request",
+        lambda *a, **k: (200, {}, b"{}"))
 
     # unresolvable on PATH and on disk -> error
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: None)
@@ -189,8 +190,8 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
-        mcs_setup.urllib.request, "urlopen",
-        lambda *a, **k: SimpleNamespace(close=lambda: None))
+        local_llm, "bounded_request",
+        lambda *a, **k: (200, {}, b"{}"))
 
     def fake_run(argv, **kw):
         return SimpleNamespace(returncode=36 if "-w" in argv else 0,
@@ -223,8 +224,8 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
-        mcs_setup.urllib.request, "urlopen",
-        lambda *a, **k: SimpleNamespace(close=lambda: None))
+        local_llm, "bounded_request",
+        lambda *a, **k: (200, {}, b"{}"))
     monkeypatch.setattr(mcs_setup.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(
                             returncode=0, stdout="", stderr=""))
@@ -311,13 +312,53 @@ def test_queue_warnings_preserve_findings_when_later_query_fails(
     assert warnings[1] == "queue health unreadable (OperationalError)"
 
 
-def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
+@pytest.mark.parametrize("name", ["runtime#literal", "runtime?literal", "runtime%23literal"])
+def test_queue_warning_uses_the_exact_database_read_only(monkeypatch, tmp_path, name):
+    import sqlite3
+
+    import ledger
+
+    home = tmp_path / name
+    (home / "data").mkdir(parents=True)
+    db = ledger.Ledger(str(home / "data" / "ledger.db"))
+    try:
+        db.job_add("extract_qc", 1, 1)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET updated_at=1,next_try=1")
+    finally:
+        db.close()
+    monkeypatch.setattr(mcs_setup, "HOME", str(home))
+    monkeypatch.setattr(mcs_setup.time, "time", lambda: 3 * 86400)
+    connect = sqlite3.connect
+
+    def read_only_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute("CREATE TABLE synthetic_write_attempt(value)")
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", read_only_connect)
+    warnings = mcs_setup._queue_warnings({
+        "semantic": {"extract_qc": "annotate", "project_ids": [1]}})
+    assert len(warnings) == 1 and "extract_qc jobs pending=1" in warnings[0]
+    assert "stalled" in warnings[0]
+    assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("source,needs_restart", [
+    ("hermes_plugin/mcs_delivery/worker.py", True),
+    ("adapters/slack/actions.py", True),
+    ("adapters/discord/delivery.py", True),
+    ("adapters/lineworks/actions.py", False),
+])
+def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_restart):
     """The gateway regenerates __pycache__ at load — pyc mtimes are
     always newer than the process start. Only source mtimes may
     trigger the stale-plugin warning."""
     import os
     import time
-    plugin = tmp_path / "hermes_plugin" / "mcs_delivery"
+    src = tmp_path / source
+    plugin = src.parent
     cache = plugin / "__pycache__"
     cache.mkdir(parents=True)
     monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(tmp_path))
@@ -328,7 +369,6 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
     started = time.mktime(time.strptime(R.stdout, "%a %b %d %H:%M:%S %Y"))
     monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: R())
 
-    src = plugin / "worker.py"
     src.write_text("x = 1")
     pyc = cache / "worker.cpython-311.pyc"
     pyc.write_bytes(b"")
@@ -336,13 +376,13 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path):
     os.utime(pyc, (started + 100, started + 100))     # regenerated at load
     assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
     # a docs-only edit needs no restart
-    doc = tmp_path / "hermes_plugin" / "README.md"
+    doc = plugin / "README.md"
     doc.write_text("docs")
     os.utime(doc, (started + 100, started + 100))
     assert not mcs_setup._plugin_newer_than_gateway("PID 123 running")
-    # a genuinely newer SOURCE file still warns
+    # Newer Hermes-owned source warns; the independent LINE worker does not.
     os.utime(src, (started + 100, started + 100))
-    assert mcs_setup._plugin_newer_than_gateway("PID 123 running")
+    assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is needs_restart
 
 
 def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
@@ -502,8 +542,8 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
     monkeypatch.setattr(mcs_setup.shutil, "which", lambda *a: "/x/hermes")
     monkeypatch.setattr(
-        mcs_setup.urllib.request, "urlopen",
-        lambda *a, **k: SimpleNamespace(close=lambda: None))
+        local_llm, "bounded_request",
+        lambda *a, **k: (200, {}, b"{}"))
     monkeypatch.setattr(mcs_setup, "env_value",
                         lambda *a, **k: "env_pw")
     monkeypatch.setattr(
@@ -855,7 +895,8 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     monkeypatch.setattr(mcs_setup, "_agent_loaded",
                         lambda label: label in loaded)
     monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "/x/hermes")
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path) if path else {})
     monkeypatch.setattr(mcs_setup, "_cron_list", lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
@@ -1276,7 +1317,8 @@ def test_services_installs_gateway_when_interactive(
         cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
     monkeypatch.setattr(
         mcs_setup, "load_config",
-        lambda: {"notify": {"interactive": "discord"}})
+        lambda path=None: mcs_util.load_config(path) if path else
+        {"notify": {"interactive": "discord"}})
     calls.clear()
     # fake_run returns empty stdout -> "supervised" absent -> install
     assert mcs_setup.cmd_services(args) == 0
@@ -1293,7 +1335,8 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
         cron_names={s for _, _, s in mcs_setup.CRON_JOBS})
     monkeypatch.setattr(
         mcs_setup, "load_config",
-        lambda: {"notify": {"interactive": "discord"}})
+        lambda path=None: mcs_util.load_config(path) if path else
+        {"notify": {"interactive": "discord"}})
 
     def fake_run(argv, **kw):
         calls.append(list(argv))
@@ -1606,8 +1649,8 @@ def test_check_warns_when_gateway_unsupervised(monkeypatch):
     def fake_cli(exe, profile, *argv, **kw):
         return SimpleNamespace(returncode=1, stdout="", stderr="")
     monkeypatch.setattr(mcs_setup, "_hermes_cli", fake_cli)
-    monkeypatch.setattr(mcs_setup.urllib.request, "urlopen",
-                        lambda *a, **k: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(local_llm, "bounded_request",
+                        lambda *a, **k: (200, {}, b"{}"))
     _, warnings = mcs_setup.check_environment(
         {"mcs_login_id": "u", "notify_target": "discord:1",
          "notify": {"interactive": "discord"}})
@@ -1727,7 +1770,8 @@ def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
     assert len(errors) == 1 and "a.sh" in errors[0] \
         and "b.sh" not in errors[0] and "mcs_setup.py services" in errors[0]
 
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path) if path else {})
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
     monkeypatch.setattr(mcs_setup, "check_environment",
                         lambda cfg: ([], []))
@@ -1779,7 +1823,8 @@ def test_fact_source_refuses_invalid_config(monkeypatch, tmp_path):
 
 
 def _check_only(monkeypatch, runtime=([], []), config=([], [])):
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path) if path else {})
     monkeypatch.setattr(mcs_setup, "check_runtime", lambda cfg: runtime)
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: config)
     monkeypatch.setattr(mcs_setup, "check_environment",
@@ -1824,7 +1869,8 @@ def test_check_ok_prints_no_blocker_summary(monkeypatch, capsys):
 
 def test_doctor_prints_facts_then_runs_check(monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path) if path else {})
     monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 7)
     assert mcs_setup.cmd_doctor(None) == 7
@@ -1977,3 +2023,39 @@ def test_all_replies_config_requires_boolean():
     assert mcs_setup.validate_config({**base, "notify_all_replies": True}) == ([], [])
     errors, _ = mcs_setup.validate_config({**base, "notify_all_replies": "true"})
     assert errors == ["notify_all_replies: must be a boolean"]
+
+
+@pytest.mark.parametrize("raw", [b'{"a":0,"b":1,"c":2}', b'null', b'[' * 2000 + b']' * 2000], ids=["object", "null", "deep"])
+def test_check_rejects_unreadable_slots_and_uses_bounded_probe(monkeypatch, raw):
+    import local_llm
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda e: True)
+    calls = []
+    def request(url, method, body, timeout):
+        calls.append((url, method, body, timeout))
+        return 200, {}, raw if url.endswith("/slots") else b'{}'
+    monkeypatch.setattr(local_llm, "bounded_request", request)
+    _, warnings = mcs_setup.check_environment({"local_llm": {"url": "http://127.0.0.1:8089/v1/chat/completions"}})
+    assert calls == [("http://127.0.0.1:8089/v1/models", "GET", None, 3),
+                     ("http://127.0.0.1:8089/slots", "GET", None, 3)]
+    assert any("/slots unreadable" in w for w in warnings)
+
+
+@pytest.mark.parametrize("raw", [b'\xff', b'[' * 2000 + b']' * 2000], ids=["encoding", "deep"])
+def test_malformed_service_manifest_is_recoverable(monkeypatch, tmp_path, raw):
+    path = tmp_path / "manifest.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(mcs_setup, "MANIFEST_PATH", str(path))
+    assert mcs_setup._load_manifest() == {}
+
+
+@pytest.mark.parametrize("cfg", [_DISCORD_CFG, _SLACK_CFG])
+def test_init_returns_failure_when_gateway_sync_fails(monkeypatch, tmp_path, cfg):
+    _init_env(monkeypatch, tmp_path, {
+        "mcs_login_id": "synthetic", "notify_target": "local", **cfg})
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda e: True)
+    monkeypatch.setattr(mcs_setup, "_sync_gateway", lambda *a, **k: 1)
+    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes"])
+    assert mcs_setup.main() == 1
