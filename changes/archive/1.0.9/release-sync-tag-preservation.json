@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "リリース本文の同期で下書きのタグを保持し、失敗を検出",
+  "summary": "GitHub Releaseのタイトル・本文を更新するとき、下書きと既存タグの紐付けを保持します。同期エラーをCIの失敗として検出し、更新後もタグ・公開状態が変わっていないことを確認します。",
+  "upgrade": "利用者の追加設定は不要です。未公開の下書きでタグの紐付けが失われている場合は、対象を確認し、承認されたリリース作業で下書きを作り直します。公開済みのタグ・公開状態・添付資産は変更しません。",
+  "details": [
+    "競合確認済みのtag_nameをPATCHへ同じ値で含め、応答と再取得の両方でReleaseの識別・公開状態を検査します。",
+    "workflowのteeを除去し、同期コマンドの失敗を成功として扱わないようにしました。"
+  ],
+  "refs": [
+    "scripts/development/sync_release_notes.py",
+    ".github/workflows/release-notes.yml",
+    "tests/release/test_sync_release_notes.py",
+    "docs/development/RELEASE_NOTES.md"
+  ]
+}

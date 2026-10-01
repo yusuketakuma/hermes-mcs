@@ -2,8 +2,12 @@
 
 import copy
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
+import textwrap
 import unittest
 
 
@@ -43,12 +47,62 @@ class SyncTest(unittest.TestCase):
         before = copy.deepcopy(self.record)
         result = sync.synchronize(self.text, self.request, apply=True)
         self.assertEqual(result["updated"], ["v1.0.0"])
-        self.assertEqual(set(self.writes[0]), {"name", "body"})
+        self.assertEqual(set(self.writes[0]), {"name", "body", "tag_name"})
         self.assertEqual(self.record["body"], notes.section(self.text, "1.0.0"))
         for key in sync.IDENTITY:
             self.assertEqual(self.record[key], before[key])
         self.assertEqual(sync.synchronize(self.text, self.request, apply=True)["updated"], [])
         self.assertEqual(len(self.writes), 1)
+
+    def test_draft_keeps_its_tag_when_api_requires_it(self):
+        self.record.update(draft=True, published_at=None)
+        before = copy.deepcopy(self.record)
+
+        def request(endpoint, payload=None):
+            if payload is not None and "tag_name" not in payload:
+                self.record["tag_name"] = "untagged-example"
+            return self.request(endpoint, payload)
+
+        sync.synchronize(self.text, request, apply=True)
+        for key in sync.IDENTITY:
+            self.assertEqual(self.record[key], before[key])
+        self.assertEqual(self.record["body"], notes.section(self.text, "1.0.0"))
+        self.assertEqual(sync.synchronize(self.text, request, apply=True)["updated"], [])
+
+    def test_identity_change_on_verification_is_detected(self):
+        def request(endpoint, payload=None):
+            result = self.request(endpoint, payload)
+            if payload is None and "?" not in endpoint and self.writes:
+                result["tag_name"] = "untagged-example"
+            return result
+
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, request, apply=True)
+
+    def test_api_rejects_state_fields_and_invalid_tags_before_transport(self):
+        for payload in [
+            dict(name="example", body="example", tag_name="v1.0.0", draft=False),
+            dict(name="example", body="example", tag_name="untagged-example"),
+            dict(name="example", body="example"),
+        ]:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                sync.api("example/repo", "releases/1", payload)
+
+    def test_sync_command_failure_fails_ci(self):
+        workflow = (SCRIPTS.parents[1] / ".github/workflows/release-notes.yml").read_text()
+        step = workflow.split("- name: Synchronize existing release notes only\n", 1)[1]
+        step = step.split("      - name:", 1)[0]
+        run = step.split("        run:", 1)[1]
+        script = textwrap.dedent(run.removeprefix(" |\n")) if run.startswith(" |\n") else run.strip()
+        with tempfile.TemporaryDirectory() as directory:
+            python = Path(directory) / "python3"
+            python.write_text("#!/bin/sh\nexit 17\n")
+            python.chmod(0o700)
+            result = subprocess.run(
+                ["bash", "-e", "-c", script], cwd=directory,
+                env=os.environ | {"PATH": directory + os.pathsep + os.defpath},
+                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 17, result.stderr)
 
     def test_unknown_version_fails_before_any_write(self):
         def request(endpoint, payload=None):
