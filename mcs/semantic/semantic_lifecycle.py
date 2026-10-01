@@ -84,7 +84,9 @@ def _rendered(summary: dict) -> tuple[list | None, dict, str]:
     if not isinstance(pages, list) or not isinstance(fact_ids, list):
         return None, {}, "pages_absent"
     if any(not isinstance(p, dict) or not isinstance(p.get("text"), str)
-           or not isinstance(p.get("fact_ids"), list) for p in pages) \
+           or not isinstance(p.get("fact_ids"), list)
+           or any(not isinstance(f, str) or not f.strip()
+                  for f in p["fact_ids"]) for p in pages) \
             or any(not isinstance(f, str) or not f.strip() for f in fact_ids):
         return None, {}, "pages_invalid"
     if not verify_mandatory_pages({"fact_ids": fact_ids, "pages": pages})["complete"]:

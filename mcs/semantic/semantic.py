@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import local_llm
 from ledger import Ledger, LedgerReader
-from mcs_util import acquire_run_lock, load_config
+from mcs_util import acquire_run_lock, load_config, loads_dict
 import semantic_jev as jev  # noqa: F401 — facade patch point for tests
 import semantic_runtime as runtime
 
@@ -421,10 +421,7 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
             "SELECT meta FROM artifacts WHERE kind=?",
             (KIND_FACTS_V2,)):
         out["shadow_v2_docs"] += 1
-        try:
-            meta = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            meta = {}
+        meta = loads_dict(r["meta"]) or {}
         if meta.get("coverage_status") == "complete":
             out["v2_coverage_complete"] += 1
         if meta.get("needs_review"):

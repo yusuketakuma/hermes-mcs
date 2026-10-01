@@ -288,10 +288,9 @@ def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):
         db.close()
 
 
-def test_not_sent_repair_is_an_unavailable_repair(tmp_path):
-    """LLMNotSent from the one-shot repair call ends like an unavailable
-    repair (NEEDS_REVIEW) — the sibling target audited earlier in the
-    pass is still committed, never discarded."""
+def test_not_sent_repair_resumes_and_keeps_completed_siblings(tmp_path):
+    """An undispatched repair waits without spending its one-shot budget;
+    the sibling already audited in the pass stays committed."""
     import json
     import semantic_runtime
     from semantic_testkit import _FakeJev, _llm
@@ -319,7 +318,17 @@ def test_not_sent_repair_is_an_unavailable_repair(tmp_path):
             "SELECT message_id, json_extract(meta,'$.audit_status') "
             "FROM artifacts WHERE kind='semantic_audit'").fetchall())
         assert audits.get(1) == "PASS"
-        assert audits.get(2) == "NEEDS_REVIEW"
+        assert audits.get(2) is None
+        assert not db.artifacts("semantic_repair", message_id=2)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                               time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=llm)
+        assert out["done"] == 1
+        assert len(db.artifacts("semantic_repair", message_id=2)) == 1
+        assert len(db.artifacts("semantic_summary", message_id=1)) == 1
+        latest = db.artifacts("semantic_audit", message_id=2)[-1]
+        assert json.loads(latest["meta"])["audit_status"] == "PASS"
     finally:
         db.close()
 

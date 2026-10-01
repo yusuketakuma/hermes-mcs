@@ -100,3 +100,18 @@ def test_canonical_readiness_counts_malformed_audits_as_unknown(tmp_path):
         assert r["fact_audits"] == {"PASS": 1, "unknown": len(MALFORMED)}
     finally:
         db.close()
+
+
+def test_canonical_readiness_keeps_malformed_fact_docs_unknown(tmp_path):
+    from semantic_testkit import _cfg, _seeded
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add("semantic_facts_v2", "{}", project_id=1, message_id=1,
+                        meta={"coverage_status": "complete", "needs_review": True})
+        _add_malformed(db, "semantic_facts_v2", mids=(1,))
+        report = semantic.status_report(db, _cfg("shadow", fact_source="shadow"))
+        assert report["canonical_readiness"]["shadow_v2_docs"] == 1 + len(MALFORMED)
+        assert report["canonical_readiness"]["v2_coverage_complete"] == 1
+        assert report["canonical_readiness"]["v2_needs_review"] == 1
+    finally:
+        db.close()
