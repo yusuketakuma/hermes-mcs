@@ -2,24 +2,51 @@
   "version": "1.0.8",
   "sections": {
     "features": {
-      "notes": "mainの収集・検索・暫定集約・アラート・人承認タスクを確認。アラート面の要点と本文スレッド、確認とタスク完了の区別を保持した。",
-      "sources": ["docs/USER_GUIDE.md", "mcs/notify/notify_render.py", "mcs/ops/mcs_signals.py", "hermes_plugin/README.md"]
+      "notes": "現行Slackカード・操作メニューとDiscordの/mcs対応を照合。READMEの推奨と先頭画面をSlackへ統一し、通知・暫定集約・人承認タスクの説明を保持した。",
+      "sources": [
+        "docs/USER_GUIDE.md",
+        "hermes_plugin/mcs_slack/cards.py",
+        "hermes_plugin/mcs_slack/actions.py",
+        "hermes_plugin/README.md"
+      ]
     },
     "demos": {
-      "notes": "既存の完全合成Discord/Slackカード図を採用。実データ不使用と、画像内ボタンは操作できないことを明記した。",
-      "sources": ["docs/screenshots/discord-card.svg", "docs/screenshots/slack-card.svg", "docs/USER_GUIDE.md"]
+      "notes": "Slackの全体像・確認と担当・操作メニュー・タスク入力・本人向け確定・一覧・患者サマリーの7画面を現行実装と照合。完全合成の説明図と明記し、PNG描画の日本語・文字切れ・重なりを確認した。SVG/PNGとハッシュ記録を同期。Discord例は折りたたみに保持した。",
+      "sources": [
+        "scripts/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md",
+        "hermes_plugin/mcs_slack/cards.py",
+        "hermes_plugin/mcs_slack/actions.py",
+        "hermes_plugin/mcs_delivery/text.py",
+        "mcs/notify/notify_views.py"
+      ]
     },
     "quickstart": {
-      "notes": "macOS前提、preflight、install、表示されたvenvでのinit/services/check、doctorの順序を導入ガイドと照合した。",
-      "sources": ["install.sh", "docs/INSTALLATION.md", "docs/SETUP_AGENT.md"]
+      "notes": "導入ガイドにあるSlack推奨と接続・許可ユーザー設定に合わせて導線を追加。macOS前提とpreflight/init/services/check/doctorの既存手順を保持した。",
+      "sources": [
+        "install.sh",
+        "docs/INSTALLATION.md",
+        "docs/SETUP_AGENT.md"
+      ]
     },
     "safety": {
-      "notes": "通知の外部送信、Jevの既定OFF・匿名化なし、知識ストア出力の別経路、既読化・人承認・暫定集約・添付未解析・同一端末バックアップの境界を維持した。",
-      "sources": ["SECURITY.md", "docs/lifecycle-spec.md", "docs/external-export-contract.md"]
+      "notes": "Slack推奨でも外部送信があることを明示する既存の説明を保持。確認済みとタスク完了、本人向けの回答、タスク作成前の内容・理由確認、暫定集約と未取得範囲を画像にも反映した。Jev・既読化・添付未解析・復旧の境界も保持した。",
+      "sources": [
+        "SECURITY.md",
+        "hermes_plugin/mcs_slack/actions.py",
+        "mcs/notify/notify_views.py",
+        "docs/lifecycle-spec.md"
+      ]
     },
     "docs": {
-      "notes": "目的別の導線とページ内アンカーを整理し、既存の各ガイド・技術資料・ロードマップへのリンクを保持した。",
-      "sources": ["README.md", "docs/DEVELOPMENT.md", "docs/ROADMAP.md", "docs/RELEASE_NOTES.md", "docs/README_MAINTENANCE.md"]
+      "notes": "Slackの5つのページ内導線、7画面のPNG、画像の更新手順、Slack設定の導線を追加。既存のガイド・技術資料とCHANGELOG生成部分へのリンクを保持した。",
+      "sources": [
+        "README.md",
+        "docs/README_MAINTENANCE.md",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/INSTALLATION.md"
+      ]
     }
   }
 }

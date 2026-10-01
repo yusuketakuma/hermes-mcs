@@ -98,6 +98,10 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 生成ブロックは `docs/DEVELOPMENT.md`（開発・運用リファレンス）に置く —
 `README.md` は利用者向けなので生成表は持たない。最新の変更要約だけは
 `GENERATED:release`としてCHANGELOGから生成する。
+通知先の推奨とREADMEの先頭画面はSlack。Discordは対応する選択肢として残す。
+Slack画面例は完全合成の説明図を使い、`docs/screenshots/slack-gallery/README.md`の
+ソース対応を確認する。画面変更時はSVG・PNGを一緒に再生成し、
+`python3 scripts/generate_slack_gallery.py --check`で画像の整合を検証する。
 新しい第一層サブディレクトリを足す場合はブートストラップが自動対応するが、
 `AGENTS.md` の構成説明と `deployment/` のパス表記も更新する。
 docstring 先頭文は公開されるので1文要約にする。
