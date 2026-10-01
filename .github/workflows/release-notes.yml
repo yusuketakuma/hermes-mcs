@@ -47,6 +47,8 @@ jobs:
         run: python3 scripts/development/readme_release.py --check
       - name: Check synthetic Slack SVG and PNG pairs
         run: python3 scripts/development/generate_slack_gallery.py --check
+      - name: Check synthetic LINE WORKS SVG and PNG pairs
+        run: python3 scripts/development/generate_lineworks_gallery.py --check
       - name: Require runtime change notes on PR
         if: github.event_name == 'pull_request'
         env:

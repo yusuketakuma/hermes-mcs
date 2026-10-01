@@ -4,15 +4,15 @@
 
 **MedicalCareStation（MCS）の記録を、自分のMacで収集・整理・検索。**
 **Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
-在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのHermes addonです。
-Discordと[LINE WORKS（独自アダプター）](docs/guides/LINEWORKS.md)にも対応しています。
+在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのローカルシステムです。
+Slack・DiscordはHermes公式接続、[LINE WORKS](docs/guides/LINEWORKS.md)は独立した独自アダプターを使います。
 LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 
 [画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
 
 | 収集 | 保存・整理 | 通知・操作 |
 |---|---|---|
-| 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord + Hermes |
+| 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord / LINE WORKS |
 
 このREADMEはmainの機能を説明します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
 通知を有効にすると患者名・本文・送信対象の添付が設定先へ送られます。[情報の行き先と安全境界](#data)を導入前に確認してください。
@@ -92,13 +92,36 @@ Discordでも通知カードと本文・添付のスレッドを利用できま�
 
 </details>
 
+<details>
+<summary><strong>LINE WORKSを使う場合の画面例を開く</strong></summary>
+
+すべて現行実装に基づく**完全合成の説明図**です。実画面のキャプチャではなく、実患者・実投稿・匿名化データも使用していません。
+
+**要約・原文・添付を、トークルームへ連続投稿**
+
+![LINE WORKS通知：要約カード・原文・添付をトークルームへ連続投稿する完全合成例](docs/screenshots/lineworks-gallery/01-delivery.png)
+
+同じ要約・原文・送信対象の添付を、共有トークルームへ順に配信します。
+表示の更新は新しい投稿になり、古いボタンと開いている確認画面は無効になります。
+
+**タスクは、本人との1:1トークで入力・確認・確定**
+
+![LINE WORKSのタスク操作：本人との1:1トークで入力し、内容と理由を確認して確定する完全合成例](docs/screenshots/lineworks-gallery/02-task-confirm.png)
+
+許可ユーザーがカードから操作すると、入力や回答は本人との1:1トークへ届きます。
+タスクは内容・担当・期限・理由を照合し、本人が`確定する`を選ぶまで登録しません。画像内のボタンは説明用です。
+
+[LINE WORKSの導入・接続・許可範囲](docs/guides/LINEWORKS.md) · [画像のソースと更新手順](docs/screenshots/lineworks-gallery/README.md)
+
+</details>
+
 <a name="features"></a>
 
 ## できること
 
 | したいこと | hermes-mcsでできること |
 |---|---|
-| 新しい連絡を確認する | 新着投稿を構造化要約カードで通知。本文・添付は専用スレッドへ |
+| 新しい連絡を確認する | 新着投稿を構造化要約カードで通知。本文・添付はSlack/Discordのスレッド、LINE WORKSの連続投稿で確認 |
 | 過去のやり取りを探す | 履歴の保存・全文検索・患者ごとのタイムライン。途中で止まった履歴取得は再開 |
 | 長い連絡の要点を読む | 薬・症状・依頼・バイタル・検査値などをローカルLLMとルールで抽出 |
 | 患者の記録をまとめて見る | 薬・最新バイタル・次回予定・未完了タスク・MCS連携サマリーを暫定集約 |
@@ -107,6 +130,7 @@ Discordでも通知カードと本文・添付のスレッドを利用できま�
 | 全体の傾向を把握する | 投稿量・職種別内訳・未解決依頼などの読み取り専用統計。任意の日次ダイジェスト |
 
 Slackでは通知カードと操作メニューから閲覧・依頼操作を行えます。Discordでは通知カードに加えて`/mcs`コマンドも使えます。
+LINE WORKSではカードのボタンから操作し、入力・確認・回答は本人との1:1トークを使います。
 詳細は[利用者ガイド](docs/guides/USER_GUIDE.md)と[プラグインガイド](hermes_plugin/README.md)を参照してください。
 
 **AIの抽出は候補です。患者サマリーは確定した処方一覧ではなく、カードの確認済み表示もタスク完了を意味しません。**
@@ -118,7 +142,7 @@ Slackでは通知カードと操作メニューから閲覧・依頼操作を行
 <details>
 <summary><strong>新着連絡を読み、チームで確認・担当を共有したい</strong></summary>
 
-1. 通知カードの送信者・要約を読み、必要な本文や添付をスレッドで確認します。
+1. 通知カードの送信者・要約を読み、必要な本文や添付を確認します。Slack/Discordはスレッド、LINE WORKSは同じトークルームの連続投稿です。
 2. `☐ 確認`で今の表示内容を確認したことを記録し、必要なら`👤 担当する`で担当を記録します。
 3. 作業が必要ならタスクを作り、確認画面で内容・担当・期限・理由を確認して確定します。
 
@@ -184,8 +208,8 @@ cd hermes-mcs
 
 事前チェックのNG行に表示される`fix:`を確認し、`0 blocker(s)`になってから導入します。
 最後の`Installed. Summary:`に表示される`mcs_setup.py init`を、そのままコピーして実行してください。
-設定ウィザードが通知先・認証情報の設定、Hermesとの同期、最終チェックまで案内します。
-初回導入で`services`や`check`を重ねて実行する必要はありません。ブラウザーの準備など、チェックで残った項目だけを解消します。
+設定ウィザードが通知先・本体の設定・最終チェックまで案内します。Slack/DiscordではHermesとの同期も行います。
+本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
 
 **AIに導入を任せる場合**は、リポジトリを開いたエージェントに次のように依頼できます。
 
@@ -216,7 +240,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 経路 | 保存・送信される情報 | 条件 |
 |---|---|---|
 | このMac | 投稿・添付・患者情報と、ローカルAIによる整理結果 | 収集・保存・構造化抽出の基本経路 |
-| Slack（推奨） / Discord | 患者名・本文・要約・送信対象の添付。タスク通知には内容・担当者名も含む | 通知先・対話カード・関連機能を設定した場合 |
+| Slack（推奨） / Discord / LINE WORKS | 患者名・本文・要約・送信対象の添付。タスク通知には内容・担当者名も含む | 通知先・対話カード・関連機能を設定した場合 |
 | TypeSafe Jev API | 本文と必要なスレッド文脈。匿名化なし | 任意・既定OFFの意味チェック／抽出監査を有効にした場合 |
 | 知識ストア向けローカル出力 | 患者名・病名・要約・薬剤等を含むMarkdown。匿名化なし | 明示的にエクスポート。出力後の同期・LLM利用は別経路で管理 |
 
@@ -308,7 +332,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 読む目的 | 文書 |
 |---|---|
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
-| 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
+| 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
 | 更新・バックアップ・復旧 | [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
