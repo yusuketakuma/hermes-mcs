@@ -23,6 +23,14 @@ services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わ�
 | 抽出・semantic/QC 常駐drainer（slot 0） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（slot 2） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer-2` |
 
+`runtime_mode: "standalone"`（[STANDALONE.md](../../docs/guides/STANDALONE.md)）では
+hermes cron の6件を同じ時刻の launchd カレンダー agent `ai.mcs.cron.<script>`
+（例 `ai.mcs.cron.mcs-check`、`mcs_setup._cron_plist` が生成）に置き換え、
+wrapper は `~/.mcs/data/scripts/`、Python は `~/.mcs/venv/bin/python3` になる。
+Slack/Discord のカードを使う場合は接続常駐 `ai.mcs.standalone`
+（`ai.mcs.standalone.plist`）も services が所有する。モードを切り替えて
+services を実行すると、もう一方のモードの所有ジョブは退役する。
+
 wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO__`/`__DATA__`
 プレースホルダ付き）。実機の `~/.hermes/scripts/` へは下記の置換コマンドで
 生成する — 直接編集すると repo との drift になる。

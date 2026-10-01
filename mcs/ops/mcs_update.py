@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 
+import mcs_runtime  # noqa: E402
 from mcs_util import (UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 
@@ -387,8 +388,11 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
-    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/")) for n in names):
-        notes.append("plugin 変更 — 適用後に gateway restart が必要です")
+    # mcs_standalone/ is loaded only by the standalone connector
+    connector = ("mcs_standalone/",) if mcs_runtime.standalone(load_config()) else ()
+    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/",
+                         *connector)) for n in names):
+        notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
     if any(n.startswith(("adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
@@ -412,6 +416,10 @@ def precheck_local(cfg: dict) -> list[str]:
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
     import mcs_setup
+    if mcs_runtime.standalone(cfg):
+        if mcs_setup._services_py_problem(cfg):
+            errors.append("standalone_python_unavailable")
+        return errors
     hermes = mcs_setup._hermes_exe(cfg)
     if not mcs_setup._hermes_ok(hermes):
         errors.append("hermes_not_resolvable")
@@ -568,6 +576,11 @@ def precheck_tag(tag: str) -> list[str]:
     if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
             ).returncode != 0:
         errors.append("install_sh_changed")
+    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
+    if mcs_runtime.standalone(load_config()) and _git(
+            ["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/requirements-standalone.txt"]).returncode != 0:
+        errors.append("standalone_requirements_changed")
     return errors
 
 
@@ -757,11 +770,17 @@ def restart_agents(bounce: bool = True) -> list[str]:
 
 def restart_gateway(cfg: dict) -> None:
     """Fire-and-forget — a cron-spawned updater is a gateway descendant;
-    a synchronous `gateway restart` would wait on ourselves (S12)."""
+    a synchronous `gateway restart` would wait on ourselves (S12). In
+    standalone mode the Slack/Discord connector agent is restarted."""
+    label = "ai.hermes.gateway"
+    if mcs_runtime.standalone(cfg):
+        label = mcs_runtime.STANDALONE_LABEL
+        if not os.path.exists(os.path.join(AGENTS_DIR, label + ".plist")):
+            return              # no Slack/Discord cards configured
     with suppress(OSError):  # runs after durable bookkeeping — never undo it
         subprocess.Popen(
             ["launchctl", "kickstart", "-k",
-             f"gui/{_uid()}/ai.hermes.gateway"],
+             f"gui/{_uid()}/{label}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, close_fds=True,
             start_new_session=True)
@@ -865,15 +884,25 @@ def scan_pending_approvals(state: dict
     return candidates, consumed
 
 
+def wrapper_path(cfg: dict | None = None) -> str:
+    """The deployed mcs_update.sh for the selected runtime."""
+    cfg = load_config() if cfg is None else cfg
+    return os.path.join(mcs_runtime.scripts_dir(cfg), "mcs_update.sh") \
+        if mcs_runtime.standalone(cfg) else WRAPPER
+
+
 def spawn_detached() -> None:
     """Launch the updater detached from the caller's fds/session (S9).
     Used by drain_commands AFTER the receipt commit — the spawned
     process re-verifies via receipt scan, never trusting argv."""
+    # the detached updater is not the launchd job that spawned it: drop
+    # that job's identity so its own services run may reload that job
     env = {k: v for k, v in os.environ.items()
-           if k not in _UPDATE_ENV_STRIP}
+           if k not in _UPDATE_ENV_STRIP + ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
     os.makedirs(DATA, exist_ok=True)
+    wrapper = wrapper_path()
     with open(os.path.join(DATA, "update.log"), "ab") as log:
-        subprocess.Popen([WRAPPER], stdin=subprocess.DEVNULL,
+        subprocess.Popen([wrapper], stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, env=env,
                          close_fds=True, start_new_session=True)
 
@@ -1264,7 +1293,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             "tag": tag, "sha": sha, "prev_sha": _head_sha(),
             "plugin_changed": bool(_git_out(
                 ["diff", "--name-only", "-z", "HEAD", tag, "--",
-                 "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"]).strip("\0")),
+                 "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
+                 *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0")),
             "schema_bump": bool(bump),
             "backup_path": bpath, "manifest_snapshot": snap,
             "command_id": command_id, "at": time.time()}
@@ -1348,7 +1378,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
                     (desired or {}).get("cron", [])}
     owned_scripts = {s for _, _, s in mcs_setup.CRON_JOBS}
     owned_scripts |= set(desired_cron)
-    if mcs_setup._hermes_ok(hermes):
+    if mcs_runtime.standalone(cfg):
+        pass        # launchd agents (below) carry the schedule; no hermes cron
+    elif mcs_setup._hermes_ok(hermes):
         try:
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
@@ -1376,16 +1408,12 @@ def _reconcile_membership(desired: dict) -> list[str]:
         problems.append("cron_list_unverifiable")
     desired_agents = {a.get("label") for a in
                       (desired or {}).get("agents", [])}
-    def _owned(label: str) -> bool:
-        return (label.startswith("ai.mcs.extract-")
-                or label.startswith("local.mcs-")) \
-            and label not in EXCLUDED_LABELS
+    current = set(mcs_setup._agent_labels(cfg))
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
-        if not _owned(label):
+        if not mcs_setup._owned_label(label):
             continue
-        if label not in desired_agents and label not in \
-                set(mcs_setup.AGENT_LABELS):
+        if label not in desired_agents and label not in current:
             _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
             with suppress(OSError):
                 os.unlink(path)
@@ -1398,6 +1426,11 @@ def _rollback_tree(entry: dict) -> None:
     already quiesced. Do not additionally delete untracked paths just
     because their names occur in the update diff; ownership is unproven."""
     prev = entry["prev_sha"]
+    if mcs_runtime.standalone(load_config()) and _git(
+            ["cat-file", "-e", f"{prev}:mcs/core/mcs_runtime.py"]).returncode != 0:
+        # that tree has no standalone runtime: Slack/Discord, the
+        # schedule and notifications would all stop
+        raise UpdateError("standalone_rollback_unsupported")
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
@@ -2288,6 +2321,9 @@ def cmd_status() -> int:
 
 
 def main() -> int:
+    # services children reload the launchd job running this updater only
+    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
+    os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--post-merge", action="store_true",
                     help=argparse.SUPPRESS)

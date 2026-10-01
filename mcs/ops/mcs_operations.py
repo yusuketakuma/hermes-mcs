@@ -814,7 +814,11 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
         from mcs_util import load_config
     except Exception:
         return "updater_not_deployed", {}
-    if not os.path.isfile(mcs_update.WRAPPER):
+    try:
+        wrapper = mcs_update.wrapper_path()
+    except Exception:
+        wrapper = mcs_update.WRAPPER
+    if not os.path.isfile(wrapper):
         return "updater_not_deployed", {}
     upd = {}
     with suppress(Exception):

@@ -36,6 +36,7 @@ import hashlib
 from html import escape as xml_escape
 import json
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -60,6 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 import bounded_http
+import mcs_runtime
 
 from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
                       load_config)
@@ -102,6 +104,8 @@ def _dict(v):
 
 
 CONFIG_RULES = {
+    "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
+                              else 'must be "hermes" or "standalone"'),
     "mcs_login_id":          (True,  _nonempty_str),
     "notify_target":         (True,  _nonempty_str),
     "notify_bot_profile":    (False, _bot_profile),
@@ -122,6 +126,56 @@ CONFIG_RULES = {
     "health":                (False, _dict),
     "daily_digest":          (False, _dict),
 }
+
+
+def _validate_standalone(cfg: dict) -> list[str]:
+    """runtime_mode=standalone: the grants Hermes plugin settings carry
+    (allowed users, projects, Discord chats/roles) live in notify.<t>,
+    and Slack/Discord targets must name a concrete channel."""
+    if cfg.get("runtime_mode") != "standalone":
+        return []
+    errors = []
+    for key in ("notify_target", "notify_system_target"):
+        target = cfg.get(key)
+        if not isinstance(target, str):
+            continue
+        transport, _, channel = target.strip().partition(":")
+        if transport not in ("discord", "slack", "lineworks"):
+            errors.append(f"{key}: standalone sends only to discord:, slack: "
+                          "or lineworks: targets")
+        elif transport == "discord" and not channel.isdecimal():
+            errors.append(f"{key}: standalone needs discord:<channel id>")
+        elif transport == "slack" and not re.fullmatch(r"[CGD][A-Z0-9]{8,}", channel):
+            errors.append(f"{key}: standalone needs slack:<C/G/D conversation id> "
+                          "(thread and user targets are Hermes-only)")
+    ntf = cfg.get("notify")
+    transport = ntf.get("interactive") if isinstance(ntf, dict) else None
+    scope = ntf.get(transport) if transport in ("discord", "slack") else None
+    if not isinstance(scope, dict):
+        return errors
+
+    def ids(key, required):
+        v = scope.get(key)
+        if v is None and not required:
+            return
+        if not (isinstance(v, list) and v and all(
+                isinstance(i, str) and i.strip() == i and i for i in v)):
+            errors.append(f"notify.{transport}.{key}: non-empty id list required")
+    ids("allowed_user_ids", True)
+    projects = scope.get("project_ids")
+    if not (isinstance(projects, list) and projects and all(
+            type(p) is int and 0 < p < 2 ** 63 for p in projects)):
+        errors.append(f"notify.{transport}.project_ids: non-empty positive "
+                      "integer list required")
+    if type(scope.get("project_ids_auto", False)) is not bool:
+        errors.append(f"notify.{transport}.project_ids_auto: must be a boolean")
+    if transport == "discord":
+        ids("allowed_chat_ids", False)
+        ids("allowed_role_ids", False)
+        if scope.get("guild_id") in (scope.get("allowed_role_ids") or []):
+            errors.append("notify.discord.allowed_role_ids: the guild id is "
+                          "@everyone and can never be a grant")
+    return errors
 
 
 def _validate_llm(ll: dict) -> list[str]:
@@ -322,6 +376,7 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         errors.extend(_validate_update(cfg["update"]))
     if isinstance(cfg.get("health"), dict):
         errors.extend(_validate_health(cfg["health"]))
+    errors.extend(_validate_standalone(cfg))
     return errors, warnings
 
 
@@ -529,6 +584,22 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
             errors.append("LINE WORKS adapter local check failed — run `python -m lineworks_adapter check` and follow docs/guides/LINEWORKS.md to repair the existing credentials")
+    if mcs_runtime.standalone(cfg):
+        # Slack/Discord run on MCS's own connector — Hermes is not used.
+        r = _run([mcs_runtime.python_executable(cfg),
+                  os.path.join(REPO_ROOT, "mcs_standalone", "__main__.py"),
+                  "check", "--root", HOME], timeout=30)
+        if r.returncode:
+            detail = (r.stderr or r.stdout or "").strip()[:200]
+            errors.append(f"standalone check failed ({detail}) — see "
+                          "docs/guides/STANDALONE.md")
+        if sys.platform == "darwin" and STANDALONE_LABEL in _agent_labels(cfg) \
+                and _agent_loaded("ai.hermes.gateway"):
+            warnings.append("ai.hermes.gateway is loaded while MCS serves "
+                            "Slack/Discord itself — remove that platform from "
+                            "Hermes or stop the gateway (docs/guides/STANDALONE.md)")
+    elif lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
+        pass
     elif not _hermes_ok(exe):
         errors.append(f"hermes CLI not resolvable ({exe}) — "
                       "notifications cannot be sent")
@@ -560,10 +631,11 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                         "semantic.mode is enabled")
     if sys.platform == "darwin":
         agents = os.path.expanduser("~/Library/LaunchAgents")
+        labels = _agent_labels(cfg)
         warnings.extend(
             f"LaunchAgent {label} not installed — templates and "
             "install steps in deployment/launchagents/README.md"
-            for label in AGENT_LABELS
+            for label in labels
             if not os.path.exists(os.path.join(agents, f"{label}.plist")))
         # plist presence is not liveness: an installed-but-unloaded
         # agent stops extraction silently (2026-09-28 incident: the
@@ -577,7 +649,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             warnings.append(
                 f"launchd gui/{os.getuid()} unreachable from this "
                 "session — cannot verify agent load state")
-        for label in AGENT_LABELS:
+        for label in labels:
             plist = os.path.join(agents, f"{label}.plist")
             if not os.path.exists(plist) or not domain_ok:
                 continue
@@ -738,12 +810,19 @@ def _semantic_on(cfg):
     return m != "off"
 
 
+def _standalone_on(transport):
+    return lambda cfg: mcs_runtime.standalone(cfg) and (
+        (cfg.get("notify") or {}).get("interactive") == transport)
+
+
 WIZARD = [
     ("基本設定", [
+        ("runtime_mode", "choice:hermes,standalone", "hermes",
+         "実行方式 — hermes=Hermes Agent 経由 / standalone=Hermes なしで MCS 単体", None),
         ("mcs_login_id", "req", None,
          "MCS のログインID", None),
         ("notify_target", "req", None,
-         "通知の送り先（hermes send target。例: slack:<チャンネルID>、"
+         "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
     ]),
     ("カード通知（Slack / Discord / LINE WORKS）", [
@@ -764,21 +843,37 @@ WIZARD = [
         ("notify.lineworks.project_ids_auto", "bool", False,
          "公開済みscope snapshotからプロジェクトを解決（通常はオフ）", _lineworks_on),
         ("notify.slack.profile", "req", None,
-         "配送に使う hermes プロファイル名", _slack_on),
+         "配送プロファイル名（hermes ではその Hermes プロファイル）", _slack_on),
         ("notify.slack.application_id", "req", None,
          "Slack アプリID", _slack_on),
         ("notify.slack.team_id", "req", None,
          "Slack ワークスペース（team）ID", _slack_on),
         ("notify.slack.channel_id", "req", None,
          "カードの投稿先チャンネルID", _slack_on),
+        ("notify.slack.allowed_user_ids", "reqcsv", None,
+         "カード操作を許可する Slack ユーザーID・カンマ区切り", _standalone_on("slack")),
+        ("notify.slack.project_ids", "reqintlist", None,
+         "対象とする MCS プロジェクトID・カンマ区切り", _standalone_on("slack")),
+        ("notify.slack.project_ids_auto", "bool", False,
+         "snapshot にある全プロジェクトも許可（通常はオフ）", _standalone_on("slack")),
         ("notify.discord.profile", "req", None,
-         "配送に使う hermes プロファイル名", _discord_on),
+         "配送プロファイル名（hermes ではその Hermes プロファイル）", _discord_on),
         ("notify.discord.application_id", "req", None,
          "Discord アプリケーションID", _discord_on),
         ("notify.discord.guild_id", "req", None,
          "Discord サーバーID", _discord_on),
         ("notify.discord.channel_id", "req", None,
          "カードの投稿先チャンネルID", _discord_on),
+        ("notify.discord.allowed_user_ids", "reqcsv", None,
+         "カード操作・/mcs を許可する Discord ユーザーID・カンマ区切り", _standalone_on("discord")),
+        ("notify.discord.allowed_chat_ids", "csv", None,
+         "/mcs を受け付けるチャンネルID（空欄=カード投稿先のみ）", _standalone_on("discord")),
+        ("notify.discord.allowed_role_ids", "csv", None,
+         "カード操作を許可するロールID（空欄可。サーバーIDは不可）", _standalone_on("discord")),
+        ("notify.discord.project_ids", "reqintlist", None,
+         "対象とする MCS プロジェクトID・カンマ区切り", _standalone_on("discord")),
+        ("notify.discord.project_ids_auto", "bool", False,
+         "snapshot にある全プロジェクトも許可（通常はオフ）", _standalone_on("discord")),
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
         ("notify.card_thread", "bool", True,
@@ -788,7 +883,8 @@ WIZARD = [
         ("notify.route_epoch", "int", 1,
          "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
         ("notify_bot_profile", "opt", None,
-         "通知投稿に使う hermes プロファイル（空欄=既定）", None),
+         "通知投稿に使う hermes プロファイル（空欄=既定）",
+         lambda cfg: not mcs_runtime.standalone(cfg)),
         ("notify_system_target", "opt", None,
          "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
         ("notify_max_age_h", "num", None,
@@ -796,7 +892,8 @@ WIZARD = [
         ("notify_all_replies", "bool", False,
          "リアルタイムで新規取得した返信は既読・投稿時刻によらず全件通知（履歴一括取込みは対象外）", None),
         ("hermes_bin", "opt", None,
-         "hermes コマンドのパス（空欄=自動検出）", None),
+         "hermes コマンドのパス（空欄=自動検出）",
+         lambda cfg: not mcs_runtime.standalone(cfg)),
         ("daily_digest.enabled", "bool", False,
          "朝の日次ダイジェスト（件数とID。患者名は include_names で追加）を notify_target に送る", None),
         ("daily_digest.hour_jst", "int", 8,
@@ -999,8 +1096,50 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
 
     Returns False when the CLI is unavailable or any attempted write
     failed; keys left unset by choice (--yes, empty answer) are not
-    failures."""
+    failures.
+
+    runtime_mode=standalone uses no Hermes profile: the tokens go to
+    ~/.mcs/.env (0600), the only file `mcs_standalone` reads them from."""
     ntf = cfg.get("notify")
+    if mcs_runtime.standalone(cfg):
+        interactive = ntf.get("interactive") if isinstance(ntf, dict) else None
+        used = {interactive} | {
+            str(cfg.get(k) or "").partition(":")[0]
+            for k in ("notify_target", "notify_system_target")}
+        wanted = [("DISCORD_BOT_TOKEN", "Discord bot token")] if "discord" in used else []
+        if "slack" in used:
+            wanted.append(("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"))
+        if interactive == "slack":
+            wanted.append(("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
+        updates, missing = {}, []
+        for env_key, desc in wanted:
+            if env_value(env_key, paths=[ENV_PATH], check_env=False):
+                print(f"  {env_key}: 設定済み")
+                continue
+            tok = os.environ.get(env_key)
+            hermes_tok = None if tok or args.yes else env_value(
+                env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
+            # switching from Hermes: reuse its token only on explicit consent
+            if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
+                                    "[y/N]: ").strip().lower() in ("y", "yes"):
+                tok = hermes_tok
+            if not tok and not args.yes:
+                tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+            if tok:
+                updates[env_key] = tok
+            else:
+                missing.append(env_key)
+        if updates:
+            try:
+                _env_write(ENV_PATH, updates)
+            except ValueError:
+                print("  .env: invalid token format; existing file retained")
+                return False
+            print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
+        if missing:
+            print("  未設定: " + ", ".join(missing)
+                  + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
+        return not missing
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
         return True
@@ -1203,6 +1342,7 @@ def cmd_init(args) -> int:
     if not _guard_config(args.yes):
         return 1
     cfg = load_config()
+    mode_before = mcs_runtime.mode(cfg)
     def pick(flag, key):
         # flag wins, else the existing value is kept — the wizard's req
         # items do the interactive prompting for these
@@ -1210,6 +1350,8 @@ def cmd_init(args) -> int:
 
     login_id = pick(args.login_id, "mcs_login_id")
     target = pick(args.notify_target, "notify_target")
+    if getattr(args, "runtime_mode", None):
+        cfg["runtime_mode"] = args.runtime_mode
     updates = {}
     if login_id:
         cfg["mcs_login_id"] = login_id
@@ -1319,6 +1461,22 @@ def cmd_init(args) -> int:
         if profs:
             sig["self_professions"] = profs
 
+    if mcs_runtime.standalone(cfg):
+        # the --plugin-* grants Hermes keeps in plugin settings live in
+        # notify.<transport> when MCS serves Slack/Discord itself
+        ntf = cfg.get("notify")
+        scope = ntf.get(ntf.get("interactive")) if isinstance(ntf, dict) else None
+        if isinstance(scope, dict):
+            for flag, key in (("plugin_user_ids", "allowed_user_ids"),
+                              ("plugin_chat_ids", "allowed_chat_ids"),
+                              ("plugin_role_ids", "allowed_role_ids"),
+                              ("plugin_project_ids", "project_ids")):
+                value = getattr(args, flag, None)
+                if value:
+                    items = _csv_list([value])
+                    scope[key] = [int(v) for v in items if v.isdecimal()] \
+                        if key == "project_ids" else items
+
     if not args.yes:
         _wizard(cfg)
 
@@ -1338,22 +1496,33 @@ def cmd_init(args) -> int:
     # a manual `services` rerun as the last step
     ntf = cfg.get("notify")
     gateway_result = 0
-    if isinstance(ntf, dict) and ntf.get("interactive") == "lineworks" \
+    if isinstance(ntf, dict) and (ntf.get("interactive") == "lineworks" or (
+            mcs_runtime.standalone(cfg)
+            and ntf.get("interactive") in ("discord", "slack"))) \
             and not _validate_notify(ntf):
         # Provision runner-owned directories/flags before the independent worker starts.
         import notify_cards
         notify_cards.ensure_dirs(os.path.join(HOME, "data"))
         notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
-    if isinstance(ntf, dict) \
+    if isinstance(ntf, dict) and not mcs_runtime.standalone(cfg) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = _hermes_exe(cfg)
         if _hermes_ok(exe):
             gateway_result = _sync_gateway(
                 cfg, exe, lambda m: print(f"  {m}"), dry=False)
+    if mcs_runtime.mode(cfg) != mode_before:
+        # config alone does not switch runtimes: the interpreter, the
+        # schedule and the Slack/Discord connection belong to install.sh
+        print(f"init: runtime_mode is now {mcs_runtime.mode(cfg)} — run "
+              f"`./install.sh --mode {mcs_runtime.mode(cfg)}` to install its "
+              "runtime and move the scheduled jobs (docs/guides/STANDALONE.md)")
     check_result = cmd_check(args)
     if not integration_ok:
-        print("init: FAIL — Hermes plugin settings were not fully "
-              "written; repair the serving profile/CLI and re-run init")
+        print("init: FAIL — " + (
+            "standalone tokens were not fully written to .env"
+            if mcs_runtime.standalone(cfg) else
+            "Hermes plugin settings were not fully written; repair the "
+            "serving profile/CLI") + " and re-run init")
         return 1
     return 1 if gateway_result else check_result
 
@@ -1636,14 +1805,16 @@ def cmd_doctor(args) -> int:
     """`check` plus the environment facts a bug report needs."""
     cfg = load_config()
     print(f"python   : {sys.executable} ({sys.version.split()[0]})")
-    print(f"services : {HERMES_PY} "
-          f"({_hermes_py_problem() or 'ok'})")
-    print(f"hermes   : {_hermes_exe(cfg)} "
-          f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
+    print(f"runtime  : {mcs_runtime.mode(cfg)}")
+    print(f"services : {_services_py(cfg)} "
+          f"({_services_py_problem(cfg) or 'ok'})")
+    if not mcs_runtime.standalone(cfg):
+        print(f"hermes   : {_hermes_exe(cfg)} "
+              f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
     print(f"repo     : {REPO_ROOT}")
     print(f"config   : {CONF_PATH}")
     if sys.platform == "darwin":
-        for label in AGENT_LABELS + [RECOVERY_LABEL, *LLAMA_LABELS]:
+        for label in _agent_labels(cfg) + [RECOVERY_LABEL, *LLAMA_LABELS]:
             state = "loaded" if _agent_loaded(label) else "not loaded"
             print(f"launchd  : {label} {state}")
     return cmd_check(args)
@@ -1691,18 +1862,112 @@ RECOVERY_LABEL = "org.mcs.recovery"
 LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
 
 
+STANDALONE_LABEL = mcs_runtime.STANDALONE_LABEL
+CRON_LABEL_PREFIX = "ai.mcs.cron."
+
+
+def _services_py(cfg: dict) -> str:
+    """The interpreter every rendered wrapper and agent runs on."""
+    return mcs_runtime.python_executable(cfg) if mcs_runtime.standalone(cfg) \
+        else HERMES_PY
+
+
+def _scripts_dir(cfg: dict) -> str:
+    return mcs_runtime.scripts_dir(cfg) if mcs_runtime.standalone(cfg) \
+        else SCRIPTS_DIR
+
+
 def _hermes_py_problem() -> str | None:
-    """None when HERMES_PY — the interpreter every rendered wrapper and
-    agent runs on — is an executable Python >= 3.10."""
-    if not (os.path.isfile(HERMES_PY) and os.access(HERMES_PY, os.X_OK)):
-        return f"interpreter {HERMES_PY} is missing or not executable"
-    r = _run([HERMES_PY, "-c",
+    """None when HERMES_PY is an executable Python >= 3.10."""
+    return _py_problem(HERMES_PY)
+
+
+def _services_py_problem(cfg: dict) -> str | None:
+    """_hermes_py_problem for the interpreter the selected runtime uses."""
+    return _py_problem(_services_py(cfg)) if mcs_runtime.standalone(cfg) \
+        else _hermes_py_problem()
+
+
+def _py_problem(exe: str) -> str | None:
+    """None when `exe` is an executable Python >= 3.10."""
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        return f"interpreter {exe} is missing or not executable"
+    r = _run([exe, "-c",
               "import sys; sys.exit(sys.version_info < (3, 10))"],
              timeout=20)
     if r.returncode != 0:
-        return (f"interpreter {HERMES_PY} is not a working Python >= 3.10 "
+        return (f"interpreter {exe} is not a working Python >= 3.10 "
                 f"(rc={r.returncode})")
     return None
+
+
+def _cron_label(script: str) -> str:
+    return CRON_LABEL_PREFIX + script.removesuffix(".sh").replace("_", "-")
+
+
+def _calendar(schedule: str) -> list[dict]:
+    """launchd StartCalendarInterval entries for a CRON_JOBS schedule —
+    launchd has no `*/n`, so minute/hour lists are expanded."""
+    minute, hour, *rest = schedule.split()
+    if rest != ["*", "*", "*"]:
+        raise ValueError(f"unsupported schedule {schedule!r}")
+
+    def expand(field, size):
+        if field == "*":
+            return [None]
+        if field.startswith("*/"):
+            return list(range(0, size, int(field[2:])))
+        return [int(v) for v in field.split(",")]
+    return [{k: v for k, v in (("Hour", h), ("Minute", m)) if v is not None}
+            for h in expand(hour, 24) for m in expand(minute, 60)]
+
+
+CRON_TIMEOUT_S = 3600      # = hermes cron's script timeout
+_TIMEOUT_PL = ("my $t = shift; my $p = 0;"
+               # launchd's SIGTERM (bootout, logout) must reach the job too
+               " $SIG{$_} = sub { kill 'TERM', -$p if $p; exit 143 } for qw(TERM INT HUP);"
+               " $p = fork; die unless defined $p;"
+               " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
+               " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
+               " alarm $t; waitpid($p, 0); exit($? >> 8)")
+
+
+def _cron_plist(label: str, script: str, schedule: str, cfg: dict) -> str:
+    """Standalone replacement for one `hermes cron` job (--deliver local:
+    output only goes to a log). launchd never starts a second instance
+    of a job that is still running."""
+    log = os.path.join(HOME, "data", "cron.log")
+    return plistlib.dumps({
+        "Label": label,
+        # hermes cron killed a script after 3600s; launchd has no timeout and
+        # never starts a job that is still running, so one wedged tick would
+        # stop the job for good. The cap kills the wrapper's process group.
+        "ProgramArguments": ["/usr/bin/perl", "-e", _TIMEOUT_PL, str(CRON_TIMEOUT_S),
+                             "/bin/bash", os.path.join(_scripts_dir(cfg), script)],
+        "StartCalendarInterval": _calendar(schedule),
+        # the CDP Chrome a collection tick starts must outlive the tick
+        # (hermes cron never killed it); launchd would reap the group
+        "AbandonProcessGroup": True,
+        "StandardOutPath": log, "StandardErrorPath": log,
+    }).decode("utf-8")
+
+
+def _agent_labels(cfg: dict) -> list[str]:
+    """Every LaunchAgent `services` owns for the selected runtime."""
+    if not mcs_runtime.standalone(cfg):
+        return list(AGENT_LABELS)
+    labels = AGENT_LABELS + [_cron_label(script) for _, _, script in CRON_JOBS]
+    ntf = cfg.get("notify")
+    if isinstance(ntf, dict) and ntf.get("interactive") in ("discord", "slack"):
+        labels.append(STANDALONE_LABEL)
+    return labels
+
+
+def _owned_label(label: str) -> bool:
+    """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
+    return label not in EXCLUDED_LABELS and (
+        label.startswith(("local.mcs-", "ai.mcs.extract-", CRON_LABEL_PREFIX))
+        or label == STANDALONE_LABEL)
 
 
 def _install_fix(stage: str) -> str:
@@ -1714,14 +1979,18 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
     as launchd resolves it, the update-recovery watchdog and the
     llama-server agent."""
     errors, warnings = [], []
-    why = _hermes_py_problem()
+    standalone = mcs_runtime.standalone(cfg)
+    why = _services_py_problem(cfg)
     if why:
         errors.append(f"{why} — cron wrappers and launchd agents cannot "
                       "start; " + _install_fix(
+                          "--mode standalone; stage 2 rebuilds ~/.mcs/venv"
+                          if standalone else
                           "stage 2 rebuilds the hermes-agent venv")
                       + ", then `mcs_setup.py services`")
     exe = _hermes_exe(cfg)
-    if _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
+    if not standalone and _hermes_ok(exe) \
+            and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
         errors.append(
             f"hermes resolves here ({exe}) but not on the launchd PATH "
             f"({LAUNCHD_PATH}) — scheduled jobs cannot send; "
@@ -1845,6 +2114,24 @@ def _agent_reconcile(label: str, dst: str, note, dry: bool) -> bool:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
     Converges loaded state to rendered content (R6)."""
     uid = os.getuid()
+    if os.environ.get("XPC_SERVICE_NAME") == label:
+        # bootout would kill this very process (the updater running as
+        # ai.mcs.cron.mcs-update): a detached helper reloads the job once
+        # this run has ended (the job abandons its process group).
+        note(f"agent {label}: reload after this run exits")
+        if not dry:
+            target = f"gui/{uid}/{label}"
+            script = ('while kill -0 "$1" 2>/dev/null; do sleep 5; done; '
+                      'launchctl bootout "$2"; launchctl bootstrap "$3" "$4"')
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
+            waiter = os.environ.get("MCS_JOB_PID") or str(os.getpid())
+            subprocess.Popen(["/bin/sh", "-c", script, "mcs-reload", waiter,
+                              target, f"gui/{uid}", dst],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, env=env, close_fds=True,
+                             start_new_session=True)
+        return True
     if _agent_loaded(label):
         note(f"agent {label}: reload (content changed)")
         if not dry:
@@ -1873,8 +2160,9 @@ def _save_manifest(manifest: dict) -> None:
                              indent=1, sort_keys=True))
 
 
-def _service_subs() -> dict:
-    return {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
+def _service_subs(cfg: dict | None = None) -> dict:
+    cfg = load_config() if cfg is None else cfg
+    return {"PYTHON": _services_py(cfg), "REPO": REPO_ROOT,
             "DATA": os.path.join(HOME, "data")}
 
 
@@ -1897,27 +2185,31 @@ def _script_drift() -> tuple[list[str], list[str]]:
     turned a delayed tick into a no-op and unread polling gapped past
     the session limit) — drift is an error, absence only a warning."""
     drifted, missing = [], []
-    for name, body in _rendered_scripts(_service_subs()):
+    cfg = load_config()
+    directory = _scripts_dir(cfg)
+    for name, body in _rendered_scripts(_service_subs(cfg)):
         try:
-            cur = Path(SCRIPTS_DIR, name).read_text(encoding="utf-8")
+            cur = Path(directory, name).read_text(encoding="utf-8")
         except OSError:
             missing.append(name)
             continue
         if cur != body:
             drifted.append(name)
-    errors = [f"deployed scripts differ from the repo in {SCRIPTS_DIR}: "
+    errors = [f"deployed scripts differ from the repo in {directory}: "
               + ", ".join(drifted)
               + " — run `mcs_setup.py services` to resync"] if drifted else []
-    warnings = [f"scripts not deployed to {SCRIPTS_DIR}: "
+    warnings = [f"scripts not deployed to {directory}: "
                 + ", ".join(missing)
                 + " — run `mcs_setup.py services`"] if missing else []
     return errors, warnings
 
 
-def _sync_scripts(subs, manifest, note, dry) -> None:
-    """Stage 1: hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)."""
+def _sync_scripts(subs, manifest, note, dry, directory=None) -> None:
+    """Stage 1: cron wrapper scripts -> ~/.hermes/scripts, or data/scripts
+    in standalone mode (atomic)."""
+    directory = directory or SCRIPTS_DIR
     for name, body in _rendered_scripts(subs):
-        dst = os.path.join(SCRIPTS_DIR, name)
+        dst = os.path.join(directory, name)
         manifest["scripts"].append({"name": name,
                                     "sha256": _sha256(body)})
         cur = None
@@ -1928,10 +2220,27 @@ def _sync_scripts(subs, manifest, note, dry) -> None:
             continue
         note(f"script {name}: write {dst}")
         if not dry:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
             _write_atomic(dst, body, 0o755)
 
 
-def _sync_agents(subs, prev, manifest, note, dry) -> int:
+def _desired_agents(subs, cfg) -> dict[str, str]:
+    """label -> rendered plist: repo templates plus, in standalone mode,
+    one calendar agent per CRON_JOBS entry."""
+    pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
+    jobs = {_cron_label(script): (script, sched) for _, sched, script in CRON_JOBS}
+    out = {}
+    for label in _agent_labels(cfg):
+        if label in jobs:
+            out[label] = _cron_plist(label, *jobs[label], cfg)
+            continue
+        out[label] = _render_template(
+            Path(pdir, label + ".plist").read_text(encoding="utf-8"),
+            {key: xml_escape(value, quote=False) for key, value in subs.items()})
+    return out
+
+
+def _sync_agents(subs, prev, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
     loaded state; retire owned-but-undesired agents from our naming
     space only, never install.sh-owned labels (S5)."""
@@ -1939,13 +2248,8 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
         note("launchd: not macOS — skipping agents")
         return 0
     problems = 0
-    pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
-    uid = os.getuid()
-    for label in AGENT_LABELS:
-        srcp = os.path.join(pdir, label + ".plist")
-        body = _render_template(
-            Path(srcp).read_text(encoding="utf-8"),
-            {key: xml_escape(value, quote=False) for key, value in subs.items()})
+    desired = _desired_agents(subs, load_config() if cfg is None else cfg)
+    for label, body in desired.items():
         dst = os.path.join(AGENTS_DIR, label + ".plist")
         try:
             cur = Path(dst).read_text(encoding="utf-8")
@@ -1970,14 +2274,22 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
                                    "loaded": True})
     # retire owned-but-undesired agents: our naming space only,
     # never install.sh-owned labels (S5)
-    for path in sorted(
-            p for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")) \
-            if os.path.isdir(AGENTS_DIR) else []:
-        label = path[:-6]
-        mcs_owned = label.startswith("local.mcs-") \
-            or label.startswith("ai.mcs.extract-")
-        if not mcs_owned or label in EXCLUDED_LABELS \
-                or label in AGENT_LABELS:
+    installed = {p[:-6] for p in os.listdir(AGENTS_DIR) if p.endswith(".plist")} \
+        if os.path.isdir(AGENTS_DIR) else set()
+    return problems + _retire_agents(
+        {label for label in installed if _owned_label(label)} - set(desired) - set(keep),
+        note, dry)
+
+
+def _retire_agents(labels, note, dry) -> int:
+    """Bootout + remove installed MCS-owned agents in `labels`."""
+    if sys.platform != "darwin" or not os.path.isdir(AGENTS_DIR):
+        return 0
+    problems = 0
+    uid = os.getuid()
+    for label in sorted(labels):
+        path = os.path.join(AGENTS_DIR, label + ".plist")
+        if not _owned_label(label) or not os.path.exists(path):
             continue
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
@@ -1987,7 +2299,7 @@ def _sync_agents(subs, prev, manifest, note, dry) -> int:
                 problems += 1
                 continue
             try:
-                os.unlink(os.path.join(AGENTS_DIR, path))
+                os.unlink(path)
             except OSError:
                 problems += 1
     return problems
@@ -2003,7 +2315,7 @@ def _cron_converged(after, sched, script) -> bool:
 
 
 def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
-                       manifest, note) -> tuple[int, bool]:
+                       manifest, note, jobs=None) -> tuple[int, bool]:
     """Post-change convergence check for _sync_cron. Returns (problems,
     persist_ownership); mutates manifest['cron'] in place."""
     problems = 0
@@ -2017,7 +2329,8 @@ def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
     # parse — an undecodable display is not drift
     after = _cron_list(hermes)
     if after is None or not all(_cron_converged(after, sched, script)
-                                for _, sched, script in CRON_JOBS):
+                                for _, sched, script in
+                                (CRON_JOBS if jobs is None else jobs)):
         note("cron: post-change state unverifiable or not exactly one "
              "job per script — re-run services")
         problems += 1
@@ -2058,13 +2371,15 @@ def _verify_cron_after(hermes, created, owned_scripts, desired_scripts,
 
 
 def _sync_cron(prev, hermes, manifest, note,
-               dry) -> tuple[int, bool]:
+               dry, jobs=None) -> tuple[int, bool]:
     """Stage 3: hermes cron jobs — create missing, edit drifted,
     remove owned-but-undesired; an unparseable list fails CLOSED
     (M1): 'unverifiable' is NOT 'no jobs', and creating on that
     assumption produces duplicates. Returns (problems,
     persist_ownership): the latter is True when a verified create must
     be saved even though problems were raised."""
+    # jobs=[] (standalone) retires every owned job: launchd runs them
+    jobs = CRON_JOBS if jobs is None else jobs
     persist = False
     entries = _cron_list(hermes)
     if entries is None:
@@ -2081,7 +2396,7 @@ def _sync_cron(prev, hermes, manifest, note,
                 (e.get("name"), e.get("script")) if v}
     by_script = {e.get("script"): e for e in entries
                  if e.get("script")}
-    desired_scripts = {s for _, _, s in CRON_JOBS}
+    desired_scripts = {s for _, _, s in jobs}
     # one job per owned script is the invariant every step below
     # relies on — which duplicate is authoritative is an operator call
     dups = sorted(s for s in desired_scripts
@@ -2093,7 +2408,7 @@ def _sync_cron(prev, hermes, manifest, note,
     owned_scripts = desired_scripts | {
         c.get("script") for c in prev.get("cron", [])
         if isinstance(c, dict) and c.get("script")}
-    for name, sched, script in CRON_JOBS:
+    for name, sched, script in jobs:
         entry = by_script.get(script)
         if entry is None and (name in existing
                               or script in existing):
@@ -2157,7 +2472,7 @@ def _sync_cron(prev, hermes, manifest, note,
                     problems += 1
     if mutated and not dry:
         p, ps = _verify_cron_after(hermes, created, owned_scripts,
-                                   desired_scripts, manifest, note)
+                                   desired_scripts, manifest, note, jobs)
         problems += p
         persist = persist or ps
     return problems, persist
@@ -2220,7 +2535,9 @@ def _record_llm_slots(manifest, note) -> None:
 
 def cmd_services(args) -> int:
     dry = getattr(args, "dry_run", False)
-    subs = _service_subs()
+    cfg = load_config()
+    standalone = mcs_runtime.standalone(cfg)
+    subs = _service_subs(cfg)
     problems = 0
     persist_partial = False
     prev = _load_manifest()
@@ -2230,27 +2547,69 @@ def cmd_services(args) -> int:
     def note(msg):
         print(("  [dry] " if dry else "  ") + msg)
 
-    why = _hermes_py_problem()
+    why = _services_py_problem(cfg)
     if why:
-        # every wrapper/plist is rendered with __PYTHON__=HERMES_PY — a
-        # missing interpreter would make each job fail at every run
+        # every wrapper/plist is rendered with __PYTHON__ — a missing
+        # interpreter would make each job fail at every run
         print(f"services: {why} — nothing rendered; "
-              + _install_fix("stage 2 rebuilds the hermes-agent venv")
+              + _install_fix("--mode standalone; stage 2 rebuilds ~/.mcs/venv"
+                             if standalone else
+                             "stage 2 rebuilds the hermes-agent venv")
               + ", then re-run services")
         return 1
-    _sync_scripts(subs, manifest, note, dry)
-    problems += _sync_agents(subs, prev, manifest, note, dry)
-
-    cfg = load_config()
     hermes = _hermes_exe(cfg)
-    if not _hermes_ok(hermes):
+    manifest["runtime_mode"] = mcs_runtime.mode(cfg)
+    # back to hermes: keep any launchd schedule until hermes cron is
+    # verified, so collection is never left without one
+    cron_labels = frozenset(_cron_label(script) for _, _, script in CRON_JOBS)
+    keep = frozenset() if standalone else cron_labels
+    _sync_scripts(subs, manifest, note, dry, _scripts_dir(cfg))
+    problems += _sync_agents(subs, prev, manifest, note, dry, cfg, keep)
+    # the Hermes plugin decides from these flags whether to stand down
+    if not dry and isinstance(cfg.get("notify"), dict) \
+            and not _validate_notify(cfg["notify"]):
+        with suppress(Exception):
+            import notify_cards
+            notify_cards.ensure_dirs(os.path.join(HOME, "data"))
+            notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+
+    if standalone:
+        # launchd calendar agents replace hermes cron; retire the jobs a
+        # previous Hermes-mode run created — only once the new schedule
+        # loaded, so collection never goes unscheduled
+        if prev.get("cron") and problems:
+            note("cron: hermes cron jobs kept until the launchd schedule "
+                 "loads — fix the agents above and re-run services")
+        elif prev.get("cron") and _hermes_ok(hermes):
+            cron_problems, persist_partial = _sync_cron(
+                prev, hermes, manifest, note, dry, jobs=[])
+            problems += cron_problems
+        elif prev.get("cron"):
+            note("cron: previous hermes cron jobs unverifiable (hermes not "
+                 "resolvable) — remove them if Hermes still runs")
+            manifest["cron"] = list(prev["cron"])   # stay owned for a later retire
+        if _agent_loaded("ai.hermes.gateway") and STANDALONE_LABEL in _agent_labels(cfg):
+            note("WARNING: ai.hermes.gateway is loaded — `hermes gateway "
+                 "restart` (or stop it) so its MCS card workers stand down")
+    elif not _hermes_ok(hermes):
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
         problems += 1
     else:
         cron_problems, persist_partial = _sync_cron(
             prev, hermes, manifest, note, dry)
         problems += cron_problems
+        if not cron_problems:
+            problems += _retire_agents(cron_labels, note, dry)
         problems += _sync_gateway(cfg, hermes, note, dry)
+        if prev.get("runtime_mode") == "standalone":
+            # a gateway that loaded while standalone owned the bot skipped
+            # /mcs and the card workers — reload it under the new flags
+            note("gateway: restart (switched back from standalone)")
+            if not dry:
+                r = _hermes_cli(hermes, "", "gateway", "restart")
+                if not (r and r.returncode == 0):
+                    note("  gateway restart failed — run `hermes gateway restart`")
+                    problems += 1
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6).
@@ -2284,6 +2643,9 @@ def main() -> int:
                "config.json that is\nnot valid JSON stops init — --yes "
                "moves it to config.json.corrupt-<ts> first.")
     p.add_argument("--login-id")
+    p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
+                   help="hermes (default) or standalone — run Slack/"
+                        "Discord, cron and delivery without Hermes Agent")
     p.add_argument("--notify-target",
                    help="hermes send target for notifications "
                         "(e.g. slack:C0CHANNELID, discord:1234)")
