@@ -137,11 +137,13 @@ def test_slack_signal_body_matches_discord_card_and_thread(led, kind):
     public_parts = {"containers": spec["parts"]["containers"],
                     "footer": spec["parts"]["footer"]}
     fallback, blocks = slack_cards.render(spec)
-    # transport parity — the evidence quote carries the body on the
-    # public card exactly like Discord
-    assert private_body in json.dumps(public_parts, ensure_ascii=False)
-    assert private_body in json.dumps({"text": fallback, "blocks": blocks},
-                                      ensure_ascii=False)
+    # transport parity — the public card face carries only the key
+    # point; the evidence body ships on the durable thread parts in
+    # both transports
+    assert private_body not in json.dumps(public_parts,
+                                          ensure_ascii=False)
+    assert private_body not in json.dumps(
+        {"text": fallback, "blocks": blocks}, ensure_ascii=False)
 
     # the verified body also travels as durable thread parts, not a
     # click-gated ephemeral answer — no 📄 token is minted at all

@@ -272,7 +272,7 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
         group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
         for c in cards:
             at = datetime.fromtimestamp(c["created_at"], JST)
-            kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 確認候補"
+            kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
             line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
             if c["owner"]:
                 line += f"（担当中: {actor_label(c['owner'])}）"

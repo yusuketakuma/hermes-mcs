@@ -122,7 +122,8 @@ _SCHEMAS = {
         "attachments": _counts("total", *_ATT_STATES)}},
     "signal": {"signal_type": _enum(
                    "request_overdue", "request_aging", "med_change_no_followup",
-                   "comm_concentration", "rx_period_expiry", "transition_reconciliation",
+                   "comm_concentration", "rx_period_expiry", "rx_period_lapsed",
+                   "transition_reconciliation",
                    "pharmacist_request_unanswered", "rx_request_visibility",
                    "adherence_concern", "discharge_notice", "symptom_after_med_change"),
                "project_id": _integer,
