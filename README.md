@@ -3,46 +3,93 @@
 ### MCSの連絡を、探せる記録と次の確認へ。
 
 **MedicalCareStation（MCS）の記録を、自分のMacで収集・整理・検索。**
-Discord / Slackの通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
+**Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
 在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのHermes addonです。
+Discordにも対応しています。
 
 [画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
 
 | 収集 | 保存・整理 | 通知・操作 |
 |---|---|---|
-| 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Discord / Slack + Hermes |
+| 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord + Hermes |
 
 このREADMEはmainの機能を説明します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
 通知を有効にすると患者名・本文・送信対象の添付が設定先へ送られます。[情報の行き先と安全境界](#data)を導入前に確認してください。
 
 <a name="demo"></a>
 
-## 画面イメージ
+## 画面イメージ — Slack
 
-**連絡の要点はカードで、本文と添付はスレッドで。**
-表示例を開閉して、利用する通知先の画面を確認できます。すべて完全合成の例です。
+**通知先とカード操作はSlackを推奨します。** 要点の確認からタスクの確定まで、7画面で紹介します。
+すべて現行実装に基づく**完全合成の説明図**です。実画面のキャプチャではなく、実患者・実投稿・匿名化データも使用していません。
 
-<details open>
-<summary><strong>Discord — 要点・確認・担当・タスクをカードに集約</strong></summary>
+![Slackの全体像：通知カードと本文・添付のスレッドを並べた完全合成例](docs/screenshots/slack-gallery/01-overview.png)
+
+カードで要点を読み、スレッドで原文と添付を確認します。
+画像を開くと拡大できます。画像内のボタンは説明用で、実際の操作はSlackの許可ユーザーが行います。
+
+[確認・担当](#slack-card) · [操作メニュー](#slack-menu) · [タスク入力・確定](#slack-task) · [タスク一覧](#slack-tasks) · [患者サマリー](#slack-summary)
+
+<a name="slack-card"></a>
+
+### 確認・担当を、カードから共有
+
+![Slack通知カード：確認済み・担当中と操作した人を表示する完全合成例](docs/screenshots/slack-gallery/02-notification.png)
+
+`☐ 確認`・`👤 担当する`の結果をカードに反映します。新しい返信で表示内容が変わると、確認状態も更新されます。
+**カードの確認済み表示は、タスク完了を意味しません。**
+
+<a name="slack-menu"></a>
+
+### 必要な操作を、メニューから選ぶ
+
+![Slackの操作メニュー：タスク作成・患者サマリー・検索などの完全合成例](docs/screenshots/slack-gallery/03-actions.png)
+
+タスク作成、患者サマリー、抽出の誤り報告、自分のタスク、未確認一覧、検索を`操作を選ぶ…`にまとめています。
+`☑ タスク完了`などの表示は、カードの状態や設定で変わります。
+
+<a name="slack-task"></a>
+
+### タスクは、入力してから内容を確認・確定
+
+| ① 入力フォーム | ② 本人だけに表示される確認画面 |
+|---|---|
+| [![Slackのタスク入力フォーム：内容・担当者・期限・理由の完全合成例](docs/screenshots/slack-gallery/04-task-form.png)](docs/screenshots/slack-gallery/04-task-form.png) | [![Slackのタスク確認画面：内容と理由を照合して確定する完全合成例](docs/screenshots/slack-gallery/05-task-preview.png)](docs/screenshots/slack-gallery/05-task-preview.png) |
+| 投稿に由来する下書きを確認し、担当者・期限・理由を入力して`確認へ`。 | 内容・担当・期限・理由を照合し、`確定する`を選ぶまで登録しません。 |
+
+スタッフ一覧を取得できる場合は担当者を選択できます。一覧がない場合は手入力になります。
+期限と理由は任意で、理由が空なら「通知カードからタスク作成」を記録します。
+タスク作成はMCSへの依頼投稿を自動化する機能ではありません。
+
+<a name="slack-tasks"></a>
+
+### スレッドのタスクを、対応中・完了へ
+
+![Slackの本人向けタスク一覧：タスクごとに対応中・完了を記録する完全合成例](docs/screenshots/slack-gallery/06-task-list.png)
+
+未完了タスクがあるカードの`☑ タスク完了`から、このスレッドの一覧を本人に表示します。
+対象のタスクを選び、人が`対応中`・`完了`を記録します。本文からAIが抽出した「完了」とも区別します。
+
+<a name="slack-summary"></a>
+
+### 訪問前に、患者サマリーで記録をたどる
+
+![Slackの本人向け患者サマリー：薬・次回予定・未完了タスク・履歴取得状況の完全合成例](docs/screenshots/slack-gallery/07-patient-summary.png)
+
+`🧾 患者サマリー`から、取得済み投稿の薬・最新バイタル・次回予定・未完了タスク・履歴取得状況を本人に表示します。
+**暫定集約であり、確定した処方一覧ではありません。未取得の記録も「無い」とは扱いません。**
+
+[Slackの導入・接続・許可ユーザー設定](docs/INSTALLATION.md) · [操作の詳しい使い方](docs/USER_GUIDE.md) · [画面画像のソースと更新手順](docs/screenshots/slack-gallery/README.md)
+
+<details>
+<summary><strong>Discordを使う場合の画面例を開く</strong></summary>
 
 ![Discord通知カードの完全合成例](docs/screenshots/discord-card.svg)
 
-カードから確認・担当の記録やタスク作成を行えます。本文と添付は専用スレッドへ配送します。
-[カードとスレッドの詳しい使い方](docs/USER_GUIDE.md)
+Discordでも通知カードと本文・添付のスレッドを利用できます。
+詳細は[利用者ガイド](docs/USER_GUIDE.md)を参照してください。
 
 </details>
-
-<details>
-<summary><strong>Slack — 確認・担当のボタンと操作メニュー</strong></summary>
-
-![Slack通知カードの完全合成例](docs/screenshots/slack-card.svg)
-
-よく使う確認・担当はボタンに、その他の操作はメニューにまとめています。
-本文と添付はスレッドへ配送します。[Slackの接続・許可ユーザー設定](docs/INSTALLATION.md)
-
-</details>
-
-画像内のボタンは説明用です。実際の操作は、接続したDiscord / Slackで許可されたユーザーが行います。
 
 <a name="features"></a>
 
@@ -58,7 +105,7 @@ Discord / Slackの通知カードから、連絡の確認、担当の記録、�
 | 確認・担当・依頼を共有する | カードの確認・担当を記録。タスクは内容と理由を確認してから確定 |
 | 全体の傾向を把握する | 投稿量・職種別内訳・未解決依頼などの読み取り専用統計。任意の日次ダイジェスト |
 
-チャットからの閲覧・依頼操作は通知カードとDiscordの`/mcs`コマンドで行えます。
+Slackでは通知カードと操作メニューから閲覧・依頼操作を行えます。Discordでは通知カードに加えて`/mcs`コマンドも使えます。
 詳細は[利用者ガイド](docs/USER_GUIDE.md)と[プラグインガイド](hermes_plugin/README.md)を参照してください。
 
 **AIの抽出は候補です。患者サマリーは確定した処方一覧ではなく、カードの確認済み表示もタスク完了を意味しません。**
@@ -139,6 +186,7 @@ cd hermes-mcs
 
 | 次に進む先 | 内容 |
 |---|---|
+| [Slackを設定する（推奨）](docs/INSTALLATION.md) | Slack app・接続・カード操作・許可ユーザーの設定 |
 | [導入ガイド](docs/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
 | [AIエージェント向け導入手順](docs/SETUP_AGENT.md) | エージェントに導入を任せるときの確認・実行手順 |
 | [更新・バックアップ・復旧](docs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |
@@ -156,7 +204,7 @@ cd hermes-mcs
 | 経路 | 保存・送信される情報 | 条件 |
 |---|---|---|
 | このMac | 投稿・添付・患者情報と、ローカルAIによる整理結果 | 収集・保存・構造化抽出の基本経路 |
-| Discord / Slack | 患者名・本文・要約・送信対象の添付。タスク通知には内容・担当者名も含む | 通知先・対話カード・関連機能を設定した場合 |
+| Slack（推奨） / Discord | 患者名・本文・要約・送信対象の添付。タスク通知には内容・担当者名も含む | 通知先・対話カード・関連機能を設定した場合 |
 | TypeSafe Jev API | 本文と必要なスレッド文脈。匿名化なし | 任意・既定OFFの意味チェック／抽出監査を有効にした場合 |
 | 知識ストア向けローカル出力 | 患者名・病名・要約・薬剤等を含むMarkdown。匿名化なし | 明示的にエクスポート。出力後の同期・LLM利用は別経路で管理 |
 
