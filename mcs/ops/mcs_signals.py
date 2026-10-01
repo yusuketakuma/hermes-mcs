@@ -45,6 +45,10 @@ FOLLOWUP_MAX_AGE_D = 90    # only mentions within this horizon — older
 CONC_WINDOW_H = 72         # comm_concentration window
 CONC_MIN_POSTS = 10        # comm_concentration threshold
 EXPIRY_AHEAD_DAYS = 3      # rx_period_expiry horizon
+RX_LAPSED_MAX_D = 14       # rx_period_lapsed: how many days past a
+                           # period end the "no renewal mention" alert
+                           # stays live — past that the silence is a
+                           # record style, not a lapsed prescription
 REQ_AGE_DAYS = 30          # request_aging: open register items older than this
 REQ_RESPONSE_DAYS = 3      # pharmacist_request_unanswered response window
 FYI_MAX_AGE_D = 30         # horizon for FYI-type signals (request
@@ -65,6 +69,7 @@ THRESHOLDS = {
     "conc_window_h":            (CONC_WINDOW_H,            6, 336),
     "conc_min_posts":           (CONC_MIN_POSTS,           2, 200),
     "expiry_ahead_days":        (EXPIRY_AHEAD_DAYS,        1,  90),
+    "rx_lapsed_days":           (RX_LAPSED_MAX_D,          1,  60),
     "req_age_days":             (REQ_AGE_DAYS,             7, 365),
     "transition_lookback_d":    (TRANSITION_LOOKBACK_D,    7, 365),
     "transition_med_window_d":  (TRANSITION_MED_WINDOW_D,  1,  60),
@@ -463,6 +468,34 @@ def _rx_period_expiry(db, now, th, sig_cfg):
                         "ありません）"}
 
 
+def _rx_period_lapsed(db, now, th, sig_cfg):
+    """Patients whose furthest-out recorded period expression has
+    already ended with no later period mention — the prescription may
+    have lapsed ('内服切れ'). Alerting is bound to `rx_lapsed_days`
+    days past the end: beyond that, the missing renewal is a chronic
+    record style rather than a fresh alert."""
+    today = datetime.fromtimestamp(now, JST).date()
+    latest = {}                    # pid -> (end_d, mid, raw)
+    for pid, mid, content in med_period_artifacts(db):
+        for p, end_d in iter_period_ends(content):
+            cur = latest.get(pid)
+            if cur is None or (end_d, mid) > (cur[0], cur[1]):
+                latest[pid] = (end_d, mid, p.get("raw"))
+    for pid, (end_d, mid, raw) in latest.items():
+        days = (today - end_d).days
+        if not (1 <= days <= th["rx_lapsed_days"]):
+            continue
+        yield _key("rx_period_lapsed", pid, f"{mid}:{end_d}"), {
+            "type": "rx_period_lapsed", "project_id": pid,
+            "evidence": {"message_id": mid, "raw": raw,
+                         "end": end_d.isoformat()},
+            "context": {"days_since_end": days},
+            "note": f"記録上の期間表現の終了日を{days}日過ぎており、"
+                    "新しい期間表現の記録はありません（抽出された表現"
+                    "であり、処方の継続・切れは原記録で確認してくださ"
+                    "い）"}
+
+
 def _transition_reconciliation(db, now, th, sig_cfg):
     """Rooms where a typed discharge/transfer event (extract_llm
     `events`, not a body substring — '退院できません' etc. does not
@@ -839,6 +872,7 @@ DETECTORS = (("request_overdue", _request_overdue),
              ("symptom_after_med_change", _symptom_after_med),
              ("comm_concentration", _comm_concentration),
              ("rx_period_expiry", _rx_period_expiry),
+             ("rx_period_lapsed", _rx_period_lapsed),
              ("transition_reconciliation", _transition_reconciliation))
 
 
@@ -1048,6 +1082,7 @@ SIGNAL_TIERS = {
     "request_aging": "digest",
     "comm_concentration": "digest",
     "rx_period_expiry": "digest",
+    "rx_period_lapsed": "digest",
 }
 DIGEST_INTERVAL_H = 24
 

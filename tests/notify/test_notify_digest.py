@@ -227,6 +227,52 @@ def test_signal_block_needs_signals_notify(led):
     assert "アラート" not in _text(led)
 
 
+def _age_signal(led, key, first_seen):
+    led.db.execute("UPDATE artifacts SET created_at=? WHERE "
+                   "kind='signal_v1' AND json_extract(meta,'$.key')=?",
+                   (first_seen, key))
+
+
+def test_stale_alerts_resurface(led):
+    """open のまま3日超で誰にも確認されていないアラートは日次
+    ダイジェストで再掲する。"""
+    _patient(led, 1)
+    _signal_row(led, "old-open", stype="adherence_concern")
+    _signal_row(led, "fresh-open", stype="comm_concentration")
+    _age_signal(led, "old-open", T - 4 * 86400)
+    _age_signal(led, "fresh-open", T - 86400)
+    led.db.commit()
+    notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
+                                now=T)
+    text = _text(led)
+    assert "■ アラート（open）2件" in text
+    assert ("■ 滞留アラート（3日超・未確認）1件: adherence_concern"
+            in text)
+
+
+def test_stale_alerts_skip_acked(led):
+    """カードで確認済みのシグナルキーは滞留に数えない。"""
+    _patient(led, 1)
+    _signal_row(led, "old-open", stype="adherence_concern")
+    _age_signal(led, "old-open", T - 4 * 86400)
+    led.db.execute(
+        "INSERT INTO notification_cards(card_key,kind,anchor_key,"
+        "created_at,updated_at) VALUES('k1','signal','k1',?,?)",
+        (T, T))
+    led.db.execute(
+        "INSERT INTO notification_view_manifests(card_id,render_rev,"
+        "source_generation,presentation_generation,shown,created_at)"
+        " VALUES(1,1,1,1,?,?)", (json.dumps(["old-open"]), T))
+    led.db.execute(
+        "INSERT INTO notification_acknowledgements(card_id,manifest_id,"
+        "actor,command_id,created_at) VALUES(1,1,'nurse','c1',?)",
+        (T,))
+    led.db.commit()
+    notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
+                                now=T)
+    assert "■ 滞留アラート（3日超・未確認）0件" in _text(led)
+
+
 def test_task_counts(led):
     for due, status in (("2026-09-30", "open"), ("2026-10-01", "in_progress"),
                         (None, "open"), ("2026-09-01", "done")):

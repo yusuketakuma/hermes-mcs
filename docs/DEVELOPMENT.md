@@ -394,7 +394,7 @@ $PY mcs/views/mcs_view.py signals --project 123
 
 <!-- BEGIN GENERATED:signals -->
 
-11 detectors — auto-generated from `mcs_signals.DETECTORS`.
+12 detectors — auto-generated from `mcs_signals.DETECTORS`.
 
 | 検知器 | 概要 |
 |---|---|
@@ -408,6 +408,7 @@ $PY mcs/views/mcs_view.py signals --project 123
 | `symptom_after_med_change` | Same-post coupling: a change-action med mention AND a new or ongoing non-negated patient symptom in ONE message — an … |
 | `comm_concentration` | Non-archived rooms whose post count in the last 72h exceeds a fixed threshold. Volume is not severity. |
 | `rx_period_expiry` | extract_v1 med_periods whose end date lands within the horizon. |
+| `rx_period_lapsed` | Patients whose furthest-out recorded period expression has already ended with no later period mention — the prescript… |
 | `transition_reconciliation` | Rooms where a typed discharge/transfer event (extract_llm `events`, not a body substring — '退院できません' etc. does not ma… |
 
 <!-- END GENERATED:signals -->
@@ -425,7 +426,9 @@ $PY mcs/views/mcs_view.py signals --project 123
   転院の言及 — 共起ありは transition_reconciliation が担当）、
   `symptom_after_med_change`（同一投稿内の薬変更言及＋新規/継続症状 —
   因果は人が原記録で判断）、`comm_concentration`（直近72hの記録集中）、
-  `rx_period_expiry`（期間表現の終了間近）、`transition_reconciliation`
+  `rx_period_expiry`（期間表現の終了間近）、`rx_period_lapsed`
+  （期間表現の終了後に新しい期間表現の記録がない — 内服切れの
+  可能性。終了後 `rx_lapsed_days` 日まで）、`transition_reconciliation`
   （extract_llm の型付き discharge/transfer イベント±14日の薬変更言及の
   共起 — 「退院」文字列ではなく抽出イベントを使う）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
@@ -471,7 +474,9 @@ $PY mcs/views/mcs_view.py signals --project 123
   `StaleSend` で破棄する。取得状況は `mcs_queries.coverage_gaps()`
   （incomplete ルームと理由コード・待機/失敗ジョブ・本文未取得・返信未取得）を
   使い、0件でも欄を出す。アラートは `signals.notify` がオンのときだけ、
-  `request_overdue`/`request_aging`/`rx_period_expiry` を除外して型別件数。
+  `request_overdue`/`request_aging`/`rx_period_expiry`/`rx_period_lapsed`
+  を除外して型別件数。滞留行は open 3日超かつカードで一度も ack
+  されていないシグナルキー（`STALE_ALERT_D`）を数える。
 - 緊急度: `structured_view.message_urgency()` が唯一の判定 —
   現行 extract_llm が `urgency:high` なら `llm`、ルール抽出（extract_v1）
   だけなら `rule`。カードの `📋 構造化` には出所付き

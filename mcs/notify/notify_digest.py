@@ -21,10 +21,13 @@ from notify_render import _patient_name, plain_notice
 
 KIND = "daily_digest"
 MAX_LIST = 10
+DAY_S = 86400
+STALE_ALERT_D = 3        # an open alert first detected longer ago
+                         # than this and never acked is re-surfaced
 # request/deadline-type signals are the task block's business, not the
 # candidate count's (design #13: 期限・予定・依頼は含めない)
 EXCLUDED_SIGNALS = frozenset({"request_overdue", "request_aging",
-                              "rx_period_expiry"})
+                              "rx_period_expiry", "rx_period_lapsed"})
 NOTE = ("※ 取得済みの記録から数えた件数です。記録が見つからないことは対応が"
         "なかったことを意味せず、取得完了の記録は欠落なしの保証ではありません。")
 
@@ -47,6 +50,40 @@ def _ids(pairs, fmt) -> str:
     shown = ", ".join(fmt(p) for p in pairs[:MAX_LIST])
     return shown + (f" 他{len(pairs) - MAX_LIST}件" if len(pairs) > MAX_LIST
                     else "")
+
+
+def _stale_open_unacked(db, now: float) -> list:
+    """[(key, latest content)] — open alert keys first detected more
+    than STALE_ALERT_D days ago whose key no live card acknowledgement
+    has ever covered. The open-since clock starts at the key's first
+    signal_v1 row: a resolve+reopen keeps the original timestamp, which
+    reads as 'this condition persists' rather than 'new alert'."""
+    latest = mcs_signals._latest_signal_states(db)
+    open_by_key = {k: c for k, c in latest.items()
+                   if c and c["state"] == "open"}
+    if not open_by_key:
+        return []
+    stale = set()
+    for k, first_open in db.execute(
+            "SELECT json_extract(meta,'$.key'), MIN(created_at) "
+            "FROM artifacts WHERE kind='signal_v1' AND json_valid(meta) "
+            "GROUP BY json_extract(meta,'$.key')"):
+        if k in open_by_key and type(first_open) in (int, float) \
+                and now - first_open >= STALE_ALERT_D * DAY_S:
+            stale.add(k)
+    acked = set()
+    for (shown,) in db.execute(
+            "SELECT m.shown FROM notification_acknowledgements a "
+            "JOIN notification_view_manifests m "
+            "ON m.manifest_id=a.manifest_id "
+            "WHERE a.withdrawn_at IS NULL"):
+        try:
+            shown_keys = json.loads(shown or "[]")
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if isinstance(shown_keys, list):
+            acked.update(k for k in shown_keys if isinstance(k, str))
+    return [(k, open_by_key[k]) for k in stale - acked]
 
 
 def build_text(db, cfg, since: float, until: float) -> str:
@@ -152,6 +189,15 @@ def build_text(db, cfg, since: float, until: float) -> str:
                      + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
                                         sorted(by_type.items()))
                         if by_type else ""))
+        stale = _stale_open_unacked(db, until)
+        by_stale: dict = {}
+        for _key, c in stale:
+            by_stale[c["type"]] = by_stale.get(c["type"], 0) + 1
+        lines.append(f"■ 滞留アラート（{STALE_ALERT_D}日超・未確認）"
+                     f"{len(stale)}件"
+                     + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
+                                         sorted(by_stale.items()))
+                        if by_stale else ""))
 
     today = end.date().isoformat()
     t = db.execute(
