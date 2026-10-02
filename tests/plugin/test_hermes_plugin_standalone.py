@@ -42,6 +42,29 @@ def test_registration_without_repo_root_on_sys_path(tmp_path):
     assert _register(tmp_path, "standalone") == []
 
 
+def test_slack_factory_bootstraps_shared_adapters(tmp_path):
+    loader = LOADER.split("calls = []", 1)[0] + r'''
+class Ctx:
+    def get_config(self, key, default=None):
+        return {"data_root": sys.argv[3], "slack_adapter_enabled": True,
+                "slack_team_id": "TTEST", "slack_application_id": "ATEST",
+                "slack_channel_id": "CTEST", "slack_allowed_user_ids": ["UTEST"],
+                "project_ids": [1]}.get(key, default)
+assert "adapters" not in sys.modules
+assert mod._make_slack_factory(Ctx())(object(), None) is None
+print("factory_ok")
+'''
+    (tmp_path / "flags").mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(json.dumps(
+        {"runtime_mode": "hermes", "interactive": False, "transport": "slack"}))
+    out = subprocess.run(
+        [sys.executable, "-I", "-c", loader, str(PLUGIN),
+         str(PLUGIN.parents[1]), str(tmp_path)],
+        capture_output=True, text=True, timeout=60, cwd=tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "factory_ok"
+
+
 def test_a_broken_probe_never_blocks_registration(tmp_path):
     (tmp_path / "flags").mkdir()
     (tmp_path / "flags" / "notify.json").write_text("{not json")

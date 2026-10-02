@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "Hermes連携でSlackの新着通知が停止する問題を修正",
+  "summary": "Hermes GatewayがMCSプラグインを読み込む際のエラーを解消し、未送信のSlack通知を既存の配送処理で送信できるようにします。",
+  "upgrade": "Hermes連携でSlack通知を使う環境は更新後にHermes Gatewayを再起動してください。通知先・認証情報・稼働モードの変更は不要です。",
+  "details": [
+    "構成整理で共有配送モジュールを直接importしたため、Hermesのプラグイン読込時にリポジトリルートを解決できなくなっていた。既存の互換入口を再利用する。",
+    "リポジトリルートをsys.pathに含めない独立PythonプロセスでSlackのhandler factoryを実行する回帰テストを追加する。"
+  ],
+  "refs": ["hermes_plugin/card_workers.py", "8b124c6d6067fb939b15904db212778ab905e94a"]
+}
