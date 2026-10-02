@@ -79,6 +79,9 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 
 ## 0. 導入形態の選択
 
+B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場合。
+§3 の手動最小構成では Slack/Discord の配送・カードは使えない。
+
 | 機能 | A: hermes アドオン | B: スタンドアロン |
 |---|---|---|
 | 未読収集 → SQLite → `mcs_view` 閲覧 | ✓ | ✓ |
@@ -124,6 +127,7 @@ cd hermes-mcs
 |---|---|
 | `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `OK`/`WARN`/`NG` を表示。NG には `fix:` 行で直し方が付く。NG が1つでもあれば exit 1。何も書き込まない |
 | `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[new]`/`[exists]`）を表示。何も書き込まない。NG があれば exit 1 |
+| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=hermes）。非対話は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
 | `--force-repo` | 別の checkout から導入済みの環境（plugin symlink・`~/.mcs-recovery/repo_path`・services）を、この checkout に切り替えることを許可する（§A-7） |
 | `--no-brew` / `--no-llm` / `--no-plugin` / `--no-services` / `--no-recovery` | ステージ 1 / 4 / 3 / 5 / 6 をスキップ（下記） |
 | `[HERMES_HOME]`（位置引数） | 既定 `~/.hermes`。既定以外は services ステージが非対応のため `--no-services` 併用が必須（無いと exit 2） |
@@ -469,8 +473,9 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | 場所 | 内容 | 備考 |
 |---|---|---|
 | Keychain `mcs-adapter` | MCS パスワード | `auto_login` がフォーム投入時に読む |
-| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY` | 平文 — FileVault/物理セキュリティ前提 |
-| hermes profile `.env` | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
+| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`。`runtime_mode=standalone` の互換トークン入力。`init`は私有JSONへ取り込み、run/sendはJSONを優先する | 平文 — FileVault/物理セキュリティ前提 |
+| `~/.mcs/data/{slack,discord}-credentials.json` (0600) | 独立Slack/DiscordのBot/App token。`mcs_standalone init`が非表示入力または既存の私有 `.env`から登録 | run/sendが優先して検証。秘密値の環境自動取得なし |
+| hermes profile `.env`（Path A のみ） | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
 
 ## 6. スケジュール構成（Path A 導入後）
 

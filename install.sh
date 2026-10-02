@@ -81,6 +81,23 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Ask only on a fresh interactive install. Existing JSON is parsed below
+# without grep, so malformed or unsupported modes cannot silently fall back.
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
+        && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
+    printf '%s\n' "How should MCS connect to Slack/Discord?" \
+        "  1) hermes      — through Hermes Agent" \
+        "  2) standalone  — without Hermes Agent"
+    printf 'choose 1 or 2 [1]: '
+    read -r _answer || _answer=""
+    case "$_answer" in
+        2|standalone) RUNTIME_MODE=standalone ;;
+        ""|1|hermes) RUNTIME_MODE=hermes ;;
+        *) printf '%s\n' "invalid choice — use --mode hermes|standalone" >&2; exit 2 ;;
+    esac
+    RUNTIME_EXPLICIT=1
+fi
+
 say()  { printf '\n=== %s ===\n' "$1"; }
 ok()   { printf '  ok: %s\n' "$*"; }
 skip() { printf '  skip: %s\n' "$*"; }
@@ -270,6 +287,7 @@ pf_net() {  # <label> <url> <needed: 1 = blocker when unreachable>
 
 preflight() {
     say "preflight (read-only — nothing is written)"
+    pf_info "runtime mode: $RUNTIME_MODE (change with --mode hermes|standalone)"
     if [ "$IS_ROOT" -eq 1 ]; then
         pf_ng "running as root" "re-run as your normal user, without sudo"
     else
@@ -390,7 +408,8 @@ dry_run_plan() {
     plan_line "" "venv $VENV [$(state "$VENV_PY")] + pip install -e hermes-agent[messaging]"
     plan_line "" "shim $SHIM [$(state "$SHIM")] (a foreign file there is left alone)"
     fi
-    if [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin)"
+    if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 plugin" "not used in standalone mode"
+    elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin)"
     else plan_line "3/6 plugin" "symlink $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
     if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 llm" "skipped"
     else
@@ -652,8 +671,13 @@ fi
 # -------------------------------------------------------- 3. plugin
 say "3/6 Discord/Slack command plugin"
 if [ "$SKIP_PLUGIN" -eq 1 ]; then
-    skip "stage skipped (--no-plugin) — interactive cards need this plugin; re-run without the flag before enabling notify.interactive"
-    sum "3/6 plugin:   skipped (--no-plugin)"
+    if [ "$RUNTIME_MODE" = standalone ]; then
+        skip "not used in standalone mode — the standalone connector serves the cards"
+        sum "3/6 plugin:   not used (standalone)"
+    else
+        skip "stage skipped (--no-plugin) — interactive cards need this plugin; re-run without the flag before enabling notify.interactive"
+        sum "3/6 plugin:   skipped (--no-plugin)"
+    fi
 else
     mkdir -p "$HERMES_HOME/plugins"
     if [ -e "$PLUGIN_LINK" ] && [ ! -L "$PLUGIN_LINK" ]; then

@@ -73,6 +73,13 @@ KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
+# runtime_mode=standalone (mcs_setup._agent_labels): launchd calendar
+# agents replace hermes cron, ai.mcs.standalone replaces the gateway
+STANDALONE_LABEL = "ai.mcs.standalone"
+CRON_LABEL_PREFIX = "ai.mcs.cron."
+KNOWN_AGENT_LABELS |= frozenset(
+    {STANDALONE_LABEL} | {CRON_LABEL_PREFIX + s[:-3].replace("_", "-")
+                          for s in KNOWN_CRON_SCRIPTS})
 STALE_S = 1800
 ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
 GIT_LOCK_MIN_AGE_S = 600
@@ -258,6 +265,15 @@ def _try_lock(path):
     except OSError:
         os.close(fd)
         return None
+
+
+def _standalone():
+    """config.json runtime_mode — read directly: the repo may be broken."""
+    try:
+        with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
+            return json.load(f).get("runtime_mode") == "standalone"
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _setup_python():
@@ -493,8 +509,9 @@ def _reconcile_membership(snapshot):
                       if isinstance(a, dict)}
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
-        owned = (label.startswith("local.mcs-")
-                 or label.startswith("ai.mcs.extract-")) \
+        owned = (label.startswith(("local.mcs-", "ai.mcs.extract-",
+                                   CRON_LABEL_PREFIX))
+                 or label == STANDALONE_LABEL) \
             and label not in EXCLUDED_LABELS
         if owned and label not in desired_agents \
                 and label not in KNOWN_AGENT_LABELS:
@@ -555,6 +572,34 @@ def _reconcile_membership(snapshot):
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
+    if _standalone():
+        # best-effort to the system-alert channel (notify_flush's choice)
+        try:
+            with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
+                cfg = json.load(f)
+            target = cfg.get("notify_system_target") or cfg.get("notify_target")
+            python = os.path.join(HOME, "venv", "bin", "python3")
+            entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
+            if isinstance(target, str) and os.access(python, os.X_OK) \
+                    and os.path.isfile(entry) and not target.startswith("lineworks:"):
+                proc = subprocess.Popen(
+                    [python, entry, "send", "--to", target.strip(), "--quiet"],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, close_fds=True,
+                    start_new_session=True)
+                try:
+                    proc.communicate(
+                        json.dumps({"text": text[:2000]}).encode(),
+                        timeout=60)
+                except subprocess.TimeoutExpired:
+                    # a wedged sender must not outlive the watchdog —
+                    # kill and reap it rather than orphaning a child
+                    proc.kill()
+                    proc.wait()
+                    raise
+        except Exception:
+            pass
+        return
     try:
         if _runtime_mode() == "standalone":
             cfg = _runtime_config()

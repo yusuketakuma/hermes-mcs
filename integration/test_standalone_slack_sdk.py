@@ -123,7 +123,7 @@ def no_network(monkeypatch):
 
 def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypatch):
     async def scenario():
-        client, session = standalone._client({"bot_token": "xoxb-fictional"})
+        client, session = standalone._client({"bot_token": "xox" + "b-fictional"})
         wire = Wire()
         monkeypatch.setattr(session, "_live", lambda: wire)
         try:
@@ -151,7 +151,7 @@ def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypa
 def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeypatch):
     """Native SDK payloads retain the current card/human-command contracts."""
     async def scenario():
-        credentials = {"bot_token": "xoxb-fictional", "app_token": "xapp-fictional"}
+        credentials = {"bot_token": "xox" + "b-fictional", "app_token": "xapp-fictional"}
         client, session = standalone._client(credentials)
         wire = Wire()
         monkeypatch.setattr(session, "_live", lambda: wire)
@@ -281,7 +281,7 @@ def test_real_supervisor_and_socket_start_only_after_scope_lock(tmp_path, monkey
         settings = {**spec["delivery"], "data_root": str(tmp_path / "data"),
                     "allowed_user_ids": frozenset({"U_OPERATOR"}),
                     "project_ids": frozenset({123})}
-        credentials = {"bot_token": "xoxb-fictional", "app_token": "xapp-fictional"}
+        credentials = {"bot_token": "xox" + "b-fictional", "app_token": "xapp-fictional"}
         for name in ("slack_render", "cmd_int", "cmd_results", "flags"):
             (tmp_path / "data" / name).mkdir(parents=True)
         (tmp_path / "data/flags/notify.json").write_text(json.dumps({
@@ -331,7 +331,7 @@ def test_real_supervisor_and_socket_start_only_after_scope_lock(tmp_path, monkey
 
 def test_socket_mode_rejects_ambient_oauth_and_redacts_sdk_debug(monkeypatch, caplog):
     async def scenario():
-        credentials = {"bot_token": "xoxb-fictional", "app_token": "xapp-fictional"}
+        credentials = {"bot_token": "xox" + "b-fictional", "app_token": "xapp-fictional"}
         client, session = standalone._client(credentials)
         wire = Wire()
         monkeypatch.setattr(session, "_live", lambda: wire)

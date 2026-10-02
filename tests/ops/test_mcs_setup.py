@@ -1436,7 +1436,7 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
 def test_standalone_init_never_writes_hermes_config(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
-    assert mcs_setup._apply_plugin_integration({"runtime_mode": "standalone", "notify": {"interactive": "slack"}}, SimpleNamespace(yes=True))
+    assert not mcs_setup._apply_plugin_integration({"runtime_mode": "standalone", "notify": {"interactive": "slack"}}, SimpleNamespace(yes=True))
 
 
 def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys):

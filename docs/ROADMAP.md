@@ -1,6 +1,6 @@
 # hermes-mcs ロードマップ
 
-改訂日: 2026-09-30（詳細計画の基準は v1.0.6 / `f947042`。処方薬剤歴の抽出候補とタスク候補抽出・v4強化計画を追加）
+改訂日: 2026-10-02（詳細計画の基準は v1.0.6 / `f947042`。スタンドアローンモードを完了済み基盤へ追加）
 対になる文書: zaitaku-calender `ROADMAP.md`。接続フェーズの ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約決定の番号（CD-1〜CD-10）、契約版は両文書で共通。片方の C0/Q/CD 見出し行だけを変えた場合は C0 を完了扱いにしない。
 旧版（Oracle レビュー統合版、機能候補 v2 30 項目）は git 履歴（`git show f947042:docs/ROADMAP.md`）を参照。変更の詳細は `CHANGELOG.md`。
 
@@ -34,7 +34,7 @@
 |---|---|---|
 | MCS からの取得・欠落の検知・原本アーカイブ | 正本（`mcs/ingest/`、`mcs/core/ledger.py`） | 持たない |
 | MCS 本文・添付の抽出（薬剤言及・症状・検査値・OCR） | 担当。出力は候補のみ（`mcs/extract/`、`mcs/semantic/`） | 抽出しない（LLM による事実生成・OCR による自動確定は OUT） |
-| MCS 新着・緊急連絡のリアルタイム通知 | 担当（Discord/Slack。`mcs/notify/`（`notify_flush.py` 等）、即時配信への昇格判定は `mcs/ops/mcs_signals.py` の `_urgency_high`（:1043 付近）と呼び出し側（:1194・:1260・:1277。昇格行の詳細は未確認）。通知の正は hermes の即時通知） | 外部リマインダーは追加しない |
+| MCS 新着・緊急連絡のリアルタイム通知 | 担当（Discord/Slack。`mcs/notify/`（`notify_flush.py` 等）、即時配信への昇格判定は `mcs/ops/mcs_signals.py` の `_urgency_high`（:1043 付近）と呼び出し側（:1194・:1260・:1277。昇格行の詳細は未確認）。通知の正は `runtime_mode=hermes` では hermes の即時通知、`standalone` では `mcs_standalone send`） | 外部リマインダーは追加しない |
 | 患者・処方・臨床プロファイル・ケアチームの正本 | 持たない | 正本 |
 | 予定・訪問・フォロー・引継ぎ・Work Queue・報告書・算定候補 | 持たない（依頼台帳は既存機能の範囲で凍結） | 正本 |
 | 外部患者 ID ⇔ 内部患者の対応付け | project_id を送るだけ | 人が確定する append-only の対応表 |
@@ -55,6 +55,7 @@
 - **更新・復旧経路の強化（v1.0.6）**: launchd bootstrap の `launchctl print` 検証、更新経路の launchctl 時間上限、consent hold をあらゆる escalate で維持、escalate 通知の重複抑止、Discord/Slack の確定・取消の一本化（詳細は `CHANGELOG.md` の 1.0.6）。
 - **外部出力契約の骨格**: `GovernedExporter` の deliver・`reconcile`（`mcs/ops/ext_contract.py:555`）・`withdraw`（同 :601）は実装済み。journal に `held` は書かれず、結果不明は `sent` として残る（`held` は読取り時に許容するだけ: 同 :449-451,:513）。CLI（同 :660-687）は `--auth/--records/--state/--sink` の deliver だけを公開し、sink は `LocalSink`（同 :327）のみ。
 - **その他の完了**: 2026-09-19 追加検証（paginate 例外境界、schema_error、thread_incomplete、mark_result_unknown）、discovery job（C02）、proxy 非継承（C04）、添付保存名（C05、今後保存するもの）、mark_as_read の定期実行（2026-09-23 承認。旧版 優先順位 9）。
+- **スタンドアローンモード（`runtime_mode: "standalone"`）**: Hermes Agent なしで収集・通知・カード・`/mcs`・定期実行・更新・復旧まで全機能を動かす経路を追加（`mcs_standalone/` が Slack/Discord 接続と送信、定期ジョブは launchd `ai.mcs.cron.*`、接続は常駐 `ai.mcs.standalone`、SDK は固定版を `~/.mcs/venv` に限定、トークンは `~/.mcs/.env` 0600 のみ）。既定の `hermes` モードの挙動は不変。計画・検証の経緯は `docs/dev-records/standalone-20261001.md`、導入は `docs/guides/STANDALONE.md`。実 Slack/Discord・実機 launchd への接続検証は未実施（オフライン検証のみ）。
 
 ## 3. 先に直す既存不具合とガード
 

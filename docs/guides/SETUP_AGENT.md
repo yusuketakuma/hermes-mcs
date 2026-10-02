@@ -126,6 +126,9 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 > 通知・操作をHermesなしで使う）
 
 - A → Phase 3
+- S → [STANDALONE.md](STANDALONE.md) の「導入」をそのまま実行する
+  （`./install.sh --mode standalone` → `~/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init`
+  → `services` → `check`）。Bot トークンは init の非表示入力でユーザー自身が入力する
 - B → Phase 6
 
 ## Phase 3 — Path A: 依存の自動導入

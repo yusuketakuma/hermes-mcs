@@ -65,7 +65,10 @@ actor/project範囲を設定します。`allowed_role_ids`は任意で、@everyo
 
 秘密情報は`~/.mcs/data/slack-credentials.json`（`bot_token`・`app_token`）または
 `discord-credentials.json`（`bot_token`）へ0600で保存します。
-CLIは秘密値をargvで受け取らず、環境やHermes profileから自動取得しません。
+既存worktree版のroot配下 `.env`（0600）も互換入力として利用できます。
+`init`はその明示ファイルをJSONへ取り込み、既存ファイルは削除しません。
+JSONが存在して壊れている場合は `.env` へfallbackせず停止します。
+CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileから自動取得しません。
 再設定は`$PY -m mcs_standalone init --transport slack`または`discord`を使います。
 
 LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設定します。
@@ -88,7 +91,7 @@ $PY -m mcs_standalone status
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
 ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
 
-Linuxでは`service`コマンドがsystemd user serviceの候補を生成します。
+Linuxでは`$PY -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
 `mcs_setup services`はユーザーsystemdへ配置します。Chrome・ローカルLLMなどの
 既存macOS向け導入は別途必要です。Linux候補の生成・隔離テストと実機検証は区別します。
 

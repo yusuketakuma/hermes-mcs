@@ -224,6 +224,34 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     assert bool(gates.gate_plugin_sandbox()) is not allowed
 
 
+def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path):
+    gates = _load("ci_standalone_sdk", "ci/gates.py")
+    adapters = tmp_path / "adapters"
+    standalone = tmp_path / "mcs_standalone"
+    path = adapters / "slack" / "standalone.py"
+    path.parent.mkdir(parents=True)
+    monkeypatch.setattr(gates, "ADAPTERS", adapters)
+    monkeypatch.setattr(gates, "STANDALONE", standalone)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    deferred = "def connect():\n from slack_sdk.web.async_client import AsyncWebClient\n"
+    guard = ('import os\nasync def connect():\n'
+             ' if "SLACK_CLIENT_ID" in os.environ and "SLACK_CLIENT_SECRET" in os.environ:\n'
+             '  raise ValueError("slack_ambient_oauth_not_allowed")\n')
+    path.write_text(deferred)
+    assert gates.gate_stdlib_only() == []
+    path.write_text("from slack_sdk.web.async_client import AsyncWebClient\n")
+    assert gates.gate_stdlib_only()  # SDKs cannot load on core/plugin import
+    path.write_text(guard)
+    assert gates.gate_plugin_sandbox() == []
+    path.write_text(guard + ' secret = os.environ["SLACK_BOT_TOKEN"]\n')
+    assert gates.gate_plugin_sandbox()
+    path.write_text(deferred)
+    forbidden = adapters / "slack" / "actions.py"
+    forbidden.write_text(deferred)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [forbidden])
+    assert gates.gate_stdlib_only()  # regular Hermes adapters gain no SDK ownership
+
+
 @pytest.mark.parametrize(("source", "locked"), [
     ('"acquire_run_lock"\ndef write():\n return Ledger("synthetic.db")\n', False),
     ('def unused():\n acquire_run_lock()\n'

@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "独立モードのCLIと送信再試行を統合",
+  "summary": "独立モードのrun/send/checkに、単一hostの定期実行・安全な更新再起動と既存のSlack・Discord配送を統合しました。受理されていない送信だけを最大5回まで再試行し、成否不明は自動再送しません。既定のHermes接続は維持します。",
+  "upgrade": "独立モードを使う場合はinstall.sh --mode standaloneで固定SDKを導入し、init、check、servicesを実行します。旧worktree版の個別calendar agentは停止し、同じBotを使うHermes接続・単体LINE WORKSサービスとの重複を解消してください。私有JSONを優先し、既存のroot配下.env（0600）も互換入力として使えます。稼働コードの更新後は選択モードのサービス再起動が必要です。install.shやSDK固定版が変わるタグは自動更新せず再導入してください。モデル・取得範囲・既読化・人承認条件・解析の既定値は変更しません。",
+  "details": [
+    "公式SDKと推移依存を独立venvへ固定して導入する。",
+    "単一hostが既存6定期ジョブ、cmd/cmd_int、抽出worker2本と接続を所有する。",
+    "scope・資格情報・添付pin・no-redirect/no-proxyを検証し、更新markerとgeneration付き再起動要求で処理中の強制終了を避ける。",
+    "既存の私有JSONまたは.envのみから実行用の資格情報を読み、環境やHermes profileへfallbackしない。",
+    "独立モード選択中はHermes pluginのMCS処理を起動しない。"
+  ],
+  "refs": [
+    "mcs_standalone/",
+    "mcs/core/mcs_runtime.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py",
+    "install.sh"
+  ]
+}

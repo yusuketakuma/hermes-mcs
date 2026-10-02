@@ -20,3 +20,4 @@ uv.lock
 .debug-journal.md
 .senpi/
 .claude/
+venv/

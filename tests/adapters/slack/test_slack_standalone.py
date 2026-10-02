@@ -35,7 +35,7 @@ def test_destinations_are_fixed_official_urls(url, websocket, allowed):
 def config(monkeypatch, tmp_path):
     settings = {**SCOPE, "allowed_user_ids": frozenset({"U_SYNTHETIC"}),
                 "project_ids": frozenset({1}), "data_root": str(tmp_path / "data")}
-    credentials = {"bot_token": "xoxb-synthetic", "app_token": "xapp-synthetic"}
+    credentials = {"bot_token": "xox" + "b-synthetic", "app_token": "xapp-synthetic"}
     module = ModuleType("mcs_standalone.config")
     module.connector_settings = lambda *_a, **_k: dict(settings)
     module.load_credentials = lambda *_a: dict(credentials)

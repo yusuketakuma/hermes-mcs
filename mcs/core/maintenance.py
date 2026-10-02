@@ -183,7 +183,11 @@ def rotate_log(paths=None):
                                        "extract_drain_2.log"),
                           os.path.join(HOME, "data", "extract_llm.log"),
                           os.path.join(HOME, "data",
-                                       "semantic_drain.log")):
+                                       "semantic_drain.log"),
+                          # runtime_mode=standalone connector / launchd jobs
+                          os.path.join(HOME, "data", "standalone.log"),
+                          os.path.join(HOME, "data", "cron.log"),
+                          os.path.join(HOME, "data", "llamacpp-restart.log")):
         with suppress(OSError):
             if os.path.getsize(path) > LOG_MAX:
                 shutil.copyfile(path, path + ".1")

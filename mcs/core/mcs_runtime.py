@@ -6,12 +6,20 @@ from pathlib import Path
 
 from mcs_util import HOME
 
+HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
+HERMES_SCRIPTS = os.path.expanduser("~/.hermes/scripts")
+STANDALONE_LABEL = "ai.mcs.standalone"
+
 
 def mode(cfg: dict) -> str:
     value = cfg.get("runtime_mode", "hermes")
     if value not in ("hermes", "standalone"):
         raise ValueError("runtime_mode_invalid")
     return value
+
+
+def standalone(cfg: dict) -> bool:
+    return mode(cfg) == "standalone"
 
 
 def runtime_home(cfg: dict, *, root=None) -> str:
