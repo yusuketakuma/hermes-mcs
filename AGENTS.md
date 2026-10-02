@@ -18,6 +18,7 @@ id は `patients.probe_mid` に記録して繰返し取得を抑える。
 | import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ |
 | 抽出 | `extract/v1/` はルール、`v4/` は現行LLM。v2/v3 の旧実装は git 履歴。`extract/rollup.py` と `semantic/` は世代横断 |
 | 通知 | `adapters/{slack,discord,lineworks,common}/`。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
+| 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
 | 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
 | 文書・配備 | 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。`deployment/` は配備候補で、編集だけでは実機適用しない |
 
@@ -30,7 +31,7 @@ Hermes plugin の更新反映には gateway 再起動が必要。旧 worker が�
 
 ```bash
 scripts/run_tests.sh                # tests/ 一式（一時HOME・認証環境の隔離）
-ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
+ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
 python3 scripts/development/update_readme.py    # README 生成ブロック再生成（CI が drift 検出）
 python3 scripts/development/update_readme.py --check
 python3 ci/gates.py
@@ -49,11 +50,19 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
 - **収集・解析コアの依存は標準ライブラリのみ**。新しい外部依存を加えない。
   `adapters/discord/{actions,cards}.py` だけは Hermes 同梱の
   `discord.py` を関数内で遅延 import し、UI と既存 interaction の
-  followup に使う。Slack/Discord の独自 Bot・認証情報・REST 接続は作らない。
+  followup に使う。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST
+  接続は作らない。例外は `runtime_mode=standalone` の
+  `adapters/{slack,discord}/standalone.py` と `mcs_standalone/{slack,discord}_runtime.py` で、
+  `deployment/requirements-standalone.txt` の固定版公式 SDK（独立 venv）で接続し、
+  トークンはroot配下の私有JSON（優先）または `.env`（0600）だけから読む。
+  SDK import は関数内に限り、
+  proxy 環境変数は起動時に除去する。
   LINE WORKS はHermesに接続機能がないため `adapters/lineworks/` だけが独自の
   認証・Bot REST・署名Callbackを所有する（stdlib・OpenSSL、固定公式URL、
   no-redirect/no-proxy、期限・容量制限、秘密値の環境自動取得なし）。
-  adapter の `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する。
+  Hermes接続のadapterの `asyncio` は `sleep`・`to_thread`・`CancelledError` に限定する。
+  独立Slack/Discordの `standalone.py` は接続・task終了待ちのasyncioも使用する。
+  正確なSDK/asyncio許可は `ci/gates.py` に限定し、通常adapterへ拡張しない。
   独立LINE WORKSの `__main__.py` だけは常駐起動/停止用の
   `Event`・`get_running_loop`・`wait_for`・`run` も使う
 - テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・

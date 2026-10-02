@@ -23,7 +23,7 @@ import time
 import urllib.request
 from contextlib import contextmanager, suppress
 
-HOME = os.path.expanduser("~/.mcs")
+HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 CONF_PATH = os.path.join(HOME, "config.json")
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 DB = os.path.join(HOME, "data", "ledger.db")

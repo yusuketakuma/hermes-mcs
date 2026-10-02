@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MCS = ROOT / "mcs"
 PLUGIN = ROOT / "hermes_plugin"
 ADAPTERS = ROOT / "adapters"
+STANDALONE = ROOT / "mcs_standalone"
 
 # Files allowed to construct a write-mode Ledger. Anything else opening
 # the ledger read-write is a regression of the snapshot/read-only contract.
@@ -26,7 +27,20 @@ LEDGER_WRITERS = {
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
 }
 
-_LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter"}
+_LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter", "mcs_standalone"}
+
+# Only independent connectors own official SDK clients. Core and Hermes
+# adapters retain their original restrictions; SDK imports stay deferred.
+_STANDALONE_SDK = {
+    "mcs_discord/standalone.py": {"discord"},
+    "mcs_slack/standalone.py": {"aiohttp", "slack_sdk", "slack_bolt"},
+    "standalone/discord_runtime.py": {"discord"},
+    "standalone/slack_runtime.py": {"slack_sdk", "slack_bolt"},
+}
+_STANDALONE_DISCORD_MEMBERS = {"", "__version__", "Intents.none", "Intents.default",
+                                "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel"}
+_STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", "gather",
+                     "get_running_loop", "wait", "wait_for", "TimeoutError"}
 
 # These adapters use the messaging SDK already owned by Hermes. Core
 # collectors must remain dependency-free, and importing /mcs must work
@@ -57,12 +71,22 @@ def _plugin_path(path: Path) -> str:
         if rel.parts[0] in ("slack", "discord"):
             return "mcs_" + rel.as_posix()
         return rel.as_posix()
+    if path.is_relative_to(STANDALONE):
+        return "standalone/" + path.relative_to(STANDALONE).as_posix()
     return ""
 
 
 def _lazy_sdk_import(path, node, parents) -> bool:
-    if (_plugin_path(path) not in _SDK_FILES or not isinstance(node, ast.Import)
-            or not all(a.name == "discord" for a in node.names)):
+    identity = _plugin_path(path)
+    native = path.is_relative_to(ADAPTERS) or path.is_relative_to(STANDALONE)
+    if native and identity in _STANDALONE_SDK:
+        mods = ([a.name.split(".")[0] for a in node.names] if isinstance(node, ast.Import)
+                else [node.module.split(".")[0]] if isinstance(node, ast.ImportFrom) else [])
+        allowed = bool(mods) and all(m in _STANDALONE_SDK[identity] for m in mods)
+    else:
+        allowed = (identity in _SDK_FILES and isinstance(node, ast.Import)
+                   and all(a.name == "discord" for a in node.names))
+    if not allowed:
         return False
     ancestor = parents.get(node)
     while ancestor is not None:
@@ -104,10 +128,10 @@ def _py_files(*dirs: Path) -> list[Path]:
 
 
 def gate_stdlib_only() -> list[str]:
-    """Stdlib/local only, except deferred Hermes-owned Discord UI imports."""
+    """Stdlib/local only, with deferred SDK imports limited to declared connector boundaries."""
     bad = []
     stdlib = sys.stdlib_module_names
-    for path in _py_files(MCS, PLUGIN, ADAPTERS):
+    for path in _py_files(MCS, PLUGIN, ADAPTERS, STANDALONE):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as e:
@@ -123,12 +147,14 @@ def gate_stdlib_only() -> list[str]:
             else:
                 continue
             for m in mods:
-                if m == "discord" and _lazy_sdk_import(path, node, parents):
+                if _lazy_sdk_import(path, node, parents):
                     continue
                 if m not in stdlib and m not in _LOCAL_MODULES:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
-        bad.extend(f"{path.name}:{v}" for v in
-                   _module_surface(tree, "discord", _SDK_MEMBERS))
+        native = path.is_relative_to(ADAPTERS) or path.is_relative_to(STANDALONE)
+        members = (_STANDALONE_DISCORD_MEMBERS if native and _plugin_path(path) in _STANDALONE_SDK
+                   else _SDK_MEMBERS)
+        bad.extend(f"{path.name}:{v}" for v in _module_surface(tree, "discord", members))
     return bad
 
 
@@ -206,7 +232,19 @@ def gate_plugin_sandbox() -> list[str]:
             continue
         identity = _plugin_path(path)
         permitted = _LINEWORKS_IMPORTS.get(identity, set())
+        independent = path.is_relative_to(ADAPTERS) and identity in {
+            "mcs_slack/standalone.py", "mcs_discord/standalone.py"}
+        if independent:
+            permitted |= {"asyncio"}
         environment_lines = set()
+        if independent and identity == "mcs_slack/standalone.py":
+            # Only this negative membership guard is allowed. Token/value
+            # reads from the ambient environment remain forbidden.
+            guard = ast.dump(ast.parse(
+                'if "SLACK_CLIENT_ID" in os.environ and "SLACK_CLIENT_SECRET" in os.environ:\n'
+                '    raise ValueError("slack_ambient_oauth_not_allowed")').body[0])
+            environment_lines.update(node.lineno for node in ast.walk(tree)
+                                     if isinstance(node, ast.If) and ast.dump(node) == guard)
         if identity == "lineworks/client.py":
             for node in tree.body:
                 if isinstance(node, ast.FunctionDef) and node.name == "_runtime_environment":
@@ -235,6 +273,8 @@ def gate_plugin_sandbox() -> list[str]:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
         async_members = _ASYNC_MEMBERS | ({"Event", "get_running_loop", "wait_for", "run", "TimeoutError"}
                                          if identity == "lineworks/__main__.py" else set())
+        if independent:
+            async_members |= _STANDALONE_ASYNC
         bad.extend(f"{path.name}:{v}" for v in
                    _module_surface(tree, "asyncio", async_members))
         for i, line in enumerate(text.splitlines(), 1):

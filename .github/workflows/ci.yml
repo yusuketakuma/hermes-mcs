@@ -23,7 +23,7 @@ jobs:
       - name: ruff
         # lint scope lives in the Makefile (LINT_PATHS); keep the pin equal to
         # the Makefile RUFF pin
-        run: pip install "ruff==0.16.8" && make lint
+        run: pip install "ruff==0.16.10" && make lint
       - name: pytest
         run: pip install "pytest==9.1.1" && scripts/run_tests.sh -x
       - name: check generated docs on PR
@@ -70,7 +70,7 @@ jobs:
       - name: no stale adapter/ references
         run: |
           bad=$(grep -rnE '(^|[^[:alnum:]_])adapter/' --include='*.py' --include='*.sh' \
-                mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ integration/ install.sh || true)
+                mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ install.sh || true)
           if [ -n "$bad" ]; then
             echo "::error::stale adapter/ references:"; echo "$bad"; exit 1
           fi
@@ -87,6 +87,22 @@ jobs:
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml
           grep -q "register" hermes_plugin/__init__.py
+
+  standalone-sdk:
+    # runtime_mode=standalone against the exact SDK pins install.sh puts in
+    # ~/.mcs/venv — offline: only each SDK's HTTP session is faked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: pinned standalone SDKs
+        run: pip install "pytest==9.1.1" -r deployment/requirements-standalone.txt
+      - name: standalone SDK integration
+        run: >-
+          scripts/run_tests.sh integration/test_standalone_sdk.py
+          integration/test_standalone_discord.py integration/test_standalone_slack_sdk.py -x
 
   incident-gates:
     runs-on: ubuntu-latest

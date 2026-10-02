@@ -40,6 +40,7 @@ import time
 import uuid
 from contextlib import suppress
 
+import mcs_runtime
 from mcs_adapter import project_url
 from mcs_queries import current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
@@ -503,6 +504,8 @@ def publish_flags(cfg: dict, root: str) -> bool:
         "route_epoch": route_epoch(cfg),
         "card_thread": n.get("card_thread") is True,
         "restore_pending": restore_pending(root) is not None,
+        # the Hermes plugin stands down when MCS runs its own connector
+        "runtime_mode": mcs_runtime.mode(cfg),
         "at": time.time(),
     }
     raw = canonical(flags)

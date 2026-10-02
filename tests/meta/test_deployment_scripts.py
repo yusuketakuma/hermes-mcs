@@ -87,8 +87,9 @@ def _llama_restart(tmp_path, launchctl_body):
         encoding="utf-8")
     runner = tmp_path / "runner.sh"
     runner.write_text(body.replace("/usr/bin/curl", str(bindir / "curl"))
-                      .replace("/bin/launchctl", str(bindir / "launchctl")))
-    log = tmp_path / ".hermes" / "logs" / "llamacpp-restart.log"
+                      .replace("/bin/launchctl", str(bindir / "launchctl"))
+                      .replace("__DATA__", str(tmp_path / "data")))
+    log = tmp_path / "data" / "llamacpp-restart.log"
     log.unlink(missing_ok=True)
     proc = subprocess.run(["bash", str(runner)],
                           env={"HOME": str(tmp_path),

@@ -883,7 +883,15 @@ def _make_handler(ctx):
 
 
 def register(ctx) -> None:
-    """Register native Discord commands and optional platform adapters."""
+    """Register native Discord commands and optional platform adapters —
+    nothing when MCS serves Slack/Discord itself (runtime_mode=standalone)."""
+    from .card_workers import _standalone_owned
+    try:
+        data_root = ctx.get_config("data_root", None)
+    except Exception:
+        data_root = None
+    if _standalone_owned(data_root):
+        return
     ctx.register_command(
         "mcs", handler=_make_handler(ctx),
         description="Read the configured MCS snapshot or preview/confirm a request.",

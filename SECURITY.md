@@ -6,7 +6,8 @@
 
 - 患者・利用者の氏名・本文・添付ファイル（`data/`、`chrome-profile/`）
 - 認証情報・トークン（`.env`、`config.json`、`token_cache.json`、
-  Keychain 登録内容、`DISCORD_BOT_TOKEN`、`TYPESAFE_API_KEY`）
+  Keychain 登録内容、`DISCORD_BOT_TOKEN`・`SLACK_BOT_TOKEN`・`SLACK_APP_TOKEN`、
+  `TYPESAFE_API_KEY`）
 - `mcs_view` の閲覧出力（本文・投稿者を含む）— 共有ログ・外部LLM・
   公開リポジトリへの転送禁止
 
@@ -19,10 +20,17 @@
   snapshot timestamp 必須の三重ゲート
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
-- Slack/Discord の対話カード addon は Hermes が接続済みの client と interaction
-  だけを使う。Discord SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
+- Hermes モード（`runtime_mode` 未指定/`hermes`）では、Slack/Discord の対話カード
+  addon は Hermes が接続済みの client と interaction だけを使う。Discord SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
   cancellation に限定する
+- `runtime_mode=standalone` では `adapters/{slack,discord}/standalone.py` と
+  `mcs_standalone/{slack,discord}_runtime.py` が
+  `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`）で
+  Slack/Discord に接続する。トークンはroot配下の私有JSON（優先）または `.env`（0600）からのみ読み、
+  SDK は関数内で import、起動時に proxy 環境変数を除去、メンションは無効化
+  （Slackの独立CLI本文はプレーンテキスト）、テキスト送信先は `notify_target` /
+  `notify_system_target` のチャンネルに限定する。成否不明の送信は再送しない
 - LINE WORKS は `adapters/lineworks/` の独立接続だけが Bot REST・JWT 認証を所有する。
   通信先は固定の公式 URL、proxy・redirect・送信の自動再試行は無効。
   秘密値は明示した権限制限付きファイルから読み、環境から自動取得しない。

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
@@ -33,9 +34,11 @@ def pid_exists(pid):
 def status(root, *, now=None):
     path = Path(root).expanduser().resolve() / "data" / STATUS_FILE
     try:
-        if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_size > 1024 * 1024:
+        from .config import _private_bytes
+        value = json.loads(_private_bytes(path, "status_missing", "status_invalid", 1024 * 1024))
+        if not isinstance(value, dict) or type(value.get("updated_at")) not in (int, float) \
+                or not math.isfinite(value["updated_at"]):
             raise ValueError
-        value = json.loads(path.read_text(encoding="utf-8"))
         age = (time.time() if now is None else now) - value["updated_at"]
         if (not isinstance(value, dict) or not -2 <= age <= STATUS_TTL
                 or not pid_exists(value.get("pid"))
@@ -44,7 +47,7 @@ def status(root, *, now=None):
                 or not isinstance(value.get("children"), dict)):
             raise ValueError
         return value
-    except (OSError, ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, UnicodeError, OverflowError):
         raise ValueError("standalone_status_unavailable") from None
 
 
@@ -67,6 +70,7 @@ def render(root, platform=None):
     if platform == "darwin":
         value = {"Label": LABEL, "ProgramArguments": argv,
                  "WorkingDirectory": repository, "RunAtLoad": True, "KeepAlive": True,
+                 "ExitTimeOut": 3660, "AbandonProcessGroup": True,
                  "ThrottleInterval": 30, "StandardOutPath": logfile,
                  "StandardErrorPath": logfile}
         return LABEL + ".plist", plistlib.dumps(value).decode("utf-8")
@@ -78,7 +82,7 @@ def render(root, platform=None):
         body = ("[Unit]\nDescription=Independent MCS runtime\nAfter=network-online.target\n\n"
                 "[Service]\nType=simple\nWorkingDirectory=" + quote(repository)
                 + "\nExecStart=" + " ".join(quote(v) for v in argv)
-                + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=60\n"
+                + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\n"
                   "KillMode=control-group\n\n[Install]\nWantedBy=default.target\n")
         return "mcs-standalone.service", body
     raise ValueError("standalone_service_platform_unsupported")

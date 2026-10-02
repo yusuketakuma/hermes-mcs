@@ -29,6 +29,12 @@ services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わ�
 | 抽出・semantic/QC 常駐drainer（slot 0） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（slot 2） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer-2` |
 
+`runtime_mode: "standalone"`では同じ時刻の6ジョブを単一hostが実行し、
+wrapperは`~/.mcs/scripts/`、Pythonは`~/.mcs/venv/bin/python3`になる。
+通知接続の有無にかかわらず`ai.mcs.standalone`を配置し、個別のcalendar agentは登録しない。
+モード変更時はmanifestの所有ジョブを照合する。Hermesへ戻す際は新cronの検証後に
+以前の独立サービスを退役させる。詳細は[独立モードの手順](../../docs/guides/STANDALONE.md)。
+
 wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO__`/`__DATA__`
 プレースホルダ付き）。実機の `~/.hermes/scripts/` へは下記の置換コマンドで
 生成する — 直接編集すると repo との drift になる。

@@ -3,12 +3,24 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import logging
+
+
+class NotSent(Exception):
+    """The platform provably did not accept the notification."""
+
+
+class Refused(Exception):
+    """The platform refused the payload before accepting it."""
 
 
 class Host:
     def __init__(self, settings):
-        self.settings = dict(settings)
+        self.settings = {key: sorted(value) if isinstance(value, frozenset) else value
+                         for key, value in settings.items()}
         self.tasks = set()
+        self._tasks = self.tasks
         self._unload = []
         self._closing = False
 
@@ -21,6 +33,7 @@ class Host:
             return None
         task = asyncio.create_task(coroutine, name=name)
         self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
         return task
 
     def on_unload(self, callback):
@@ -40,10 +53,25 @@ class Host:
                     await result
             except Exception as exc:
                 errors.append(exc)
-        for task in self.tasks:
+        tasks = list(self.tasks)
+        for task in tasks:
             task.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
         if errors:
             raise RuntimeError("standalone_host_unload_failed") from None
+
+
+def raise_ended(done, waiter):
+    """Unexpected connection or worker exits must trigger supervised recovery."""
+    for task in done - {waiter}:
+        if not task.cancelled() and task.exception() is not None:
+            raise task.exception()
+        raise RuntimeError(f"ended:{task.get_name()}")
+
+
+def log(event, **fields):
+    """Log fixed event codes without message bodies or credentials."""
+    logging.getLogger("mcs.standalone").info(
+        "%s %s", event, json.dumps(fields, ensure_ascii=False, sort_keys=True, default=str))

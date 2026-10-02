@@ -17,6 +17,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,9 @@ exit 0
     # ambient python3 answers every version probe as 3.11–3.13
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
+if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
+    exec "$STUB_PARSE_PYTHON" "$@"
+fi
 exit 0
 """,
     "llama-server": """#!/bin/sh
@@ -187,6 +191,9 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 # copied into the venv by the uv stub (not on PATH)
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
+if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
+    exec "$STUB_PARSE_PYTHON" "$@"
+fi
 if [ "$1" = "-" ] && [ -n "$STUB_REAL_PYTHON" ]; then
     exec "$STUB_REAL_PYTHON" "$@"
 fi
@@ -241,6 +248,7 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
         "STUB_STATE": str(stub_root / "state"),
         "STUB_GIT_HEAD": git_head or _pin(),
         "STUB_CLONE_HEAD": CLONE_HEAD,
+        "STUB_PARSE_PYTHON": sys.executable,
     })
     return home, hermes_home, stub_root, env
 
