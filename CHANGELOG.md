@@ -6,6 +6,90 @@
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-10-02
+
+**Hermesなしの独立稼働を追加し、Slack通知と運用の安定性を改善**
+
+独立モードで収集・通知・人承認操作・定期実行・更新・復旧を利用できます。Hermesの既定経路を維持し、Slack通知の読込み障害と独立モードの通知先・停止・切替えを修正しました。利用中の接続には更新後の再起動が必要です。
+
+### 新機能
+
+- **Hermesなしでも通知・操作・定期実行を使える独立モードを追加**
+  スタンドアローンモードで収集・保存・検索・抽出に加え、Slack・Discord・LINE WORKSへの通知、対話カード、人承認操作、監視、更新・復旧を実行できます。既存の設定はHermesモードを維持し、同じ配送・承認・既読化の安全条件を使います。
+
+### 改善
+
+- **独立接続のコード配置を整理**
+  Slack・Discordの独立接続コードを接続先別にまとめます。既存のCLI・旧import入口・送信結果・通知先と承認条件は維持します。
+
+- **独立モードのCLIと送信再試行を統合**
+  独立モードのrun/send/checkに、単一hostの定期実行・安全な更新再起動と既存のSlack・Discord配送を統合しました。受理されていない送信だけを最大5回まで再試行し、成否不明は自動再送しません。既定のHermes接続は維持します。
+
+### 不具合修正
+
+- **Hermes連携でSlackの新着通知が停止する問題を修正**
+  Hermes GatewayがMCSプラグインを読み込む際のエラーを解消し、未送信のSlack通知を既存の配送処理で送信できるようにします。
+
+- **独立稼働の通知先と停止・切替え処理を修正**
+  指定した保存先の通知設定を一貫して使用し、明示した別チャンネルへのシステム通知と通知なしでの収集起動を可能にします。ログ障害時も子プロセスと接続を回収し、LinuxでHermesへ戻す際は独立サービスの停止を確認します。
+
+### 更新時の注意
+
+- Hermes連携でSlack通知を使う環境は更新後にHermes Gatewayを再起動してください。通知先・認証情報・稼働モードの変更は不要です。
+
+- Hermes連携の標準保存先では設定変更は不要です。独立稼働の修正反映にはホストの再起動が必要です。システム通知は明示したnotify_system_targetだけを使用し、Slackのworkspace/applicationおよびDiscordのguildの照合を維持します。Linuxの切替えで停止が確認できない場合は成功扱いせずサービス定義を保持します。
+
+- 設定変更・DB移行・サービス再登録は不要です。Hermesモードの接続経路は変更しません。
+
+- 独立モードを使う場合はinstall.sh --mode standaloneで固定SDKを導入し、init、check、servicesを実行します。旧worktree版の個別calendar agentは停止し、同じBotを使うHermes接続・単体LINE WORKSサービスとの重複を解消してください。私有JSONを優先し、既存のroot配下.env（0600）も互換入力として使えます。稼働コードの更新後は選択モードのサービス再起動が必要です。install.shやSDK固定版が変わるタグは自動更新せず再導入してください。モデル・取得範囲・既読化・人承認条件・解析の既定値は変更しません。
+
+- 従来のHermes運用は追加設定不要です。独立モードを使う場合はinstall.sh --mode standaloneを実行し、runtime_mode=standalone、操作ユーザー・プロジェクト範囲と専用資格情報を設定してcheckを実行してください。既存経路から切り替える際は同じBotのHermes接続、手動登録の定期ジョブや単体LINE WORKSサービスとの重複を解消します。更新後は独立hostの処理終了後に再起動します。独立モード非対応の旧タグへのロールバックは事前にHermesモードへ移行してください。モデル・抽出範囲・既読化・承認条件・解析の既定値は変更しません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### Hermes連携でSlackの新着通知が停止する問題を修正
+
+- 構成整理で共有配送モジュールを直接importしたため、Hermesのプラグイン読込時にリポジトリルートを解決できなくなっていた。既存の互換入口を再利用する。
+- リポジトリルートをsys.pathに含めない独立PythonプロセスでSlackのhandler factoryを実行する回帰テストを追加する。
+- 根拠: hermes_plugin/card_workers.py、8b124c6d6067fb939b15904db212778ab905e94a
+
+#### 独立稼働の通知先と停止・切替え処理を修正
+
+- 通知処理の設定パスをMCS_ROOTに対応する共通パスへ統一する。
+- ログを開く失敗も捕捉し、終了処理では新規ジョブ起動をせず、状態ファイルの書込み失敗が子の回収を妨げないようにする。
+- 送信用scopeは明示した通知先からチャンネルだけを解決し、認証主体・権限と既存の配送不確実性の扱いを維持する。
+- localプレースホルダーを通知なしの構成として扱う。
+- systemdの独立サービスをdisable --nowし、非稼働を確認してから定義を削除する。
+- 根拠: mcs/notify/notify_flush.py、mcs_standalone/、adapters/slack/standalone.py、adapters/discord/standalone.py、mcs/ops/mcs_setup.py
+
+#### 独立接続のコード配置を整理
+
+- 旧ランタイム実装をadapters/slack・adapters/discord配下のruntime_compat.pyへ移し、mcs_standaloneの旧モジュール名は同じモジュール実体への互換入口として保持。
+- SDKとasyncioの静的許可を移動先の個別ファイルへ引き継ぎ、通常adapterの許可は拡張しない。
+- 文書生成のimport探索を_mcs_pathへ統一し、隣接する生成ヘルパーのパスを明示。リポジトリ外・隔離Pythonで生成内容を確認する回帰テストを追加。
+- 根拠: adapters/slack/runtime_compat.py、adapters/discord/runtime_compat.py、mcs_standalone/slack_runtime.py、mcs_standalone/discord_runtime.py、scripts/development/update_readme.py
+
+#### 独立モードのCLIと送信再試行を統合
+
+- 公式SDKと推移依存を独立venvへ固定して導入する。
+- 単一hostが既存6定期ジョブ、cmd/cmd_int、抽出worker2本と接続を所有する。
+- scope・資格情報・添付pin・no-redirect/no-proxyを検証し、更新markerとgeneration付き再起動要求で処理中の強制終了を避ける。
+- 既存の私有JSONまたは.envのみから実行用の資格情報を読み、環境やHermes profileへfallbackしない。
+- 独立モード選択中はHermes pluginのMCS処理を起動しない。
+- 根拠: mcs_standalone/、mcs/core/mcs_runtime.py、mcs/notify/notify_flush.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、install.sh
+
+#### Hermesなしでも通知・操作・定期実行を使える独立モードを追加
+
+- 独立venvへ公式接続SDKを導入し、収集・解析コアの標準ライブラリのみという条件を維持する。
+- 単一hostが既存6定期ジョブ、cmd/cmd_int取込、抽出worker2本と接続を所有し、更新marker・heartbeat・子PID検証・再起動要求で更新と協調する。
+- setupとrepo外復旧watchdogが選択モードのインタプリタ、scope、資格情報、常駐状態、所有ジョブを扱う。
+- 根拠: mcs/core/mcs_runtime.py、mcs_standalone/、adapters/discord/standalone.py、adapters/slack/standalone.py、mcs/notify/notify_flush.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、docs/guides/STANDALONE.md
+
+</details>
+
 ## [1.0.9] — 2026-10-01
 
 **LINE WORKS接続を追加し、導入・表示・収集・更新の安定性を改善**

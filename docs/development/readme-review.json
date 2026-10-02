@@ -1,21 +1,20 @@
 {
-  "version": "1.0.9",
+  "version": "1.0.10",
   "sections": {
     "features": {
-      "notes": "1.0.9の新機能と修正をLINE WORKSの配送・操作、構造化表示のソースへ照合した。LINE WORKSは要約・原文・添付を連続投稿し、許可ユーザーの1:1入力と本人確定を使う。Slack/DiscordはHermes公式接続を維持する。未確認検査値・所見の解釈条件・壊れた抽出結果への耐性改善は、候補と原本確認を区別する本文説明と整合している。",
+      "notes": "未指定はHermes経路を維持する独立モードの単一host・6定期ジョブ・cmd取込・抽出worker2本・Slack/Discord/LINE WORKSの配送と本人確定をソースへ照合した。SlackのHermes読込復旧、独立モードの通知先・停止・切替え修正と互換import入口を確認した。本文・モデル・取得範囲・既読化・人承認の既定条件は変更しない。",
       "sources": [
-        "changes/archive/1.0.9/lineworks-adapter-20261001.json",
-        "changes/archive/1.0.9/unverified-lab-display-20261001.json",
-        "changes/archive/1.0.9/structured-display-shapes-20261001.json",
-        "adapters/lineworks/actions.py",
-        "adapters/lineworks/delivery.py",
-        "mcs/notify/notify_cards.py",
-        "mcs/views/structured_view.py",
-        "docs/guides/USER_GUIDE.md"
+        "mcs_standalone/runtime.py",
+        "mcs_standalone/config.py",
+        "mcs/core/mcs_runtime.py",
+        "hermes_plugin/card_workers.py",
+        "docs/guides/STANDALONE.md",
+        "changes/archive/1.0.10/standalone-mode.json",
+        "changes/archive/1.0.10/fix-standalone-review-20261002.json"
       ]
     },
     "demos": {
-      "notes": "Slackを先頭に、DiscordとLINE WORKSを折りたたむ構成と現行の表示・本人確定条件を照合した。9画面の患者・スタッフ・施設・添付名を山田さん、田中さん、佐藤さんなど架空の名称へ統一し、SVG・PNG・ハッシュを生成元から同期して日本語・文字切れ・比率を視認した。既存のDiscord/Slack SVG例も表記を揃えた。架空データであり実データ・匿名化例を使わない説明を冒頭にまとめ、画像説明での繰り返しを削減した。",
+      "notes": "既存Slack7画面・LINE WORKS2画面は生成器のSVG/PNG/hash検査に成功。カード・本文・添付・本人preview/confirmの表示契約をadapterと共有textへ照合し、今回の配置整理は表示を変更しない。画像は架空データの説明図で実画面ではなく、画像の更新は不要。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -35,47 +34,38 @@
       ]
     },
     "quickstart": {
-      "notes": "初回導入の一本化をinstall.shのSummaryとmcs_setupのinit処理へ照合した。Slack/DiscordだけがHermes同期を行い、LINE WORKSは端末での秘密値入力・ローカルcheck・公開HTTPS Callback・独立常駐のガイドへ進む。導入形態表を接続別に明確化し、LINE WORKSはHermesなしでも独立接続できることを記載した。更新時の接続プロセス再起動と配備済み復旧ツールの再導入を1.0.9の更新注意へ掲載する。",
+      "notes": "Hermesの既存導入を保持し、独立モードはinstall.sh --mode standalone、init/check/servicesと専用資格情報を使うことを現在の導入ガイドと実装へ照合した。旧calendar登録と同じBotのHermes接続の重複を避ける。互換入口の整理には設定変更・DB移行・サービス再登録は不要。",
       "sources": [
         "install.sh",
         "mcs/ops/mcs_setup.py",
-        "changes/archive/1.0.9/setup-path-stability-20261001.json",
-        "changes/archive/1.0.9/repository-layout-20261001.json",
-        "changes/archive/1.0.9/recovery-cron-list-20261001.json",
         "docs/guides/INSTALLATION.md",
-        "docs/guides/SETUP_AGENT.md",
-        "docs/guides/LINEWORKS.md"
+        "docs/guides/STANDALONE.md",
+        "changes/archive/1.0.10/standalone-mode.json",
+        "changes/archive/1.0.10/fix-standalone-review-20261002.json"
       ]
     },
     "safety": {
-      "notes": "3接続への患者名・本文・要約・送信対象添付の外部送信を安全文書と独立LINE WORKSの許可範囲・本人確認に照合した。署名Callback、秘密値の分離、成否不明時の自動再実行抑止、理由とreceiptを伴う人承認を維持する。未取得と対応なしの区別、添付未解析、復旧の限界、任意Jev送信を本文から確認できる。収集・集約・復旧の異常入力への修正は既読化・承認・通知範囲を緩めない。",
+      "notes": "SDKは独立venvの固定版、資格情報は私有JSONまたは権限制限付き.envのみ。配送は明示scopeとreceipt、成否不明の自動再送抑止、添付pin、snapshot既読化と理由・本人確定を維持する。移動先だけへ静的許可を引き継ぎ、Hermesの接続権限を広げない。",
       "sources": [
         "SECURITY.md",
-        "docs/guides/LINEWORKS.md",
-        "docs/specs/lifecycle-spec.md",
-        "adapters/lineworks/actions.py",
-        "adapters/lineworks/config.py",
-        "changes/archive/1.0.9/repo-review-ingest-20261001.json",
-        "changes/archive/1.0.9/repo-review-lineworks-setup-20261001.json",
-        "changes/archive/1.0.9/export-rollup-stability-20261001.json",
-        "changes/archive/1.0.9/recovery-sqlite-paths-20261001.json"
+        "ci/gates.py",
+        "mcs_standalone/config.py",
+        "adapters/slack/standalone.py",
+        "adapters/discord/standalone.py",
+        "mcs/notify/notify_transport.py"
       ]
     },
     "docs": {
-      "notes": "配置整理後のREADME導線をdocs索引と移動記録へ照合した。guides・development・specsの現行正本とSlack/LINE WORKS画像の更新手順へ到達できる。未リリース記録とCHANGELOG冒頭の旧パスを現在の正本へ更新し、過去版の記録は当時の仕様として保持する。install.sh、make、テストrunner、独立LINE WORKSの互換入口は維持され、README本文への追加修正は不要と判断した。 Release同期の既存タグ保持・公開状態検査・エラー伝播を共有手順とソースへ照合し、1.0.9の変更履歴へ反映した。",
+      "notes": "新しいruntime_compatと旧mcs_standalone入口の説明をAGENTS・SECURITY・adapter索引・変更記録へ照合した。開発生成器は_mcs_pathを共用しrepo外cwdの隔離Pythonでもcheck成功。現行ガイドへ到達でき、過去記録と生成OpenWikiは保持する。",
       "sources": [
-        "README.md",
-        "CHANGELOG.md",
-        "docs/README.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/development/RELEASE_NOTES.md",
-        "docs/dev-records/structure-20261001.md",
-        "changes/archive/1.0.9/repository-layout-20261001.json",
-        "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/lineworks-gallery/README.md",
-        "scripts/development/sync_release_notes.py",
-        ".github/workflows/release-notes.yml",
-        "changes/archive/1.0.9/release-sync-tag-preservation.json"
+        "AGENTS.md",
+        "SECURITY.md",
+        "adapters/README.md",
+        "docs/guides/STANDALONE.md",
+        "docs/development/DEVELOPMENT.md",
+        "scripts/development/update_readme.py",
+        "docs/dev-records/refactor-20261002.md",
+        "changes/archive/1.0.10/refactor-standalone-layout-20261002.json"
       ]
     }
   }
