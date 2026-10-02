@@ -17,7 +17,7 @@ id は `patients.probe_mid` に記録して繰返し取得を抑える。
 | 実行 | `mcs/` の `core/`・`ingest/`・`notify/`・`extract/`・`semantic/`・`views/`・`ops/`。モジュール表は `docs/development/DEVELOPMENT.md` |
 | import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ |
 | 抽出 | `extract/v1/` はルール、`v4/` は現行LLM。v2/v3 の旧実装は git 履歴。`extract/rollup.py` と `semantic/` は世代横断 |
-| 通知 | `adapters/{slack,discord,lineworks,common}/`。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
+| 通知 | `adapters/{slack,discord,lineworks,common}/`。独立接続と旧APIの実装も接続先配下へ集約。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
 | 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
 | 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
 | 文書・配備 | 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。`deployment/` は配備候補で、編集だけでは実機適用しない |
@@ -52,7 +52,8 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
   `discord.py` を関数内で遅延 import し、UI と既存 interaction の
   followup に使う。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST
   接続は作らない。例外は `runtime_mode=standalone` の
-  `adapters/{slack,discord}/standalone.py` と `mcs_standalone/{slack,discord}_runtime.py` で、
+  `adapters/{slack,discord}/standalone.py` と `runtime_compat.py`（同じ接続先配下）。
+  旧 `mcs_standalone/{slack,discord}_runtime.py` は互換import入口として保持し、
   `deployment/requirements-standalone.txt` の固定版公式 SDK（独立 venv）で接続し、
   トークンはroot配下の私有JSON（優先）または `.env`（0600）だけから読む。
   SDK import は関数内に限り、

@@ -45,6 +45,13 @@ def test_shadow_driver_bootstraps_its_runtime_outside_repository(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_readme_generator_bootstraps_outside_repository(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-I", str(ROOT / "scripts/development/update_readme.py"), "--check"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
 # ---------- FIX-UR1: generator failure must fail the run ----------
 
 

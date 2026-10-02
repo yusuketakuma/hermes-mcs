@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "独立接続のコード配置を整理",
+  "summary": "Slack・Discordの独立接続コードを接続先別にまとめます。既存のCLI・旧import入口・送信結果・通知先と承認条件は維持します。",
+  "upgrade": "設定変更・DB移行・サービス再登録は不要です。Hermesモードの接続経路は変更しません。",
+  "details": [
+    "旧ランタイム実装をadapters/slack・adapters/discord配下のruntime_compat.pyへ移し、mcs_standaloneの旧モジュール名は同じモジュール実体への互換入口として保持。",
+    "SDKとasyncioの静的許可を移動先の個別ファイルへ引き継ぎ、通常adapterの許可は拡張しない。",
+    "文書生成のimport探索を_mcs_pathへ統一し、隣接する生成ヘルパーのパスを明示。リポジトリ外・隔離Pythonで生成内容を確認する回帰テストを追加。"
+  ],
+  "refs": [
+    "adapters/slack/runtime_compat.py",
+    "adapters/discord/runtime_compat.py",
+    "mcs_standalone/slack_runtime.py",
+    "mcs_standalone/discord_runtime.py",
+    "scripts/development/update_readme.py"
+  ]
+}

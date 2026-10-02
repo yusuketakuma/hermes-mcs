@@ -231,3 +231,15 @@ def test_unfinished_setup_is_retried_not_held(tmp_path, monkeypatch):
     cfg = json.loads((tmp_path / "config.json").read_text())
     with pytest.raises(config.ConfigError):
         config.channel(cfg, "slack:C0123:1700000000.000100")
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord"])
+def test_legacy_runtime_import_is_the_platform_module(transport, monkeypatch):
+    from importlib import import_module
+    old = import_module(f"mcs_standalone.{transport}_runtime")
+    current = import_module(f"adapters.{transport}.runtime_compat")
+    assert old is current
+    marker = object()
+    monkeypatch.setattr(old, "_client", marker)
+    assert current._client is marker
+    assert cli._runtime(transport) is import_module(f"adapters.{transport}.standalone")

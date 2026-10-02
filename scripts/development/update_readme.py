@@ -23,7 +23,6 @@ Keep module/function docstrings' first line a one-line summary — it is
 published.
 """
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
@@ -34,10 +33,9 @@ DEV_DOC = ROOT / "docs" / "development" / "DEVELOPMENT.md"
 MCS_DIR = ROOT / "mcs"
 TESTS_DIR = ROOT / "tests"
 
-for _root, _dirs, _files in os.walk(MCS_DIR):
-    _dirs[:] = [d for d in _dirs if not d.startswith((".", "_"))]
-    if any(f.endswith(".py") for f in _files):
-        sys.path.insert(0, _root)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(MCS_DIR))
+import _mcs_path  # noqa: E402,F401  shared runtime import roots
 
 
 def _first_docline(obj) -> str:
