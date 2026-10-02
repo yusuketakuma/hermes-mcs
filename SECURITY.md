@@ -25,12 +25,13 @@
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
   cancellation に限定する
 - `runtime_mode=standalone` では `adapters/{slack,discord}/standalone.py` と
-  `mcs_standalone/{slack,discord}_runtime.py` が
+  同じ接続先配下の `runtime_compat.py` が
   `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`）で
   Slack/Discord に接続する。トークンはroot配下の私有JSON（優先）または `.env`（0600）からのみ読み、
   SDK は関数内で import、起動時に proxy 環境変数を除去、メンションは無効化
   （Slackの独立CLI本文はプレーンテキスト）、テキスト送信先は `notify_target` /
-  `notify_system_target` のチャンネルに限定する。成否不明の送信は再送しない
+  `notify_system_target` のチャンネルに限定する。成否不明の送信は再送しない。
+  旧 `mcs_standalone/{slack,discord}_runtime.py` は互換import入口として保持する
 - LINE WORKS は `adapters/lineworks/` の独立接続だけが Bot REST・JWT 認証を所有する。
   通信先は固定の公式 URL、proxy・redirect・送信の自動再試行は無効。
   秘密値は明示した権限制限付きファイルから読み、環境から自動取得しない。

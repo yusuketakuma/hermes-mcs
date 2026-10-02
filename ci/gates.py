@@ -34,8 +34,8 @@ _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapte
 _STANDALONE_SDK = {
     "mcs_discord/standalone.py": {"discord"},
     "mcs_slack/standalone.py": {"aiohttp", "slack_sdk", "slack_bolt"},
-    "standalone/discord_runtime.py": {"discord"},
-    "standalone/slack_runtime.py": {"slack_sdk", "slack_bolt"},
+    "mcs_discord/runtime_compat.py": {"discord"},
+    "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
 _STANDALONE_DISCORD_MEMBERS = {"", "__version__", "Intents.none", "Intents.default",
                                 "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel"}
@@ -232,8 +232,7 @@ def gate_plugin_sandbox() -> list[str]:
             continue
         identity = _plugin_path(path)
         permitted = _LINEWORKS_IMPORTS.get(identity, set())
-        independent = path.is_relative_to(ADAPTERS) and identity in {
-            "mcs_slack/standalone.py", "mcs_discord/standalone.py"}
+        independent = path.is_relative_to(ADAPTERS) and identity in _STANDALONE_SDK
         if independent:
             permitted |= {"asyncio"}
         environment_lines = set()
