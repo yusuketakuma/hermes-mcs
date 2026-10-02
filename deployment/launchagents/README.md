@@ -1,5 +1,11 @@
 # スケジューリング構成
 
+`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ6定期ジョブ、
+cmd/cmd_int取込、抽出worker2本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
+併用しない。LLMとrepo外復旧watchdogは別のnative serviceを維持する。
+導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
+以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
+
 収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 5件** の
 ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
@@ -45,6 +51,11 @@ plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画�
 配置・ロード状態の確認は `mcs_setup.py check`（drift・未ロードを
 エラー表示）/ `doctor`（各 label の loaded/not loaded 一覧）。
 
+独立モードの`services`は`~/.mcs/venv/bin/python3`・`~/.mcs/scripts/`で描画し、
+単一host serviceを登録する。稼働中はnative hostを強制停止せず、処理完了後の
+再起動を要求する。mode切替は旧manifest所有のMCS cron/agentだけを停止し、
+停止を検証できなければ新serviceを起動しない。手動登録や共有gatewayは対象外。
+
 **復旧 watchdog（install.sh が別系統で所有）**: `org.mcs.recovery`
 は hermes cron に乗らない独立 launchd agent（StartInterval 900、
 `/usr/bin/python3` で `~/.mcs-recovery/mcs_recover.py --if-stale`）。
@@ -83,7 +94,8 @@ install.sh が作る venv インタプリタを使う）
 | `__RECOVERY__` | install.sh | 復旧ツール dir（`~/.mcs-recovery`） |
 | `__LLAMA_BIN__` | install.sh | llama-server バイナリ（例 `/opt/homebrew/bin/llama-server`） |
 | `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`） |
-| `__HERMES_HOME__` | install.sh | hermes home（`~/.hermes`） |
+| `__HERMES_HOME__` | install.sh | runtime home（Hermesは`~/.hermes`、standaloneは`~/.mcs`） |
+| `__RUNTIME_HOME__` | mcs_setup services | runtime home（LLM再起動ログの保存先） |
 
 > 注意: パス変更時は plist の ProgramArguments と cron wrapper の双方を
 > 更新すること（`adapter/` → `mcs/` 移動時に実機 plist が旧パスで失敗した実績あり）。

@@ -89,9 +89,11 @@ case "$1" in
         echo "error: venv already exists at $last (use --clear)" >&2; exit 2
     fi
     mkdir -p "$last/bin"
-    cp "$STUB_ROOT/venv-python" "$last/bin/python"; exit 0 ;;
+    cp "$STUB_ROOT/venv-python" "$last/bin/python"
+    cp "$STUB_ROOT/venv-python" "$last/bin/python3"; exit 0 ;;
   pip)
     [ -z "$STUB_FAIL_PIP" ] || { echo "error: build failed" >&2; exit 1; }
+    case "$*" in *requirements-standalone.txt*) exit 0 ;; esac
     cp "$STUB_ROOT/venv-hermes" "$(dirname "$py")/hermes"; exit 0 ;;
 esac
 exit 0
@@ -185,6 +187,9 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 # copied into the venv by the uv stub (not on PATH)
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
+if [ "$1" = "-" ] && [ -n "$STUB_REAL_PYTHON" ]; then
+    exec "$STUB_REAL_PYTHON" "$@"
+fi
 case "$*" in
   *"mcs_setup.py services"*)
     if [ -d "$HOME/.mcs/data/cmd" ] && [ -d "$HOME/.mcs/data/cmd_int" ]; then
@@ -877,30 +882,45 @@ def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
     assert "recovery watchdog loaded" in r.stdout
 
 
-def test_standalone_worker_documented_render_preserves_literal_paths(tmp_path, monkeypatch):
-    """Run only the documented renderer; never launchctl or a real service."""
-    import sys
+def test_standalone_documented_service_preserves_literal_paths(tmp_path):
+    from mcs_standalone.service import render
+    root = tmp_path / "home & space"
+    _, body = render(root, platform="darwin")
+    spec = plistlib.loads(body.encode())
+    assert spec["ProgramArguments"] == [str(root / "venv/bin/python3"), "-m",
+                                         "mcs_standalone", "run", "--root", str(root)]
+    assert spec["StandardOutPath"] == str(root / "data/standalone.log")
     guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
-    marker = "$PY - <<'PYDRAIN'\n"
-    snippet = guide.split(marker, 1)[1].split("\nPYDRAIN", 1)[0]
-    repo = tmp_path / "checkout & space"
-    source = repo / "deployment/launchagents"
-    source.mkdir(parents=True)
-    for label in ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"):
-        shutil.copyfile(ROOT / "deployment/launchagents" / (label + ".plist"),
-                        source / (label + ".plist"))
-    home = tmp_path / "home & space"
-    home.mkdir()
-    monkeypatch.chdir(repo)
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(sys, "executable", "/synthetic/python & space")
-    exec(compile(snippet, "INSTALLATION.md:PYDRAIN", "exec"), {})
-    for label, slot in (("ai.mcs.extract-drainer", "0"),
-                        ("ai.mcs.extract-drainer-2", "2")):
-        target = home / "Library/LaunchAgents" / (label + ".plist")
-        spec = plistlib.loads(target.read_bytes())
-        assert spec["ProgramArguments"][:2] == [sys.executable, str(repo / "mcs/extract/v4/extract_llm.py")]
-        assert slot == spec["ProgramArguments"][spec["ProgramArguments"].index("--slot") + 1]
-        assert str(home / ".mcs/data") in spec["StandardOutPath"]
-        assert "__" not in target.read_text()
-        assert target.stat().st_mode & 0o777 == 0o600
+    assert "./install.sh --mode standalone" in guide
+    assert "$PY mcs/ops/mcs_setup.py check" in guide
+
+
+def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
+    import json
+    import sys
+    home, _, stub, env = _world(tmp_path)
+    env["STUB_REAL_PYTHON"] = sys.executable
+    first = _run(env, None, "--mode", "standalone", "--no-llm")
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
+    calls = _calls(stub)
+    text = "\n".join(calls)
+    assert "requirements-standalone.txt" in text
+    assert "hermes-agent" not in text
+    assert "venv-hermes" not in text
+    assert not (home / ".hermes").exists()
+    assert (home / ".mcs/venv/bin/python3").exists()
+    before = sum(call.startswith("uv pip install") for call in calls)
+    assert before == 1
+    second = _run(env, None, "--no-llm")
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert sum(call.startswith("uv pip install") for call in _calls(stub)) == before
+    assert "hermes-agent" not in "\n".join(_calls(stub))
+
+
+def test_standalone_preflight_does_not_write_runtime(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    result = _run(env, None, "--mode", "standalone", "--preflight", "--no-llm")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (home / ".mcs").exists() and not (home / ".hermes").exists()
+    assert not any(call.startswith(("git clone", "uv pip")) for call in _calls(stub))

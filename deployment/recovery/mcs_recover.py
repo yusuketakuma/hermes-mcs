@@ -19,6 +19,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -27,10 +28,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import suppress
 from pathlib import Path
 
-HOME = os.path.expanduser("~/.mcs")
+HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 DATA = os.path.join(HOME, "data")
 RECOVERY_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -260,11 +262,80 @@ def _try_lock(path):
 
 def _setup_python():
     """Interpreter able to run mcs_setup (>= 3.10), or None."""
+    if _runtime_mode() == "standalone":
+        exe = str(Path(DATA).parent / "venv/bin/python3")
+        return exe if os.access(exe, os.X_OK) else (sys.executable if sys.version_info >= (3, 10) else None)
+    if _runtime_mode() != "hermes":
+        return None
     if os.access(HERMES_PY, os.X_OK):
         return HERMES_PY
     if sys.version_info >= (3, 10):
         return sys.executable
     return None
+
+
+def _runtime_config():
+    """Read only mode and destinations from local config; never infer credentials."""
+    path = Path(DATA).parent / "config.json"
+    try:
+        if not path.exists():
+            return {}
+        if path.is_symlink() or path.stat().st_size > 262144:
+            return {"runtime_mode": "invalid"}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {"runtime_mode": "invalid"}
+    except (OSError, ValueError, RecursionError):
+        return {"runtime_mode": "invalid"}
+
+
+def _runtime_mode():
+    return _runtime_config().get("runtime_mode", "hermes")
+
+
+def _standalone_target_supported(ref):
+    for name in ("mcs_standalone/__main__.py", "mcs/core/mcs_runtime.py"):
+        result = _git(["cat-file", "-e", f"{ref}:{name}"])
+        if not result or result.returncode:
+            return False
+    return True
+
+
+def _standalone_status():
+    path = Path(DATA, "standalone-status.json")
+    try:
+        if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_size > 65536:
+            return None
+        status = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(status, dict):
+            return None
+        pid, stamp, children = status.get("pid"), status.get("updated_at"), status.get("children")
+        if type(pid) is not int or pid <= 0 or type(stamp) not in (int, float) \
+                or not math.isfinite(stamp) or not 0 <= time.time() - stamp <= 15 \
+                or not isinstance(children, dict) or any(not isinstance(row, dict) for row in children.values()):
+            return None
+        if not isinstance(status.get("generation"), str) or len(status["generation"]) != 32:
+            return None
+        os.kill(pid, 0)
+        return status
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
+
+
+def _standalone_drainer_problems():
+    status = _standalone_status()
+    if status is None:
+        return ["standalone_host_unverifiable"]
+    problems = []
+    for job in ("extract-0", "extract-2"):
+        row = status["children"].get(job) or {}
+        pid = row.get("pid")
+        try:
+            if type(pid) is not int or pid <= 0 or row.get("kind") != "background":
+                raise ValueError("invalid child")
+            os.kill(pid, 0)
+        except (OSError, ValueError, OverflowError):
+            problems.append(job)
+    return problems
 
 
 def _launchctl(args, **kw):
@@ -305,6 +376,23 @@ def _restart_drainers(bounce=True):
     running drainer alone; start one not running, not loaded or
     unverifiable (hung print — fail closed) via bootstrap unless loaded,
     then `kickstart` without -k (never kills a running job)."""
+    if _runtime_mode() == "standalone":
+        _remove_marker()
+        if _standalone_status() is None:
+            if sys.platform == "darwin":
+                target = f"gui/{os.getuid()}/ai.mcs.standalone"
+                _launchctl(["bootstrap", f"gui/{os.getuid()}", os.path.join(AGENTS_DIR, "ai.mcs.standalone.plist")])
+                _launchctl(["kickstart", target])
+            elif sys.platform.startswith("linux"):
+                with suppress(OSError, subprocess.TimeoutExpired):
+                    subprocess.run(["systemctl", "--user", "start", "mcs-standalone.service"],
+                                   capture_output=True, timeout=30)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if not _standalone_drainer_problems():
+                return []
+            time.sleep(0.2)
+        return _standalone_drainer_problems()
     problems = []
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
@@ -336,6 +424,31 @@ def _restart_drainers(bounce=True):
 def _restart_gateway():
     # runs after durable bookkeeping — never undo it (mirrors
     # mcs_update.restart_gateway)
+    if _runtime_mode() == "standalone":
+        live = _standalone_status()
+        if live is not None:
+            path = Path(DATA, "standalone-restart.request")
+            value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
+                     "requested_at": time.time()}
+            fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restart.")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(value, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, path)
+                directory = os.open(DATA, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                with suppress(OSError):
+                    os.unlink(tmp)
+        return
+    if _runtime_mode() != "hermes":
+        return
     with suppress(OSError):
         subprocess.Popen(
             ["launchctl", "kickstart", "-k",
@@ -369,6 +482,9 @@ def _reconcile_membership(snapshot):
     so a no-op rollback never deletes what it still wants; recreation
     belongs to the repo's own `services` run (old code re-renders)."""
     problems = []
+    standalone = _runtime_mode() == "standalone"
+    if _runtime_mode() not in ("hermes", "standalone"):
+        return ["runtime_mode_unverifiable"]
     desired_cron = {os.path.basename(c.get("script") or "")
                     for c in (snapshot or {}).get("cron", [])
                     if isinstance(c, dict)}
@@ -391,7 +507,9 @@ def _reconcile_membership(snapshot):
     # snapshot nor in the current desired set
     hermes = shutil.which("hermes") \
         or os.path.expanduser("~/.local/bin/hermes")
-    if os.path.isfile(hermes):
+    if standalone:
+        pass  # The restored host owns one scheduler; services reconciles its native entry.
+    elif os.path.isfile(hermes):
         try:
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
@@ -438,6 +556,24 @@ def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
     try:
+        if _runtime_mode() == "standalone":
+            cfg = _runtime_config()
+            target = cfg.get("notify_system_target") or cfg.get("notify_target")
+            exe = _setup_python()
+            entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
+            if exe and isinstance(target, str) and os.path.isfile(entry):
+                process = subprocess.Popen([exe, entry, "send", "--root", str(Path(DATA).parent),
+                                            "--to", target], stdin=subprocess.PIPE,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           close_fds=True, start_new_session=True)
+                try:
+                    process.communicate(json.dumps({"text": text, "files": []}).encode(), timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate(timeout=5)
+            return
+        if _runtime_mode() != "hermes":
+            return
         import shutil
         hermes = shutil.which("hermes") \
             or os.path.expanduser("~/.local/bin/hermes")
@@ -906,6 +1042,8 @@ def recover(if_stale=False):
                                 "refusing to classify")
             if not prev:
                 return escalate("MERGE_HEAD without known prev_sha")
+            if _runtime_mode() == "standalone" and not _standalone_target_supported(prev):
+                return escalate("standalone_runtime_missing_in_target")
             r = _git(["merge", "--abort"])
             if (not r or r.returncode != 0) or _head() != prev:
                 return escalate("merge --abort failed or HEAD "
@@ -924,7 +1062,7 @@ def recover(if_stale=False):
             _remove_marker()
             _report("resumed_done", "completed bookkeeping after crash")
             _notify("[MCS] 中断された更新の後処理を完了しました")
-            if applied and applied[-1].get("plugin_changed"):
+            if _runtime_mode() == "standalone" or (applied and applied[-1].get("plugin_changed")):
                 _restart_gateway()
             return 0
         if not applying:
@@ -941,6 +1079,8 @@ def recover(if_stale=False):
         if head == target:
             if not clean:
                 tree_reset = True
+                if _runtime_mode() == "standalone" and not _standalone_target_supported(target):
+                    return escalate("standalone_runtime_missing_in_target")
                 r = _git(["reset", "--hard", target])
                 if r is None or r.returncode != 0:
                     return git_failed("reset --hard")
@@ -996,7 +1136,7 @@ def recover(if_stale=False):
             _remove_marker()
             _report("resumed", "post-merge converged after crash")
             _notify("[MCS] 更新の中断を検出し、post-merge を完了しました")
-            if applying.get("plugin_changed"):
+            if _runtime_mode() == "standalone" or applying.get("plugin_changed"):
                 _restart_gateway()
             return 0
         if prev and head == prev:
@@ -1009,6 +1149,8 @@ def recover(if_stale=False):
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach
+                if _runtime_mode() == "standalone" and not _standalone_target_supported(prev):
+                    return escalate("standalone_runtime_missing_in_target")
                 _git_out(["reset", "--hard", prev])
                 if _head() != prev or _clean() is not True:
                     return escalate("prev tree could not be cleaned")
@@ -1043,6 +1185,8 @@ def _finish(state, result, removed):
     _report(result, "removed locks: " + ",".join(removed)
             + (" restart:" + ",".join(problems) if problems else ""))
     _notify(f"[MCS] 更新が中断され復旧しました: {result}")
+    if _runtime_mode() == "standalone":
+        _restart_gateway()
 
 
 def _remove_marker():

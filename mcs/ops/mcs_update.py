@@ -43,12 +43,14 @@ from contextlib import suppress
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
+import mcs_runtime  # noqa: E402
 
-from mcs_util import (UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
+from mcs_util import (HOME, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 
-HOME = os.path.expanduser("~/.mcs")
 DATA = os.path.join(HOME, "data")
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -70,7 +72,7 @@ RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
 # install.sh-owned labels the updater must never touch (S5).
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
-PROTECTED = ("data/", "config.json", ".env", "chrome-profile/")
+PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
 SEMVER_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$")
 HEX_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -412,9 +414,13 @@ def precheck_local(cfg: dict) -> list[str]:
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
     import mcs_setup
-    hermes = mcs_setup._hermes_exe(cfg)
-    if not mcs_setup._hermes_ok(hermes):
-        errors.append("hermes_not_resolvable")
+    if cfg.get("runtime_mode") == "standalone":
+        if mcs_setup._standalone_py_problem(cfg):
+            errors.append("standalone_interpreter_unavailable")
+    else:
+        hermes = mcs_setup._hermes_exe(cfg)
+        if not mcs_setup._hermes_ok(hermes):
+            errors.append("hermes_not_resolvable")
     return errors
 
 
@@ -456,6 +462,8 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
 def precheck_tag(tag: str) -> list[str]:
     """Candidate-tree content gates — all work on fetched objects."""
     errors: list[str] = []
+    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(tag):
+        errors.append("standalone_runtime_missing_in_target")
     paths = []
     for mode, otype, _sha, path in _ls_tree_paths(tag):
         if mode not in ("100644", "100755", "040000") or \
@@ -571,6 +579,11 @@ def precheck_tag(tag: str) -> list[str]:
     return errors
 
 
+def _standalone_target_supported(ref):
+    return all(_git(["cat-file", "-e", f"{ref}:{name}"]).returncode == 0
+               for name in ("mcs_standalone/__main__.py", "mcs/core/mcs_runtime.py"))
+
+
 # ------------------------------------------------------------- services
 
 def _uid() -> int:
@@ -661,11 +674,47 @@ def _stray_drainer_pids() -> list[int] | None:
             if p.isdigit() and int(p) != os.getpid()]
 
 
+def _standalone_status():
+    """Fresh private heartbeat plus a live host PID; stale files prove nothing."""
+    try:
+        from mcs_standalone.service import status
+        value = status(str(Path(DATA).parent))
+        return value if all(isinstance(row, dict) for row in value["children"].values()) else None
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
+
+
+def _standalone_drainer_problems():
+    status = _standalone_status()
+    if status is None:
+        return ["standalone_host_unverifiable"]
+    problems = []
+    for job in ("extract-0", "extract-2"):
+        row = status["children"].get(job) or {}
+        pid = row.get("pid")
+        try:
+            if type(pid) is not int or pid <= 0 or row.get("kind") != "background":
+                raise ValueError("invalid child")
+            os.kill(pid, 0)
+        except (OSError, ValueError, OverflowError):
+            problems.append("drainer_not_running:" + job)
+    return problems
+
+
 def quiesce() -> list[str]:
     """Stop resident drainers + stray helpers; returns old pids' labels
     for restart verification. Marker first — helper launchers (cron
     catchup) must see it before any process is stopped (S8)."""
     _write_marker()
+    if load_config().get("runtime_mode") == "standalone":
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            status = _standalone_status()
+            if status is not None and status.get("update_in_progress") is True \
+                    and not any(job != "update" for job in status["children"]):
+                return ["extract-0", "extract-2"]
+            time.sleep(0.2)
+        raise UpdateError("standalone_quiesce_unverifiable")
     stopped = []
     for label in RESIDENT_LABELS:
         _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
@@ -716,6 +765,14 @@ def restart_agents(bounce: bool = True) -> list[str]:
     not loaded or unverifiable (hung print — fail closed) is started:
     bootstrap unless loaded, then `kickstart` without -k, which starts
     a stopped job and never kills a running one."""
+    if load_config().get("runtime_mode") == "standalone":
+        _remove_marker()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if not _standalone_drainer_problems():
+                return []
+            time.sleep(0.2)
+        return _standalone_drainer_problems()
     problems = []
     deadline = time.time() + RESTART_BUDGET_S
     for label in RESIDENT_LABELS:
@@ -758,6 +815,13 @@ def restart_agents(bounce: bool = True) -> list[str]:
 def restart_gateway(cfg: dict) -> None:
     """Fire-and-forget — a cron-spawned updater is a gateway descendant;
     a synchronous `gateway restart` would wait on ourselves (S12)."""
+    if cfg.get("runtime_mode") == "standalone":
+        try:
+            from mcs_standalone.service import request_restart
+            request_restart(str(Path(DATA).parent))
+        except (OSError, ValueError):
+            _enqueue_notice("[MCS] 独立プロセスの再起動要求を確認できません。更新状態を確認し、常駐プロセスを再起動してください。")
+        return
     with suppress(OSError):  # runs after durable bookkeeping — never undo it
         subprocess.Popen(
             ["launchctl", "kickstart", "-k",
@@ -873,7 +937,9 @@ def spawn_detached() -> None:
            if k not in _UPDATE_ENV_STRIP}
     os.makedirs(DATA, exist_ok=True)
     with open(os.path.join(DATA, "update.log"), "ab") as log:
-        subprocess.Popen([WRAPPER], stdin=subprocess.DEVNULL,
+        cfg = load_config()
+        wrapper = os.path.join(mcs_runtime.scripts_dir(cfg, root=Path(DATA).parent), "mcs_update.sh") if cfg.get("runtime_mode") == "standalone" else WRAPPER
+        subprocess.Popen([wrapper], stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, env=env,
                          close_fds=True, start_new_session=True)
 
@@ -944,8 +1010,11 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         errors.extend("new_env_error: " + e for e in new)
     except Exception:
         errors.append("postcheck_unverifiable")
-    errors.extend(f"drainer_not_running:{label}"
-                  for label in RESIDENT_LABELS if _agent_pid(label) is None)
+    if load_config().get("runtime_mode") == "standalone":
+        errors.extend(_standalone_drainer_problems())
+    else:
+        errors.extend(f"drainer_not_running:{label}"
+                      for label in RESIDENT_LABELS if _agent_pid(label) is None)
     return errors
 
 
@@ -1302,7 +1371,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         # a synchronous restart would deadlock when this updater is a
         # gateway descendant (S12)
         applied_entry = state.get("applied") or [{}]
-        if applied_entry[-1].get("plugin_changed"):
+        if cfg.get("runtime_mode") == "standalone" or applied_entry[-1].get("plugin_changed"):
             restart_gateway(cfg)
         return 0
     except Exception as e:
@@ -1331,7 +1400,7 @@ def _baseline_check(cfg: dict) -> list[str]:
 def _gateway_restart_if_needed(state: dict) -> None:
     applying = state.get("applying") or {}
     applied = (state.get("applied") or [{}])[-1]
-    if applying.get("plugin_changed") or applied.get("plugin_changed"):
+    if load_config().get("runtime_mode") == "standalone" or applying.get("plugin_changed") or applied.get("plugin_changed"):
         restart_gateway(load_config())
 
 
@@ -1343,6 +1412,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
     problems = []
     import mcs_setup
     cfg = load_config()
+    if cfg.get("runtime_mode") == "standalone":
+        # One host owns jobs; its restored code reconciles membership on restart.
+        return []
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
                     (desired or {}).get("cron", [])}
@@ -1398,6 +1470,8 @@ def _rollback_tree(entry: dict) -> None:
     already quiesced. Do not additionally delete untracked paths just
     because their names occur in the update diff; ownership is unproven."""
     prev = entry["prev_sha"]
+    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
+        raise UpdateError("standalone_runtime_missing_in_target")
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
@@ -1506,7 +1580,7 @@ def rollback(command_id: str | None = None) -> int:
                     "result": "rolled_back", "at": time.time()}
             save_state(state)
             # gateway restart AFTER the durable save (self-deadlock)
-            if entry.get("plugin_changed"):
+            if load_config().get("runtime_mode") == "standalone" or entry.get("plugin_changed"):
                 restart_gateway(load_config())
             _enqueue_notice(f"[MCS] ロールバックしました: "
                             f"{entry.get('tag')} → {prev[:12]}")
@@ -2056,7 +2130,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 _report("resumed", "post-merge completed after crash")
                 _enqueue_notice(
                     "[MCS] 更新の中断を検出し、post-merge を完了しました")
-                if applying.get("plugin_changed"):
+                if load_config().get("runtime_mode") == "standalone" or applying.get("plugin_changed"):
                     restart_gateway(load_config())
                 return 0
             except UpdateError as e:

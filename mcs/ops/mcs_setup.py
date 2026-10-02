@@ -24,9 +24,9 @@ Exit 1 on any error so it can gate automation.
   python3 mcs/ops/mcs_setup.py doctor   # check + interpreter/launchd facts
 
 Secrets are never accepted as argv flags (they would persist in shell
-history and `ps`): export MCS_SETUP_PASSWORD / TYPESAFE_API_KEY /
-DISCORD_BOT_TOKEN in the environment, or answer the interactive
-prompts.
+history and `ps`). MCS / Jev and the existing Hermes integration keep
+their environment or interactive inputs. Standalone connector tokens
+use hidden prompts and private files; they are not inferred from the environment.
 """
 from __future__ import annotations
 
@@ -55,11 +55,14 @@ if sys.version_info < (3, 10):
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
 import bounded_http
+import mcs_runtime
 
 from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
                       load_config)
@@ -102,6 +105,8 @@ def _dict(v):
 
 
 CONFIG_RULES = {
+    "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
+                             else 'must be "hermes" or "standalone"'),
     "mcs_login_id":          (True,  _nonempty_str),
     "notify_target":         (True,  _nonempty_str),
     "notify_bot_profile":    (False, _bot_profile),
@@ -322,7 +327,44 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         errors.extend(_validate_update(cfg["update"]))
     if isinstance(cfg.get("health"), dict):
         errors.extend(_validate_health(cfg["health"]))
+    if cfg.get("runtime_mode") == "standalone":
+        errors.extend(_validate_standalone_scope(cfg))
     return errors, warnings
+
+
+def _validate_standalone_scope(cfg: dict) -> list[str]:
+    """Require explicit actor and project scopes for independent connectors."""
+    errors = []
+    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+    targets = [cfg.get("notify_target"), cfg.get("notify_system_target")]
+    active = {ntf.get("interactive")} if isinstance(ntf.get("interactive"), str) else set()
+    active |= {
+        value.split(":", 1)[0] for value in targets if isinstance(value, str)}
+    for transport in ("slack", "discord"):
+        if transport not in active:
+            continue
+        scope = ntf.get(transport)
+        if not isinstance(scope, dict):
+            errors.append(f"notify.{transport}: explicit scope required in standalone mode")
+            continue
+        users = scope.get("allowed_user_ids")
+        if not (isinstance(users, list) and users and all(
+                isinstance(uid, str) and uid.strip() for uid in users)):
+            errors.append(f"notify.{transport}.allowed_user_ids: non-empty identifier list required")
+        automatic = scope.get("project_ids_auto", False)
+        if type(automatic) is not bool:
+            errors.append(f"notify.{transport}.project_ids_auto: must be a boolean")
+        projects = scope.get("project_ids", [])
+        if not (isinstance(projects, list) and all(
+                type(pid) is int and 0 < pid < 2**63 for pid in projects)
+                and (projects or automatic is True)):
+            errors.append(f"notify.{transport}.project_ids: positive integer list required (or project_ids_auto=true)")
+        if transport == "discord" and "allowed_role_ids" in scope:
+            roles = scope["allowed_role_ids"]
+            if not (isinstance(roles, list) and all(isinstance(role, str)
+                    and role.strip() and role != scope.get("guild_id") for role in roles)):
+                errors.append("notify.discord.allowed_role_ids: identifier list required; @everyone is not allowed")
+    return errors
 
 
 def _hermes_exe(cfg: dict, path: str | None = None) -> str:
@@ -339,7 +381,8 @@ def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
-def _run(argv: list, *, timeout: int = 60, input_text: str | None = None):
+def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
+         cwd: str | None = None):
     """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
     prompt this context cannot show, or a stuck gateway must fail the
     check, not hang the session. Timeout yields a returncode=124 result
@@ -348,7 +391,7 @@ def _run(argv: list, *, timeout: int = 60, input_text: str | None = None):
     raising."""
     try:
         return subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}))
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, 124, "", f"timed out after {timeout}s")
@@ -425,6 +468,10 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     """Machine probes — things config.json can't express. Keychain and
     token resolution are errors only when the feature needs them."""
     errors, warnings = [], []
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        return ["runtime_mode is invalid — select hermes or standalone before checking runtime services"], []
     if sys.platform != "darwin":
         warnings.append("not macOS — Keychain/launchd steps do not apply")
     else:
@@ -520,11 +567,16 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     # Delivery is `hermes send` — the binary must resolve the same way
     # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
     # standard user-local install (launchd PATH is minimal).
-    exe = _hermes_exe(cfg)
     ntf = cfg.get("notify") or {}
+    exe = _hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
     lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
     target = cfg.get("notify_target", "")
-    if lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
+    if cfg.get("runtime_mode") == "standalone":
+        r = _run([sys.executable, "-m", "mcs_standalone", "check", "--root", HOME],
+                 timeout=30, cwd=REPO_ROOT)
+        if r.returncode:
+            errors.append("standalone connector local check failed — run `python -m mcs_standalone check` and follow docs/guides/STANDALONE.md")
+    elif lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
         r = _run([sys.executable, os.path.join(REPO_ROOT, "lineworks_adapter", "__main__.py"),
                   "check", "--root", HOME], timeout=20)
         if r.returncode:
@@ -558,7 +610,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     elif env_value("TYPESAFE_API_KEY") is None:
         warnings.append("TYPESAFE_API_KEY not set — needed when "
                         "semantic.mode is enabled")
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and cfg.get("runtime_mode") != "standalone":
         agents = os.path.expanduser("~/Library/LaunchAgents")
         warnings.extend(
             f"LaunchAgent {label} not installed — templates and "
@@ -709,11 +761,18 @@ def _csv_list(values):
 _UNSET = object()
 
 def _discord_on(cfg):
-    return (cfg.get("notify") or {}).get("interactive") == "discord"
+    return _transport_on(cfg, "discord")
 
 
 def _slack_on(cfg):
-    return (cfg.get("notify") or {}).get("interactive") == "slack"
+    return _transport_on(cfg, "slack")
+
+
+def _transport_on(cfg, transport):
+    return (cfg.get("notify") or {}).get("interactive") == transport or (
+        cfg.get("runtime_mode") == "standalone" and any(
+            isinstance(cfg.get(key), str) and cfg[key].startswith(transport + ":")
+            for key in ("notify_target", "notify_system_target")))
 
 
 def _lineworks_on(cfg):
@@ -740,10 +799,12 @@ def _semantic_on(cfg):
 
 WIZARD = [
     ("基本設定", [
+        ("runtime_mode", "choice:hermes,standalone", "hermes",
+         "実行モード — hermes=既存Hermes接続 / standalone=Hermesなしで全機能", None),
         ("mcs_login_id", "req", None,
          "MCS のログインID", None),
         ("notify_target", "req", None,
-         "通知の送り先（hermes send target。例: slack:<チャンネルID>、"
+         "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
     ]),
     ("カード通知（Slack / Discord / LINE WORKS）", [
@@ -764,21 +825,35 @@ WIZARD = [
         ("notify.lineworks.project_ids_auto", "bool", False,
          "公開済みscope snapshotからプロジェクトを解決（通常はオフ）", _lineworks_on),
         ("notify.slack.profile", "req", None,
-         "配送に使う hermes プロファイル名", _slack_on),
+         "配送スコープのプロファイル名", _slack_on),
         ("notify.slack.application_id", "req", None,
          "Slack アプリID", _slack_on),
         ("notify.slack.team_id", "req", None,
          "Slack ワークスペース（team）ID", _slack_on),
         ("notify.slack.channel_id", "req", None,
          "カードの投稿先チャンネルID", _slack_on),
+        ("notify.slack.allowed_user_ids", "reqcsv", None,
+         "操作を許可するSlackユーザーID・カンマ区切り", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
+        ("notify.slack.project_ids_auto", "bool", False,
+         "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
+        ("notify.slack.project_ids", "intlist", [],
+         "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
         ("notify.discord.profile", "req", None,
-         "配送に使う hermes プロファイル名", _discord_on),
+         "配送スコープのプロファイル名", _discord_on),
         ("notify.discord.application_id", "req", None,
          "Discord アプリケーションID", _discord_on),
         ("notify.discord.guild_id", "req", None,
          "Discord サーバーID", _discord_on),
         ("notify.discord.channel_id", "req", None,
          "カードの投稿先チャンネルID", _discord_on),
+        ("notify.discord.allowed_user_ids", "reqcsv", None,
+         "操作を許可するDiscordユーザーID・カンマ区切り", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
+        ("notify.discord.allowed_role_ids", "csv", None,
+         "操作を許可するDiscordロールID（@everyone不可・空欄可）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
+        ("notify.discord.project_ids_auto", "bool", False,
+         "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
+        ("notify.discord.project_ids", "intlist", [],
+         "閲覧・操作を許可するMCSプロジェクトID・カンマ区切り（自動解決がオフなら必須）", lambda cfg: cfg.get("runtime_mode") == "standalone" and _discord_on(cfg)),
         ("notify.operator", "opt", None,
          "運用者の Discord ユーザーID（空欄可）", _discord_on),
         ("notify.card_thread", "bool", True,
@@ -788,7 +863,7 @@ WIZARD = [
         ("notify.route_epoch", "int", 1,
          "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
         ("notify_bot_profile", "opt", None,
-         "通知投稿に使う hermes プロファイル（空欄=既定）", None),
+         "通知投稿に使う hermes プロファイル（空欄=既定）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
         ("notify_system_target", "opt", None,
          "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
         ("notify_max_age_h", "num", None,
@@ -796,7 +871,7 @@ WIZARD = [
         ("notify_all_replies", "bool", False,
          "リアルタイムで新規取得した返信は既読・投稿時刻によらず全件通知（履歴一括取込みは対象外）", None),
         ("hermes_bin", "opt", None,
-         "hermes コマンドのパス（空欄=自動検出）", None),
+         "hermes コマンドのパス（空欄=自動検出）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
         ("daily_digest.enabled", "bool", False,
          "朝の日次ダイジェスト（件数とID。患者名は include_names で追加）を notify_target に送る", None),
         ("daily_digest.hour_jst", "int", 8,
@@ -1000,6 +1075,8 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     Returns False when the CLI is unavailable or any attempted write
     failed; keys left unset by choice (--yes, empty answer) are not
     failures."""
+    if cfg.get("runtime_mode") == "standalone":
+        return True
     ntf = cfg.get("notify")
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
@@ -1203,6 +1280,8 @@ def cmd_init(args) -> int:
     if not _guard_config(args.yes):
         return 1
     cfg = load_config()
+    if getattr(args, "runtime_mode", None):
+        cfg["runtime_mode"] = args.runtime_mode
     def pick(flag, key):
         # flag wins, else the existing value is kept — the wizard's req
         # items do the interactive prompting for these
@@ -1332,6 +1411,18 @@ def cmd_init(args) -> int:
                                       indent=2, sort_keys=True) + "\n", 0o600)
     print(f"config: wrote {CONF_PATH}")
     integration_ok = _apply_plugin_integration(cfg, args)
+    if cfg.get("runtime_mode") == "standalone":
+        for transport in ("slack", "discord"):
+            if _transport_on(cfg, transport):
+                argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
+                        "--transport", transport] + (["--yes"] if args.yes else [])
+                # Terminal-bound getpass owns credentials; no secret ever travels in argv.
+                try:
+                    result = subprocess.run(argv, timeout=300 if not args.yes else 30,
+                                            cwd=REPO_ROOT)
+                    integration_ok = integration_ok and result.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    integration_ok = False
     # an interactive transport needs the supervised gateway — on a
     # first install `services` ran BEFORE init could configure
     # interactive, so sync just the gateway here rather than leaving
@@ -1344,7 +1435,7 @@ def cmd_init(args) -> int:
         import notify_cards
         notify_cards.ensure_dirs(os.path.join(HOME, "data"))
         notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
-    if isinstance(ntf, dict) \
+    if cfg.get("runtime_mode") != "standalone" and isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = _hermes_exe(cfg)
         if _hermes_ok(exe):
@@ -1352,8 +1443,11 @@ def cmd_init(args) -> int:
                 cfg, exe, lambda m: print(f"  {m}"), dry=False)
     check_result = cmd_check(args)
     if not integration_ok:
-        print("init: FAIL — Hermes plugin settings were not fully "
-              "written; repair the serving profile/CLI and re-run init")
+        if cfg.get("runtime_mode") == "standalone":
+            print("init: FAIL — standalone credentials were not fully written; repair the connector and re-run init")
+        else:
+            print("init: FAIL — Hermes plugin settings were not fully "
+                  "written; repair the serving profile/CLI and re-run init")
         return 1
     return 1 if gateway_result else check_result
 
@@ -1613,7 +1707,7 @@ def cmd_check(args) -> int:
                    "`mcs_setup.py init --yes` to move it aside"]
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
-    e3, w3 = _script_drift()
+    e3, w3 = _script_drift() if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
     for w in warnings:
@@ -1636,14 +1730,22 @@ def cmd_doctor(args) -> int:
     """`check` plus the environment facts a bug report needs."""
     cfg = load_config()
     print(f"python   : {sys.executable} ({sys.version.split()[0]})")
-    print(f"services : {HERMES_PY} "
-          f"({_hermes_py_problem() or 'ok'})")
-    print(f"hermes   : {_hermes_exe(cfg)} "
-          f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        print("mode     : invalid")
+        return cmd_check(args)
+    standalone = cfg.get("runtime_mode") == "standalone"
+    print(f"mode     : {cfg.get('runtime_mode', 'hermes')}")
+    print(f"services : {_service_subs(cfg)['PYTHON']} "
+          f"({(_standalone_py_problem(cfg) if standalone else _hermes_py_problem()) or 'ok'})")
+    if not standalone:
+        print(f"hermes   : {_hermes_exe(cfg)} "
+              f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
     print(f"repo     : {REPO_ROOT}")
     print(f"config   : {CONF_PATH}")
     if sys.platform == "darwin":
-        for label in AGENT_LABELS + [RECOVERY_LABEL, *LLAMA_LABELS]:
+        for label in ([STANDALONE_LABEL] if standalone else AGENT_LABELS) + [RECOVERY_LABEL, *LLAMA_LABELS]:
             state = "loaded" if _agent_loaded(label) else "not loaded"
             print(f"launchd  : {label} {state}")
     return cmd_check(args)
@@ -1689,6 +1791,8 @@ RECOVERY_DIR = os.path.expanduser("~/.mcs-recovery")
 RECOVERY_LABEL = "org.mcs.recovery"
 # whichever is loaded serves :8080 (see llamacpp_restart_if_idle.sh)
 LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
+STANDALONE_LABEL = "ai.mcs.standalone"
+STANDALONE_UNIT = "mcs-standalone.service"
 
 
 def _hermes_py_problem() -> str | None:
@@ -1709,24 +1813,51 @@ def _install_fix(stage: str) -> str:
     return f"re-run `{os.path.join(REPO_ROOT, 'install.sh')}` ({stage})"
 
 
+def _standalone_py_problem(cfg: dict) -> str | None:
+    exe = mcs_runtime.python_executable(cfg, root=HOME)
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        return f"interpreter {exe} is missing or not executable"
+    r = _run([exe, "-c", "import sys; sys.exit(sys.version_info < (3, 10))"], timeout=20)
+    return f"interpreter {exe} is not a working Python >= 3.10" if r.returncode else None
+
+
 def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
     """What the scheduled jobs run on: the services interpreter, hermes
     as launchd resolves it, the update-recovery watchdog and the
     llama-server agent."""
     errors, warnings = [], []
-    why = _hermes_py_problem()
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        return errors, warnings
+    standalone = cfg.get("runtime_mode") == "standalone"
+    why = _standalone_py_problem(cfg) if standalone else _hermes_py_problem()
     if why:
         errors.append(f"{why} — cron wrappers and launchd agents cannot "
                       "start; " + _install_fix(
-                          "stage 2 rebuilds the hermes-agent venv")
+                          "stage 2 rebuilds the standalone venv" if standalone else "stage 2 rebuilds the hermes-agent venv")
                       + ", then `mcs_setup.py services`")
-    exe = _hermes_exe(cfg)
-    if _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
+    exe = _hermes_exe(cfg) if not standalone else ""
+    if not standalone and _hermes_ok(exe) and not _hermes_ok(_hermes_exe(cfg, LAUNCHD_PATH)):
         errors.append(
             f"hermes resolves here ({exe}) but not on the launchd PATH "
             f"({LAUNCHD_PATH}) — scheduled jobs cannot send; "
             f"`ln -s {shlex.quote(exe)} ~/.local/bin/hermes` (or "
             "init --set hermes_bin=...)")
+    if standalone:
+        path = _standalone_service_path()
+        if not os.path.exists(path):
+            warnings.append("standalone supervised service not installed — run `mcs_setup.py services` or run `python -m mcs_standalone run` in a supervisor")
+        elif not _standalone_loaded():
+            errors.append("standalone service installed but not loaded — run `mcs_setup.py services`")
+        else:
+            try:
+                from mcs_standalone.service import render
+                _, desired = render(HOME, platform=sys.platform)
+                if Path(path).read_text(encoding="utf-8") != desired:
+                    errors.append("standalone service differs from current source — run `mcs_setup.py services`")
+            except (OSError, ValueError):
+                errors.append("standalone service content unverifiable")
     if sys.platform != "darwin":
         return errors, warnings
     uid = os.getuid()
@@ -1873,9 +2004,17 @@ def _save_manifest(manifest: dict) -> None:
                              indent=1, sort_keys=True))
 
 
-def _service_subs() -> dict:
-    return {"PYTHON": HERMES_PY, "REPO": REPO_ROOT,
-            "DATA": os.path.join(HOME, "data")}
+def _service_subs(cfg=None) -> dict:
+    cfg = load_config() if cfg is None else cfg
+    python = mcs_runtime.python_executable(cfg, root=HOME) if cfg.get("runtime_mode") == "standalone" else HERMES_PY
+    return {"PYTHON": python, "REPO": REPO_ROOT,
+            "DATA": os.path.join(HOME, "data"),
+            "RUNTIME_HOME": mcs_runtime.runtime_home(cfg, root=HOME)}
+
+
+def _scripts_dir(cfg=None):
+    cfg = load_config() if cfg is None else cfg
+    return mcs_runtime.scripts_dir(cfg, root=HOME) if cfg.get("runtime_mode") == "standalone" else SCRIPTS_DIR
 
 
 def _rendered_scripts(subs):
@@ -1897,18 +2036,19 @@ def _script_drift() -> tuple[list[str], list[str]]:
     turned a delayed tick into a no-op and unread polling gapped past
     the session limit) — drift is an error, absence only a warning."""
     drifted, missing = [], []
+    directory = _scripts_dir()
     for name, body in _rendered_scripts(_service_subs()):
         try:
-            cur = Path(SCRIPTS_DIR, name).read_text(encoding="utf-8")
+            cur = Path(directory, name).read_text(encoding="utf-8")
         except OSError:
             missing.append(name)
             continue
         if cur != body:
             drifted.append(name)
-    errors = [f"deployed scripts differ from the repo in {SCRIPTS_DIR}: "
+    errors = [f"deployed scripts differ from the repo in {directory}: "
               + ", ".join(drifted)
               + " — run `mcs_setup.py services` to resync"] if drifted else []
-    warnings = [f"scripts not deployed to {SCRIPTS_DIR}: "
+    warnings = [f"scripts not deployed to {directory}: "
                 + ", ".join(missing)
                 + " — run `mcs_setup.py services`"] if missing else []
     return errors, warnings
@@ -1917,7 +2057,7 @@ def _script_drift() -> tuple[list[str], list[str]]:
 def _sync_scripts(subs, manifest, note, dry) -> None:
     """Stage 1: hermes cron wrapper scripts -> ~/.hermes/scripts (atomic)."""
     for name, body in _rendered_scripts(subs):
-        dst = os.path.join(SCRIPTS_DIR, name)
+        dst = os.path.join(_scripts_dir(), name)
         manifest["scripts"].append({"name": name,
                                     "sha256": _sha256(body)})
         cur = None
@@ -2168,7 +2308,7 @@ def _sync_gateway(cfg, hermes, note, dry) -> int:
     transport (Discord interactions / Slack socket mode); `gateway
     install` creates the launchd service hermes owns."""
     ntf = cfg.get("notify") if isinstance(cfg, dict) else None
-    if not (isinstance(ntf, dict)
+    if cfg.get("runtime_mode") == "standalone" or not (isinstance(ntf, dict)
             and ntf.get("interactive") in ("discord", "slack")):
         return 0
     r = _hermes_cli(hermes, "", "gateway", "status")
@@ -2188,6 +2328,114 @@ def _sync_gateway(cfg, hermes, note, dry) -> int:
             note(f"gateway {sub} failed: {detail}")
             return 1
     note("gateway: installed + started")
+    return 0
+
+
+def _standalone_service_path():
+    if sys.platform == "darwin":
+        return os.path.join(AGENTS_DIR, STANDALONE_LABEL + ".plist")
+    return os.path.expanduser("~/.config/systemd/user/" + STANDALONE_UNIT)
+
+
+def _standalone_loaded():
+    if sys.platform == "darwin":
+        return _agent_loaded(STANDALONE_LABEL)
+    if sys.platform.startswith("linux"):
+        return _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT]).returncode == 0
+    return False
+
+
+def _retire_previous_runtime(prev, desired_mode, note, dry):
+    """Stop only the previous manifest's owned jobs before switching runtimes."""
+    if not prev or prev.get("runtime_mode", "hermes") == desired_mode:
+        return 0
+    if prev.get("runtime_mode") == "standalone":
+        note("previous standalone service: stop")
+        if dry:
+            return 0
+        command = ["launchctl", "bootout", f"gui/{os.getuid()}/{STANDALONE_LABEL}"] if sys.platform == "darwin" else ["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]
+        _run(command)
+        return 1 if _standalone_loaded() else 0
+    labels = {row.get("label") for row in prev.get("agents", []) if isinstance(row, dict)} & set(AGENT_LABELS)
+    scripts = {row.get("script") for row in prev.get("cron", []) if isinstance(row, dict)} & {script for _, _, script in CRON_JOBS}
+    if dry:
+        note("previous Hermes MCS jobs: stop " + ", ".join(sorted(labels | scripts)))
+        return 0
+    for label in sorted(labels):
+        _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+        if _agent_loaded(label):
+            note(f"previous agent {label}: stop unverifiable — no new service started")
+            return 1
+    if scripts:
+        exe = _hermes_exe(load_config())
+        entries = _cron_list(exe)
+        if entries is None:
+            note("previous Hermes cron state unverifiable — no new service started")
+            return 1
+        for entry in entries:
+            if entry.get("script") in scripts:
+                if _run([exe, "cron", "remove", entry["id"]]).returncode:
+                    return 1
+        after = _cron_list(exe)
+        if after is None or any(row.get("script") in scripts for row in after):
+            return 1
+    return 0
+
+
+def _sync_standalone_service(manifest, note, dry):
+    """Install one supervised host; its scheduler owns every MCS job."""
+    from mcs_standalone.service import render, request_restart
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
+        note("standalone services require launchd or systemd; use an external supervisor")
+        return 1
+    _, body = render(HOME, platform=sys.platform)
+    path = _standalone_service_path()
+    try:
+        current = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    changed = current != body
+    running = _standalone_loaded()
+    note(f"standalone service: {'update' if changed else 'up to date'} {path}")
+    if not dry:
+        if changed:
+            _write_atomic(path, body, 0o600)
+        if sys.platform.startswith("linux") and changed:
+            if _run(["systemctl", "--user", "daemon-reload"]).returncode:
+                return 1
+        if running:
+            # Synchronization also reloads changed Python sources whose service argv is unchanged.
+            try:
+                request_restart(HOME)
+            except (OSError, ValueError):
+                # A loaded launchd label can be waiting after init was incomplete.
+                # Starting without -k never kills a live host or its updater.
+                start = ["launchctl", "kickstart", f"gui/{os.getuid()}/{STANDALONE_LABEL}"] if sys.platform == "darwin" else ["systemctl", "--user", "start", STANDALONE_UNIT]
+                if _run(start).returncode:
+                    note("standalone start failed; service was preserved")
+                    return 1
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        request_restart(HOME)
+                        break
+                    except (OSError, ValueError):
+                        time.sleep(0.2)
+                else:
+                    note("standalone restart request failed; service was preserved")
+                    return 1
+        elif not running:
+            if sys.platform == "darwin":
+                if not _agent_reconcile(STANDALONE_LABEL, path, note, False):
+                    return 1
+            elif _run(["systemctl", "--user", "enable", "--now", STANDALONE_UNIT]).returncode:
+                return 1
+        if not _standalone_loaded():
+            note("standalone service did not become active")
+            return 1
+    manifest["agents"].append({"label": STANDALONE_LABEL if sys.platform == "darwin" else STANDALONE_UNIT,
+                              "sha256": _sha256(body), "loaded": not dry})
+    manifest["scheduler"] = "standalone"
     return 0
 
 
@@ -2220,28 +2468,46 @@ def _record_llm_slots(manifest, note) -> None:
 
 def cmd_services(args) -> int:
     dry = getattr(args, "dry_run", False)
-    subs = _service_subs()
+    cfg = load_config()
+    try:
+        selected_mode = mcs_runtime.mode(cfg)
+    except ValueError:
+        print("services: invalid runtime_mode — nothing changed")
+        return 1
+    subs = _service_subs(cfg)
     problems = 0
     persist_partial = False
     prev = _load_manifest()
-    manifest = {"v": 1, "at": time.time(), "scripts": [],
+    manifest = {"v": 1, "at": time.time(), "runtime_mode": selected_mode,
+                "python": subs["PYTHON"], "scripts": [],
                 "agents": [], "cron": []}
 
     def note(msg):
         print(("  [dry] " if dry else "  ") + msg)
 
-    why = _hermes_py_problem()
+    why = _standalone_py_problem(cfg) if selected_mode == "standalone" else _hermes_py_problem()
     if why:
         # every wrapper/plist is rendered with __PYTHON__=HERMES_PY — a
         # missing interpreter would make each job fail at every run
         print(f"services: {why} — nothing rendered; "
-              + _install_fix("stage 2 rebuilds the hermes-agent venv")
+              + _install_fix("stage 2 rebuilds the standalone venv" if selected_mode == "standalone" else "stage 2 rebuilds the hermes-agent venv")
               + ", then re-run services")
         return 1
+    if _retire_previous_runtime(prev, selected_mode, note, dry):
+        return 1
     _sync_scripts(subs, manifest, note, dry)
+    if selected_mode == "standalone":
+        problems += _sync_standalone_service(manifest, note, dry)
+        _record_llm_slots(manifest, note)
+        if not dry and not problems:
+            try:
+                _save_manifest(manifest)
+            except OSError:
+                note("standalone manifest write failed")
+                problems += 1
+        return 1 if problems else 0
     problems += _sync_agents(subs, prev, manifest, note, dry)
 
-    cfg = load_config()
     hermes = _hermes_exe(cfg)
     if not _hermes_ok(hermes):
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
@@ -2284,6 +2550,8 @@ def main() -> int:
                "config.json that is\nnot valid JSON stops init — --yes "
                "moves it to config.json.corrupt-<ts> first.")
     p.add_argument("--login-id")
+    p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
+                   help="select the runtime explicitly (omitted keeps the existing mode)")
     p.add_argument("--notify-target",
                    help="hermes send target for notifications "
                         "(e.g. slack:C0CHANNELID, discord:1234)")
@@ -2345,7 +2613,7 @@ def main() -> int:
                    help="evaluation deadline in seconds")
     p.set_defaults(fn=cmd_jev_value)
     p = sub.add_parser("services",
-                       help="install launchd agents + hermes cron jobs "
+                       help="install the selected runtime's supervised services "
                             "(renders deployment/ templates; idempotent)")
     p.add_argument("--dry-run", action="store_true",
                    help="print the actions without applying them")

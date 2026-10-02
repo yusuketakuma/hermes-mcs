@@ -73,10 +73,9 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 
 - **Path A — hermes-agent アドオン**（推奨・全機能）: 収集→SQLite→
   Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
-- **Path B — スタンドアロン**（hermes-agent なし）: 収集→SQLite→
-  `mcs_view` 閲覧＋構造化抽出。Slack/Discord通知の配送は `hermes send` 必須のため
-  この形態では送られない。後から Path A へ移行できる（§3-6）。
-  LINE WORKSは[独立接続手順](LINEWORKS.md)を参照し、収集の定期実行はこの形態の設定を使う
+- **Path B — スタンドアローン**（Hermesなし・全MCS機能）: 収集・保存・閲覧・
+  抽出・Slack/Discord/LINE WORKS通知と操作・定期実行・監視・更新を独立して実行する。
+  `./install.sh --mode standalone`で導入する。[専用手順](STANDALONE.md)を参照
 
 ## 0. 導入形態の選択
 
@@ -85,13 +84,13 @@ hermes-mcs の新規導入手順。導入形態は次の2つ:
 | 未読収集 → SQLite → `mcs_view` 閲覧 | ✓ | ✓ |
 | 全履歴アーカイブ・FTS5 検索 | ✓ | ✓ |
 | 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
-| アラートシグナル（検出） | ✓ | ✓（`mcs_view signals` で閲覧のみ） |
-| Discord/Slack への通知配送 | ✓ | ✗ — `hermes send` が必須 |
-| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✗ — gateway + plugin が必要 |
+| アラートシグナル（検出） | ✓ | ✓ |
+| Discord/Slack への通知配送 | ✓ — Hermes公式接続 | ✓ — 独立公式SDK接続 |
+| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✓ |
 | LINE WORKSへの通知・本人1:1での操作 | ✓ — 独立接続を設定 | ✓ — 独立接続を設定 |
-| semantic v4（shadow/enforce） | ✓ | ✓（通知連携のみ不可） |
-| 定期実行の仕組み | hermes cron + launchd | launchd / crontab |
-| `mcs_setup.py check` | 全項目検証 | `hermes CLI`・services 用インタプリタ等のエラーは想定内（§3 B-5） |
+| semantic v4（shadow/enforce） | ✓ | ✓ |
+| 定期実行の仕組み | hermes cron + launchd | 独立hostをnative supervisorで常駐 |
+| `mcs_setup.py check` | 全項目検証 | 独立モードの全必須条件を検証 |
 
 ## 1. 共通の前提条件
 
@@ -371,219 +370,46 @@ wrapper・plist（`__REPO__`）、復旧ツールが復旧する checkout を記
 - 記録のずれは `check` が
   `recovery watchdog recovers <パス>, not this checkout <パス>` として警告する
 
-## 3. Path B — スタンドアロン（hermes-agent なし）
+## 3. Path B — スタンドアローン（Hermesなし・全MCS機能）
 
-収集・保存・閲覧・抽出は hermes-agent なしで動く。**Slack/Discord通知は
-`hermes send` 経由のためこの形態では送られない**（outbox に pending
-として残る。`--no-notify` で送信試行自体を抑止できる）。後から
-hermes-agent を追加して Path A に移行できる（§3-6）。LINE WORKSの接続は
-[独自アダプターの手順](LINEWORKS.md)に従い、`--no-notify`を付けず本体の配送処理を動かす。
+収集・保存・検索・抽出に加え、Slack / Discord / LINE WORKSの通知、
+対話カード、人承認操作、定期実行、監視、更新・復旧を独立して動かせます。
+Hermesが導入済みでも`runtime_mode=standalone`を明示すれば独立モードを使えます。
+未指定の既存設定は従来のHermesモードを維持します。
 
-### B-1. 依存の手動導入
+### B-1. 導入・設定
 
-`install.sh` は hermes-agent 自体も導入するため使わず、必要なもの
-だけを導入する:
+同じcheckoutのルートで実行します。macOSの共通前提条件は§1を参照してください。
 
 ```bash
-brew install python@3.13 llama.cpp        # uv は任意（依存なし・標準libのみ）
-brew install --cask google-chrome
-git clone https://github.com/yusuketakuma/hermes-mcs.git
-cd hermes-mcs
-PY=python3.13                              # brew の python@3.13。以下のコマンドはすべて $PY で実行
-$PY -V                                     # Python 3.13.x と出ること
-```
-
-MCS のスクリプトは Python ≥3.10 が必要。素の `python3` は新規 Mac では
-`/usr/bin/python3`（3.9 系）になり `mcs_setup requires Python >= 3.10`
-で止まるため使わない。B-4 の wrapper にもこのインタプリタのパスが
-焼き込まれる。以下は同じシェルで `PY` を設定した前提。
-
-### B-2. 設定（`mcs_setup.py init`）
-
-```bash
-$PY mcs/ops/mcs_setup.py init
-```
-
-- `mcs_login_id` — MCS のログインID
-- `notify_target` — config 検証上の必須キー。通知を送らない運用では
-  便宜値を入れる（例: `local`）。実際の送信は `--no-notify` で抑止
-- 通知を送らない場合の `notify.interactive` は `off` のまま — Discord/Slack カードは
-  gateway なしでは動かない
-- MCS パスワードは Keychain `mcs-adapter` + `~/.mcs/.env`
-  `MCS_PASSWORD` フォールバックに保存（自動再ログイン用）
-- Chrome は MCS ログイン済みプロファイルで `--remote-debugging-port=9333`
-  を付けて起動しておく
-
-LINE WORKSへ通知する場合は[接続手順](LINEWORKS.md)で
-`notify_target=lineworks:<トークルームID>`と`notify.lineworks`を設定する。
-カード・操作を使う場合は`notify.interactive=lineworks`、テキストだけなら`off`にする。
-
-### B-3. ローカルLLM（extract_llm / semantic を使う場合のみ）
-
-`install.sh` stage 4 相当を手動で行う:
-
-```bash
-# モデル（約6GB）
-mkdir -p ~/.hermes/models
-curl -fL -o ~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf \
-  "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
-
-# 常駐サーバ（パスは XML としてエスケープして配置）
-$PY - <<'PYSETUP'
-from pathlib import Path
-import re
-import shutil
-from xml.sax.saxutils import escape
-home = Path.home()
-llama = shutil.which("llama-server")
-if not llama:
-    raise SystemExit("llama-server not found")
-values = {"__LLAMA_BIN__": llama,
-          "__MODEL__": str(home / ".hermes/models/Qwen3.5-9B-Q4_K_M.gguf"),
-          "__HERMES_HOME__": str(home / ".hermes")}
-template = Path("deployment/launchagents/ai.mcs.llamaserver.plist").read_text()
-pattern = "|".join(re.escape(key) for key in values)
-body = re.sub(pattern, lambda match: escape(values[match.group()]), template)
-target = home / "Library/LaunchAgents/ai.mcs.llamaserver.plist"
-target.parent.mkdir(parents=True, exist_ok=True)
-(home / ".hermes/logs").mkdir(parents=True, exist_ok=True)
-target.write_text(body)
-PYSETUP
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/ai.mcs.llamaserver.plist"
-```
-
-抽出を使わないならこの節はスキップしてよい（`mcs_setup check` が
-LLM endpoint の警告を出すが収集自体は動く）。
-
-### B-4. スケジューリング（crontab）
-
-通知を送らない wrapper を生成し、主要ジョブを crontab で実行する。
-既存の収集ジョブがある場合は、重複して登録せず、その起動経路も確認する:
-
-LINE WORKSへ通知する場合は、下の`body.replace`の1行を省き、
-runnerに`--no-notify`を追加しない。カード・操作を使う場合は
-[独立アダプターの常駐設定](LINEWORKS.md#常駐サービスの候補を作る)も行う。
-
-```bash
-# スタンドアロン用 wrapper を正本からレンダリングする。
-# shell 引数を引用し、通知を送らない runner の起動に --no-notify を追加する。
-# __PYTHON__ にはこのコマンドを実行したインタプリタ（$PY）が入る。
-$PY - <<'PYSETUP'
-from pathlib import Path
-import re
-import shlex
-import sys
-repo = Path.cwd()
-home = Path.home()
-values = {"__PYTHON__": sys.executable, "__REPO__": str(repo),
-          "__DATA__": str(home / ".mcs/data")}
-pattern = "|".join(re.escape(key) for key in values)
-out = home / ".mcs/scripts"
-out.mkdir(parents=True, exist_ok=True)
-for name in ("mcs_check", "mcs_deep", "mcs_llm_catchup"):
-    body = (repo / "deployment/scripts" / (name + ".sh")).read_text()
-    body = body.replace("run_check.py", "run_check.py --no-notify")
-    body = re.sub(pattern, lambda match: shlex.quote(values[match.group()]), body)
-    target = out / (name + ".sh")
-    target.write_text(body)
-    target.chmod(0o755)
-PYSETUP
-
-crontab -e
-```
-
-```cron
-*/5 * * * * $HOME/.mcs/scripts/mcs_check.sh
-7,37 * * * * $HOME/.mcs/scripts/mcs_deep.sh
-0 */6 * * * $HOME/.mcs/scripts/mcs_llm_catchup.sh
-```
-
-`mcs_check.sh` は24時間5分間隔で収集する。`mcs_llm_catchup.sh` は
-上限・クールダウンを保持した再試行の登録のみ行う。解析は常駐workerが行う。
-この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
-併用しない。既定の起動経路には `--no-notify` がなく、配送先を設定した環境では
-通知を送信し得る。LLM 抽出を使う場合は、以下の常駐workerも配置する。
-`mcs_llm_catchup.sh` だけでは解析は進まない。
-
-#### 抽出worker（LLM を使う場合のみ）
-
-同じシェルの `$PY` を使い、既存の抽出用 plist 2件だけを描画する。
-MCS の cmd watcher・Hermes cron・gateway は登録しない。
-
-```bash
-$PY - <<'PYDRAIN'
-import os
-import plistlib
-import sys
-from pathlib import Path
-repo = Path.cwd()
-data = Path.home() / ".mcs/data"
-data.mkdir(parents=True, exist_ok=True, mode=0o700)
-agents = Path.home() / "Library/LaunchAgents"
-agents.mkdir(parents=True, exist_ok=True)
-for label in ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"):
-    source = repo / "deployment/launchagents" / (label + ".plist")
-    spec = plistlib.loads(source.read_bytes())
-    spec["ProgramArguments"][:2] = [sys.executable, str(repo / "mcs/extract/v4/extract_llm.py")]
-    for key in ("StandardOutPath", "StandardErrorPath"):
-        spec[key] = spec[key].replace("__DATA__", str(data))
-    target = agents / (label + ".plist")
-    target.write_bytes(plistlib.dumps(spec))
-    os.chmod(target, 0o600)
-PYDRAIN
-for label in ai.mcs.extract-drainer ai.mcs.extract-drainer-2; do
-  launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || \
-    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$label.plist"
-done
-```
-
-`launchctl print "gui/$(id -u)/ai.mcs.extract-drainer"` と `-2` の両方が成功すれば
-登録完了。既存workerがロード済みで plist の内容を変えた場合は、そのworkerの
-再読込が必要なので、処理終了後に該当 label の `bootout` → `bootstrap` を行う。
-
-### B-5. 動作確認と `check` の読み方
-
-```bash
-$PY mcs/ingest/run_check.py --json --download-files --mark-read --no-notify
-$PY mcs/views/mcs_view.py status
+./install.sh --mode standalone --preflight
+./install.sh --mode standalone
+PY="$HOME/.mcs/venv/bin/python3"
+$PY mcs/ops/mcs_setup.py init --runtime-mode standalone
 $PY mcs/ops/mcs_setup.py check
+$PY -m mcs_standalone status
 ```
 
-LINE WORKSへ通知する場合は、上の収集コマンドから`--no-notify`を省く。
+installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセスと復旧watchdogを
+用意します。ウィザードがMCS設定・配信先・許可ユーザー・プロジェクト範囲と
+認証情報を設定します。初回設定中は接続が起動できず再試行する場合があります。
+設定後の`check`はHermes未導入をエラー扱いせず、実際の必須条件を検証します。
+`check: FAIL`を想定内として無視しないでください。
 
-`mcs_setup.py check` はスタンドアロンでは次をエラー/警告として報告
-する — **想定内**（Path A 用の実行基盤が無いだけで、収集・閲覧・
-抽出は動作する）:
+### B-2. 接続・常駐・更新
 
-- error `interpreter ~/.hermes/hermes-agent/venv/bin/python is missing
-  or not executable`（Path A の services が使うインタプリタ。B-4 の crontab 構成では
-  使わない）
-- error `hermes CLI not resolvable (...) — notifications cannot be sent`
-  （Slack/Discord通知先の場合は配送経路が無い。LINE WORKSの独立配送には不要）
-- warn `LaunchAgent local.mcs-cmd not installed` 等 4件、
-  `update recovery watchdog (org.mcs.recovery) not installed`、
-  `scripts not deployed to ~/.hermes/scripts`
-- warn `no llama-server LaunchAgent`（B-3 を行わない場合）
+[独立モードの接続・設定・移行手順](STANDALONE.md)を使用します。
+SlackはBot/App token、DiscordはBot tokenをowner-onlyの専用ファイルへ保存します。
+LINE WORKSの秘密情報・HTTPS Callbackは[LINE WORKS手順](LINEWORKS.md)に従います。
 
-このため Path B では `check` の exit 1 自体は失敗の判定に使えない。
-これ以外のエラー（`mcs_login_id`・Keychain・Chrome 等）は Path A と
-同じ基準で対処する。
+独立hostが既存と同じ6定期ジョブ、cmd/cmd_int取込、抽出worker2本を所有します。
+Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないでください。
+既存モードからの切替では`services`が旧manifest所有のMCSジョブだけを停止します。
+手動登録のジョブや別プロセスのLINE WORKSアダプターは、対象を確認して別途停止します。
+共有Hermes gatewayや他用途のジョブは停止しません。
 
-### B-6. 後から通知を有効にする（Path A への移行）
-
-```bash
-./install.sh --preflight                        # NG が無いことを確認
-./install.sh                                    # hermes-agent + plugin + services
-PY=~/.hermes/hermes-agent/venv/bin/python       # 以後は install.sh が作った venv を使う
-$PY mcs/ops/mcs_setup.py init                   # notify.interactive=discord 等を設定
-# init が gateway 同期と最終 check を実行する
-```
-
-移行後は B-4 の crontab 行を削除する（services が登録する hermes cron と
-二重実行になる）。`--no-notify` を付けて運用していた場合は wrapper の該当フラグを除き、
-outbox に残った pending は次回 flush で配送対象になる。
-`notify_max_age_h` は取り込み時の抑制なので、既存の待機分は送信再開前に確認する。Discord/Slack アプリの
-作成は付録A/B（hermes-agent リポジトリのドキュメント転記）の手順。
+独立モードの更新後はhost自身が処理終了・ロック解放後に新コードで再起動します。
+独立モード非対応の旧タグへは戻せません。必要なら先にHermesモードへ移行します。
 
 ## 4. config.json 設定リファレンス
 
@@ -593,6 +419,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|
+| `runtime_mode` | choice | `hermes` | `hermes` / `standalone`。未指定は既存Hermes連携を維持 |
 | `mcs_login_id` | str | — （必須） | MCS のログインID |
 | `notify_target` | str | — （必須） | 通知の送り先。`discord:<チャンネルID>`・`slack:#ch` 等 `hermes send --to` 形式、又は独自接続の `lineworks:<トークルームID>`。通知を送らない運用では便宜値 |
 | `notify.interactive` | choice | `off` | `discord`/`slack`/`lineworks`=対話カード / `off`=テキストのみ |
@@ -702,14 +529,14 @@ outbox に残った pending は次回 flush で配送対象になる。
 | メッセージ | 原因・対処 |
 |---|---|
 | `mcs_setup requires Python >= 3.10` | 素の `python3`（3.9 系）で実行した — `$PY` で実行する |
-| `interpreter ~/.hermes/hermes-agent/venv/bin/python is missing or not executable` | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（Path B では想定内） |
+| `interpreter ~/.hermes/hermes-agent/venv/bin/python is missing or not executable` | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
 | `hermes resolves here (...) but not on the launchd PATH` | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
 | `config.json is unreadable or invalid` / init の `config: ... nothing written` | `~/.mcs/config.json` が壊れている — 手で直すか `$PY mcs/ops/mcs_setup.py init --yes` で `config.json.corrupt-<日時>` へ退避して作り直す |
 | `missing required key: mcs_login_id` / `notify_target` | `init` で再登録（両方とも必須） |
 | `Keychain entry 'mcs-adapter' not found` | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
 | `Keychain entry ... unreadable` | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
 | `Chrome binary missing` | Chrome が `/Applications` に無い — `brew install --cask google-chrome` |
-| `local LLM endpoint not reachable (http://127.0.0.1:8080/v1/models)` | llama-server 未起動 — Path A-1/§B-3。収集自体は動く（警告） |
+| `local LLM endpoint not reachable (http://127.0.0.1:8080/v1/models)` | llama-server 未起動 — Path A-1 または [スタンドアローン導入](STANDALONE.md)。収集自体は動く（警告） |
 | `llama-server advertises N slots` | `-np` が選択スロット数（3）未満 — plist の `-np 3` を確認 |
 | `LaunchAgent ai.hermes.llamacpp`（または `ai.mcs.llamaserver`）`installed but not loaded — the local LLM is down` | LLM サーバが止まっている — 表示の `launchctl bootstrap gui/<uid> <plist>` |
 | `no llama-server LaunchAgent (...)`（警告） | 自前サーバを `local_llm.url` で使うなら問題なし。そうでなければ `./install.sh`（stage 4） |
@@ -722,7 +549,7 @@ outbox に残った pending は次回 flush で配送対象になる。
 | `deployed scripts differ from the repo in ~/.hermes/scripts` | 更新後に services を再実行していない — `$PY mcs/ops/mcs_setup.py services` |
 | `scripts not deployed to ~/.hermes/scripts`（警告） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
 | `launchd gui/<uid> unreachable from this session`（警告） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
-| `hermes CLI not resolvable` | hermes 未導入（Path B では想定内。Path A なら `install.sh` 再実行か `hermes_bin` 設定） |
+| `hermes CLI not resolvable` | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
 | `hermes gateway is not supervised` | `services` を実行（`hermes gateway install`+`start` で常駐化） |
 | `hermes_plugin/ is newer than the running gateway`（警告） | `hermes gateway restart`（§A-6） |
 | `TYPESAFE_API_KEY is not resolvable` | semantic 有効時に必須 — `~/.mcs/.env` に登録 |
