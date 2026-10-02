@@ -20,6 +20,22 @@ def test_minimal_valid_config():
     assert errors == []
 
 
+def test_standalone_scope_is_required_for_text_and_card_delivery():
+    base = {"runtime_mode": "standalone", "mcs_login_id": "u1",
+            "notify_target": "slack:C1234567890"}
+    assert any("explicit scope required" in error for error in mcs_setup.validate_config(base)[0])
+    scope = {"profile": "default", "application_id": "A1234567890",
+             "team_id": "T1234567890", "channel_id": "C1234567890",
+             "allowed_user_ids": ["U1234567890"], "project_ids": [101]}
+    cfg = {**base, "notify": {"interactive": "off", "slack": scope}}
+    assert not mcs_setup.validate_config(cfg)[0]
+    assert mcs_setup._validate_standalone_scope({**cfg, "notify": {"interactive": []}})
+    for key, value in (("allowed_user_ids", []), ("project_ids", []), ("project_ids_auto", 1)):
+        bad = {**cfg, "notify": {"slack": {**scope, key: value}}}
+        assert any(key in error for error in mcs_setup.validate_config(bad)[0])
+    assert mcs_setup.validate_config({**base, "runtime_mode": "automatic"})[0]
+
+
 def test_daily_digest_block_is_typed():
     base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs"}
     errors, warnings = mcs_setup.validate_config(
@@ -1363,6 +1379,76 @@ def test_services_gateway_skipped_when_off(monkeypatch, tmp_path):
 
 
 # ---- plugin integration (hermes config CLI, never hermes internals) --
+
+def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_path):
+    from mcs_standalone import service
+
+    calls, args = _services_env(monkeypatch, tmp_path)
+    requests = []
+    monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
+    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes must not be resolved"))
+    assert mcs_setup.cmd_services(args) == 0
+    manifest = mcs_util.load_config(mcs_setup.MANIFEST_PATH)
+    assert manifest["runtime_mode"] == "standalone"
+    assert manifest["python"] == str(tmp_path / "venv/bin/python3")
+    assert manifest["cron"] == [] and manifest["scheduler"] == "standalone"
+    assert [row["label"] for row in manifest["agents"]] == ["ai.mcs.standalone"]
+    assert not any("cron" in call or "gateway" in call for call in calls)
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    assert not any("bootstrap" in call for call in calls)
+    assert requests == [str(tmp_path)]
+
+
+def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatch, tmp_path):
+    from mcs_standalone import service
+
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={mcs_setup.STANDALONE_LABEL})
+    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    attempts = iter([False, True])
+
+    def request(root):
+        if not next(attempts):
+            raise ValueError("standalone_status_unavailable")
+
+    monkeypatch.setattr(service, "request_restart", request)
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["launchctl", "kickstart", "gui/501/ai.mcs.standalone"] in calls
+    assert not any("-k" in call or "bootout" in call for call in calls)
+
+
+def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_path):
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"},
+                               cron_entries=[{"id": "aaaaaa", "name": "old", "schedule": "*/5 * * * *", "script": "mcs_check.sh"},
+                                             {"id": "bbbbbb", "name": "other", "schedule": "0 0 * * *", "script": "other.sh"}])
+    mcs_setup._save_manifest({"agents": [{"label": "local.mcs-int"}], "cron": [{"script": "mcs_check.sh"}]})
+    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
+    assert not any("bbbbbb" in call or "ai.hermes.gateway" in call for call in calls)
+    assert ["launchctl", "bootout", "gui/501/local.mcs-int"] in calls
+
+
+def test_standalone_init_never_writes_hermes_config(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
+    assert mcs_setup._apply_plugin_integration({"runtime_mode": "standalone", "notify": {"interactive": "slack"}}, SimpleNamespace(yes=True))
+
+
+def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(mcs_setup, "load_config", lambda: {"runtime_mode": ["standalone"]})
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
+    monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
+    assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
+    assert "check: FAIL" in capsys.readouterr().out
 
 def _plugin_args(**kw):
     from types import SimpleNamespace

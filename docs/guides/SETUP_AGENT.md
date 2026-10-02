@@ -74,13 +74,13 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
 一度に確認する。依存導入と収集開始は分けて進める。Chrome の CDP 起動や
 MCS ログインは依存導入を妨げないため、初回収集の直前に確認する。
 
-以下を順に確認する。Path B と決まっている場合は install.sh の
-Path A 向け preflight を必須にせず、Phase 6 の前提を確認する。不合格は【失敗時】
+以下を順に確認する。Path B と決まっている場合は install.sh に
+`--mode standalone`を付ける。不合格は【失敗時】
 の指示に従う。**Python の事前確認はしない** — 新規 Mac の `python3` は
 3.9 系で、Path A では `install.sh` が `python@3.13` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
 実行しない（Path A は `~/.hermes/hermes-agent/venv/bin/python`、
-Path B は `python3.13`）。
+Path B は `~/.mcs/venv/bin/python3`）。
 
 | # | チェック | コマンド | 合格条件 |
 |---|---|---|---|
@@ -122,8 +122,8 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 > 導入形態を選んでください:
 > **A**: hermes-agent アドオン（推奨・全機能 — Discord/Slack 通知・
 > 対話カード・`/mcs` コマンドあり）
-> **B**: スタンドアロン（収集・保存・閲覧・抽出。
-> LINE WORKSは独立接続で通知できます。Slack/Discord通知には A が必要です）
+> **B**: スタンドアローン（全MCS機能。Slack/Discord/LINE WORKSの
+> 通知・操作をHermesなしで使う）
 
 - A → Phase 3
 - B → Phase 6
@@ -370,92 +370,37 @@ $PY mcs/views/mcs_view.py status
 エラー分類だけを報告する。`session_expired`
 なら `auto_login` の復旧を待つか INSTALLATION.md §7 の Keychain 節を案内。
 
-## Phase 6 — Path B: スタンドアロン
+## Phase 6 — Path B: スタンドアローン
 
-### 6-1. 依存
-
-【実行】
-
-```bash
-brew install python@3.13 llama.cpp       # 未導入のみ
-brew install --cask google-chrome        # 未導入のみ
-# Phase 1 で確認した同じリポジトリルートで実行
-PY=python3.13                            # 以後の MCS コマンドはすべて $PY で実行
-$PY -V                                   # Python 3.13.x
-```
-
-素の `python3`（新規 Mac では 3.9 系）は使わない — `mcs_setup` は
-`mcs_setup requires Python >= 3.10` で止まる。以後のコマンドは同じ
-シェルで `PY` を設定した前提。
-
-### 6-2. 設定
-
-LINE WORKSを選んだ場合は[専用設定](LINEWORKS.md#3-mcs-の配送先と操作範囲を設定する)で
-`notify_target`・`notify.lineworks`と秘密ファイルを設定し、ローカル診断を行う。
-カード・操作を使う場合は`interactive=lineworks`、テキストだけなら`off`にする。
-以下は通知を送らない構成の例なので、LINE WORKS設定を`local`へ置き換えない。
-
-【ユーザー確認】未取得の値だけをまとめて尋ねる:
-
-1. `mcs_login_id`
-2. MCS パスワード（§0-1）
-3. `semantic` を使うか（off 推奨の初期値）
-
-【実行】
+Hermesなしで全MCS機能を使用する経路です。[STANDALONE.md](STANDALONE.md)と
+INSTALLATION.md §B-1に従い、同じcheckoutから次を実行します。
 
 ```bash
-# MCS_SETUP_PASSWORD は §0-1 に従って環境変数に準備済み
-$PY mcs/ops/mcs_setup.py init --yes \
-    --login-id <ID> --notify-target local \
-    --set 'notify.interactive="off"'
-```
-
-`notify_target` は検証上の必須キーのため便宜値 `local`（配送しない）。
-
-### 6-3. ローカルLLM（抽出を使う場合のみ — ユーザーに要否を確認）
-
-【ユーザー確認】構造化抽出・semantic を使いますか？（約6GBの
-モデルDLが必要）
-
-使う場合は INSTALLATION.md §B-3 のサーバ導入と §B-4「抽出worker」の
-2件の plist 配置・ロードを実行する。retry 登録だけでは解析は進まない。
-
-### 6-4. スケジューリング
-
-【実行】INSTALLATION.md §B-4 の手順で wrapper を
-`~/.mcs/scripts/` にレンダリングし、ユーザーの crontab に:
-
-```cron
-*/5 * * * * $HOME/.mcs/scripts/mcs_check.sh
-7,37 * * * * $HOME/.mcs/scripts/mcs_deep.sh
-```
-
-通知を送らない場合は`mcs_check.sh`へ`--no-notify`を付与する。
-LINE WORKSへ送る場合はINSTALLATION.md §B-4のLINE条件に従い、付与しない。
-カード・操作を使う場合は[独立プロセスの常駐設定](LINEWORKS.md#常駐サービスの候補を作る)も行う。
-
-この構成では `mcs_setup services` の既定 wrapper・cmd watcher・Hermes cron を
-併用しない。既定の起動経路には `--no-notify` がなく、配送先を設定した環境では
-通知を送信し得る。既存ジョブの停止・置換が必要な場合は、その対象を確認し、
-許可済みの範囲で行う。
-
-### 6-5. 検証
-
-Phase 5-5 と同じく CDP 起動・MCS ログインを確認し、取得・既読化が
-承認範囲内であることを確認する。通知を送らない場合は`--no-notify`で抑止する。
-LINE WORKSへ送る場合は次のコマンドから`--no-notify`を省く。
-
-```bash
-$PY mcs/ingest/run_check.py --json --download-files --mark-read --no-notify
-$PY mcs/views/mcs_view.py status
+./install.sh --mode standalone --preflight
+./install.sh --mode standalone
+PY="$HOME/.mcs/venv/bin/python3"
+$PY mcs/ops/mcs_setup.py init --runtime-mode standalone
 $PY mcs/ops/mcs_setup.py check
+$PY -m mcs_standalone status
 ```
 
-`check` はスタンドアロンでは exit 1 になる。次は想定内（一覧は
-INSTALLATION.md §B-5）: `interpreter ~/.hermes/hermes-agent/venv/bin/python
-is missing`、Slack/Discord通知先の場合の`hermes CLI not resolvable`のエラー、LaunchAgent 4件・
-`org.mcs.recovery`・`~/.hermes/scripts` 未配置の警告。それ以外のエラーは
-対処する。
+導入・外部配信・既読化の承認は§0の実行契約に従います。既に承認された範囲は
+聞き直さず、未知のMCSログイン・通知先・操作ユーザー・プロジェクト範囲だけ確認します。
+Bot token等は端末の非表示入力に委ね、チャットやargvへ含めません。既存の秘密値は保持します。
+`--yes`では秘密値を環境から推測せず、不足時は`credentials_missing`で停止します。
+
+SlackはBot/App token、DiscordはBot tokenを専用0600ファイルへ保存します。
+LINE WORKSの認証・HTTPS Callbackは[専用手順](LINEWORKS.md)に従います。
+LINE WORKSは独立host内で起動するため、同じ資格情報で別アダプターを常駐させません。
+
+旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
+手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
+独立hostは6定期ジョブ・2抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
+
+`check`の失敗は想定内として無視しません。モード・専用venv・scope・資格情報・常駐状態・
+文書生成とのdriftを確認し、固定エラーコードで原因を報告します。
+実MCS取得・通知・カード操作の検証は許可された対象だけで行い、未実施なら明記します。
+Linuxのsystemd候補は実機適用・検証済みとは報告しません。
 
 ## Phase 7 — 完了報告
 
@@ -465,11 +410,11 @@ is missing`、Slack/Discord通知先の場合の`hermes CLI not resolvable`の�
 【MCS セットアップ完了】
 - 導入形態: A(hermes アドオン) / B(スタンドアロン)
 - 事前チェック: install.sh --preflight = 0 blocker(s) / 警告N件
-- install.sh: Installed（使用フラグ: …）/ B のため未使用
+- install.sh: Installed（runtime_modeと使用フラグ: …）
 - 設定: ~/.mcs/config.json（notify_target=…、interactive=…）
 - 秘密情報: Keychain mcs-adapter=登録済み / .env=設定済み
 - LINE WORKS利用時: 認証ファイル=権限確認済み、独立プロセス=稼働/不要/未起動
-- スケジュール: hermes cron=N件 / launchd=N件 / crontab=N件
+- スケジュール: hermes cron=N件 / launchd=N件 / standalone host=稼働・未起動
 - 検証: mcs_setup check = exit 0 / 警告N件（内容: …）
 - 初回 run: 成功（messages=N, patients=N）/ 失敗（原因: …）
 - 通知先: discord:… / slack:… / lineworks:… / なし

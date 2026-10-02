@@ -17,6 +17,10 @@
 #                   --check-only): prints OK / WARN / NG with the fix
 #                   command; exits 1 when a blocker (NG) exists.
 #                   Nothing is written. Run this first.
+#   --mode MODE     hermes or standalone (existing config, then hermes
+#                   when unspecified). Standalone installs
+#                   its own venv and official connector SDKs; Hermes
+#                   is neither downloaded nor configured.
 #   --dry-run       preflight + the per-stage plan of what would be
 #                   written or changed; nothing is written
 #   --force-repo    allow re-pointing an existing install (plugin
@@ -51,11 +55,16 @@ usage() {
 }
 
 MODE=install
+RUNTIME_MODE=hermes
+RUNTIME_EXPLICIT=0
 SKIP_BREW=0; SKIP_LLM=0; SKIP_PLUGIN=0; SKIP_SERVICES=0; SKIP_RECOVERY=0
 FORCE_REPO=0
 ARG_HOME=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        --mode)       [ $# -ge 2 ] || { printf '%s\n' '--mode needs hermes or standalone' >&2; exit 2; }
+                      RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
+                      case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' 'invalid --mode' >&2; exit 2 ;; esac ;;
         --no-brew)     SKIP_BREW=1 ;;
         --no-llm)      SKIP_LLM=1 ;;
         --no-plugin)   SKIP_PLUGIN=1 ;;
@@ -106,6 +115,26 @@ link_target() {
 }
 
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+if [ "$RUNTIME_EXPLICIT" = 0 ] && [ -e "$HOME/.mcs/config.json" ]; then
+    MODE_PY="$HOME/.mcs/venv/bin/python3"
+    if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
+    [ -n "$MODE_PY" ] || die "existing config requires Python to select its runtime mode; pass --mode explicitly"
+    RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" <<'PYMODE'
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        cfg = json.load(stream)
+    mode = cfg.get("runtime_mode", "hermes")
+    if mode not in ("hermes", "standalone"):
+        raise ValueError
+    print(mode)
+except (OSError, ValueError, AttributeError, TypeError):
+    raise SystemExit(1) from None
+PYMODE
+)" || die "cannot select runtime from existing config; repair config or pass --mode explicitly"
+    case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "runtime mode could not be read; pass --mode explicitly" ;; esac
+fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
 ENV_HERMES_HOME="${HERMES_HOME:-}"
 if [ -n "$ARG_HOME" ]; then HERMES_HOME="$(abspath "$ARG_HOME")"
@@ -116,6 +145,12 @@ if [ -n "$ENV_HERMES_HOME" ] \
 fi
 # every hermes command below must act on the home being installed
 export HERMES_HOME
+RUNTIME_HOME="$HERMES_HOME"
+if [ "$RUNTIME_MODE" = standalone ]; then
+    [ -z "$ARG_HOME" ] || die "standalone mode does not accept HERMES_HOME"
+    RUNTIME_HOME="$HOME/.mcs"
+    SKIP_PLUGIN=1
+fi
 
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
@@ -125,14 +160,16 @@ HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
 HERMES_PIN="fd50a275e2616118c48fe07e7e1c878782b15ccd"
 CLONE_MARK="$HERMES_HOME/.hermes-agent.install-in-progress"
 VENV="$HERMES_DIR/venv"
+if [ "$RUNTIME_MODE" = standalone ]; then VENV="$RUNTIME_HOME/venv"; fi
 VENV_PY="$VENV/bin/python"
+if [ "$RUNTIME_MODE" = standalone ]; then VENV_PY="$VENV/bin/python3"; fi
 VENV_HERMES="$VENV/bin/hermes"
 PIP_MARK="$VENV/.mcs-pip-incomplete"
 HERMES_BIN_DIR="$HOME/.local/bin"
 SHIM="$HERMES_BIN_DIR/hermes"
 PLUGIN_LINK="$HERMES_HOME/plugins/mcs-discord-commands"
 LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
-MODEL_DIR="$HERMES_HOME/models"
+MODEL_DIR="$RUNTIME_HOME/models"
 MODEL_FILE="$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf"
 MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
 # optional integrity check — set when the published sha256 is known
@@ -204,7 +241,7 @@ repo_conflict() {
             printf '%s\n' "$_r"; return 0
         fi
     fi
-    if [ -L "$PLUGIN_LINK" ] && _t="$(link_target "$PLUGIN_LINK")" \
+    if [ "$RUNTIME_MODE" = hermes ] && [ -L "$PLUGIN_LINK" ] && _t="$(link_target "$PLUGIN_LINK")" \
             && [ "$_t" != "$REPO/hermes_plugin" ]; then
         dirname -- "$_t"
     fi
@@ -264,7 +301,7 @@ preflight() {
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.11–3.13 yet — stage 1 installs python@3.13"
     else pf_ng "no Python 3.11–3.13 on PATH" "brew install python@3.13"; fi
     _need_clone=0
-    if [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; then _need_clone=1; fi
+    if [ "$RUNTIME_MODE" = hermes ] && { [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; }; then _need_clone=1; fi
     if command -v git >/dev/null 2>&1; then pf_ok "git: $(command -v git)"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "git missing — stage 1 installs it"
     elif [ "$_need_clone" -eq 1 ]; then pf_ng "git missing" "xcode-select --install   (or: brew install git)"
@@ -286,6 +323,10 @@ preflight() {
     if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$MODEL_FILE" ]; then _need_hf=1; fi
     pf_net huggingface.co "$MODEL_URL" "$_need_hf"
 
+    if [ "$RUNTIME_MODE" = standalone ]; then
+        pf_info "standalone runtime: $VENV (Hermes is not required)"
+        pf_net pypi.org https://pypi.org 1
+    else
     if command -v hermes >/dev/null 2>&1; then pf_info "hermes on PATH: $(command -v hermes)"
     else pf_info "hermes not on PATH yet — stage 2 writes $SHIM"; fi
     if [ -f "$CLONE_MARK" ]; then
@@ -301,6 +342,7 @@ preflight() {
     if py_ok "$VENV_PY" 11 14; then pf_ok "hermes venv python: $VENV_PY"
     elif [ -e "$VENV" ]; then pf_info "hermes venv has no usable Python 3.11–3.13 — stage 2 recreates it"
     else pf_info "no hermes venv yet — stage 2 creates it"; fi
+    fi
 
     if [ -f "$REPO/.git" ]; then
         pf_warn "running from a git worktree ($REPO) — services and the plugin will point here and break if it is removed" "run install.sh from the main checkout"
@@ -311,7 +353,7 @@ preflight() {
     elif [ -n "$_c" ]; then
         pf_warn "--force-repo: will switch the install from $_c to $REPO" ""
     fi
-    if [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
+    if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
         pf_ng "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage" "use the default ~/.hermes, or add --no-services"
     fi
 
@@ -341,9 +383,13 @@ dry_run_plan() {
     say "plan (--dry-run: nothing below is executed)"
     if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 brew" "skipped (--no-brew)"
     else plan_line "1/6 brew" "brew install any of: git python@3.13 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
+    if [ "$RUNTIME_MODE" = standalone ]; then
+        plan_line "2/6 standalone" "venv $VENV + official SDKs from deployment/requirements-standalone.txt; runtime_mode=standalone"
+    else
     plan_line "2/6 hermes" "checkout $HERMES_DIR [$(state "$HERMES_DIR")] @ $HERMES_PIN (existing checkouts are kept)"
     plan_line "" "venv $VENV [$(state "$VENV_PY")] + pip install -e hermes-agent[messaging]"
     plan_line "" "shim $SHIM [$(state "$SHIM")] (a foreign file there is left alone)"
+    fi
     if [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin)"
     else plan_line "3/6 plugin" "symlink $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
     if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 llm" "skipped"
@@ -363,7 +409,7 @@ dry_run_plan() {
     if [ "$SKIP_SERVICES" -eq 1 ]; then plan_line "5/6 services" "skipped (--no-services)"
     else
         plan_line "5/6 services" "mkdir $MCS_DATA{,/cmd,/cmd_int} (mode 700)"
-        plan_line "" "$VENV_PY $SETUP services  (launchd agents + hermes cron)"
+        plan_line "" "$VENV_PY $SETUP services (selected runtime supervisor)"
     fi
     if [ "$SKIP_RECOVERY" -eq 1 ]; then plan_line "6/6 recovery" "skipped (--no-recovery)"
     else
@@ -384,7 +430,7 @@ fi
 # mcs_setup services renders cron wrappers/plists against ~/.hermes (its
 # HERMES_PY and scripts dir are fixed there) — a custom HERMES_HOME would
 # install services pointing at an interpreter that does not exist
-if [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
+if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
     printf '%s\n' "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage;" \
         "use the default ~/.hermes, or pass --no-services and register services yourself" >&2
     exit 2
@@ -438,6 +484,36 @@ else
 fi
 
 # ----------------------------------------------------------- 2. hermes
+if [ "$RUNTIME_MODE" = standalone ]; then
+    say "2/6 standalone runtime"
+    mkdir -p "$RUNTIME_HOME"
+    if ! py_ok "$VENV_PY" 11 14; then
+        PYBIN="$(find_py)" || die "Python 3.11–3.13 required — brew install python@3.13"
+        if [ -e "$VENV" ]; then rm -rf "$VENV"; fi
+        if command -v uv >/dev/null 2>&1; then
+            uv venv --python "$PYBIN" "$VENV"
+        else
+            "$PYBIN" -m venv "$VENV"
+        fi
+        : > "$PIP_MARK"
+    fi
+    REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
+    [ -f "$REQUIREMENTS" ] || die "standalone requirements file is missing"
+    if [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
+        : > "$PIP_MARK"
+        if command -v uv >/dev/null 2>&1; then
+            uv pip install --python "$VENV_PY" -r "$REQUIREMENTS"
+        else
+            "$VENV_PY" -m pip install -r "$REQUIREMENTS"
+        fi
+        cp "$REQUIREMENTS" "$VENV/.mcs-connector-requirements.tmp"
+        mv -f "$VENV/.mcs-connector-requirements.tmp" "$VENV/.mcs-connector-requirements"
+        rm -f "$PIP_MARK"
+    fi
+    py_ok "$VENV_PY" 11 14 || die "standalone interpreter unavailable after install"
+    MCS_PY="$VENV_PY"
+    sum "2/6 runtime:  standalone venv and official connector SDKs"
+else
 say "2/6 hermes-agent"
 mkdir -p "$HERMES_HOME"
 # checkout: a fresh clone is bracketed by CLONE_MARK, so an interrupted
@@ -551,6 +627,27 @@ case ":$PATH:" in
     *) warn "$HERMES_BIN_DIR is not on PATH — add it to your shell profile to run 'hermes'" ;;
 esac
 sum "2/6 hermes:   $_ck; $_venv; $_shimsum"
+fi
+
+# Persist only an explicitly selected mode; never discard an unreadable config.
+if [ "$RUNTIME_EXPLICIT" -eq 1 ]; then
+    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" <<'PYMODE'
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
+import _mcs_path
+from mcs_util import CONF_PATH, atomic_write
+path = Path(CONF_PATH)
+try:
+    cfg = json.loads(path.read_text()) if path.exists() else {}
+except (OSError, ValueError):
+    raise SystemExit("config.json unreadable — repair it before selecting a runtime")
+if not isinstance(cfg, dict):
+    raise SystemExit("config.json must be an object")
+cfg["runtime_mode"] = sys.argv[2]
+atomic_write(str(path), lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
+PYMODE
+fi
 
 # -------------------------------------------------------- 3. plugin
 say "3/6 Discord/Slack command plugin"
@@ -646,10 +743,10 @@ else
             mv -f "$MODEL_FILE.part" "$MODEL_FILE"
             ok "model downloaded"
         fi
-        mkdir -p "$AGENTS_DIR" "$HERMES_HOME/logs"
+        mkdir -p "$AGENTS_DIR" "$RUNTIME_HOME/logs"
         sed -e "s|__LLAMA_BIN__|$(xml_sed "$LLAMA_BIN")|g" \
             -e "s|__MODEL__|$(xml_sed "$MODEL_FILE")|g" \
-            -e "s|__HERMES_HOME__|$(xml_sed "$HERMES_HOME")|g" \
+            -e "s|__HERMES_HOME__|$(xml_sed "$RUNTIME_HOME")|g" \
             "$REPO/deployment/launchagents/ai.mcs.llamaserver.plist" \
             > "$LLAMA_PLIST.tmp"
         _changed=0
@@ -678,7 +775,7 @@ else
 fi
 
 # ------------------------------------------- 5. launchd + hermes cron
-say "5/6 scheduled services (launchd + hermes cron)"
+say "5/6 scheduled services ($RUNTIME_MODE)"
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$HOME/.mcs" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
@@ -756,6 +853,20 @@ printf '%s' "$SUMMARY"
 printf '============================================================\n'
 printf '\nOne guided step remains — it needs your secrets/choices:\n\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
+if [ "$RUNTIME_MODE" = standalone ]; then
+    cat <<'EOF'
+
+Select your notification destination and explicit actor/project scopes.
+The wizard stores connector secrets with hidden prompts in owner-only files.
+Hermes profiles, plugins and gateway are not used.
+Run init first; the host waits until configuration and credentials are ready.
+Then run the required-condition check and inspect status:
+EOF
+    printf '    %s %s check\n' "$PYQ" "$SETUPQ"
+    printf '    %s -m mcs_standalone status\n' "$PYQ"
+    printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
+    exit 0
+fi
 cat <<'EOF'
 
 The wizard covers EVERY config.json setting (Enter keeps the

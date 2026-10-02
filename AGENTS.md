@@ -2,69 +2,29 @@
 
 エージェント作業用の最小指示。詳細は `README.md`・`SECURITY.md`。
 
-## これは何か（機能サマリ）
+## システムと入口
 
-MedicalCareStation (MCS) の医療・介護チャットを収集・解析するローカルシステム:
+MCS の医療・介護チャットを収集・解析するローカルシステム。
+5分間隔の未読収集、`self_posts` の最新投稿 probe、履歴保管・FTS5検索、
+ルール抽出とローカルLLM抽出、統計・シグナル、人承認の依頼管理を持つ。
+LLM は新着・対話1枠とバックログ2枠。抽出世代・QC・公開条件・モデルの
+既定は `mcs/extract/`・`mcs/semantic/` と仕様を照合し、要約から固定しない。
+`stage_self_probe` は未保管の最新 id を bounded 履歴取得し、取得できない
+id は `patients.probe_mid` に記録して繰返し取得を抑える。
 
-- 24時間5分間隔で未読収集。LLM は新着・対話用1枠とバックログ用2枠→ SQLite(`data/ledger.db`) → Slack / Discord / LINE WORKS 通知
-- `self_posts` 設定で自投稿・他者先読み投稿を毎 tick `latest` probe →
-  未保管の最新 id があれば bounded 履歴取得して取り込み・新着通知
-  （`stage_self_probe`。`latest` は `{is_self_only,message:{id}}` のみ返し
-  after フィルタ無し。取り切れなかった id は `patients.probe_mid` に
-  記録して再取得ループを抑止）
-- 全履歴アーカイブ・FTS5 全文検索・患者タイムライン
-- 構造化抽出: ルール `extract_v1` + ローカルLLM `extract_llm`（外部送信なし）。
-  抽出スキーマ、QC、再抽出、v4 の公開条件は `mcs/extract/`・`mcs/semantic/` と
-  関連仕様を照合する。モデル名や既定値をこの要約から固定的に推定しない。
-- 読み取り専用統計・アラートシグナル・人承認の依頼管理
-- Hermes addon(`hermes_plugin/`): Discord / Slack で閲覧・preview/confirm と配送。
-  LINE WORKS は `adapters/lineworks/` の独立プロセスで同じ配送・人承認契約を使う
+| 領域 | 入口・制約 |
+|---|---|
+| 実行 | `mcs/` の `core/`・`ingest/`・`notify/`・`extract/`・`semantic/`・`views/`・`ops/`。モジュール表は `docs/development/DEVELOPMENT.md` |
+| import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ |
+| 抽出 | `extract/v1/` はルール、`v4/` は現行LLM。v2/v3 の旧実装は git 履歴。`extract/rollup.py` と `semantic/` は世代横断 |
+| 通知 | `adapters/{slack,discord,lineworks,common}/`。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
+| 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
+| 文書・配備 | 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。`deployment/` は配備候補で、編集だけでは実機適用しない |
 
-## 構成
-
-- `mcs/` — 実行モジュール。**flat import維持のまま第一層サブディレクトリに分割**:
-  `core/`(DB・共通処理・LLM admission) · `ingest/`(収集・health監視) ·
-  `notify/`(通知・配送整合) · `extract/`(抽出・評価) · `semantic/`(意味解析) ·
-  `views/`(読み取りモデル・統計) · `ops/`(依頼・運用・外部出力契約)
-  `extract/` 内は推論エンジン世代でフォルダ分け: `v1/`(ルール抽出
-  `extract.py`) · `v2/`/`v3/`(in-place 置換で退役した旧 extract_llm —
-  README のみ、旧実装は git 履歴) · `v4/`(現行 `extract_llm.py` と
-  `extract_bench.py`)。`semantic/` は v4 canonical エンジン群と
-  世代横断の QC・評価基盤のため世代分割しない。`rollup.py` は
-  v1+v4 を読む世代横断集約で `extract/` 直下に残す。
-  個別モジュールの一覧は `docs/development/DEVELOPMENT.md` の生成表を参照。
-  — importは変わらず `import ledger`。エントリポイントが `mcs/` ルートを
-  sys.path に挿れて `import _mcs_path`（.py を持つ全サブディレクトリを
-  任意の深さで import root として登録）する2行ブートストラップを持つ。
-  `mcs/` 直下に import 可能なモジュールは `_mcs_path.py` のみ
-- `tests/` — pytest。`mcs/` と同じ領域名のサブディレクトリに配置。
-  `adapters/` は接続先別のテスト、`plugin/` はHermes連携のテスト
-  （`conftest.py` が tests/ 各サブディレクトリを sys.path 挿入して
-  テスト間ヘルパーimportを維持 + socket 遮断ガード）
-- `evaluation/` — 評価資産一式（ベンチcases・G6基準・注釈ガイド・
-  rehearsal結果）
-- `adapters/` — `slack/`・`discord/`（Hermes公式接続を利用する表示・配送・操作） ·
-  `lineworks/`（独自Bot API・JWT認証・署名Callback・配送・DM入力/確定・CLI/サービス候補） ·
-  `common/`（接続先共通のpaths・journal・registry・envelopes・spec・text・worker）
-- `lineworks_adapter/` — 独立LINE WORKS CLIの互換入口（`python -m lineworks_adapter`）
-- `hermes_plugin/` — `mcs_discord/`・`mcs_slack/`（`adapters/`への互換import入口） ·
-  `mcs_delivery/`（`adapters/common/`への互換import入口） ·
-  `card_workers.py`(worker 設定解決・factory) · `projects.py`
-- `integration/` — Hermes 連携・複数領域の統合テスト
-- `deployment/` — 配備用スクリプト・設定候補（変更だけでは実機適用しない）
-- `docs/` — `guides/`（利用・導入） · `development/`（開発・保守） ·
-  `specs/`（仕様） · `roadmap/`（計画） · `dev-records/`（検証・設計履歴） ·
-  `assets/`・`screenshots/`（図・完全合成の画面例）
-- `scripts/` — `run_tests.sh`・`keychain_to_env.py`（実行・運用入口） ·
-  `development/`（文書生成・リリース・画面生成・合成検証）
-
-`hermes_plugin/` は長寿命の Hermes gateway が起動時に読込む。変更を
-有効化するには `hermes gateway restart` が必要 — 再起動なしでは
-runner が発行する新形式 spec を旧世代 worker が処理し、card は
-届くが companion thread の本文・添付が欠落する（2026-09 実例）。
-再起動は配備の明示範囲に含まれる場合に行い、未適用なら結果報告に残す。
-LINE WORKS の起動・更新は独立アダプターの再起動が必要で、Hermes gateway
-だけでは起動しない。導入・公開HTTPS Callback・常駐手順は `docs/guides/LINEWORKS.md`。
+Hermes plugin の更新反映には gateway 再起動が必要。旧 worker が新 spec を
+処理すると本文・添付が欠落し得るため、配備が明示範囲にあるときだけ再起動し、
+未適用なら報告する。LINE WORKS は独立アダプターの起動・再起動が必要。
+公開 Callback・常駐手順は `docs/guides/LINEWORKS.md`。
 
 ## コマンド
 
@@ -144,6 +104,14 @@ docstring 先頭文は公開されるので1文要約にする。
 - tag workflowは下書きを作り、mainのCHANGELOGを既存Releaseへ自動同期する。
   タイトル・本文以外は変更しない。公開済み本文の変更も先にCHANGELOGへ反映する。
   push・PR・tag・公開の承認は従来の規約に従う。
+
+## 現行の連携方針
+
+ユーザー指示（2026-10-02）により agmsg は廃止。以下の古い managed block の
+agmsg 通知・所有者宣言・受信コマンド・フックは実行しない。保存済み履歴は保持する。
+Devflow の PLAN/STATUS/git/VERIFY/REVIEW 正本、役割分離、書込み所有権、
+人承認・外部操作の境界は維持する。現存しない中央設定を推測で再作成したり、
+別の連携サービス・常駐処理へ自動置換したりしない。
 
 <!-- BEGIN DEVFLOW MANAGED -->
 ## Devflow 共通運用（managed block — この block 内のみ devflow が更新する）

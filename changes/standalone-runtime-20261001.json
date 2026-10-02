@@ -1,0 +1,22 @@
+{
+  "category": "added",
+  "title": "Hermesなしでも通知・操作・定期実行を使える独立モードを追加",
+  "summary": "スタンドアローンモードで収集・保存・検索・抽出に加え、Slack・Discord・LINE WORKSへの通知、対話カード、人承認操作、監視、更新・復旧を実行できます。既存の設定はHermesモードを維持し、同じ配送・承認・既読化の安全条件を使います。",
+  "upgrade": "従来のHermes運用は追加設定不要です。独立モードを使う場合はinstall.sh --mode standaloneを実行し、runtime_mode=standalone、操作ユーザー・プロジェクト範囲と専用資格情報を設定してcheckを実行してください。既存経路から切り替える際は同じBotのHermes接続、手動登録の定期ジョブや単体LINE WORKSサービスとの重複を解消します。更新後は独立hostの処理終了後に再起動します。独立モード非対応の旧タグへのロールバックは事前にHermesモードへ移行してください。モデル・抽出範囲・既読化・承認条件・解析の既定値は変更しません。",
+  "details": [
+    "独立venvへ公式接続SDKを導入し、収集・解析コアの標準ライブラリのみという条件を維持する。",
+    "単一hostが既存6定期ジョブ、cmd/cmd_int取込、抽出worker2本と接続を所有し、更新marker・heartbeat・子PID検証・再起動要求で更新と協調する。",
+    "setupとrepo外復旧watchdogが選択モードのインタプリタ、scope、資格情報、常駐状態、所有ジョブを扱う。"
+  ],
+  "refs": [
+    "mcs/core/mcs_runtime.py",
+    "mcs_standalone/",
+    "adapters/discord/standalone.py",
+    "adapters/slack/standalone.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py",
+    "docs/guides/STANDALONE.md"
+  ]
+}

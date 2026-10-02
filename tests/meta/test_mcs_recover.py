@@ -758,6 +758,52 @@ def test_known_cron_scripts_cover_setup_cron_jobs():
     assert desired <= rec.KNOWN_CRON_SCRIPTS
 
 
+def _standalone_recovery(rec):
+    Path(rec.DATA).parent.joinpath("config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
+    value = {"pid": os.getpid(), "generation": "b" * 32, "updated_at": time.time(),
+             "children": {name: {"pid": os.getpid(), "kind": "background"}
+                          for name in ("extract-0", "extract-2")}}
+    path = Path(rec.DATA, "standalone-status.json")
+    path.write_text(json.dumps(value))
+    path.chmod(0o600)
+    return value
+
+
+def test_standalone_recovery_uses_own_python_and_one_scheduler(rec, tmp_path, monkeypatch):
+    _standalone_recovery(rec)
+    exe = tmp_path / "venv/bin/python3"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o700)
+    setup = tmp_path / "repo/mcs/ops/mcs_setup.py"
+    setup.parent.mkdir(parents=True)
+    setup.write_text("# fixture")
+    calls = []
+    monkeypatch.setattr(rec.subprocess, "run", lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    assert rec._setup_python() == str(exe)
+    assert rec._reconcile_membership({"agents": [], "cron": []}) == []
+    assert calls == [[str(exe), str(setup), "services"]]
+
+
+def test_standalone_recovery_restores_drainers_and_requests_restart(rec, monkeypatch):
+    value = _standalone_recovery(rec)
+    monkeypatch.setattr(rec, "_launchctl", lambda *a, **k: pytest.fail("native host must not be killed"))
+    Path(rec.MARKER_PATH).write_text("marker")
+    assert rec._restart_drainers() == []
+    assert not Path(rec.MARKER_PATH).exists()
+    rec._restart_gateway()
+    path = Path(rec.DATA, "standalone-restart.request")
+    assert json.loads(path.read_text())["generation"] == value["generation"]
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_standalone_recovery_does_not_restart_an_unverified_host(rec):
+    _standalone_recovery(rec)
+    Path(rec.DATA, "standalone-status.json").unlink()
+    rec._restart_gateway()
+    assert not Path(rec.DATA, "standalone-restart.request").exists()
+
+
 def test_reconcile_uses_install_interpreter_not_watchdog_python(
         rec, tmp_path, monkeypatch):
     """The watchdog runs under /usr/bin/python3 (3.9) but mcs_setup

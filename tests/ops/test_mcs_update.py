@@ -33,6 +33,68 @@ def test_repo_fixture_clones_main_with_master_default(tmp_path, monkeypatch):
     assert (repo / "f.txt").read_text() == "two"
 
 
+def _standalone_heartbeat(updater, **updates):
+    value = {"pid": os.getpid(), "generation": "a" * 32, "updated_at": time.time(),
+             "update_in_progress": False, "children": {
+                 name: {"pid": os.getpid(), "kind": "background"} for name in ("extract-0", "extract-2")}}
+    value.update(updates)
+    path = Path(updater.DATA, "standalone-status.json")
+    path.write_text(json.dumps(value))
+    path.chmod(0o600)
+    return value
+
+
+def test_standalone_precheck_does_not_require_hermes(updater, monkeypatch):
+    import mcs_setup
+    monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("Hermes lookup forbidden"))
+    assert updater.precheck_local({"runtime_mode": "standalone", "mcs_login_id": "u", "notify_target": "local"}) == []
+
+
+def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    _standalone_heartbeat(updater, update_in_progress=True, children={"update": {"pid": os.getpid(), "kind": "core"}})
+    monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("native service must not be stopped"))
+    assert updater.quiesce() == ["extract-0", "extract-2"]
+    assert Path(updater.MARKER_PATH).exists()
+    _standalone_heartbeat(updater)
+    assert updater.restart_agents() == []
+    assert not Path(updater.MARKER_PATH).exists()
+
+
+def test_standalone_quiesce_fails_closed_on_missing_host(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    ticks = iter([0, 21])
+    monkeypatch.setattr(updater.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(updater.UpdateError, match="standalone_quiesce_unverifiable"):
+        updater.quiesce()
+
+
+def test_standalone_update_requests_restart_for_the_observed_generation(updater):
+    value = _standalone_heartbeat(updater)
+    updater.restart_gateway({"runtime_mode": "standalone"})
+    path = Path(updater.DATA, "standalone-restart.request")
+    request = json.loads(path.read_text())
+    assert request["generation"] == value["generation"]
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_standalone_refuses_rollback_to_a_tag_without_runtime(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    calls = []
+    monkeypatch.setattr(updater, "_git", lambda argv: calls.append(argv) or subprocess.CompletedProcess(argv, 1, "", ""))
+    with pytest.raises(updater.UpdateError, match="standalone_runtime_missing_in_target"):
+        updater._rollback_tree({"prev_sha": "0" * 40})
+    assert not any("reset" in call for call in calls)
+
+
+@pytest.mark.parametrize("bad", [{"updated_at": 0}, {"pid": -1}, {"children": {"extract-0": []}}])
+def test_standalone_heartbeat_is_evidence_not_an_assumption(updater, bad):
+    _standalone_heartbeat(updater, **bad)
+    assert updater._standalone_status() is None
+
+
 @pytest.fixture
 def updater(tmp_path, monkeypatch):
     """mcs_update pointed at temp dirs — REPORT_PATH included so a
