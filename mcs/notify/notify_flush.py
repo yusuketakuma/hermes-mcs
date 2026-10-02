@@ -36,7 +36,7 @@ import mcs_runtime
 import mcs_signals
 import semantic_send_gate
 import structured_view
-from mcs_util import html_to_text, load_config
+from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
 from notify_render import _signal_evidence
 # Re-exported send-gate verdicts — the canonical definitions live in
@@ -48,7 +48,6 @@ from semantic_send_gate import (
     StaleSend as _StaleSend,
 )
 
-CONF_PATH = os.path.expanduser("~/.mcs/config.json")
 _MAX_LEN = 1900
 # Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.

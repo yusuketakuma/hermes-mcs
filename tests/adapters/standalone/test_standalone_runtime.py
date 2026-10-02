@@ -93,6 +93,34 @@ def test_hermes_mode_config_is_refused(tmp_path):
         config.load(tmp_path)
 
 
+def test_collection_without_notifications_can_pass_startup_check(tmp_path, monkeypatch):
+    write_root(tmp_path, interactive="off", target="local")
+    monkeypatch.setattr(cli, "_sdk_problem", lambda: pytest.fail("no connector required"))
+    assert cli.check(tmp_path) == 0
+    assert config.transports(tmp_path) == ()
+
+
+@pytest.mark.parametrize("transport,secondary", [
+    ("discord", "discord:1000000000000000009"),
+    ("slack", "slack:C0SYSTEM99")])
+def test_system_destination_retains_identity_and_grants(tmp_path, transport, secondary):
+    cfg = write_root(tmp_path, interactive="off",
+                     target="discord:" + DISCORD["channel_id"] if transport == "discord"
+                     else "slack:C0PRIMARY99")
+    # Valid concrete channels for the production configuration validator.
+    if transport == "slack":
+        cfg["notify"]["slack"]["channel_id"] = "C0PRIMARY99"
+    cfg["notify_system_target"] = secondary
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    base = config.connector_settings(tmp_path, transport, require_interactive=False)
+    selected = config.connector_settings(tmp_path, transport, require_interactive=False,
+                                         target=secondary)
+    assert selected == {**base, "channel_id": secondary.split(":", 1)[1]}
+    with pytest.raises(ValueError, match="destination_not_configured"):
+        config.connector_settings(tmp_path, transport, require_interactive=False,
+                                  target=secondary + "9")
+
+
 def _send(tmp_path, monkeypatch, payload, outcome=None, target="discord:1000000000000000001"):
     sent = []
 

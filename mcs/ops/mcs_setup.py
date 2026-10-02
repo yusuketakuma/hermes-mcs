@@ -2360,6 +2360,24 @@ def _sync_agents(subs, prev, manifest, note, dry, cfg=None, keep=frozenset()) ->
 
 def _retire_agents(labels, note, dry) -> int:
     """Bootout + remove installed MCS-owned agents in `labels`."""
+    if sys.platform.startswith("linux") and STANDALONE_LABEL in labels:
+        path = _standalone_service_path()
+        if not os.path.exists(path):
+            return 0
+        note("standalone service: disable + stop")
+        if dry:
+            return 0
+        if _run(["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]).returncode:
+            return 1
+        state = _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT])
+        if state.returncode not in (3, 4):  # inactive / unknown unit; other errors are unverifiable
+            note("standalone service: stop unverifiable; keeping unit")
+            return 1
+        try:
+            os.unlink(path)
+        except OSError:
+            return 1
+        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
     if sys.platform != "darwin" or not os.path.isdir(AGENTS_DIR):
         return 0
     problems = 0
@@ -2773,10 +2791,14 @@ def cmd_services(args) -> int:
         cron_problems, persist_partial = _sync_cron(
             prev, hermes, manifest, note, dry)
         problems += cron_problems
+        retire_problems = 0
         if not cron_problems:
-            problems += _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
-        problems += _sync_gateway(cfg, hermes, note, dry)
-        if prev.get("runtime_mode") == "standalone":
+            retire_problems = _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
+            problems += retire_problems
+        switching = prev.get("runtime_mode") == "standalone"
+        if not switching or not (cron_problems or retire_problems):
+            problems += _sync_gateway(cfg, hermes, note, dry)
+        if switching and not (cron_problems or retire_problems):
             # a gateway that loaded while standalone owned the bot skipped
             # /mcs and the card workers — reload it under the new flags
             note("gateway: restart (switched back from standalone)")

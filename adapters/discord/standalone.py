@@ -411,7 +411,7 @@ async def send(root, target, payload):
     """Make one bounded text/file attempt to the explicitly configured channel."""
     from mcs_standalone.config import connector_settings, load_credentials
 
-    settings = connector_settings(root, "discord", require_interactive=False)
+    settings = connector_settings(root, "discord", require_interactive=False, target=target)
     if target != "discord:" + settings["channel_id"]:
         raise ValueError("discord_destination_not_configured")
     content, blobs = _payload(root, payload)
@@ -419,7 +419,7 @@ async def send(root, target, payload):
     bot = _bot(settings, gateway=False)
     def current():
         try:
-            return connector_settings(root, "discord", require_interactive=False) == settings
+            return connector_settings(root, "discord", require_interactive=False, target=target) == settings
         except (OSError, ValueError, TypeError):
             return False
     setattr(bot, _CURRENT, current)
