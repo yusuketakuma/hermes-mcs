@@ -2,7 +2,10 @@
 with the sealed JSON contract; Hermes mode still uses `hermes send`."""
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +13,34 @@ import pytest
 import notify_flush
 from ledger import Ledger
 from test_notify_lineworks_flush import stored_attachment
+
+
+def test_custom_root_never_reads_the_default_notification_destination(tmp_path):
+    user_home = tmp_path / "home"
+    default = user_home / ".mcs"
+    root = tmp_path / "selected"
+    default.mkdir(parents=True)
+    root.mkdir()
+    for directory, target in ((default, "slack:C0DEFAULT9"), (root, "slack:C0SELECTED")):
+        (directory / "config.json").write_text(json.dumps(
+            {"runtime_mode": "standalone", "notify_target": target}))
+    repository = Path(__file__).resolve().parents[2]
+    script = '''
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
+import _mcs_path
+import mcs_util, notify_flush
+cfg = notify_flush._config()
+assert cfg["notify_target"] == "slack:C0SELECTED"
+assert notify_flush.CONF_PATH == mcs_util.CONF_PATH
+argv = notify_flush._send_argv(cfg, cfg["notify_target"])
+assert argv[argv.index("--root") + 1] == sys.argv[2]
+'''
+    result = subprocess.run([sys.executable, "-c", script, str(repository), str(root)],
+                            env={**os.environ, "HOME": str(user_home), "MCS_ROOT": str(root)},
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 def _flush(tmp_path, monkeypatch, cfg, returncode):

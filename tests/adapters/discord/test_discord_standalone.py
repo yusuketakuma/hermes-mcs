@@ -383,6 +383,24 @@ def test_send_classifies_one_attempt_without_retry(tmp_path, monkeypatch, outcom
     assert "secret" not in json.dumps(result)
 
 
+def test_system_notification_uses_its_configured_channel_in_the_same_guild(tmp_path, monkeypatch):
+    cfg = root_config(tmp_path)
+    cfg["notify_system_target"] = "discord:43"
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    bot = Bot()
+    bot.channel.id = 43
+    async def fetch(channel_id):
+        assert channel_id == 43
+        return bot.channel
+    bot.fetch_channel = fetch
+    monkeypatch.setattr(runtime, "_bot", lambda *args, **kwargs: bot)
+    result = asyncio.run(runtime.send(tmp_path, "discord:43", {"text": "合成の運用通知"}))
+    assert result["result"] == "delivered" and len(bot.channel.sent) == 1
+    bot.channel.guild.id = 8
+    result = asyncio.run(runtime.send(tmp_path, "discord:43", {"text": "合成の運用通知"}))
+    assert result["result"] == "not_sent" and len(bot.channel.sent) == 1
+
+
 def test_send_validates_all_files_before_network_and_preserves_full_text(tmp_path, monkeypatch):
     root_config(tmp_path)
     attachments = tmp_path / "data/attachments"

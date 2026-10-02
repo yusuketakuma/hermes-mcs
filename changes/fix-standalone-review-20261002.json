@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "独立稼働の通知先と停止・切替え処理を修正",
+  "summary": "指定した保存先の通知設定を一貫して使用し、明示した別チャンネルへのシステム通知と通知なしでの収集起動を可能にします。ログ障害時も子プロセスと接続を回収し、LinuxでHermesへ戻す際は独立サービスの停止を確認します。",
+  "upgrade": "Hermes連携の標準保存先では設定変更は不要です。独立稼働の修正反映にはホストの再起動が必要です。システム通知は明示したnotify_system_targetだけを使用し、Slackのworkspace/applicationおよびDiscordのguildの照合を維持します。Linuxの切替えで停止が確認できない場合は成功扱いせずサービス定義を保持します。",
+  "details": [
+    "通知処理の設定パスをMCS_ROOTに対応する共通パスへ統一する。",
+    "ログを開く失敗も捕捉し、終了処理では新規ジョブ起動をせず、状態ファイルの書込み失敗が子の回収を妨げないようにする。",
+    "送信用scopeは明示した通知先からチャンネルだけを解決し、認証主体・権限と既存の配送不確実性の扱いを維持する。",
+    "localプレースホルダーを通知なしの構成として扱う。",
+    "systemdの独立サービスをdisable --nowし、非稼働を確認してから定義を削除する。"
+  ],
+  "refs": ["mcs/notify/notify_flush.py", "mcs_standalone/", "adapters/slack/standalone.py", "adapters/discord/standalone.py", "mcs/ops/mcs_setup.py"]
+}

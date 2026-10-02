@@ -104,6 +104,28 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert manifest["cron"] == [] and len(manifest["agents"]) == 1
 
 
+@pytest.mark.parametrize("state,expected", [(3, 0), (0, 1), (1, 1)])
+def test_linux_switch_stops_and_verifies_owned_systemd_service(monkeypatch, tmp_path, state, expected):
+    unit = tmp_path / "mcs-standalone.service"
+    unit.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
+    monkeypatch.setattr(mcs_setup, "_standalone_service_path", lambda: str(unit))
+    calls = []
+    def systemctl(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=state if "is-active" in argv else 0)
+    monkeypatch.setattr(mcs_setup, "_run", systemctl)
+    assert mcs_setup._retire_agents({mcs_setup.STANDALONE_LABEL}, lambda msg: None, True) == 0
+    assert not calls and unit.exists()
+    assert mcs_setup._retire_agents({mcs_setup.STANDALONE_LABEL}, lambda msg: None, False) == expected
+    assert calls[:2] == [
+        ["systemctl", "--user", "disable", "--now", mcs_setup.STANDALONE_UNIT],
+        ["systemctl", "--user", "is-active", "--quiet", mcs_setup.STANDALONE_UNIT]]
+    assert unit.exists() is bool(expected)
+    if not expected:
+        assert calls[-1] == ["systemctl", "--user", "daemon-reload"]
+
+
 def test_switching_retires_the_other_runtimes_jobs(monkeypatch, tmp_path):
     # Hermes -> standalone: owned hermes cron jobs are removed
     owned = [{"id": f"{i:06d}", "name": n, "schedule": s, "script": sc}
@@ -271,6 +293,7 @@ def test_failed_hermes_cron_keeps_the_launchd_schedule(monkeypatch, tmp_path):
     outs = {a[2].rsplit("/", 1)[-1] for a in calls if a[:2] == ["launchctl", "bootout"]}
     assert not any(label.startswith("ai.mcs.cron.") for label in outs)
     assert (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+    assert ["/x/hermes", "gateway", "restart"] not in [a[:3] for a in calls]
 
 
 def test_self_reload_waits_for_the_updater_not_for_services(monkeypatch, tmp_path):

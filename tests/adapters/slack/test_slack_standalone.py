@@ -100,6 +100,28 @@ def test_bad_target_or_attachment_never_constructs_an_sdk(config, tmp_path, monk
                                    {"text": "sample", "files": [pin]}))
 
 
+def test_system_notification_uses_its_explicit_channel(tmp_path, monkeypatch):
+    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0PRIMARY9",
+           "notify_system_target": "slack:C0SYSTEM99",
+           "notify": {"interactive": "slack", "slack": {
+               **SCOPE, "channel_id": "C0PRIMARY9", "allowed_user_ids": ["U_SYNTHETIC"],
+               "project_ids": [1]}}}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    data = tmp_path / "data"
+    data.mkdir()
+    credentials = data / "slack-credentials.json"
+    credentials.write_text(json.dumps({"bot_token": "xox" + "b-synthetic",
+                                       "app_token": "xapp-synthetic"}))
+    credentials.chmod(0o600)
+    client = Client()
+    wire_client(monkeypatch, client)
+    result = asyncio.run(standalone.send(tmp_path, cfg["notify_system_target"],
+                                        {"text": "合成の運用通知"}))
+    assert result["result"] == "delivered"
+    post = next(kwargs for op, kwargs in client.calls if op == "create")
+    assert post["channel"] == "C0SYSTEM99"
+
+
 def test_ambiguous_post_and_upload_are_not_retried(config, tmp_path, monkeypatch):
     client = Client()
     client.failure = TimeoutError("fictional")

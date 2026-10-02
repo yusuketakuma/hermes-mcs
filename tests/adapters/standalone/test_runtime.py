@@ -89,3 +89,49 @@ def test_failed_child_start_requests_a_safe_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.subprocess, "Popen", unavailable)
     host.start("extract-0", "background", 1)
     assert host.restarting and host.children["update"]["process"] is running
+
+
+def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_path, monkeypatch):
+    import asyncio
+    import pytest
+    cfg = {"runtime_mode": "standalone"}
+    original_runtime = runtime.Runtime
+    hosts, children, closed = [], [], []
+    def host(*args):
+        value = original_runtime(*args)
+        hosts.append(value)
+        return value
+    class Child:
+        pid = 1001
+        code = None
+        def __init__(self, *args, **kwargs):
+            children.append(self)
+        def poll(self):
+            return self.code
+        def terminate(self):
+            self.code = 0
+        def kill(self):
+            self.code = -9
+    real_open = runtime.os.open
+    def open_log(path, *args, **kwargs):
+        if str(path).endswith('extract-2.log'):
+            raise PermissionError('synthetic log failure')
+        return real_open(path, *args, **kwargs)
+    def broken_status(*args, **kwargs):
+        raise OSError('synthetic status failure')
+    async def connector(root, stopping):
+        await stopping.wait()
+        closed.append(True)
+    sleep = asyncio.sleep
+    async def fast_sleep(*args):
+        await sleep(0)
+    monkeypatch.setattr(runtime, 'Runtime', host)
+    monkeypatch.setattr(runtime.subprocess, 'Popen', Child)
+    monkeypatch.setattr(runtime.os, 'open', open_log)
+    monkeypatch.setattr(runtime, 'atomic_write', broken_status)
+    monkeypatch.setattr(runtime.config, 'load', lambda root: cfg)
+    monkeypatch.setattr(runtime.asyncio, 'sleep', fast_sleep)
+    with pytest.raises(OSError, match='synthetic status failure'):
+        asyncio.run(runtime.serve(tmp_path, cfg, connector))
+    assert len(children) == 1 and children[0].code == 0
+    assert not hosts[0].children and closed == [True]

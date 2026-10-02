@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import fcntl
 import json
 import math
@@ -58,8 +59,8 @@ class Runtime:
         if job in self.children or now < self.retry_at.get(job, 0):
             return
         path = self.data / (job + ".log")
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "ab") as output:
                 os.fchmod(output.fileno(), 0o600)
                 child = subprocess.Popen(self.argv[job], cwd=REPO,
@@ -86,9 +87,10 @@ class Runtime:
         except (OSError, ValueError, KeyError, TypeError, RecursionError):
             return False
 
-    def tick(self, now=None):
+    def tick(self, now=None, *, draining=False):
         now = time.time() if now is None else now
-        self.restarting |= self._restart_requested(now)
+        if not draining:
+            self.restarting |= self._restart_requested(now)
         updating = os.path.lexists(self.data / UPDATE_MARKER_NAME)
         for job, row in list(self.children.items()):
             child = row["process"]
@@ -102,7 +104,7 @@ class Runtime:
                     row["stopping_at"] = now
                 elif now - row["stopping_at"] >= 10:
                     child.kill()
-        if not updating and not self.restarting:
+        if not updating and not self.restarting and not draining:
             for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
                 self.start(job, "background", now)
             for job in COMMANDS:
@@ -160,7 +162,9 @@ async def serve(root, cfg, connector=None):
         finally:
             runtime.restarting = True
             while runtime.children:
-                runtime.tick()
+                # Log/status failures must not strand children or skip connector cleanup.
+                with suppress(OSError):
+                    runtime.tick(draining=True)
                 await asyncio.sleep(1)
             stopping.set()
             if worker:

@@ -331,14 +331,14 @@ async def send(root, target, payload):
     """Send one configured text notification and its verified attachments once."""
     from mcs_standalone.config import connector_settings, load_credentials
 
-    settings = connector_settings(root, "slack", require_interactive=False)
+    settings = connector_settings(root, "slack", require_interactive=False, target=target)
     if target != "slack:" + settings["channel_id"]:
         raise ValueError("slack_destination_not_configured")
     blobs = await asyncio.to_thread(_files, root, payload)
     credentials = load_credentials(root, "slack")
 
     def current():
-        if connector_settings(root, "slack", require_interactive=False) != settings \
+        if connector_settings(root, "slack", require_interactive=False, target=target) != settings \
                 or load_credentials(root, "slack") != credentials:
             raise ValueError("slack_configuration_changed_restart_required")
 

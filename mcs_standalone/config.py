@@ -95,7 +95,7 @@ def transports(root):
         found.add(active)
     for key in ("notify_target", "notify_system_target"):
         target = cfg.get(key)
-        if isinstance(target, str) and target:
+        if isinstance(target, str) and target and target != "local":
             transport, separator, _ = target.partition(":")
             if not separator or transport not in {"slack", "discord", "lineworks"}:
                 raise ValueError("standalone_destination_invalid")
@@ -103,7 +103,7 @@ def transports(root):
     return tuple(sorted(found))
 
 
-def connector_settings(root, transport, *, require_interactive=True):
+def connector_settings(root, transport, *, require_interactive=True, target=None):
     if transport not in {"slack", "discord", "lineworks"}:
         raise ValueError("standalone_transport_invalid")
     root = Path(root).expanduser().resolve()
@@ -131,7 +131,16 @@ def connector_settings(root, transport, *, require_interactive=True):
         raise ValueError("standalone_grants_invalid")
     if transport == "discord" and scope["guild_id"] in roles:
         raise ValueError("standalone_everyone_role_forbidden")
+    channel_id = scope["channel_id"]
+    if target is not None and target != f"{transport}:{channel_id}":
+        try:
+            selected, channel_id = channel(cfg, target)
+        except ConfigError:
+            raise ValueError(f"{transport}_destination_not_configured") from None
+        if selected != transport:
+            raise ValueError("standalone_destination_invalid")
     return {**scope, "runtime_mode": "standalone", "transport": transport,
+            "channel_id": channel_id,
             "data_root": str(root / "data"), "route_epoch": notify.get("route_epoch", 1),
             "snapshot": str(root / "data/snapshots/ledger-snapshot.db"),
             "inbox": str(root / "data/cmd"),
