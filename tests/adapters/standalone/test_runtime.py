@@ -94,6 +94,9 @@ def test_failed_child_start_requests_a_safe_restart(tmp_path, monkeypatch):
 def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_path, monkeypatch):
     import asyncio
     import pytest
+    # Keep scheduled core jobs out: these stub children finish only on terminate.
+    now = datetime(2026, 10, 2, 5, 11, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(runtime.time, 'time', lambda: now)
     cfg = {"runtime_mode": "standalone"}
     original_runtime = runtime.Runtime
     hosts, children, closed = [], [], []
