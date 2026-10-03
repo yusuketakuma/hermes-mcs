@@ -67,6 +67,7 @@ def patient_summary_text(db, project_id) -> tuple:
                              else "抽出されたバイタルなし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
+        lines.extend(_request_reply_lines(db, project_id, roll))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
@@ -84,6 +85,33 @@ def patient_summary_text(db, project_id) -> tuple:
                  + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
                  for t in tasks)
     return title, "\n".join(lines)
+
+
+REPLY_LABELS = {"ack": "了解", "intent": "対応予定", "progress": "対応中",
+                "answer": "回答", "done": "完了", "cancel": "取消"}
+
+
+def _request_reply_lines(db, project_id, roll) -> list:
+    """#25: rollupの依頼候補ごとのスレッド内返信状況（記録上）とLoop候補の有無。"""
+    reqs = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)][:5]
+    lines = ["■ 依頼候補の返信状況（記録上）" + ("" if reqs else ": なし")]
+    for r in reqs:
+        state = REPLY_LABELS.get(r.get("reply_state"))
+        line = (f"・{_mmdd(r.get('at'))} "
+                f"{_inline(r.get('ctx'), 40) or '内容不明'} — 返信: "
+                + (state or "記録なし"))
+        if r.get("reply_conflict") is True:
+            line += "（完了後に取消の記録あり）"
+        mid = r.get("mid")
+        if type(mid) is int and db.execute(
+                "SELECT 1 FROM artifacts WHERE kind='loop_candidate' "
+                "AND project_id=? AND message_id=? LIMIT 1",
+                (project_id, mid)).fetchone():
+            line += "・Loop候補（semantic shadow）あり"
+        lines.append(line)
+    if reqs:
+        lines.append("※ 返信記録が見つからないことは対応がなかったことを意味しません。")
+    return lines
 
 
 def _karte_summary_from_artifact(db, project_id) -> dict | None:
@@ -269,6 +297,7 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
     items = []
+    self_reacted = 0
     for pid, cards in groups.items():
         group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
         with_reactions = [(c, card_reactions(db, c)) for c in cards]
@@ -276,6 +305,8 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
         with_reactions.sort(key=lambda pair: any(
             r["self_reacted"] for _, meta in pair[1]
             for r in meta["reactions"] or []))
+        self_reacted += sum(1 for _, reactions in with_reactions if any(
+            r["self_reacted"] for _, meta in reactions for r in meta["reactions"] or []))
         for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
@@ -291,7 +322,8 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
             items.append({"project_id": pid, "group": group, "text": line})
     assigned = sum(1 for r in rows if r["owner"])
     out = {"title": "🗂 未確認一覧（直近7日に更新されたカード）",
-           "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）"],
+           "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）",
+                    f"MCSで本人反応あり {self_reacted}件（確認状態は変えません）"],
            "empty": "未確認のカードはありません。",
            "notes": ["※「確認」ボタンの記録の有無です。作業が済んだかどうかは"
                      "表しません。MCSスタンプも承認・作業完了を保証せず、"

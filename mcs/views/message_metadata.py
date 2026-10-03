@@ -21,10 +21,33 @@ def reaction_label(kind):
     return REACTION_LABELS.get(kind, "未知")
 
 
+def _valid_reactions(value) -> bool:
+    return isinstance(value, list) and not any(
+        not isinstance(r, dict) or not isinstance(r.get("type"), str)
+        or not r["type"] or type(r.get("count")) is not int or r["count"] < 0
+        or type(r.get("self_reacted")) is not bool for r in value)
+
+
+def _valid_mentions(value) -> bool:
+    return isinstance(value, list) and not any(
+        not isinstance(m, dict) or m.get("type") not in ("user", "station", "project")
+        or type(m.get("id")) is not int or not 0 < m["id"] < 2**63 for m in value)
+
+
+# 保存キー -> (検証, 結果の状態キー)。未取得・不正の値は None のまま返す。
+_FIELDS = {"reactions": (_valid_reactions, "reactions_status"),
+           "mentions": (_valid_mentions, "mentions_status"),
+           "is_bookmarked": (lambda v: type(v) is bool, "bookmark_status"),
+           "is_pinned": (lambda v: type(v) is bool, "pin_status")}
+
+
 def _read_metadata(db, mid, source) -> dict:
     result = {"reactions": None, "reactions_status": "not_fetched",
               "reactions_observed_at": None, "checked_at": None,
               "last_error": None}
+    for key, (_, status) in _FIELDS.items():
+        result.setdefault(key, None)
+        result[status] = "not_fetched"
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                       "AND name='message_metadata'").fetchone():
         return result
@@ -41,23 +64,26 @@ def _read_metadata(db, mid, source) -> dict:
     try:
         content = json.loads(raw)
     except (ValueError, TypeError, RecursionError):
-        result["reactions_status"] = "invalid"
-        return result
-    field = content.get("reactions") if isinstance(content, dict) else None
-    if field is None:
-        if result["last_error"] and ("reactions_invalid" in str(error).split(",")):
-            result["reactions_status"] = "invalid"
-        return result
-    reactions = field.get("value") if isinstance(field, dict) else None
-    observed = _timestamp(field.get("observed_at")) if isinstance(field, dict) else None
-    if not isinstance(reactions, list) or observed is None or any(
-            not isinstance(r, dict) or not isinstance(r.get("type"), str)
-            or not r["type"] or type(r.get("count")) is not int or r["count"] < 0
-            or type(r.get("self_reacted")) is not bool for r in reactions):
-        result["reactions_status"] = "invalid"
-        return result
-    result.update(reactions=reactions, reactions_status="observed",
-                  reactions_observed_at=observed)
+        content = None
+    errors = str(error).split(",") if error else []
+    for key, (valid, status) in _FIELDS.items():
+        field = content.get(key) if isinstance(content, dict) else None
+        if not isinstance(content, dict):
+            result[status] = "invalid"
+            continue
+        if field is None:
+            if key + "_invalid" in errors:
+                result[status] = "invalid"
+            continue
+        value = field.get("value") if isinstance(field, dict) else None
+        observed = (_timestamp(field.get("observed_at"))
+                    if isinstance(field, dict) else None)
+        if observed is None or not valid(value):
+            result[status] = "invalid"
+            continue
+        result[key], result[status] = value, "observed"
+        if key == "reactions":
+            result["reactions_observed_at"] = observed
     return result
 
 
@@ -106,6 +132,58 @@ def self_reaction_text(metadata) -> str:
              "スタンプ0件" if not reactions else "本人反応は記録されていません")
     return (f"MCS: {value}（観測 {when:%m-%d %H:%M} JST）"
             + ("・再取得失敗" if metadata["last_error"] else ""))
+
+
+def own_post_reaction_text(metadata) -> str:
+    """自分の投稿への他者反応を種別ごとの件数で表示する（氏名・押下者は出さない）。"""
+    reactions = metadata["reactions"]
+    if reactions is None:
+        return "MCS: スタンプ未取得"
+    when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
+    others: dict = {}
+    for r in reactions:
+        label = reaction_label(r["type"])
+        others[label] = others.get(label, 0) + max(0, r["count"] - r["self_reacted"])
+    value = "/".join(f"{k}{n}" for k, n in others.items() if n) or "他者0件"
+    return (f"MCS: 自分の投稿への反応 {value}（観測 {when:%m-%d %H:%M} JST）"
+            + ("・再取得失敗" if metadata["last_error"] else ""))
+
+
+def others_reaction_count(metadata) -> int | None:
+    """本人分を除いた反応件数。未取得・不正は None（0件と区別する）。"""
+    if metadata["reactions"] is None:
+        return None
+    return sum(max(0, r["count"] - r["self_reacted"]) for r in metadata["reactions"])
+
+
+def mentions_self(metadata, self_id) -> bool | None:
+    """本人の送信者ID宛のuserメンションがあるか。未取得・不正・本人ID不明は None。"""
+    if metadata["mentions"] is None or self_id is None:
+        return None
+    return any(m["type"] == "user" and m["id"] == self_id
+               for m in metadata["mentions"])
+
+
+def self_mentioned(db, mid) -> bool | None:
+    """captureのメンションが本人宛か（True/False）、判定できなければ None。"""
+    import mcs_signals
+    return mentions_self(get_message_metadata(db, mid), mcs_signals.self_sender_id(db))
+
+
+def flag_lines(db, metadata) -> list:
+    """メンション・しおり・ピン留めの取得状態付き表示（CLI/evidence用）。"""
+    def state(value, status, yes="あり", no="なし"):
+        return (yes if value else no) if status == "observed" else (
+            "取得不正" if status == "invalid" else "未取得")
+    import mcs_signals
+    hit = mentions_self(metadata, mcs_signals.self_sender_id(db))
+    mention = (state(hit, "observed", "本人宛あり", "本人宛なし") if hit is not None
+               else "本人判定不可（本人ID不明）"
+               if metadata["mentions_status"] == "observed"
+               else state(None, metadata["mentions_status"]))
+    return [f"メンション: {mention}",
+            "しおり: " + state(metadata["is_bookmarked"], metadata["bookmark_status"]),
+            "ピン留め: " + state(metadata["is_pinned"], metadata["pin_status"])]
 
 
 def is_self_sender(db, sender_id) -> bool:
