@@ -415,7 +415,7 @@ def _signal_body(db, sig: dict) -> str:
         lines.append(f"患者: {name}")
     mid, m = _signal_evidence(db, sig)
     if m and m["body_text"]:
-        lines.append(_message_post(db, mid, m, _sender_tag(m),
+        lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                    head="最新言及 "))
     state = sig.get("state")
     if state and state != "open":
@@ -447,7 +447,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
                 (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
-            lines.append(_message_post(db, mid, m, _sender_tag(m)))
+            lines.append(_message_post(db, mid, m, _sender_tag(m, db)))
         name = _patient_name(db, card["project_id"]) \
             or "project " + str(card["project_id"])
         title = f"💬 {name} — 本文"
