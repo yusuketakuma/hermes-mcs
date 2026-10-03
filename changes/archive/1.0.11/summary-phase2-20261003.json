@@ -1,7 +1,7 @@
 {
   "category": "added",
-  "title": "日次サマリーをカードで配信し、コマンドから本人専用で呼び出せるように",
-  "summary": "カード通知が有効な環境では、朝の日次サマリーをSlack・Discord・LINE WORKSのカード形式で配送先チャンネルへ送ります。Discordの/mcs（op: summary）、Slackの/mcs-summary、LINE WORKSのBot DM「サマリー」から、押した人だけに見える要約サマリーを呼び出せます。",
+  "title": "日次サマリーをカードで配信し、各チャットのコマンドから呼出し",
+  "summary": "カード通知が有効な環境では、朝の日次サマリーをSlack・Discord・LINE WORKSのカード形式で配送先チャンネルへ送ります。Discordの/mcs（op: summary）、Slackの/mcs-summary、LINE WORKSのBot DM「サマリー」から呼び出せます。SlackとLINE WORKSは本人への回答、Discordは公開範囲が未確認のため患者名を表示しません。",
   "upgrade": "Hermes連携のSlack・Discordは更新後にHermes Gatewayを、LINE WORKSは独立アダプターを再起動してください。Slackの/mcs-summaryを使う場合はSlackアプリにslash commandとcommands scopeを追加して再インストールし、plugin settingsのsnapshotを設定します（導入ガイド付録B）。日次サマリーの送信先はカード通知が有効ならカード用の配送先、無効なら従来どおりnotify_targetです。DBはnotification_renders.intent_event_id列を追加します（加法）。この版より前へ巻き戻すと、未封印のカード版日次サマリーはその日の分が送られず、封印済みで未送の分は送信されても完了扱いにならず通知キューに残ります（翌日分の投入後は手動で整理してください）。Discordの/mcsのサマリーは返答の公開範囲が実機で未確認のため患者名を出しません。既読化・人承認・取得範囲・モデル・患者名の既定（include_names=false）は変更しません。",
   "details": [
     "日次サマリーはカード行を持たないop=noticeのrenderとして発行し、受領がdeliveredなら通知キューをaccepted、実際の送信失敗はMAX_RESENDまで再発行、begin拒否は数えない。",
@@ -9,5 +9,14 @@
     "LINE WORKSは1000字に畳み、超える分は既存のdisplay#分割で封入する。",
     "コマンドは公開snapshotを読取り専用で開き、各入口の静的プロジェクト範囲を必ず適用する。範囲が空なら表示しない。mineはname:名前で照合する。"
   ],
-  "refs": ["mcs/notify/notify_cards.py", "mcs/notify/notify_transport.py", "mcs/notify/notify_digest.py", "mcs/core/ledger.py", "adapters/common/summary.py", "adapters/slack/actions.py", "adapters/lineworks/actions.py", "hermes_plugin/__init__.py"]
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/notify/notify_digest.py",
+    "mcs/core/ledger.py",
+    "adapters/common/summary.py",
+    "adapters/slack/actions.py",
+    "adapters/lineworks/actions.py",
+    "hermes_plugin/__init__.py"
+  ]
 }
