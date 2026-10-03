@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SchemaError, UNREAD_SCREEN_CAP, _has_next,
-                         _message_metadata, _valid_id)
+                         _message_metadata, _valid_id, walk_reaction_actors)
 from mcs_util import CACHE
 
 
@@ -258,115 +257,20 @@ def probe_routes(adapter, project_id, message_id, *, unread_at_start, parent_id=
 def probe_actor_pages(adapter, project_id, message_id, *, reaction_type=None,
                       max_pages=10, per_page=50):
     """Compare two bounded actor walks; emit counts and conclusions, never actor identities."""
-    if (not _valid_id(project_id) or not _valid_id(message_id)
-            or type(max_pages) is not int or not 1 <= max_pages <= 10
-            or type(per_page) is not int or not 1 <= per_page <= 50
-            or (reaction_type is not None and (
-                not isinstance(reaction_type, str)
-                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", reaction_type)
-                or reaction_type == "all"))):
-        raise ValueError("invalid actor probe arguments")
-    suffix, key = ("user_reactions", "reactions") if reaction_type is None else ("reactions", "users")
-    path = f"/messages/{message_id}/{suffix}"
-
     def walk():
-        actors, expected, timestamp = set(), None, None
-        result = {"complete": False, "rows": 0, "pages": 0,
-                  "counts_match_message": None, "timestamp_stable": None,
-                  "multiple_kinds_per_actor_observed": None}
         try:
-            for page in range(1, max_pages + 1):
-                params = {"page": page, "per_page": per_page, "include_meta": int(page == 1),
-                          "include_paginate_totals": 0}
-                if reaction_type is not None:
-                    params["reaction_type"] = reaction_type
-                if timestamp is not None:
-                    params["timestamp"] = timestamp
-                raw = adapter._get(path, params, extend_session=False)
-                result["pages"] += 1
-                meta = raw.get("message")
-                if meta is not None:
-                    if not isinstance(meta, dict):
-                        raise SchemaError("actors: message invalid")
-                    for field, wanted in (("id", message_id), ("project_id", project_id)):
-                        if field in meta and (not _valid_id(meta[field]) or meta[field] != wanted):
-                            raise SchemaError("actors: target mismatch")
-                if page == 1:
-                    normalized, errors = _message_metadata(meta or {}, project_id)
-                    if "reactions_invalid" in errors:
-                        raise SchemaError("actors: summary invalid")
-                    if "reactions" in normalized:
-                        expected = {r["type"]: r["count"] for r in normalized["reactions"]}
-                paginate, rows = raw.get("paginate"), raw.get(key)
-                if (not isinstance(paginate, dict) or not isinstance(rows, list)
-                        or len(rows) > per_page):
-                    raise SchemaError("actors: collection invalid")
-                if "current_page" in paginate and (
-                        type(paginate["current_page"]) is not int or paginate["current_page"] != page):
-                    raise SchemaError("actors: page invalid")
-                if "per_page" in paginate and (
-                        type(paginate["per_page"]) is not int or paginate["per_page"] != per_page):
-                    raise SchemaError("actors: page size invalid")
-                server_ts = paginate.get("timestamp")
-                if not _valid_id(server_ts):
-                    raise SchemaError("actors: timestamp invalid")
-                if timestamp is None:
-                    timestamp = server_ts
-                    result["timestamp_stable"] = True
-                elif server_ts != timestamp:
-                    result["timestamp_stable"] = False
-                    raise SchemaError("actors: timestamp changed")
-                if "has_next" in paginate:
-                    has_next = _has_next(paginate, "actors")
-                else:
-                    total_pages = paginate.get("total_pages")
-                    if (type(total_pages) is not int or total_pages < page
-                            or paginate.get("current_page") != page):
-                        raise SchemaError("actors: terminal state invalid")
-                    has_next = page < total_pages
-                if has_next and not rows:
-                    raise SchemaError("actors: no progress")
-                for row in rows:
-                    if not isinstance(row, dict):
-                        raise SchemaError("actors: row invalid")
-                    user = row.get("user") if reaction_type is None else row
-                    kind = row.get("reaction_type") if reaction_type is None else reaction_type
-                    if (not isinstance(user, dict) or not _valid_id(user.get("id"))
-                            or not isinstance(kind, str)
-                            or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", kind) or kind == "all"):
-                        raise SchemaError("actors: identity invalid")
-                    identity = (user["id"], kind)
-                    if identity in actors:
-                        raise SchemaError("actors: duplicate actor")
-                    actors.add(identity)
-                result["rows"] = len(actors)
-                if not has_next:
-                    counts = {}
-                    for _, kind in actors:
-                        counts[kind] = counts.get(kind, 0) + 1
-                    if expected is not None:
-                        if reaction_type is None:
-                            result["counts_match_message"] = (
-                                counts == {k: v for k, v in expected.items() if v})
-                        elif reaction_type in expected or not expected:
-                            result["counts_match_message"] = (
-                                counts.get(reaction_type, 0) == expected.get(reaction_type, 0))
-                    if "total_entries" in paginate and (
-                            type(paginate["total_entries"]) is not int
-                            or paginate["total_entries"] != len(actors)):
-                        raise SchemaError("actors: total mismatch")
-                    result["complete"] = result["counts_match_message"] is True
-                    if result["complete"]:
-                        result["multiple_kinds_per_actor_observed"] = (
-                            len(actors) > len({uid for uid, _ in actors}))
-                    break
-            else:
-                result["error"] = "page_limit"
-        except MCSError as error:
-            result["rows"] = len(actors)
-            result["error"] = error.kind
-            if error.status:
-                result["status"] = error.status
+            raw = walk_reaction_actors(adapter._get, project_id, message_id,
+                                       reaction_type=reaction_type,
+                                       max_pages=max_pages, per_page=per_page)
+        except ValueError:
+            raise ValueError("invalid actor probe arguments") from None
+        actors = {(a["actor_id"], a["reaction_type"]) for a in raw["actors"]}
+        result = {key: raw[key] for key in (
+            "complete", "pages", "counts_match_message", "timestamp_stable")}
+        result["rows"] = len(actors)
+        result["multiple_kinds_per_actor_observed"] = (
+            len(actors) > len({uid for uid, _ in actors}) if raw["complete"] else None)
+        result.update({key: raw[key] for key in ("error", "status") if key in raw})
         return result, actors
 
     first, first_actors = walk()
