@@ -101,6 +101,22 @@ def test_fit_parts_folds_the_longest_list_and_keeps_the_rest():
     assert notify_render.fit_parts(small) == small
 
 
+@pytest.mark.parametrize("n", range(100, 160, 3))
+def test_fit_parts_stays_within_the_worker_spec_budget(n):
+    """Regression: folding measured visible text only, so a folded
+    daily summary landed just under 4000 while the worker's spec check
+    (+4 per container / footer line) rejected it and the card was never
+    sent."""
+    from adapters.common import spec
+    parts = _long_parts(n)
+    parts["containers"].insert(1, {"type": "text", "text": "要約" * (n % 40)})
+    parts["footer"].append({"type": "text", "text": "脚注1\n脚注2\n脚注3"})
+    out = notify_render.fit_parts(parts)
+    cost = (spec._containers_cost(out["containers"])[1]
+            + spec._footer_cost(out["footer"])[1])
+    assert cost <= spec.MAX_TOTAL_TEXT
+
+
 def test_fetch_gap_disclosure_is_never_folded(led):
     """Regression: the coverage block outlived longer lists being
     folded — it must survive even when it is the longest list left."""

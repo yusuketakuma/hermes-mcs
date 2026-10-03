@@ -1102,6 +1102,15 @@ def spawn_detached() -> None:
 
 # ------------------------------------------------------------- pipeline
 
+_NOTICE_CHILD = (
+    "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
+    "db = ledger.Ledger(sys.argv[2])\n"
+    "try:\n"
+    "    db.outbox_add('update_notice', None, {'text': sys.argv[3]})\n"
+    "finally:\n"
+    "    db.db.close()\n")
+
+
 def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
     """Freeze sanitized text into an update_notice outbox event.
     use_run_lock=True for the daily check (NB acquire — a busy tick
@@ -1113,11 +1122,21 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
         if fd is None:
             return False
     try:
+        text = defuse_mentions(text)
+        live = os.path.join(REPO, "mcs")
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if os.path.realpath(here) != os.path.realpath(live):
+            # launcher copy (scripts/mcs_upgrade.py): this code's Ledger
+            # would migrate the live DB past what the live tree runs, so
+            # only the live tree's own Ledger may open it
+            r = subprocess.run(
+                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, text],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+            return r.returncode == 0
         import ledger
         db = ledger.Ledger(LEDGER)
         try:
-            db.outbox_add("update_notice", None,
-                          {"text": defuse_mentions(text)})
+            db.outbox_add("update_notice", None, {"text": text})
         finally:
             db.db.close()
         return True
@@ -2114,6 +2133,34 @@ def _restore_db(backup_path: str) -> None:
 
 # -------------------------------------------------------------- recover
 
+def reinstall_done() -> int:
+    """Operator acknowledgement, after finishing install.sh by hand
+    (docs/guides/UPGRADE_AGENT.md), that an interrupted --reinstall is
+    complete: marks the journal — or the applied record a recovery
+    already promoted — reinstall_done, then lets recover converge."""
+    fd = acquire_update_lock()
+    if fd is None:
+        print("reinstall-done: another updater is running")
+        return 1
+    try:
+        state = load_state()
+        if state.get("_corrupt"):
+            return 2
+        applying = state.get("applying")
+        rec = applying or (state.get("applied") or [None])[-1]
+        if not rec or not rec.get("reinstall") or rec.get("reinstall_done"):
+            print("reinstall-done: no unfinished reinstall")
+            return 2
+        if _head_sha() != rec.get("sha"):
+            print("reinstall-done: HEAD is not the reinstalled version")
+            return 2
+        rec["reinstall_done"] = True
+        save_state(state)
+    finally:
+        os.close(fd)
+    return recover_interrupted() if applying else 0
+
+
 def recover_interrupted(if_stale: bool = False) -> int:
     """Journal-driven recovery (⑤). Safe to call any time.
 
@@ -2593,6 +2640,8 @@ def main() -> int:
     sub.add_parser("status")
     sub.add_parser("rollback")
     sub.add_parser("recover")
+    sub.add_parser("reinstall-done",
+                   help="after finishing an interrupted install.sh by hand")
     args = ap.parse_args()
     if args.post_merge:
         state = load_state()
@@ -2622,6 +2671,8 @@ def main() -> int:
         return rollback()
     if args.cmd == "recover":
         return recover_interrupted()
+    if args.cmd == "reinstall-done":
+        return reinstall_done()
     return 2
 
 

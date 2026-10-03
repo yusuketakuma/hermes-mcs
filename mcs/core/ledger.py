@@ -1251,8 +1251,13 @@ class Ledger:
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
         content = loads_dict(row["content"]) if row else {}
+        # observed_at marks when this value was first seen: unread posts
+        # are re-captured every tick, and refreshing an unchanged value
+        # would re-render cards and recount digests each time.
         content.update({key: {"value": value, "observed_at": now}
-                        for key, value in metadata.items()})
+                        for key, value in metadata.items()
+                        if not (isinstance(content.get(key), dict)
+                                and content[key].get("value") == value)})
         self.db.execute("""
           INSERT INTO message_metadata(message_id,source,content,checked_at,last_error)
           VALUES(?,?,?,?,?) ON CONFLICT(message_id,source) DO UPDATE SET

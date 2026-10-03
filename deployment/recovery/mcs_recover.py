@@ -1152,6 +1152,11 @@ def recover(if_stale=False):
                 # the hold is over — later failures escalate normally
                 if state.pop("restore_consent", None) is not None:
                     _save_state(state)
+            if not applying.get("rollback") and applying.get("reinstall") \
+                    and not applying.get("reinstall_done"):
+                # install.sh is never re-run unattended; the operator
+                # finishes it and acknowledges (mcs_update reinstall-done)
+                return escalate("reinstall_incomplete")
             problems = _reconcile_membership(
                 applying.get("manifest_snapshot")
                 or state.get("manifest_snapshot"))

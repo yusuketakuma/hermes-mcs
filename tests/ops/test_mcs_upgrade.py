@@ -281,6 +281,35 @@ def test_plan_flags_an_unfinished_reinstall(updater, monkeypatch, tmp_path):
     assert "reinstall_incomplete" in updater.plan("v1.2.0")["blockers"]
 
 
+def test_reinstall_done_clears_a_promoted_unfinished_reinstall(
+        updater, monkeypatch, tmp_path):
+    """Regression: nothing could clear reinstall_incomplete after the
+    operator finished install.sh by hand."""
+    _plan_env(updater, monkeypatch, tmp_path, [])
+    monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    state = updater._default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": "b" * 40, "reinstall": True}]
+    updater.save_state(state)
+    assert updater.reinstall_done() == 2            # HEAD is elsewhere
+    state["applied"][0]["sha"] = "a" * 40
+    updater.save_state(state)
+    assert updater.reinstall_done() == 0
+    assert "reinstall_incomplete" not in updater.plan("v1.2.0")["blockers"]
+    assert updater.reinstall_done() == 2            # nothing left to clear
+
+
+def test_reinstall_done_lets_recover_finish_the_journal(updater, monkeypatch):
+    monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    calls = []
+    monkeypatch.setattr(updater, "recover_interrupted",
+                        lambda: calls.append(updater.load_state()) or 0)
+    state = updater._default_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40, "reinstall": True}
+    updater.save_state(state)
+    assert updater.reinstall_done() == 0
+    assert calls[0]["applying"]["reinstall_done"] is True
+
+
 def test_plan_reports_gate_crash_as_blocker(updater, monkeypatch, tmp_path):
     _plan_env(updater, monkeypatch, tmp_path, [])
 
@@ -296,3 +325,32 @@ def test_launcher_apply_refuses_standalone(updater, monkeypatch):
     monkeypatch.setattr(updater, "load_config",
                         lambda: {"runtime_mode": "standalone"})
     assert updater.apply("v1.2.0", None, None) == 2
+
+
+def test_launcher_copy_notice_never_migrates_the_live_db(updater, tmp_path):
+    """Regression: a bail/escalate notice from the launcher's temp copy
+    opened the live DB with the target version's Ledger and bumped its
+    schema while the live tree still ran the old version."""
+    import sqlite3
+    live = Path(updater.REPO) / "mcs"
+    live.mkdir(parents=True, exist_ok=True)
+    (live / "_mcs_path.py").write_text("")
+    (live / "ledger.py").write_text(
+        "import json, sqlite3\n"
+        "class Ledger:\n"
+        "    def __init__(self, path):\n"
+        "        self.db = sqlite3.connect(path)\n"
+        "    def outbox_add(self, kind, pid, payload):\n"
+        "        self.db.execute('CREATE TABLE IF NOT EXISTS seen(v)')\n"
+        "        self.db.execute('INSERT INTO seen VALUES(?)',"
+        " (json.dumps([kind, payload]),))\n"
+        "        self.db.commit()\n")
+    con = sqlite3.connect(updater.LEDGER)
+    con.execute("PRAGMA user_version=7")
+    con.close()
+    assert updater._enqueue_notice("[MCS] 更新 v9 を中止しました: x")
+    con = sqlite3.connect(updater.LEDGER)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+    kind, payload = json.loads(con.execute("SELECT v FROM seen").fetchone()[0])
+    con.close()
+    assert kind == "update_notice" and "中止" in payload["text"]

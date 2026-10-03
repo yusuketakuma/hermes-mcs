@@ -127,6 +127,26 @@ def test_capture_restart_and_hash_unchanged(tmp_path):
     db.close()
 
 
+def test_unchanged_recapture_keeps_observed_at(tmp_path, monkeypatch):
+    """Regression: every unread re-capture refreshed observed_at, so the
+    card footer changed each tick and digests recounted old reactions."""
+    import ledger
+    clock = [1_000_000.0]
+    monkeypatch.setattr(ledger.time, "time", lambda: clock[0])
+    db = Ledger(str(tmp_path / "ledger.db"))
+    seen = [{"type": "viewed", "count": 1, "self_reacted": True}]
+    save(db, message(reactions=seen, is_pinned=False))
+    first = get_message_metadata(db.db, 1)["reactions_observed_at"]
+    clock[0] += 300
+    save(db, message(reactions=seen, is_pinned=False))
+    assert get_message_metadata(db.db, 1)["reactions_observed_at"] == first
+    clock[0] += 300
+    save(db, message(reactions=seen + [
+        {"type": "good", "count": 1, "self_reacted": False}]))
+    assert get_message_metadata(db.db, 1)["reactions_observed_at"] == first + 600
+    db.close()
+
+
 def test_shadow_never_changes_source_or_capture(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     save(db, message(reactions=[]))
