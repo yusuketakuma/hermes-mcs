@@ -450,6 +450,8 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `daily_digest.include_names` | bool | `false` | 一覧の project ID に患者名を添える（送信先は `notify_target`） |
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
 | `metadata_shadow` | bool | `false` | 監視対象のスタンプを保存のみ再取得。未読保持の実証と監視集合・予算の運用合意後に限り有効化する。shadowの反応値はカード・digest・CLIの反応表示に出さず、CLIでは取得状態・日時・理由のみ参照できる |
+| `metadata_refresh_publish` | bool | `false` | `metadata_shadow`の再取得が成功した値をカード・digest・CLIの反応表示へ反映する。失敗時と保存済みのshadow値は反映しない。未読保持の実証と`mcs/views/metadata_report.py`での照合後に限り有効化する |
+| `metadata_actors` | bool | `false` | 自分の投稿のスタンプ押下者をID・種別・職種だけ取得する（氏名・アイコン・施設名は保存しない）。shadowと同じtickの予算内で最大2件。押下者の表示・保持の判断（#22-D2・D3）後に有効化する |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |
@@ -457,6 +459,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `signals.notify` | bool | `false` | アラートを通知に出す |
 | `signals.digest` | bool | `true`（キー未設定時。ウィザード既定は `false`） | 複数候補をダイジェストにまとめる |
 | `signals.digest_interval_h` | num | 既定 | ダイジェスト間隔・時間 |
+| `signals.self_reaction_response` | bool | `false` | 依頼投稿そのものに本人の承知・完了スタンプが観測されたら、薬剤師宛依頼の未応答候補から外す。見ました・他者のスタンプ・未取得は数えない。切替え時に既存候補のresolve・再openが起き得る（#22-D5） |
 | `signals.self_organizations` | list[str] | 自動検出 | 自施設名（MCS プロフィールから自動検出を上書き） |
 | `signals.self_professions` | list[str] | 自動検出 | 自職種（同上） |
 | `signals.request_targets` | list[str] | なし | 依頼先として数える宛名 |
