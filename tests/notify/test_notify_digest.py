@@ -63,16 +63,16 @@ def test_once_per_day_after_the_hour(led):
 
 
 def test_body_is_built_outside_the_write_lock(led, monkeypatch):
-    """build_text runs before BEGIN IMMEDIATE; a digest another writer
+    """daily_parts runs before BEGIN IMMEDIATE; a digest another writer
     queued meanwhile wins and no duplicate is written."""
-    real = notify_digest.build_text
+    real = notify_digest.daily_parts
 
     def build(db, *a):
         assert not db.in_transaction
         led.outbox_add(notify_digest.KIND, None, {"text": "x",
                                                   "date": "2026-10-01"})
         return real(db, *a)
-    monkeypatch.setattr(notify_digest, "build_text", build)
+    monkeypatch.setattr(notify_digest, "daily_parts", build)
     assert notify_digest.maybe_enqueue(led, ON, now=T) == 0
     assert len(_digests(led)) == 1
 
@@ -95,9 +95,9 @@ def test_counts_ids_and_no_patient_content(led):
     cfg = {**ON, "notify_max_age_h": 48}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "■ 新着 3件（ルーム 1）: 看護師 1・医師 1・職種不明 1" in text
-    assert "■ 緊急度: 高 1件（AI抽出 0・機械照合 1）" in text
-    assert "・project 1 / message 100（機械照合）" in text
+    assert "新着 3件・緊急度高 1件・未完了タスク 0件（期限切れ 0・本日期限 0）" in text
+    assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
+    assert "■ 緊急度高 1件\n・project 1 / message 100（機械照合）" in text
     for secret in ("秘密の本文", "患者A", "患者B", "職員"):
         assert secret not in text
     assert "記録が見つからないことは対応がなかったことを意味せず" in text
@@ -118,7 +118,7 @@ def test_patient_names_only_when_opted_in(led):
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "・project 1 患者A / message 100（機械照合）" in text
+    assert "■ 緊急度高 1件\n・project 1 患者A / message 100（機械照合）" in text
     for secret in ("秘密の本文", "職員"):
         assert secret not in text
 
@@ -154,7 +154,7 @@ def test_karte_summary_count_and_ids_without_comment(led):
     _summary_at(led, 4, T + 5)                             # after window
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
-    assert "■ 連携サマリー更新: 1件: project 1" in text     # rooms, not artifacts
+    assert "■ 連携サマリー更新\n・1件: project 1" in text     # rooms, not artifacts
     assert "project 2" not in text and "project 3" not in text
     assert "project 4" not in text and "project 5" not in text
     for secret in ("連携の秘密本文", "二度目の秘密", "三度目の秘密", "職員X",
@@ -169,13 +169,13 @@ def test_karte_summary_names_when_opted_in(led):
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "■ 連携サマリー更新: 1件: project 1 患者A" in text
+    assert "■ 連携サマリー更新\n・1件: project 1 患者A" in text
     assert "連携の秘密本文" not in text and "職員X" not in text
 
 
 def test_karte_summary_zero_line(led):
     notify_digest.maybe_enqueue(led, ON, now=T)
-    assert "■ 連携サマリー更新: 0件\n" in _text(led)
+    assert "連携サマリー更新" not in _text(led)   # empty sections are hidden
 
 
 def test_coverage_block_always_present(led):
@@ -203,7 +203,7 @@ def test_coverage_block_always_present(led):
             "project 2（unrecorded）") in text
     assert "・取得待ち/失敗ジョブ: reply 1" in text
     assert "・本文未取得の投稿: 1件" in text
-    assert "・送信保留の通知: 1件" in text
+    assert "・送信保留の通知（全体）: 1件" in text
 
 
 def test_signal_block_excludes_request_and_deadline_types(led):
@@ -216,7 +216,7 @@ def test_signal_block_excludes_request_and_deadline_types(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
-    assert "■ アラート（open）1件: adherence_concern 1" in _text(led)
+    assert "■ アラート（open）\n・adherence_concern 1" in _text(led)
 
 
 def test_signal_block_needs_signals_notify(led):
@@ -245,8 +245,8 @@ def test_stale_alerts_resurface(led):
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
     text = _text(led)
-    assert "■ アラート（open）2件" in text
-    assert ("■ 滞留アラート（3日超・未確認）1件: adherence_concern"
+    assert "アラート 2件" in text
+    assert ("・滞留アラート（3日超・未確認）1件: adherence_concern"
             in text)
 
 
@@ -270,7 +270,7 @@ def test_stale_alerts_skip_acked(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
-    assert "■ 滞留アラート（3日超・未確認）0件" in _text(led)
+    assert "滞留アラート" not in _text(led)   # nothing stale: no line
 
 
 def test_task_counts(led):
@@ -282,7 +282,7 @@ def test_task_counts(led):
             "VALUES(1,1,?,'t',?,?,1,0,0)", ("0" * 64, due, status))
     led.db.commit()
     notify_digest.maybe_enqueue(led, ON, now=T)
-    assert "■ タスク: 未完了 3件（うち期限切れ 1件）" in _text(led)
+    assert "未完了タスク 3件（期限切れ 1・本日期限 1）" in _text(led)
 
 
 def test_flush_relays_text_and_drops_when_turned_off(led, monkeypatch):
@@ -290,7 +290,7 @@ def test_flush_relays_text_and_drops_when_turned_off(led, monkeypatch):
     ev = _digests(led)[0]
     monkeypatch.setattr(notify_flush, "_config", lambda: ON)
     text, files = notify_flush._format_event(led, ev)
-    assert text.startswith("🌅 MCS 日次ダイジェスト") and files == []
+    assert text.startswith("【🌅 MCS 日次サマリー") and files == []
     assert len(text) < 1900
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     with pytest.raises(StaleSend):
@@ -310,3 +310,13 @@ def test_tick_hook_enqueues_even_without_notify(led, monkeypatch):
     assert result.get("daily_digest") == 1 and sent == []
     assert not [e for e in result["errors"] if "daily_digest" in e]
     assert len(_digests(led)) == 1
+
+
+def test_text_route_never_sends_a_superseded_day(led, monkeypatch):
+    monkeypatch.setattr(notify_flush, "_config", lambda: ON)
+    old = led.outbox_add("daily_digest", None, {"text": "x", "date": "a"})
+    led.outbox_add("daily_digest", None, {"text": "y", "date": "b"})
+    ev = led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                        (old,)).fetchone()
+    with pytest.raises(StaleSend, match="superseded"):
+        notify_flush._format_event(led, ev)

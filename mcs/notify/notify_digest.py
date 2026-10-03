@@ -1,45 +1,123 @@
-"""Morning daily digest — one text notice per JST day (ROADMAP #13).
+"""MCS summary (#31) — the daily digest card and its on-demand view.
 
-Counts and ids only: new messages by profession, urgency-high message
-ids, open review candidates by type, recorded fetch gaps (always shown),
-連携サマリー updates (count and project ids, never the comment) and
-open/overdue task counts. No bodies, summaries or patient names.
-Off unless ``daily_digest.enabled`` is true; fires at or after
-``daily_digest.hour_jst`` once per day. The ``notify_outbox`` row itself
-is the durable once-per-day marker (``payload.date``).
+One display model (``parts``: heading + text sections + footer) feeds the
+once-per-JST-day relayed notice and the clicker-only 📊 view on every
+transport; ``notify_render.parts_text``/``fit_parts`` absorb each chat's
+format and size limits. Counts, ids and (opt-in / private view only)
+patient names — never bodies or summaries. Recorded fetch gaps are
+always shown. A scope narrows the patients: ``all`` / ``mine`` (open
+tasks assigned to the clicker, as recorded) / ``station:<name>`` /
+``project:<id,...>`` / ``days:<1-7>``. Off unless
+``daily_digest.enabled``; the ``notify_outbox`` row is the durable
+once-per-day marker (``payload.date``).
 """
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from datetime import datetime
 
-import mcs_signals
-import structured_view
-from mcs_queries import JST, coverage_gaps
-from notify_render import _patient_name, plain_notice
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _mcs_path  # noqa: F401,E402  CLI entry: registers every subdir
+
+import mcs_signals  # noqa: E402
+import structured_view  # noqa: E402
+from mcs_queries import JST, coverage_gaps  # noqa: E402
+from notify_render import (_patient_name, fit_parts, parts_text,  # noqa: E402
+                           plain_notice)
+from notify_views import assignee_matches  # noqa: E402
 
 KIND = "daily_digest"
 MAX_LIST = 10
 DAY_S = 86400
+MAX_DAYS = 7
 STALE_ALERT_D = 3        # an open alert first detected longer ago
                          # than this and never acked is re-surfaced
+NOTICE_BUDGET = 1900     # relayed text notice (one chat message)
 # request/deadline-type signals are the task block's business, not the
 # candidate count's (design #13: 期限・予定・依頼は含めない)
 EXCLUDED_SIGNALS = frozenset({"request_overdue", "request_aging",
                               "rx_period_expiry", "rx_period_lapsed"})
 NOTE = ("※ 取得済みの記録から数えた件数です。記録が見つからないことは対応が"
         "なかったことを意味せず、取得完了の記録は欠落なしの保証ではありません。")
+SCOPE_HELP = "all / mine / station:名前 / project:ID,ID / days:1-7（空白区切りで組合せ）"
 
 
 def settings(cfg) -> dict | None:
-    """(hour, include_names) from config, or None when the digest is off."""
+    """Digest settings from config, or None when the digest is off."""
     d = (cfg or {}).get("daily_digest")
     if not isinstance(d, dict) or d.get("enabled") is not True:
         return None
     hour = d.get("hour_jst", 8)
+    scope = d.get("scope", "all")
     return {"hour_jst": hour if type(hour) is int and 0 <= hour <= 23 else 8,
-            "include_names": d.get("include_names") is True}
+            "include_names": d.get("include_names") is True,
+            "scope": scope if isinstance(scope, str) else "all"}
+
+
+def parse_scope(text) -> dict | str:
+    """``all mine station:X project:1,2 days:3`` -> filter dict, or a JA
+    error string. Kinds combine with AND; repeated station/project OR."""
+    out = {"mine": False, "stations": [], "projects": [], "days": 1}
+    for tok in str(text or "").split():
+        key, _, val = tok.partition(":")
+        key = key.lower()
+        if key in ("all", "全体") and not val:
+            continue
+        if key in ("mine", "担当") and not val:
+            out["mine"] = True
+        elif key in ("station", "施設") and val:
+            out["stations"].append(val[:60])
+        elif key in ("project", "患者") and val:
+            ids = [int(v) for v in val.split(",")
+                   if v.isascii() and v.isdigit()]
+            if not ids or len(ids) != len(val.split(",")):
+                return f"project の指定が不正です: {tok[:40]}"
+            out["projects"] += ids
+        elif key in ("days", "日数") and val.isascii() and val.isdigit() \
+                and 1 <= int(val) <= MAX_DAYS:
+            out["days"] = int(val)
+        else:
+            return f"絞込みを解釈できません: {tok[:40]}（{SCOPE_HELP}）"
+    return out
+
+
+def _scope_label(flt, name) -> str:
+    parts = []
+    if flt["mine"]:
+        parts.append(f"担当（記録上: {plain_notice(name, 30) or '不明'}）")
+    if flt["stations"]:
+        parts.append("施設 " + "・".join(plain_notice(s, 30)
+                                         for s in flt["stations"]))
+    if flt["projects"]:
+        parts.append("project " + ",".join(map(str, flt["projects"][:5]))
+                     + ("…" if len(flt["projects"]) > 5 else ""))
+    return " / ".join(parts) or "全患者"
+
+
+def scope_projects(db, flt, name=None, allowed=None) -> set | None:
+    """Live project ids the filter keeps (None = unrestricted). ``allowed``
+    is the caller's project scope and always applies."""
+    keep = None if allowed is None else set(allowed)
+
+    def narrow(ids):
+        nonlocal keep
+        keep = set(ids) if keep is None else keep & set(ids)
+
+    if flt["mine"]:
+        narrow(r["project_id"] for r in db.execute(
+            "SELECT project_id, assignee FROM requests "
+            "WHERE status IN ('open','in_progress')")
+            if assignee_matches(r["assignee"], name))
+    if flt["stations"]:
+        narrow(r["project_id"] for r in db.execute(
+            "SELECT project_id, station_name FROM patients")
+            if any(s in (r["station_name"] or "") for s in flt["stations"]))
+    if flt["projects"]:
+        narrow(flt["projects"])
+    return keep
 
 
 def _plain(text) -> str:
@@ -86,75 +164,113 @@ def _stale_open_unacked(db, now: float) -> list:
     return [(k, open_by_key[k]) for k in stale - acked]
 
 
-def build_text(db, cfg, since: float, until: float) -> str:
-    """The digest body for the window [since, until) — ids and counts,
-    plus patient names next to project ids when
-    ``daily_digest.include_names`` is true (off by default: the digest
-    goes to the same notify_target as card bodies, but names stay out
-    unless the operator opts in)."""
-    names = (settings(cfg) or {}).get("include_names") is True
+def build(db, cfg, since: float, until: float, flt=None, *,
+          names: bool = False, name: str | None = None,
+          allowed=None, private: bool = False) -> dict:
+    """The summary display model for [since, until). ``flt`` is a
+    parse_scope dict (None = all); ``names`` shows patient names next to
+    project ids; ``allowed`` is the caller's project scope."""
+    flt = flt or parse_scope("")
+    keep = scope_projects(db, flt, name, allowed)
+
+    def ok(pid) -> bool:
+        return keep is None or pid in keep
 
     def room(pid) -> str:
-        name = _plain(_patient_name(db, pid)) if names else ""
-        return f"project {pid}" + (f" {name}" if name else "")
+        name_ = _plain(_patient_name(db, pid)) if names else ""
+        return f"project {pid}" + (f" {name_}" if name_ else "")
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
-    lines = [f"🌅 MCS 日次ダイジェスト（{end:%m-%d %H:%M} JST）",
-             f"対象: {start:%m-%d %H:%M}〜{end:%m-%d %H:%M}"]
+    span = (f"直近{round((until - since) / DAY_S)}日"
+            if until - since > DAY_S * 1.5 else
+            f"{start:%m-%d %H:%M}〜{end:%m-%d %H:%M}")
+    title = ("📊 MCS サマリー" if private else "🌅 MCS 日次サマリー") \
+        + f"（{end:%m-%d %H:%M} JST）"
     max_age = cfg.get("notify_max_age_h")
-    floor = (until - float(max_age) * 3600
+    # history imports land with first_seen in the window but an old post
+    # time; measured from the window start so days:N keeps its N days
+    floor = (min(until - float(max_age) * 3600, since)
              if type(max_age) in (int, float) and max_age > 0 else None)
-    rows = db.execute(
+    rows = [r for r in db.execute(
         """SELECT m.message_id, m.project_id, m.profession, m.posted_at_ts
            FROM messages m JOIN patients p ON p.project_id=m.project_id
            WHERE m.first_seen>=? AND m.first_seen<?
              AND COALESCE(p.is_archived,0)=0
              AND COALESCE(m.body_state,'')!='deleted'
-           ORDER BY m.first_seen, m.message_id""",
-        (since, until)).fetchall()
-    # history imports land with first_seen now but an old post time
-    rows = [r for r in rows if floor is None
-            or (r["posted_at_ts"] or 0) >= floor]
-    prof: dict = {}
-    for r in rows:
-        key = _plain(r["profession"]) or "職種不明"
-        prof[key] = prof.get(key, 0) + 1
-    lines.append(f"■ 新着 {len(rows)}件（ルーム {len({r['project_id'] for r in rows})}）"
-                 + (": " + "・".join(f"{k} {n}" for k, n in
-                                    sorted(prof.items(), key=lambda x: -x[1]))
-                    if prof else ""))
-
+           ORDER BY m.first_seen, m.message_id""", (since, until))
+        # history imports land with first_seen now but an old post time
+        if ok(r["project_id"])
+        and (floor is None or (r["posted_at_ts"] or 0) >= floor)]
     urgent = [(r["project_id"], r["message_id"], u) for r in rows
               if (u := structured_view.message_urgency(db, r["message_id"]))]
-    llm = sum(1 for u in urgent if u[2] == "llm")
-    lines.append(f"■ 緊急度: 高 {len(urgent)}件（AI抽出 {llm}・機械照合 "
-                 f"{len(urgent) - llm}）")
-    if urgent:
-        lines.append("・" + _ids(urgent, lambda u: (
-            f"{room(u[0])} / message {u[1]}"
-            + ("" if u[2] == "llm" else "（機械照合）"))))
 
-    gaps = coverage_gaps(db)
-    lines.append("■ 取得状況（記録ベース）")
-    rooms = gaps["incomplete_rooms"]
-    if rooms:
-        lines.append(f"・取得未完了のルーム {len(rooms)}: " + _ids(
-            rooms, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
-    else:
-        lines.append("・未完了として記録されたルーム: なし"
-                     "（完全性の保証ではありません）")
-    if gaps["jobs"]:
-        lines.append("・取得待ち/失敗ジョブ: " + "・".join(
-            f"{_plain(k)} {n}" for k, n in gaps["jobs"].items()))
-    if gaps["partial_bodies"]:
-        lines.append(f"・本文未取得の投稿: {gaps['partial_bodies']}件")
-    if gaps["reply_gaps"]:
-        lines.append(f"・返信の取得未完了スレッド: {gaps['reply_gaps']}件")
-    held = db.execute("SELECT count(*) FROM notify_outbox WHERE "
-                      "state='failed' AND next_try IS NULL").fetchone()[0]
-    if held:
-        lines.append(f"・送信保留の通知: {held}件")
+    today = end.date().isoformat()
+    tasks = [t for t in db.execute(
+        "SELECT project_id, due_date FROM requests "
+        "WHERE status IN ('open','in_progress') ORDER BY request_id")
+        if ok(t["project_id"])]
+    late = [t["project_id"] for t in tasks
+            if t["due_date"] and t["due_date"] < today]
+    due = [t["project_id"] for t in tasks if t["due_date"] == today]
+
+    sig = cfg.get("signals")
+    signals_on = isinstance(sig, dict) and sig.get("notify") is True
+    by_type: dict = {}
+    stale_by: dict = {}
+    if signals_on:
+        for c in mcs_signals._latest_signal_states(db).values():
+            if c and c["state"] == "open" and ok(c["project_id"]) \
+                    and c["type"] not in EXCLUDED_SIGNALS:
+                by_type[c["type"]] = by_type.get(c["type"], 0) + 1
+        for _key, c in _stale_open_unacked(db, until):
+            if ok(c["project_id"]):
+                stale_by[c["type"]] = stale_by.get(c["type"], 0) + 1
+
+    live = {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0")}
+    patients = len(live if keep is None else live & keep)
+    summary = (f"新着 {len(rows)}件・緊急度高 {len(urgent)}件"
+               + (f"・アラート {sum(by_type.values())}件" if signals_on else "")
+               + f"・未完了タスク {len(tasks)}件（期限切れ {len(late)}・本日期限 {len(due)}）")
+    containers = [
+        {"type": "heading", "text": title},
+        {"type": "text", "text": f"対象: {_scope_label(flt, name)} {patients}人・{span}"
+                                 f"\n{summary}"}]
+
+    def section(head, lines, fold=False):
+        if lines:
+            containers.append({"type": "text", "fold": fold,
+                               "text": "\n".join([f"■ {head}", *lines])})
+
+    section(f"緊急度高 {len(urgent)}件", [
+        f"・{room(p)} / message {m}" + ("" if u == "llm" else "（機械照合）")
+        for p, m, u in urgent], fold=True)
+    todo = []
+    for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
+        if pids:
+            rooms_ = list(dict.fromkeys(pids))
+            todo.append(f"・{label} {len(pids)}件: " + _ids(rooms_, room))
+    if stale_by:
+        todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）"
+                    f"{sum(stale_by.values())}件: " + "・".join(
+                        f"{_plain(k)} {n}" for k, n in sorted(stale_by.items())))
+    section("要対応", todo)
+
+    per: dict = {}
+    for r in rows:
+        prof = per.setdefault(r["project_id"], {})
+        key = _plain(r["profession"]) or "職種不明"
+        prof[key] = prof.get(key, 0) + 1
+    ranked = sorted(per.items(), key=lambda kv: (-sum(kv[1].values()), kv[0]))
+    section(f"新着（患者別 {len(per)}人）", [
+        f"・{room(pid)} {sum(p.values())}件（" + "・".join(
+            f"{k} {n}" for k, n in sorted(p.items(), key=lambda x: -x[1]))
+        + "）" for pid, p in ranked], fold=True)
+
+    if by_type:
+        section("アラート（open）", ["・" + "・".join(
+            f"{_plain(k)} {n}" for k, n in sorted(by_type.items()))])
 
     # 連携サマリー (#21): artifacts stored in the window that change an
     # earlier stored summary (a room's first fetch/backfill is not an
@@ -171,50 +287,89 @@ def build_text(db, cfg, since: float, until: float) -> str:
             c = json.loads(r["content"])
         except (ValueError, TypeError):
             continue
-        if isinstance(c, dict) and c.get("empty") is not True:
+        if isinstance(c, dict) and c.get("empty") is not True \
+                and ok(r["project_id"]):
             summaries.append(r["project_id"])
     # count rooms, not artifacts — one room refetched twice is one update
-    rooms = list(dict.fromkeys(summaries))
-    lines.append(f"■ 連携サマリー更新: {len(rooms)}件"
-                 + (": " + _ids(rooms, room) if rooms else ""))
+    updated = list(dict.fromkeys(summaries))
+    section("連携サマリー更新", [f"・{len(updated)}件: " + _ids(updated, room)]
+            if updated else [])
 
-    sig = cfg.get("signals")
-    if isinstance(sig, dict) and sig.get("notify") is True:
-        by_type: dict = {}
-        for c in mcs_signals._latest_signal_states(db).values():
-            if c and c["state"] == "open" \
-                    and c["type"] not in EXCLUDED_SIGNALS:
-                by_type[c["type"]] = by_type.get(c["type"], 0) + 1
-        lines.append(f"■ アラート（open）{sum(by_type.values())}件"
-                     + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
-                                        sorted(by_type.items()))
-                        if by_type else ""))
-        stale = _stale_open_unacked(db, until)
-        by_stale: dict = {}
-        for _key, c in stale:
-            by_stale[c["type"]] = by_stale.get(c["type"], 0) + 1
-        lines.append(f"■ 滞留アラート（{STALE_ALERT_D}日超・未確認）"
-                     f"{len(stale)}件"
-                     + (": " + "・".join(f"{_plain(k)} {n}" for k, n in
-                                         sorted(by_stale.items()))
-                        if by_stale else ""))
+    gaps = coverage_gaps(db)
+    cov = []
+    incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
+    if incomplete:
+        cov.append(f"・取得未完了のルーム {len(incomplete)}: " + _ids(
+            incomplete, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
+    else:
+        cov.append("・未完了として記録されたルーム: なし"
+                   "（完全性の保証ではありません）")
+    scoped = "（全体）" if keep is not None else ""
+    if gaps["jobs"]:
+        cov.append(f"・取得待ち/失敗ジョブ{scoped}: " + "・".join(
+            f"{_plain(k)} {n}" for k, n in gaps["jobs"].items()))
+    if gaps["partial_bodies"]:
+        cov.append(f"・本文未取得の投稿{scoped}: {gaps['partial_bodies']}件")
+    if gaps["reply_gaps"]:
+        cov.append(f"・返信の取得未完了スレッド{scoped}: {gaps['reply_gaps']}件")
+    held = db.execute("SELECT count(*) FROM notify_outbox WHERE "
+                      "state='failed' AND next_try IS NULL").fetchone()[0]
+    if held:
+        cov.append(f"・送信保留の通知（全体）: {held}件")
+    containers.append({"type": "text",
+                       "text": "\n".join(["■ 取得状況（記録ベース）", *cov])})
+    footer = [NOTE]
+    if flt["mine"]:
+        footer.insert(0, "※ 担当は担当者欄が表示名と一致する未完了タスクの記録です。"
+                         "正式な担当割当ではありません。")
+    return fit_parts({"containers": containers,
+                      "footer": [{"type": "text", "text": t} for t in footer]})
 
-    today = end.date().isoformat()
-    t = db.execute(
-        "SELECT count(*) n, sum(due_date IS NOT NULL AND due_date<?) late "
-        "FROM requests WHERE status IN ('open','in_progress')",
-        (today,)).fetchone()
-    lines.append(f"■ タスク: 未完了 {t['n']}件（うち期限切れ {t['late'] or 0}件）")
-    lines.append(NOTE)
-    return "\n".join(lines)
+
+def daily_parts(db, cfg, since: float, until: float) -> dict:
+    """The daily summary's display model (the card notice). Names only
+    when ``include_names``; scope from ``daily_digest.scope``."""
+    s = settings(cfg) or {}
+    flt = parse_scope(s.get("scope", "all"))
+    if isinstance(flt, str) or flt["mine"]:
+        flt = parse_scope("")          # mine needs a clicker; validated in setup
+    return build(db, cfg, since, until, flt,
+                 names=s.get("include_names") is True)
+
+
+def build_text(db, cfg, since: float, until: float) -> str:
+    """The daily text notice — the summary in the plain dialect, folded
+    to one relayed chat message (text route and card kill switch)."""
+    return parts_text(fit_parts(daily_parts(db, cfg, since, until),
+                                NOTICE_BUDGET), "plain")
+
+
+def view(db, cfg, scope_text, *, name=None, allowed=None, now=None,
+         names: bool = True) -> dict:
+    """The clicker-only 📊 view: the scope's window ending now, patient
+    names shown unless ``names`` is False (an entry whose answer is not
+    proven private), caller scope enforced."""
+    flt = parse_scope(scope_text)
+    if isinstance(flt, str):
+        return {"error": flt}
+    if flt["mine"] and not " ".join(str(name or "").split()):
+        return {"error": "mine には担当の名前が必要です。名前欄に入力してください。"}
+    now = time.time() if now is None else now
+    return {"parts": build(db, cfg, now - flt["days"] * DAY_S, now, flt,
+                           names=names, name=name, allowed=allowed,
+                           private=True)}
 
 
 def maybe_enqueue(ledger, cfg, now=None) -> int:
     """Queue today's digest once, at or after hour_jst. The window
     starts where the previous digest ended (24h back the first time)."""
+    import notify_cards
     s = settings(cfg)
     target = (cfg or {}).get("notify_target")
-    if s is None or not (isinstance(target, str) and target.strip()):
+    cards_on = notify_cards.interactive_enabled(cfg or {}) \
+        and notify_cards.delivery_scope(cfg or {}) is not None
+    if s is None or not (cards_on or (isinstance(target, str)
+                                      and target.strip())):
         return 0
     now = time.time() if now is None else now
     local = datetime.fromtimestamp(now, JST)
@@ -242,11 +397,49 @@ def maybe_enqueue(ledger, cfg, now=None) -> int:
         since = now - 86400
     # the read-heavy body is built outside the write lock; the insert
     # re-checks that no other writer queued a digest meanwhile
-    text = build_text(db, cfg, since, now)
+    parts = daily_parts(db, cfg, since, now)
     with db:
         db.execute("BEGIN IMMEDIATE")
         if last_digest()[0] != seen:
             return 0
+        # both forms frozen: parts for the card notice, text for the
+        # text route and the card kill switch
         ledger.outbox_add_tx(KIND, None, {
-            "text": text, "date": day, "since": since, "until": now})
+            "text": parts_text(fit_parts(parts, NOTICE_BUDGET), "plain"),
+            "parts": parts, "date": day, "since": since, "until": now},
+            # a card notice only while cards are on — off, the text route
+            # never waits on (or rolls back into) the card pipeline
+            route="interactive" if cards_on else "text")
     return 1
+
+
+def main(argv=None) -> int:
+    """CLI: print the summary for a scope (plain text, no names unless
+    --names) — ``notify_digest.py --print [--names] [scope ...]``."""
+    import argparse
+    import sqlite3
+    from pathlib import Path
+
+    from mcs_util import DB, load_config
+    ap = argparse.ArgumentParser(description="MCS summary (#31)")
+    ap.add_argument("--print", action="store_true", required=True)
+    ap.add_argument("--names", action="store_true")
+    ap.add_argument("--name", help="担当照合に使う名前（mine）")
+    ap.add_argument("scope", nargs="*")
+    args = ap.parse_args(argv)
+    flt = parse_scope(" ".join(args.scope))
+    if isinstance(flt, str):
+        print(flt, file=sys.stderr)
+        return 2
+    # read-only: the CLI never writes or migrates the ledger
+    db = sqlite3.connect(Path(DB).resolve().as_uri() + "?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    now = time.time()
+    parts = build(db, load_config(), now - flt["days"] * DAY_S, now, flt,
+                  names=args.names, name=args.name, private=True)
+    print(parts_text(parts, "plain"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

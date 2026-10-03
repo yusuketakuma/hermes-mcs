@@ -212,7 +212,7 @@ def test_button_rows_layout_and_link(led):
     # card_thread on: 📄 lives in the thread; no task yet -> no ☑;
     # no extract_llm result -> no ⚠
     assert rows == [["ack", "assign"], ["request", "summary"], ["link"],
-                    ["mytasks", "unacked", "search"]]
+                    ["digest", "mytasks", "unacked", "search"]]
     link = _button(spec, "link")
     assert link == {"id": "link", "ui": "link", "label": "🔗 MCSで開く",
                     "url": "https://www.medical-care.net/projects/medical/1"}

@@ -13,6 +13,9 @@ ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
 
 
+SUMMARY_WORD = "サマリー"
+
+
 class Actions:
     def __init__(self, settings, dirs, reg, sender, log):
         self.settings, self.dirs, self.reg = settings, dirs, reg
@@ -113,6 +116,21 @@ class Actions:
         if match and source.get("channelId") is None:
             await self._confirm(match[1], bool(match[2]), user, actor)
 
+    async def _summary(self, user, rest):
+        """DM「サマリー <scope> [name:名前]」 — the 📊 summary from the
+        snapshot, answered to this user's DM only (handle() already
+        checked the allowlist and that this is a DM)."""
+        from adapters.common import summary
+        snapshot = self.settings.get("snapshot")
+        if not snapshot:
+            await self._say(user, "サマリーの元データが設定されていません。")
+            return
+        got = await asyncio.to_thread(
+            summary.answer, snapshot, rest[:300],
+            allowed=projects.summary_scope(self.settings), dialect="plain")
+        for chunk in text.split_body(got.get("text") or got["error"]):
+            await self._say(user, chunk)
+
     async def _prompt(self, user, session):
         field = session["definitions"][session["index"]]
         lines = [field["label"]]
@@ -131,6 +149,9 @@ class Actions:
         mid = "lw-form-" + envelopes.actor_hash(actor)
         session = self.reg.modal(mid)
         if not session or session["actor"] != actor:
+            word, *rest = value.split(None, 1)
+            if word == SUMMARY_WORD:
+                await self._summary(user, rest[0] if rest else "")
             return
         if not self._pinned(session["token"], actor):
             self.reg.drop_modal(mid)
@@ -162,9 +183,13 @@ class Actions:
             await self._prompt(user, session)
             return
         self.reg.drop_modal(mid)
-        if session["action"] in ("search", "mytasks"):
-            inputs = ({"query": text.search_query(session["fields"])} if session["action"] == "search"
-                      else projects.view_inputs(self.settings, "mytasks", session["fields"]["name"]))
+        if session["action"] in ("search", "mytasks", "digest"):
+            if session["action"] == "digest":
+                inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
+                          **text.digest_inputs(session["fields"])}
+            else:
+                inputs = ({"query": text.search_query(session["fields"])} if session["action"] == "search"
+                          else projects.view_inputs(self.settings, "mytasks", session["fields"]["name"]))
             if inputs and all(inputs.values()):
                 env = envelopes.notification(session["token"], actor, session["origin"], inputs)
                 self.reg.put_followup(env["command_id"], {**session, "kind": "action",

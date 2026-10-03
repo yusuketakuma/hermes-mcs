@@ -719,3 +719,17 @@ SLACK_HOME_CHANNEL=C01234567890        # 任意: cron/通知の既定ch
   `slack_application_id`, `slack_channel_id`,
   `slack_allowed_user_ids`, `slack_profile`, `project_ids`,
   `data_root`, `snapshot`
+
+### 任意: `/mcs-summary`（本人専用の要約サマリー）
+
+カードの「📊 サマリー」に加え、Slackのslash commandからも呼び出せます（v1.0.11〜）。
+使う場合だけ、Slackアプリ設定で次を追加して**アプリを再インストール**します。
+
+- **Slash Commands** → Create New Command: Command `/mcs-summary`、
+  Short Description「MCS 要約サマリー（本人専用）」、Usage Hint `all / mine / station:施設名 / project:ID / days:1-7`
+  （Socket Modeでは Request URL は不要）
+- **OAuth & Permissions** の Bot Token Scopes に `commands`（manifest生成済みなら含まれているか確認）
+
+Hermes連携では plugin settings の `snapshot` が必要です（未設定だと「元データが設定されていません」と返します）。
+返答は押した本人だけに見え（ephemeral）、`slack_allowed_user_ids` 以外のユーザーは拒否されます。
+同名のコマンドを他アプリ・Hermes側で登録していないことを確認してください。

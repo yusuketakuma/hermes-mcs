@@ -43,6 +43,67 @@ def display_text(parts: dict) -> str:
     return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
 
 
+# the shared display model's text budget (adapters/common/spec.py
+# MAX_TOTAL_TEXT — the tightest transport, Discord Components V2)
+PARTS_TEXT_BUDGET = 4000
+_FOLD_RE = re.compile(r"^・…他([0-9]+)件$")
+
+
+def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
+    """Fold list lines (``・`` bullets) of text containers marked
+    ``"fold": True`` (one item per line) until the visible text fits
+    ``limit``: the longest such list loses its last rows first and ends
+    with ``・…他N件``. Unmarked containers — disclosures such as fetch
+    gaps, aggregate lines — and the footer are never folded, so a
+    content builder never sizes for a transport."""
+    containers = [dict(c) for c in parts["containers"]]
+    out = {**parts, "containers": containers}
+
+    def bullets(c):
+        return [i for i, ln in enumerate(c["text"].split("\n"))
+                if ln.startswith("・") and not _FOLD_RE.match(ln)]
+
+    while len(display_text(out)) > limit:
+        lists = [c for c in containers
+                 if c["type"] == "text" and c.get("fold") and bullets(c)]
+        if not lists:
+            break
+        c = max(lists, key=lambda c: len(bullets(c)))
+        lines = c["text"].split("\n")
+        folded = 0
+        if _FOLD_RE.match(lines[-1]):
+            folded = int(_FOLD_RE.match(lines[-1]).group(1))
+            lines.pop()
+        del lines[bullets({"text": "\n".join(lines)})[-1]]
+        c["text"] = "\n".join(lines + [f"・…他{folded + 1}件"])
+    return out
+
+
+def parts_text(parts: dict, dialect: str = "plain") -> str:
+    """The display model as one chat's text: ``discord`` (markdown
+    heading, ``-#`` subtext footer), ``slack`` (mrkdwn bold heading) or
+    ``plain`` (LINE WORKS, CLI, relayed notices — ``【】`` heading).
+    Body text is passed through unformatted in every dialect."""
+    head = {"discord": "## {}", "slack": "*{}*"}.get(dialect, "【{}】")
+    lines = []
+    for item in parts["containers"]:
+        kind = item["type"]
+        if kind == "meta":
+            continue
+        if kind == "heading":
+            lines.append(head.format(item["text"]))
+        elif kind == "field":
+            lines.append(f"{item['name']}: {item['value']}")
+        else:
+            lines.append(f"引用: {item['text']}" if kind == "quote"
+                         else item["text"])
+    for item in parts.get("footer") or []:
+        if item["type"] == "text":
+            lines.extend(f"-# {ln}" if dialect == "discord" else ln
+                         for ln in item["text"].splitlines())
+    return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+
+
 def _latest_signals(db, keys: list, project_id=None) -> dict:
     """key -> {'artifact_id','content'} of the newest signal_v1 row."""
     out = {}

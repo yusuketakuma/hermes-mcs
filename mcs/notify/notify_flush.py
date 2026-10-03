@@ -333,6 +333,11 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         import notify_digest
         if notify_digest.settings(_config()) is None:
             raise _StaleSend("daily_digest_disabled")
+        if ledger.db.execute(
+                "SELECT 1 FROM notify_outbox WHERE kind='daily_digest' "
+                "AND event_id>?", (ev["event_id"],)).fetchone():
+            # a newer day exists — an old summary is never sent late
+            raise _StaleSend("daily_digest_superseded")
     if ev["kind"] in ("update_notice", "task_reminder", "daily_digest"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.
@@ -786,7 +791,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         return False
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
-        if outcome.get("error") == "payload_invalid":
+        if outcome.get("error") in ("payload_invalid", "resend_exhausted"):
             # dispatch already quarantined it — a malformed frozen
             # payload cannot heal, so never re-arm an hourly retry
             ledger.outbox_hold(ev["event_id"])

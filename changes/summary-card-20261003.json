@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "要約サマリーを本人専用でいつでも表示し、対象患者を絞り込めるように",
+  "summary": "通知カードの「📊 サマリー」から、押した本人だけに要約サマリーを表示できます。Slackは見出し付きのカード、Discordは見出し付きの表示、LINE WORKSはDMで届き、all・mine（担当・記録上）・station:施設名・project:ID・days:1-7で対象と期間を絞れます。朝の日次ダイジェストは要約行・要対応・患者別新着・取得状況の順に見やすく整理し、空の節を省きます。",
+  "upgrade": "Hermes連携のSlack・Discordは更新後にHermes Gatewayを再起動してください。LINE WORKSは独立アダプターを再起動してください。再起動前の旧アダプターでは📊ボタンが正しく動作しません（Slackは「操作できません」、Discord・LINE WORKSは結果の無い応答になります）。日次ダイジェストの対象は任意のdaily_digest.scopeで絞れます（既定は全患者、mineは指定不可）。通知先・送信時刻・患者名の既定（include_names=false）・既読化・人承認・取得範囲・モデルは変更しません。",
+  "details": [
+    "notify_digest.buildが共通表示モデル(parts)を組み、notify_render.fit_partsが上限を超える一覧を「…他N件」に畳み、parts_textが各チャットの書式(discord/slack/plain)に変換する。",
+    "📊はview actionとして既存のcmd_int→cmd_results経路で本人へ返し、receiptには本文・partsを保存しない。プロジェクト範囲はrunner側で必ず適用する。",
+    "Slackの本人専用返答はslack.cards.render_partsで同じpartsからBlock Kitを組む。",
+    "mineは押した人の表示名と未完了タスクの担当者欄の照合（📋と同じ規則）で、正式な担当割当ではない。"
+  ],
+  "refs": ["mcs/notify/notify_digest.py", "mcs/notify/notify_render.py", "mcs/notify/notify_cards.py", "adapters/common/text.py", "adapters/slack/cards.py"]
+}
