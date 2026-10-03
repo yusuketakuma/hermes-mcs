@@ -34,6 +34,7 @@ import hashlib
 import json
 from datetime import datetime
 import os
+import re
 import socket
 import tempfile
 import time
@@ -332,6 +333,8 @@ class Message:
     # list (possibly empty) may reconcile the stored attachment set;
     # an absent key means "not returned this call", never "no files"
     files_present: bool = False
+    metadata: dict = field(default_factory=dict)
+    metadata_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -462,6 +465,55 @@ def _attachments(files: list | None) -> list[Attachment]:
     return out
 
 
+def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
+    """Normalize optional metadata independently of the required chat body."""
+    out, errors = {}, []
+    for key in ("reactions", "mentions", "is_bookmarked", "is_pinned"):
+        if key not in m:
+            continue
+        value = m[key]
+        try:
+            if key in ("is_bookmarked", "is_pinned"):
+                if type(value) is not bool:
+                    raise ValueError
+            elif not isinstance(value, list):
+                raise ValueError
+            elif key == "reactions":
+                normalized, seen = [], set()
+                for r in value:
+                    if (not isinstance(r, dict)
+                            or not isinstance(r.get("type"), str)
+                            or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", r["type"])
+                            or r["type"] == "all" or r["type"] in seen
+                            or type(r.get("count")) is not int
+                            or not 0 <= r["count"] <= 2**63 - 1
+                            or type(r.get("self_reacted")) is not bool
+                            or (r["self_reacted"] and r["count"] == 0)):
+                        raise ValueError
+                    seen.add(r["type"])
+                    normalized.append({k: r[k] for k in
+                                       ("type", "count", "self_reacted")})
+                value = normalized
+            else:
+                normalized = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        raise ValueError
+                    kind = item.get("type")
+                    target = item.get(kind) if kind in ("user", "station", "project") else None
+                    if kind == "project" and target is None:
+                        target = {"id": project_id}
+                    if (not isinstance(target, dict) or not _valid_id(target.get("id"))
+                            or (kind == "project" and target["id"] != project_id)):
+                        raise ValueError
+                    normalized.append({"type": kind, "id": target["id"]})
+                value = normalized
+            out[key] = value
+        except ValueError:
+            errors.append(key + "_invalid")
+    return out, errors
+
+
 def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
                   is_unread: bool | None = None) -> Message:
     if not isinstance(m, dict):
@@ -492,6 +544,7 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
         body, state = snippet, "snippet"
     else:
         body, state = "", "unknown"
+    metadata, metadata_errors = _message_metadata(m, project_id)
     return Message(
         message_id=m.get("id"),
         project_id=project_id,
@@ -508,6 +561,8 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
         reply_count=reply_count,
         attachments=_attachments(m.get("files")),
         files_present="files" in m,
+        metadata=metadata,
+        metadata_errors=metadata_errors,
     )
 
 
@@ -687,6 +742,28 @@ class MCSAdapter:
                 "name": name,
                 "professions": profs, "organizations": orgs,
                 "stations": stations}
+
+    def fetch_message_metadata(self, project_id: int, message_id: int, *,
+                               parent_id: int | None = None) -> Message:
+        """Read one exact post with read/session preservation for shadow refresh."""
+        if not _valid_id(project_id) or not _valid_id(message_id):
+            raise SchemaError("metadata: invalid id")
+        if parent_id is not None and (not _valid_id(parent_id) or parent_id == message_id):
+            raise SchemaError("metadata: invalid parent id")
+        path = f"/projects/{project_id}/messages"
+        if parent_id is not None:
+            path += f"/{parent_id}/messages"
+        r = self._get(path, {
+            "message_id": message_id, "per_page": 1, "keep_read_status": 1},
+            extend_session=False)
+        items = r.get("messages")
+        if (not isinstance(items, list) or len(items) != 1
+                or not isinstance(items[0], dict) or not _valid_id(items[0].get("id"))
+                or not _valid_id(items[0].get("project_id", project_id))
+                or items[0].get("id") != message_id
+                or items[0].get("project_id", project_id) != project_id):
+            raise SchemaError("metadata: target mismatch")
+        return _norm_message(items[0], project_id, parent_id=parent_id)
 
     def station_staffs(self, stations: list, per_page: int = 100,
                        max_pages: int = 10) -> list:

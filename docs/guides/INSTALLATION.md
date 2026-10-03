@@ -446,6 +446,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `daily_digest.hour_jst` | int(0-23) | `8` | 日次ダイジェストを送る時刻（JST。この時刻以降の最初の実行で1日1回） |
 | `daily_digest.include_names` | bool | `false` | 一覧の project ID に患者名を添える（送信先は `notify_target`） |
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
+| `metadata_shadow` | bool | `false` | 監視対象のスタンプを保存のみ再取得。未読保持の実証と監視集合・予算の運用合意後に限り有効化する。shadowの反応値はカード・digest・CLIの反応表示に出さず、CLIでは取得状態・日時・理由のみ参照できる |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |

@@ -1147,7 +1147,7 @@ def test_interrupted_v7_migration_reruns_backfill(tmp_path):
     assert rows[1] is not None             # read message backfilled
     assert rows[2] is None                 # unread w/o intent stays NULL
     assert db2.db.execute(
-        "PRAGMA user_version").fetchone()[0] == 7
+        "PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
     db2.close()
 
 
@@ -1178,7 +1178,7 @@ def test_migration_tolerates_malformed_outbox_payload(tmp_path):
     assert rows[2] is not None             # valid id 2 inside the mixed
                                            # list still counts as intented
     assert db2.db.execute(
-        "PRAGMA user_version").fetchone()[0] == 7
+        "PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
     db2.close()
 
 

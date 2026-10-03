@@ -17,6 +17,7 @@ from datetime import datetime
 import mcs_signals
 import structured_view
 from mcs_queries import JST, coverage_gaps
+from message_metadata import get_message_metadata, reaction_label
 from notify_render import _patient_name, plain_notice
 
 KIND = "daily_digest"
@@ -50,6 +51,33 @@ def _ids(pairs, fmt) -> str:
     shown = ", ".join(fmt(p) for p in pairs[:MAX_LIST])
     return shown + (f" 他{len(pairs) - MAX_LIST}件" if len(pairs) > MAX_LIST
                     else "")
+
+
+def _self_reaction_count(db, since, until) -> tuple:
+    """観測窓に入るcaptureの現在の本人反応を投稿単位で数える。"""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                      "AND name='message_metadata'").fetchone():
+        return 0, {}
+    rows = db.execute(
+        "SELECT x.message_id FROM message_metadata x "
+        "JOIN messages m ON m.message_id=x.message_id "
+        "JOIN patients p ON p.project_id=m.project_id "
+        "WHERE x.source='capture' AND json_valid(x.content) "
+        "AND json_extract(x.content,'$.reactions.observed_at')>=? "
+        "AND json_extract(x.content,'$.reactions.observed_at')<? "
+        "AND COALESCE(p.is_archived,0)=0 AND m.body_state!='deleted'",
+        (since, until))
+    posts, counts = 0, {}
+    for row in rows:
+        meta = get_message_metadata(db, row[0])
+        labels = {reaction_label(r["type"]) for r in meta["reactions"] or []
+                  if r["self_reacted"]}
+        if not labels:
+            continue
+        posts += 1
+        for label in labels:
+            counts[label] = counts.get(label, 0) + 1
+    return posts, counts
 
 
 def _stale_open_unacked(db, now: float) -> list:
@@ -124,6 +152,13 @@ def build_text(db, cfg, since: float, until: float) -> str:
                  + (": " + "・".join(f"{k} {n}" for k, n in
                                     sorted(prof.items(), key=lambda x: -x[1]))
                     if prof else ""))
+    reacted, reaction_counts = _self_reaction_count(db, since, until)
+    lines.append(f"■ MCS 本人スタンプ観測: {reacted}投稿"
+                 + (": " + "・".join(f"{label} {count}" for label, count in
+                                     sorted(reaction_counts.items()))
+                    if reaction_counts else ""))
+    lines.append("・対象期間に観測した現在の保存状態です。未取得を除き、"
+                 "押下時刻・操作件数・業務完了を表しません。")
 
     urgent = [(r["project_id"], r["message_id"], u) for r in rows
               if (u := structured_view.message_urgency(db, r["message_id"]))]

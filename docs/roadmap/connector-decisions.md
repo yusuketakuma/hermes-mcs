@@ -5,6 +5,11 @@
 現行の優先順位は[ROADMAP](../ROADMAP.md)、接続の実装計画は[connector.md](connector.md)を参照。
 スタンプの個人別データを送る権限・record型はこの移設では追加しない。
 
+2026-10-03レビューの訂正提案（未合意・本文の合意内容を変更しない）:
+CD-9の自局判定について、[connector.mdの提案](connector.md)にあるとおり、薬剤師という職種一致だけでは
+他組織の薬剤師と区別できない。F-7の自局送信者IDを主根拠にし、ID不明時は明示した自局organizationを
+補助にする案をC0で合意するまで実装しない。C3の結果不明後の新auth送付も、旧receipt/保存先照合を前提にする案として保持する。
+
 ## 5. zaitaku-calender との接続
 
 契約: 送付単位 `mcs-ext-export/1`、認可 `mcs-ext-auth/1`、record 型 `mcs-read-model/1`（`mcs/ops/ext_contract.py:43-44`、`mcs/ops/export_schema.py:106-148`）。本文・statement・evidence 引用・送信者・患者名・病名は、`export_schema.py` の record ごとの allowlist（`_SCHEMAS`、:116-147。未知キーは拒否）によって構造的に送れない — ただし CD-9 で追加する `message_body` record は本文を明示的に運ぶ例外（オーナー判断 2026-09-29）。`FORBIDDEN_KEYS`（`ext_contract.py:46-52`）は、よくある本文系キーを早く見つけるための診断用拒否リストにすぎない。スキーマを変える場合（C2 を含む）は allowlist の変更として扱い、レビュー対象とする。

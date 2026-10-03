@@ -1,6 +1,12 @@
 # 整合性・命名・運用前提の詳細計画（#7〜#10）
 
-[`docs/ROADMAP.md`](../ROADMAP.md) §3 の #7 FK/CHECK の導入、#8 編集履歴と命名、#9 SQLite runtime 版の確認、#10 独立実装レビューを、実装に着手できる粒度まで掘り下げた計画。
+[`docs/ROADMAP.md`](../ROADMAP.md) の #7 FK/CHECK の導入、#8 編集履歴と命名、#9 SQLite runtime 版の確認、#10 独立実装レビューの詳細計画。
+
+2026-10-03照合: 以下の「現状」・行番号・実測・固定commitは2026-09-29の調査記録。
+現在の版割当・公開条件は[ROADMAP](../ROADMAP.md)を正とする。#7/#9は1.0.15、#8は未割当。
+#8-M1→#4の修復実施→C1本番の依存は残るため、#4のplanやC1合成開発だけで本番投入できない。
+#10の旧固定commit全体レビューを今回繰り返さず、依頼された1.0.11の変更と重要な既存経路を照合する。
+末尾の即時着手順は当時の提案であり、現在の版割当を上書きしない。未決owner判断は今回実装しない。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
 - 表記: 【実行確認】= 合成入力で実行して確認、【未検証】= 実データ・実機・実 API に触れないと分からない点。
@@ -183,7 +189,7 @@ PRAGMA foreign_key_check; PRAGMA quick_check;
 - `possibly_deleted`（`rollup.py:211-216`）は、`updated_seen` が「先頭メッセージの `updated_seen` − 21 日」より古い先頭 20 件。削除の証拠ではなく、tombstone（`body_state='deleted'`）も区別しない。reconcile が一巡していない履歴や NULL の旧行（`or 0`）も入る。挙動のテストがない（fixture の `[]` だけ: `tests/ops/test_brain_export.py:93,235`）。
 - `current_med_period`（`rollup.py:142-145,186,220-268`）は、extract_v1 の規則正規表現による日付範囲のうち、start ≤ 当日 ≤ end かつ前後 16 字に 予定 | 検討 がない最初の 1 件。どの薬かは不明で、後続の「中止」で取り消されない（`med_state` とは独立）。
 - 露出面: `brain_export.py:197-199,227-228`、`docs/guides/USER_GUIDE.md:73,313-315`、`docs/development/DEVELOPMENT.md:208-209`、`tests/extract/test_rollup_period.py:45,56,65,70,75`、`tests/ops/test_brain_export.py:84,93,235`。
-- 接続側: `message` の allowlist は `export_schema.py:137-147`、`_BASE` の contract enum は :105。同一性は `type+project_id+message_id+content_hash`（ROADMAP §4）で、編集は新 identity になる。現状でも stale と新 hash で表現できる（`read_model.py:68-113,193-206`）。signal の note は「確定ではありません」と書くが（`mcs_signals.py:405-426`）、集約スコープでは出ないため、`rx_period_expiry` / `pharmacist_request_unanswered` / `med_change_no_followup` は enum 名だけが届く。
+- 接続側: `message` の allowlist は `export_schema.py:137-147`、`_BASE` の contract enum は :105。旧案の同一性`type+project_id+message_id+content_hash`は廃止され、論理キーに`content_hash`を含めない（[接続判断の正本](connector-decisions.md)）。hashは変化検知に使う。signal の note は「確定ではありません」と書くが（`mcs_signals.py:405-426`）、集約スコープでは出ないため、`rx_period_expiry` / `pharmacist_request_unanswered` / `med_change_no_followup` は enum 名だけが届く。
 
 **設計方針**
 
@@ -210,11 +216,11 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 - 初回の編集で seq=1（旧）と seq=2（新）を作り、A → B → A も連番で残す。INSERT は `OR IGNORE` 等で fail-soft にする（`_upsert_message` は収集の critical path で、例外は batch 全体を rollback する）。
 - M2 を選ぶ場合の注意: `publish_snapshot` は DB 全体をコピーする（`ledger.py:1856-1889`）。別表にしても snapshot 生成時に DROP + VACUUM が要る。deleted の旧本文は F02 の意図と相容れない。
 
-(2) read-model: 変更しないのを推奨する。変更するなら、C0 の fixture 固定前に `prev_content_hash`（hash だけ）を allowlist へ追加する。receiver は未知キーを拒否するため、固定後は `/2` が必要。同一 `(project_id, message_id)` で新 generation・別 hash が来たら旧 identity を supersede する、という規則を C0 契約に明記する。
+(2) read-model: `prev_content_hash`は追加しない（2026-09-29決定済み）。旧案の追加提案を再実施しない。messageの論理キーは維持し、payload hashによる版管理とsnapshot世代でcurrentを決める（[接続判断](connector-decisions.md)）。
 
 (3) 命名: `current_med_period` → `med_period_candidate`、`possibly_deleted` → `unrefreshed_message_ids`（提案名）。brain_export の見出しと注記に「規則抽出・未確認」「削除の証拠ではない（tombstone は `coverage.collection.deleted`）」を入れる。USER_GUIDE と DEVELOPMENT を直す。`PERIOD_CHECK_VERSION` を 2 → 3 にする（`rollup.py:47`）。旧キーを持つ rollup は一度 tick で再構築される（`run_check.py:709-710`。全患者を 1 tick で再構築するコストは【未検証】）。brain_export は移行期に新旧キーの両方を読む。`possibly_deleted` の挙動テストを新設する（現状なし）。
 
-(4) wire の enum（#8-D2）: A = enum 名を維持し、契約文書に「意味と caveat」の表を置き、C0 fixture に honesty ラベルを付ける。B = C0 前に改名する（例 `rx_period_expiry` → `rx_period_mention_expiry`）。C0 が未固定の今なら無償。
+(4) wire の enum（#8-D2）: A = 現行enum名維持を2026-09-29に決定済み。契約文書に意味と制約を明記する。旧案Bの改名は今回行わない。
 
 **成果物**
 - `ledger.py`（DDL + 約 20 行）と `tests/core/test_message_revisions.py`。

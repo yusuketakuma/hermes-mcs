@@ -1,6 +1,21 @@
 # zaitaku-calender 接続（C0〜C4）の hermes-mcs 側の詳細計画
 
-[`docs/ROADMAP.md`](../ROADMAP.md) §4 の接続フェーズのうち、**hermes-mcs 側の成果物**を、実装に着手できる粒度まで掘り下げた計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-10）は両文書で共通。
+[`docs/ROADMAP.md`](../ROADMAP.md#6-zaitaku-calender接続) の接続フェーズのうち、**hermes-mcs 側の成果物**の詳細計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-10）は両文書で共通。
+
+2026-10-03照合: 以下の「現状」・行番号・相手側未実装の記述・実測は2026-09-29の調査記録。
+現在の優先順位・版割当は[ROADMAP](../ROADMAP.md)を正とし、合意済みの判断本文は[引継ぎ記録](connector-decisions.md)に保持する。
+C1の1.0.15割当はC0合意後の合成開発だけ。本番は#8-M1→#4の修復実施、#10の必要な独立レビュー・Q6・相手側ゲート後。
+今回の1.0.11でC0/C1の契約・allowlist・相手repo・外部送付は変更しない。
+
+### 2026-10-03の訂正提案（未合意・実装しない）
+
+- **CD-9 自局判定**: 下記の「organizationまたはprofession一致」と「他組織の薬剤師はother_professional」は両立しない。
+  `_self_sets`の既定professionは「薬剤師」であり、職種だけでは自局を特定できない。
+  F-7の自局送信者IDを根拠にし、ID不明時は明示された自局organizationの一致だけを補助にする案をC0で再合意する。
+  profession単独から`self_org`を断定しない。この提案は既存CD本文を変更せず、未合意の間は送出実装をしない。
+- **C3 結果不明後の送付**: 新しい`auth_id`を作ること自体は未実行の証拠にならない。
+  旧送付のreceipt/保存先を照合し、未受領または撤回完了が確認できるまで別IDでの送付も始めない。
+  新authによる手動送付の条件を契約付録で明記する。自動再送禁止は維持する。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
 - 表記: 【実行確認】= 合成入力でローカル実行して確認、【未検証】= 実データ・実機・実 API・相手側実装に触れないと分からない点。
@@ -303,7 +318,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 **目的**: Discord / Slack 通知から患者名を外し、PHI の露出面を減らす。
 
 **現状**
-- 名前の出力は次の 4 ファイル（約 15 箇所）:
+- 当時調査した名前の出力は次の4ファイル。現行の患者サマリーを含む`notify_views.py`も対象として、C4着手時に呼出元を再照合する（計5ファイル）:
   - `notify_render.py:55-60` の `_patient_name`（関所）。呼出しは :183（thread の source_fp）、:186 と :210（signal の source_fp に名前が入る）、:266（signal カードの「患者」欄）、:290（本文表示）、:342（本文表示タイトル）、:374（thread カード見出し）。
   - `notify_cards.py:46,1075-1085` の `_thread_name`（Discord スレッド名 `💬 {name} — mm-dd`、`card_thread:true` 時: :1001-1004）。旧 ROADMAP になかった。
   - `notify_flush.py:187-191`（signal テキスト）、:353-354 と :379（新着本文の見出し）。

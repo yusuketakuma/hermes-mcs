@@ -1,0 +1,21 @@
+{
+  "category": "added",
+  "title": "MCSスタンプと投稿メタ情報を分離して保存",
+  "summary": "既存の収集応答に含まれるスタンプ件数・本人反応・メンション・しおり・ピン留めを保存します。未取得と0件を区別し、不正なメタ情報があっても本文収集を継続します。",
+  "upgrade": "DBは起動時にschema 8へ加法移行します。schemaを上げるため自動更新は適用せず、人承認付きの更新経路を使います。更新前バックアップを保持してください。メタ情報専用の再取得は既定で無効です。契約と未読保持を実証した後、metadata_shadow=trueで定期shadow、または --metadata-shadow で手動shadowを実行します（最大5件・最大25秒・末尾30秒確保、成功後30分・失敗後6時間）。Hermes pluginはgateway再起動、独立モードはhost再起動で反映します。既存の既読化条件・抽出モデル・通知先・人承認条件は変えません。",
+  "details": [
+    "message_metadataを本文hashと独立して保存。shadow観測は通常表示へ出さない。",
+    "監視集合は自分のルート投稿7日分・未確認カード・現在openの薬剤師宛候補。",
+    "氏名・押下者一覧・新しいMCS POST・外部export契約は追加しない。",
+    "実API確認は合成テストと別の公開ゲート。",
+    "通常tick/deepの定期設定を型検証し、shadowをsemantic処理後に実行する。専用deadlineを設定・復元し、healthにIDなしの状態・予算・延期理由を記録する。",
+    "返信投稿は親投稿ID付きの既存thread APIを使って正確に1件取得する。ルート投稿用経路へ返信IDを送って422になる失敗を防ぐ。",
+    "契約確認用の診断は、生の対象未読を取得前後で独立観測し、不完全・不明・初回の型不正を成功にしない。押下者は上限付き2断面の集合を値を出さず比較し、利用件数は患者データとgroup相談を分ける。最終MCS実画面検証はユーザーが担当する。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/core/ledger.py",
+    "mcs/ingest/run_check.py",
+    "scripts/development/probe_message_metadata.py"
+  ]
+}

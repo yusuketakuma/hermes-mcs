@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "大文字Pythonで起動した抽出workerの更新前検出を修正",
+  "summary": "HomebrewのPython実行名でも抽出workerを検出し、更新時に旧workerを見逃す問題を修正します。対象のスクリプト名を厳密に照合し、無関係なプロセスは停止対象にしません。",
+  "upgrade": "設定変更は不要です。更新処理を実行するコードの反映後から適用します。稼働サービスの再起動は今回実施していません。",
+  "details": ["pgrepのPOSIX EREで[Pp]ythonを許可。実子プロセスの正・負例で検証。"],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_mcs_update.py"]
+}

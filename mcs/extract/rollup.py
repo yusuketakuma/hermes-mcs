@@ -32,19 +32,16 @@ from ledger import Ledger, karte_summary_block
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import acquire_run_lock
+from mcs_signals import normalize_sender_id
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
-# rebuilds every row stamped with another version (2: request flag).
-# No bump for 623f1a6 (item_unverified on meds/symptoms): it only differs
-# from the old truthiness test on non-bool flags, and every producer
-# (extract_llm _Validator, semantic_projection) writes a bool or omits it.
-# v1.0.5 rows carry version 1, so 2 already rebuilds them under this code.
+# rebuilds every row stamped with another version (3: sender-ID replies).
 # Rebuilds only rewrite artifacts; no notification reads patient_rollup.
-PERIOD_CHECK_VERSION = 2
+PERIOD_CHECK_VERSION = 3
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -74,7 +71,7 @@ def _llm_reply_kind(blob):
 def build_rollup(ledger, project_id: int) -> dict:
     db = ledger.db
     msgs = db.execute("""
-      SELECT message_id, posted_at, posted_at_ts, body_text, sender_name, sender_type,
+      SELECT message_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
              parent_id, updated_seen, body_state
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
@@ -124,8 +121,8 @@ def build_rollup(ledger, project_id: int) -> dict:
     # slot-less canonical categories stay enumerable in the read model.
     canonical = {}
     requests = []
-    # thread root -> [(ts, sender, reply kind)] / LLM request rows with
-    # their (root, ts, sender) for the reply_state pass below
+    # thread root -> [(ts, sender ID, reply kind)] / LLM request rows with
+    # their (root, ts, sender ID) for the reply_state pass below
     replies = {}
     req_thread = []
     next_planned = None
@@ -133,6 +130,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     summary = None
     for m in msgs:
         ts = m["posted_at_ts"] or 0
+        sender_id = normalize_sender_id(m["sender_id"])
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
         blobs = arts.get(m["message_id"], {})
@@ -199,12 +197,12 @@ def build_rollup(ledger, project_id: int) -> dict:
                 if isinstance(rq.get(src), str) and rq[src]:
                     row[dst] = rq[src]
             requests.append(row)
-            req_thread.append((row, root, ts, m["sender_name"]))
+            req_thread.append((row, root, ts, sender_id))
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(llm)
         if kind in _REPLY_STAGE:
-            replies.setdefault(root, []).append((ts, m["sender_name"], kind))
+            replies.setdefault(root, []).append((ts, sender_id, kind))
         for f in _dicts(lm.get("canonical_facts")):
             fid = f.get("fact_id")
             if isinstance(fid, str) and fid and fid not in canonical:
@@ -249,10 +247,12 @@ def build_rollup(ledger, project_id: int) -> dict:
                                   for k, v in list(symptoms.items())[:20]]
     # ponytail: thread-level reply_state — any later reply by another
     # sender in the same thread counts, no per-request action matching
-    # (that is the Loop path). NULL posted_at_ts is 0 and never 'later'.
+    # (that is the Loop path). Unknown sender IDs cannot prove different
+    # authors. NULL posted_at_ts is 0 and never 'later'.
     for row, root, ts, sender in req_thread:
         seen = [(rts, kind) for rts, rsender, kind in replies.get(root, ())
-                if rts > ts and rsender != sender]
+                if rts > ts and sender is not None and rsender is not None
+                and rsender != sender]
         if seen:
             row["reply_state"] = max(
                 (kind for _, kind in seen), key=_REPLY_STAGE.get)

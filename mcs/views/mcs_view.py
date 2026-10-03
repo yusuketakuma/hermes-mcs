@@ -17,7 +17,10 @@ import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader
 from mcs_queries import incomplete_reply_roots
+from mcs_signals import is_own_station_message
 from mcs_util import loads_dict
+from message_metadata import (
+    get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
 
 UNKNOWN_TIME = -(2**63)
@@ -55,9 +58,9 @@ class View:
             self.db.execute("BEGIN")
             # reader declares the schema generations it understands —
             # v6 added patients.is_archived, v7 messages.notified_at
-            # (both additive, read-compatible)
+            # v8 adds capture/shadow message metadata (read-compatible)
             if self.db.execute("PRAGMA user_version").fetchone()[0] \
-                    not in (5, 6, 7):
+                    not in (5, 6, 7, 8):
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
@@ -110,7 +113,7 @@ class View:
         if not requests.positive(mid):
             raise ValueError("bad_message_id")
         row = self.db.execute("""
-          SELECT m.message_id,m.project_id,m.parent_id,m.sender_name,m.posted_at,
+          SELECT m.message_id,m.project_id,m.parent_id,m.sender_id,m.sender_name,m.posted_at,
             m.posted_at_ts,m.body_text,m.body_state,m.content_hash,m.reply_count,
             m.first_seen,m.updated_seen,p.url AS source_url
           FROM messages m LEFT JOIN patients p ON p.project_id=m.project_id
@@ -131,11 +134,18 @@ class View:
           SELECT state,count(*) AS count FROM attachments WHERE message_id=? GROUP BY state
         """, (mid,))]
         row["body_complete"] = row["body_state"] == "full"
+        sender_id = row.pop("sender_id", None)
+        row["is_self_sender"] = is_self_sender(self.db, sender_id)
+        row["is_own_station_sender"] = is_own_station_message(self.db, sender_id)
+        row["message_metadata"] = get_message_metadata(
+            self.db, mid, as_of=self.meta["generated_at"])
+        row["metadata_shadow"] = get_metadata_shadow_status(
+            self.db, mid, as_of=self.meta["generated_at"])
         return row
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):
         params = [pid]
-        sql = """SELECT m.message_id,m.project_id,m.parent_id,m.sender_name,m.posted_at,
+        sql = """SELECT m.message_id,m.project_id,m.parent_id,m.sender_id,m.sender_name,m.posted_at,
           m.posted_at_ts,m.body_text,m.body_state,m.content_hash,m.reply_count,
           m.first_seen,m.updated_seen,p.url AS source_url
           FROM messages m LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?"""

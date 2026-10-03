@@ -16,6 +16,7 @@ import time
 
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
+from message_metadata import get_message_metadata, is_self_sender, self_reaction_text
 import structured_view
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -25,6 +26,7 @@ PAGE_THREAD = 8           # messages per page on a thread card (count cap)
 # Pages pack items until this budget — a signal item alone over budget
 # gets its own page and a hard cap marker.
 PAGE_TEXT_BUDGET = 3200
+CARD_TEXT_BUDGET = 4000
 BODY_MAX_CHARS = 6000
 
 
@@ -90,10 +92,12 @@ def _hhmm(posted_at) -> str:
     return "??:??"
 
 
-def _sender_tag(m) -> str:
+def _sender_tag(m, db=None) -> str:
     """Message sender header — name plus profession・organization when
     the ledger stores them (same metadata the text notify path shows)."""
     name = m["sender_name"] or "?"
+    if db is not None and is_self_sender(db, m["sender_id"]):
+        name += "（自分）"
     meta = "・".join(x for x in (m["profession"], m["organization"]) if x)
     return f"{name}（{meta}）" if meta else name
 
@@ -103,8 +107,10 @@ def _blocks_len(blocks) -> int:
     Components-V2 validator applies (text +4, field name+value +6)."""
     n = 0
     for b in blocks:
-        if b["type"] in ("heading", "text", "quote"):
+        if b["type"] in ("heading", "text"):
             n += len(b.get("text") or "") + 4
+        elif b["type"] == "quote":
+            n += sum(len(line) + 3 for line in (b.get("text") or "").splitlines())
         elif b["type"] == "field":
             n += len(b.get("name") or "") + len(b.get("value") or "") + 6
     return n
@@ -120,18 +126,18 @@ def _cap_card_text(text, cap=PAGE_TEXT_BUDGET) -> str:
     return text[:cap - 1] + "…\n（省略 — 📄本文表示または原本を参照）"
 
 
-def _fit_item(blocks) -> list:
+def _fit_item(blocks, budget=PAGE_TEXT_BUDGET) -> list:
     """Bound one pageable item (a signal's block set) to the per-page
     budget: the largest text/quote block shrinks first — structured
     fields yield only as a last resort, since an item left over budget
     would make the whole spec fail validation and the card render
     nothing at all."""
     for _ in range(len(blocks)):
-        over = _blocks_len(blocks) - PAGE_TEXT_BUDGET
+        over = _blocks_len(blocks) - budget
         if over <= 0:
             return blocks
         target = max((b for b in blocks
-                      if b["type"] in ("text", "quote")),
+                      if b["type"] in ("heading", "text", "quote")),
                      key=lambda b: len(b.get("text") or ""),
                      default=None)
         if target is None or len(target["text"]) <= 120:
@@ -139,7 +145,7 @@ def _fit_item(blocks) -> list:
         keep = len(target["text"]) - over - 40
         target["text"] = _cap_card_text(target["text"], keep)
     for b in blocks:
-        over = _blocks_len(blocks) - PAGE_TEXT_BUDGET
+        over = _blocks_len(blocks) - budget
         if over <= 0:
             break
         if b["type"] == "field" and len(b.get("value") or "") > 120:
@@ -162,6 +168,19 @@ def _pack_pages(lengths, max_count, budget=PAGE_TEXT_BUDGET) -> list:
     if cur:
         pages.append(cur)
     return pages or [[]]
+
+
+def _footer_len(footer) -> int:
+    """Count every footer line, including the transport's subtext prefix."""
+    return sum(len(line) + 4 for item in footer if item["type"] == "text"
+               for line in item["text"].splitlines())
+
+
+def _page_caption(kind, indices, page, pages, total) -> dict:
+    pos = (f"{indices[0] + 1}〜{indices[-1] + 1}件目 / 全{total}件"
+           if kind == "message_ids" else
+           f"アラート {indices[0] + 1}〜{indices[-1] + 1} / {total}名")
+    return {"type": "text", "text": f"{page + 1}/{pages} ページ（{pos}）"}
 
 
 def _structured_block(db, mid) -> dict | None:
@@ -371,7 +390,7 @@ def _card_content(db, card) -> dict:
     ui = card["ui_state"]
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
-            """SELECT message_id,sender_name,profession,organization,
+            """SELECT message_id,sender_id,sender_name,profession,organization,
                       posted_at,body_text,body_state,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
@@ -388,7 +407,7 @@ def _card_content(db, card) -> dict:
         rendered = []
         for m in msgs:
             line = (f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
-                    f"{_sender_tag(m)}"
+                    f"{_sender_tag(m, db)}"
                     + (" （削除済み）" if m["body_state"] == "deleted"
                        else ""))
             blocks = [{"type": "text", "text": line}]
@@ -396,14 +415,8 @@ def _card_content(db, card) -> dict:
             if sblk:
                 blocks.append(sblk)
             rendered.append(_fit_item(blocks))
-        pages_idx = _pack_pages([_blocks_len(b) for b in rendered],
-                                PAGE_THREAD)
-        pages = len(pages_idx)
-        page = _page(ui, pages, default=pages - 1)
-        shown = []
-        for i in pages_idx[page]:
-            shown.append(msgs[i]["message_id"])
-            containers.extend(rendered[i])
+        item_shown = [[m["message_id"]] for m in msgs]
+        max_count = PAGE_THREAD
         shown_kind = "message_ids"
     else:
         keys = _anchor_keys(card)
@@ -419,35 +432,46 @@ def _card_content(db, card) -> dict:
                 gidx[pid] = len(groups)
                 groups.append((pid, []))
             groups[gidx[pid]][1].append(k)
-        sig_blocks = [_signal_compact(
+        rendered = [_signal_compact(
             db, pid, [sigs[k]["content"] for k in ks])
             for pid, ks in groups]
         containers = [{"type": "heading", "text":
                        (f"💬 アラート（{len(groups)}名 / "
                          f"{len(ordered)}件）"
                         if kind == "digest" else "アラート")}]
-        pages_idx = _pack_pages(
-            [_blocks_len(b) for b in sig_blocks],
-            PAGE_DIGEST if kind == "digest" else PAGE_THREAD)
-        pages = len(pages_idx)
-        page = _page(ui, pages)
-        shown = [k for i in pages_idx[page] for k in groups[i][1]]
-        for i in pages_idx[page]:
-            containers.extend(sig_blocks[i])
+        item_shown = [ks for _, ks in groups]
+        max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
     source_fp = _source_fp(db, card)
-    footer, toggles = _footer(db, card, shown,
-                              _current_generation(card, source_fp))
-    if pages > 1:
-        # F05: 順序・件数を表示 — a multi-page card must say where the
-        # reader is, not just offer nav buttons
-        idx = pages_idx[page]
-        if shown_kind == "message_ids":
-            pos = f"{idx[0] + 1}〜{idx[-1] + 1}件目 / 全{len(msgs)}件"
-        else:
-            pos = f"アラート {idx[0] + 1}〜{idx[-1] + 1} / {len(groups)}名"
-        footer.append({"type": "text",
-                       "text": f"{page + 1}/{pages} ページ（{pos}）"})
+    generation = _current_generation(card, source_fp)
+    # A long heading shares the old 800-character reserve with the footer.
+    # Any physical truncation retains the existing explicit original/body link.
+    containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET)
+    budget = PAGE_TEXT_BUDGET
+    pages_idx = _pack_pages([_blocks_len(b) for b in rendered], max_count)
+    while True:
+        page_states = []
+        for p, indices in enumerate(pages_idx):
+            shown = [key for i in indices for key in item_shown[i]]
+            footer, toggles = _footer(db, card, shown, generation)
+            if len(pages_idx) > 1:
+                footer.append(_page_caption(
+                    shown_kind, indices, p, len(pages_idx), len(rendered)))
+            page_states.append((shown, footer, toggles))
+        budget = min(budget, CARD_TEXT_BUDGET - _blocks_len(containers)
+                     - max(_footer_len(state[1]) for state in page_states))
+        if all(sum(_blocks_len(rendered[i]) for i in indices) <= budget
+               for indices in pages_idx):
+            break
+        # The budget only decreases: pages split without dropping/reordering items.
+        rendered = [_fit_item(blocks, budget) for blocks in rendered]
+        pages_idx = _pack_pages(
+            [_blocks_len(b) for b in rendered], max_count, budget)
+    pages = len(pages_idx)
+    page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
+    shown, footer, toggles = page_states[page]
+    for i in pages_idx[page]:
+        containers.extend(rendered[i])
     return {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
@@ -520,6 +544,39 @@ def open_tasks(db, card) -> list:
 
 FOOTER_TASKS = 3
 FOOTER_ACKERS = 8
+FOOTER_REACTIONS = 3
+
+
+def card_reactions(db, card, shown=None) -> list:
+    """カードが参照する同患者の未削除投稿についてcaptureの反応だけを読む。"""
+    if card["kind"] == "thread":
+        params = [card["project_id"], card["root_message_id"], card["root_message_id"]]
+        selected = ""
+        if shown is not None:
+            selected = " AND message_id IN (" + ",".join("?" for _ in shown) + ")"
+            params.extend(shown)
+        mids = [r[0] for r in db.execute(
+            "SELECT message_id FROM messages WHERE project_id=? "
+            "AND (message_id=? OR parent_id=?) AND body_state!='deleted' "
+            + selected + " ORDER BY posted_at_ts,message_id", params)]
+    else:
+        keys = shown if shown is not None else _anchor_keys(card)
+        sigs = _latest_signals(db, keys, card["project_id"])
+        mids = []
+        for signal in sigs.values():
+            mid, message = _signal_evidence(db, signal["content"])
+            if message and message["body_state"] != "deleted" and mid not in mids:
+                mids.append(mid)
+    return [(mid, get_message_metadata(db, mid)) for mid in mids]
+
+
+def card_reaction_lines(reactions) -> list:
+    """複数投稿を識別し、脚注の物理上限を守って取得状態を併記する。"""
+    lines = [(f"#{mid} " if len(reactions) > 1 else "") + self_reaction_text(meta)
+             for mid, meta in reactions[:FOOTER_REACTIONS]]
+    if len(reactions) > FOOTER_REACTIONS:
+        lines.append(f"MCS: 他{len(reactions) - FOOTER_REACTIONS}投稿（CLIで確認）")
+    return lines
 
 
 def today_jst(now=None) -> str:
@@ -583,6 +640,9 @@ def _footer(db, card, shown, generation) -> tuple:
         if len(ackers) > FOOTER_ACKERS:
             names += f" 他{len(ackers) - FOOTER_ACKERS}名"
         out.append({"type": "text", "text": "✅ 確認: " + names})
+    reactions = card_reaction_lines(card_reactions(db, card, shown))
+    if reactions:
+        out.append({"type": "text", "text": "\n".join(reactions)})
     tasks = open_tasks(db, card)
     if tasks:
         # one footer item — every line costs a component slot otherwise

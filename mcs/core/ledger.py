@@ -1,6 +1,6 @@
 """SQLite ledger for MCS unread capture + history archive.
 
-Schema v7 (reuse-oriented):
+Schema v8 (reuse-oriented):
   runs          : one row per check run (kind: tick | init)
   patients      : per-project fetch state + history_floor (deepest completed
                   cutoff) + history_page (resume cursor for deep imports)
@@ -30,7 +30,7 @@ from contextlib import suppress
 from mcs_util import html_to_text, loads_dict, publish_tmp
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # overlap between a verified boundary and an archived patient's final
 # head reconciliation walk
@@ -39,6 +39,8 @@ HEAD_SYNC_OVERLAP_S = 120
 # a failed 連携サマリー GET keeps its project out of the due/fill
 # selection this long, so one broken karte cannot burn every tick's cap
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
+METADATA_SHADOW_INTERVAL_S = 30 * 60
+METADATA_SHADOW_BACKOFF_S = 6 * 3600
 
 # body_state values meaning "nothing more to fetch" — shared by the
 # ledger's job-reconciliation and the walk checkpoint logic
@@ -317,6 +319,14 @@ class Ledger:
             self._backfill_v3()
 
     def _migrate_body(self, cols, old_version: int):
+        self.db.execute("""
+          CREATE TABLE IF NOT EXISTS message_metadata(
+            message_id INTEGER NOT NULL REFERENCES messages(message_id),
+            source TEXT NOT NULL CHECK(source IN ('capture','shadow')),
+            content TEXT NOT NULL, checked_at REAL NOT NULL,
+            last_error TEXT,
+            PRIMARY KEY(message_id,source))
+        """)
         c = cols("patients")
         adds = []
         for col, ddl in [("fetch_state",
@@ -472,9 +482,8 @@ class Ledger:
               "ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'tick'")
         from mcs_requests import SCHEMA
         self._script(SCHEMA)
-        # interactive notification delivery ledger (module-SCHEMA, same
-        # pattern as mcs_requests — SCHEMA_VERSION stays 7 so snapshot
-        # readers never see a version they refuse)
+        # Interactive delivery uses module-SCHEMA, like mcs_requests;
+        # this table does not require its own schema-version bump.
         if "route" not in cols("notify_outbox"):
             self.db.execute(
               "ALTER TABLE notify_outbox ADD COLUMN route TEXT NOT NULL"
@@ -1222,7 +1231,74 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
+        self._save_message_metadata(m, source="capture", now=now)
         return 0 if existing is not None else 1
+
+    def _save_message_metadata(self, m, *, source, now):
+        metadata = getattr(m, "metadata", {})
+        errors = getattr(m, "metadata_errors", [])
+        if not metadata and not errors and source == "capture":
+            return
+        row = self.db.execute(
+            "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
+            (m.message_id, source)).fetchone()
+        content = loads_dict(row["content"]) if row else {}
+        content.update({key: {"value": value, "observed_at": now}
+                        for key, value in metadata.items()})
+        self.db.execute("""
+          INSERT INTO message_metadata(message_id,source,content,checked_at,last_error)
+          VALUES(?,?,?,?,?) ON CONFLICT(message_id,source) DO UPDATE SET
+            content=excluded.content,checked_at=excluded.checked_at,
+            last_error=excluded.last_error
+        """, (m.message_id, source, json.dumps(content, ensure_ascii=False),
+              now, ",".join(errors) or None))
+
+    def save_metadata_shadow(self, m, *, error=None):
+        """Save refresh observations without changing chat, coverage or delivery."""
+        row = self.db.execute(
+            "SELECT project_id FROM messages WHERE message_id=?", (m.message_id,)).fetchone()
+        if row is None or row["project_id"] != m.project_id:
+            raise ValueError("message_project_mismatch")
+        if error is not None:
+            from types import SimpleNamespace
+            m = SimpleNamespace(message_id=m.message_id, metadata={}, metadata_errors=[error])
+        with self.db:
+            self._save_message_metadata(m, source="shadow", now=time.time())
+
+    def metadata_watch_targets(self, limit=5, *, now=None):
+        """Oldest observations in the bounded active watch set, excluding backoff."""
+        from mcs_signals import self_sender_id
+        now = time.time() if now is None else now
+        return self.db.execute("""
+          SELECT m.message_id,m.project_id,m.parent_id,COUNT(*) OVER() AS due_total FROM messages m
+          JOIN patients p ON p.project_id=m.project_id
+          LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
+          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+            AND (md.checked_at IS NULL OR md.checked_at<=? -
+              CASE WHEN md.last_error IS NULL THEN ? ELSE ? END)
+            AND ((m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?)
+              OR EXISTS(SELECT 1 FROM notification_cards c
+                WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
+                  AND c.delivery_state='delivered'
+                  AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
+                    JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
+                    WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
+                      AND vm.source_generation=c.source_generation
+                      AND vm.shown=(SELECT shown FROM notification_view_manifests
+                        WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
+              OR EXISTS(SELECT 1 FROM artifacts a,json_each(
+                CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,'$.evidence.message_ids') e
+                WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
+                  AND a.project_id=m.project_id AND e.value=m.message_id
+                  AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
+                  AND json_extract(a.content,'$.state')='open'
+                  AND NOT EXISTS(SELECT 1 FROM artifacts newer
+                    WHERE newer.kind=a.kind AND json_valid(newer.meta)
+                      AND json_extract(newer.meta,'$.key')=json_extract(a.meta,'$.key')
+                      AND newer.artifact_id>a.artifact_id)))
+          ORDER BY COALESCE(md.checked_at,0),m.message_id LIMIT ?
+        """, (now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
+              self_sender_id(self.db), now - 7*86400, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -2155,6 +2231,8 @@ def valid_mcs_db(path: str) -> bool:
                     "attachments", "notify_outbox", "read_marks",
                     "artifacts", "fetch_jobs"} <= tables:
                 return False
+            if version >= 8 and "message_metadata" not in tables:
+                return False
             base_columns = {
                 **core_columns,
                 "attachments": {"attachment_id", "message_id", "file_id",
@@ -2171,6 +2249,9 @@ def valid_mcs_db(path: str) -> bool:
                                "parent_id", "payload", "state", "attempts",
                                "next_try", "created_at", "updated_at"},
             }
+            if "message_metadata" in tables:
+                base_columns["message_metadata"] = {
+                    "message_id", "source", "content", "checked_at", "last_error"}
             for table, required in base_columns.items():
                 if table not in tables:
                     continue  # _init creates absent tables for older backups.

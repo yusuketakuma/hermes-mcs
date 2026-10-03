@@ -118,6 +118,13 @@ def _key(type_, pid, anchor):
 SELF_PROFILE_KIND = "self_profile_v1"
 
 
+def normalize_sender_id(value) -> int | None:
+    """A positive signed-64-bit sender ID, or None for unknown values."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,19}", value.strip()):
+        value = int(value)
+    return value if type(value) is int and 0 < value < 2**63 else None
+
+
 def _latest_self_profile(db):
     """Most recent self_profile artifact (written from the MCS
     /users/self response by record_self_profile) — the fetched default
@@ -138,7 +145,10 @@ def record_self_profile(db, prof) -> bool:
     skipped when byte-identical to the latest row so repeated ticks
     don't spam the log. Caller holds the transaction. Returns True
     when a row was written."""
-    doc = {"sender_id": prof.get("sender_id"), "name": prof.get("name"),
+    sid = normalize_sender_id(prof.get("sender_id"))
+    if sid is None:
+        sid = _station_self_id(latest_station_staff(db))
+    doc = {"sender_id": sid, "name": prof.get("name"),
            "professions": [x for x in (prof.get("professions") or [])
                            if isinstance(x, str) and x],
            "organizations": [x for x in (prof.get("organizations") or [])
@@ -177,19 +187,64 @@ def latest_station_staff(db) -> list:
 
 
 def record_station_staff(db, staff: list) -> bool:
-    """Persist the fetched roster as an append-only artifact — skipped
-    when identical to the latest row (same replace-on-change rule as
-    record_self_profile). Caller holds the transaction."""
-    if staff == latest_station_staff(db):
-        return False
-    db.execute(
-        "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
-        " VALUES(?,NULL,?,?,?)",
-        (STATION_STAFF_KIND,
-         json.dumps({"staff": staff, "fetched_at": int(time.time())},
-                    ensure_ascii=False),
-         json.dumps({"type": "station_staff"}), time.time()))
-    return True
+    """Persist a changed roster and fill a missing self-profile ID.
+
+    Caller holds the transaction. Returns True when either artifact
+    was appended; an unchanged roster can still repair the profile.
+    """
+    changed = staff != latest_station_staff(db)
+    if changed:
+        db.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
+            " VALUES(?,NULL,?,?,?)",
+            (STATION_STAFF_KIND,
+             json.dumps({"staff": staff, "fetched_at": int(time.time())},
+                        ensure_ascii=False),
+             json.dumps({"type": "station_staff"}), time.time()))
+    # /users/self can omit its ID. Repair the existing profile even
+    # when this roster is unchanged; preserve its org/profession defaults.
+    sid = _station_self_id(staff)
+    prof = _latest_self_profile(db)
+    if sid is not None and prof \
+            and normalize_sender_id(prof.get("sender_id")) is None:
+        changed = record_self_profile(db, {**prof, "sender_id": sid}) or changed
+    return changed
+
+
+def _station_self_id(staff) -> int | None:
+    ids = {normalize_sender_id(s.get("staff_id")) for s in staff
+           if isinstance(s, dict) and s.get("is_self") is True}
+    return next(iter(ids)) if len(ids) == 1 else None
+
+
+def own_sender_ids(db) -> frozenset[int]:
+    """Own-station member IDs, including the logged-in user when listed."""
+    return frozenset(sid for s in latest_station_staff(db)
+                     if (sid := normalize_sender_id(s.get("staff_id")))
+                     is not None)
+
+
+def is_own_station_message(db, sender_id) -> bool | None:
+    """Match roster IDs only; absent sender or roster IDs remain unknown."""
+    sid = normalize_sender_id(sender_id)
+    own = own_sender_ids(db)
+    return sid in own if sid is not None and own else None
+
+
+def self_sender_id(db) -> int | None:
+    """Resolve the logged-in user from the roster, then the self profile."""
+    staff = latest_station_staff(db)
+    if any(s.get("is_self") is True for s in staff):
+        # Ambiguous/invalid roster identities fail closed, even if the
+        # profile has an ID. Display names never resolve an identity.
+        return _station_self_id(staff)
+    return normalize_sender_id(_latest_self_profile(db).get("sender_id"))
+
+
+def is_self_message(db, sender_id) -> bool:
+    """Whether a known sender ID belongs to the logged-in MCS user."""
+    sid = normalize_sender_id(sender_id)
+    return sid is not None and sid == self_sender_id(db)
 
 
 def _self_sets(sig_cfg, db=None):

@@ -14,7 +14,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | 画面 | 根拠 |
 |---|---|
 | `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送） |
-| `02-notification` | `adapters/slack/cards.py`、`mcs/notify/notify_cards.py`（確認・担当・無音の表示名） |
+| `02-notification` | `adapters/slack/cards.py`、`mcs/notify/notify_cards.py`（確認・担当・無音の表示名）、`mcs/notify/notify_render.py`、`mcs/views/message_metadata.py`（本人スタンプと観測日時。確認・担当・タスク完了とは別の情報） |
 | `03-actions` | 同カード実装（確認・担当以外を選択メニューへ。表示項目は状態・設定に依存） |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
