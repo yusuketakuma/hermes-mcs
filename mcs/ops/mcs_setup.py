@@ -121,6 +121,8 @@ CONFIG_RULES = {
     "job_budget_seconds":    (False, _num),
     "self_posts":            (False, _bool),
     "metadata_shadow":       (False, _bool),
+    "metadata_refresh_publish": (False, _bool),
+    "metadata_actors":       (False, _bool),
     "notify":                (False, _dict),
     "signals":               (False, _dict),
     "semantic":              (False, _dict),
@@ -312,8 +314,9 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                                 for x in v)):
                     errors.append(f"signals.{key}: must be a list of "
                                   "non-empty strings")
-        if "digest" in sig and type(sig["digest"]) is not bool:
-            errors.append("signals.digest: must be a boolean")
+        for key in ("digest", "self_reaction_response"):
+            if key in sig and type(sig[key]) is not bool:
+                errors.append(f"signals.{key}: must be a boolean")
         if "digest_interval_h" in sig:
             err = _num(sig["digest_interval_h"])
             if err:
@@ -945,6 +948,12 @@ WIZARD = [
          "ため、最新probe経由で検出）", None),
         ("metadata_shadow", "bool", False,
          "未読保持の実証・運用合意後のみスタンプを再取得（shadow・反応値は非公開）",
+         None),
+        ("metadata_refresh_publish", "bool", False,
+         "shadow再取得の成功結果を表示用の観測へ反映（未読保持と照合の確認後のみ）",
+         None),
+        ("metadata_actors", "bool", False,
+         "自分の投稿のスタンプ押下者をIDと職種だけ取得（氏名は保存しない）",
          None),
         ("deep_history", "bool", True,
          "初回に全履歴を遡って保存する", None),

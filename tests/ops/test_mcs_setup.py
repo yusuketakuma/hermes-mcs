@@ -57,10 +57,31 @@ def test_metadata_shadow_config_is_recognized(value):
 
 @pytest.mark.parametrize("value", [1, "true", None])
 def test_metadata_shadow_config_requires_boolean(value):
+    _assert_bool_key("metadata_shadow", value)
+
+
+@pytest.mark.parametrize("key", ["metadata_refresh_publish", "metadata_actors"])
+@pytest.mark.parametrize("value", [1, "true", None])
+def test_stamp_gates_require_boolean(key, value):
+    _assert_bool_key(key, value)
+
+
+def test_self_reaction_response_requires_boolean():
+    base = {"mcs_login_id": "synthetic", "notify_target": "slack:#synthetic"}
+    ok = mcs_setup.validate_config({**base, "metadata_refresh_publish": True,
+                                    "metadata_actors": False,
+                                    "signals": {"self_reaction_response": True}})
+    assert ok == ([], [])
+    errors, _ = mcs_setup.validate_config(
+        {**base, "signals": {"self_reaction_response": "true"}})
+    assert errors == ["signals.self_reaction_response: must be a boolean"]
+
+
+def _assert_bool_key(key, value):
     errors, warnings = mcs_setup.validate_config({
         "mcs_login_id": "synthetic", "notify_target": "slack:#synthetic",
-        "metadata_shadow": value})
-    assert errors == ["metadata_shadow: must be a boolean"]
+        key: value})
+    assert errors == [f"{key}: must be a boolean"]
     assert warnings == []
 
 
