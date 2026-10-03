@@ -2,7 +2,7 @@
   "version": "1.0.11",
   "sections": {
     "features": {
-      "notes": "既存応答の投稿メタ保存、本人・自局のID判定、返信ID比較、カードと一覧の観測表示、digestの観測窓を照合した。CLIはcaptureの経過時間と遅延説明、shadowの状態・日時を別々に返す。型検証したmetadata_shadow設定で定期tick/deepに保存専用再取得を追加できる。既定off、本人スタンプから業務状態を変えず、既存signal・モデル・本文hash・通知先を保持する。 スタンプ脚注付きカードは見出し・脚注・ページ表記を含む4000文字上限を維持し、必要な場合だけページを分割する。利用数診断ではページ不整合と患者ID欠損を成功にせず、解決不能な医療ルーム数を患者数と区別する。",
+      "notes": "既存応答の投稿メタ保存、本人・自局のID判定、返信ID比較、カードと一覧の観測表示、digestの観測窓を照合した。CLIはcaptureの経過時間と遅延説明、shadowの状態・日時を別々に返す。型検証したmetadata_shadow設定で定期tick/deepに保存専用再取得を追加できる。既定off、本人スタンプから業務状態を変えず、既存signal・モデル・本文hash・通知先を保持する。 スタンプ脚注付きカードは見出し・脚注・ページ表記を含む4000文字上限を維持し、必要な場合だけページを分割する。利用数診断ではページ不整合と患者ID欠損を成功にせず、解決不能な医療ルーム数を患者数と区別する。 更新手順、共通サマリー表示モデル、カード・3接続先コマンドを統合しREADMEの機能に追加。本人スタンプ集計も患者scopeに従い、定期配信の明示日数を反映する。",
       "sources": [
         "mcs/ingest/mcs_adapter.py",
         "mcs/core/ledger.py",
@@ -12,11 +12,13 @@
         "mcs/extract/rollup.py",
         "mcs/views/mcs_view.py",
         "mcs/ingest/run_check.py",
-        "scripts/development/probe_message_metadata.py"
+        "scripts/development/probe_message_metadata.py",
+        "adapters/common/summary.py",
+        "scripts/mcs_upgrade.py"
       ]
     },
     "demos": {
-      "notes": "Slackを先頭に保持し、02通知図へ本人見ましたの観測日時と確認/担当/タスク完了との区別を追加した。架空の表示例のみを生成元からSVG/PNG/ハッシュへ同期し、実投稿由来の例は使っていない。Slack7組とLINE WORKS2組の検査成功。本人向けpreview/confirm経路は既存どおりで、情報の多いカードでは必要に応じてページ分割を増やし、表示対象と本文表示の導線を維持する。通常の合成画面例は変更不要。",
+      "notes": "Slackを先頭に保持し、02通知図へ本人見ましたの観測日時と確認/担当/タスク完了との区別を追加した。架空の表示例のみを生成元からSVG/PNG/ハッシュへ同期し、実投稿由来の例は使っていない。Slack7組とLINE WORKS2組の検査成功。本人向けpreview/confirm経路は既存どおりで、情報の多いカードでは必要に応じてページ分割を増やし、表示対象と本文表示の導線を維持する。通常の合成画面例は変更不要。 📊サマリーの追加は本文導線で説明し、既存7画面の例は本人向け操作と整合する。新しいコマンドの実画面確認は未実施。",
       "sources": [
         "scripts/development/generate_slack_gallery.py",
         "docs/screenshots/slack-gallery/README.md",
@@ -24,40 +26,48 @@
         "mcs/notify/notify_render.py",
         "adapters/slack/cards.py",
         "adapters/common/text.py",
-        "docs/screenshots/lineworks-gallery/assets.json"
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "tests/notify/test_notify_summary.py"
       ]
     },
     "quickstart": {
-      "notes": "既存install入口、Hermes/独立モード要件を維持。schema7→8は人承認付き更新と事前バックアップ、反映にはgateway/独立host再起動が必要。専用GETは未読保持実証後にmetadata_shadow=trueで定期有効化でき、手動flagも保持。最大5件/25秒、末尾30秒、成功後30分/失敗後6時間の境界を導入文書とコードで照合した。実機には未適用。 利用数診断の不完全なinventoryは失敗または未確認であり、患者IDを解決できない医療ルームを登録0件へ変換しない。",
+      "notes": "既存install入口、Hermes/独立モード要件を維持。schema7→8は人承認付き更新と事前バックアップ、反映にはgateway/独立host再起動が必要。専用GETは未読保持実証後にmetadata_shadow=trueで定期有効化でき、手動flagも保持。最大5件/25秒、末尾30秒、成功後30分/失敗後6時間の境界を導入文書とコードで照合した。実機には未適用。 利用数診断の不完全なinventoryは失敗または未確認であり、患者IDを解決できない医療ルームを登録0件へ変換しない。 既存導入には移行先版の更新コードを使う手順へのリンクを追加。再導入は明示指定し、独立モードの直接applyは拒否する。",
       "sources": [
         "install.sh",
         "mcs/ops/mcs_update.py",
         "docs/guides/INSTALLATION.md",
         "docs/guides/STANDALONE.md",
         "changes/archive/1.0.11/message-metadata-1.0.11.json",
-        "scripts/development/probe_message_metadata.py"
+        "scripts/development/probe_message_metadata.py",
+        "docs/guides/UPGRADE_AGENT.md",
+        "scripts/mcs_upgrade.py"
       ]
     },
     "safety": {
-      "notes": "本文と反応を独立保存し、未取得/0件/不正/古い観測を区別。shadow反応値の非公開、外部export/read_model契約を維持。pytestは合成のみ。既読化は従来の明示flagとsnapshot/保存完了条件を保つ。実API確認は通常患者ルームへの読取り許可後に実施し、本文・氏名・秘密値・IDを記録やfixtureへ入れない。未読保持の実証は未完了で、通常再取得は有効化しない。 最終実画面はユーザー担当でエージェント操作は禁止。追加の実機検証は行わず原全確認を受入票へ保持。独立したraw未読観測とunknown/不完全の非成功化を診断の合成回帰で確認した。 重複・逆行ページとmedicalのkarte欠損を成功にしない回帰を追加し、不明対象の出力は件数だけに限定する。共通カード検証の上限や承認条件は緩和しない。 マージ前監査により、未読終端の総ページ数が小さすぎる場合と、空datasetの後続ページ・総件数矛盾も確認成功へ進めない条件を追加した。",
+      "notes": "本文と反応を独立保存し、未取得/0件/不正/古い観測を区別。shadow反応値の非公開、外部export/read_model契約を維持。pytestは合成のみ。既読化は従来の明示flagとsnapshot/保存完了条件を保つ。実API確認は通常患者ルームへの読取り許可後に実施し、本文・氏名・秘密値・IDを記録やfixtureへ入れない。未読保持の実証は未完了で、通常再取得は有効化しない。 最終実画面はユーザー担当でエージェント操作は禁止。追加の実機検証は行わず原全確認を受入票へ保持。独立したraw未読観測とunknown/不完全の非成功化を診断の合成回帰で確認した。 重複・逆行ページとmedicalのkarte欠損を成功にしない回帰を追加し、不明対象の出力は件数だけに限定する。共通カード検証の上限や承認条件は緩和しない。 マージ前監査により、未読終端の総ページ数が小さすぎる場合と、空datasetの後続ページ・総件数矛盾も確認成功へ進めない条件を追加した。 サマリーの接続先権限と静的患者範囲、空scope拒否、読取り専用snapshot、非公開回答を確認。通知noticeの結果不明・再送上限と更新のバックアップ・復元承認ゲートを保持する。",
       "sources": [
         "SECURITY.md",
         "mcs/ingest/run_check.py",
         "mcs/core/ledger.py",
         "mcs/views/message_metadata.py",
         "mcs/ops/export_schema.py",
-        "scripts/development/probe_message_metadata.py"
+        "scripts/development/probe_message_metadata.py",
+        "adapters/common/summary.py",
+        "tests/notify/test_notify_summary_notice.py",
+        "tests/ops/test_mcs_upgrade.py"
       ]
     },
     "docs": {
-      "notes": "ロードマップと全詳細計画を現行コードに照合し、重複版割当・医師反応の誤推定・メンションと応答の混同・CD9自局判定・C1本番依存・旧実装状態を修正した。現行のローカルリンク74件に欠落なし。既読化の手動のみという文書を定期収集の明示flagにも整合させた。生成表とREADME要約は既存生成器で更新する。 相談の公開UIはgroup向けなので患者数との同一視を訂正した。最終手動受入票は本人宛メンションを作成せず、実装/合成/実機/公開/配備を分ける。 最終レビューのカード文字数・診断完了判定の3指摘は同版の変更記録と回帰テストへ反映する。 投稿診断の0は対象未読保持と再取得間viewed不変、利用数診断の0は件数調査の完了として受入票を訂正し、どちらも全22-A受入とは区別する。",
+      "notes": "ロードマップと全詳細計画を現行コードに照合し、重複版割当・医師反応の誤推定・メンションと応答の混同・CD9自局判定・C1本番依存・旧実装状態を修正した。現行のローカルリンク74件に欠落なし。既読化の手動のみという文書を定期収集の明示flagにも整合させた。生成表とREADME要約は既存生成器で更新する。 相談の公開UIはgroup向けなので患者数との同一視を訂正した。最終手動受入票は本人宛メンションを作成せず、実装/合成/実機/公開/配備を分ける。 最終レビューのカード文字数・診断完了判定の3指摘は同版の変更記録と回帰テストへ反映する。 投稿診断の0は対象未読保持と再取得間viewed不変、利用数診断の0は件数調査の完了として受入票を訂正し、どちらも全22-A受入とは区別する。 #30〜#32を計画へ統合し、既存7件のロードマップ修正を維持。定期サマリーの明示日数と既定の前回終端方式を文書へ記載する。更新・サマリーの変更記録を同版に生成反映する。",
       "sources": [
         "README.md",
         "docs/ROADMAP.md",
         "docs/roadmap/stamps.md",
         "docs/development/DEVELOPMENT.md",
         "docs/guides/USER_GUIDE.md",
-        "docs/development/ACCEPTANCE_1.0.11.md"
+        "docs/development/ACCEPTANCE_1.0.11.md",
+        "docs/roadmap/digest.md",
+        "docs/roadmap/upgrade.md"
       ]
     }
   }

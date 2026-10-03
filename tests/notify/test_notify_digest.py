@@ -59,6 +59,17 @@ def test_once_per_day_after_the_hour(led):
     first, second = (json.loads(e["payload"]) for e in _digests(led))
     assert (first["date"], second["date"]) == ("2026-10-01", "2026-10-02")
     assert first["since"] == T - 86400 and second["since"] == first["until"]
+
+
+@pytest.mark.parametrize("scope,days", [("days:3", 3), ("日数:1", 1)])
+def test_daily_explicit_days_controls_content_and_recorded_window(led, scope, days):
+    _patient(led)
+    _seen(led, 100, T - 2 * 86400)
+    cfg = {**ON, "daily_digest": {**ON["daily_digest"], "scope": scope}}
+    assert notify_digest.maybe_enqueue(led, cfg, now=T) == 1
+    payload = json.loads(_digests(led)[0]["payload"])
+    assert payload["since"] == T - days * 86400
+    assert ("新着 1件" in payload["text"]) is (days == 3)
     assert all(e["route"] == "text" for e in _digests(led))
 
 

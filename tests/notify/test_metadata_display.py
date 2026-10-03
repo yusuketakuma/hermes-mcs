@@ -304,3 +304,17 @@ def test_digest_counts_observation_window_not_post_time_or_shadow(led):
     assert "完了 1" in text and "見ました 1" in text
     assert "押下時刻・操作件数・業務完了を表しません" in text
     assert "職員" not in text
+
+
+def test_summary_stamp_counts_follow_project_scope(led):
+    _patient(led, 1)
+    _patient(led, 2)
+    _msg(led, 100, pid=1)
+    _msg(led, 101, pid=2)
+    _metadata(led, 100, [_react("viewed")], at=NOW - 10)
+    _metadata(led, 101, [_react("completed")], at=NOW - 10)
+    got = notify_digest.view(led.db, CFG, "all", allowed=[1], now=NOW)
+    text = notify_render.parts_text(got["parts"])
+    stamps = text.split("■ MCS 本人スタンプ観測:", 1)[1].split("■", 1)[0]
+    assert "1投稿" in stamps and "見ました 1" in stamps
+    assert "完了 1" not in stamps

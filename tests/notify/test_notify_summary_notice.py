@@ -175,6 +175,20 @@ def test_answer_reads_the_snapshot_within_the_caller_scope(led, tmp_path):
     assert summary._config(path) == {"notify_max_age_h": 48}
 
 
+def test_answer_survives_snapshot_removal_after_read(led, tmp_path, monkeypatch):
+    path = _snapshot(led, tmp_path)
+    digest, _ = summary._modules()
+    view = digest.view
+
+    def removing_view(*args, **kwargs):
+        got = view(*args, **kwargs)
+        path.unlink()
+        return got
+
+    monkeypatch.setattr(digest, "view", removing_view)
+    assert "text" in summary.answer(path, "all", now=NOW)
+
+
 def test_discord_mcs_summary_op(led, tmp_path, monkeypatch):
     import hermes_plugin
     path = _snapshot(led, tmp_path)

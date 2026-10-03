@@ -66,6 +66,7 @@ def answer(snapshot, text: str, *, name: str = "", allowed=None,
     notify_digest, notify_render = _modules()
     now = time.time() if now is None else now
     try:
+        snapshot_mtime = path.stat().st_mtime
         db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             db.row_factory = sqlite3.Row
@@ -74,13 +75,13 @@ def answer(snapshot, text: str, *, name: str = "", allowed=None,
                                      now=now, names=names)
         finally:
             db.close()
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         # a snapshot being swapped or of an older schema
         return {"error": SNAPSHOT_MISSING}
     if "error" in got:
         return got
     parts = got["parts"]
-    age = now - path.stat().st_mtime
+    age = now - snapshot_mtime
     if age > STALE_S:
         parts["footer"].insert(0, {"type": "text", "text":
                                    f"※ 元データは約{int(age // 3600)}時間前のものです。"})
