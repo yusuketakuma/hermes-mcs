@@ -44,7 +44,7 @@
       ]
     },
     "safety": {
-      "notes": "本文と反応を独立保存し、未取得/0件/不正/古い観測を区別。shadow反応値の非公開、外部export/read_model契約を維持。pytestは合成のみ。既読化は従来の明示flagとsnapshot/保存完了条件を保つ。実API確認は通常患者ルームへの読取り許可後に実施し、本文・氏名・秘密値・IDを記録やfixtureへ入れない。未読保持の実証は未完了で、通常再取得は有効化しない。 最終実画面はユーザー担当でエージェント操作は禁止。追加の実機検証は行わず原全確認を受入票へ保持。独立したraw未読観測とunknown/不完全の非成功化を診断の合成回帰で確認した。 重複・逆行ページとmedicalのkarte欠損を成功にしない回帰を追加し、不明対象の出力は件数だけに限定する。共通カード検証の上限や承認条件は緩和しない。 マージ前監査により、未読終端の総ページ数が小さすぎる場合と、空datasetの後続ページ・総件数矛盾も確認成功へ進めない条件を追加した。 サマリーの接続先権限と静的患者範囲、空scope拒否、読取り専用snapshot、非公開回答を確認。通知noticeの結果不明・再送上限と更新のバックアップ・復元承認ゲートを保持する。",
+      "notes": "本文と反応を独立保存し、未取得/0件/不正/古い観測を区別。shadow反応値の非公開、外部export/read_model契約を維持。pytestは合成のみ。既読化は従来の明示flagとsnapshot/保存完了条件を保つ。実API確認は通常患者ルームへの読取り許可後に実施し、本文・氏名・秘密値・IDを記録やfixtureへ入れない。未読保持の実証は未完了で、通常再取得は有効化しない。 最終実画面はユーザー担当でエージェント操作は禁止。追加の実機検証は行わず原全確認を受入票へ保持。独立したraw未読観測とunknown/不完全の非成功化を診断の合成回帰で確認した。 重複・逆行ページとmedicalのkarte欠損を成功にしない回帰を追加し、不明対象の出力は件数だけに限定する。共通カード検証の上限や承認条件は緩和しない。 マージ前監査により、未読終端の総ページ数が小さすぎる場合と、空datasetの後続ページ・総件数矛盾も確認成功へ進めない条件を追加した。 サマリーの接続先権限と静的患者範囲、空scope拒否、読取り専用snapshot、非公開回答を確認。通知noticeの結果不明・再送上限と更新のバックアップ・復元承認ゲートを保持する。 Slackのサマリー返答は既存chat.postEphemeralへ統一し、別Webhookクライアントを作らない。実SDKのslash command配送で通信ガードと本人宛返答を確認した。",
       "sources": [
         "SECURITY.md",
         "mcs/ingest/run_check.py",
@@ -54,7 +54,9 @@
         "scripts/development/probe_message_metadata.py",
         "adapters/common/summary.py",
         "tests/notify/test_notify_summary_notice.py",
-        "tests/ops/test_mcs_upgrade.py"
+        "tests/ops/test_mcs_upgrade.py",
+        "adapters/slack/actions.py",
+        "integration/test_standalone_slack_sdk.py"
       ]
     },
     "docs": {

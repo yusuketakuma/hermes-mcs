@@ -12,6 +12,8 @@
 
 本人スタンプの観測表示とID判定を追加し、日次サマリー・絞込み・本人向け呼出しを共通化します。移行先版のコードで更新でき、DB更新は人承認付き、新しい再取得は既定で無効です。
 
+> 更新前の確認：HermesモードはGateway、独立モードはSlackアダプターを更新後に再起動してください。Slackアプリのslash command設定は従来の追加手順が必要です。取得範囲・既読化・モデル・患者名の既定は変更しません。
+
 ### 新機能
 
 - **MCSスタンプと投稿メタ情報を分離して保存**
@@ -23,8 +25,8 @@
 - **要約サマリーを本人専用でいつでも表示し、対象患者を絞り込めるように**
   通知カードの「📊 サマリー」から、押した本人だけに要約サマリーを表示できます。Slackは見出し付きのカード、Discordは見出し付きの表示、LINE WORKSはDMで届き、all・mine（担当・記録上）・station:施設名・project:ID・days:1-7で対象と期間を絞れます。朝の日次ダイジェストは要約行・要対応・患者別新着・取得状況の順に見やすく整理し、空の節を省きます。
 
-- **日次サマリーをカードで配信し、コマンドから本人専用で呼び出せるように**
-  カード通知が有効な環境では、朝の日次サマリーをSlack・Discord・LINE WORKSのカード形式で配送先チャンネルへ送ります。Discordの/mcs（op: summary）、Slackの/mcs-summary、LINE WORKSのBot DM「サマリー」から、押した人だけに見える要約サマリーを呼び出せます。
+- **日次サマリーをカードで配信し、各チャットのコマンドから呼出し**
+  カード通知が有効な環境では、朝の日次サマリーをSlack・Discord・LINE WORKSのカード形式で配送先チャンネルへ送ります。Discordの/mcs（op: summary）、Slackの/mcs-summary、LINE WORKSのBot DM「サマリー」から呼び出せます。SlackとLINE WORKSは本人への回答、Discordは公開範囲が未確認のため患者名を表示しません。
 
 - **過去版から移行先版のコードで安全に更新する手順を追加**
   v1.0.3以降の導入は、移行先タグから取り出した起動役(scripts/mcs_upgrade.py)で更新計画の確認と適用ができます。install.shや独立モードSDKが変わる版も、操作者が--reinstallを指定すれば同じロック・バックアップ・巻戻し付きの経路で再導入まで行います。AIエージェント用のdocs/guides/UPGRADE_AGENT.mdが計画確認から完了報告までを案内します。
@@ -49,6 +51,9 @@
 - **大文字Pythonで起動した抽出workerの更新前検出を修正**
   HomebrewのPython実行名でも抽出workerを検出し、更新時に旧workerを見逃す問題を修正します。対象のスクリプト名を厳密に照合し、無関係なプロセスは停止対象にしません。
 
+- **セキュリティ：Slackサマリーの返答を既存の通信制限に統一**
+  Slackのサマリーは既存の接続済みクライアントから本人宛の非公開メッセージとして返します。別のWebhook接続を作らず、固定接続先・リダイレクト禁止・プロキシ禁止・再試行禁止の制限を維持します。認可外やチャンネル不明の入力には返答しません。
+
 ### 更新時の注意
 
 - 追加設定は不要です。カード表示の反映には、利用中のHermes gatewayまたは独立アダプターの再起動が必要です。通知先・確認・担当・依頼の承認条件は変更しません。今回の作業では再起動していません。
@@ -66,6 +71,8 @@
 - Hermesでカード表示を更新する場合はgatewayの再起動が必要です。独立アダプターも起動中のプロセスを再起動してください。日次ダイジェストは既存の有効化設定に従い、既定では無効のままです。観測日時は押下時刻ではなく、スタンプから業務確認・担当引受・完了を自動実行しません。旧snapshotでは未取得と表示します。
 
 - 設定変更は不要です。更新処理を実行するコードの反映後から適用します。稼働サービスの再起動は今回実施していません。
+
+- HermesモードはGateway、独立モードはSlackアダプターを更新後に再起動してください。Slackアプリのslash command設定は従来の追加手順が必要です。取得範囲・既読化・モデル・患者名の既定は変更しません。
 
 - Hermes連携のSlack・Discordは更新後にHermes Gatewayを再起動してください。LINE WORKSは独立アダプターを再起動してください。再起動前の旧アダプターでは📊ボタンが正しく動作しません（Slackは「操作できません」、Discord・LINE WORKSは結果の無い応答になります）。日次ダイジェストの対象は任意のdaily_digest.scopeで絞れます（既定は全患者、mineは指定不可）。通知先・送信時刻・患者名の既定（include_names=false）・既読化・人承認・取得範囲・モデルは変更しません。
 
@@ -135,6 +142,12 @@
 - pgrepのPOSIX EREで[Pp]ythonを許可。実子プロセスの正・負例で検証。
 - 根拠: mcs/ops/mcs_update.py、tests/ops/test_mcs_update.py
 
+#### Slackサマリーの返答を既存の通信制限に統一
+
+- Boltのrespondは別AsyncWebhookClientを生成するため使わず、既存の_say/chat.postEphemeralを再利用する。
+- 実SDKのSocket Modeでslash commandを配送し、response_urlを参照せず本人宛に返す合成回帰を追加。
+- 根拠: adapters/slack/actions.py、integration/test_standalone_slack_sdk.py
+
 #### 要約サマリーを本人専用でいつでも表示し、対象患者を絞り込めるように
 
 - notify_digest.buildが共通表示モデル(parts)を組み、notify_render.fit_partsが上限を超える一覧を「…他N件」に畳み、parts_textが各チャットの書式(discord/slack/plain)に変換する。
@@ -143,7 +156,7 @@
 - mineは押した人の表示名と未完了タスクの担当者欄の照合（📋と同じ規則）で、正式な担当割当ではない。
 - 根拠: mcs/notify/notify_digest.py、mcs/notify/notify_render.py、mcs/notify/notify_cards.py、adapters/common/text.py、adapters/slack/cards.py
 
-#### 日次サマリーをカードで配信し、コマンドから本人専用で呼び出せるように
+#### 日次サマリーをカードで配信し、各チャットのコマンドから呼出し
 
 - 日次サマリーはカード行を持たないop=noticeのrenderとして発行し、受領がdeliveredなら通知キューをaccepted、実際の送信失敗はMAX_RESENDまで再発行、begin拒否は数えない。
 - カード機能をオフにした時点で未送と証明できる日次サマリーだけをテキスト経路へ戻し、日次オフ・翌日分の投入後は送らずsuppressedにする。送れなかったnoticeの本文はgcで消す。
@@ -160,6 +173,8 @@
 - 根拠: scripts/mcs_upgrade.py、mcs/ops/mcs_update.py、mcs/core/mcs_util.py、docs/guides/UPGRADE_AGENT.md
 
 </details>
+
+
 
 ## [1.0.10] — 2026-10-02
 

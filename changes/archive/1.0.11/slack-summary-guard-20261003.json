@@ -1,0 +1,14 @@
+{
+  "category": "security",
+  "title": "Slackサマリーの返答を既存の通信制限に統一",
+  "summary": "Slackのサマリーは既存の接続済みクライアントから本人宛の非公開メッセージとして返します。別のWebhook接続を作らず、固定接続先・リダイレクト禁止・プロキシ禁止・再試行禁止の制限を維持します。認可外やチャンネル不明の入力には返答しません。",
+  "upgrade": "HermesモードはGateway、独立モードはSlackアダプターを更新後に再起動してください。Slackアプリのslash command設定は従来の追加手順が必要です。取得範囲・既読化・モデル・患者名の既定は変更しません。",
+  "details": [
+    "Boltのrespondは別AsyncWebhookClientを生成するため使わず、既存の_say/chat.postEphemeralを再利用する。",
+    "実SDKのSocket Modeでslash commandを配送し、response_urlを参照せず本人宛に返す合成回帰を追加。"
+  ],
+  "refs": [
+    "adapters/slack/actions.py",
+    "integration/test_standalone_slack_sdk.py"
+  ]
+}

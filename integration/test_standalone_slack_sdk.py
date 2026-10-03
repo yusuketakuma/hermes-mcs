@@ -179,8 +179,8 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
         monkeypatch.setattr("adapters.slack.actions.MODAL_OPEN_WAIT_S", 0)
         tasks = []
 
-        async def dispatch(payload):
-            request = SocketModeRequest(type="interactive", envelope_id="fictional-envelope",
+        async def dispatch(payload, kind="interactive"):
+            request = SocketModeRequest(type=kind, envelope_id="fictional-envelope",
                                         payload=payload, accepts_response_payload=True)
             await handler.client.socket_mode_request_listeners[0](handler.client, request)
             # Bolt returns after ack; its native listener finishes separately.
@@ -192,6 +192,18 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
 
         try:
             assert await sender.bind()
+            from adapters.common import summary
+            settings["snapshot"] = "/synthetic/snapshot.db"
+            monkeypatch.setattr(summary, "answer", lambda *_a, **_kw: {
+                "text": "合成サマリー", "parts": {"containers": [
+                    {"type": "heading", "text": "合成サマリー"}], "footer": []}})
+            await dispatch({"command": "/mcs-summary", "text": "all",
+                            "team_id": "T_SYNTHETIC", "api_app_id": "A_SYNTHETIC",
+                            "user_id": "U_OPERATOR", "channel_id": "C_SYNTHETIC",
+                            "response_url": "https://evil.invalid/"}, "slash_commands")
+            assert wire.ephemerals[-1]["user"] == "U_OPERATOR"
+            assert wire.ephemerals[-1]["text"] == "合成サマリー"
+            wire.ephemerals.clear()
             outcome = await sender.perform(spec)
             assert outcome["result"] == "delivered"
             reg.put_tokens({token: {**context, "team_id": settings["team_id"],
@@ -304,13 +316,13 @@ def test_real_supervisor_and_socket_start_only_after_scope_lock(tmp_path, monkey
             app, handler = await original_socket(client, values, inflight)
 
             async def connect(url, **kwargs):
+                stopping.set()  # stop the host even if a connection assertion fails
                 supervisor = _LIVE[registry.scope_key(settings)]
                 assert supervisor._worker._lock_fd is not None
-                assert supervisor._actions._active and len(app._async_listeners) == 5
+                assert supervisor._actions._active and len(app._async_listeners) == 6
                 assert kwargs["proxy"] is None and kwargs["max_msg_size"] == 1024 * 1024
                 assert kwargs["ssl"] is True
                 ws_calls.append(url)
-                stopping.set()
                 return WebSocket()
 
             monkeypatch.setattr(handler.client.aiohttp_client_session, "_live", lambda: SimpleNamespace(

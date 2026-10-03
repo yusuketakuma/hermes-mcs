@@ -141,16 +141,16 @@ SlackとLINE WORKSは新規投稿と同じ処理、Discordは`single_post`）と
    日次オフなら既存どおり破棄。発行済みnoticeはテキストへ転じない（二重送信防止）。
 5. 送信先はカード用の配送先（`delivery_scope`）。`notify_target`ではない。患者名は従来どおり`include_names`。
 
-### 6.2 コマンドからの呼出し（本人専用）
+### 6.2 コマンドからの呼出し
 
 計算は📊と同じ`notify_digest.view`を、公開snapshot（`data/snapshots/ledger-snapshot.db`、DB全体のコピー）に
 読取り専用で実行する共通関数`adapters/common/summary.py: answer(snapshot, text, name, allowed, dialect)`に集約する。
-入力は`parse_scope`に加え`name:<名前>`（mine用、LINE WORKS向け）を受ける。
+入力は`parse_scope`に加え`name:<名前>`（mine用、Discord・LINE WORKSで明示指定）を受ける。
 
 | チャット | 入口 | 認可 | 返答 |
 |---|---|---|---|
-| Discord | `/mcs {"op":"summary","scope":"mine days:3"}`（`hermes_plugin._dispatch`。Hermes・独立の両方） | 既存`_authorize_system`（許可ユーザー・チャンネル） | 既存`/mcs`と同じ返答経路。名前は`identity`の表示名 |
-| Slack | `/mcs-summary <scope>`（`app.command`。Hermes同居・独立の両方） | team・app・許可ユーザー（`_scope`と同じ検査） | `chat.postEphemeral`（Block Kit）。Slackアプリにslash command追加が必要 |
+| Discord | `/mcs {"op":"summary","scope":"mine days:3 name:山田"}`（`hermes_plugin._dispatch`。Hermes・独立の両方） | 既存`_authorize_system`（許可ユーザー・チャンネル） | 既存`/mcs`と同じ返答経路。公開範囲は実機未確認のため患者名を出さず、担当名は`name:`で指定 |
+| Slack | `/mcs-summary <scope>`（`app.command`。Hermes同居・独立の両方） | team・app・許可ユーザー（`_scope`と同じ検査） | 既存クライアントの`chat.postEphemeral`（Block Kit、呼出し元チャンネルの本人宛）。Slackアプリにslash command追加が必要 |
 | LINE WORKS | Bot DMで「サマリー <scope>」（入力待ちセッションが無いとき） | 既存の許可ユーザー検査・DMのみ | 本人DM（`plain`） |
 
 プロジェクト範囲は各adapterの静的scopeを`allowed`として必ず渡す。snapshotが無い・古い場合はその旨を返す。
@@ -168,7 +168,7 @@ Slack slash commandの実テナント確認とHermes同居時の`/mcs`返答の�
 - 再入時: 日次オフ・翌日分の投入・カード機能オフで未送noticeを取消して`suppressed`。送れなかったnoticeのspec本文はgcで消す。
 - `maybe_enqueue`はカード配送先だけでも投入できる。旧版への巻戻しでは未封印の当日分が消える旨を更新時の注意に書く。spec`kind`は付けない。
 - コマンド: `answer(..., cfg)`（設定は`notify_max_age_h`・`signals`だけをroot`config.json`から読む）。`mine`は全入口で`name:<名前>`必須（Slackは表示名で補完）。
-  Slackは平坦なslash payload用の検査、3秒以内のack後に計算、返答は`respond`（ephemeral）。app manifestはrepoに無いため手順書へslash定義と`commands`scopeを追記。
+  Slackは平坦なslash payload用の検査、3秒以内のack後に計算、返答は既存の`chat.postEphemeral`（ephemeral）。`response_url`へ別接続を作らない。app manifestはrepoに無いため手順書へslash定義と`commands`scopeを追記。
   `/mcs`の`summary`は人が読む表示テキストを返す（失敗時は従来どおりJSON）。返答の公開範囲が未確認のため患者名は出さない。
 - 実装再レビュー反映: 経路（epoch・transport・配送先）が変わった未送noticeは取消して再発行、`resend_exhausted`は即保留、
   テキスト経路でも翌日分があれば送らない、カード停止時にテキスト送信先が無ければ送らない、snapshotの読取り失敗は元データ無しとして返す。

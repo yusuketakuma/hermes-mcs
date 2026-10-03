@@ -814,19 +814,17 @@ def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path)
         actions._settings["snapshot"] = "/synthetic/snap.db"
-        said = []
-
-        async def respond(**kw):
-            said.append(kw)
         body = {"team_id": SCOPE["team_id"], "api_app_id": "A_SYNTHETIC",
-                "user_id": "U_OPERATOR", "text": "station:みどり days:2"}
-        await actions._summary(ack, body, respond)
-        assert said[-1]["response_type"] == "ephemeral"
-        assert said[-1]["blocks"][0]["type"] == "header"
+                "user_id": "U_OPERATOR", "channel_id": "C_SYNTHETIC",
+                "response_url": "https://evil.invalid/", "text": "station:みどり days:2"}
+        await actions._summary(ack, body)
+        assert app.client.messages[-1]["user"] == "U_OPERATOR"
+        assert app.client.messages[-1]["channel"] == "C_SYNTHETIC"
+        assert app.client.messages[-1]["blocks"][0]["type"] == "header"
         assert calls[-1][0][1] == "station:みどり days:2"
         assert calls[-1][1]["allowed"] == [123]
-        await actions._summary(ack, {**body, "user_id": "U_OTHER"}, respond)
-        assert said[-1]["text"] == "権限がありません。" and len(calls) == 1
+        await actions._summary(ack, {**body, "user_id": "U_OTHER"})
+        assert len(app.client.messages) == 1 and len(calls) == 1
     asyncio.run(scenario())
 
 
