@@ -1882,3 +1882,106 @@ def test_dismiss_checks_project_scope_before_revealing_row_ids(led):
     assert r["outcome"] == "rejected"
     assert "project_mismatch" in json.dumps(r)
     assert "current_artifact_id" not in json.dumps(r)
+
+
+# --- #22-D5: signals.self_reaction_response ---
+
+SELF_REACT_CFG = {"signals": {"self_reaction_response": True}}
+
+
+def _capture(db, mid, reactions, observed=NOW - DAY):
+    """capture metadata row for mid; reactions=None leaves it unfetched."""
+    content = {} if reactions is None else {
+        "reactions": {"value": reactions, "observed_at": observed}}
+    db.execute(
+        "INSERT INTO message_metadata(message_id,source,content,checked_at,"
+        "last_error) VALUES(?,?,?,?,NULL) ON CONFLICT(message_id,source) "
+        "DO UPDATE SET content=excluded.content",
+        (mid, "capture", json.dumps(content), observed))
+
+
+def _stamp(type_, self_reacted, count=1):
+    return {"type": type_, "count": count, "self_reacted": self_reacted}
+
+
+def _ph_open(db):
+    return [s for s in mcs_signals.current_open(db)["items"]
+            if s["type"] == "pharmacist_request_unanswered"]
+
+
+def _ph_request(db):
+    _msg(db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(db, 1, "h1",
+                 requests=[_req_item("薬剤師", "残薬調整の確認")])
+
+
+def _side_tables(db):
+    return {t: [tuple(r) for r in db.execute(f"SELECT * FROM {t} ORDER BY 1")]
+            for t in ("requests", "notification_triage",
+                      "notification_acknowledgements")}
+
+
+@pytest.mark.parametrize("cfg", [
+    None, {"signals": {}}, {"signals": {"self_reaction_response": False}},
+    {"signals": {"self_reaction_response": "true"}}])
+def test_self_reaction_off_matches_existing(led, cfg):
+    _ph_request(led.db)
+    _capture(led.db, 1, [_stamp("accepted", True)])
+    _ev(led, cfg)
+    assert len(_ph_open(led.db)) == 1
+
+
+@pytest.mark.parametrize("kind", ["accepted", "completed"])
+def test_self_reaction_resolves_and_reopens(led, kind):
+    _ph_request(led.db)
+    _ev(led, SELF_REACT_CFG)
+    [sig] = _ph_open(led.db)
+    before = _side_tables(led.db)
+    _capture(led.db, 1, [_stamp(kind, True)])
+    res = _ev(led, SELF_REACT_CFG)
+    assert res["resolved"] == 1 and not _ph_open(led.db)
+    # stamp withdrawn and re-observed -> the candidate returns
+    _capture(led.db, 1, [_stamp(kind, False)])
+    _ev(led, SELF_REACT_CFG)
+    [again] = _ph_open(led.db)
+    assert again["evidence"] == sig["evidence"]
+    assert _side_tables(led.db) == before
+    # no extra supersede rows: open, resolved, open
+    assert led.db.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE kind='signal_v1'"
+    ).fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("reactions", [
+    None,                                        # never fetched
+    [],                                          # observed, no stamps
+    [_stamp("accepted", False, count=3)],        # someone else's 承知
+    [_stamp("viewed", True), _stamp("thanked", True), _stamp("good", True)],
+    [{"type": "accepted", "count": 1}],          # invalid: no self flag
+])
+def test_self_reaction_non_counting(led, reactions):
+    _ph_request(led.db)
+    _capture(led.db, 1, reactions)
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+
+
+def test_self_reaction_only_on_request_post(led):
+    _ph_request(led.db)
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2")
+    _capture(led.db, 2, [_stamp("accepted", True)])
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+
+
+def test_self_reaction_detector_error_never_resolves(led, monkeypatch):
+    import message_metadata
+    _ph_request(led.db)
+    _ev(led, SELF_REACT_CFG)
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(message_metadata, "get_message_metadata", boom)
+    res = _ev(led, SELF_REACT_CFG)
+    assert "pharmacist_request_unanswered:RuntimeError" in res["errors"]
+    assert res["resolved"] == 0 and len(_ph_open(led.db)) == 1

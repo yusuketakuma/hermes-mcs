@@ -334,6 +334,19 @@ def _request_registered(db, mid):
         (mid,)).fetchone() is not None
 
 
+SELF_RESPONSE_REACTIONS = ("accepted", "completed")
+
+
+def _self_reaction_response(db, mid):
+    """The logged-in user's 承知/完了 stamp observed on the request post
+    itself (capture only). Other stamps, other people's stamps and
+    unfetched or invalid metadata never count."""
+    from message_metadata import get_message_metadata
+    reactions = get_message_metadata(db, mid)["reactions"] or ()
+    return any(r["self_reacted"] and r["type"] in SELF_RESPONSE_REACTIONS
+               for r in reactions)
+
+
 def _med_followup_note(meds, days):
     """med_change_no_followup note for one or several meds sharing a
     post — 「A」「B」 juxtaposition keeps the single-med wording intact."""
@@ -602,8 +615,12 @@ def _pharmacist_request(db, now, th, sig_cfg):
     target or configured request_targets) whose mention passed the
     response window with no visible responder post — 'no response could
     be confirmed on the record', never 'ignored'. Response = a post by
-    self_professions/self_organizations or a registered request."""
+    self_professions/self_organizations or a registered request, plus —
+    only with signals.self_reaction_response === true — the user's own
+    承知/完了 stamp on the request post."""
     orgs, profs, targets = _self_sets(sig_cfg, db)
+    self_reaction = (isinstance(sig_cfg, dict)
+                     and sig_cfg.get("self_reaction_response") is True)
     # request_targets adds exact spellings like 「〇〇薬局さま」.
     # Empty/不明 targets never count as pharmacist-addressed.
     tgt_pred = (f" OR json_extract({JSON_OBJECT_SQL},'$.to') IN "
@@ -636,6 +653,8 @@ def _pharmacist_request(db, now, th, sig_cfg):
         if _request_registered(db, mid):
             continue
         if _self_post_exists(db, pid, ts, profs, orgs):
+            continue
+        if self_reaction and _self_reaction_response(db, mid):
             continue
         days = int((now - ts) / DAY_S)
         acts = [a for a in acts if isinstance(a, str) and a]
