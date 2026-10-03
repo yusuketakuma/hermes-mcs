@@ -16,7 +16,8 @@ import time
 
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
-from message_metadata import get_message_metadata, is_self_sender, self_reaction_text
+from message_metadata import (get_message_metadata, is_self_sender,
+                              own_post_reaction_text, self_reaction_text)
 import structured_view
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -646,12 +647,21 @@ def card_reactions(db, card, shown=None) -> list:
             mid, message = _signal_evidence(db, signal["content"])
             if message and message["body_state"] != "deleted" and mid not in mids:
                 mids.append(mid)
-    return [(mid, get_message_metadata(db, mid)) for mid in mids]
+    out = []
+    for mid in mids:
+        meta = get_message_metadata(db, mid)
+        sender = db.execute("SELECT sender_id FROM messages WHERE message_id=?",
+                            (mid,)).fetchone()
+        # 送信者IDで判定する（同名別人を自分にしない）
+        meta["own_post"] = bool(sender) and is_self_sender(db, sender[0])
+        out.append((mid, meta))
+    return out
 
 
 def card_reaction_lines(reactions) -> list:
     """複数投稿を識別し、脚注の物理上限を守って取得状態を併記する。"""
-    lines = [(f"#{mid} " if len(reactions) > 1 else "") + self_reaction_text(meta)
+    lines = [(f"#{mid} " if len(reactions) > 1 else "")
+             + (own_post_reaction_text if meta.get("own_post") else self_reaction_text)(meta)
              for mid, meta in reactions[:FOOTER_REACTIONS]]
     if len(reactions) > FOOTER_REACTIONS:
         lines.append(f"MCS: 他{len(reactions) - FOOTER_REACTIONS}投稿（CLIで確認）")
