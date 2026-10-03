@@ -158,9 +158,9 @@ def stamp_line(metadata) -> str:
     if counts is None:
         return "MCS スタンプ未取得"
     when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    text = "MCS " + (" ".join(f"{e}{n}" for e, n in counts.items())
-                     or "スタンプなし")
     mine = self_stamps(metadata)
+    text = "MCS " + (" ".join(f"{e}{n}" for e, n in counts.items())
+                     or ("他者なし" if mine else "スタンプなし"))
     if mine:
         text += f"（自分 {mine}）"
     return (text + f" · 観測 {when:%m-%d %H:%M}"

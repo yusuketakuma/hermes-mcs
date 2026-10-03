@@ -678,7 +678,8 @@ def card_reaction_lines(reactions) -> list:
             totals[e] = totals.get(e, 0) + n
         mine += bool(self_stamps(meta))
     parts = [" ".join(f"{e}{n}" for e, n in totals.items())
-             or ("スタンプなし" if unfetched < len(reactions) else "")]
+             or ("スタンプなし" if not mine and unfetched < len(reactions)
+                 else "")]
     if mine:
         parts.append(f"自分 {mine}投稿")
     if unfetched:

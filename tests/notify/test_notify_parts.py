@@ -652,22 +652,41 @@ def test_same_tick_replies_are_separate_posts(led):
         "m:300#1", "m:301#1", "m:302#1"]
 
 
-def test_legacy_combined_posts_are_rewritten_not_reposted(led):
-    """Cards posted before per-reply posts carry unnamed chunks of the
-    whole thread. Their messages stay in those posts (by chunk index);
-    only the newly announced reply gets a post of its own."""
+def _legacy_card(led, n=180):
     _seed_thread(led)
     _dispatch(led, _intent(led))
-    r1 = _latest_render(led)
-    _deliver_bodies(led, r1, "msg-1", n=180)
+    _deliver_bodies(led, _latest_render(led), "msg-1", n=n)
     led.db.execute("UPDATE notification_render_parts SET name=NULL "
                    "WHERE kind='body_part'")
     led.db.commit()
+
+
+def test_legacy_combined_posts_are_frozen_not_reposted(led):
+    """Cards posted before per-reply posts carry unnamed chunks of the
+    whole thread. Those posts are left as they are (never rewritten,
+    never re-posted); only new messages get posts of their own."""
+    _legacy_card(led)
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     r2 = _latest_render(led)
-    assert _body_names(r2) == ["legacy#1", "m:300#1"]
-    assert _prior_ids(r2) == {"body:0001": "msg-1/body:0001"}
+    assert _body_names(r2) == ["m:300#1"]
+    assert _prior_ids(r2) == {}
+
+
+def test_legacy_post_is_never_overwritten_by_a_later_backlog_reply(led):
+    """Regression: once the legacy members paged off, a backlog reply
+    became the whole 'legacy' group and overwrote the old post (the
+    root's body vanished from the thread)."""
+    _legacy_card(led, n=200)
+    for mid in range(300, 310):
+        _msg(led, mid, parent=100, body=f"返信{mid}")
+    _dispatch(led, _intent(led, payload={"message_ids": list(range(300, 309))}))
+    _deliver_bodies(led, _latest_render(led), "msg-2", n=230)
+    notify_cards.sweep(led, CFG, now=NOW + 1)      # 309: backlog, no intent
+    names = _body_names(_latest_render(led))
+    assert not any(n.startswith("legacy") for n in names)
+    assert "m:309#1" in names
+    assert all("msg-1" not in v for v in _prior_ids(_latest_render(led)).values())
 
 
 def test_update_plan_ignores_chunks_that_never_reached_the_thread(led):
@@ -829,3 +848,37 @@ def test_parts_state_stat(led):
     assert data["by_state"].get("delivered") == 1   # card part
     assert data["by_state"].get("pending", 0) >= 2
     assert data["renders_incomplete"] == 1
+
+
+def _old_body_groups(db, card, planned, prior):
+    """The pre-2026-10-03 rule: a backlog reply joins the post before it."""
+    announced = notify_cards._announced_ids(db, card)
+    groups = []
+    for mid in planned:
+        if not prior or f"m:{mid}#1" in prior or mid in announced:
+            groups.append((f"m:{mid}", [mid]))
+        elif groups:
+            groups[-1][1].append(mid)
+    return groups
+
+
+def test_reply_appended_by_the_old_rule_is_not_reposted(led, monkeypatch):
+    """Migration: a backlog reply the earlier rule appended to the post
+    before it keeps riding that post — no notifying duplicate on the
+    first render after the upgrade. Replies never delivered still get
+    their own post."""
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    _deliver_bodies(led, _latest_render(led), "msg-1", n=240)
+    _msg(led, 300, parent=100, body="履歴の返信")
+    with monkeypatch.context() as m:
+        m.setattr(notify_cards, "_body_groups", _old_body_groups)
+        notify_cards.sweep(led, CFG, now=NOW + 1)
+        r2 = _latest_render(led)
+        assert _body_names(r2) == ["m:100#1", "m:101#1"]
+        _deliver_bodies(led, r2, "msg-2", n=260)
+    _msg(led, 301, parent=100, body="新しい履歴")
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    r3 = _latest_render(led)
+    assert _body_names(r3) == ["m:100#1", "m:101#1", "m:301#1"]
+    assert "履歴の返信" in _spec(r3)["parts"]["thread_body_parts"][1]

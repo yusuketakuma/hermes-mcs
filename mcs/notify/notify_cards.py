@@ -742,8 +742,15 @@ def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
             cur += seg[:take]
             seg = seg[take:]
         if cur and len(cur) + len(seg) > limit:
-            chunks.append(cur)
-            cur = ""
+            if len(cur) >= limit // 2:
+                chunks.append(cur)
+                cur = ""
+            else:
+                # a short head (header / 📋 summary / stamp line) never
+                # becomes a post of its own — fill it with the body start
+                take = limit - len(cur)
+                chunks.append(cur + seg[:take])
+                cur, seg = "", seg[take:]
         cur += seg
     if cur:
         chunks.append(cur)
@@ -860,23 +867,55 @@ def _prior_body_posts(db, card) -> dict:
     return out
 
 
+def _delivered_members(db, card, *, legacy: bool) -> set:
+    """Message ids carried by this card's delivered body chunks — the
+    shown set and announced coverage of every render that delivered an
+    unnamed (``legacy``, pre-per-reply) or a named chunk."""
+    out: set = set()
+    named = "IS NULL" if legacy else "IS NOT NULL"
+    for r in db.execute(
+            f"""SELECT DISTINCT r.delivery_id, m.shown
+               FROM notification_renders r
+               JOIN notification_render_parts p ON p.delivery_id=r.delivery_id
+               LEFT JOIN notification_view_manifests m
+                 ON m.manifest_id=r.manifest_id
+               WHERE r.card_id=? AND p.kind='body_part' AND p.name {named}
+                 AND p.state='delivered'""", (card["card_id"],)):
+        rows = [r["shown"]] + [c[0] for c in db.execute(
+            "SELECT coverage FROM notification_intent_cards "
+            "WHERE delivery_id=?", (r["delivery_id"],))]
+        for raw in rows:
+            try:
+                ids = json.loads(raw or "[]")
+            except (ValueError, TypeError, RecursionError):
+                continue
+            if isinstance(ids, list):
+                out.update(m for m in ids if positive(m))
+    return out
+
+
 def _body_groups(db, card, planned, prior) -> list:
     """[(post key, message ids)] — one thread post per message, however
     many arrived in the same tick and whether or not an intent announced
-    them (owner rule 2026-10-03: every write stays separate). Only a
-    card posted before per-reply posts keeps its unnamed ``legacy``
-    chunks; their old members stay there instead of being re-posted."""
+    them (owner rule 2026-10-03: every write stays separate). Messages
+    already delivered inside another post stay where they are: unnamed
+    pre-per-reply (``legacy``) posts are frozen — never rewritten with a
+    page subset nor re-posted — and a reply the earlier rule appended to
+    the post before it keeps riding that post instead of re-notifying."""
     if card["kind"] != "thread":
         return [("legacy", list(planned))]
-    announced = _announced_ids(db, card)
-    legacy = [] if any(k.startswith("legacy#") for k in prior) else None
+    announced = _announced_ids(db, card) if prior else set()
+    frozen = (_delivered_members(db, card, legacy=True)
+              if any(k.startswith("legacy#") for k in prior) else set())
+    carried = _delivered_members(db, card, legacy=False) if prior else set()
     groups = []
     for mid in planned:
-        if legacy is not None and f"m:{mid}#1" not in prior \
-                and mid not in announced:
-            if not legacy:
-                groups.append(("legacy", legacy))
-            legacy.append(mid)
+        if f"m:{mid}#1" in prior or mid in announced:
+            groups.append((f"m:{mid}", [mid]))
+        elif mid in frozen:
+            continue
+        elif mid in carried and groups:
+            groups[-1][1].append(mid)
         else:
             groups.append((f"m:{mid}", [mid]))
     return groups
@@ -2758,22 +2797,26 @@ def recover(ledger, cfg, result) -> dict:
                     "updated_at=? WHERE delivery_id=?",
                     (now, now, r["delivery_id"]))
                 fixed["republished"] += 1
-        try:
-            claimed = [os.path.join(dirs[t + "_render"], n)
-                       for t in SUPPORTED_TRANSPORTS
-                       for n in os.listdir(dirs[t + "_render"])
-                       if n.endswith(".json.claimed")]
-        except OSError:
-            claimed = []
-        stale = 0
-        for n in claimed:
-            with suppress(OSError):
-                if now - os.stat(n).st_mtime > 60:
-                    stale += 1
-        fixed["missing_claimed"] = stale
-        if stale:
+        retired = retired_transports(cfg)
+        stale = {"live": 0, "retired": 0}
+        for t in SUPPORTED_TRANSPORTS:
+            try:
+                names = [os.path.join(dirs[t + "_render"], n)
+                         for n in os.listdir(dirs[t + "_render"])
+                         if n.endswith(".json.claimed")]
+            except OSError:
+                continue
+            for n in names:
+                with suppress(OSError):
+                    if now - os.stat(n).st_mtime > 60:
+                        stale["retired" if t in retired else "live"] += 1
+        # a claim left on a transport switched away from is disclosed,
+        # never live delivery trouble (the claim itself is kept)
+        fixed["missing_claimed"] = stale["live"]
+        fixed["retired_claimed"] = stale["retired"]
+        if stale["live"]:
             result.setdefault("errors", []).append(
-                f"claimed_specs_stale:{stale}")
+                f"claimed_specs_stale:{stale['live']}")
     publish_flags(cfg, root)
     return fixed
 
@@ -2838,6 +2881,18 @@ def health_cards(ledger, cfg=None) -> dict:
         "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
         "WHERE a.state IN ('granted','unknown')" + live +
         " ORDER BY a.created_at LIMIT 20", retired).fetchall()
+    retired_items = [
+        {"attempt_id": w["attempt_id"], "delivery_id": w["delivery_id"],
+         "state": w["state"], "transport": w["transport"],
+         "age_s": round(now - w["created_at"], 1),
+         "resolve_scope": stored_scope(w)}
+        for w in db.execute(
+            "SELECT a.attempt_id,a.delivery_id,a.state,a.created_at,"
+            "r.transport,r.profile,r.application_id,r.guild_id,"
+            "r.channel_id,r.team_id FROM notification_delivery_attempts a "
+            "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
+            f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks}) "
+            "ORDER BY a.created_at LIMIT 20", retired)] if retired else []
     return {
         "pending": states.get("pending", 0),
         "delivered": states.get("delivered", 0),
@@ -2850,6 +2905,8 @@ def health_cards(ledger, cfg=None) -> dict:
         "renders_unknown": unknown,
         "attempts_unsettled": unsettled["c"],
         "retired_unsettled": retired_unsettled,
+        # ids + scope only: still resolvable via ops.card_resolve
+        "retired_items": retired_items,
         "oldest_unsettled_age_s": (round(now - unsettled["o"], 1)
                                  if unsettled["o"] else 0),
         "unsettled": [

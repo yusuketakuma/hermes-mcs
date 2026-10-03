@@ -2621,6 +2621,21 @@ def test_switched_away_transport_leaves_live_health(led, tmp_path,
     h = notify_cards.health_cards(led, slack)
     assert (h["attempts_unsettled"], h["retired_unsettled"]) == (0, 1)
     assert h["unsettled"] == []
+    assert [i["transport"] for i in h["retired_items"]] == ["discord"]
+    assert h["retired_items"][0]["resolve_scope"]["channel_id"]
+    # a claim left on the retired transport is disclosed, not an error
+    root = notify_cards.data_root(led)
+    notify_cards.ensure_dirs(root)
+    claim = os.path.join(notify_cards.notify_dirs(root)["discord_render"],
+                         "x.json.claimed")
+    open(claim, "w").close()
+    os.utime(claim, (NOW - 3600, NOW - 3600))
+    for cfg, live in ((slack, 0), (CFG, 1)):
+        result = {"errors": []}
+        fixed = notify_cards.recover(led, cfg, result)
+        assert fixed["missing_claimed"] == live
+        assert bool(result["errors"]) == bool(live)
+    os.remove(claim)
     assert notify_cards.health_cards(led)["attempts_unsettled"] == 1
     monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
     for cfg, held, retired in ((CFG, 1, 0), (slack, 0, 1)):

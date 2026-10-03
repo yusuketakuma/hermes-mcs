@@ -26,7 +26,8 @@ import mcs_signals  # noqa: E402
 import structured_view  # noqa: E402
 from mcs_queries import JST, coverage_gaps  # noqa: E402
 from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
-                              others_reaction_count, reaction_label)
+                              others_reaction_count, reaction_label,
+                              STAMP_EMOJI)
 from notify_render import (_patient_name, fit_parts, parts_text,  # noqa: E402
                            plain_notice)
 from notify_views import assignee_matches  # noqa: E402
@@ -151,8 +152,8 @@ def _self_reaction_count(db, since, until, keep=None) -> tuple:
         if keep is not None and row["project_id"] not in keep:
             continue
         meta = get_message_metadata(db, row[0])
-        labels = {reaction_label(r["type"]) for r in meta["reactions"] or []
-                  if r["self_reacted"]}
+        labels = {STAMP_EMOJI.get(r["type"], "❔") + reaction_label(r["type"])
+                  for r in meta["reactions"] or [] if r["self_reacted"]}
         if not labels:
             continue
         posts += 1
