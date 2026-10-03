@@ -27,7 +27,7 @@ def _texts(view):
 def test_extra_row_is_budgeted(led):
     spec = _delivered_card(led)
     assert [b["id"] for b in spec["parts"]["action_rows"][-1]] == [
-        "mytasks", "unacked", "search"]
+        "digest", "mytasks", "unacked", "search"]
     card = notify_cards._card_row(led.db, 1)
     content = notify_render._card_content(led.db, card)
     content["manifest_id"] = 1
@@ -40,10 +40,10 @@ def test_extra_row_is_budgeted(led):
         notify_cards.MAX_COMPONENTS - base - fixed - 2)
     rows = notify_cards._action_rows(led.db, card, content, NOW)
     # one slot for the row itself leaves room for one button only
-    assert [b["id"] for b in rows[-1]] == ["mytasks"]
+    assert [b["id"] for b in rows[-1]] == ["digest"]
     content["containers"].append({"type": "text", "text": "x"})
     rows = notify_cards._action_rows(led.db, card, content, NOW)
-    assert "mytasks" not in [b["id"] for r in rows for b in r]
+    assert "digest" not in [b["id"] for r in rows for b in r]
 
 
 def test_my_tasks_matches_display_name_overdue_first(led):

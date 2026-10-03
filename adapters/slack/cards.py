@@ -65,11 +65,11 @@ def _sections(text):
     ]
 
 
-def render(spec, names=None):
-    """Render visible containers/footer without serializing private context."""
-    validate(spec)
+def render_parts(parts, names=None, silent=False) -> list:
+    """Visible containers/footer of the shared display model as Block
+    Kit — used for cards and the clicker-only 📊 answer."""
     blocks = []
-    for item in spec["parts"]["containers"]:
+    for item in parts["containers"]:
         kind = item["type"]
         if kind == "meta":
             continue
@@ -85,8 +85,7 @@ def render(spec, names=None):
             text = f"引用: {text}"
         blocks.extend(_sections(text))
 
-    silent = spec["parts"].get("mentions") == "silent"
-    for item in spec["parts"].get("footer") or []:
+    for item in parts.get("footer") or []:
         if item["type"] != "text":
             continue
         text = _names(item["text"], names) if silent else item["text"]
@@ -96,7 +95,14 @@ def render(spec, names=None):
                            "text": text[i:i + _CONTEXT_MAX]}]}
             for i in range(0, len(text), _CONTEXT_MAX)
         )
+    return blocks
 
+
+def render(spec, names=None):
+    """Render visible containers/footer without serializing private context."""
+    validate(spec)
+    blocks = render_parts(spec["parts"], names,
+                          spec["parts"].get("mentions") == "silent")
     quick, menu, links = [], [], []
     for row in spec["parts"].get("action_rows") or []:
         for button in row:

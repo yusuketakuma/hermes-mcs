@@ -854,6 +854,21 @@ def _dispatch(data: dict, settings: dict[str, Any],
         if set(data) - allowed:
             return _deny("unknown_field")
         return _build_control_preview(data, settings, identity)
+    if op == "summary":
+        # 📊 — projectless and read-only on the snapshot; the answer is
+        # display text (not JSON) since a human reads it. No patient
+        # names: whether Hermes answers privately is not proven here
+        if set(data) - {"op", "scope"} or not isinstance(
+                data.get("scope", ""), str) or len(data.get("scope", "")) > 200:
+            return _deny("unknown_field")
+        error = _authorize_system(settings, identity)
+        if error:
+            return _deny(error)
+        from adapters.common import summary
+        got = summary.answer(settings["snapshot"], data.get("scope", ""),
+                             allowed=projects.summary_scope(settings),
+                             dialect="discord", names=False)
+        return got.get("text") or got["error"]
     return _deny("unknown_operation")
 
 

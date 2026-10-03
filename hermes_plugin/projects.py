@@ -51,15 +51,24 @@ def static_scope(settings: dict) -> list[int] | None:
     return ids[:1000] or None
 
 
+def summary_scope(settings: dict) -> list[int] | None:
+    """The 📊 command's project bound: None only under
+    ``project_ids_auto``; an empty static list stays empty (nothing),
+    never 'unrestricted'."""
+    if settings.get("project_ids_auto"):
+        return None
+    return static_scope(settings) or []
+
+
 def view_inputs(settings: dict, action: str, clicker: str) -> dict | None:
-    """Typed input of a 📋/🗂 click: the clicker's display name (📋
+    """Typed input of a 📋/🗂/📊 click: the clicker's display name (📋
     matching) and this deployment's static project scope (list/count
     bound). None for every other action or when nothing applies."""
     inputs = {}
     if action == "mytasks" and clicker:
         inputs["name"] = clicker[:120]
     scope = static_scope(settings)
-    if action in ("mytasks", "unacked") and scope:
+    if action in ("mytasks", "unacked", "digest") and scope:
         inputs["projects"] = scope
     return inputs or None
 

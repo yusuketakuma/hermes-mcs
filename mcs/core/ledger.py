@@ -507,6 +507,12 @@ class Ledger:
             self.db.execute(
                 "ALTER TABLE notification_renders ADD COLUMN parts_state "
                 "TEXT NOT NULL DEFAULT 'none'")
+        # 📊 daily summary notices (#31) are card-less renders: the
+        # outbox event they deliver, kept after gc strips spec_json
+        if "intent_event_id" not in cols("notification_renders"):
+            self.db.execute(
+                "ALTER TABLE notification_renders ADD COLUMN "
+                "intent_event_id INTEGER")
         # ☐/✅ 確認 toggle: a withdrawn ack stays as an audit row
         if "withdrawn_at" not in cols("notification_acknowledgements"):
             self.db.execute(
@@ -712,7 +718,8 @@ class Ledger:
                 "AND state != 'done'",
                 (now, m.project_id, m.message_id))
 
-    def _outbox_insert(self, kind, project_id, payload, next_try=None):
+    def _outbox_insert(self, kind, project_id, payload, next_try=None,
+                       route=None):
         """In-transaction outbox insert — caller must hold `with self.db`.
         next_try delays when the drain first picks the event up
         (scheduled digests); default is immediately."""
@@ -721,7 +728,8 @@ class Ledger:
         # interactive flag itself is evaluated at delivery time, so a
         # kill switch never strands a sealed card pipeline
         from notify_cards import INTERACTIVE_KINDS
-        route = "interactive" if kind in INTERACTIVE_KINDS else "text"
+        if route not in ("interactive", "text"):
+            route = "interactive" if kind in INTERACTIVE_KINDS else "text"
         cur = self.db.execute("""
           INSERT INTO notify_outbox(kind,project_id,payload,state,next_try,
             route,created_at,updated_at)
@@ -1996,12 +2004,14 @@ class Ledger:
     # ---------- notify outbox ----------
 
     def outbox_add_tx(self, kind: str, project_id: int | None,
-                      payload: dict, next_try: float | None = None) -> int:
+                      payload: dict, next_try: float | None = None,
+                      route: str | None = None) -> int:
         """outbox_add's INSERT without the commit — callers holding
         `with self.db` can land a notification intent in the same
         transaction as the artifacts that justify it (spec §18.3).
         next_try delays first pickup (scheduled digests)."""
-        return self._outbox_insert(kind, project_id, payload, next_try)
+        return self._outbox_insert(kind, project_id, payload, next_try,
+                                   route)
 
     def outbox_add(self, kind: str, project_id: int | None, payload: dict) -> int:
         rid = self.outbox_add_tx(kind, project_id, payload)
