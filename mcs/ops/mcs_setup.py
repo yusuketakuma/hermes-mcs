@@ -329,6 +329,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 errors.append(f"daily_digest.hour_jst: {err}")
         if "include_names" in dd and type(dd["include_names"]) is not bool:
             errors.append("daily_digest.include_names: must be a boolean")
+        if "scope" in dd:
+            import notify_digest
+            flt = (notify_digest.parse_scope(dd["scope"])
+                   if isinstance(dd["scope"], str) and len(dd["scope"]) <= 200
+                   else "must be a string")
+            if isinstance(flt, str) or flt["mine"]:
+                errors.append("daily_digest.scope: " + (
+                    flt if isinstance(flt, str) else
+                    "mine needs a clicker — use station:/project:/days:"))
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
         # a scope block for the transport that is NOT active is stale —
@@ -924,6 +933,9 @@ WIZARD = [
          "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
         ("daily_digest.include_names", "bool", False,
          "日次ダイジェストの一覧に患者名を添える（送信先は notify_target）",
+         _digest_on),
+        ("daily_digest.scope", "opt", None,
+         "日次ダイジェストの対象患者（例: station:○○ / project:1,2 / days:3。空欄=全患者）",
          _digest_on),
     ]),
     ("収集ポリシー", [
