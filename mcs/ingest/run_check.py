@@ -39,6 +39,7 @@ import shutil
 import sys
 import time
 from contextlib import suppress
+from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -46,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
-from ledger import Ledger
+from ledger import Ledger, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S
 from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
@@ -242,6 +243,11 @@ def _health(ledger, result: dict, status: str,
                if (result.get("errors") or coll["collection"] != "ok"
                    or notify_state == "incomplete")
                else "ok")
+    shadow = result.get("metadata_shadow") or {"mode": "off", "reason": "not_run"}
+    shadow_health = {key: shadow[key] for key in (
+        "mode", "reason", "due", "fetched", "deferred", "budget_s", "elapsed_s",
+        "interval_s", "backoff_s", "deferred_reasons") if key in shadow}
+    shadow_health["error_count"] = len(shadow.get("errors") or [])
     return {
         "overall": overall, "run_status": status,
         "run_id": run_id,
@@ -267,6 +273,7 @@ def _health(ledger, result: dict, status: str,
             "poison_gated": poison,
             "ratio": round(current / total, 4) if total else None},
         "cards": cards_health,
+        "metadata_shadow": shadow_health,
         "attention": attention,
         "errors": list(result.get("errors") or []),
     }
@@ -923,6 +930,64 @@ def stage_karte_summary(adapter, ledger, result, deadline,
 
 # ---------- stage: derived data ----------
 
+def stage_metadata_shadow(adapter, ledger, result, deadline):
+    """Bounded opt-in metadata refresh after delivery; never changes message state."""
+    started = time.monotonic()
+    shadow_deadline = min(deadline - 30, started + 25)
+    stats = {"mode": "shadow", "fetched": 0, "deferred": 0, "errors": [],
+             "budget_s": round(max(0, shadow_deadline - started), 3),
+             "elapsed_s": 0, "deferred_reasons": {},
+             "interval_s": METADATA_SHADOW_INTERVAL_S,
+             "backoff_s": METADATA_SHADOW_BACKOFF_S}
+    result["metadata_shadow"] = stats
+    targets = ledger.metadata_watch_targets(limit=5)
+    stats["due"] = targets[0]["due_total"] if targets else 0
+    stats["deferred"] = max(0, stats["due"] - len(targets))
+    if stats["deferred"]:
+        stats["deferred_reasons"]["cap"] = stats["deferred"]
+    try:
+        adapter.set_deadline(shadow_deadline)
+        for index, target in enumerate(targets):
+            if time.monotonic() >= shadow_deadline:
+                remaining = len(targets) - index
+                stats["deferred"] += remaining
+                reason = "deadline_margin" if shadow_deadline == deadline - 30 else "budget_exhausted"
+                stats["deferred_reasons"][reason] = remaining
+                break
+            try:
+                parent = {"parent_id": target["parent_id"]} if target["parent_id"] is not None else {}
+                m = adapter.fetch_message_metadata(target["project_id"], target["message_id"], **parent)
+            except MCSError as e:
+                ledger.save_metadata_shadow(SimpleNamespace(**dict(target)), error=e.kind)
+                stats["errors"].append({"message_id": target["message_id"], "kind": e.kind})
+                if isinstance(e, SessionExpired) or e.kind == "deadline_exceeded":
+                    remaining = len(targets) - index - 1
+                    stats["deferred"] += remaining
+                    reason = "session_expired" if isinstance(e, SessionExpired) else "budget_exhausted"
+                    if remaining:
+                        stats["deferred_reasons"][reason] = remaining
+                    break
+                continue
+            ledger.save_metadata_shadow(m)
+            stats["fetched"] += 1
+            if m.metadata_errors:
+                stats["errors"].append({"message_id": m.message_id, "kind": "schema_error"})
+    finally:
+        adapter.set_deadline(deadline)
+        stats["elapsed_s"] = round(max(0, time.monotonic() - started), 3)
+
+
+def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False):
+    """Select off or storage-only shadow mode for scheduled and manual runs."""
+    enabled = cfg.get("metadata_shadow", False)
+    reason = ("config_invalid" if type(enabled) is not bool else
+              "code_changed" if _code_changed(result) else
+              "disabled" if not (enabled or manual) else None)
+    if reason:
+        result["metadata_shadow"] = {"mode": "off", "reason": reason}
+        return
+    stage_metadata_shadow(adapter, ledger, result, deadline)
+
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
     """extract_v1 (instant rules) -> extract_llm (v4) -> rollups.
@@ -1479,6 +1544,8 @@ def _main() -> int:
     ap.add_argument("--jobs-only", action="store_true",
                     help="skip unread/backfill; only drain durable jobs "
                          "(used by the idle-time deep-import agent)")
+    ap.add_argument("--metadata-shadow", action="store_true",
+                    help="opt-in bounded metadata GETs after contract verification; storage only")
     ap.add_argument("--commands-only", action="store_true",
                     help="drain cmd/cmd_int command traffic only — no "
                          "adapter, network, ingest, derive or notify; "
@@ -1553,6 +1620,8 @@ def _main() -> int:
         if not _code_changed(result):
             _run_semantic(ledger, args, cfg, result, deadline, sem_on,
                           run_lock_fd=lock_fd)
+        _run_metadata_shadow(adapter, ledger, result, deadline, cfg,
+                             manual=args.metadata_shadow)
         _housekeeping(result)
         status = _finish_run(ledger, cfg, result, run_id, deadline)
         _write_health(ledger, result, status, run_id=run_id)

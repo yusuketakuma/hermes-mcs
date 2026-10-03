@@ -80,7 +80,7 @@ _MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 # drainer stray sweep: interpreter argv0 + script path — never matches
 # `vim extract_llm.py` or `pytest ...` (H7/F13)
 # pgrep uses POSIX ERE; BSD pgrep does not recognize Python's \S.
-_STRAY_RE = (r"^([^[:space:]]*/)?python[0-9.]* "
+_STRAY_RE = (r"^([^[:space:]]*/)?[Pp]ython[0-9.]* "
              r"([^[:space:]]*/)?(extract_llm|semantic_drain)"
              r"[.]py([[:space:]]|$)")
 

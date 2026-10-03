@@ -120,6 +120,7 @@ CONFIG_RULES = {
     "notify_all_replies":    (False, _bool),
     "job_budget_seconds":    (False, _num),
     "self_posts":            (False, _bool),
+    "metadata_shadow":       (False, _bool),
     "notify":                (False, _dict),
     "signals":               (False, _dict),
     "semantic":              (False, _dict),
@@ -930,6 +931,9 @@ WIZARD = [
         ("self_posts", "bool", False,
          "自分自身の投稿も取り込んで通知する（未読APIは自投稿を返さない"
          "ため、最新probe経由で検出）", None),
+        ("metadata_shadow", "bool", False,
+         "未読保持の実証・運用合意後のみスタンプを再取得（shadow・反応値は非公開）",
+         None),
         ("deep_history", "bool", True,
          "初回に全履歴を遡って保存する", None),
         ("discover_archived", "bool", False,

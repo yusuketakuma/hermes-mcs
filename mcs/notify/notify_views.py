@@ -17,7 +17,8 @@ from ledger import karte_summary_block
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from notify_render import (
-    _hhmm, _inline, _mmdd, _patient_name, actor_label, today_jst)
+    _hhmm, _inline, _mmdd, _patient_name, actor_label, card_reaction_lines,
+    card_reactions, today_jst)
 
 SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
                   "訂正前の記録があり得るため、確定した処方一覧や依頼台帳の"
@@ -270,12 +271,19 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
     items = []
     for pid, cards in groups.items():
         group = _inline(_patient_name(db, pid), 30) or f"project {pid}"
-        for c in cards:
+        with_reactions = [(c, card_reactions(db, c)) for c in cards]
+        # Stable partition: acknowledgement remains independent of MCS stamps.
+        with_reactions.sort(key=lambda pair: any(
+            r["self_reacted"] for _, meta in pair[1]
+            for r in meta["reactions"] or []))
+        for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
             line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
             if c["owner"]:
                 line += f"（担当中: {actor_label(c['owner'])}）"
+            for reaction in card_reaction_lines(reactions):
+                line += "\n  " + reaction
             line += f"\n  MCS: {project_url(pid)}"
             link = _discord_link(c)
             if link:
@@ -286,7 +294,8 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
            "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）"],
            "empty": "未確認のカードはありません。",
            "notes": ["※「確認」ボタンの記録の有無です。作業が済んだかどうかは"
-                     "表しません。", _NOT_DONE_NOTE]}
+                     "表しません。MCSスタンプも承認・作業完了を保証せず、"
+                     "本人反応があるカードは同患者内の末尾に表示します。", _NOT_DONE_NOTE]}
     out["items"], out["more"] = _limit(items)
     return out
 

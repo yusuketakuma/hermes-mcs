@@ -1763,15 +1763,20 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     ("extract_llm.py", True, False),
     ("extract_llm.py", "embedded", False),
 ])
-def test_native_pgrep_stray_script_contract(updater, tmp_path, name, via_c, expected):
+@pytest.mark.parametrize("capitalized", [False, True])
+def test_native_pgrep_stray_script_contract(updater, tmp_path, name, via_c, expected, capitalized):
     """Native pgrep must find only interpreter + exact drainer scripts."""
     script = tmp_path / name
     source = tmp_path / "worker_source.py" if name.endswith(".pyc") else script
     source.write_text("import time; time.sleep(30)\n")
     if name.endswith(".pyc"):
         py_compile.compile(str(source), cfile=str(script), doraise=True)
-    argv = ([sys.executable, "-c", "import time; time.sleep(30)", str(script)]
-            if via_c else [sys.executable, str(script)])
+    executable = sys.executable
+    if capitalized:
+        executable = str(tmp_path / "Python")
+        os.symlink(sys.executable, executable)
+    argv = ([executable, "-c", "import time; time.sleep(30)", str(script)]
+            if via_c else [executable, str(script)])
     if via_c == "embedded":
         argv[-1] = "/python " + str(script)
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
@@ -2131,7 +2136,12 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     assert updater.recover_interrupted() == 0
     assert updater.load_state()["executed"]["cid-rb"]["result"] \
         == "rolled_back"
-    assert _live_version(live) == 7 and restarts == [1]
+    from ledger import SCHEMA_VERSION
+    # Consuming the consent receipt reopens the restored DB with the current writer.
+    assert _live_version(live) == SCHEMA_VERSION and restarts == [1]
+    con = sqlite3.connect(live)
+    assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    con.close()
 
 
 @pytest.mark.parametrize("unreadable", [False, True])

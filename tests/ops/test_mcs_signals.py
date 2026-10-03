@@ -1464,6 +1464,70 @@ def test_record_self_profile_dedupes(led):
     assert latest["name"] == "山田 薬剤"
 
 
+@pytest.mark.parametrize(("value", "expected"), [
+    (42, 42), ("42", 42), (" 0042 ", 42), (2**63 - 1, 2**63 - 1),
+    (None, None), (True, None), (42.0, None), (0, None), (-1, None),
+    (2**63, None), ("9223372036854775808", None), ("", None),
+    ("4.2", None), ("４２", None), ({"id": 42}, None),
+])
+def test_normalize_sender_id(value, expected):
+    assert mcs_signals.normalize_sender_id(value) == expected
+
+
+def test_station_self_id_repairs_profile_and_does_not_match_names(led):
+    prof = {"sender_id": None, "name": "SYNTH-A",
+            "professions": [], "organizations": ["SYNTH-薬局"]}
+    mcs_signals.record_self_profile(led.db, prof)
+    assert mcs_signals.is_own_station_message(led.db, 42) is None
+    staff = [{"staff_id": "42", "name": "SYNTH-A", "is_self": True},
+             {"staff_id": 43, "name": "SYNTH-A", "is_self": False},
+             {"staff_id": 42, "name": "SYNTH-改名", "is_self": True}]
+    assert mcs_signals.record_station_staff(led.db, staff) is True
+    assert mcs_signals.self_sender_id(led.db) == 42
+    assert mcs_signals.own_sender_ids(led.db) == frozenset({42, 43})
+    assert mcs_signals.is_own_station_message(led.db, "0042") is True
+    assert mcs_signals.is_own_station_message(led.db, 43) is True
+    assert mcs_signals.is_own_station_message(led.db, 44) is False
+    assert mcs_signals.is_own_station_message(led.db, None) is None
+    assert mcs_signals.is_own_station_message(led.db, True) is None
+    assert mcs_signals.is_self_message(led.db, "0042") is True
+    assert mcs_signals.is_self_message(led.db, 43) is False
+    assert mcs_signals.is_self_message(led.db, None) is False
+    current = mcs_signals._latest_self_profile(led.db)
+    assert current["sender_id"] == 42
+    assert all(current[k] == prof[k] for k in ("name", "professions", "organizations"))
+    assert mcs_signals._self_sets({}, led.db) == (["SYNTH-薬局"], [], [])
+    # A subsequent /users/self response missing its ID cannot erase it.
+    assert mcs_signals.record_self_profile(led.db, prof) is False
+    assert mcs_signals.record_station_staff(led.db, staff) is False
+    # Repair also runs if an old missing-ID profile follows an unchanged roster.
+    led.artifact_add(mcs_signals.SELF_PROFILE_KIND, json.dumps(prof))
+    assert mcs_signals.record_station_staff(led.db, staff) is True
+    assert mcs_signals._latest_self_profile(led.db)["sender_id"] == 42
+
+
+@pytest.mark.parametrize("self_ids", [[42, 43], [42, None], [True], [None]])
+def test_ambiguous_station_self_id_is_unknown(led, self_ids):
+    mcs_signals.record_self_profile(led.db, {"sender_id": 42})
+    mcs_signals.record_station_staff(led.db, [
+        {"staff_id": sid, "is_self": True} for sid in self_ids])
+    assert mcs_signals.self_sender_id(led.db) is None
+    assert mcs_signals.is_self_message(led.db, 42) is False
+
+
+def test_station_self_id_works_without_profile_and_falls_back_when_absent(led):
+    assert mcs_signals.self_sender_id(led.db) is None
+    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
+    assert mcs_signals.self_sender_id(led.db) == 42
+    assert mcs_signals._latest_self_profile(led.db) == {}
+    mcs_signals.record_self_profile(led.db, {"sender_id": "44"})
+    assert mcs_signals.self_sender_id(led.db) == 42  # roster takes precedence
+    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": False}])
+    assert mcs_signals.self_sender_id(led.db) == 44
+    mcs_signals.record_station_staff(led.db, [{"name": "SYNTH-A"}])
+    assert mcs_signals.is_own_station_message(led.db, 44) is None
+
+
 # --- review fixes: negation handling, v1 urgency, salvage, archived ---
 
 def test_adherence_negations_do_not_flag(led):

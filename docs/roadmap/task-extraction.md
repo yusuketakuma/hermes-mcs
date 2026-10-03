@@ -2,6 +2,11 @@
 
 作成日: 2026-09-30。状態: 順序 1〜6 を `wip/roadmap20-ultracode` に実装済み（20-D/E は未着手、設定変更は無し）。ユーザー要望は「チャット文面からタスク化する能力を、構造化データ・LLM 処理の強化を前提に引き上げる」。実データ・実 LLM による現状精度や性能は未計測。
 
+2026-10-03照合: 20-A〜Cの依頼種別・条件・返信種別・rollupの`reply_state`はv1.0.10基準のコードに存在する。
+上のworktree名と以下の設定・実測は当時の記録。設定変更・enforce/canonicalの切替完了を宣言しない。
+現在の順序・版割当は[ROADMAP](../ROADMAP.md)を正とする。1.0.11のF-7で`reply_state`を送信者ID比較に直し、
+ID不明時は別人と断定しない。表示追加は1.0.12の#25で、G6・calibration・20-Dの未決ゲートは維持する。
+
 改訂: 2026-09-30 第4版。第4版は実装判断（decision list）に合わせた行単位の訂正のみ（QC の走査範囲、kind 語彙、evidence 必須化、due_text 表示、rollup キー名、20-C の thread 単位・閲覧のみ、semantic_loops 判定文の保留、20-D の前提、容量ゲートの算出元、signals の kind ガード）。第3版は 第2版（同日）で利用者に届く経路を先に強化する順序へ組み替え、第3版で **shadow/off の機能は on にする** オーナー方針（2026-09-30）を取り込んだ。コード上のゲート（enforce の calibration、canonical の G6 token）は迂回せず満たして通す。初版・第2版の本文は git 履歴を参照。読み取り側の新項目（kind/condition/due_text/reply_state）は extract_llm 経路のみに出る — `canonical_projection` が投影する request_pending は to/from/action/due/unverified だけを持ち、投影が有効な投稿では #20 以前と同じ表示・集計になる。
 
 ## 目的と境界

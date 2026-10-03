@@ -47,6 +47,23 @@ def test_daily_digest_block_is_typed():
                       "daily_digest.hour_jst: must be an integer in [0,23]"]
 
 
+@pytest.mark.parametrize("value", [False, True])
+def test_metadata_shadow_config_is_recognized(value):
+    errors, warnings = mcs_setup.validate_config({
+        "mcs_login_id": "synthetic", "notify_target": "slack:#synthetic",
+        "metadata_shadow": value})
+    assert errors == [] and warnings == []
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+def test_metadata_shadow_config_requires_boolean(value):
+    errors, warnings = mcs_setup.validate_config({
+        "mcs_login_id": "synthetic", "notify_target": "slack:#synthetic",
+        "metadata_shadow": value})
+    assert errors == ["metadata_shadow: must be a boolean"]
+    assert warnings == []
+
+
 @pytest.mark.parametrize("value", [float("inf"), float("nan"), 10 ** 400])
 def test_unbounded_numeric_config_is_rejected(value):
     errors, _ = mcs_setup.validate_config({
@@ -708,11 +725,13 @@ def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):
         mcs_setup.sys, "argv",
         ["mcs_setup", "init", "--yes",
          "--set", "self_posts=true",
+         "--set", "metadata_shadow=true",
          "--set", 'notify.interactive="discord"',
          "--set", "notify.card_thread=false"])
     assert mcs_setup.main() == 0
     cfg = json.loads((tmp_path / "c.json").read_text())
     assert cfg["self_posts"] is True
+    assert cfg["metadata_shadow"] is True
     assert cfg["notify"] == {"interactive": "discord",
                              "card_thread": False}
 
@@ -767,6 +786,7 @@ def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
     assert mcs_setup.main() == 0
     cfg = json.loads((tmp_path / "c.json").read_text())
     assert cfg["self_posts"] is False
+    assert cfg["metadata_shadow"] is False
     assert cfg["deep_history"] is True
     assert cfg["trickle_pages"] == 3
     # interactive defaults to off -> discord/card keys never asked

@@ -183,6 +183,7 @@ def _thread(db, rows):
         msg = _message(mid=mid, body="合成本文", parent_id=parent,
                        posted_at=posted)
         msg.sender_name = sender
+        msg.sender_id = {"SYNTH-A": 1, "SYNTH-B": 2, "SYNTH-C": 3}[sender]
         db.save_messages([msg])
         db.artifact_add("extract_llm", json.dumps(content), project_id=1,
                         message_id=mid, meta={"hash": _hash(db, mid)})
@@ -260,6 +261,44 @@ def test_rollup_reply_with_unparseable_posted_at_is_never_later(db):
                  (2, 1, "SYNTH-B", "not-a-date", _reply("done"))])
     rows = rollup.build_rollup(db, 1)["recent_requests"]
     assert "reply_state" not in rows[0]
+
+
+@pytest.mark.parametrize(("request_id", "reply_id", "same_name", "state"), [
+    (1, 2, True, "done"),       # identical display names, distinct people
+    (1, 1, False, None),        # renamed sender, same person
+    (None, 2, False, None),     # unknown identities cannot prove a reply
+    (1, None, False, None),
+    (None, None, False, None),
+    (0, 2, False, None),
+])
+def test_rollup_reply_uses_sender_ids(db, request_id, reply_id, same_name, state):
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
+                  _reply("done"))])
+    db.db.execute("UPDATE messages SET sender_id=? WHERE message_id=1",
+                  (request_id,))
+    db.db.execute("UPDATE messages SET sender_id=? WHERE message_id=2",
+                  (reply_id,))
+    if same_name:
+        db.db.execute("UPDATE messages SET sender_name='SYNTH-A'")
+    assert rollup.build_rollup(db, 1)["recent_requests"][0].get("reply_state") \
+        == state
+
+
+def test_rollup_old_name_based_reply_is_rebuilt(db):
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00",
+                  _reply("done"))])
+    rollup.rebuild(db, 1)
+    db.db.execute("UPDATE messages SET sender_id=1 WHERE message_id=2")
+    db.db.execute("UPDATE artifacts SET meta=json_set(meta,"
+                  " '$.period_check_version',2) WHERE kind=?", (rollup.KIND,))
+    assert rollup.dirty_projects(db) == [1]
+    rollup.rebuild(db, 1)
+    content = db.db.execute("SELECT content FROM artifacts WHERE kind=?",
+                            (rollup.KIND,)).fetchone()[0]
+    assert "reply_state" not in json.loads(content)["recent_requests"][0]
+    assert rollup.dirty_projects(db) == []
 
 
 def test_pre_flag_rollup_is_rebuilt_with_unverified_flag(db):

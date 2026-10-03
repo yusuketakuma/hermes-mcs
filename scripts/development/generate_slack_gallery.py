@@ -144,14 +144,16 @@ def overview():
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "操作した結果はカードに反映。確認済みとタスク完了は別です。", 770)
+    s = Screen(2, "通知カードから、確認と担当を共有。", "確認・担当は操作記録。MCSスタンプは反応の観測で、タスク完了とは別です。", 830)
     x, y = s.app()
     y = s.card(x, y)
     s.line(x, y + 8, 1028, y + 8)
     s.text(x, y + 45, "確認: 田中さん / 担当: 田中さん", 18, MUTED)
-    s.actions(x, y + 68, confirmed=True)
-    s.text(x, y + 148, "MCSで開く", 19, "#1264a3")
-    s.text(x, y + 185, "本文・添付はスレッドに投稿済み", 17, MUTED)
+    s.text(x, y + 77, "MCS: 本人 見ました（観測 10-03 09:00 JST）", 18, GREEN)
+    s.actions(x, y + 105, confirmed=True)
+    s.text(x, y + 171, "MCSで開く", 19, "#1264a3")
+    s.text(x, y + 204, "本文・添付はスレッドに投稿済み", 17, MUTED)
+    s.text(x, y + 236, "スタンプの観測は、担当引受・タスク完了の記録ではありません。", 16, MUTED)
     return s.finish()
 
 
