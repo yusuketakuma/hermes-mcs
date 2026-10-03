@@ -248,3 +248,26 @@ def test_patient_summary_request_reply_states(led):
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5
     assert "返信記録が見つからないことは対応がなかったことを意味しません" in sec
+
+
+def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, SELF, ts=NOW - 600)
+    _post(led, 101, OTHER, ts=NOW - 500)
+    led.save_reaction_actors(100, [
+        {"actor_id": OTHER, "reaction_type": "viewed", "profession": "医師"},
+        {"actor_id": SELF, "reaction_type": "accepted", "profession": None}],
+        True, now=NOW - 60)
+    snap = ledger.publish_snapshot(str(tmp_path / "data" / "ledger.db"),
+                                   str(tmp_path / "snap"))
+    view = mcs_view.View(snap)
+    try:
+        own = view.read("evidence", project=1, message_id=100)["message"]
+        other = view.read("evidence", project=1, message_id=101)["message"]
+    finally:
+        view.close()
+    actors = own["reaction_actors"]
+    assert actors["counts"] == {"医師": {"viewed": 1}, "": {"accepted": 1}}
+    assert actors["self_included"] is True
+    assert "actor_id" not in json.dumps(actors) and other["reaction_actors"] is None

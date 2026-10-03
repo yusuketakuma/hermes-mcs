@@ -338,6 +338,16 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - HermesモードはGateway、独立モードはSlackアダプターを更新後に再起動してください。Slackアプリのslash command設定は従来の追加手順が必要です。取得範囲・既読化・モデル・患者名の既定は変更しません。
 
+- 追加設定は不要です。カード表示の反映には、利用中のHermes gatewayまたは独立アダプターの再起動が必要です。「反応が観測されていない自分の投稿」はmetadata_refresh_publish=trueのときだけ出ます。確認状態・依頼台帳は変わりません。
+
+- 既定では動作は変わりません。metadata_refresh_publishは未読保持の実証とmcs/views/metadata_report.pyでの照合後、metadata_actorsは押下者の表示・保持の判断後に有効化します。どちらもmetadata_shadow=trueが前提です。DBはschema 8のまま押下者用の表を加法で追加します。
+
+- 既定では動作は変わりません。signals.self_reaction_responseはオーナー判断(#22-D5)後に有効化します。切り替えると既存候補のresolve・再openが起き得ます。依頼台帳・割当・確認状態は変わりません。
+
+- 追加設定は不要です。python3 mcs/views/metadata_report.pyで実行し、DBは読取り専用で開きます。不一致0は未読保持の証明になりません。
+
+- 追加設定は不要です。表示の反映にはHermes gatewayまたは独立アダプターの再起動が必要です。未取得と0件・なしは区別して表示し、確認状態は変えません。
+
 - Hermes連携のSlack・Discordは更新後にHermes Gatewayを再起動してください。LINE WORKSは独立アダプターを再起動してください。再起動前の旧アダプターでは📊ボタンが正しく動作しません（Slackは「操作できません」、Discord・LINE WORKSは結果の無い応答になります）。日次ダイジェストの対象は任意のdaily_digest.scopeで絞れます（既定は全患者、mineは指定不可）。通知先・送信時刻・患者名の既定（include_names=false）・既読化・人承認・取得範囲・モデルは変更しません。
 
 - Hermes連携のSlack・Discordは更新後にHermes Gatewayを、LINE WORKSは独立アダプターを再起動してください。Slackの/mcs-summaryを使う場合はSlackアプリにslash commandとcommands scopeを追加して再インストールし、plugin settingsのsnapshotを設定します（導入ガイド付録B）。日次サマリーの送信先はカード通知が有効ならカード用の配送先、無効なら従来どおりnotify_targetです。DBはnotification_renders.intent_event_id列を追加します（加法）。この版より前へ巻き戻すと、未封印のカード版日次サマリーはその日の分が送られず、封印済みで未送の分は送信されても完了扱いにならず通知キューに残ります（翌日分の投入後は手動で整理してください）。Discordの/mcsのサマリーは返答の公開範囲が実機で未確認のため患者名を出しません。既読化・人承認・取得範囲・モデル・患者名の既定（include_names=false）は変更しません。
