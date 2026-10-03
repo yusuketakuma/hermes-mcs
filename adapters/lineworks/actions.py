@@ -149,7 +149,7 @@ class Actions:
         mid = "lw-form-" + envelopes.actor_hash(actor)
         session = self.reg.modal(mid)
         if not session or session["actor"] != actor:
-            word, *rest = value.split(None, 1)
+            word, *rest = value.split(None, 1) or [""]
             if word == SUMMARY_WORD:
                 await self._summary(user, rest[0] if rest else "")
             return

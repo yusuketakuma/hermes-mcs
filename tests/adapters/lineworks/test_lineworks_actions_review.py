@@ -171,3 +171,12 @@ def test_dm_summary_word_answers_privately_from_the_snapshot(tmp_path, monkeypat
     assert [(s, r) for s, r, _ in seen] == [
         ("/synthetic/ledger-snapshot.db", "mine name:山田")]
     assert seen[0][2]["allowed"] == [1] and seen[0][2]["dialect"] == "plain"
+
+
+@pytest.mark.parametrize("text", ["", "   ", "　　"])
+def test_dm_without_words_is_ignored(tmp_path, text):
+    """Regression: an empty or blank DM (image, sticker, spaces) raised
+    in the summary-word check and was recorded as an unknown callback."""
+    w = world(tmp_path, action="summary")
+    asyncio.run(w.actions.handle(event(text=text, channel=None)))
+    assert w.client.calls == []

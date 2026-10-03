@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSで本文のないDMが不明な処理として残る問題を修正",
+  "summary": "画像・スタンプや空白だけのDMで例外が起き、不明な処理件数として残っていました。従来どおり何もせずに終了します。",
+  "upgrade": "LINE WORKS独立アダプターの再起動で反映されます。",
+  "details": [
+    "サマリー語の判定で空の入力を空文字として扱う。"
+  ],
+  "refs": [
+    "adapters/lineworks/actions.py"
+  ]
+}

@@ -316,6 +316,23 @@ def test_resumed_target_retains_apply_history_and_restarts_gateway(
     assert len(gateway_restarts) == 1
 
 
+def test_unfinished_reinstall_escalates_instead_of_applied(
+        rec, tmp_path, monkeypatch, gateway_restarts):
+    """Regression: the watchdog promoted an interrupted --reinstall to
+    applied (reinstall_done false), so plan blocked every later version."""
+    repo = _make_repo(tmp_path)
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying("0" * 40, sha=target, stage="post_merge")
+    state["applying"].update(reinstall=True, reinstall_done=False)
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda snapshot: [])
+    rec._save_state(state)
+
+    assert rec.recover() == 1
+    after = rec._load_state()
+    assert after["applying"]["reinstall"] and after["applied"] == []
+    assert gateway_restarts == []
+
+
 def test_done_bookkeeping_restarts_gateway(rec, tmp_path, gateway_restarts):
     _make_repo(tmp_path)
     state = {"v": 1, "applying": None,

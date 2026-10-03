@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "中断した再導入を手動完了した後に更新が止まり続ける問題を修正",
+  "summary": "install.sh再実行中に中断した更新を、手順どおり手動で完了しても更新計画が「再導入未完了」で止まり続けていました。完了を記録するreinstall-doneを追加し、15分ごとの復旧処理も未完了の再導入を適用済みにしません。",
+  "upgrade": "復旧処理(deployment/recovery)の変更は、install.shの再実行を伴う更新で反映されます。中断時の手順はdocs/guides/UPGRADE_AGENT.mdのreinstall_incompleteを参照してください。",
+  "details": [
+    "mcs_update.py reinstall-doneはHEADが再導入した版のときだけ完了を記録し、journalが残っていればrecoverで後処理を完了する。",
+    "mcs_recover.pyは未完了のreinstallをescalateする。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
+}

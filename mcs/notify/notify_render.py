@@ -51,6 +51,24 @@ PARTS_TEXT_BUDGET = 4000
 _FOLD_RE = re.compile(r"^・…他([0-9]+)件$")
 
 
+def _text_cost(parts: dict) -> int:
+    """Text size as the strictest consumer counts it: the larger of the
+    visible text and adapters/common/spec.py's per-item accounting
+    (+4 per container / footer line, +3 per quote line, +6 per field),
+    so a folded card never fails the worker's ``text_budget`` check."""
+    cost = 0
+    for c in parts["containers"]:
+        if c["type"] == "quote":
+            cost += sum(len(ln) + 3 for ln in c["text"].splitlines())
+        elif c["type"] == "field":
+            cost += len(c["name"]) + len(c["value"]) + 6
+        elif c["type"] != "meta":
+            cost += len(c["text"]) + 4
+    cost += sum(len(ln) + 4 for c in parts.get("footer") or []
+                if c["type"] == "text" for ln in c["text"].splitlines())
+    return max(cost, len(display_text(parts)))
+
+
 def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
     """Fold list lines (``・`` bullets) of text containers marked
     ``"fold": True`` (one item per line) until the visible text fits
@@ -65,7 +83,7 @@ def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
         return [i for i, ln in enumerate(c["text"].split("\n"))
                 if ln.startswith("・") and not _FOLD_RE.match(ln)]
 
-    while len(display_text(out)) > limit:
+    while _text_cost(out) > limit:
         lists = [c for c in containers
                  if c["type"] == "text" and c.get("fold") and bullets(c)]
         if not lists:
