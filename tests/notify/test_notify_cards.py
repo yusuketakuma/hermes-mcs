@@ -2597,6 +2597,41 @@ def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
         and out["error"] == "origin_mismatch"
 
 
+def test_switched_away_transport_leaves_live_health(led, tmp_path,
+                                                   monkeypatch):
+    """Regression: after notify.interactive moved from discord to slack,
+    a discord attempt left 'unknown' and its held event kept health
+    degraded forever. They stay recorded (never auto-settled) but count
+    only as retired."""
+    import run_check
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    _begin(led, _latest_render(led), n=1)
+    led.db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL "
+                   "WHERE event_id=?", (ev["event_id"],))
+    led.db.execute("INSERT OR IGNORE INTO notification_intent_batches("
+                   "event_id,frozen_payload,payload_hash,route_epoch,"
+                   "sealed_at,transport,scope_json) VALUES(?,?,?,?,?,?,?)",
+                   (ev["event_id"], "{}", "h", 1, NOW, "discord", "{}"))
+    led.db.commit()
+    slack = {"notify": {**CFG["notify"], "interactive": "slack"}}
+    assert notify_cards.health_cards(led, CFG)["attempts_unsettled"] == 1
+    h = notify_cards.health_cards(led, slack)
+    assert (h["attempts_unsettled"], h["retired_unsettled"]) == (0, 1)
+    assert h["unsettled"] == []
+    assert notify_cards.health_cards(led)["attempts_unsettled"] == 1
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    for cfg, held, retired in ((CFG, 1, 0), (slack, 0, 1)):
+        monkeypatch.setattr(run_check, "_config", lambda cfg=cfg: cfg)
+        health = run_check._health(led, {"errors": [], "notify": {}}, "ok")
+        assert (health["notify"]["held"],
+                health["notify"]["retired_held"]) == (held, retired)
+        assert (health["notify"]["state"] == "incomplete") == bool(held)
+    assert led.db.execute("SELECT state FROM notification_delivery_attempts"
+                          ).fetchone()[0] == "granted"
+
+
 def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
     """The operator worklist: each unsettled attempt carries the exact
     scope ops.card_resolve validates against — check the channel, then

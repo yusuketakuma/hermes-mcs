@@ -621,21 +621,35 @@ def test_update_plan_names_the_post_that_carries_each_chunk(led):
                if p["kind"] != "body_part")
 
 
-def test_backlog_reply_edits_the_preceding_post(led):
-    """A reply no intent announces (history backfill) joins the post
-    before it — edited in place, never a new post that would notify."""
+def test_backlog_reply_gets_its_own_post(led):
+    """A reply no intent announces (history backfill) is still written
+    as its own post — never merged into the post before it."""
     _seed_thread(led)
     _dispatch(led, _intent(led))
     r1 = _latest_render(led)
     _deliver_bodies(led, r1, "msg-1", n=170)
     _msg(led, 300, parent=100, body="履歴の返信")
+    _msg(led, 301, parent=100, body="同時に取り込んだ返信")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     r2 = _latest_render(led)
     assert r2["op"] == "update"
-    assert _body_names(r2) == ["m:100#1", "m:101#1"]
+    assert _body_names(r2) == ["m:100#1", "m:101#1", "m:300#1", "m:301#1"]
     assert _prior_ids(r2) == {"body:0001": "msg-1/body:0001",
                               "body:0002": "msg-1/body:0002"}
-    assert "履歴の返信" in _spec(r2)["parts"]["thread_body_parts"][1]
+    bodies = _spec(r2)["parts"]["thread_body_parts"]
+    assert "履歴の返信" not in bodies[1] and "履歴の返信" in bodies[2]
+    assert "同時に取り込んだ返信" in bodies[3]
+
+
+def test_same_tick_replies_are_separate_posts(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    _deliver_bodies(led, _latest_render(led), "msg-1", n=190)
+    for mid in (300, 301, 302):
+        _msg(led, mid, parent=100, body=f"同時{mid}")
+    _dispatch(led, _intent(led, payload={"message_ids": [300, 301, 302]}))
+    assert _body_names(_latest_render(led))[2:] == [
+        "m:300#1", "m:301#1", "m:302#1"]
 
 
 def test_legacy_combined_posts_are_rewritten_not_reposted(led):

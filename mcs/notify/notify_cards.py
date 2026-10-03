@@ -861,28 +861,24 @@ def _prior_body_posts(db, card) -> dict:
 
 
 def _body_groups(db, card, planned, prior) -> list:
-    """[(post key, message ids)] — one thread post per reply. A reply an
-    intent announces (realtime) opens its own post, so the thread
-    notifies; a backlog reply is appended to the preceding post, which
-    is edited in place and notifies nobody. A thread with no body post
-    yet gives every message its own post."""
+    """[(post key, message ids)] — one thread post per message, however
+    many arrived in the same tick and whether or not an intent announced
+    them (owner rule 2026-10-03: every write stays separate). Only a
+    card posted before per-reply posts keeps its unnamed ``legacy``
+    chunks; their old members stay there instead of being re-posted."""
     if card["kind"] != "thread":
         return [("legacy", list(planned))]
     announced = _announced_ids(db, card)
-    legacy = any(k.startswith("legacy#") for k in prior)
-    groups, head = [], []
+    legacy = [] if any(k.startswith("legacy#") for k in prior) else None
+    groups = []
     for mid in planned:
-        if not prior or f"m:{mid}#1" in prior or mid in announced:
-            groups.append((f"m:{mid}", head + [mid]))
-            head = []
-        elif groups:
-            groups[-1][1].append(mid)
-        elif legacy:
-            groups.append(("legacy", [mid]))
+        if legacy is not None and f"m:{mid}#1" not in prior \
+                and mid not in announced:
+            if not legacy:
+                groups.append(("legacy", legacy))
+            legacy.append(mid)
         else:
-            head.append(mid)       # joins the next post, never its own
-    if head:
-        groups.append((f"m:{head[0]}", head))
+            groups.append((f"m:{mid}", [mid]))
     return groups
 
 
@@ -2782,12 +2778,28 @@ def recover(ledger, cfg, result) -> dict:
     return fixed
 
 
-def health_cards(ledger) -> dict:
+def retired_transports(cfg) -> tuple[str, ...]:
+    """Transports no longer selected by notify.interactive: their
+    unsettled rows stay recorded (never auto-settled — a granted send
+    may be remote) but no longer count as live delivery work. Without a
+    config (None) nothing is treated as retired."""
+    if cfg is None or not interactive_enabled(cfg):
+        return ()
+    active = active_transport(cfg)
+    return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
+
+
+def health_cards(ledger, cfg=None) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
-    ops.card_resolve (ids only, no patient data)."""
+    ops.card_resolve (ids only, no patient data). Attempts on a retired
+    transport (after a notify.interactive switch) are reported only as
+    ``retired_unsettled`` and leave the live counts."""
     db = _db(ledger)
     now = time.time()
+    retired = retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    live = f" AND r.transport NOT IN ({marks})" if retired else ""
     states = {r["delivery_state"]: r["c"] for r in db.execute(
         "SELECT delivery_state,COUNT(*) c FROM notification_cards "
         "GROUP BY delivery_state")}
@@ -2798,9 +2810,16 @@ def health_cards(ledger) -> dict:
         "SELECT COUNT(*) FROM notification_renders WHERE state='queued'"
     ).fetchone()[0]
     unsettled = db.execute(
-        "SELECT COUNT(*) c,MIN(created_at) o FROM "
-        "notification_delivery_attempts WHERE state IN ('granted','unknown')"
+        "SELECT COUNT(*) c,MIN(a.created_at) o FROM "
+        "notification_delivery_attempts a "
+        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
+        "WHERE a.state IN ('granted','unknown')" + live, retired
     ).fetchone()
+    retired_unsettled = db.execute(
+        "SELECT COUNT(*) FROM notification_delivery_attempts a "
+        "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
+        f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks})",
+        retired).fetchone()[0] if retired else 0
     last = db.execute(
         "SELECT MAX(updated_at) FROM notification_renders "
         "WHERE state='delivered'").fetchone()[0]
@@ -2817,8 +2836,8 @@ def health_cards(ledger) -> dict:
         "r.application_id,r.guild_id,r.channel_id,r.team_id "
         "FROM notification_delivery_attempts a "
         "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
-        "WHERE a.state IN ('granted','unknown') "
-        "ORDER BY a.created_at LIMIT 20").fetchall()
+        "WHERE a.state IN ('granted','unknown')" + live +
+        " ORDER BY a.created_at LIMIT 20", retired).fetchall()
     return {
         "pending": states.get("pending", 0),
         "delivered": states.get("delivered", 0),
@@ -2830,6 +2849,7 @@ def health_cards(ledger) -> dict:
         "renders_queued": queued,
         "renders_unknown": unknown,
         "attempts_unsettled": unsettled["c"],
+        "retired_unsettled": retired_unsettled,
         "oldest_unsettled_age_s": (round(now - unsettled["o"], 1)
                                  if unsettled["o"] else 0),
         "unsettled": [

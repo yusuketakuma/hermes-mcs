@@ -175,9 +175,26 @@ def _health(ledger, result: dict, status: str,
         "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
         "WHERE state IN ('pending','failed') AND next_try IS NOT NULL"
     ).fetchone()
-    held = ledger.db.execute(
-        "SELECT COUNT(*) FROM notify_outbox "
-        "WHERE state='failed' AND next_try IS NULL").fetchone()[0]
+    try:
+        cfg = _config()
+    except Exception:
+        cfg = None
+    retired = notify_cards.retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    # an interactive event whose only sealed batches belong to a retired
+    # transport (notify.interactive switched away) can never complete:
+    # disclose it apart, never as live notify work
+    on_retired = (
+        "route='interactive' AND EXISTS(SELECT 1 FROM "
+        "notification_intent_batches b WHERE b.event_id=o.event_id "
+        f"AND b.transport IN ({marks})) AND NOT EXISTS(SELECT 1 FROM "
+        "notification_intent_batches b WHERE b.event_id=o.event_id "
+        f"AND b.transport NOT IN ({marks}))") if retired else "0"
+    held, retired_held = ledger.db.execute(
+        f"SELECT COALESCE(SUM(NOT ({on_retired})),0),"
+        f"COALESCE(SUM({on_retired}),0) FROM notify_outbox o "
+        "WHERE state='failed' AND next_try IS NULL",
+        retired * 4).fetchone()
     if held:
         notify_state = "incomplete"
     sem = ledger.db.execute(
@@ -206,7 +223,7 @@ def _health(ledger, result: dict, status: str,
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     coll = _collection(result)
     free_mb = _free_mb()
-    cards_health = notify_cards.health_cards(ledger)
+    cards_health = notify_cards.health_cards(ledger, cfg)
     # Itemized attention block (2026-09-30): 'degraded' alone did not
     # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
     # unsettled deliveries aged ~31h while everything read "incomplete".
@@ -260,6 +277,7 @@ def _health(ledger, result: dict, status: str,
         "notify": {"state": notify_state,
                    "pending": outbox["c"],
                    "held": held,
+                   "retired_held": retired_held,
                    "oldest_age_s": (round(now - outbox["o"], 1)
                                     if outbox["o"] else 0)},
         "semantic_jobs": {"pending": sem["c"],
