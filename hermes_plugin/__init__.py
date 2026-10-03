@@ -33,12 +33,13 @@ _CONTEXT_FLAGS = {
 _READ_KINDS = frozenset({
     "search", "timeline", "thread", "evidence", "attachments", "candidates",
     "requests", "staff", "receipt", "semantic", "comparison", "loops",
-    "operations",
+    "operations", "qc", "read_model", "stats", "signals", "metadata_report",
 })
 _STATUS_FIELDS = frozenset({"op", "project_id", "limit", "cursor"})
 _READ_FIELDS = frozenset({
     "op", "kind", "project_id", "limit", "cursor", "query", "message_id",
     "request_id", "status", "command_id", "payload_hash", "since", "until",
+    "scope", "stat", "preset", "list", "as_of",
 })
 _RECEIPT_FIELDS = frozenset({
     "op", "kind", "command_id", "payload_hash",
@@ -71,6 +72,14 @@ _CONTROL_FIELDS = {
     "restore_approve": _CONTROL_COMMON_FIELDS | {
         "report_id", "backup_sha256", "backup_schema", "reason",
     },
+    "signal_dismiss": _CONTROL_COMMON_FIELDS | {
+        "signal_key", "reason", "reason_code", "expected_signal_artifact_id"},
+    "extract_feedback": _CONTROL_COMMON_FIELDS | {
+        "message_id", "artifact_id", "field", "reason"},
+    "signal_policy": _CONTROL_COMMON_FIELDS | {"policy", "reason"},
+    "refstat_approve": _CONTROL_COMMON_FIELDS | {"name", "file_hash", "reason"},
+    "card_resolve": _CONTROL_COMMON_FIELDS | {
+        "delivery_id", "attempt_id", "result", "message_id", "evidence", "reason"},
 }
 # Lifecycle ops are system-wide — they carry no project_id and get the
 # user/chat allowlist only (project check would always deny them).
@@ -237,7 +246,23 @@ def _view_read(settings: dict[str, Any], data: dict, project_id: int,
     view = None
     try:
         view = mcs_view.View(settings["snapshot"])
-        result = view.read(kind, project=project_id, **kwargs)
+        if project_id is None and settings.get("project_ids_auto") is not True:
+            ids = {r[0] for r in view.db.execute("SELECT project_id FROM patients")}
+            if not ids <= set(settings["project_ids"]):
+                return _deny("project_scope_required")
+        if kind == "stats":
+            result = view.stats({**{k: data[k] for k in (
+                "stat", "preset", "list", "since", "until", "as_of", "limit")
+                if k in data}, "project": project_id})
+        elif kind == "signals":
+            result = view.signals({"project": project_id, "limit": data.get("limit", 50)})
+        elif kind == "metadata_report":
+            import metadata_report
+            result = metadata_report.build_report(view.reader, project_id=project_id)
+        else:
+            if "scope" in data:
+                kwargs["scope"] = data["scope"]
+            result = view.read(kind, project=project_id, **kwargs)
     finally:
         if view is not None:
             view.close()
@@ -273,6 +298,8 @@ def _current_request(view, requests, project_id: int, request_id: int):
 
 
 def _actor(identity: dict[str, str | None]) -> str:
+    if identity.get("transport") in ("slack", "lineworks"):
+        return f"{identity['transport']}:{identity['scope_id']}:{identity['user_id']}"
     return f"discord:{identity['user_id']}"
 
 
@@ -477,6 +504,11 @@ def _new_control(
                     "backup_sha256", "backup_schema"):
             if key in fields:
                 payload[key] = fields[key]
+    elif command.removeprefix("ops.") in {
+            "signal_dismiss", "extract_feedback", "signal_policy", "refstat_approve"}:
+        action = command.removeprefix("ops.")
+        payload.update({k: fields[k] for k in _CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
+                        if k in fields})
     else:
         payload["feature"] = fields.get("feature")
     error = requests.validate(payload)
@@ -485,8 +517,73 @@ def _new_control(
     return payload
 
 
+def _control_reference(view, payload):
+    """Check the snapshot reference again at preview and confirmation."""
+    if payload["cmd"] == "ops.signal_dismiss":
+        row = view.db.execute(
+            "SELECT artifact_id,project_id,content FROM artifacts WHERE kind='signal_v1' "
+            "AND json_valid(meta) AND json_valid(content) AND json_extract(meta,'$.key')=? "
+            "ORDER BY artifact_id DESC LIMIT 1", (payload["signal_key"],)).fetchone()
+        if row is None or row["project_id"] != payload["project_id"]:
+            return "signal_not_found"
+        if (row["artifact_id"] != payload.get("expected_signal_artifact_id", row["artifact_id"])
+                or json.loads(row["content"]).get("state") != "open"):
+            return "signal_changed"
+        payload["expected_signal_artifact_id"] = row["artifact_id"]
+    elif payload["cmd"] == "ops.extract_feedback":
+        from mcs_queries import current_extract_pred
+        if not view.db.execute(
+                "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                "WHERE a.artifact_id=? AND a.kind='extract_llm' AND a.message_id=? "
+                f"AND m.project_id=? {current_extract_pred('a', 'm')}",
+                (payload["artifact_id"], payload["message_id"], payload["project_id"])).fetchone():
+            return "extraction_changed"
+    return None
+
+
+def _card_resolution(view, settings, identity, payload):
+    """Derive recovery scope from the stored render/hold, never native input."""
+    import notify_cards
+    import notify_transport
+    db = view.db
+    render = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
+                        (payload["delivery_id"],)).fetchone()
+    hold = None
+    if render is None:
+        hold = db.execute("SELECT * FROM notification_restore_holds WHERE delivery_id=? "
+                          "AND released_at IS NULL ORDER BY hold_id DESC LIMIT 1",
+                          (payload["delivery_id"],)).fetchone()
+    if render is None and hold is None:
+        return "delivery_not_found"
+    scope = notify_cards.stored_scope(render) if render else json.loads(hold["scope_json"])
+    transport = identity.get("transport", "discord")
+    if scope.get("transport", "discord") != transport:
+        return "scope_mismatch"
+    expected = {"channel_id": identity["chat_id"], "profile": identity["profile"],
+                "application_id": settings.get("application_id"),
+                "guild_id" if transport == "discord" else "team_id": identity["scope_id"]}
+    if any(scope.get(k) != v for k, v in expected.items()):
+        return "scope_mismatch"
+    row = render if render is not None else hold
+    card = notify_cards._card_row(db, row["card_id"]) if row["card_id"] is not None else None
+    pids = notify_transport._card_projects(db, render, card) if render else (
+        [card["project_id"]] if card and card["project_id"] else [])
+    if any(not projects.project_allowed(settings, pid) for pid in pids):
+        return "project_not_allowed"
+    for key, value in scope.items():
+        if key in payload and payload[key] != value:
+            return "scope_mismatch"
+        payload[key] = value
+    payload["version"] = notify_cards.TRANSPORT_VERSIONS[transport]
+    return None
+
+
 def _confirmation_origin(identity: dict[str, str | None]) -> dict[str, str | None]:
-    return {key: identity[key] for key in _ORIGIN_KEYS}
+    origin = {key: identity[key] for key in _ORIGIN_KEYS}
+    if identity.get("transport"):
+        origin.update({key: identity[key] for key in (
+            "transport", "application_id", "route_epoch")})
+    return origin
 
 
 def _build_preview(data: dict, settings: dict[str, Any],
@@ -557,6 +654,26 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
                            identity: dict[str, str | None]) -> str:
     retry_budget = None
     action = data.get("action")
+    if action == "card_resolve":
+        error = _authorize_system(settings, identity) or _reason_error(data)
+        if error:
+            return _deny(error)
+        requests, mcs_view = _adapter_modules()
+        payload = _command_base(requests, identity, data, None, "ops.card_resolve")
+        del payload["project_id"]
+        payload.update({k: data[k] for k in _CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
+                        if k in data})
+        view = mcs_view.View(settings["snapshot"])
+        try:
+            error = _card_resolution(view, settings, identity, payload)
+        finally:
+            view.close()
+        if error or requests.validate(payload):
+            return _deny(error or "invalid_command")
+        origin = _confirmation_origin(identity)
+        return _ok(operation="control", phase="preview", payload=payload, origin=origin,
+                   payload_hash=requests.payload_hash({"payload": payload, "origin": origin}),
+                   queued=False, confirmation_required=True)
     if action in ("update_apply", "update_rollback", "restore_approve"):
         # Projectless lifecycle ops — user/chat allowlist only; no view
         # needed (there is no project scope to resolve against).
@@ -644,6 +761,14 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
             payload = _new_control(
                 requests, identity, data, project_id,
                 "ops.adopt_summary", comparison=comparison)
+        elif action in {"signal_dismiss", "extract_feedback", "signal_policy", "refstat_approve"}:
+            error = _reason_error(data)
+            if error:
+                return _deny(error)
+            payload = _new_control(requests, identity, data, project_id, f"ops.{action}")
+            error = _control_reference(view, payload)
+            if error:
+                return _deny(error)
         else:
             return _deny("bad_control_action")
     finally:
@@ -696,7 +821,7 @@ def _confirm(data: dict, settings: dict[str, Any],
             return _deny("invalid_command")
     elif command not in {"request.create", "request.update"}:
         return _deny("invalid_command")
-    if command in _PROJECTLESS_OPS:
+    if command in _PROJECTLESS_OPS or command == "ops.card_resolve":
         error = _authorize_system(settings, identity)
         project_id = None
     else:
@@ -761,6 +886,16 @@ def _confirm(data: dict, settings: dict[str, Any],
                     or comparison["comparison_hash"]
                     != payload.get("comparison_hash")):
                 return _deny("comparison_changed")
+        elif command == "ops.card_resolve":
+            error = _card_resolution(view, settings, identity, payload)
+            if error:
+                return _deny(error)
+        elif command in {"ops.signal_dismiss", "ops.extract_feedback", "ops.signal_policy", "ops.refstat_approve"}:
+            if command == "ops.signal_dismiss" and not payload.get("expected_signal_artifact_id"):
+                return _deny("signal_changed")
+            error = _control_reference(view, payload)
+            if error:
+                return _deny(error)
         elif command not in {"ops.pause", "ops.resume",
                              "ops.update_apply", "ops.update_rollback",
                              "ops.restore_approve"}:
@@ -777,12 +912,12 @@ def _confirm(data: dict, settings: dict[str, Any],
 
 
 def _notification_receipt(data: dict, settings: dict[str, Any],
-                          identity: dict[str, str | None]) -> str:
+                          identity: dict[str, str | None], *, operator=False) -> str:
     """Projectless receipt lookup — the card UX answer to 'what happened
     to my click' after the interaction token expired. User/chat gate is
     the same as any read; the receipt itself narrows by actor, delivery
     scope, and the caller's allowed projects."""
-    if set(data) - _RECEIPT_FIELDS:
+    if set(data) - (_RECEIPT_FIELDS | ({"phase"} if operator else set())):
         return _deny("unknown_field")
     if identity["user_id"] not in settings["allowed_user_ids"]:
         return _deny("user_not_allowed")
@@ -799,12 +934,15 @@ def _notification_receipt(data: dict, settings: dict[str, Any],
                "channel_id": identity["chat_id"],
                "application_id": settings.get("application_id"),
                "guild_id": settings.get("guild_id"),
+               "team_id": settings.get("team_id"),
                "profile": identity["profile"],
                "projects": settings["project_ids"],
-               "operator": False}
+               "operator": operator}
     view = None
     try:
         view = mcs_view.View(settings["snapshot"])
+        if settings.get("project_ids_auto") is True:
+            context["projects"] = [r[0] for r in view.db.execute("SELECT project_id FROM patients")]
         result = view.notification_receipt(
             command_id, payload_hash, context)
     finally:
@@ -819,7 +957,9 @@ def _dispatch(data: dict, settings: dict[str, Any],
     if op == "status":
         if set(data) - _STATUS_FIELDS:
             return _deny("unknown_field")
-        project_id, error = _authorize(settings, identity, data.get("project_id"))
+        project_id, error = ((None, _authorize_system(settings, identity))
+                            if "project_id" not in data else
+                            _authorize(settings, identity, data.get("project_id")))
         return (_deny(error) if error
                 else _view_read(settings, data, project_id, "status"))
     if op == "read":
@@ -827,7 +967,10 @@ def _dispatch(data: dict, settings: dict[str, Any],
             return _notification_receipt(data, settings, identity)
         if set(data) - _READ_FIELDS or data.get("kind") not in _READ_KINDS:
             return _deny("bad_read")
-        project_id, error = _authorize(settings, identity, data.get("project_id"))
+        project_id, error = ((None, _authorize_system(settings, identity))
+                            if "project_id" not in data and data["kind"] in (
+                                "stats", "signals", "read_model", "metadata_report") else
+                            _authorize(settings, identity, data.get("project_id")))
         if error:
             return _deny(error)
         return _view_read(settings, data, project_id, data["kind"])
@@ -845,6 +988,8 @@ def _dispatch(data: dict, settings: dict[str, Any],
         return _build_preview(data, settings, identity)
     if op == "control":
         phase = data.get("phase")
+        if phase == "receipt":
+            return _notification_receipt(data, settings, identity, operator=True)
         if phase == "confirm":
             return _confirm(data, settings, identity, operation="control")
         if phase != "preview":

@@ -152,6 +152,12 @@ class Actions:
             word, *rest = value.split(None, 1) or [""]
             if word == SUMMARY_WORD:
                 await self._summary(user, rest[0] if rest else "")
+            elif word.lower() == "mcs":
+                from adapters.common import commands
+                answer = await asyncio.to_thread(
+                    commands.answer, self.settings, rest[0] if rest else "",
+                    user=user, channel=self.settings["channel_id"])
+                await self._say(user, answer)
             return
         if not self._pinned(session["token"], actor):
             self.reg.drop_modal(mid)

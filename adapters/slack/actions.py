@@ -30,6 +30,7 @@ _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
           "mytasks", "unacked", "search", "digest")
 SUMMARY_COMMAND = "/mcs-summary"
+MCS_COMMAND = "/mcs"
 RESULT_POLL_S = 0.25
 # the 📝 modal waits this long for the runner's form (prefill + roster)
 # before opening — trigger_id lives ~3s; a slow drain opens without it
@@ -165,6 +166,21 @@ class Actions:
         command = getattr(self._app, "command", None)
         if command is not None:
             command(SUMMARY_COMMAND)(self._summary)
+            command(MCS_COMMAND)(self._command)
+
+    async def _command(self, ack, body):
+        await ack()
+        if not (self._active and body.get("team_id") == self._settings["team_id"]
+                and body.get("api_app_id") == self._settings["application_id"]
+                and body.get("user_id") in self._settings["allowed_user_ids"]
+                and body.get("channel_id") == self._settings["channel_id"]):
+            return
+        from adapters.common import commands, text
+        answer = await asyncio.to_thread(
+            commands.answer, self._settings, body.get("text"),
+            user=body["user_id"], channel=body["channel_id"])
+        for chunk in text.split_body(answer, max_chunks=None):
+            await self._say(body["channel_id"], body["user_id"], chunk)
 
     async def _summary(self, ack, body):
         """``/mcs-summary <scope> [name:名前]`` — the clicker-only summary

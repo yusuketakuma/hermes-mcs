@@ -1,6 +1,6 @@
-# MCS Hermes plugin（Discord コマンド／Discord・Slack カード）
+# MCS Hermes plugin（Discord・Slack コマンド／カード）
 
-plugin 名は互換のため `mcs-discord-commands` のまま。`/mcs` コマンドは Discord のみ、
+plugin 名は互換のため `mcs-discord-commands` のまま。`/mcs <JSON>` は Discord と Slack に対応し、
 インタラクティブカード worker は Discord（`mcs_discord`）と Slack（`mcs_slack`）の両方を持つ。
 
 既存Hermesのnative Discord受信とallowlistを使う独立plugin。Hermes側には
@@ -11,7 +11,12 @@ optional `command_context` とnative入力provenanceの対応が必要。
 既存の固定pinが対応済みとは扱わない。
 モデルtoolや任意shellは登録せず、`/mcs <JSON>` だけを登録する。
 
-現状の範囲はstatus、snapshot閲覧、正式依頼と限定運用操作のpreview/confirm、receipt閲覧。
+status、全18種類のsnapshot閲覧、正式依頼と全13種類の運用操作のpreview/confirm、receipt閲覧に対応します。
+Slackは既存接続のslash command、LINE WORKSは独立アダプターの本人1:1トークで
+`mcs <JSON>`を使い、独立モードも同じ検証・承認処理を使います。
+閲覧にはQC・統計・シグナル・read model・メタデータ差分を含み、運用操作には
+シグナル除外・抽出訂正・ポリシー変更・参照統計承認・配送状態の手動解決を含みます。
+患者を指定しない集計はsnapshot内の全患者が許可対象である場合だけ利用できます。
 Loop候補の採用も既存requestのpreview/confirmを使う。
 
 ## アダプターの配置
@@ -66,7 +71,7 @@ Hermesの既存allowlistによる現在の認可も毎回必要。bot、internal
 ```
 
 previewは書込みなし。応答の`payload`（操作者、原文hash、更新時のrevisionを含む）、
-`origin`（user/chat/scope/profile）、`payload_hash`を確認する。
+`origin`（user/chat/scope/profile。Slack・LINE WORKSではtransport/application/route epochも含む）、`payload_hash`を確認する。
 人が同じ送信元scopeから、これらをそのまま含む次のJSONを送る：
 
 ```json
@@ -106,7 +111,17 @@ preview／confirm／原本適用時に原文・スレッド指紋・設定世代
 `loops`の`linked_requests`と`requests`の`loop_links`から関連を表示し、正式状態はrequest行から読む。
 新しい候補世代へ既存リンクを自動移行せず、必要なら改めて人が確認する。
 
-## 限定運用操作
+## 運用操作
+
+対応actionは `scan` / `retry` / `pause` / `resume` / `adopt_summary` /
+`update_apply` / `update_rollback` / `restore_approve` / `signal_dismiss` /
+`extract_feedback` / `signal_policy` / `refstat_approve` / `card_resolve` です。
+全操作をpreview/confirmで実行し、理由が必要な操作ではreasonを省略できません。
+配送の手動解決は保存された配送scopeと患者権限を照合します。Discordでは
+カード設定のapplication_id・guild_idも設定してください。
+配送操作のreceiptは `{"op":"control","phase":"receipt","command_id":"ID","payload_hash":"hash"}`
+で確認でき、保存されたscope・患者権限を再検証します。
+
 
 assist要約の比較・採用は次の操作を使う。
 
@@ -360,3 +375,6 @@ scripts/run_tests.sh /absolute/path/to/mcs/integration/test_hermes_discord.py -q
 
 実plugin discovery、native Discord event構築、gateway dispatch、公開snapshot、限定inbox、
 原本側drainまでをtempディレクトリ内で通す。実際のDiscord／MCSサービスには接続しない。
+
+Slackの `/mcs` は[導入手順](../docs/guides/INSTALLATION.md)でアプリへの登録が必要です。
+LINE WORKSの入口は[専用手順](../docs/guides/LINEWORKS.md)を参照してください。

@@ -89,7 +89,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | 構造化抽出（ルール + ローカルLLM） | ✓ | ✓ |
 | アラートシグナル（検出） | ✓ | ✓ |
 | Discord/Slack への通知配送 | ✓ — Hermes公式接続 | ✓ — 独立公式SDK接続 |
-| Slack/Discordの対話カード（Discord `/mcs`） | ✓ | ✓ |
+| Slack/Discordの対話カード・`/mcs` | ✓ | ✓ |
 | LINE WORKSへの通知・本人1:1での操作 | ✓ — 独立接続を設定 | ✓ — 独立接続を設定 |
 | semantic v4（shadow/enforce） | ✓ | ✓ |
 | 定期実行の仕組み | hermes cron + launchd | 独立hostをnative supervisorで常駐 |
@@ -737,3 +737,19 @@ SLACK_HOME_CHANNEL=C01234567890        # 任意: cron/通知の既定ch
 Hermes連携では plugin settings の `snapshot` が必要です（未設定だと「元データが設定されていません」と返します）。
 返答は押した本人だけに見え（ephemeral）、`slack_allowed_user_ids` 以外のユーザーは拒否されます。
 同名のコマンドを他アプリ・Hermes側で登録していないことを確認してください。
+
+### 任意: `/mcs <JSON>`（全機能の閲覧・依頼管理・運用承認）
+
+Slackアプリの **Slash Commands** に `/mcs`、Usage Hint `<JSON>` を登録し、
+Bot Token Scopesの `commands` を確認してアプリを再インストールします。
+Socket ModeではRequest URLは不要です。`/mcs-summary` は引き続き使えます。
+許可ユーザー・固定チャンネル・公開snapshot・cmd inboxとinteractive設定が必要です。
+Hermesでは既存Slack接続を使い、独立モードでは同じコマンドを独立SDK接続に登録します。
+
+```text
+/mcs {"op":"read","kind":"qc","project_id":1}
+/mcs {"op":"read","kind":"signals","project_id":1}
+```
+
+全コマンドと人承認のpreview/confirm形式は[plugin手順](../../hermes_plugin/README.md)を参照してください。
+変更コードの反映にはHermes gatewayまたは独立Slackアダプターの再起動が必要です。

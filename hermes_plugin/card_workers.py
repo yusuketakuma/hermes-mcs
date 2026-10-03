@@ -125,6 +125,9 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     snapshot = ctx.get_config("snapshot", None)
     if isinstance(snapshot, str) and snapshot.strip():
         settings["snapshot"] = snapshot.strip()
+    inbox = ctx.get_config("inbox", None)
+    if isinstance(inbox, str) and inbox.strip():
+        settings["inbox"] = inbox.strip()
     if ctx.get_config("project_ids_auto", None) is True:
         settings["project_ids_auto"] = True
     return settings

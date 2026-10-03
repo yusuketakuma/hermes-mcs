@@ -67,6 +67,9 @@ def _read_metadata(db, mid, source) -> dict:
         content = None
     errors = str(error).split(",") if error else []
     for key, (valid, status) in _FIELDS.items():
+        if key + "_invalid" in errors:
+            result[status] = "invalid"
+            continue
         field = content.get(key) if isinstance(content, dict) else None
         if not isinstance(content, dict):
             result[status] = "invalid"

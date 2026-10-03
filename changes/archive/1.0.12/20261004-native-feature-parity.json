@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "Slack・LINE WORKSでも全機能のコマンド操作に対応",
+  "summary": "Hermesあり・なしのDiscord、Slack、LINE WORKSで共通の閲覧・依頼管理・運用承認を利用できます。QC・統計・シグナル等の閲覧と全13種の運用操作を既存のpreview/confirmとreceipt経路に接続し、送信元・患者権限・参照の再検証を保ちます。",
+  "upgrade": "Slackはアプリに /mcs と commands 権限を登録して再インストールしてください。Hermes gateway、独立Slack/DiscordまたはLINE WORKSアダプターの該当プロセスを更新後に再起動してください。LINE WORKSは許可された本人トークで mcs に続けてJSON を使用します。既存の通知・取得・承認条件の既定値は変更しません。",
+  "refs": [
+    "adapters/common/commands.py",
+    "adapters/slack/actions.py",
+    "adapters/lineworks/actions.py",
+    "hermes_plugin/__init__.py"
+  ],
+  "details": [
+    "既存のDiscordコマンド検証をSlack slash commandとLINE WORKSの本人1:1入力でも使い、全18閲覧kindとstatus・全13運用actionを共有する。",
+    "本人のpreview/confirm、最新参照とhashの照合、患者権限、送信元scope、cmd inboxとreceiptを維持する。全体集計はsnapshot内の全患者に権限がある場合だけ許可する。",
+    "LINE WORKSはHermesにnative接続がないため、Hermesあり・なしで同じ独立アダプターを使用する。全6構成の合成テストと固定SDK統合を検証し、実サービスへの配備・送信は未実施。"
+  ]
+}

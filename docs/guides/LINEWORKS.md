@@ -223,3 +223,20 @@ URL と file ID の有効期限は 24 時間で、同じ URL への再アップ�
 間でも60秒の待機を共有します。同一リソースへの同時書込みを避け、
 ドメイン全体の同時接続上限 5 に注意します。
 [公式 API 使用上限](https://developers.worksmobile.com/jp/docs/rate-limits)
+
+## 本人トークで全機能を操作する
+
+許可された操作者がBotとの1:1トークで `mcs <JSON>` を送ると、公開snapshotの
+閲覧・QC・統計・シグナル・依頼管理・運用承認を利用できます。
+共有トークの自由入力はこの入口では処理しません。入力フォームの会話中はフォームを先に完了してください。
+
+```text
+mcs {"op":"read","kind":"qc","project_id":1}
+mcs {"op":"request","phase":"preview","action":"create","project_id":1,"source_message_id":10,"title":"合成の確認依頼","reason":"本人が原文を確認"}
+```
+
+確定には応答のpayload・origin・payload_hashをそのまま含むconfirmを本人が送ります。
+[共通の操作形式](../../hermes_plugin/README.md)の `/mcs` を `mcs` に置き換えてください。
+同じ本人・通知scopeでの確定、最新snapshotでの参照照合、runnerでの再検証とreceiptを維持します。
+Hermesあり・なしで機能は共通です。LINE WORKSの接続はどちらも独立アダプターが所有し、
+更新コードの反映にはそのアダプターの再起動が必要です。

@@ -113,6 +113,20 @@ def test_report_never_writes(db_path):
     assert hashlib.sha256(db_path.read_bytes()).hexdigest() == before
 
 
+def test_omitted_zero_kind_matches_but_positive_cancellation_differs(db_path):
+    led = Ledger(str(db_path))
+    with led.db:
+        led.db.execute("DELETE FROM message_metadata")
+        _row(led.db, 1, "capture", [_stamp("viewed", count=0)])
+        _row(led.db, 1, "shadow", [])
+        _row(led.db, 2, "capture", [_stamp("viewed", count=1)])
+        _row(led.db, 2, "shadow", [])
+    rep = metadata_report.build_report(led, now=NOW)
+    assert rep["outcomes"] == {"match": 1, "mismatch": 1}
+    assert rep["count_diff_by_type"] == {"viewed": 1}
+    led.close()
+
+
 def test_cli_runs_against_db(db_path):
     for flags in (["--json"], []):
         res = subprocess.run([sys.executable, str(SCRIPT), "--db", str(db_path),

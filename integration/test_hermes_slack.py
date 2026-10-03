@@ -107,6 +107,13 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
 
         app.action = action
         app.view = lambda matcher: lambda handler: handler
+        app.native_commands = {}
+        def attach_command(name):
+            def attach(handler):
+                app.native_commands[name] = handler
+                return handler
+            return attach
+        app.command = attach_command
         return app, client, registered, handlers
 
     app, client, _, handlers = native_app()
@@ -146,6 +153,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
         supervisor = supervisors[0]
         try:
             await asyncio.wait_for(registered.wait(), timeout=2)
+            assert set(fresh_app.native_commands) == {"/mcs", "/mcs-summary"}
             spec = _spec()
             spec["parts"]["context"]["project_id"] = 1
             outcome = await supervisor._sender.perform(spec)
