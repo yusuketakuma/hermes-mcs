@@ -1974,6 +1974,49 @@ def test_self_reaction_only_on_request_post(led):
     assert len(_ph_open(led.db)) == 1
 
 
+def test_failed_refresh_never_uses_previous_stamp_as_response(led):
+    from types import SimpleNamespace
+    from message_metadata import get_message_metadata
+    _ph_request(led.db)
+    _capture(led.db, 1, [_stamp("accepted", True)])
+    # An invalid recapture retains the observation for history, but must
+    # not turn it into a current response or publish a failed refresh.
+    led.db.execute("UPDATE message_metadata SET last_error='reactions_invalid'")
+    assert get_message_metadata(led.db, 1)["reactions_status"] == "invalid"
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+    led.db.execute("UPDATE message_metadata SET last_error=NULL")
+    _ev(led, SELF_REACT_CFG)
+    assert not _ph_open(led.db)
+    before = tuple(led.db.execute("SELECT * FROM message_metadata").fetchone())
+    led.save_metadata_shadow(SimpleNamespace(
+        message_id=1, project_id=1, metadata={}, metadata_errors=["reactions_invalid"]),
+        publish=True)
+    assert tuple(led.db.execute(
+        "SELECT * FROM message_metadata WHERE source='capture'").fetchone()) == before
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+
+
+def test_stamp_resolved_request_stays_watched_until_cancellation(led):
+    from types import SimpleNamespace
+    _ph_request(led.db)
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+    _capture(led.db, 1, [_stamp("accepted", True)])
+    _ev(led, SELF_REACT_CFG)
+    assert not _ph_open(led.db)
+    assert 1 in {r["message_id"] for r in led.metadata_watch_targets(now=NOW)}
+    # Simulate the actual refresh publication, not a direct replacement
+    # of the capture row used by the existing lifecycle test.
+    led.save_metadata_shadow(SimpleNamespace(
+        message_id=1, project_id=1, metadata={"reactions": []}, metadata_errors=[]),
+        publish=True)
+    _ev(led, SELF_REACT_CFG)
+    assert len(_ph_open(led.db)) == 1
+
+
+
 def test_self_reaction_detector_error_never_resolves(led, monkeypatch):
     import message_metadata
     _ph_request(led.db)

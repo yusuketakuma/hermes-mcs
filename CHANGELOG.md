@@ -6,6 +6,49 @@
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-10-04
+
+**全通知先のコマンド操作とスタンプ判定の修正**
+
+Hermesあり・なしのDiscord・Slack・LINE WORKSで閲覧と人承認操作を共通化し、スタンプの取得失敗・取消・差分を正しく扱います。Slackのコマンド登録と更新後の再起動が必要です。
+
+### 新機能
+
+- **Slack・LINE WORKSでも全機能のコマンド操作に対応**
+  Hermesあり・なしのDiscord、Slack、LINE WORKSで共通の閲覧・依頼管理・運用承認を利用できます。QC・統計・シグナル等の閲覧と全13種の運用操作を既存のpreview/confirmとreceipt経路に接続し、送信元・患者権限・参照の再検証を保ちます。
+
+### 不具合修正
+
+- **スタンプの取消・取得失敗を正しく判定**
+  取得に失敗したスタンプを有効な対応として扱わず、解消済みの依頼も監視期間内は取消を再確認します。公開を無効にしたshadow取得でも押した人を取得でき、件数ゼロの表現違いによる誤差分を抑えます。
+
+### 更新時の注意
+
+- メタデータ取得・公開の既定値、取得上限、既読化と人承認の条件は変更しません。変更コードを稼働workerへ反映してください。
+
+- Slackはアプリに /mcs と commands 権限を登録して再インストールしてください。Hermes gateway、独立Slack/DiscordまたはLINE WORKSアダプターの該当プロセスを更新後に再起動してください。LINE WORKSは許可された本人トークで mcs に続けてJSON を使用します。既存の通知・取得・承認条件の既定値は変更しません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### スタンプの取消・取得失敗を正しく判定
+
+- 不正な保存フィールドを無効として読み取り、新しいshadow取得の失敗時には本人スタンプを応答根拠に使わない。不正なshadowをcaptureへ昇格しない。
+- 本人スタンプで解消した未応答候補を監視期間内の再取得対象に残し、取消の公開後に再評価する。間隔・失敗時backoff・取得予算は維持する。
+- 押下者取得と鮮度判定は最新の正常なcaptureまたはshadow観測を使い、公開設定とは独立させる。差分比較では種別省略の件数をゼロとする。
+- 根拠: mcs/core/ledger.py、mcs/ops/mcs_signals.py、mcs/views/message_metadata.py、mcs/views/metadata_report.py
+
+#### Slack・LINE WORKSでも全機能のコマンド操作に対応
+
+- 既存のDiscordコマンド検証をSlack slash commandとLINE WORKSの本人1:1入力でも使い、全18閲覧kindとstatus・全13運用actionを共有する。
+- 本人のpreview/confirm、最新参照とhashの照合、患者権限、送信元scope、cmd inboxとreceiptを維持する。全体集計はsnapshot内の全患者に権限がある場合だけ許可する。
+- LINE WORKSはHermesにnative接続がないため、Hermesあり・なしで同じ独立アダプターを使用する。全6構成の合成テストと固定SDK統合を検証し、実サービスへの配備・送信は未実施。
+- 根拠: adapters/common/commands.py、adapters/slack/actions.py、adapters/lineworks/actions.py、hermes_plugin/__init__.py
+
+</details>
+
 ## [1.0.11] — 2026-10-03
 
 **MCSスタンプの観測表示と絞込みサマリー・更新手順**

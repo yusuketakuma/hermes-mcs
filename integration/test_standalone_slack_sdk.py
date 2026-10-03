@@ -204,6 +204,26 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
             assert wire.ephemerals[-1]["user"] == "U_OPERATOR"
             assert wire.ephemerals[-1]["text"] == "合成サマリー"
             wire.ephemerals.clear()
+            from adapters.common import commands
+            admitted = []
+
+            def native_answer(scope, raw, **identity):
+                admitted.append((scope, json.loads(raw), identity))
+                return '{"ok":true,"operation":"read"}'
+
+            monkeypatch.setattr(commands, "answer", native_answer)
+            native = {"command": "/mcs", "text": '{"op":"read","kind":"qc","project_id":123}',
+                      "team_id": "T_SYNTHETIC", "api_app_id": "A_SYNTHETIC",
+                      "user_id": "U_OPERATOR", "channel_id": "C_SYNTHETIC",
+                      "response_url": "https://evil.invalid/"}
+            await dispatch(native, "slash_commands")
+            assert len(admitted) == 1 and admitted[0][2] == {
+                "user": "U_OPERATOR", "channel": "C_SYNTHETIC"}
+            assert json.loads(wire.ephemerals[-1]["text"])["ok"]
+            assert wire.ephemerals[-1]["user"] == "U_OPERATOR"
+            await dispatch({**native, "channel_id": "C_FOREIGN"}, "slash_commands")
+            assert len(admitted) == 1
+            wire.ephemerals.clear()
             outcome = await sender.perform(spec)
             assert outcome["result"] == "delivered"
             reg.put_tokens({token: {**context, "team_id": settings["team_id"],
@@ -319,7 +339,7 @@ def test_real_supervisor_and_socket_start_only_after_scope_lock(tmp_path, monkey
                 stopping.set()  # stop the host even if a connection assertion fails
                 supervisor = _LIVE[registry.scope_key(settings)]
                 assert supervisor._worker._lock_fd is not None
-                assert supervisor._actions._active and len(app._async_listeners) == 6
+                assert supervisor._actions._active and len(app._async_listeners) == 7
                 assert kwargs["proxy"] is None and kwargs["max_msg_size"] == 1024 * 1024
                 assert kwargs["ssl"] is True
                 ws_calls.append(url)

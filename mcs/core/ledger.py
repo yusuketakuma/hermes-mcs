@@ -1296,7 +1296,7 @@ class Ledger:
         now = time.time()
         with self.db:
             self._save_message_metadata(m, source="shadow", now=now)
-            if publish is True and error is None:
+            if publish is True and error is None and not getattr(m, "metadata_errors", []):
                 self._save_message_metadata(m, source="capture", now=now)
 
     def _reaction_actor_watch_sql(self):
@@ -1318,7 +1318,12 @@ class Ledger:
         return self.db.execute(f"""
           SELECT m.message_id,m.project_id FROM messages m
           JOIN ({watch}) w ON w.message_id=m.message_id
-          JOIN message_metadata md ON md.message_id=m.message_id AND md.source='capture'
+          JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
+            SELECT source FROM message_metadata latest
+            WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
+              AND json_valid(latest.content)
+              AND json_type(latest.content,'$.reactions.value')='array'
+            ORDER BY latest.checked_at DESC,latest.source='capture' DESC LIMIT 1)
           LEFT JOIN message_reaction_actor_fetch f ON f.message_id=m.message_id
           WHERE json_valid(md.content)
             AND json_type(md.content,'$.reactions.value')='array'
@@ -1374,7 +1379,7 @@ class Ledger:
 
     def metadata_watch_targets(self, limit=5, *, now=None):
         """Oldest observations in the bounded active watch set, excluding backoff."""
-        from mcs_signals import self_sender_id
+        from mcs_signals import _thresholds, self_sender_id
         now = time.time() if now is None else now
         return self.db.execute("""
           SELECT m.message_id,m.project_id,m.parent_id,COUNT(*) OVER() AS due_total FROM messages m
@@ -1398,14 +1403,23 @@ class Ledger:
                 WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
                   AND a.project_id=m.project_id AND e.value=m.message_id
                   AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
-                  AND json_extract(a.content,'$.state')='open'
+                  AND (json_extract(a.content,'$.state')='open'
+                    OR (json_extract(a.content,'$.state')='resolved'
+                      AND m.posted_at_ts>=?
+                      AND EXISTS(SELECT 1 FROM message_metadata cap,json_each(
+                        CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{}' END,
+                        '$.reactions.value') r
+                        WHERE cap.message_id=m.message_id AND cap.source='capture'
+                          AND json_extract(r.value,'$.self_reacted')=1
+                          AND json_extract(r.value,'$.type') IN ('accepted','completed'))))
                   AND NOT EXISTS(SELECT 1 FROM artifacts newer
                     WHERE newer.kind=a.kind AND json_valid(newer.meta)
                       AND json_extract(newer.meta,'$.key')=json_extract(a.meta,'$.key')
                       AND newer.artifact_id>a.artifact_id)))
           ORDER BY COALESCE(md.checked_at,0),m.message_id LIMIT ?
         """, (now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
-              self_sender_id(self.db), now - 7*86400, limit)).fetchall()
+              self_sender_id(self.db), now - 7*86400,
+              now - _thresholds(self.db)["fyi_max_age_d"] * 86400, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -2334,7 +2348,9 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
                 out["self_included"] = False
             seen = db.execute(
                 "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
-                "WHERE message_id=? AND source='capture' AND json_valid(content)",
+                "WHERE message_id=? AND last_error IS NULL AND json_valid(content) "
+                "AND json_type(content,'$.reactions.value')='array' "
+                "ORDER BY checked_at DESC,source='capture' DESC LIMIT 1",
                 (message_id,)).fetchone()
             changed = seen is not None and seen[0] is not None and seen[0] > f[0]
         if f[2] is not None:

@@ -203,6 +203,22 @@ def test_unknown_self_never_prunes(tmp_path):
     store.close()
 
 
+def test_shadow_detects_first_actor_and_changes_without_publishing(db, monkeypatch):
+    save(db, message(reactions=[]))
+    assert not db.reaction_actor_targets()
+    now = time.time() + 10
+    monkeypatch.setattr(ledger_mod.time, "time", lambda: now)
+    db.save_metadata_shadow(message(reactions=reactions(viewed=1)), publish=False)
+    assert get_message_metadata(db.db, 1)["reactions"] == []
+    assert [r["message_id"] for r in db.reaction_actor_targets()] == [1]
+    db.save_reaction_actors(1, ok(5)["actors"], True)
+    now += 1
+    db.save_metadata_shadow(message(reactions=reactions(viewed=2)), publish=False)
+    assert [r["message_id"] for r in db.reaction_actor_targets()] == [1]
+    assert reaction_actor_summary(db.db, 1)["state"] == "stale"
+
+
+
 # ---------- 22-E publish ----------
 
 def dump_except_metadata(store):

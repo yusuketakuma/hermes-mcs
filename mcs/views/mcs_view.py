@@ -802,7 +802,7 @@ class View:
                 "candidates": result,
                 # 🚫 dismissals per type and reason code (all projects);
                 # counts only — no actor or free text
-                "dismissals": mcs_signals.dismiss_reason_counts(self.db),
+                "dismissals": mcs_signals.dismiss_reason_counts(self.db, args.get("project")),
                 "note": "候補は原記録の人による確認を求める提示です。"
                         "却下件数は人が付けた区分で、候補が誤りだった"
                         "ことの証明ではありません。"

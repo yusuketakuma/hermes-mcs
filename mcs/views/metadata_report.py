@@ -34,10 +34,12 @@ def _lag_bucket(seconds):
     return next(name for limit, name in LAG_BUCKETS if seconds < limit)
 
 
-def _watch(reader, now):
+def _watch(reader, now, project_id=None):
     """Due watch-set targets via the ledger's own selector (read only)."""
     try:
         targets = reader.metadata_watch_targets(limit=-1, now=now)
+        if project_id is not None:
+            targets = [r for r in targets if r["project_id"] == project_id]
     except sqlite3.Error:
         return {"available": False}
     checked = []
@@ -53,7 +55,7 @@ def _watch(reader, now):
                 round(now - min(checked)) if checked else None}
 
 
-def build_report(reader, now=None) -> dict:
+def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
     from message_metadata import _read_metadata
     now = time.time() if now is None else now
@@ -64,7 +66,11 @@ def build_report(reader, now=None) -> dict:
     has_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                            "AND name='message_metadata'").fetchone()
     mids = [r[0] for r in db.execute(
-        "SELECT DISTINCT message_id FROM message_metadata")] if has_table else []
+        "SELECT DISTINCT md.message_id FROM message_metadata md "
+        "JOIN messages m ON m.message_id=md.message_id WHERE m.project_id=?",
+        (project_id,))] if has_table and project_id is not None else (
+        [r[0] for r in db.execute("SELECT DISTINCT message_id FROM message_metadata")]
+        if has_table else [])
     for mid in mids:
         cap = _read_metadata(db, mid, "capture")
         sh = _read_metadata(db, mid, "shadow")
@@ -92,7 +98,7 @@ def build_report(reader, now=None) -> dict:
         c, s = _by_type(cap["reactions"]), _by_type(sh["reactions"])
         types = sorted(set(c) | set(s))
         diff_types = [t for t in types
-                      if c.get(t, {}).get("count") != s.get(t, {}).get("count")]
+                      if c.get(t, {}).get("count", 0) != s.get(t, {}).get("count", 0)]
         flag_types = [t for t in types
                       if c.get(t, {}).get("self_reacted", False)
                       != s.get(t, {}).get("self_reacted", False)]
@@ -111,7 +117,7 @@ def build_report(reader, now=None) -> dict:
             "shadow_failures_by_code": dict(sorted(failures.items())),
             "time_direction": dict(sorted(direction.items())),
             "capture_to_shadow_lag": dict(sorted(lag.items())),
-            "watch": _watch(reader, now), "note": NOTE}
+            "watch": _watch(reader, now, project_id), "note": NOTE}
 
 
 def render_text(rep) -> str:

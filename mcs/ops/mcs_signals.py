@@ -341,8 +341,13 @@ def _self_reaction_response(db, mid):
     """The logged-in user's 承知/完了 stamp observed on the request post
     itself (capture only). Other stamps, other people's stamps and
     unfetched or invalid metadata never count."""
-    from message_metadata import get_message_metadata
-    reactions = get_message_metadata(db, mid)["reactions"] or ()
+    from message_metadata import get_message_metadata, get_metadata_shadow_status
+    meta = get_message_metadata(db, mid)
+    shadow = get_metadata_shadow_status(db, mid)
+    if meta["last_error"] or (shadow["last_error"] and (
+            shadow["checked_at"] or 0) >= (meta["checked_at"] or 0)):
+        return False
+    reactions = meta["reactions"] or ()
     return any(r["self_reacted"] and r["type"] in SELF_RESPONSE_REACTIONS
                for r in reactions)
 
@@ -1428,17 +1433,18 @@ def _notify(ledger, members, now, th):
     return 1
 
 
-def dismiss_reason_counts(db) -> dict:
+def dismiss_reason_counts(db, project_id=None) -> dict:
     """Human dismissals per signal type and reason code — every
     'dismissed' transition counts once; rows from before reason codes
     existed count as 'unclassified'. Read-only; no actor or free text.
     A dismissal is a label, not proof the signal was wrong."""
     from mcs_operations import DISMISS_REASON_CODES
     out: dict = {}
+    where, params = (" AND project_id=?", (ARTIFACT_KIND, project_id)) if project_id is not None else (
+        "", (ARTIFACT_KIND,))
     for (content_s,) in db.execute(
             "SELECT content FROM artifacts WHERE kind=? AND json_valid(content)"
-            " AND json_extract(content,'$.state')='dismissed'",
-            (ARTIFACT_KIND,)):
+            " AND json_extract(content,'$.state')='dismissed'" + where, params):
         c = json.loads(content_s)
         if not isinstance(c, dict):
             continue
