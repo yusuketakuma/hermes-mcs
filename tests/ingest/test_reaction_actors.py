@@ -303,19 +303,19 @@ def ok(*ids):
         {"actor_id": i, "reaction_type": "viewed", "profession": None} for i in ids]}
 
 
-def test_stage_caps_two_per_tick_and_detects_swap_on_expiry(db, monkeypatch):
-    for mid in (1, 2, 3):
+def test_stage_caps_four_per_tick_and_detects_swap_on_expiry(db, monkeypatch):
+    for mid in (1, 2, 3, 4, 5):
         save(db, message(mid, reactions=reactions(viewed=1)))
-    calls, adapter = actor_stage_adapter([ok(5), ok(5)])
+    calls, adapter = actor_stage_adapter([ok(5)] * 4)
     result = {}
     stage_metadata_shadow(adapter, db, result, time.monotonic() + 60, actors=True)
-    assert calls == [1, 2] and result["metadata_shadow"]["actors"]["complete"] == 2
+    assert calls == [1, 2, 3, 4] and result["metadata_shadow"]["actors"]["complete"] == 4
     # same counts, different actor: only the 24h expiry refetch can see it
     later = time.time() + 86400 + 60
     monkeypatch.setattr(ledger_mod.time, "time", lambda: later)
-    calls, adapter = actor_stage_adapter([ok(6), ok(7)])
+    calls, adapter = actor_stage_adapter([ok(6), ok(7), ok(7), ok(7)])
     stage_metadata_shadow(adapter, db, {}, time.monotonic() + 60, actors=True)
-    assert calls == [3, 1]
+    assert calls == [5, 1, 2, 3]
     # the swap is seen: 7 is current, 5 stays in the history as removed
     assert db.db.execute("SELECT actor_id FROM message_reaction_actors WHERE message_id=1 "
                          "AND removed_at IS NULL").fetchall()[0][0] == 7

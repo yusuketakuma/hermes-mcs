@@ -263,6 +263,8 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
 
 def test_shadow_watch_uses_current_ack_generation(led, pinned_clock):
     _delivered_card(led)
+    with led.db:   # older than the activity tiers: only the unacked card keeps it watched
+        led.db.execute("UPDATE messages SET posted_at_ts=?", (NOW - 40 * 86400,))
     manifest = led.db.execute(
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id DESC LIMIT 1"
     ).fetchone()

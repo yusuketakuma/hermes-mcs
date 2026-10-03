@@ -40,6 +40,15 @@ HEAD_SYNC_OVERLAP_S = 120
 # selection this long, so one broken karte cannot burn every tick's cap
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
 METADATA_SHADOW_INTERVAL_S = 30 * 60
+# Stamp re-read interval by the age of the thread's newest post (owner
+# 2026-10-03: stamps land after a post is written, on roots and replies
+# alike). Sized from live volume (~18 posts/day): about 65 GET/h, peak
+# under METADATA_SHADOW_TICK_CAP per 5-minute tick. Older than 30 days:
+# no longer re-read (the last observation is kept).
+METADATA_REFRESH_TIERS = ((2 * 3600, 10 * 60), (24 * 3600, 30 * 60),
+                          (3 * 86400, 2 * 3600), (7 * 86400, 6 * 3600),
+                          (30 * 86400, 24 * 3600))
+METADATA_SHADOW_TICK_CAP = 8
 METADATA_SHADOW_BACKOFF_S = 6 * 3600
 # 第2層: a complete actor set older than this is refetched even when the
 # post's counts and self flag look unchanged — actors can swap silently
@@ -1307,21 +1316,21 @@ class Ledger:
                 self._save_message_metadata(m, source="capture", now=now)
 
     def _reaction_actor_watch_sql(self):
-        """Own root posts of the last 7 days in active rooms (第2層 watch set)."""
-        from mcs_signals import self_sender_id
+        """Roots and replies of threads active in the last 7 days in active
+        rooms (第2層 watch set) — stamps are pressed on both."""
         return ("""SELECT m.message_id FROM messages m
           JOIN patients p ON p.project_id=m.project_id
           WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?""",
-                self_sender_id(self.db))
+            AND (SELECT MAX(x.posted_at_ts) FROM messages x
+                 WHERE x.project_id=m.project_id
+                   AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?""",
+                None)
 
-    def reaction_actor_targets(self, limit=2, *, now=None):
-        """Watched own roots whose captured reactions changed since the last
+    def reaction_actor_targets(self, limit=4, *, now=None):
+        """Watched posts whose captured reactions changed since the last
         complete actor fetch, or whose complete set expired; failures back off."""
         now = time.time() if now is None else now
-        watch, self_id = self._reaction_actor_watch_sql()
-        if self_id is None:
-            return []
+        watch, _ = self._reaction_actor_watch_sql()
         return self.db.execute(f"""
           SELECT m.message_id,m.project_id FROM messages m
           JOIN ({watch}) w ON w.message_id=m.message_id
@@ -1336,7 +1345,7 @@ class Ledger:
                  ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
                    OR f.complete_at<=? END)
           ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
-        """, (self_id, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
+        """, (now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
               now - REACTION_ACTORS_TTL_S, limit)).fetchall()
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
@@ -1384,40 +1393,63 @@ class Ledger:
             """, (message_id, now if complete is True else None, now,
                   None if complete is True else (error or "incomplete")))
 
-    def metadata_watch_targets(self, limit=5, *, now=None):
-        """Oldest observations in the bounded active watch set, excluding backoff."""
-        from mcs_signals import self_sender_id
+    def metadata_watch_targets(self, limit=METADATA_SHADOW_TICK_CAP, *, now=None):
+        """Every post — thread root and reply alike — due for a stamp
+        re-read, most overdue first. Stamps keep arriving after a post is
+        written, mostly while the thread is active, so the interval
+        follows the thread's newest post (METADATA_REFRESH_TIERS): a new
+        reply brings the whole thread back to short intervals. Unacked
+        delivered cards and open pharmacist requests are re-read at least
+        every 30 minutes whatever their age; failures back off."""
         now = time.time() if now is None else now
-        return self.db.execute("""
-          SELECT m.message_id,m.project_id,m.parent_id,COUNT(*) OVER() AS due_total FROM messages m
-          JOIN patients p ON p.project_id=m.project_id
-          LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
-          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND (md.checked_at IS NULL OR md.checked_at<=? -
-              CASE WHEN md.last_error IS NULL THEN ? ELSE ? END)
-            AND ((m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?)
-              OR EXISTS(SELECT 1 FROM notification_cards c
-                WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
-                  AND c.delivery_state='delivered'
-                  AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
-                    JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
-                    WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
-                      AND vm.source_generation=c.source_generation
-                      AND vm.shown=(SELECT shown FROM notification_view_manifests
-                        WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
-              OR EXISTS(SELECT 1 FROM artifacts a,json_each(
-                CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,'$.evidence.message_ids') e
-                WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
-                  AND a.project_id=m.project_id AND e.value=m.message_id
-                  AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
-                  AND json_extract(a.content,'$.state')='open'
-                  AND NOT EXISTS(SELECT 1 FROM artifacts newer
-                    WHERE newer.kind=a.kind AND json_valid(newer.meta)
-                      AND json_extract(newer.meta,'$.key')=json_extract(a.meta,'$.key')
-                      AND newer.artifact_id>a.artifact_id)))
-          ORDER BY COALESCE(md.checked_at,0),m.message_id LIMIT ?
-        """, (now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
-              self_sender_id(self.db), now - 7*86400, limit)).fetchall()
+        tiers = " ".join(f"WHEN ?-act.last<{age} THEN {iv}"
+                         for age, iv in METADATA_REFRESH_TIERS)
+        return self.db.execute(f"""
+          WITH act AS (
+            SELECT project_id, COALESCE(parent_id,message_id) AS root,
+                   MAX(posted_at_ts) AS last FROM messages
+            WHERE body_state IS NOT 'deleted' GROUP BY 1,2),
+          w AS (
+            SELECT m.message_id,m.project_id,m.parent_id,
+                   md.checked_at,md.last_error,
+                   CASE {tiers} END AS tier,
+                   (EXISTS(SELECT 1 FROM notification_cards c
+                     WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
+                       AND c.delivery_state='delivered'
+                       AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
+                         JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
+                         WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
+                           AND vm.source_generation=c.source_generation
+                           AND vm.shown=(SELECT shown FROM notification_view_manifests
+                             WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
+                    OR EXISTS(SELECT 1 FROM artifacts a,json_each(
+                     CASE WHEN json_valid(a.content) THEN a.content ELSE '{{}}' END,'$.evidence.message_ids') e
+                     WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
+                       AND a.project_id=m.project_id AND e.value=m.message_id
+                       AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
+                       AND json_extract(a.content,'$.state')='open'
+                       AND NOT EXISTS(SELECT 1 FROM artifacts newer
+                         WHERE newer.kind=a.kind AND json_valid(newer.meta)
+                           AND json_extract(newer.meta,'$.key')=json_extract(a.meta,'$.key')
+                           AND newer.artifact_id>a.artifact_id))) AS priority
+            FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN act ON act.project_id=m.project_id
+              AND act.root=COALESCE(m.parent_id,m.message_id)
+            LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
+            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'),
+          due AS (
+            SELECT *, CASE WHEN priority THEN MIN(COALESCE(tier,?),?) ELSE tier END AS iv
+            FROM w)
+          SELECT message_id,project_id,parent_id,COUNT(*) OVER() AS due_total FROM due
+          WHERE iv IS NOT NULL
+            AND (checked_at IS NULL OR checked_at<=? -
+                 CASE WHEN last_error IS NULL THEN iv ELSE ? END)
+          ORDER BY checked_at IS NOT NULL, COALESCE(checked_at+iv,iv), message_id
+          LIMIT ?
+        """, (*[now] * len(METADATA_REFRESH_TIERS),
+              METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_INTERVAL_S,
+              now, METADATA_SHADOW_BACKOFF_S, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:

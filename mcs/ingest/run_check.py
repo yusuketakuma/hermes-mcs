@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
-from ledger import Ledger, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S
+from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
 from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
@@ -949,7 +949,7 @@ def stage_karte_summary(adapter, ledger, result, deadline,
 # ---------- stage: derived data ----------
 
 # 第2層 actor walks per tick, inside whatever the shadow budget left
-REACTION_ACTORS_TICK_CAP = 2
+REACTION_ACTORS_TICK_CAP = 4
 
 
 def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
@@ -964,10 +964,10 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
              "published": 0, "deferred": 0, "errors": [],
              "budget_s": round(max(0, shadow_deadline - started), 3),
              "elapsed_s": 0, "deferred_reasons": {},
-             "interval_s": METADATA_SHADOW_INTERVAL_S,
+             "interval_s": "tiered",
              "backoff_s": METADATA_SHADOW_BACKOFF_S}
     result["metadata_shadow"] = stats
-    targets = ledger.metadata_watch_targets(limit=5)
+    targets = ledger.metadata_watch_targets()
     stats["due"] = targets[0]["due_total"] if targets else 0
     stats["deferred"] = max(0, stats["due"] - len(targets))
     if stats["deferred"]:
