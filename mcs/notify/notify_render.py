@@ -17,7 +17,8 @@ import time
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from message_metadata import (get_message_metadata, is_self_sender,
-                              self_stamps, stamp_counts, stamp_line)
+                              self_stamps, stamp_counts, stamp_line,
+                              actor_line)
 import structured_view
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -400,6 +401,10 @@ def _message_post(db, mid, m, sender, head="") -> str:
     sid = m["sender_id"] if "sender_id" in m.keys() else None
     meta["own_post"] = is_self_sender(db, sid)
     out.append(stamp_line(meta))
+    from ledger import reaction_actor_summary
+    who = actor_line(reaction_actor_summary(db, mid))
+    if who:
+        out.append(who)
     out.append(m["body_text"] or "")
     return "\n".join(out)
 

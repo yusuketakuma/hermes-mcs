@@ -103,8 +103,11 @@ def test_walk_boundaries_and_snapshot_params(count):
         assert ("timestamp" in params) is (i > 0)
         assert params.get("timestamp", TS) == TS and params["page"] == i + 1
     for a in walk["actors"]:
-        assert set(a) == {"actor_id", "reaction_type", "profession"}
-    assert NAME not in json.dumps(walk)
+        # #22-D2: name and facility are kept for display; the icon never
+        assert set(a) == {"actor_id", "reaction_type", "profession",
+                          "name", "organization"}
+        assert a["name"] == NAME and a["organization"] == NAME
+    assert "icon" not in json.dumps(walk)
 
 
 def test_walk_multiple_people_and_kinds():
@@ -159,7 +162,8 @@ def test_complete_replaces_and_incomplete_keeps_old_set(db):
     assert s["state"] == "failed" and s["complete_at"] == first
     assert sum(sum(v.values()) for v in s["counts"].values()) == 2
     cols = {r[1] for r in db.db.execute("PRAGMA table_info(message_reaction_actors)")}
-    assert not {"name", "sender_name", "icon_url", "organization"} & cols
+    assert {"actor_name", "organization", "removed_at"} <= cols
+    assert not {"icon_url", "medium_icon_url"} & cols   # the icon is never kept
     assert reaction_actor_summary(db.db, 99)["state"] == "not_fetched"
 
 
@@ -175,7 +179,7 @@ def test_summary_stale_on_expiry_or_changed_counts(db):
     assert reaction_actor_summary(db.db, 1, now=now + 2)["state"] == "stale"
 
 
-def test_targets_change_expiry_backoff_and_prune(db, monkeypatch):
+def test_targets_change_expiry_backoff_and_retention(db, monkeypatch):
     for mid in (1, 2, 3):
         save(db, message(mid, reactions=reactions(viewed=1) if mid != 3 else []))
     now = time.time() + 10
@@ -191,16 +195,32 @@ def test_targets_change_expiry_backoff_and_prune(db, monkeypatch):
     assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 3)] == [1]
     with db.db:
         db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
-    assert db.prune_reaction_actors() == 1
-    assert db.db.execute("SELECT COUNT(*) FROM message_reaction_actor_fetch").fetchone()[0] == 1
+    # retention is unlimited (#22-D3): leaving the watch set never deletes
+    assert db.db.execute("SELECT COUNT(*) FROM message_reaction_actor_fetch").fetchone()[0] == 2
 
 
-def test_unknown_self_never_prunes(tmp_path):
-    store = Ledger(str(tmp_path / "ledger.db"))
-    with store.db:
-        store.db.execute("INSERT INTO message_reaction_actor_fetch VALUES(1,1,1,NULL)")
-    assert store.prune_reaction_actors() == 0 and store.reaction_actor_targets() == []
-    store.close()
+def test_actor_history_keeps_names_and_marks_cancellations(db):
+    """#22-D2/D3 (2026-10-03): names are kept and shown; nothing is
+    deleted — a cancelled stamp is marked removed_at, a re-press clears
+    it, and an incomplete walk never marks anything removed."""
+    save(db, message(reactions=reactions(viewed=2)))
+    a = {"actor_id": 5, "reaction_type": "viewed", "profession": "医師",
+         "name": "合成 一郎", "organization": "合成クリニック"}
+    b = {"actor_id": 6, "reaction_type": "viewed", "name": "合成 花子"}
+    db.save_reaction_actors(1, [a, b], True, now=100.0)
+    names = [x["name"] for x in reaction_actor_summary(db.db, 1, now=101)["actors"]]
+    assert names == ["合成 一郎", "合成 花子"]
+    db.save_reaction_actors(1, [a], False, error="http_error", now=200.0)
+    assert len(reaction_actor_summary(db.db, 1, now=201)["actors"]) == 2
+    db.save_reaction_actors(1, [a], True, now=300.0)
+    rows = db.db.execute("SELECT actor_id,observed_at,removed_at,actor_name FROM "
+                         "message_reaction_actors ORDER BY actor_id").fetchall()
+    assert [tuple(r) for r in rows] == [(5, 100.0, None, "合成 一郎"),
+                                        (6, 100.0, 300.0, "合成 花子")]
+    assert [x["name"] for x in reaction_actor_summary(db.db, 1, now=301)["actors"]] == ["合成 一郎"]
+    db.save_reaction_actors(1, [a, b], True, now=400.0)    # pressed again
+    assert db.db.execute("SELECT observed_at,removed_at FROM message_reaction_actors "
+                         "WHERE actor_id=6").fetchone()[:] == (400.0, None)
 
 
 # ---------- 22-E publish ----------
@@ -243,7 +263,7 @@ def test_config_gates(monkeypatch, cfg, publish, actors):
     seen = {}
     monkeypatch.setattr(run_check, "stage_metadata_shadow",
                         lambda *a, **kw: seen.update(kw))
-    run_check._run_metadata_shadow(None, SimpleNamespace(prune_reaction_actors=lambda: 0),
+    run_check._run_metadata_shadow(None, SimpleNamespace(),
                                    {"errors": []}, 100, cfg)
     assert seen == {"publish": publish, "actors": actors}
 
@@ -296,8 +316,11 @@ def test_stage_caps_two_per_tick_and_detects_swap_on_expiry(db, monkeypatch):
     calls, adapter = actor_stage_adapter([ok(6), ok(7)])
     stage_metadata_shadow(adapter, db, {}, time.monotonic() + 60, actors=True)
     assert calls == [3, 1]
-    assert db.db.execute("SELECT actor_id FROM message_reaction_actors WHERE message_id=1"
-                         ).fetchall()[0][0] == 7
+    # the swap is seen: 7 is current, 5 stays in the history as removed
+    assert db.db.execute("SELECT actor_id FROM message_reaction_actors WHERE message_id=1 "
+                         "AND removed_at IS NULL").fetchall()[0][0] == 7
+    assert db.db.execute("SELECT removed_at IS NOT NULL FROM message_reaction_actors "
+                         "WHERE message_id=1 AND actor_id=5").fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("error", ["http_error", "session_expired"])

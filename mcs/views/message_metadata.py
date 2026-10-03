@@ -167,6 +167,38 @@ def stamp_line(metadata) -> str:
             + ("・再取得失敗" if metadata["last_error"] else ""))
 
 
+ACTOR_NAMES_MAX = 12
+
+
+def actor_line(summary) -> str | None:
+    """Who pressed which stamp (#22-D2: names shown), one line grouped by
+    emoji. None until a walk completed once. A stale or failed walk is
+    labelled with its last complete time — never presented as current."""
+    if not summary or summary.get("complete_at") is None:
+        return None
+    groups: dict = {}
+    for a in summary["actors"]:
+        label = "自分" if a["self"] else (a["name"] or "氏名不明")
+        if a["profession"] and not a["self"]:
+            label += f"（{a['profession']}）"
+        groups.setdefault(STAMP_EMOJI.get(a["reaction_type"], "❔"), []).append(label)
+    shown, parts = 0, []
+    for e in [*STAMP_EMOJI.values(), "❔"]:
+        names = groups.get(e, [])
+        take = names[:max(0, ACTOR_NAMES_MAX - shown)]
+        shown += len(take)
+        if take:
+            parts.append(f"{e} " + "・".join(take)
+                         + (f" 他{len(names) - len(take)}名" if len(names) > len(take) else ""))
+        elif names:
+            parts.append(f"{e} {len(names)}名")
+    text = "押した人: " + (" / ".join(parts) or "なし")
+    if summary["state"] != "complete":
+        when = datetime.fromtimestamp(summary["complete_at"], JST)
+        text += f"（{when:%m-%d %H:%M} 時点）"
+    return text
+
+
 def others_reaction_count(metadata) -> int | None:
     """本人分を除いた反応件数。未取得・不正は None（0件と区別する）。"""
     if metadata["reactions"] is None:

@@ -311,3 +311,29 @@ def test_long_post_keeps_summary_and_stamps_with_its_body():
         assert "".join(chunks) == head + body
         assert all(len(c) <= notify_cards.THREAD_PART_LIMIT for c in chunks)
         assert chunks[0].startswith(head) and len(chunks[0]) > len(head)
+
+
+def test_thread_post_names_who_pressed(led, monkeypatch):
+    """#22-D2 (2026-10-03): the thread post names the people behind each
+    stamp, right under the stamp line; the card face stays one line."""
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, SELF, ts=NOW - 100)
+    _meta(led, 100, reactions=[_r("viewed", 2), _r("accepted", 1, True)])
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    body = lambda: notify_render._card_body_text(  # noqa: E731
+        led.db, _card(led), {"shown": "[100]"}, max_chars=None)[1]
+    assert "押した人" not in body()                 # never walked yet
+    led.save_reaction_actors(100, [
+        {"actor_id": OTHER, "reaction_type": "viewed", "name": "合成 一郎", "profession": "医師"},
+        {"actor_id": 9, "reaction_type": "viewed", "name": "合成 花子"},
+        {"actor_id": SELF, "reaction_type": "accepted", "name": "合成 自分"}], True, now=NOW - 50)
+    lines = body().split("\n")
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("MCS "))
+    assert lines[i + 1] == ("押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
+                            "（09-21 23:12 時点）")       # real clock: 24h past
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    lines = body().split("\n")
+    assert lines[i + 1] == "押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
+    footer = "\n".join(x["text"] for x in notify_render._card_content(led.db, _card(led))["footer"])
+    assert "合成 一郎" not in footer

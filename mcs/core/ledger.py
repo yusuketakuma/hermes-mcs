@@ -337,6 +337,13 @@ class Ledger:
             observed_at REAL NOT NULL,
             PRIMARY KEY(message_id,actor_id,reaction_type))
         """)
+        actor_cols = {r[1] for r in self.db.execute(
+            "PRAGMA table_info(message_reaction_actors)")}
+        for col in ("actor_name", "organization", "removed_at"):
+            if col not in actor_cols:   # additive; schema stays 8
+                kind = "REAL" if col == "removed_at" else "TEXT"
+                self.db.execute(
+                    f"ALTER TABLE message_reaction_actors ADD COLUMN {col} {kind}")
         self.db.execute("""
           CREATE TABLE IF NOT EXISTS message_reaction_actor_fetch(
             message_id INTEGER PRIMARY KEY, complete_at REAL,
@@ -1333,22 +1340,41 @@ class Ledger:
               now - REACTION_ACTORS_TTL_S, limit)).fetchall()
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
-        """Replace the current actor set only from a complete walk.
+        """Merge a complete walk into the kept actor history.
 
-        An incomplete walk records checked_at/last_error and keeps the
-        previous set — a partial list never proves a cancellation. Only
-        actor id, kind and profession are stored (no names/icons/facilities)."""
+        Retention is unlimited (#22-D3, 2026-10-03): a present actor keeps
+        its first observed_at and gets its current name, an actor missing
+        from a complete walk is marked removed_at (never deleted), and a
+        re-press clears it. An incomplete walk records checked_at /
+        last_error only — a partial list never proves a cancellation."""
         now = time.time() if now is None else now
         with self.db:
             if complete is True:
-                self.db.execute(
-                    "DELETE FROM message_reaction_actors WHERE message_id=?", (message_id,))
+                seen = [(r["actor_id"], r["reaction_type"]) for r in rows]
                 self.db.executemany("""
                   INSERT INTO message_reaction_actors(
-                    message_id,actor_id,reaction_type,profession,observed_at)
-                  VALUES(?,?,?,?,?)""", [
+                    message_id,actor_id,reaction_type,profession,observed_at,
+                    actor_name,organization,removed_at)
+                  VALUES(?,?,?,?,?,?,?,NULL)
+                  ON CONFLICT(message_id,actor_id,reaction_type) DO UPDATE SET
+                    profession=excluded.profession,
+                    actor_name=COALESCE(excluded.actor_name,actor_name),
+                    organization=COALESCE(excluded.organization,organization),
+                    observed_at=CASE WHEN removed_at IS NULL THEN observed_at
+                                     ELSE excluded.observed_at END,
+                    removed_at=NULL""", [
                     (message_id, r["actor_id"], r["reaction_type"],
-                     r.get("profession") or None, now) for r in rows])
+                     r.get("profession") or None, now, r.get("name") or None,
+                     r.get("organization") or None) for r in rows])
+                for actor, kind in self.db.execute(
+                        "SELECT actor_id,reaction_type FROM message_reaction_actors "
+                        "WHERE message_id=? AND removed_at IS NULL",
+                        (message_id,)).fetchall():
+                    if (actor, kind) not in seen:
+                        self.db.execute(
+                            "UPDATE message_reaction_actors SET removed_at=? WHERE "
+                            "message_id=? AND actor_id=? AND reaction_type=?",
+                            (now, message_id, actor, kind))
             self.db.execute("""
               INSERT INTO message_reaction_actor_fetch(
                 message_id,complete_at,checked_at,last_error) VALUES(?,?,?,?)
@@ -1357,20 +1383,6 @@ class Ledger:
                 checked_at=excluded.checked_at,last_error=excluded.last_error
             """, (message_id, now if complete is True else None, now,
                   None if complete is True else (error or "incomplete")))
-
-    def prune_reaction_actors(self, *, now=None) -> int:
-        """Drop actor rows for posts that left the watch set (deleted, archived, aged out)."""
-        now = time.time() if now is None else now
-        watch, self_id = self._reaction_actor_watch_sql()
-        if self_id is None:
-            return 0   # unknown identity: keep rows rather than wipe them
-        with self.db:
-            n = 0
-            for table in ("message_reaction_actors", "message_reaction_actor_fetch"):
-                n += self.db.execute(
-                    f"DELETE FROM {table} WHERE message_id NOT IN ({watch})",
-                    (self_id, now - 7*86400)).rowcount
-        return n
 
     def metadata_watch_targets(self, limit=5, *, now=None):
         """Oldest observations in the bounded active watch set, excluding backoff."""
@@ -2305,7 +2317,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
 
 
 def reaction_actor_summary(db, message_id, *, now=None) -> dict:
-    """押下者の職種×種別件数・本人の有無・取得状態を氏名なしで返す。
+    """押下者の職種×種別件数・氏名・本人の有無・取得状態を返す（#22-D2で氏名表示）。
 
     state: complete | stale (expired or reactions changed since) |
     failed (last walk incomplete; counts are the last complete set) |
@@ -2313,7 +2325,7 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     from mcs_signals import self_sender_id
     now = time.time() if now is None else now
     out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
-           "counts": {}, "self_included": None}
+           "counts": {}, "self_included": None, "actors": []}
     with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
         f = db.execute("SELECT complete_at,checked_at,last_error FROM "
                        "message_reaction_actor_fetch WHERE message_id=?",
@@ -2323,11 +2335,15 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
         out.update(complete_at=f[0], checked_at=f[1])
         if f[0] is not None:
             self_id = self_sender_id(db)
-            for actor, kind, prof in db.execute(
-                    "SELECT actor_id,reaction_type,profession FROM message_reaction_actors "
-                    "WHERE message_id=?", (message_id,)):
+            for actor, kind, prof, name, org in db.execute(
+                    "SELECT actor_id,reaction_type,profession,actor_name,organization "
+                    "FROM message_reaction_actors WHERE message_id=? AND removed_at IS NULL "
+                    "ORDER BY observed_at,actor_id", (message_id,)):
                 by_kind = out["counts"].setdefault(prof or "", {})
                 by_kind[kind] = by_kind.get(kind, 0) + 1
+                out["actors"].append({"reaction_type": kind, "name": name,
+                                      "profession": prof, "organization": org,
+                                      "self": self_id is not None and actor == self_id})
                 if self_id is not None and actor == self_id:
                     out["self_included"] = True
             if self_id is not None and out["self_included"] is None:

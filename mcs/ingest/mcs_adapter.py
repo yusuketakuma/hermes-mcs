@@ -525,7 +525,7 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
     `get` is an adapter `_get`. Transport and schema failures end the
     walk with `error`/`status` and the partial rows; a partial walk is
     never a proof of absence. Rows keep only actor id, kind and
-    profession — names, icons and facilities are dropped here.
+    profession, name and facility — the icon is dropped here.
     """
     if (not _valid_id(project_id) or not _valid_id(message_id)
             or type(max_pages) is not int or not 1 <= max_pages <= 10
@@ -608,12 +608,18 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 identity = (user["id"], kind)
                 if identity in actors:
                     raise SchemaError("actors: duplicate actor")
-                try:
-                    profession = _profession(user) or None
-                except SchemaError:
-                    profession = None   # optional display field, never identity
-                actors[identity] = {"actor_id": user["id"], "reaction_type": kind,
-                                    "profession": profession}
+                # optional display fields, never identity (#22-D2 2026-10-03:
+                # names are kept and shown; the icon is never taken)
+                extra = {}
+                for field, read in (("profession", _profession),
+                                    ("name", _sender_name),
+                                    ("organization", _organization)):
+                    try:
+                        extra[field] = read(user) or None
+                    except SchemaError:
+                        extra[field] = None
+                actors[identity] = {"actor_id": user["id"],
+                                    "reaction_type": kind, **extra}
             if not has_next:
                 counts = {}
                 for _, kind in actors:

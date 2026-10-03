@@ -542,7 +542,7 @@ def test_shadow_config_and_manual_selection(monkeypatch, cfg, manual, expected):
     monkeypatch.setattr(run_check, "stage_metadata_shadow", lambda adapter, store, result, deadline,
                         **kwargs: result.update(metadata_shadow={"mode": "shadow"}))
     result = {"errors": []}
-    store = SimpleNamespace(prune_reaction_actors=lambda: 0)
+    store = SimpleNamespace()
     run_check._run_metadata_shadow(None, store, result, 100, cfg, manual=manual)
     assert result["metadata_shadow"] == ({"mode": "shadow"} if expected == "shadow"
                                          else {"mode": "off", "reason": expected})

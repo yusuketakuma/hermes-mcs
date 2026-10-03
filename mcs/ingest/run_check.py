@@ -36,7 +36,6 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import sys
 import time
 from contextlib import suppress
@@ -1044,12 +1043,6 @@ def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False
     if reason:
         result["metadata_shadow"] = {"mode": "off", "reason": reason}
         return
-    try:   # housekeeping: actor rows of posts that left the watch set
-        pruned = ledger.prune_reaction_actors()
-        if pruned:
-            result["reaction_actors_pruned"] = pruned
-    except sqlite3.Error as e:
-        result["errors"].append(f"reaction_actors_prune: {type(e).__name__}")
     # a non-bool switch is off: publishing or actor walks need an explicit true
     stage_metadata_shadow(adapter, ledger, result, deadline,
                           publish=cfg.get("metadata_refresh_publish") is True,
