@@ -36,6 +36,7 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import sys
 import time
 from contextlib import suppress
@@ -245,7 +246,7 @@ def _health(ledger, result: dict, status: str,
                else "ok")
     shadow = result.get("metadata_shadow") or {"mode": "off", "reason": "not_run"}
     shadow_health = {key: shadow[key] for key in (
-        "mode", "reason", "due", "fetched", "deferred", "budget_s", "elapsed_s",
+        "mode", "reason", "due", "fetched", "published", "deferred", "budget_s", "elapsed_s",
         "interval_s", "backoff_s", "deferred_reasons") if key in shadow}
     shadow_health["error_count"] = len(shadow.get("errors") or [])
     return {
@@ -930,11 +931,20 @@ def stage_karte_summary(adapter, ledger, result, deadline,
 
 # ---------- stage: derived data ----------
 
-def stage_metadata_shadow(adapter, ledger, result, deadline):
-    """Bounded opt-in metadata refresh after delivery; never changes message state."""
+# 第2層 actor walks per tick, inside whatever the shadow budget left
+REACTION_ACTORS_TICK_CAP = 2
+
+
+def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
+                          actors=False):
+    """Bounded opt-in metadata refresh after delivery; never changes message state.
+
+    publish=True also writes successful refreshes to capture (22-E);
+    actors=True then walks reaction actors in the remaining budget (22-F)."""
     started = time.monotonic()
     shadow_deadline = min(deadline - 30, started + 25)
-    stats = {"mode": "shadow", "fetched": 0, "deferred": 0, "errors": [],
+    stats = {"mode": "publish" if publish else "shadow", "fetched": 0,
+             "published": 0, "deferred": 0, "errors": [],
              "budget_s": round(max(0, shadow_deadline - started), 3),
              "elapsed_s": 0, "deferred_reasons": {},
              "interval_s": METADATA_SHADOW_INTERVAL_S,
@@ -945,6 +955,7 @@ def stage_metadata_shadow(adapter, ledger, result, deadline):
     stats["deferred"] = max(0, stats["due"] - len(targets))
     if stats["deferred"]:
         stats["deferred_reasons"]["cap"] = stats["deferred"]
+    stopped = False
     try:
         adapter.set_deadline(shadow_deadline)
         for index, target in enumerate(targets):
@@ -953,6 +964,7 @@ def stage_metadata_shadow(adapter, ledger, result, deadline):
                 stats["deferred"] += remaining
                 reason = "deadline_margin" if shadow_deadline == deadline - 30 else "budget_exhausted"
                 stats["deferred_reasons"][reason] = remaining
+                stopped = True
                 break
             try:
                 parent = {"parent_id": target["parent_id"]} if target["parent_id"] is not None else {}
@@ -966,19 +978,47 @@ def stage_metadata_shadow(adapter, ledger, result, deadline):
                     reason = "session_expired" if isinstance(e, SessionExpired) else "budget_exhausted"
                     if remaining:
                         stats["deferred_reasons"][reason] = remaining
+                    stopped = True
                     break
                 continue
-            ledger.save_metadata_shadow(m)
+            ledger.save_metadata_shadow(m, publish=publish)
             stats["fetched"] += 1
+            stats["published"] += publish
             if m.metadata_errors:
                 stats["errors"].append({"message_id": m.message_id, "kind": "schema_error"})
+        if actors:
+            stats["actors"] = _stage_reaction_actors(adapter, ledger, shadow_deadline,
+                                                     skip=stopped)
     finally:
         adapter.set_deadline(deadline)
         stats["elapsed_s"] = round(max(0, time.monotonic() - started), 3)
 
 
+def _stage_reaction_actors(adapter, ledger, until, *, skip):
+    """Walk up to REACTION_ACTORS_TICK_CAP actor lists; incomplete walks keep the old set."""
+    targets = ledger.reaction_actor_targets(limit=REACTION_ACTORS_TICK_CAP)
+    stats = {"due": len(targets), "fetched": 0, "complete": 0,
+             "deferred": len(targets) if skip else 0, "errors": []}
+    for index, target in enumerate([] if skip else targets):
+        if time.monotonic() >= until:
+            stats["deferred"] += len(targets) - index
+            break
+        walk = adapter.fetch_reaction_actors(target["project_id"], target["message_id"])
+        stats["fetched"] += 1
+        ledger.save_reaction_actors(target["message_id"], walk["actors"], walk["complete"],
+                                    error=walk.get("error"))
+        if walk["complete"]:
+            stats["complete"] += 1
+            continue
+        stats["errors"].append({"message_id": target["message_id"], "kind": walk.get("error")})
+        if walk.get("error") in ("session_expired", "deadline_exceeded"):
+            stats["deferred"] += len(targets) - index - 1
+            break
+    return stats
+
+
 def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False):
-    """Select off or storage-only shadow mode for scheduled and manual runs."""
+    """Select off, storage-only shadow, or publish mode for scheduled and manual runs."""
     enabled = cfg.get("metadata_shadow", False)
     reason = ("config_invalid" if type(enabled) is not bool else
               "code_changed" if _code_changed(result) else
@@ -986,7 +1026,16 @@ def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False
     if reason:
         result["metadata_shadow"] = {"mode": "off", "reason": reason}
         return
-    stage_metadata_shadow(adapter, ledger, result, deadline)
+    try:   # housekeeping: actor rows of posts that left the watch set
+        pruned = ledger.prune_reaction_actors()
+        if pruned:
+            result["reaction_actors_pruned"] = pruned
+    except sqlite3.Error as e:
+        result["errors"].append(f"reaction_actors_prune: {type(e).__name__}")
+    # a non-bool switch is off: publishing or actor walks need an explicit true
+    stage_metadata_shadow(adapter, ledger, result, deadline,
+                          publish=cfg.get("metadata_refresh_publish") is True,
+                          actors=cfg.get("metadata_actors") is True)
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):

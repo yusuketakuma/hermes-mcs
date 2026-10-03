@@ -41,6 +41,9 @@ HEAD_SYNC_OVERLAP_S = 120
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
 METADATA_SHADOW_INTERVAL_S = 30 * 60
 METADATA_SHADOW_BACKOFF_S = 6 * 3600
+# 第2層: a complete actor set older than this is refetched even when the
+# post's counts and self flag look unchanged — actors can swap silently
+REACTION_ACTORS_TTL_S = 24 * 3600
 
 # body_state values meaning "nothing more to fetch" — shared by the
 # ledger's job-reconciliation and the walk checkpoint logic
@@ -326,6 +329,18 @@ class Ledger:
             content TEXT NOT NULL, checked_at REAL NOT NULL,
             last_error TEXT,
             PRIMARY KEY(message_id,source))
+        """)
+        self.db.execute("""
+          CREATE TABLE IF NOT EXISTS message_reaction_actors(
+            message_id INTEGER NOT NULL, actor_id INTEGER NOT NULL,
+            reaction_type TEXT NOT NULL, profession TEXT,
+            observed_at REAL NOT NULL,
+            PRIMARY KEY(message_id,actor_id,reaction_type))
+        """)
+        self.db.execute("""
+          CREATE TABLE IF NOT EXISTS message_reaction_actor_fetch(
+            message_id INTEGER PRIMARY KEY, complete_at REAL,
+            checked_at REAL NOT NULL, last_error TEXT)
         """)
         c = cols("patients")
         adds = []
@@ -1266,8 +1281,11 @@ class Ledger:
         """, (m.message_id, source, json.dumps(content, ensure_ascii=False),
               now, ",".join(errors) or None))
 
-    def save_metadata_shadow(self, m, *, error=None):
-        """Save refresh observations without changing chat, coverage or delivery."""
+    def save_metadata_shadow(self, m, *, error=None, publish=False):
+        """Save refresh observations without changing chat, coverage or delivery.
+
+        publish=True also writes a successful refresh to capture in the
+        same transaction; a failure never touches capture."""
         row = self.db.execute(
             "SELECT project_id FROM messages WHERE message_id=?", (m.message_id,)).fetchone()
         if row is None or row["project_id"] != m.project_id:
@@ -1275,8 +1293,84 @@ class Ledger:
         if error is not None:
             from types import SimpleNamespace
             m = SimpleNamespace(message_id=m.message_id, metadata={}, metadata_errors=[error])
+        now = time.time()
         with self.db:
-            self._save_message_metadata(m, source="shadow", now=time.time())
+            self._save_message_metadata(m, source="shadow", now=now)
+            if publish is True and error is None:
+                self._save_message_metadata(m, source="capture", now=now)
+
+    def _reaction_actor_watch_sql(self):
+        """Own root posts of the last 7 days in active rooms (第2層 watch set)."""
+        from mcs_signals import self_sender_id
+        return ("""SELECT m.message_id FROM messages m
+          JOIN patients p ON p.project_id=m.project_id
+          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+            AND m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?""",
+                self_sender_id(self.db))
+
+    def reaction_actor_targets(self, limit=2, *, now=None):
+        """Watched own roots whose captured reactions changed since the last
+        complete actor fetch, or whose complete set expired; failures back off."""
+        now = time.time() if now is None else now
+        watch, self_id = self._reaction_actor_watch_sql()
+        if self_id is None:
+            return []
+        return self.db.execute(f"""
+          SELECT m.message_id,m.project_id FROM messages m
+          JOIN ({watch}) w ON w.message_id=m.message_id
+          JOIN message_metadata md ON md.message_id=m.message_id AND md.source='capture'
+          LEFT JOIN message_reaction_actor_fetch f ON f.message_id=m.message_id
+          WHERE json_valid(md.content)
+            AND json_type(md.content,'$.reactions.value')='array'
+            AND (f.last_error IS NULL OR f.checked_at<=?)
+            AND (CASE WHEN f.complete_at IS NULL THEN EXISTS(
+                   SELECT 1 FROM json_each(md.content,'$.reactions.value') r
+                   WHERE json_extract(r.value,'$.count')>0)
+                 ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
+                   OR f.complete_at<=? END)
+          ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
+        """, (self_id, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
+              now - REACTION_ACTORS_TTL_S, limit)).fetchall()
+
+    def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
+        """Replace the current actor set only from a complete walk.
+
+        An incomplete walk records checked_at/last_error and keeps the
+        previous set — a partial list never proves a cancellation. Only
+        actor id, kind and profession are stored (no names/icons/facilities)."""
+        now = time.time() if now is None else now
+        with self.db:
+            if complete is True:
+                self.db.execute(
+                    "DELETE FROM message_reaction_actors WHERE message_id=?", (message_id,))
+                self.db.executemany("""
+                  INSERT INTO message_reaction_actors(
+                    message_id,actor_id,reaction_type,profession,observed_at)
+                  VALUES(?,?,?,?,?)""", [
+                    (message_id, r["actor_id"], r["reaction_type"],
+                     r.get("profession") or None, now) for r in rows])
+            self.db.execute("""
+              INSERT INTO message_reaction_actor_fetch(
+                message_id,complete_at,checked_at,last_error) VALUES(?,?,?,?)
+              ON CONFLICT(message_id) DO UPDATE SET
+                complete_at=COALESCE(excluded.complete_at,complete_at),
+                checked_at=excluded.checked_at,last_error=excluded.last_error
+            """, (message_id, now if complete is True else None, now,
+                  None if complete is True else (error or "incomplete")))
+
+    def prune_reaction_actors(self, *, now=None) -> int:
+        """Drop actor rows for posts that left the watch set (deleted, archived, aged out)."""
+        now = time.time() if now is None else now
+        watch, self_id = self._reaction_actor_watch_sql()
+        if self_id is None:
+            return 0   # unknown identity: keep rows rather than wipe them
+        with self.db:
+            n = 0
+            for table in ("message_reaction_actors", "message_reaction_actor_fetch"):
+                n += self.db.execute(
+                    f"DELETE FROM {table} WHERE message_id NOT IN ({watch})",
+                    (self_id, now - 7*86400)).rowcount
+        return n
 
     def metadata_watch_targets(self, limit=5, *, now=None):
         """Oldest observations in the bounded active watch set, excluding backoff."""
@@ -2208,6 +2302,47 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     finally:
         with suppress(OSError):
             os.unlink(tmp)
+
+
+def reaction_actor_summary(db, message_id, *, now=None) -> dict:
+    """押下者の職種×種別件数・本人の有無・取得状態を氏名なしで返す。
+
+    state: complete | stale (expired or reactions changed since) |
+    failed (last walk incomplete; counts are the last complete set) |
+    not_fetched. Counts outside 'complete' are past observations only."""
+    from mcs_signals import self_sender_id
+    now = time.time() if now is None else now
+    out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
+           "counts": {}, "self_included": None}
+    with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
+        f = db.execute("SELECT complete_at,checked_at,last_error FROM "
+                       "message_reaction_actor_fetch WHERE message_id=?",
+                       (message_id,)).fetchone()
+        if f is None:
+            return out
+        out.update(complete_at=f[0], checked_at=f[1])
+        if f[0] is not None:
+            self_id = self_sender_id(db)
+            for actor, kind, prof in db.execute(
+                    "SELECT actor_id,reaction_type,profession FROM message_reaction_actors "
+                    "WHERE message_id=?", (message_id,)):
+                by_kind = out["counts"].setdefault(prof or "", {})
+                by_kind[kind] = by_kind.get(kind, 0) + 1
+                if self_id is not None and actor == self_id:
+                    out["self_included"] = True
+            if self_id is not None and out["self_included"] is None:
+                out["self_included"] = False
+            seen = db.execute(
+                "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
+                "WHERE message_id=? AND source='capture' AND json_valid(content)",
+                (message_id,)).fetchone()
+            changed = seen is not None and seen[0] is not None and seen[0] > f[0]
+        if f[2] is not None:
+            out["state"] = "failed"
+        elif f[0] is not None:
+            out["state"] = ("stale" if changed or f[0] <= now - REACTION_ACTORS_TTL_S
+                            else "complete")
+    return out
 
 
 def valid_mcs_db(path: str) -> bool:
