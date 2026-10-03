@@ -514,6 +514,136 @@ def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
     return out, errors
 
 
+_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+def walk_reaction_actors(get, project_id: int, message_id: int, *,
+                         reaction_type: str | None = None,
+                         max_pages: int = 10, per_page: int = 50) -> dict:
+    """Walk one fixed-snapshot actor list; complete only when it matches the post's counts.
+
+    `get` is an adapter `_get`. Transport and schema failures end the
+    walk with `error`/`status` and the partial rows; a partial walk is
+    never a proof of absence. Rows keep only actor id, kind and
+    profession — names, icons and facilities are dropped here.
+    """
+    if (not _valid_id(project_id) or not _valid_id(message_id)
+            or type(max_pages) is not int or not 1 <= max_pages <= 10
+            or type(per_page) is not int or not 1 <= per_page <= 50
+            or (reaction_type is not None and (
+                not isinstance(reaction_type, str)
+                or not _REACTION_KIND.fullmatch(reaction_type)
+                or reaction_type == "all"))):
+        raise ValueError("invalid actor arguments")
+    suffix, key = (("user_reactions", "reactions") if reaction_type is None
+                   else ("reactions", "users"))
+    path = f"/messages/{message_id}/{suffix}"
+    actors, expected, timestamp = {}, None, None
+    result = {"complete": False, "actors": [], "pages": 0,
+              "counts_match_message": None, "timestamp_stable": None}
+    try:
+        for page in range(1, max_pages + 1):
+            # timestamp: omitted first, then the server's own value; no
+            # keep_read_status — the official client never sends it here
+            params = {"page": page, "per_page": per_page,
+                      "include_meta": int(page == 1), "include_paginate_totals": 0}
+            if reaction_type is not None:
+                params["reaction_type"] = reaction_type
+            if timestamp is not None:
+                params["timestamp"] = timestamp
+            raw = get(path, params, extend_session=False)
+            result["pages"] += 1
+            meta = raw.get("message")
+            if meta is not None:
+                if not isinstance(meta, dict):
+                    raise SchemaError("actors: message invalid")
+                for name, wanted in (("id", message_id), ("project_id", project_id)):
+                    if name in meta and (not _valid_id(meta[name]) or meta[name] != wanted):
+                        raise SchemaError("actors: target mismatch")
+            if page == 1:
+                normalized, errors = _message_metadata(meta or {}, project_id)
+                if "reactions_invalid" in errors:
+                    raise SchemaError("actors: summary invalid")
+                if "reactions" in normalized:
+                    expected = {r["type"]: r["count"] for r in normalized["reactions"]}
+            paginate, rows = raw.get("paginate"), raw.get(key)
+            if (not isinstance(paginate, dict) or not isinstance(rows, list)
+                    or len(rows) > per_page):
+                raise SchemaError("actors: collection invalid")
+            if "current_page" in paginate and (
+                    type(paginate["current_page"]) is not int
+                    or paginate["current_page"] != page):
+                raise SchemaError("actors: page invalid")
+            if "per_page" in paginate and (
+                    type(paginate["per_page"]) is not int or paginate["per_page"] != per_page):
+                raise SchemaError("actors: page size invalid")
+            server_ts = paginate.get("timestamp")
+            if not _valid_id(server_ts):
+                raise SchemaError("actors: timestamp invalid")
+            if timestamp is None:
+                timestamp = server_ts
+                result["timestamp_stable"] = True
+            elif server_ts != timestamp:
+                result["timestamp_stable"] = False
+                raise SchemaError("actors: timestamp changed")
+            if "has_next" in paginate:
+                has_next = _has_next(paginate, "actors")
+            else:
+                total_pages = paginate.get("total_pages")
+                if (type(total_pages) is not int or total_pages < page
+                        or paginate.get("current_page") != page):
+                    raise SchemaError("actors: terminal state invalid")
+                has_next = page < total_pages
+            if has_next and not rows:
+                raise SchemaError("actors: no progress")
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise SchemaError("actors: row invalid")
+                user = row.get("user") if reaction_type is None else row
+                kind = row.get("reaction_type") if reaction_type is None else reaction_type
+                if (not isinstance(user, dict) or not _valid_id(user.get("id"))
+                        or not isinstance(kind, str)
+                        or not _REACTION_KIND.fullmatch(kind) or kind == "all"):
+                    raise SchemaError("actors: identity invalid")
+                identity = (user["id"], kind)
+                if identity in actors:
+                    raise SchemaError("actors: duplicate actor")
+                try:
+                    profession = _profession(user) or None
+                except SchemaError:
+                    profession = None   # optional display field, never identity
+                actors[identity] = {"actor_id": user["id"], "reaction_type": kind,
+                                    "profession": profession}
+            if not has_next:
+                counts = {}
+                for _, kind in actors:
+                    counts[kind] = counts.get(kind, 0) + 1
+                if expected is not None:
+                    if reaction_type is None:
+                        result["counts_match_message"] = (
+                            counts == {k: v for k, v in expected.items() if v})
+                    elif reaction_type in expected or not expected:
+                        result["counts_match_message"] = (
+                            counts.get(reaction_type, 0) == expected.get(reaction_type, 0))
+                if "total_entries" in paginate and (
+                        type(paginate["total_entries"]) is not int
+                        or paginate["total_entries"] != len(actors)):
+                    raise SchemaError("actors: total mismatch")
+                result["complete"] = result["counts_match_message"] is True
+                if not result["complete"]:
+                    result["error"] = ("count_mismatch" if result["counts_match_message"] is False
+                                       else "summary_missing")
+                break
+        else:
+            result["error"] = "page_limit"
+    except MCSError as error:
+        result["error"] = error.kind
+        if error.status:
+            result["status"] = error.status
+    result["actors"] = list(actors.values())
+    return result
+
+
 def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
                   is_unread: bool | None = None) -> Message:
     if not isinstance(m, dict):
@@ -764,6 +894,12 @@ class MCSAdapter:
                 or items[0].get("project_id", project_id) != project_id):
             raise SchemaError("metadata: target mismatch")
         return _norm_message(items[0], project_id, parent_id=parent_id)
+
+    def fetch_reaction_actors(self, project_id: int, message_id: int, *,
+                              max_pages: int = 10, per_page: int = 50) -> dict:
+        """GET-only walk of every reaction actor on one post (see walk_reaction_actors)."""
+        return walk_reaction_actors(self._get, project_id, message_id,
+                                    max_pages=max_pages, per_page=per_page)
 
     def station_staffs(self, stations: list, per_page: int = 100,
                        max_pages: int = 10) -> list:

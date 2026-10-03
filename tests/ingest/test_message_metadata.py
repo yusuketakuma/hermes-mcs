@@ -539,10 +539,11 @@ def test_shadow_restores_deadline_after_unexpected_failure(tmp_path):
 ])
 def test_shadow_config_and_manual_selection(monkeypatch, cfg, manual, expected):
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
-    monkeypatch.setattr(run_check, "stage_metadata_shadow", lambda adapter, store, result, deadline:
-                        result.update(metadata_shadow={"mode": "shadow"}))
+    monkeypatch.setattr(run_check, "stage_metadata_shadow", lambda adapter, store, result, deadline,
+                        **kwargs: result.update(metadata_shadow={"mode": "shadow"}))
     result = {"errors": []}
-    run_check._run_metadata_shadow(None, None, result, 100, cfg, manual=manual)
+    store = SimpleNamespace(prune_reaction_actors=lambda: 0)
+    run_check._run_metadata_shadow(None, store, result, 100, cfg, manual=manual)
     assert result["metadata_shadow"] == ({"mode": "shadow"} if expected == "shadow"
                                          else {"mode": "off", "reason": expected})
 
@@ -568,7 +569,7 @@ def test_scheduled_tick_and_deep_share_shadow_after_semantic(
     monkeypatch.setattr(run_check, "_deliver", lambda *args: events.append("delivery"))
     monkeypatch.setattr(run_check, "_run_semantic", lambda *args, **kwargs: events.append("semantic"))
 
-    def shadow(adapter, store, result, deadline):
+    def shadow(adapter, store, result, deadline, **kwargs):
         events.append("shadow")
         result["metadata_shadow"] = {"mode": "shadow"}
 
