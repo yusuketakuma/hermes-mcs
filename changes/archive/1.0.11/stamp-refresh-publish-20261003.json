@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "スタンプ再取得の反映と押下者取得を既定offで追加",
+  "summary": "監視対象のスタンプ再取得が成功した値を表示へ反映する設定と、自分の投稿の押下者をID・種別・職種だけ取得する設定を追加します。どちらも既定offで、氏名・アイコン・施設名は保存しません。",
+  "upgrade": "既定では動作は変わりません。metadata_refresh_publishは未読保持の実証とmcs/views/metadata_report.pyでの照合後、metadata_actorsは押下者の表示・保持の判断後に有効化します。どちらもmetadata_shadow=trueが前提です。DBはschema 8のまま押下者用の表を加法で追加します。",
+  "details": [
+    "publish時は成功した再取得だけを同じtransactionでcaptureへ書き、失敗・保存済みshadow値は反映しない。",
+    "押下者は完全取得時だけcurrentを置換し、最大2件/tick、期限24h、失敗後6時間待機。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ingest/mcs_adapter.py"
+  ]
+}

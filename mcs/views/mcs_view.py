@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from ledger import LedgerReader
+from ledger import LedgerReader, reaction_actor_summary
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict
@@ -142,6 +142,11 @@ class View:
         row["metadata_flags"] = flag_lines(self.db, row["message_metadata"])
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
+        # 22-F: actor counts by profession × type for own posts only, no
+        # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
+        row["reaction_actors"] = (reaction_actor_summary(
+            self.db, mid, now=self.meta["generated_at"])
+            if row["is_self_sender"] else None)
         return row
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):

@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "スタンプ再取得の照合レポートを追加",
+  "summary": "通常収集と再取得のスタンプ値の一致・差・失敗理由・経過時間と、監視対象の未処理件数を件数だけで表示する読取り専用のレポートを追加します。投稿・患者IDや本文は出しません。",
+  "upgrade": "追加設定は不要です。python3 mcs/views/metadata_report.pyで実行し、DBは読取り専用で開きます。不一致0は未読保持の証明になりません。",
+  "details": [
+    "captureとshadowのchecked_atの前後を分類し、captureが新しいだけの差を区別する。"
+  ],
+  "refs": [
+    "mcs/views/metadata_report.py"
+  ]
+}

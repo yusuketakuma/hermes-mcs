@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "自分の投稿へのMCSスタンプと自分宛で応答未観測の投稿を表示",
+  "summary": "カード脚注で自分の投稿には他者からのスタンプ件数を表示します。日次サマリーと📊に「自分宛で応答未観測」と、再取得の反映を有効にした環境では「反応が観測されていない自分の投稿」を追加します。氏名は出しません。",
+  "upgrade": "追加設定は不要です。カード表示の反映には、利用中のHermes gatewayまたは独立アダプターの再起動が必要です。「反応が観測されていない自分の投稿」はmetadata_refresh_publish=trueのときだけ出ます。確認状態・依頼台帳は変わりません。",
+  "details": [
+    "own_post_reaction_textは本人分を除いた他者件数を表示し、count 0の種別を0で補わない。",
+    "自分宛で応答未観測は未対応の依頼候補シグナルと本人宛メンションから作り、本人ID不明時はメンション行を出さない。"
+  ],
+  "refs": [
+    "mcs/views/message_metadata.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_digest.py"
+  ]
+}
