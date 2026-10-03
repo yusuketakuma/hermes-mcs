@@ -65,7 +65,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import mcs_runtime
 
-from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
+from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
 
 ENV_PATH = os.path.join(HOME, ".env")
@@ -1891,8 +1891,7 @@ HERMES_PY = os.path.join(HERMES_HOME, "hermes-agent", "venv", "bin",
                          "python")
 SCRIPTS_DIR = os.path.join(HERMES_HOME, "scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+REPO_ROOT = REPO
 G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
                                 "g6-criteria-v1.json")
 

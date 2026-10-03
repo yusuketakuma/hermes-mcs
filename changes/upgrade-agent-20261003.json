@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "過去版から移行先版のコードで安全に更新する手順を追加",
+  "summary": "v1.0.3以降の導入は、移行先タグから取り出した起動役(scripts/mcs_upgrade.py)で更新計画の確認と適用ができます。install.shや独立モードSDKが変わる版も、操作者が--reinstallを指定すれば同じロック・バックアップ・巻戻し付きの経路で再導入まで行います。AIエージェント用のdocs/guides/UPGRADE_AGENT.mdが計画確認から完了報告までを案内します。",
+  "upgrade": "追加操作は不要です。v1.0.11以降への更新でUPGRADE_AGENT.mdの手順が使えます。v1.0.0〜1.0.2からは同書の手動経路を使います。自動更新とSlack等の承認経路はinstall.sh変更を含む版を従来どおり適用しません。独立モードの外部適用は未対応で、host経由の更新を使います。既読化・人承認・取得範囲・モデルの既定値は変更しません。",
+  "details": [
+    "mcs_update.py planが既存の検査結果を経路・阻害・再導入・再起動・各版の更新時の注意に分類して出力する。",
+    "apply --reinstallはCLIからだけ受け付け、merge後のpost-merge内でinstall.sh --no-servicesを実行してからサービスを再同期する。中断復旧の再開時も再実行する。",
+    "repo rootをmcs_util.REPOへ一元化し、MCS_UPDATE_REPOで一時展開した移行先コードを実checkoutへ向ける。",
+    "v1.0.2〜1.0.7の常駐ai.mcs.extract-drainer-rtが配置されていれば更新時に停止する。"
+  ],
+  "refs": ["scripts/mcs_upgrade.py", "mcs/ops/mcs_update.py", "mcs/core/mcs_util.py", "docs/guides/UPGRADE_AGENT.md"]
+}
