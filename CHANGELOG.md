@@ -8,9 +8,9 @@
 
 ## [1.0.11] — 2026-10-03
 
-**MCSスタンプの観測表示と本人ID判定**
+**MCSスタンプの観測表示と絞込みサマリー・更新手順**
 
-スタンプの本人反応と観測日時をカード・一覧・digestへ表示します。DB更新は人承認付きで適用し、新しい再取得は既定で無効です。
+本人スタンプの観測表示とID判定を追加し、日次サマリー・絞込み・本人向け呼出しを共通化します。移行先版のコードで更新でき、DB更新は人承認付き、新しい再取得は既定で無効です。
 
 ### 新機能
 
@@ -20,6 +20,15 @@
 - **MCSスタンプの本人反応と観測時刻を表示**
   カード脚注と未確認一覧で本人のスタンプを観測日時とともに確認でき、同患者の反応済みカードは一覧の末尾に表示します。取得未完了と0件を区別し、自投稿は送信者IDで「自分」と表示します。日次ダイジェストには対象期間に観測した本人反応の投稿数を追加します。
 
+- **要約サマリーを本人専用でいつでも表示し、対象患者を絞り込めるように**
+  通知カードの「📊 サマリー」から、押した本人だけに要約サマリーを表示できます。Slackは見出し付きのカード、Discordは見出し付きの表示、LINE WORKSはDMで届き、all・mine（担当・記録上）・station:施設名・project:ID・days:1-7で対象と期間を絞れます。朝の日次ダイジェストは要約行・要対応・患者別新着・取得状況の順に見やすく整理し、空の節を省きます。
+
+- **日次サマリーをカードで配信し、コマンドから本人専用で呼び出せるように**
+  カード通知が有効な環境では、朝の日次サマリーをSlack・Discord・LINE WORKSのカード形式で配送先チャンネルへ送ります。Discordの/mcs（op: summary）、Slackの/mcs-summary、LINE WORKSのBot DM「サマリー」から、押した人だけに見える要約サマリーを呼び出せます。
+
+- **過去版から移行先版のコードで安全に更新する手順を追加**
+  v1.0.3以降の導入は、移行先タグから取り出した起動役(scripts/mcs_upgrade.py)で更新計画の確認と適用ができます。install.shや独立モードSDKが変わる版も、操作者が--reinstallを指定すれば同じロック・バックアップ・巻戻し付きの経路で再導入まで行います。AIエージェント用のdocs/guides/UPGRADE_AGENT.mdが計画確認から完了報告までを案内します。
+
 ### 不具合修正
 
 - **スタンプ脚注付きカードの文字数上限を維持**
@@ -27,6 +36,9 @@
 
 - **本人の投稿と返信をIDで識別**
   自局名簿の本人フラグから本人IDを解決し、プロフィールのID欠落を補います。返信状態は氏名ではなく送信者IDで判定し、同名の別人や改名した本人を混同しません。識別できない投稿は返信済みと推測しません。 CLIの自局投稿判定も名簿の送信者IDで行い、IDや名簿が不明なら不明と表示します。
+
+- **サマリーの絞込みと集計期間を維持**
+  本人スタンプの件数にも患者範囲の絞込みを適用します。定期サマリーで明示した日数が集計内容と記録に反映され、取得中にスナップショットが消えても回答処理が中断しません。
 
 - **不整合な診断応答を確認成功にしない**
   投稿の未読診断でページ終端の矛盾を成功にせず、利用数診断では空の一覧と後続ページ・総件数の矛盾を調査不能として残します。未読保持と登録なしを誤って確認済みにしません。
@@ -43,6 +55,8 @@
 
 - 追加設定は不要です。既存プロフィールのID補完は自局名簿の次回取得時に行い、保存済みの患者集約は次回の集約処理で再構築します。シグナルの自局・職種設定と応答判定は変更しません。
 
+- 追加操作は不要です。daily_digest.scopeの日数指定時は指定期間を毎回集計するため期間が重複し得ます。日数未指定時は従来どおり前回の配信終端から集計します。
+
 - DBは起動時にschema 8へ加法移行します。schemaを上げるため自動更新は適用せず、人承認付きの更新経路を使います。更新前バックアップを保持してください。メタ情報専用の再取得は既定で無効です。契約と未読保持を実証した後、metadata_shadow=trueで定期shadow、または --metadata-shadow で手動shadowを実行します（最大5件・最大25秒・末尾30秒確保、成功後30分・失敗後6時間）。Hermes pluginはgateway再起動、独立モードはhost再起動で反映します。既存の既読化条件・抽出モデル・通知先・人承認条件は変えません。
 
 - 追加設定は不要です。不整合な応答は失敗または未確認として再確認してください。MCS実画面・実APIの最終確認はユーザーが担当します。
@@ -52,6 +66,12 @@
 - Hermesでカード表示を更新する場合はgatewayの再起動が必要です。独立アダプターも起動中のプロセスを再起動してください。日次ダイジェストは既存の有効化設定に従い、既定では無効のままです。観測日時は押下時刻ではなく、スタンプから業務確認・担当引受・完了を自動実行しません。旧snapshotでは未取得と表示します。
 
 - 設定変更は不要です。更新処理を実行するコードの反映後から適用します。稼働サービスの再起動は今回実施していません。
+
+- Hermes連携のSlack・Discordは更新後にHermes Gatewayを再起動してください。LINE WORKSは独立アダプターを再起動してください。再起動前の旧アダプターでは📊ボタンが正しく動作しません（Slackは「操作できません」、Discord・LINE WORKSは結果の無い応答になります）。日次ダイジェストの対象は任意のdaily_digest.scopeで絞れます（既定は全患者、mineは指定不可）。通知先・送信時刻・患者名の既定（include_names=false）・既読化・人承認・取得範囲・モデルは変更しません。
+
+- Hermes連携のSlack・Discordは更新後にHermes Gatewayを、LINE WORKSは独立アダプターを再起動してください。Slackの/mcs-summaryを使う場合はSlackアプリにslash commandとcommands scopeを追加して再インストールし、plugin settingsのsnapshotを設定します（導入ガイド付録B）。日次サマリーの送信先はカード通知が有効ならカード用の配送先、無効なら従来どおりnotify_targetです。DBはnotification_renders.intent_event_id列を追加します（加法）。この版より前へ巻き戻すと、未封印のカード版日次サマリーはその日の分が送られず、封印済みで未送の分は送信されても完了扱いにならず通知キューに残ります（翌日分の投入後は手動で整理してください）。Discordの/mcsのサマリーは返答の公開範囲が実機で未確認のため患者名を出しません。既読化・人承認・取得範囲・モデル・患者名の既定（include_names=false）は変更しません。
+
+- 追加操作は不要です。v1.0.11以降への更新でUPGRADE_AGENT.mdの手順が使えます。v1.0.0〜1.0.2からは同書の手動経路を使います。自動更新とSlack等の承認経路はinstall.sh変更を含む版を従来どおり適用しません。独立モードの外部適用は未対応で、host経由の更新を使います。既読化・人承認・取得範囲・モデルの既定値は変更しません。
 
 ### 技術詳細
 
@@ -70,6 +90,12 @@
 - 名簿の本人IDが複数ある場合は氏名やプロフィールで推測せず不明扱いにする。
 - プロフィール補完は追記式で、既存の所属・職種の既定値を維持する。
 - 根拠: mcs/ops/mcs_signals.py、mcs/extract/rollup.py、mcs/views/mcs_view.py
+
+#### サマリーの絞込みと集計期間を維持
+
+- captureのみを本人スタンプの集計に使い、shadowは非公開のまま保持する。
+- スナップショットの更新日時は読取り開始時に取得し、ファイル操作失敗を固定エラーに変換する。
+- 根拠: mcs/notify/notify_digest.py、adapters/common/summary.py
 
 #### MCSスタンプと投稿メタ情報を分離して保存
 
@@ -108,6 +134,30 @@
 
 - pgrepのPOSIX EREで[Pp]ythonを許可。実子プロセスの正・負例で検証。
 - 根拠: mcs/ops/mcs_update.py、tests/ops/test_mcs_update.py
+
+#### 要約サマリーを本人専用でいつでも表示し、対象患者を絞り込めるように
+
+- notify_digest.buildが共通表示モデル(parts)を組み、notify_render.fit_partsが上限を超える一覧を「…他N件」に畳み、parts_textが各チャットの書式(discord/slack/plain)に変換する。
+- 📊はview actionとして既存のcmd_int→cmd_results経路で本人へ返し、receiptには本文・partsを保存しない。プロジェクト範囲はrunner側で必ず適用する。
+- Slackの本人専用返答はslack.cards.render_partsで同じpartsからBlock Kitを組む。
+- mineは押した人の表示名と未完了タスクの担当者欄の照合（📋と同じ規則）で、正式な担当割当ではない。
+- 根拠: mcs/notify/notify_digest.py、mcs/notify/notify_render.py、mcs/notify/notify_cards.py、adapters/common/text.py、adapters/slack/cards.py
+
+#### 日次サマリーをカードで配信し、コマンドから本人専用で呼び出せるように
+
+- 日次サマリーはカード行を持たないop=noticeのrenderとして発行し、受領がdeliveredなら通知キューをaccepted、実際の送信失敗はMAX_RESENDまで再発行、begin拒否は数えない。
+- カード機能をオフにした時点で未送と証明できる日次サマリーだけをテキスト経路へ戻し、日次オフ・翌日分の投入後は送らずsuppressedにする。送れなかったnoticeの本文はgcで消す。
+- LINE WORKSは1000字に畳み、超える分は既存のdisplay#分割で封入する。
+- コマンドは公開snapshotを読取り専用で開き、各入口の静的プロジェクト範囲を必ず適用する。範囲が空なら表示しない。mineはname:名前で照合する。
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_transport.py、mcs/notify/notify_digest.py、mcs/core/ledger.py、adapters/common/summary.py、adapters/slack/actions.py、adapters/lineworks/actions.py、hermes_plugin/__init__.py
+
+#### 過去版から移行先版のコードで安全に更新する手順を追加
+
+- mcs_update.py planが既存の検査結果を経路・阻害・再導入・再起動・各版の更新時の注意に分類して出力する。
+- apply --reinstallはCLIからだけ受け付け、merge後のpost-merge内でinstall.sh --no-servicesを実行してからサービスを再同期する。中断復旧の再開時も再実行する。
+- repo rootをmcs_util.REPOへ一元化し、MCS_UPDATE_REPOで一時展開した移行先コードを実checkoutへ向ける。
+- v1.0.2〜1.0.7の常駐ai.mcs.extract-drainer-rtが配置されていれば更新時に停止する。
+- 根拠: scripts/mcs_upgrade.py、mcs/ops/mcs_update.py、mcs/core/mcs_util.py、docs/guides/UPGRADE_AGENT.md
 
 </details>
 

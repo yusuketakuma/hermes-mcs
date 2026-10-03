@@ -363,6 +363,16 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                       "footer": [{"type": "text", "text": t} for t in footer]})
 
 
+def _daily_since(cfg, since, until):
+    scope = (settings(cfg) or {}).get("scope", "all")
+    flt = parse_scope(scope)
+    if not isinstance(flt, str) and any(
+            tok.partition(":")[0].lower() in ("days", "日数")
+            for tok in scope.split()):
+        return until - flt["days"] * DAY_S
+    return since
+
+
 def daily_parts(db, cfg, since: float, until: float) -> dict:
     """The daily summary's display model (the card notice). Names only
     when ``include_names``; scope from ``daily_digest.scope``."""
@@ -370,7 +380,7 @@ def daily_parts(db, cfg, since: float, until: float) -> dict:
     flt = parse_scope(s.get("scope", "all"))
     if isinstance(flt, str) or flt["mine"]:
         flt = parse_scope("")          # mine needs a clicker; validated in setup
-    return build(db, cfg, since, until, flt,
+    return build(db, cfg, _daily_since(cfg, since, until), until, flt,
                  names=s.get("include_names") is True)
 
 
@@ -432,6 +442,7 @@ def maybe_enqueue(ledger, cfg, now=None) -> int:
     since = last.get("until")
     if type(since) not in (int, float) or not 0 < since < now:
         since = now - 86400
+    since = _daily_since(cfg, since, now)
     # the read-heavy body is built outside the write lock; the insert
     # re-checks that no other writer queued a digest meanwhile
     parts = daily_parts(db, cfg, since, now)
