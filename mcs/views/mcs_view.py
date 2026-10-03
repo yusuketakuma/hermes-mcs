@@ -20,7 +20,7 @@ from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict
 from message_metadata import (
-    get_message_metadata, get_metadata_shadow_status, is_self_sender)
+    flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
 
 UNKNOWN_TIME = -(2**63)
@@ -139,6 +139,7 @@ class View:
         row["is_own_station_sender"] = is_own_station_message(self.db, sender_id)
         row["message_metadata"] = get_message_metadata(
             self.db, mid, as_of=self.meta["generated_at"])
+        row["metadata_flags"] = flag_lines(self.db, row["message_metadata"])
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
         return row

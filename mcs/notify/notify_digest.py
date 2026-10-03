@@ -25,7 +25,8 @@ import _mcs_path  # noqa: F401,E402  CLI entry: registers every subdir
 import mcs_signals  # noqa: E402
 import structured_view  # noqa: E402
 from mcs_queries import JST, coverage_gaps  # noqa: E402
-from message_metadata import get_message_metadata, reaction_label  # noqa: E402
+from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
+                              others_reaction_count, reaction_label)
 from notify_render import (_patient_name, fit_parts, parts_text,  # noqa: E402
                            plain_notice)
 from notify_views import assignee_matches  # noqa: E402
@@ -160,6 +161,120 @@ def _self_reaction_count(db, since, until, keep=None) -> tuple:
     return posts, counts
 
 
+OWN_POST_DAYS = 7
+NOT_RESPONSE_NOTE = ("※ 記録が見つからない≠対応がなかった。メンションだけでは"
+                     "応答済みにも未対応にもしません。")
+
+
+def _ago(seconds) -> str:
+    return (f"{int(seconds // DAY_S)}日経過" if seconds >= DAY_S
+            else f"{int(seconds // 3600)}時間経過")
+
+
+def _observed(meta) -> str:
+    return (f"観測 {datetime.fromtimestamp(meta['reactions_observed_at'], JST):%m-%d %H:%M}"
+            if meta["reactions"] is not None else
+            "スタンプ取得不正" if meta["reactions_status"] == "invalid"
+            else "スタンプ未取得")
+
+
+def _listed(rows) -> list:
+    return rows[:MAX_LIST] + ([f"・…他{len(rows) - MAX_LIST}件"]
+                              if len(rows) > MAX_LIST else [])
+
+
+def _recent_posts(db, until, ok, where, params=()) -> list:
+    """直近OWN_POST_DAYS日（投稿時刻）の未削除・非アーカイブ投稿。"""
+    return [r for r in db.execute(
+        "SELECT m.message_id,m.project_id,m.parent_id,m.sender_id,m.posted_at_ts "
+        "FROM messages m JOIN patients p ON p.project_id=m.project_id "
+        "WHERE m.posted_at_ts>=? AND m.posted_at_ts<? "
+        "AND COALESCE(p.is_archived,0)=0 AND COALESCE(m.body_state,'')!='deleted' "
+        + where + " ORDER BY m.posted_at_ts,m.message_id",
+        (until - OWN_POST_DAYS * DAY_S, until, *params)) if ok(r["project_id"])]
+
+
+def _own_unreacted(db, until, ok, room, self_id) -> list:
+    """本人のroot投稿で他者の反応が観測されていないもの。未取得・不正は別に数える。"""
+    if self_id is None:
+        return ["本人の送信者IDが不明のため判定していません。"]
+    rows, unfetched, invalid = [], 0, 0
+    for r in _recent_posts(db, until, ok, "AND m.parent_id IS NULL"):
+        if mcs_signals.normalize_sender_id(r["sender_id"]) != self_id:
+            continue
+        meta = get_message_metadata(db, r["message_id"])
+        others = others_reaction_count(meta)
+        if others is None:
+            invalid += meta["reactions_status"] == "invalid"
+            unfetched += meta["reactions_status"] != "invalid"
+        elif others == 0:
+            rows.append(f"・{room(r['project_id'])} / message {r['message_id']} "
+                        f"{_ago(until - r['posted_at_ts'])}・{_observed(meta)}")
+    head = [f"他者反応0件 {len(rows)}投稿（直近{OWN_POST_DAYS}日・本人のroot投稿）"]
+    if unfetched or invalid:
+        head.append(f"スタンプ未取得 {unfetched}投稿・取得不正 {invalid}（0件に含めません）")
+    return head + _listed(rows)
+
+
+def _response_state(db, r, self_id) -> tuple:
+    """(本人の後続返信あり, 本人スタンプ表示) — 同スレッド・投稿後のみ数える。"""
+    root = r["parent_id"] or r["message_id"]
+    replied = any(mcs_signals.normalize_sender_id(x[0]) == self_id for x in db.execute(
+        "SELECT sender_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?) "
+        "AND posted_at_ts>? AND COALESCE(body_state,'')!='deleted'",
+        (r["project_id"], root, root, r["posted_at_ts"] or 0)))
+    meta = get_message_metadata(db, r["message_id"])
+    mine = (None if meta["reactions"] is None else
+            any(x["self_reacted"] for x in meta["reactions"]))
+    stamp = ("本人スタンプ" + ("取得不正" if meta["reactions_status"] == "invalid"
+                              else "未取得") if mine is None
+             else "本人スタンプあり" if mine else "本人スタンプ観測なし")
+    return replied, mine, f"自分の返信{'あり' if replied else '観測なし'}・{stamp}"
+
+
+def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
+    """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。"""
+    rows = []
+    if signals_on:
+        for c in mcs_signals._latest_signal_states(db).values():
+            mids = ((c.get("evidence") or {}).get("message_ids") or []) if c else []
+            if not (c and c["state"] == "open" and ok(c["project_id"])
+                    and c["type"] == "pharmacist_request_unanswered" and mids):
+                continue
+            msg = db.execute("SELECT message_id,project_id,parent_id,posted_at_ts "
+                             "FROM messages WHERE message_id=?", (mids[0],)).fetchone()
+            state = _response_state(db, msg, self_id)[2] if msg and self_id else "本人ID不明"
+            rows.append(f"・{room(c['project_id'])} / message {mids[0]} "
+                        f"薬剤師宛依頼の応答未確認（シグナル）・{state}")
+    unknown, station = 0, 0
+    if self_id is not None:
+        for r in _recent_posts(db, until, ok, ""):
+            if mcs_signals.normalize_sender_id(r["sender_id"]) == self_id:
+                continue
+            meta = get_message_metadata(db, r["message_id"])
+            hit = mentions_self(meta, self_id)
+            if hit is None:
+                unknown += 1
+                continue
+            station += any(m["type"] == "station" for m in meta["mentions"])
+            if not hit:
+                continue
+            replied, mine, state = _response_state(db, r, self_id)
+            if not replied and not mine:
+                rows.append(f"・{room(r['project_id'])} / message {r['message_id']} "
+                            f"本人宛メンション・{_ago(until - r['posted_at_ts'])}・{state}")
+    notes = [] if self_id is not None else [
+        "本人の送信者IDが不明のためメンションは判定していません。"]
+    if station:
+        notes.append(f"施設宛（自局判定なし）: {station}投稿")
+    if unknown:
+        notes.append(f"メンション不明（未取得・取得不正）: {unknown}投稿")
+    if not rows and not station:
+        return []
+    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日のメンションと薬剤師宛依頼シグナル）",
+            *notes, *_listed(rows), NOT_RESPONSE_NOTE]
+
+
 def _stale_open_unacked(db, now: float) -> list:
     """[(key, latest content)] — open alert keys first detected more
     than STALE_ALERT_D days ago whose key no live card acknowledgement
@@ -280,6 +395,13 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         "・対象期間に観測した現在の保存状態です。未取得を除き、"
         "押下時刻・操作件数・業務完了を表しません。"])
 
+    self_id = mcs_signals.self_sender_id(db)
+    if cfg.get("metadata_refresh_publish") is True:
+        section("反応が観測されていない自分の投稿",
+                _own_unreacted(db, until, ok, room, self_id), fold=True)
+    section("自分宛で応答未観測",
+            _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
+
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} / message {m}" + ("" if u == "llm" else "（機械照合）")
         for p, m, u in urgent], fold=True)
@@ -349,6 +471,11 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         cov.append(f"・本文未取得の投稿{scoped}: {gaps['partial_bodies']}件")
     if gaps["reply_gaps"]:
         cov.append(f"・返信の取得未完了スレッド{scoped}: {gaps['reply_gaps']}件")
+    stamp_states = [get_message_metadata(db, r["message_id"])["reactions_status"]
+                    for r in rows]
+    if "not_fetched" in stamp_states or "invalid" in stamp_states:
+        cov.append(f"・スタンプ未取得 {stamp_states.count('not_fetched')}投稿"
+                   f"・取得不正 {stamp_states.count('invalid')}")
     held = db.execute("SELECT count(*) FROM notify_outbox WHERE "
                       "state='failed' AND next_try IS NULL").fetchone()[0]
     if held:

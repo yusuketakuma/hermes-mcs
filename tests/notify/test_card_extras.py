@@ -87,7 +87,7 @@ def test_list_counts_respect_the_plugin_project_scope(led):
     assert _click(led, spec, "mytasks", {"name": "山田"})["list"]["head"] \
         == ["未完了 2件（うち期限切れ 2件）"]
     view = _click(led, spec, "unacked", {"projects": [2]})["list"]
-    assert view["head"] == ["未確認 0件（うち担当者あり 0件）"]
+    assert view["head"][0] == "未確認 0件（うち担当者あり 0件）"
     for bad in ({"projects": []}, {"projects": ["1"]}, {"projects": [0]},
                 {"projects": 1}, {"projects": [1] * 1001}):
         req = {"version": 1, "op": "notification", "command_id": "x:y",
@@ -106,7 +106,7 @@ def test_my_tasks_without_name_says_why(led):
 def test_unacked_lists_until_acknowledged(led):
     spec = _delivered_card(led)
     view = _click(led, spec, "unacked")["list"]
-    assert view["head"] == ["未確認 1件（うち担当者あり 0件）"]
+    assert view["head"][0] == "未確認 1件（うち担当者あり 0件）"
     item = view["items"][0]
     assert (item["project_id"], item["group"]) == (1, "患者A")
     assert "https://www.medical-care.net/projects/medical/1" in item["text"]
@@ -116,7 +116,7 @@ def test_unacked_lists_until_acknowledged(led):
     _click(led, spec, "assign")
     _deliver(led)
     view = _click(led, _spec(led), "unacked")["list"]
-    assert view["head"] == ["未確認 1件（うち担当者あり 1件）"]
+    assert view["head"][0] == "未確認 1件（うち担当者あり 1件）"
     assert "担当中: <@1001>" in view["items"][0]["text"]
 
     _click(led, _spec(led), "ack")

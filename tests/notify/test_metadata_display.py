@@ -246,7 +246,9 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
     led.db.execute("UPDATE notification_cards SET message_id='delivered-2'")
     _metadata(led, 100, [_react("accepted")])
     view = notify_views.unacked_view(led.db, "discord", now=NOW)
-    assert view["head"] == ["未確認 2件（うち担当者あり 0件）"]
+    assert view["head"] == ["未確認 2件（うち担当者あり 0件）",
+                            "MCSで本人反応あり 1件（確認状態は変えません）"]
+    assert "MCSスタンプも承認・作業完了を保証せず" in view["notes"][0]
     assert "本人 承知" not in view["items"][0]["text"]
     assert "本人 承知" in view["items"][1]["text"]
     assert "未確認" in view["items"][1]["text"]

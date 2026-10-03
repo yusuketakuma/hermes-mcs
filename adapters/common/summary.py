@@ -15,7 +15,7 @@ from pathlib import Path
 
 _MCS = Path(__file__).resolve().parents[2] / "mcs"
 # the only config keys the summary reads (notify_digest.build)
-_CFG_KEYS = ("notify_max_age_h", "signals")
+_CFG_KEYS = ("notify_max_age_h", "signals", "metadata_refresh_publish")
 SNAPSHOT_MISSING = "サマリーの元データ（スナップショット）がまだありません。しばらく待ってから再度お試しください。"
 STALE_S = 6 * 3600
 
