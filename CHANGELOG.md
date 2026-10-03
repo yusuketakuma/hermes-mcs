@@ -46,6 +46,14 @@
 - **過去版から移行先版のコードで安全に更新する手順を追加**
   v1.0.3以降の導入は、移行先タグから取り出した起動役(scripts/mcs_upgrade.py)で更新計画の確認と適用ができます。install.shや独立モードSDKが変わる版も、操作者が--reinstallを指定すれば同じロック・バックアップ・巻戻し付きの経路で再導入まで行います。AIエージェント用のdocs/guides/UPGRADE_AGENT.mdが計画確認から完了報告までを案内します。
 
+### 改善
+
+- **MCSスタンプを絵文字で表示し、要約・スタンプ・本文の順に整理**
+  カード本体のスタンプ表示を絵文字の集計1行(例: MCS 👀5 🙆2 ・自分 2投稿)に縮め、各投稿の詳細はスレッドの投稿へ移します。すべての投稿を見出し・要約・スタンプ・MCSの本文の順に表示します。
+
+- **スレッドへの書込みを1投稿ずつ分離**
+  同じタイミングで取り込んだ投稿や、履歴の補完で見つかった返信も、スレッドではそれぞれ別のメッセージとして書き込みます。前の書込みへ追記してまとめることはしません。
+
 ### 不具合修正
 
 - **スタンプ脚注付きカードの文字数上限を維持**
@@ -77,6 +85,9 @@
 
 - **中断した再導入を手動完了した後に更新が止まり続ける問題を修正**
   install.sh再実行中に中断した更新を、手順どおり手動で完了しても更新計画が「再導入未完了」で止まり続けていました。完了を記録するreinstall-doneを追加し、15分ごとの復旧処理も未完了の再導入を適用済みにしません。
+
+- **通知先を切り替えた後も旧通知先の未決着で稼働状態が劣化のまま残る問題を修正**
+  カード通知先をDiscordからSlackへ切り替えた後、旧Discordの配送結果不明と送信保留が稼働状態を劣化にし続けていました。現在の通知先だけを数え、旧通知先の分は別枠の件数として表示します。
 
 - **セキュリティ：Slackサマリーの返答を既存の通信制限に統一**
   Slackのサマリーは既存の接続済みクライアントから本人宛の非公開メッセージとして返します。別のWebhook接続を作らず、固定接続先・リダイレクト禁止・プロキシ禁止・再試行禁止の制限を維持します。認可外やチャンネル不明の入力には返答しません。
@@ -110,7 +121,11 @@
 
 - 復旧処理(deployment/recovery)の変更は、install.shの再実行を伴う更新で反映されます。中断時の手順はdocs/guides/UPGRADE_AGENT.mdのreinstall_incompleteを参照してください。
 
+- 追加操作は不要です。旧通知先の記録は自動で決着させず保持します(再送しません)。health.jsonのcards.retired_unsettledとnotify.retired_heldで件数を確認できます。
+
 - HermesモードはGateway、独立モードはSlackアダプターを更新後に再起動してください。Slackアプリのslash command設定は従来の追加手順が必要です。取得範囲・既読化・モデル・患者名の既定は変更しません。
+
+- 追加設定は不要です。反映にはHermes gatewayまたは独立アダプターの再起動が必要です。絵文字は見ました👀・承知🙆・感謝🙏・いいね👍・完了✅の代替表示で、MCSのスタンプ画像そのものではありません。観測時刻は押下時刻ではありません。
 
 - 追加設定は不要です。カード表示の反映には、利用中のHermes gatewayまたは独立アダプターの再起動が必要です。「反応が観測されていない自分の投稿」はmetadata_refresh_publish=trueのときだけ出ます。確認状態・依頼台帳は変わりません。
 
@@ -125,6 +140,8 @@
 - Hermes連携のSlack・Discordは更新後にHermes Gatewayを再起動してください。LINE WORKSは独立アダプターを再起動してください。再起動前の旧アダプターでは📊ボタンが正しく動作しません（Slackは「操作できません」、Discord・LINE WORKSは結果の無い応答になります）。日次ダイジェストの対象は任意のdaily_digest.scopeで絞れます（既定は全患者、mineは指定不可）。通知先・送信時刻・患者名の既定（include_names=false）・既読化・人承認・取得範囲・モデルは変更しません。
 
 - Hermes連携のSlack・Discordは更新後にHermes Gatewayを、LINE WORKSは独立アダプターを再起動してください。Slackの/mcs-summaryを使う場合はSlackアプリにslash commandとcommands scopeを追加して再インストールし、plugin settingsのsnapshotを設定します（導入ガイド付録B）。日次サマリーの送信先はカード通知が有効ならカード用の配送先、無効なら従来どおりnotify_targetです。DBはnotification_renders.intent_event_id列を追加します（加法）。この版より前へ巻き戻すと、未封印のカード版日次サマリーはその日の分が送られず、封印済みで未送の分は送信されても完了扱いにならず通知キューに残ります（翌日分の投入後は手動で整理してください）。Discordの/mcsのサマリーは返答の公開範囲が実機で未確認のため患者名を出しません。既読化・人承認・取得範囲・モデル・患者名の既定（include_names=false）は変更しません。
+
+- 追加設定は不要です。反映にはHermes gatewayまたは独立アダプターの再起動が必要です。履歴補完の返信も新しいスレッド投稿になるため、スレッドの通知が増えることがあります。1件ずつ分ける前の古いまとめ投稿は再投稿しません。
 
 - 追加操作は不要です。v1.0.11以降への更新でUPGRADE_AGENT.mdの手順が使えます。v1.0.0〜1.0.2からは同書の手動経路を使います。自動更新とSlack等の承認経路はinstall.sh変更を含む版を従来どおり適用しません。独立モードの外部適用は未対応で、host経由の更新を使います。既読化・人承認・取得範囲・モデルの既定値は変更しません。
 
@@ -213,11 +230,21 @@
 - mcs_recover.pyは未完了のreinstallをescalateする。
 - 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、docs/guides/UPGRADE_AGENT.md
 
+#### 通知先を切り替えた後も旧通知先の未決着で稼働状態が劣化のまま残る問題を修正
+
+- notify.interactiveで選ばれていない配送先のgranted/unknown attemptと、その配送先だけに封印された保留イベントをlive件数から除く。
+- 根拠: mcs/notify/notify_cards.py、mcs/ingest/run_check.py
+
 #### Slackサマリーの返答を既存の通信制限に統一
 
 - Boltのrespondは別AsyncWebhookClientを生成するため使わず、既存の_say/chat.postEphemeralを再利用する。
 - 実SDKのSocket Modeでslash commandを配送し、response_urlを参照せず本人宛に返す合成回帰を追加。
 - 根拠: adapters/slack/actions.py、integration/test_standalone_slack_sdk.py
+
+#### MCSスタンプを絵文字で表示し、要約・スタンプ・本文の順に整理
+
+- 自分の投稿は本人分を除いた件数、未知の種別は❔で表示する。未取得・再取得失敗は集計行にも明示する。
+- 根拠: mcs/views/message_metadata.py、mcs/notify/notify_render.py
 
 #### 自分の投稿へのMCSスタンプと自分宛で応答未観測の投稿を表示
 
@@ -261,6 +288,11 @@
 - LINE WORKSは1000字に畳み、超える分は既存のdisplay#分割で封入する。
 - コマンドは公開snapshotを読取り専用で開き、各入口の静的プロジェクト範囲を必ず適用する。範囲が空なら表示しない。mineはname:名前で照合する。
 - 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_transport.py、mcs/notify/notify_digest.py、mcs/core/ledger.py、adapters/common/summary.py、adapters/slack/actions.py、adapters/lineworks/actions.py、hermes_plugin/__init__.py
+
+#### スレッドへの書込みを1投稿ずつ分離
+
+- _body_groupsは全メッセージに独自のpost keyを与え、legacyのまとめ投稿だけ既存メンバーを保持する。
+- 根拠: mcs/notify/notify_cards.py
 
 #### 過去版から移行先版のコードで安全に更新する手順を追加
 

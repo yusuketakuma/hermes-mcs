@@ -120,32 +120,50 @@ def get_metadata_shadow_status(db, mid, *, as_of=None) -> dict:
             "age_as_of": _timestamp(as_of), "last_error": metadata["last_error"]}
 
 
-def self_reaction_text(metadata) -> str:
-    """本人のスタンプまたは取得状態を表示し、観測日時を押下時刻と区別する。"""
-    reactions = metadata["reactions"]
-    if reactions is None:
-        return "MCS: スタンプ未取得"
-    when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    labels = list(dict.fromkeys(reaction_label(r["type"]) for r in reactions
-                                if r["self_reacted"]))
-    value = ("本人 " + "/".join(labels) if labels else
-             "スタンプ0件" if not reactions else "本人反応は記録されていません")
-    return (f"MCS: {value}（観測 {when:%m-%d %H:%M} JST）"
-            + ("・再取得失敗" if metadata["last_error"] else ""))
+# MCS stamp -> chat emoji. Unicode stand-ins for the official stamp
+# images (the images themselves are not fetched); unknown future types
+# stay visible as ❔ rather than being dropped.
+STAMP_EMOJI = {"viewed": "👀", "accepted": "🙆", "thanked": "🙏",
+               "good": "👍", "completed": "✅"}
 
 
-def own_post_reaction_text(metadata) -> str:
-    """自分の投稿への他者反応を種別ごとの件数で表示する（氏名・押下者は出さない）。"""
+def stamp_counts(metadata) -> dict | None:
+    """{emoji: count} in STAMP_EMOJI order — for one's own post the
+    count excludes one's own stamp. None when unfetched or invalid."""
     reactions = metadata["reactions"]
     if reactions is None:
-        return "MCS: スタンプ未取得"
+        return None
+    own = metadata.get("own_post")
+    out: dict = {}
+    for r in sorted(reactions, key=lambda r: list(STAMP_EMOJI).index(r["type"])
+                    if r["type"] in STAMP_EMOJI else len(STAMP_EMOJI)):
+        n = r["count"] - (1 if own and r["self_reacted"] else 0)
+        if n > 0:
+            e = STAMP_EMOJI.get(r["type"], "❔")
+            out[e] = out.get(e, 0) + n
+    return out
+
+
+def self_stamps(metadata) -> str:
+    """Emoji of the stamps one pressed oneself on this post ("" if none)."""
+    return "".join(dict.fromkeys(
+        STAMP_EMOJI.get(r["type"], "❔")
+        for r in metadata["reactions"] or [] if r["self_reacted"]))
+
+
+def stamp_line(metadata) -> str:
+    """One compact line for a single post: emoji counts, own stamps and
+    the observation time (never the press time)."""
+    counts = stamp_counts(metadata)
+    if counts is None:
+        return "MCS スタンプ未取得"
     when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    others: dict = {}
-    for r in reactions:
-        label = reaction_label(r["type"])
-        others[label] = others.get(label, 0) + max(0, r["count"] - r["self_reacted"])
-    value = "/".join(f"{k}{n}" for k, n in others.items() if n) or "他者0件"
-    return (f"MCS: 自分の投稿への反応 {value}（観測 {when:%m-%d %H:%M} JST）"
+    text = "MCS " + (" ".join(f"{e}{n}" for e, n in counts.items())
+                     or "スタンプなし")
+    mine = self_stamps(metadata)
+    if mine:
+        text += f"（自分 {mine}）"
+    return (text + f" · 観測 {when:%m-%d %H:%M}"
             + ("・再取得失敗" if metadata["last_error"] else ""))
 
 

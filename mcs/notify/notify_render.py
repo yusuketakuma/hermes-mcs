@@ -17,7 +17,7 @@ import time
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from message_metadata import (get_message_metadata, is_self_sender,
-                              own_post_reaction_text, self_reaction_text)
+                              self_stamps, stamp_counts, stamp_line)
 import structured_view
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -363,7 +363,7 @@ def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
     if not positive(mid):
         return None, None
     message = db.execute(
-        "SELECT sender_name,profession,organization,posted_at,"
+        "SELECT sender_id,sender_name,profession,organization,posted_at,"
         "body_text,body_state "
         "FROM messages WHERE message_id=? AND project_id=?",
         (mid, sig["project_id"])).fetchone()
@@ -387,6 +387,23 @@ def _signal_compact(db, pid, contents: list) -> list:
                       {"type": "text", "text": "\n".join(lines)}])
 
 
+def _message_post(db, mid, m, sender, head="") -> str:
+    """One MCS post as a thread message, always in the owner's order
+    (2026-10-03): header, 📋 summary, MCS stamps, then the posted body."""
+    if m["body_state"] == "deleted":
+        return f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}（削除済み）"
+    out = [f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"]
+    sblk = _structured_block(db, mid)
+    if sblk:
+        out.append(sblk["text"])
+    meta = get_message_metadata(db, mid)
+    sid = m["sender_id"] if "sender_id" in m.keys() else None
+    meta["own_post"] = is_self_sender(db, sid)
+    out.append(stamp_line(meta))
+    out.append(m["body_text"] or "")
+    return "\n".join(out)
+
+
 def _signal_body(db, sig: dict) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: notice text, patient, the untruncated evidence
@@ -398,14 +415,8 @@ def _signal_body(db, sig: dict) -> str:
         lines.append(f"患者: {name}")
     mid, m = _signal_evidence(db, sig)
     if m and m["body_text"]:
-        body = ("（削除済み）" if m["body_state"] == "deleted"
-                else m["body_text"])
-        lines.append(f"最新言及 {m['posted_at'] or '?'} "
-                     f"{_sender_tag(m)}: {body}")
-        if m["body_state"] != "deleted":
-            sblk = _structured_block(db, mid)
-            if sblk:
-                lines.append(sblk["text"])
+        lines.append(_message_post(db, mid, m, _sender_tag(m),
+                                   head="最新言及 "))
     state = sig.get("state")
     if state and state != "open":
         lines.append(f"状態: {state}")
@@ -430,21 +441,13 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
             if not positive(mid):
                 continue
             m = db.execute(
-                "SELECT sender_name,profession,organization,posted_at,"
-                "body_text,body_state "
+                "SELECT sender_id,sender_name,profession,organization,"
+                "posted_at,body_text,body_state "
                 "FROM messages WHERE message_id=? AND project_id=?",
                 (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
-            body = ("（削除済み）" if m["body_state"] == "deleted"
-                    else (m["body_text"] or ""))
-            lines.append(f"{_mmdd(m['posted_at'])} "
-                         f"{_hhmm(m['posted_at'])} "
-                         f"{_sender_tag(m)}: {body}")
-            if m["body_state"] != "deleted":
-                sblk = _structured_block(db, mid)
-                if sblk:
-                    lines.append(sblk["text"])
+            lines.append(_message_post(db, mid, m, _sender_tag(m)))
         name = _patient_name(db, card["project_id"]) \
             or "project " + str(card["project_id"])
         title = f"💬 {name} — 本文"
@@ -624,7 +627,6 @@ def open_tasks(db, card) -> list:
 
 FOOTER_TASKS = 3
 FOOTER_ACKERS = 8
-FOOTER_REACTIONS = 3
 
 
 def card_reactions(db, card, shown=None) -> list:
@@ -659,13 +661,31 @@ def card_reactions(db, card, shown=None) -> list:
 
 
 def card_reaction_lines(reactions) -> list:
-    """複数投稿を識別し、脚注の物理上限を守って取得状態を併記する。"""
-    lines = [(f"#{mid} " if len(reactions) > 1 else "")
-             + (own_post_reaction_text if meta.get("own_post") else self_reaction_text)(meta)
-             for mid, meta in reactions[:FOOTER_REACTIONS]]
-    if len(reactions) > FOOTER_REACTIONS:
-        lines.append(f"MCS: 他{len(reactions) - FOOTER_REACTIONS}投稿（CLIで確認）")
-    return lines
+    """The card face's single stamp line: emoji totals over the shown
+    posts (one's own posts count others only), how many posts carry
+    one's own stamp, and how many are still unfetched. Per-post detail
+    lives in each post's thread message, keeping the face short."""
+    if not reactions:
+        return []
+    totals: dict = {}
+    mine = unfetched = 0
+    for _mid, meta in reactions:
+        counts = stamp_counts(meta)
+        if counts is None:
+            unfetched += 1
+            continue
+        for e, n in counts.items():
+            totals[e] = totals.get(e, 0) + n
+        mine += bool(self_stamps(meta))
+    parts = [" ".join(f"{e}{n}" for e, n in totals.items())
+             or ("スタンプなし" if unfetched < len(reactions) else "")]
+    if mine:
+        parts.append(f"自分 {mine}投稿")
+    if unfetched:
+        parts.append(f"未取得 {unfetched}投稿")
+    if any(meta["last_error"] for _mid, meta in reactions):
+        parts.append("再取得失敗")
+    return ["MCS " + " · ".join(p for p in parts if p)]
 
 
 def today_jst(now=None) -> str:

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "通知先を切り替えた後も旧通知先の未決着で稼働状態が劣化のまま残る問題を修正",
+  "summary": "カード通知先をDiscordからSlackへ切り替えた後、旧Discordの配送結果不明と送信保留が稼働状態を劣化にし続けていました。現在の通知先だけを数え、旧通知先の分は別枠の件数として表示します。",
+  "upgrade": "追加操作は不要です。旧通知先の記録は自動で決着させず保持します(再送しません)。health.jsonのcards.retired_unsettledとnotify.retired_heldで件数を確認できます。",
+  "details": [
+    "notify.interactiveで選ばれていない配送先のgranted/unknown attemptと、その配送先だけに封印された保留イベントをlive件数から除く。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

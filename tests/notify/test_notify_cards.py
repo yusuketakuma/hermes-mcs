@@ -611,8 +611,9 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    assert "職員（薬剤師・薬局Y）: 本文" in text
-    assert "職員: 本文" in text
+    # header -> (summary) -> stamps -> posted body, in that order
+    assert "08:40 職員（薬剤師・薬局Y）\nMCS スタンプ未取得\n本文" in text
+    assert "08:41 職員\nMCS スタンプ未取得\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
