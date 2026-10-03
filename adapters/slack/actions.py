@@ -8,9 +8,10 @@ import time
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
+                                 digest_inputs,
                                  ja, modal_fields, preview_text,
                                  search_query, task_list_text, view_answer)
-from .cards import LINK_ACTION, MENU_ACTION, _sections
+from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
@@ -27,7 +28,8 @@ _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
 # action_retired and refreshes the posted card
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
-          "mytasks", "unacked", "search")
+          "mytasks", "unacked", "search", "digest")
+SUMMARY_COMMAND = "/mcs-summary"
 RESULT_POLL_S = 0.25
 # the 📝 modal waits this long for the runner's form (prefill + roster)
 # before opening — trigger_id lives ~3s; a slow drain opens without it
@@ -125,6 +127,19 @@ def origin(body, action, *, team_id, application_id, channel_id,
             "actor": f"slack:{team_id}:{uid}", "token": token}
 
 
+def _parts_blocks(result) -> list | None:
+    """Block Kit for a view answer carrying the shared display model, or
+    None (text answer) when absent or over Slack's 50-block ceiling."""
+    parts = result.get("parts") if result.get("action") == "digest" else None
+    if not isinstance(parts, dict) or not isinstance(parts.get("containers"), list):
+        return None
+    try:
+        blocks = render_parts(parts)
+    except (KeyError, TypeError):
+        return None
+    return blocks if 0 < len(blocks) <= 50 else None
+
+
 class Actions:
     def __init__(self, app, settings, dirs, reg, sender, log):
         self._app = app
@@ -144,6 +159,45 @@ class Actions:
         self._app.action(_MENU)(self._action)
         self._app.action(_CONFIRM)(self._confirm)
         self._app.view("mcs:modal")(self._modal)
+        # the 📊 slash command needs the Slack app to declare it
+        # (docs/guides/INSTALLATION.md); a host app without the
+        # command API keeps every other handler
+        command = getattr(self._app, "command", None)
+        if command is not None:
+            command(SUMMARY_COMMAND)(self._summary)
+
+    async def _summary(self, ack, body, respond):
+        """``/mcs-summary <scope> [name:名前]`` — the clicker-only summary
+        from the snapshot. Slash payloads are flat (team_id/api_app_id/
+        user_id): checked like ``_scope``, acked first (3s), computed
+        off-loop, answered ephemerally through response_url."""
+        await ack()
+        if not (self._active
+                and body.get("team_id") == self._settings["team_id"]
+                and body.get("api_app_id") == self._settings["application_id"]
+                and body.get("user_id") in self._settings["allowed_user_ids"]):
+            await respond(text="権限がありません。", response_type="ephemeral")
+            return
+        snapshot = self._settings.get("snapshot")
+        if not snapshot:
+            await respond(text="サマリーの元データが設定されていません。",
+                          response_type="ephemeral")
+            return
+        name = ""
+        if {"mine", "担当"} & set(str(body.get("text") or "").lower().split()):
+            name = await self._clicker_name({"id": body["user_id"],
+                                             "name": body.get("user_name")})
+        from adapters.common import summary
+        got = await asyncio.to_thread(
+            summary.answer, snapshot, str(body.get("text") or "")[:300],
+            name=name, allowed=projects.summary_scope(self._settings),
+            dialect="slack")
+        if "error" in got:
+            await respond(text=got["error"], response_type="ephemeral")
+            return
+        blocks = _parts_blocks({"action": "digest", "parts": got["parts"]})
+        await respond(text=got["text"][:3000], response_type="ephemeral",
+                      **({"blocks": blocks} if blocks else {}))
 
     def unload(self):
         self._active = False
@@ -278,7 +332,7 @@ class Actions:
             await self._say(origin["channel_id"], user, "操作できません。")
             return
         clicker = await self._clicker_name(body["user"]) \
-            if kind in ("mytasks", "request") else ""
+            if kind in ("mytasks", "request", "digest") else ""
         env = envelopes.notification(
             token, actor, origin,
             projects.view_inputs(self._settings, kind, clicker))
@@ -372,16 +426,22 @@ class Actions:
             picked = got.get("selected_option")
             fields[name] = (picked.get("value") if isinstance(picked, dict)
                             else got.get("value")) or ""
-        if pending["action"] == "search":
-            # 🔎 no preview — the keyword rides the card token as a view
-            # click and the hits come back through the followup sweep
+        if pending["action"] in ("search", "digest"):
+            # 🔎/📊 no preview — the input rides the card token as a view
+            # click and the answer comes back through the followup sweep
             self._reg.drop_modal(modal_id)
-            query = search_query(fields)
-            if query is None:
-                await self._say(origin["channel_id"], user, SEARCH_EMPTY)
-                return
+            if pending["action"] == "digest":
+                clicker = await self._clicker_name(body["user"])
+                inputs = {**(projects.view_inputs(self._settings, "digest", "")
+                             or {}), **digest_inputs(fields, clicker)}
+            else:
+                query = search_query(fields)
+                if query is None:
+                    await self._say(origin["channel_id"], user, SEARCH_EMPTY)
+                    return
+                inputs = {"query": query}
             env = envelopes.notification(pending["token"], actor, origin,
-                                         {"query": query})
+                                         inputs)
             try:
                 await self._publish(env)
             except (OSError, ValueError):
@@ -557,9 +617,13 @@ class Actions:
                 token_ctx = result.get("token_ctx") or {}
                 if token_ctx:
                     await asyncio.to_thread(self._reg.put_tokens, token_ctx)
+                cards = _parts_blocks(result)
+                if cards:
+                    # 📊: one Block Kit card; the text is the fallback
+                    answer = answer[:1]
                 for message, tasks in answer:
                     await self._say(origin["channel_id"], rec["user"],
-                                    message, blocks=_task_blocks(tasks)
-                                    if tasks else None)
+                                    message, blocks=cards or (
+                                        _task_blocks(tasks) if tasks else None))
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
                 await self._say(origin["channel_id"], rec["user"], ja(result))

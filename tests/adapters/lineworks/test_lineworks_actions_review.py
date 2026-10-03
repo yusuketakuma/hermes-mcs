@@ -147,3 +147,27 @@ def test_human_receipt_is_tracked_before_publication_can_lose_its_ack(tmp_path, 
     _result(w, payload["command_id"], {"outcome": "applied"})
     asyncio.run(w.actions.sweep_followups())
     assert w.client.calls[-1][1]["text"] == "反映しました。"
+
+
+def test_dm_summary_word_answers_privately_from_the_snapshot(tmp_path, monkeypatch):
+    from adapters.common import summary
+    w = world(tmp_path, action="summary")
+    seen = []
+
+    def answer(snapshot, rest, **kw):
+        seen.append((snapshot, rest, kw))
+        return {"text": "【📊 MCS サマリー】\n対象: 全患者"}
+    monkeypatch.setattr(summary, "answer", answer)
+
+    async def scenario():
+        await w.actions.handle(event(text="サマリー mine name:山田", channel=None))
+        assert w.client.calls[-1][2] == {"user_id": "operator", "channel_id": None}
+        w.settings["snapshot"] = "/synthetic/ledger-snapshot.db"
+        await w.actions.handle(event(text="サマリー mine name:山田", channel=None))
+        # a shared room never answers, a non-allowlisted user is ignored
+        await w.actions.handle(event(text="サマリー", channel=SCOPE["channel_id"]))
+        await w.actions.handle(event(text="サマリー", user="stranger", channel=None))
+    asyncio.run(scenario())
+    assert [(s, r) for s, r, _ in seen] == [
+        ("/synthetic/ledger-snapshot.db", "mine name:山田")]
+    assert seen[0][2]["allowed"] == [1] and seen[0][2]["dialect"] == "plain"

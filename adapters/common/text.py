@@ -131,7 +131,8 @@ DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応�
 TASK_REASON = "通知カードからタスク作成"
 STAFF_OPTIONS = 25
 MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
-                "report": "抽出の誤りを報告", "search": "この患者を検索"}
+                "report": "抽出の誤りを報告", "search": "この患者を検索",
+                "digest": "サマリー（絞込み）"}
 # card actions whose click opens a modal (text.modal_fields) instead of
 # answering directly
 MODAL_ACTIONS = tuple(MODAL_TITLES)
@@ -187,7 +188,24 @@ def modal_fields(action: str, form: dict | None = None,
     if action == "search":
         return [{"id": "query", "label": "キーワード（空白区切りで AND）",
                  "required": True, "max": 100, "default": ""}]
+    if action == "digest":
+        return [{"id": "query", "required": False, "max": 100,
+                 "label": "絞込み（all / mine / station:名前 / days:1-7）",
+                 "default": "all"},
+                {"id": "name", "label": "担当の名前（mine用）",
+                 "required": False, "max": 120, "default": clicker[:120]}]
     return []
+
+
+def digest_inputs(fields: dict, clicker: str = "") -> dict:
+    """📊 modal values -> view input: the scope text (blank = all) and
+    the name ``mine`` matches (blank = the clicker's display name)."""
+    name = " ".join((fields.get("name") or "").split())[:120] or clicker[:120]
+    out = {"query": " ".join((fields.get("query") or "").split())[:100]
+           or "all"}
+    if name:
+        out["name"] = name
+    return out
 
 
 def task_attrs(fields: dict):
@@ -299,6 +317,10 @@ def view_answer(result: dict | None, allowed,
             or result.get("modal"):
         return None
     action = result.get("action")
+    if action == "digest" and isinstance(result.get("text"), str):
+        # rendered by the runner from the shared display model in this
+        # card's transport dialect (notify_render.parts_text)
+        return [(m, None) for m in split_body(result["text"])]
     if action in ("body", "summary") and result.get("body"):
         return [(m, None) for m in body_messages(result)]
     if action == "tasks":

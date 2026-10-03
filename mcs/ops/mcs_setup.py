@@ -65,7 +65,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import mcs_runtime
 
-from mcs_util import (CONF_PATH, HOME, atomic_write, env_value,
+from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
 
 ENV_PATH = os.path.join(HOME, ".env")
@@ -330,6 +330,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 errors.append(f"daily_digest.hour_jst: {err}")
         if "include_names" in dd and type(dd["include_names"]) is not bool:
             errors.append("daily_digest.include_names: must be a boolean")
+        if "scope" in dd:
+            import notify_digest
+            flt = (notify_digest.parse_scope(dd["scope"])
+                   if isinstance(dd["scope"], str) and len(dd["scope"]) <= 200
+                   else "must be a string")
+            if isinstance(flt, str) or flt["mine"]:
+                errors.append("daily_digest.scope: " + (
+                    flt if isinstance(flt, str) else
+                    "mine needs a clicker — use station:/project:/days:"))
     if isinstance(cfg.get("notify"), dict):
         errors.extend(_validate_notify(cfg["notify"]))
         # a scope block for the transport that is NOT active is stale —
@@ -925,6 +934,9 @@ WIZARD = [
          "日次ダイジェストを送る時刻（JST・0-23時）", _digest_on),
         ("daily_digest.include_names", "bool", False,
          "日次ダイジェストの一覧に患者名を添える（送信先は notify_target）",
+         _digest_on),
+        ("daily_digest.scope", "opt", None,
+         "日次ダイジェストの対象患者（例: station:○○ / project:1,2 / days:3。空欄=全患者）",
          _digest_on),
     ]),
     ("収集ポリシー", [
@@ -1895,8 +1907,7 @@ HERMES_PY = os.path.join(HERMES_HOME, "hermes-agent", "venv", "bin",
                          "python")
 SCRIPTS_DIR = os.path.join(HERMES_HOME, "scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+REPO_ROOT = REPO
 G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
                                 "g6-criteria-v1.json")
 

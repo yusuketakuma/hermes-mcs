@@ -47,7 +47,7 @@ from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
-    display_text, plain_notice)
+    display_text, fit_parts, parts_text, plain_notice)
 from notify_views import (
     my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
@@ -59,7 +59,11 @@ SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
 
 # outbox kinds that become interactive cards when notify.interactive is
 # on; everything else (ops alerts, semantic notices) stays legacy text.
-INTERACTIVE_KINDS = frozenset({"new_messages", "signal"})
+INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest"})
+# kinds delivered as one card-less ``op=notice`` render (no card row,
+# manifest, tokens or thread) — see _dispatch_notice
+NOTICE_KINDS = frozenset({"daily_digest"})
+LINEWORKS_DISPLAY = 1000          # button-template text bound
 
 # renders whose spec file must be available to a claiming worker
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
@@ -267,6 +271,7 @@ _ACTIONS = {
     "mytasks": ("📋 自分のタスク", "secondary", "view"),
     "unacked": ("🗂 未確認一覧", "secondary", "view"),
     "search":  ("🔎 この患者を検索", "secondary", "view"),
+    "digest":  ("📊 サマリー", "secondary", "view"),
     # minted only inside a tasks view — never a card button; the plugin
     # supplies its own labels from the view's transitions
     "task_status": ("", "secondary", "write"),
@@ -276,7 +281,7 @@ _WRITE_ACTIONS = frozenset(
 # recomputed on every click — a replayed command_id never returns the
 # stored receipt for these
 _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
-                         "mytasks", "unacked", "search"})
+                         "mytasks", "unacked", "search", "digest"})
 
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
                               # (hermes_plugin spec.MAX_COMPONENTS)
@@ -708,7 +713,7 @@ def _action_rows(db, card, content, now, context=None,
     used = (sum(c["type"] != "meta" for c in content["containers"])
             + sum(f["type"] == "text" for f in content["footer"])
             + sum(len(r) + 1 for r in rows))
-    extras = ["mytasks", "unacked"] + (["search"] if positive(pid) else [])
+    extras = ["digest", "mytasks", "unacked"] + (["search"] if positive(pid) else [])
     for action in extras[:max(0, MAX_COMPONENTS - used - 1)]:
         btn(action)
     flush()
@@ -908,14 +913,7 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     posts = _prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
     if card["transport"] == "lineworks":
-        # LINE WORKS button-template text is bounded at 1000 characters.
-        # Preserve the exact remainder as durable body parts, never truncate.
-        overflow = display_text(parts)[1000:]
-        keyed.extend((f"display#{i}", chunk)
-                     for i, chunk in enumerate(_split_body_chunks(overflow), 1))
-        button_count = sum(len(row) for row in parts.get("action_rows") or [])
-        keyed.extend((f"actions#{i}", "MCS 追加操作")
-                     for i in range(1, (button_count + 9) // 10))
+        keyed.extend(_lineworks_overflow(parts))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
         body = _card_body_text(db, card, man, max_chars=None)[1]
@@ -952,6 +950,19 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
         manifest.append(entry)
         idx += 1
     parts["manifest"] = manifest
+
+
+def _lineworks_overflow(parts) -> list:
+    """[(name, chunk)] — LINE WORKS button-template text is bounded at
+    1000 characters. The exact remainder and the buttons past ten ride
+    as durable body parts, never truncated (lineworks/cards.validate)."""
+    overflow = display_text(parts)[LINEWORKS_DISPLAY:]
+    keyed = [(f"display#{i}", chunk)
+             for i, chunk in enumerate(_split_body_chunks(overflow), 1)]
+    button_count = sum(len(row) for row in parts.get("action_rows") or [])
+    keyed.extend((f"actions#{i}", "MCS 追加操作")
+                 for i in range(1, (button_count + 9) // 10))
+    return keyed
 
 
 def _seed_parts(db, spec, now) -> None:
@@ -1576,12 +1587,232 @@ def _reseat(db, event_id, now) -> None:
         "WHERE event_id=?", (now + RESEAT_S, now, event_id))
 
 
+def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
+    """A self-contained card-less notice: no buttons, tokens, manifest
+    row or thread — only the sealed part plan (card, plus the LINE WORKS
+    overflow body parts behind a thread part)."""
+    correlation = secrets.token_hex(16)
+    key = f"v1|notice|{event_id}"
+    if transport == "lineworks":
+        parts = fit_parts(parts, LINEWORKS_DISPLAY)
+    body = {"containers": parts["containers"], "action_rows": [],
+            "footer": [f for f in parts["footer"] if f.get("type") == "text"]
+                      + [{"type": "meta", "correlation": correlation}]}
+    spec = {
+        "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[transport]}",
+        "delivery_id": str(uuid.uuid4()),
+        "logical_intent_id": key, "card_key": key, "op": "notice",
+        "render_rev": rev, "source_generation": 0,
+        "presentation_generation": 0, "ui_revision": 0,
+        "delivery": {**scope, "intent_event_ids": [event_id],
+                     "route_epoch": route_epoch(cfg),
+                     "correlation": correlation},
+        "parts": body}
+    payload = canonical({k: body[k] for k in
+                         ("containers", "footer", "action_rows")})
+    manifest = [{"part_id": "card", "kind": "card", "index": 0,
+                 "sha256": hashlib.sha256(payload).hexdigest(),
+                 "bytes": len(payload)}]
+    keyed = _lineworks_overflow(body) if transport == "lineworks" else []
+    if keyed:
+        manifest.append({"part_id": "thread", "kind": "thread", "index": 1,
+                         "name": key, "sha256": _sha_text(key)})
+        body["thread_body_parts"] = [c for _k, c in keyed]
+        manifest += [{"part_id": f"body:{i + 1:04d}", "kind": "body_part",
+                      "index": i + 2, "name": k, "sha256": _sha_text(c),
+                      "bytes": len(c.encode("utf-8"))}
+                     for i, (k, c) in enumerate(keyed)]
+    body["manifest"] = manifest
+    return spec
+
+
+def _notice_renders(db, event_id) -> list:
+    return db.execute(
+        "SELECT * FROM notification_renders WHERE card_id IS NULL "
+        "AND op='notice' AND intent_event_id=? ORDER BY render_rev",
+        (event_id,)).fetchall()
+
+
+def _notice_failures(db, event_id) -> int:
+    """Real failed sends of this event's notices — begin denials
+    (``denied_*``) are not send attempts and never spend the budget."""
+    return db.execute(
+        """SELECT count(*) FROM notification_delivery_attempts a
+           JOIN notification_renders r ON r.delivery_id=a.delivery_id
+           WHERE r.card_id IS NULL AND r.intent_event_id=?
+             AND a.state='not_sent'
+             AND (a.error_code IS NULL OR a.error_code NOT LIKE 'denied_%')""",
+        (event_id,)).fetchone()[0]
+
+
+def _notice_unsent(db, renders) -> bool:
+    """Provably never delivered: every render queued/not_sent/cancelled
+    and no attempt granted or unknown."""
+    ids = [r["delivery_id"] for r in renders]
+    if any(r["state"] not in ("queued", "not_sent", "cancelled")
+           for r in renders):
+        return False
+    return not ids or not db.execute(
+        "SELECT 1 FROM notification_delivery_attempts WHERE delivery_id IN "
+        f"({','.join('?' * len(ids))}) AND state IN ('granted','unknown')",
+        ids).fetchone()
+
+
+def _close_notice(db, event_id, renders, now, state="suppressed") -> None:
+    for r in renders:
+        if r["state"] in ("queued", "held"):
+            _cancel_render(db, r["delivery_id"], now)
+    db.execute("UPDATE notify_outbox SET state=?,next_try=NULL,"
+               "updated_at=? WHERE event_id=?", (state, now, event_id))
+
+
+def _notice_route_moved(render, cfg) -> bool:
+    """A queued notice aimed at a route the config no longer has (epoch,
+    transport or destination changed) — begin would deny it forever."""
+    scope = delivery_scope(cfg) or {}
+    return (render["route_epoch"] != route_epoch(cfg)
+            or render["transport"] != active_transport(cfg)
+            or any(render[k] != scope.get(k) for k in
+                   ("application_id", "channel_id", "team_id", "guild_id")
+                   if k in scope))
+
+
+def _dispatch_notice(ledger, ev, cfg, now) -> dict:
+    """Card-less notice intents (📊 daily summary): seal once, issue a
+    ``notice`` render, and on re-entry finish it — delivered → accepted,
+    a real failure → a fresh render up to MAX_RESEND, then held. Turned
+    off: a stale/disabled day is suppressed; cards switched off while
+    provably unsent fall back to the frozen text exactly once."""
+    import notify_digest
+    db = _db(ledger)
+    root = data_root(ledger)
+    specs: list = []
+    event_id = ev["event_id"]
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT event_id,kind,payload,state,route FROM notify_outbox "
+            "WHERE event_id=?", (event_id,)).fetchone()
+        if row is None or row["route"] != "interactive" \
+                or row["state"] not in ("pending", "failed"):
+            return {"skipped": True}
+        renders = _notice_renders(db, event_id)
+        if interactive_enabled(cfg):
+            # never sent (queued, no attempt) to a route the config left:
+            # cancel and let a fresh render aim at the current one
+            moved = [r for r in renders if r["state"] == "queued"
+                     and _notice_route_moved(r, cfg) and _notice_unsent(db, [r])]
+            for r in moved:
+                _cancel_render(db, r["delivery_id"], now)
+            if moved:
+                renders = _notice_renders(db, event_id)
+        if any(r["state"] == "delivered" for r in renders):
+            db.execute("UPDATE notify_outbox SET state='accepted',"
+                       "next_try=NULL,accepted_ref='notice',updated_at=? "
+                       "WHERE event_id=?", (now, event_id))
+            mark_snapshot_dirty(db)
+            return {"accepted": True}
+        newer = db.execute(
+            "SELECT 1 FROM notify_outbox WHERE kind=? AND event_id>?",
+            (row["kind"], event_id)).fetchone()
+        if notify_digest.settings(cfg) is None or newer:
+            # an undelivered summary has no value once disabled or a
+            # newer day exists — never sent late
+            if _notice_unsent(db, renders):
+                _close_notice(db, event_id, renders, now)
+                mark_snapshot_dirty(db)
+                return {"suppressed": True}
+        elif not interactive_enabled(cfg) and _notice_unsent(db, renders):
+            target = cfg.get("notify_target")
+            if not (isinstance(target, str) and target.strip()):
+                # no text destination to fall back to — never send late
+                _close_notice(db, event_id, renders, now)
+                mark_snapshot_dirty(db)
+                return {"suppressed": True}
+            # the kill switch: provably unsent → the frozen text, once
+            _close_notice(db, event_id, renders, now, state="pending")
+            db.execute("DELETE FROM notification_intent_batches "
+                       "WHERE event_id=?", (event_id,))
+            db.execute("UPDATE notify_outbox SET route='text',next_try=? "
+                       "WHERE event_id=?", (now, event_id))
+            mark_snapshot_dirty(db)
+            return {"reverted": True}
+        live = [r for r in renders if r["state"] in LIVE_RENDER]
+        if live or not interactive_enabled(cfg) \
+                or notify_digest.settings(cfg) is None or newer:
+            specs.extend(json.loads(r["spec_json"]) for r in live
+                         if r["state"] == "queued" and r["spec_json"]
+                         and not r["spec_published"])
+            _reseat(db, event_id, now)
+        elif _notice_failures(db, event_id) >= MAX_RESEND:
+            db.execute("UPDATE notify_outbox SET state='failed',"
+                       "next_try=NULL,updated_at=? WHERE event_id=?",
+                       (now, event_id))
+            mark_snapshot_dirty(db)
+            return {"error": "resend_exhausted"}
+        else:
+            scope = delivery_scope(cfg)
+            if scope is None:
+                return {"error": "delivery_scope_missing"}
+            try:
+                frozen = json.loads(row["payload"])
+                parts = frozen["parts"]
+                ok = isinstance(parts.get("containers"), list) \
+                    and isinstance(parts.get("footer"), list)
+            except (ValueError, TypeError, KeyError, AttributeError):
+                ok = False
+            if not ok:
+                db.execute("UPDATE notify_outbox SET state='failed',"
+                           "next_try=NULL,updated_at=? WHERE event_id=?",
+                           (now, event_id))
+                return {"error": "payload_invalid"}
+            transport = active_transport(cfg)
+            db.execute(
+                "INSERT OR IGNORE INTO notification_intent_batches("
+                "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
+                "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
+                (event_id, canonical(frozen).decode(), payload_hash(frozen),
+                 route_epoch(cfg), now, transport,
+                 canonical(scope).decode()
+                 if transport in ("slack", "lineworks") else None))
+            spec = _notice_spec(event_id, parts, cfg, scope,
+                                len(renders) + 1, transport)
+            db.execute(
+                """INSERT INTO notification_renders(
+                     delivery_id,card_id,op,render_rev,manifest_id,
+                     route_epoch,profile,application_id,guild_id,
+                     channel_id,transport,team_id,spec_json,payload_hash,
+                     correlation,state,parts_state,intent_event_id,
+                     created_at,updated_at)
+                   VALUES(?,NULL,'notice',?,NULL,?,?,?,?,?,?,?,?,?,?,
+                          'queued','pending',?,?,?)""",
+                (spec["delivery_id"], spec["render_rev"],
+                 spec["delivery"]["route_epoch"],
+                 spec["delivery"].get("profile"),
+                 spec["delivery"].get("application_id"),
+                 spec["delivery"].get("guild_id"),
+                 spec["delivery"].get("channel_id"), transport,
+                 spec["delivery"].get("team_id"), canonical(spec).decode(),
+                 payload_hash(spec), spec["delivery"]["correlation"],
+                 event_id, now, now))
+            _seed_parts(db, spec, now)
+            specs.append(spec)
+            _reseat(db, event_id, now)
+        mark_snapshot_dirty(db)
+    if specs:
+        ensure_dirs(root)
+        _publish_specs(db, notify_dirs(root), specs, now)
+    return {"dispatched": bool(specs)}
+
+
 def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
     """Freeze an interactive intent: sealed batch -> card fan-out ->
     immutable render -> atomic spec publication. Idempotent re-entry on
     a sealed intent repairs missing spec files and re-checks completion."""
-    db = _db(ledger)
     now = time.time() if now is None else now
+    if ev["kind"] in NOTICE_KINDS:
+        return _dispatch_notice(ledger, ev, cfg, now)
+    db = _db(ledger)
     root = data_root(ledger)
     dirs = notify_dirs(root)
     ensure_dirs(root)
@@ -1764,7 +1995,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
             # the 📝 form's prefill/staff list is the same kind of live
             # view data — recomputed per click, never persisted
             kept = {k: v for k, v in receipt.items()
-                    if k not in ("body", "form", "list")}
+                    if k not in ("body", "form", "list", "parts", "text")}
             db.execute(
                 "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                 (command_id, digest, receipt.get("project_id"),
@@ -1831,8 +2062,9 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
         return _act_body(db, base, card, tok)
-    if action in ("summary", "mytasks", "unacked", "search"):
-        return _act_view(db, base, card, action, req.get("input") or {}, now)
+    if action in ("summary", "mytasks", "unacked", "search", "digest"):
+        return _act_view(db, base, card, action, req.get("input") or {}, now,
+                         cfg)
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -1869,9 +2101,29 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
             "error": "action_not_applicable"}
 
 
-def _act_view(db, base, card, action, inputs, now) -> dict:
-    """🧾 / 📋 / 🗂 / 🔎 — live clicker-scoped views (notify_views),
-    recomputed per click; stored receipts drop their text."""
+_DIALECT = {"discord": "discord", "slack": "slack"}   # else plain (LINE WORKS)
+
+
+def _act_view(db, base, card, action, inputs, now, cfg=None) -> dict:
+    """🧾 / 📋 / 🗂 / 🔎 / 📊 — live clicker-scoped views (notify_views,
+    notify_digest), recomputed per click; stored receipts drop their
+    text."""
+    if action == "digest":
+        if not inputs.get("query"):
+            # the click opens the scope modal; its submit carries input
+            return {**base, "outcome": "applied", "action": action,
+                    "modal": True, "params": {}}
+        import notify_digest
+        got = notify_digest.view(db, cfg or {}, inputs["query"],
+                                 name=inputs.get("name"),
+                                 allowed=inputs.get("projects"), now=now)
+        if "error" in got:
+            return {**base, "outcome": "applied", "action": "digest",
+                    "text": got["error"]}
+        return {**base, "outcome": "applied", "action": "digest",
+                "parts": got["parts"],
+                "text": parts_text(got["parts"],
+                                   _DIALECT.get(card["transport"], "plain"))}
     if action == "summary":
         title, text = patient_summary_text(db, card["project_id"])
         return {**base, "outcome": "applied", "action": "summary",
@@ -2407,7 +2659,9 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_intent_cards ic
                        WHERE ic.delivery_id=r.delivery_id AND ic.state='pending')
-                     AND ((r.state IN ('cancelled','not_sent')
+                     AND ((r.card_id IS NULL AND r.op='notice'
+                           AND r.state IN ('cancelled','not_sent'))
+                          OR (r.state IN ('cancelled','not_sent')
                            AND EXISTS (
                              SELECT 1 FROM notification_renders successor
                              WHERE successor.card_id=r.card_id

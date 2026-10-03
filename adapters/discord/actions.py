@@ -444,7 +444,7 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
-        if pending["action"] == "search":
+        if pending["action"] in ("search", "digest"):
             await self._search(interaction, modal_id, pending)
             return
 
@@ -489,14 +489,21 @@ class Actions:
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
-        """🔎 submit: the keyword rides the same card token as a view
-        click — no preview/confirm, the runner answers with the hits."""
-        query = text.search_query(self._modal_fields(interaction))
-        if query is None:
-            await self._followup(interaction, text.SEARCH_EMPTY)
-            return
+        """🔎/📊 submit: the keyword or scope rides the same card token as
+        a view click — no preview/confirm, the runner answers."""
+        fields = self._modal_fields(interaction)
+        if pending["action"] == "digest":
+            inputs = {**(projects.view_inputs(self._settings, "digest", "")
+                         or {}),
+                      **text.digest_inputs(fields, _display_name(interaction))}
+        else:
+            query = text.search_query(fields)
+            if query is None:
+                await self._followup(interaction, text.SEARCH_EMPTY)
+                return
+            inputs = {"query": query}
         env = envelopes.notification(pending["token"], pending["actor"],
-                                     pending["origin"], {"query": query})
+                                     pending["origin"], inputs)
         result, published = await self._dispatch_notification(
             interaction, env)
         if not published:
@@ -510,7 +517,7 @@ class Actions:
                 pending["origin"], _context_projects(
                     {"project_id": ctx.get("project_id"), "context": ctx}))
             return
-        self._result_log(interaction, "search", result)
+        self._result_log(interaction, pending["action"], result)
         answer = text.view_answer(result, self._allowed_pid)
         if answer is not None:
             await self._send_answer(interaction, answer, result)

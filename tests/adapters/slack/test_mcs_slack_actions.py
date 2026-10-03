@@ -773,6 +773,63 @@ def test_search_modal_submits_query_as_view_click(tmp_path):
     asyncio.run(scenario())
 
 
+def test_digest_modal_submits_scope_and_answers_with_a_card(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="digest")
+        await actions._action(ack, *click())
+        view = app.client.views[0]["view"]
+        assert view["title"]["text"] == "サマリー（絞込み）"
+        first = command(dirs)
+        Path(dirs["cmd_int"], shared_paths.safe_name(first["command_id"])
+             + ".json").unlink()
+        view_body, submitted_view = submitted(view["private_metadata"],
+                                              query=" mine  days:2 ", name="佐藤 一郎")
+        await actions._modal(ack, view_body, submitted_view)
+        env = command(dirs)
+        assert env["input"]["query"] == "mine days:2"
+        assert env["input"]["projects"] == [123]
+        assert env["input"]["name"] == "佐藤 一郎"
+        assert validate_int(env) is None
+        parts = {"containers": [{"type": "heading", "text": "📊 MCS サマリー"},
+                                {"type": "text", "text": "■ 新着\n・project 123 1件"}],
+                 "footer": [{"type": "text", "text": "※ 注記"}]}
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="digest", parts=parts,
+               text="*📊 MCS サマリー*\n■ 新着")
+        await actions.sweep_followups()
+        sent = app.client.messages[-1]
+        assert sent["text"].startswith("*📊 MCS サマリー*")
+        assert sent["blocks"][0]["type"] == "header"
+    asyncio.run(scenario())
+
+
+def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
+    from adapters.common import summary
+    calls = []
+    monkeypatch.setattr(summary, "answer", lambda *a, **kw: (calls.append(
+        (a, kw)) or {"text": "*📊 MCS サマリー*", "parts": {
+            "containers": [{"type": "heading", "text": "📊 MCS サマリー"}],
+            "footer": []}}))
+
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path)
+        actions._settings["snapshot"] = "/synthetic/snap.db"
+        said = []
+
+        async def respond(**kw):
+            said.append(kw)
+        body = {"team_id": SCOPE["team_id"], "api_app_id": "A_SYNTHETIC",
+                "user_id": "U_OPERATOR", "text": "station:みどり days:2"}
+        await actions._summary(ack, body, respond)
+        assert said[-1]["response_type"] == "ephemeral"
+        assert said[-1]["blocks"][0]["type"] == "header"
+        assert calls[-1][0][1] == "station:みどり days:2"
+        assert calls[-1][1]["allowed"] == [123]
+        await actions._summary(ack, {**body, "user_id": "U_OTHER"}, respond)
+        assert said[-1]["text"] == "権限がありません。" and len(calls) == 1
+    asyncio.run(scenario())
+
+
 def test_dismiss_modal_sends_reason_code(tmp_path):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path, kind="dismiss")

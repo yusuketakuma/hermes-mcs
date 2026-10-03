@@ -165,6 +165,24 @@ def _settle_attempt(db, attempt, render, result, now,
             "WHERE card_id=?", (render["card_id"],)).fetchall() \
             if render["card_id"] is not None else []:
         cards._complete_intent(db, r["event_id"], now)
+    if render["card_id"] is None and render["op"] == "notice" \
+            and render["intent_event_id"] is not None:
+        # card-less notice (📊 daily summary): its outbox event IS the
+        # intent — delivered accepts it; a real failure re-arms the
+        # dispatch now (a fresh render, bounded by MAX_RESEND); a begin
+        # denial waits for the hourly re-examination
+        if result == "delivered":
+            db.execute(
+                "UPDATE notify_outbox SET state='accepted',next_try=NULL,"
+                "accepted_ref='notice',updated_at=? WHERE event_id=? "
+                "AND state IN ('pending','failed')",
+                (now, render["intent_event_id"]))
+        elif result == "not_sent" and not str(error_code or "").startswith(
+                "denied_"):
+            db.execute(
+                "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                "WHERE event_id=? AND state IN ('pending','failed')",
+                (now, now, render["intent_event_id"]))
     # a factual settlement also answers any post-restore hold on this
     # delivery — the disputed evidence is resolved
     cards.release_holds(db, delivery_id=render["delivery_id"],
