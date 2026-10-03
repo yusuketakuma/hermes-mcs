@@ -48,12 +48,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 import mcs_runtime  # noqa: E402
 
-from mcs_util import (HOME, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
+from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 
 DATA = os.path.join(HOME, "data")
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
 LEDGER = os.path.join(DATA, "ledger.db")
 STATE_PATH = os.path.join(DATA, "update_state.json")
 UPDATE_LOCK = os.path.join(DATA, "update.lock")
@@ -69,6 +67,15 @@ WRAPPER = os.path.join(SCRIPTS_DIR, "mcs_update.sh")
 RECOVERY_TOOL = os.path.expanduser("~/.mcs-recovery/mcs_recover.py")
 
 RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
+# v1.0.2-1.0.7 KeepAlive drainer: stopped by quiesce, never restarted —
+# the new services drop it, a rollback's old services recreate it
+LEGACY_LABELS = ("ai.mcs.extract-drainer-rt",)
+# install.sh opt-outs an operator may repeat on a reinstall apply; --mode
+# stays out (install.sh derives it from config.json)
+INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
+                          "--no-recovery"})
+REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed")
+T_INSTALL = 3600
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
 # install.sh-owned labels the updater must never touch (S5).
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
@@ -587,6 +594,129 @@ def precheck_tag(tag: str) -> list[str]:
     return errors
 
 
+def _plugin_changed(tag: str, cfg: dict) -> bool:
+    return bool(_git_out(
+        ["diff", "--name-only", "-z", "HEAD", tag, "--",
+         "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
+         *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
+
+
+_CHANGELOG_VER_RE = re.compile(r"^## \[?v?([0-9]+\.[0-9]+\.[0-9]+[^\]\s]*)\]?")
+
+
+def upgrade_notes(tag: str, cur_tag: str | None) -> list[dict]:
+    """[{version, notes}] — the target's CHANGELOG '### 更新時の注意'
+    sections for versions in (cur_tag, tag], oldest first."""
+    try:
+        text = _git_out(["show", f"{tag}:CHANGELOG.md"])
+    except UpdateError:
+        return []
+    lo, hi = _ver_key(cur_tag or "v0.0.0"), _ver_key(tag)
+    out, ver, section, buf = [], None, None, []
+
+    def flush():
+        if ver and buf and "".join(buf).strip():
+            out.append({"version": ver, "notes": "".join(buf).strip()})
+
+    for line in text.splitlines(keepends=True):
+        m = _CHANGELOG_VER_RE.match(line)
+        if m or line.startswith("## "):
+            if section == "notes":
+                flush()
+            key = _ver_key(m.group(1)) if m else None
+            ver = m.group(1) if key and lo and hi and lo < key <= hi else None
+            section, buf = None, []
+        elif line.startswith("### "):
+            if section == "notes":
+                flush()
+            section = "notes" if line.strip() == "### 更新時の注意" else None
+            buf = []
+        elif section == "notes":
+            buf.append(line)
+    if section == "notes":
+        flush()
+    return sorted(out, key=lambda n: _ver_key(n["version"]))
+
+
+def plan(tag: str) -> dict:
+    """Read-only upgrade plan for scripts/mcs_upgrade.py and
+    docs/guides/UPGRADE_AGENT.md: classifies the existing gate tokens,
+    never mutates the tree, state or services."""
+    cfg = load_config()
+    cur_tag, cur_sha = current_version()
+    state = load_state()
+    try:
+        con = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=ro",
+                              uri=True)
+        try:
+            schema = con.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        schema = None
+    current = {"tag": cur_tag, "sha": cur_sha, "schema": schema}
+    try:
+        target_sha = _git_out(["rev-parse", f"refs/tags/{tag}^{{commit}}"]).strip()
+    except UpdateError:
+        return {"route": "blocked", "current": current,
+                "target": {"tag": tag, "sha": None},
+                "blockers": ["tag_not_fetched"]}
+    try:
+        return _plan(tag, cfg, state, current, target_sha)
+    except (UpdateError, subprocess.SubprocessError, OSError) as e:
+        return {"route": "blocked", "current": current,
+                "target": {"tag": tag, "sha": target_sha},
+                "blockers": [f"plan_failed: {e}"[:200]]}
+
+
+def _plan(tag, cfg, state, current, target_sha) -> dict:
+    cur_tag, cur_sha = current["tag"], current["sha"]
+    blockers = precheck_local(cfg)
+    tag_errors = precheck_tag(tag)
+    reinstall = [e for e in tag_errors if e in REINSTALL_ERRORS]
+    bump = [e for e in tag_errors if e.startswith("schema_bump:")]
+    blockers += [e for e in tag_errors
+                 if e not in REINSTALL_ERRORS and e not in bump]
+    if state.get("_corrupt"):
+        blockers.append("update_state_corrupt")
+    elif state.get("applying") or state.get("stages"):
+        blockers.append("update_in_progress_or_interrupted")
+    if state.get("restore_consent") or _awaiting_consent_marker():
+        blockers.append("restore_consent_pending")
+    last = (state.get("applied") or [{}])[-1]
+    if last.get("reinstall") and not last.get("reinstall_done"):
+        blockers.append("reinstall_incomplete")
+    if _git(["cat-file", "-e", "HEAD:mcs/ops/mcs_update.py"]).returncode != 0:
+        blockers.append("legacy_source_manual")
+    if mcs_runtime.standalone(cfg):
+        blockers.append("standalone_external_apply")
+    if bump and _update_mode(cfg) == "auto":
+        blockers.append("schema_bump_auto_blocked")
+    noop = cur_sha == target_sha
+    route = ("noop" if noop else "blocked" if blockers
+             else "reinstall" if reinstall else "apply")
+    interactive = (cfg.get("notify") or {}).get("interactive") \
+        if isinstance(cfg.get("notify"), dict) else None
+    restarts = []
+    if not noop and (mcs_runtime.standalone(cfg) or _plugin_changed(tag, cfg)):
+        restarts.append("gateway")
+    if not noop and interactive == "lineworks":
+        restarts.append("lineworks_adapter")
+    recovery_changed = not noop and _git(
+        ["diff", "--quiet", "HEAD", tag, "--", "deployment/recovery"]
+    ).returncode != 0
+    return {
+        "route": route, "current": current,
+        "target": {"tag": tag, "sha": target_sha},
+        "runtime_mode": cfg.get("runtime_mode") or "hermes",
+        "blockers": sorted(set(blockers)), "reinstall": reinstall,
+        "schema_bump": bump[0] if bump else None,
+        "restarts": restarts,
+        "recovery_tool_changed": recovery_changed,
+        "notes": [] if noop else upgrade_notes(tag, cur_tag),
+    }
+
+
 def _standalone_target_supported(ref):
     return all(_git(["cat-file", "-e", f"{ref}:{name}"]).returncode == 0
                for name in ("mcs_standalone/__main__.py", "mcs/core/mcs_runtime.py"))
@@ -723,6 +853,9 @@ def quiesce() -> list[str]:
                 return ["extract-0", "extract-2"]
             time.sleep(0.2)
         raise UpdateError("standalone_quiesce_unverifiable")
+    for label in LEGACY_LABELS:
+        if os.path.exists(os.path.join(AGENTS_DIR, label + ".plist")):
+            _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
     stopped = []
     for label in RESIDENT_LABELS:
         _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
@@ -808,6 +941,13 @@ def restart_agents(bounce: bool = True) -> list[str]:
             time.sleep(0.5)
         if not pid:
             problems.append(f"drainer_not_running:{label}")
+    for label in LEGACY_LABELS:
+        # still installed = the tree was never moved past the old layout
+        # (bail before merge, or a rollback): bring it back as quiesce
+        # found it. New services retire it, so after an apply it is gone.
+        plist = os.path.join(AGENTS_DIR, label + ".plist")
+        if os.path.exists(plist) and not _bootstrap_agent(label, plist):
+            problems.append(f"bootstrap_failed:{label}")
     for label in WATCHER_LABELS:
         if time.time() >= deadline:
             problems.append(f"restart_deadline:{label}")
@@ -1034,11 +1174,42 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
     return errors
 
 
+def _reinstall(applying: dict) -> None:
+    """Operator-requested install.sh re-run (scripts/mcs_upgrade.py
+    --reinstall) on the merged tree, before services. Its own session so
+    a timeout kills brew/pip too. Its brew/venv side effects are not
+    rolled back."""
+    if not applying.get("reinstall") or applying.get("reinstall_done"):
+        return
+    args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
+    try:
+        child = subprocess.Popen(
+            ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
+             "--no-services"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            start_new_session=True)
+    except OSError as e:
+        raise UpdateError(f"install_failed: {e}") from e
+    try:
+        out, _ = child.communicate(timeout=T_INSTALL)
+    except subprocess.TimeoutExpired:
+        with suppress(OSError):
+            os.killpg(child.pid, 9)
+        child.communicate()
+        raise UpdateError("install_failed: timeout") from None
+    if child.returncode != 0:
+        raise UpdateError("install_failed: " + (out or "").strip()[-200:])
+    applying["reinstall_done"] = True
+
+
 def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
     try:
+        if applying.get("reinstall") and not applying.get("reinstall_done"):
+            _reinstall(applying)
+            journal(state, "reinstall")      # persists reinstall_done
         _services_reconcile()
         journal(state, "services")
         problems = restart_agents()
@@ -1057,6 +1228,8 @@ def _post_merge(state: dict) -> int:
         "backup_path": applying.get("backup_path"),
         "schema_bump": applying.get("schema_bump", False),
         "plugin_changed": applying.get("plugin_changed", False),
+        "reinstall": applying.get("reinstall", False),
+        "reinstall_done": applying.get("reinstall_done", False),
         "manifest_snapshot": applying.get("manifest_snapshot"),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
@@ -1144,12 +1317,17 @@ def _run_post_merge(sha: str) -> None:
     env = {k: v for k, v in os.environ.items()
            if k not in _UPDATE_ENV_STRIP}
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
+    # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
+    # runs this module from a temp copy of the target tag
     child = subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--post-merge"],
+        [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_update.py"),
+         "--post-merge"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env=env, start_new_session=True)
     try:
-        cout, cerr = child.communicate(timeout=T_POST_MERGE)
+        cout, cerr = child.communicate(
+            timeout=T_POST_MERGE + (T_INSTALL if (load_state().get(
+                "applying") or {}).get("reinstall") else 0))
     except subprocess.TimeoutExpired:
         with suppress(OSError):
             os.killpg(child.pid, 9)
@@ -1168,7 +1346,8 @@ def _run_post_merge(sha: str) -> None:
 
 
 def apply(tag: str | None, sha: str | None, command_id: str | None,
-          base_sha: str | None = None) -> int:
+          base_sha: str | None = None, reinstall: bool = False,
+          install_args: tuple = ()) -> int:
     """The staged apply pipeline (④).
 
     Lock discipline: update.lock is acquired BEFORE the first journal
@@ -1182,6 +1361,17 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         return 2
     if sha is not None and not HEX_RE.fullmatch(sha):
         print("apply: bad sha", sha)
+        return 2
+    if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(load_config()):
+        # the launcher's temp copy cannot drive the standalone host's
+        # cooperative quiesce — standalone updates go through the host
+        print("apply: standalone_external_apply")
+        return 2
+    # reinstall is an operator-only CLI option: receipt applies never
+    # carry it, and cmd_check's auto path never passes it
+    if (reinstall and command_id) or (install_args and not reinstall) \
+            or any(a not in INSTALL_ARGS for a in install_args):
+        print("apply: bad reinstall options")
         return 2
     state = load_state()
     if state.get("_corrupt"):
@@ -1298,7 +1488,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         journal(state, "tag_checks")
         errors = precheck_tag(tag)
         bump = [e for e in errors if e.startswith("schema_bump:")]
-        errors = [e for e in errors if not e.startswith("schema_bump:")]
+        errors = [e for e in errors if not e.startswith("schema_bump:")
+                  and not (reinstall and e in REINSTALL_ERRORS)]
         if errors:
             return bail("tag_checks: " + ",".join(errors))
         if bump and command_id is None \
@@ -1347,11 +1538,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 
         state["applying"] = {
             "tag": tag, "sha": sha, "prev_sha": _head_sha(),
-            "plugin_changed": bool(_git_out(
-                ["diff", "--name-only", "-z", "HEAD", tag, "--",
-                 "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
-                 *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0")),
+            "plugin_changed": _plugin_changed(tag, cfg),
             "schema_bump": bool(bump),
+            "reinstall": reinstall, "install_args": list(install_args),
             "backup_path": bpath, "manifest_snapshot": snap,
             "command_id": command_id, "at": time.time()}
         journal(state, "applying")
@@ -2116,6 +2305,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     problems = _reconcile_membership(applying.get("manifest_snapshot"))
                     if problems:
                         return escalate("membership: " + ",".join(problems))
+                elif applying.get("reinstall") \
+                        and not applying.get("reinstall_done"):
+                    # an interrupted install.sh is never re-run unattended
+                    # (operator-only) — a human finishes the upgrade
+                    return escalate("reinstall_incomplete")
                 _services_reconcile()
                 problems = drainers(_drainers_key(state, head))
                 errors = _postcheck(state, target)
@@ -2389,6 +2583,12 @@ def main() -> int:
     ap_p.add_argument("--sha")
     ap_p.add_argument("--base-sha")
     ap_p.add_argument("--command-id")
+    ap_p.add_argument("--reinstall", action="store_true",
+                      help="also re-run install.sh on the merged tree")
+    ap_p.add_argument("--install-arg", action="append", default=[],
+                      choices=sorted(INSTALL_ARGS))
+    pl_p = sub.add_parser("plan", help="read-only upgrade plan (JSON)")
+    pl_p.add_argument("--tag", required=True)
     sub.add_parser("check")
     sub.add_parser("status")
     sub.add_parser("rollback")
@@ -2410,7 +2610,14 @@ def main() -> int:
         return cmd_check()
     if args.cmd == "apply":
         return apply(args.tag, args.sha, args.command_id,
-                     base_sha=args.base_sha)
+                     base_sha=args.base_sha, reinstall=args.reinstall,
+                     install_args=tuple(args.install_arg))
+    if args.cmd == "plan":
+        if not SEMVER_RE.fullmatch(args.tag):
+            print("plan: bad tag", args.tag)
+            return 2
+        print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "rollback":
         return rollback()
     if args.cmd == "recover":

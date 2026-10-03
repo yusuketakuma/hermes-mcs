@@ -24,6 +24,10 @@ import urllib.request
 from contextlib import contextmanager, suppress
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
+# checkout root; scripts/mcs_upgrade.py runs a target tag's code from a
+# temp dir and points it at the live checkout through MCS_UPDATE_REPO
+REPO = os.path.abspath(os.environ.get("MCS_UPDATE_REPO") or os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CONF_PATH = os.path.join(HOME, "config.json")
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 DB = os.path.join(HOME, "data", "ledger.db")

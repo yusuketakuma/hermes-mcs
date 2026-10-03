@@ -266,6 +266,9 @@ and re-run install.sh`）、後続ステージは実行されない。原因を�
 
 ### A-4. サービスの再同期と再検証（更新・復旧時）
 
+過去版からの更新（データ移行・install.sh再実行を含む）は、AIエージェントに
+[更新実行手順書](UPGRADE_AGENT.md)を読ませて実行できます。
+
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services   # launchd + hermes cron + gateway
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check      # 必須条件の検証（exit 1 で失敗）
