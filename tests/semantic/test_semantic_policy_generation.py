@@ -7,7 +7,9 @@ import ledger
 import mcs_view
 import notify_flush
 import semantic
-from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
+from mcs_requests import payload_hash
+from semantic_testkit import (_canonical_cfg, _cfg, _FakeJev, _llm, _llm_v2,
+                              _PassJev, _seeded, _seeded_two)
 
 
 def test_policy_change_rechecks_analysis_and_freezes_old_notification(tmp_path, monkeypatch):
@@ -85,5 +87,58 @@ def test_attempted_notice_does_not_hide_a_new_recorded_arrival(tmp_path):
             db.db.execute("UPDATE notify_outbox SET state='accepted' "
                           "WHERE kind='semantic_notice'")
         assert semantic._notify_src_event(db, 1, [1]) is None
+    finally:
+        db.close()
+
+
+def test_fact_source_policy_preserves_legacy_hash_and_separates_modes():
+    scfg = semantic.semantic_config(_cfg("enforce"))[0]
+    historical = payload_hash({key: scfg.get(key) for key in (
+        "model", "match_threshold", "nomatch_threshold", "calibration_version")})
+    assert semantic.policy_fingerprint(scfg) == historical
+    policies = {semantic.policy_fingerprint(dict(scfg, fact_source=mode))
+                for mode in ("legacy", "shadow", "canonical")}
+    assert len(policies) == 3
+    assert semantic.policy_fingerprint(dict(scfg, daily_request_budget=1)) == historical
+
+
+@pytest.mark.parametrize("original_source", ["legacy", "canonical"])
+def test_fact_source_switch_holds_old_notice_and_rechecks_receipts(
+        tmp_path, monkeypatch, original_source):
+    canonical = original_source == "canonical"
+    db = _seeded_two(tmp_path) if canonical else _seeded(tmp_path)
+    try:
+        original = _canonical_cfg() if canonical else _cfg("enforce", loop_mode="off")
+        semantic.run_due(db, original, {"errors": []}, time.monotonic() + 300,
+                         jev_client=_PassJev() if canonical else _FakeJev(),
+                         llm_fn=_llm_v2 if canonical else _llm)
+        old = db.artifacts("semantic_summary", message_id=1)[-1]
+        event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice' "
+                              "AND json_extract(payload,'$.target_message_id')=1").fetchone()
+        assert event is not None
+        changed = _cfg("enforce", loop_mode="off") if canonical else _canonical_cfg()
+        monkeypatch.setattr(notify_flush, "_config", lambda: changed)
+        with pytest.raises(notify_flush._StaleSend):
+            notify_flush._semantic_gate(db, event, json.loads(event["payload"]))
+
+        # Returning to legacy reevaluates coverage/summary, and the old
+        # canonical mandatory layer cannot ride on the new legacy receipt.
+        if canonical:
+            db.semantic_seed(1, [1], {"source": "replay"})
+
+            def empty(_prompt):
+                return '{"facts":[],"claims":[],"limitations":[]}'
+
+            out = semantic.run_due(db, changed, {"errors": []},
+                                   time.monotonic() + 300,
+                                   jev_client=_FakeJev(), llm_fn=empty)
+            assert out["done"] == 1
+            current = db.artifacts("semantic_summary", message_id=1)[-1]
+            assert json.loads(current["meta"])["policy_fingerprint"] != json.loads(old["meta"])["policy_fingerprint"]
+            assert "mandatory_facts" not in json.loads(current["content"])
+            assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_coverage' "
+                                 "AND message_id=1").fetchone()[0] == 2
+            assert db.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='semantic_notice' "
+                                 "AND json_extract(payload,'$.target_message_id')=1").fetchone()[0] == 2
     finally:
         db.close()

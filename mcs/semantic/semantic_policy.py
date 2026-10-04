@@ -156,5 +156,12 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
 
 def policy_fingerprint(scfg: dict) -> str:
     """Only interpretation settings invalidate cached analysis, not retry budgets."""
-    return payload_hash({key: scfg.get(key) for key in (
-        "model", "match_threshold", "nomatch_threshold", "calibration_version")})
+    policy = {key: scfg.get(key) for key in (
+        "model", "match_threshold", "nomatch_threshold", "calibration_version")}
+    # Canonical facts require their own coverage/summary audit and mandatory
+    # rendering. Keep historical legacy hashes stable, but never reuse their
+    # PASS receipts after changing the fact source.
+    fact_source = scfg.get("fact_source", "legacy")
+    if fact_source != "legacy":
+        policy["fact_source"] = fact_source
+    return payload_hash(policy)

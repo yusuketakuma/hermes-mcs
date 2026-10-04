@@ -1715,3 +1715,42 @@ def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path,
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
     assert job["state"] == "failed" and job["attempts"] > 1   # bounded, not endless
     db.close()
+
+
+@pytest.mark.parametrize("replacement_state", ["pending", "failed"])
+def test_revive_preserves_job_changed_after_selection(
+        tmp_path, monkeypatch, replacement_state):
+    import semantic_drain
+    db = _seeded(tmp_path)
+    try:
+        now = time.time()
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2,updated_at=? "
+                          "WHERE kind='semantic'", (now - 25000,))
+        old = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        replacement = json.dumps({"targets": [1], "generation": "new-synthetic-generation",
+                                  "retry_command_id": "new-synthetic-receipt"})
+        original_loads = json.loads
+        changed = False
+
+        def loads(raw, *args, **kwargs):
+            nonlocal changed
+            if raw == old["payload"] and not changed:
+                changed = True
+                with db.db:
+                    db.db.execute("UPDATE fetch_jobs SET state=?,payload=?,attempts=7,updated_at=? "
+                                  "WHERE job_id=?",
+                                  (replacement_state, replacement, now, old["job_id"]))
+            return original_loads(raw, *args, **kwargs)
+
+        monkeypatch.setattr(semantic_drain.json, "loads", loads)
+        out = semantic_drain.revive_failed(db, now)
+        current = db.db.execute("SELECT * FROM fetch_jobs WHERE job_id=?",
+                                (old["job_id"],)).fetchone()
+        assert changed
+        assert current["payload"] == replacement
+        assert current["state"] == replacement_state
+        assert current["attempts"] == 7 and current["updated_at"] == now
+        assert out["revived"] == 0
+    finally:
+        db.close()
