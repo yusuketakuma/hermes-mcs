@@ -125,3 +125,23 @@
 意図した機能変更に合わせて更新した。写真/連絡先非取得、部分walk失敗、snapshot timestamp、
 latest signal・project境界・未来/削除/archive除外は明示検証を維持する。
 更新後の全suite結果は以下の最終検証欄へ記録する。
+
+## 作業ツリーの既存変更
+
+別worktreeも読取り確認した。roadmap20-ultracodeのAGENTS.md OpenWiki blockはmainと完全一致。
+旧codex/release-1.0.11-20261003のtracked未コミット34件も、メタ情報取得・本人ID・返信判定・
+カード表示・Python検出・設定・回帰・文書・画像を全件照合し、mainに導入済みまたは後続実装で更新済み。
+未導入の必要機能/修正は検出しなかった。これら他者の変更と未追跡ファイルは編集・stage・commitしない。
+
+## 最終検証
+
+最終実行コードはe7a8428。全suite再実行は **6780 passed、6 skipped、26 subtests passed、635.61秒**。
+失敗した旧契約5件も全件成功した。最終core/ingestは1520 passed、取得契約は61 passed。
+SDK専用隔離試験はHermes 16 passed、standalone 25 passed（各skipなし）。
+任意SDK環境の全suite内skipを実機検証成功とは扱わない。
+
+ruff 0.16.10のCI全対象、生成README/開発文書、release_notes、readme_release、
+安全ゲート10/10、incident coverage、Slack画像7組の整合検証は成功した。
+公開済み1.0.12以前のCHANGELOGと既存archiveに改変がないことも確認。
+ローカル66枝とorigin12枝は全てmainの祖先となり、未統合headは0。
+この追記は検証結果の文書化だけで、実行コード・テスト・設定を変更しない。
