@@ -347,7 +347,10 @@ def test_actor_raw_routes_keep_snapshot_and_partial_failure(replay, kind, failur
     replies = []
     for i in (1, 2):
         user = {"id": 900000201 + i, "last_name": "SYNTHETIC",
-                "specialist_categories": [{"name": "SYNTHETIC_PROFESSION"}]}
+                "specialist_categories": [{"name": "SYNTHETIC_PROFESSION"}],
+                "stations": [{"name": "SYNTHETIC_ORGANIZATION"}],
+                "icon_url": "https://invalid.example/synthetic-icon",
+                "email": "synthetic@invalid.example"}
         replies.append({
             key: [{"reaction_type": "viewed", "user": user}] if kind is None else [user],
             "paginate": {"has_next": i == 1, "timestamp": STAMP}})
@@ -361,7 +364,12 @@ def test_actor_raw_routes_keep_snapshot_and_partial_failure(replay, kind, failur
                   adapter._get, PID, MID, reaction_type=kind, per_page=1))
     assert result["complete"] is (not failure)
     assert len(result["actors"]) == (1 if failure else 2)
-    assert all(set(actor) == {"actor_id", "reaction_type", "profession"}
+    assert all(set(actor) == {"actor_id", "reaction_type", "profession",
+                              "name", "organization"}
+               for actor in result["actors"])
+    assert all(actor["name"] == "SYNTHETIC"
+               and actor["organization"] == "SYNTHETIC_ORGANIZATION"
+               and actor["profession"] == "SYNTHETIC_PROFESSION"
                for actor in result["actors"])
     if failure:
         assert result["error"] == "http_error" and result["status"] == 404

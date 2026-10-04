@@ -251,6 +251,32 @@ def test_actor_watch_activity_excludes_future_and_deleted_replies(db, reply_stat
         assert [r["message_id"] for r in db.reaction_actor_targets(now=now)] == [1]
         assert [r["message_id"] for r in db.reaction_actor_targets(now=now + 1)] == [1, 2]
 
+
+def test_thread_activity_index_is_added_on_reopen_without_changing_targets(db):
+    for mid in range(1, 41):
+        save(db, message(mid, reactions=reactions(viewed=1)))
+    now = time.time() + 1
+    with db.db:
+        db.db.execute("UPDATE messages SET parent_id=message_id-1 WHERE message_id%2=0")
+        db.db.execute("DROP INDEX idx_messages_thread_time")
+    before = [tuple(r) for r in db.reaction_actor_targets(now=now)]
+    path = db.db.execute("PRAGMA database_list").fetchone()[2]
+    reopened = Ledger(path)
+    try:
+        statements = []
+        reopened.db.set_trace_callback(statements.append)
+        after = [tuple(r) for r in reopened.reaction_actor_targets(now=now)]
+        reopened.db.set_trace_callback(None)
+        assert after == before
+        assert len(after) == 4
+        query = next(sql for sql in statements
+                     if "SELECT m.message_id,m.project_id FROM messages m" in sql)
+        plan = [r[3] for r in reopened.db.execute("EXPLAIN QUERY PLAN " + query)]
+        assert any("SEARCH x USING INDEX idx_messages_thread_time" in step
+                   and "<expr>=?" in step and "posted_at_ts<?" in step for step in plan)
+    finally:
+        reopened.close()
+
 def test_actor_history_keeps_names_and_marks_cancellations(db):
     """#22-D2/D3 (2026-10-03): names are kept and shown; nothing is
     deleted — a cancelled stamp is marked removed_at, a re-press clears

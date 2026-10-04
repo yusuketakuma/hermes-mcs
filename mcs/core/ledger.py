@@ -290,6 +290,8 @@ class Ledger:
             ON messages(project_id, posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_parent
             ON messages(parent_id);
+          CREATE INDEX IF NOT EXISTS idx_messages_thread_time
+            ON messages(project_id, COALESCE(parent_id,message_id), posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_artifacts_lookup
             ON artifacts(kind, project_id, message_id);
           CREATE INDEX IF NOT EXISTS idx_requests_source_msg

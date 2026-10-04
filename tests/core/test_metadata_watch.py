@@ -1,4 +1,4 @@
-"""metadata_watch_targets のシグナル枝は、旧い相関EXISTSと同じ対象を返す。"""
+"""全スレッド監視でもシグナルの30分優先条件と安全な対象範囲を維持する。"""
 import json
 
 import pytest
@@ -9,11 +9,12 @@ from mcs_signals import _thresholds
 NOW = 1_800_000_000.0
 DAY = 86400
 
-# The pre-optimization third OR branch, kept verbatim as the reference.
+# Independent correlated reference for signal priority; future posts are excluded.
 OLD_SIGNAL_BRANCH = """
   SELECT m.message_id FROM messages m
   JOIN patients p ON p.project_id=m.project_id
   WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+    AND m.posted_at_ts<=?
     AND EXISTS(SELECT 1 FROM artifacts a,json_each(
       CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,'$.evidence.message_ids') e
       WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
@@ -70,8 +71,8 @@ def test_signal_branch_matches_correlated_reference(led):
     db.execute("INSERT INTO patients(project_id,patient_name,is_archived) VALUES(2,'合成B',0)")
     old_ts = NOW - 400 * DAY  # outside any fyi_max_age_d window
     for mid in range(1, 15):
-        _msg(db, mid, ts=old_ts if mid in (4, 9) else NOW)
-    _msg(db, 20, pid=2)
+        _msg(db, mid, ts=old_ts if mid in (4, 9) else NOW - 5 * DAY)
+    _msg(db, 20, pid=2, ts=NOW - 5 * DAY)
     _sig(db, "open", "open", [1, 2])
     _sig(db, "resolved-in", "resolved", [3])          # self-reacted, recent
     _sig(db, "resolved-old", "resolved", [4])         # self-reacted, too old
@@ -89,10 +90,22 @@ def test_signal_branch_matches_correlated_reference(led):
         _self_react(db, mid)
     _self_react(db, 14, "viewed")
     _sig(db, "viewed", "resolved", [14])
+    # All threads are normally watched, but five-day-old threads use a
+    # six-hour interval. At 30 minutes only signal-priority posts are due.
+    db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) "
+               "SELECT message_id,'shadow','{}',? FROM messages", (NOW - 1800,))
+    _msg(db, 21, ts=NOW + 1)
+    _sig(db, "future", "open", [21])
+    _msg(db, 22, ts=NOW - 5 * DAY)
+    db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=22")
+    _sig(db, "deleted", "open", [22])
+    db.execute("INSERT INTO patients(project_id,patient_name,is_archived) VALUES(3,'合成C',1)")
+    _msg(db, 23, pid=3, ts=NOW - 5 * DAY)
+    _sig(db, "archived", "open", [23], pid=3)
     db.commit()
 
     cutoff = NOW - _thresholds(db)["fyi_max_age_d"] * DAY
-    expected = [r[0] for r in db.execute(OLD_SIGNAL_BRANCH, (cutoff,))]
+    expected = [r[0] for r in db.execute(OLD_SIGNAL_BRANCH, (NOW, cutoff,))]
     got = [r["message_id"] for r in led.metadata_watch_targets(limit=-1, now=NOW)]
     assert got == expected
     assert got == [1, 2, 3, 7, 8, 9, 11, 12, 13]
