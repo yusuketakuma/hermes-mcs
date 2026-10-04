@@ -6,7 +6,6 @@ import os
 import re
 import sqlite3
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,7 +20,7 @@ import mcs_view
 import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
-from mcs_util import loads_dict
+from mcs_util import atomic_write, loads_dict
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -40,17 +39,10 @@ FACTS_SEP = "| - | ----- | ---- | --- | ------ | ----- | ------ | -------- | ---
 def _write(root: Path, rel: str, text: str) -> None:
     """Atomic rewrite — a crash mid-write must not leave a torn file."""
     dest = root / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
     # Exported summaries can contain PHI; staging must be private and
     # exclusively created, including in a user-selected shared directory.
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}-",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.replace(tmp, dest)
-    finally:
-        Path(tmp).unlink(missing_ok=True)
+    atomic_write(str(dest), lambda stream: stream.write(text),
+                 mode=0o600, tmp_prefix=f".{dest.name}-")
 
 
 def _fm(title: str) -> str:

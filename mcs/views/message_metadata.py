@@ -75,8 +75,6 @@ def _read_metadata(db, mid, source) -> dict:
             result[status] = "invalid"
             continue
         if field is None:
-            if key + "_invalid" in errors:
-                result[status] = "invalid"
             continue
         value = field.get("value") if isinstance(field, dict) else None
         observed = (_timestamp(field.get("observed_at"))

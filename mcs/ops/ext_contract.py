@@ -33,12 +33,12 @@ import fcntl
 import json
 import os
 import re
-import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from export_schema import RECORD_TYPES, finite_number, validate_record
+from mcs_util import atomic_write
 
 AUTH_CONTRACT = "mcs-ext-auth/1"
 EXT_CONTRACT = "mcs-ext-export/1"
@@ -79,22 +79,7 @@ def _sha(text: str) -> str:
 
 def _write_json(path: Path, obj) -> None:
     """Atomic write — a crash must not leave a torn journal/ack."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".t-",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(_canonical(obj))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(tmp).unlink(missing_ok=True)
+    atomic_write(str(path), lambda fh: fh.write(_canonical(obj)), tmp_prefix=".t-")
 
 
 def load_authorization(path, now: float | None = None) -> dict:

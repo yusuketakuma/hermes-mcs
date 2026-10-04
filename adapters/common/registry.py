@@ -192,6 +192,7 @@ class Registry:
         self._data["claims"][delivery_id] = record
         self.save()
 
+    @_locked
     def claimed(self, delivery_id: str) -> dict | None:
         return self._data["claims"].get(delivery_id)
 
@@ -289,6 +290,16 @@ class Registry:
 
     # -- pending modal / confirm flows -----------------------------
 
+    def _unexpired(self, table: str, key: str) -> dict | None:
+        """Lookup under the caller's lock, retiring malformed/expired records."""
+        records = self._data[table]
+        rec = records.get(key)
+        if rec is not None and _expired(rec.get("expires")):
+            records.pop(key, None)
+            self.save()
+            return None
+        return rec
+
     @_locked
     def put_modal(self, modal_id: str, record: dict) -> None:
         self._data["pending_modals"][modal_id] = {
@@ -297,12 +308,7 @@ class Registry:
 
     @_locked
     def modal(self, modal_id: str) -> dict | None:
-        rec = self._data["pending_modals"].get(modal_id)
-        if rec is not None and _expired(rec.get("expires")):
-            self._data["pending_modals"].pop(modal_id, None)
-            self.save()
-            return None
-        return rec
+        return self._unexpired("pending_modals", modal_id)
 
     @_locked
     def drop_modal(self, modal_id: str) -> None:
@@ -317,12 +323,7 @@ class Registry:
 
     @_locked
     def confirm(self, confirm_id: str) -> dict | None:
-        rec = self._data["pending_confirms"].get(confirm_id)
-        if rec is not None and _expired(rec.get("expires")):
-            self._data["pending_confirms"].pop(confirm_id, None)
-            self.save()
-            return None
-        return rec
+        return self._unexpired("pending_confirms", confirm_id)
 
     @_locked
     def drop_confirm(self, confirm_id: str) -> None:
@@ -373,12 +374,7 @@ class Registry:
 
     @_locked
     def followup(self, command_id: str) -> dict | None:
-        rec = self._data["followups"].get(command_id)
-        if rec is not None and _expired(rec.get("expires")):
-            self._data["followups"].pop(command_id, None)
-            self.save()
-            return None
-        return rec
+        return self._unexpired("followups", command_id)
 
     @_locked
     def drop_followup(self, command_id: str) -> None:

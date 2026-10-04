@@ -1,0 +1,30 @@
+{
+  "category": "changed",
+  "title": "保存・認可・配送復旧と解析の共通処理を整理",
+  "summary": "利用者向けの操作や判定条件を維持して、ファイル保存、認可、対話の期限管理、ハッシュ計算、返信取得の重複実装を既存処理へ統一しました。出力ファイルと基準統計の保存にも共通の同期処理を使い、評価レポートの再読込みや解析・配送復旧の不要な中間コピーを除きました。",
+  "upgrade": "設定変更・DB移行は不要です。既存のHermes経由・独立実行・LINE WORKSの操作と承認条件は同じです。出力ファイルと基準統計の保存でディスク同期に失敗した場合は、保存処理がエラーとして報告されます。この変更は公開済み1.0.12の後続変更で、稼働中のサービスへの反映は別途必要です。",
+  "details": [
+    "既存atomic_write・loads_dict・file_sha256・canonical・payload_hashを再利用し、0600、一時ファイルの排他的作成、保存バイト、承認用ハッシュを保持する。",
+    "modal・confirm・followupの期限切れ削除と保存を共通化し、ロックと不正期限の拒否を保持する。",
+    "ユーザー・チャット認可を共通化し、project ID・ユーザー・チャット・project scopeの判定順を保持する。",
+    "返信取得は既存のページ取得処理を再利用し、全件取得APIは途中エラーと上限超過を引き続き例外として報告する。",
+    "関係判定の比較順序と分類を保ち、itertoolsで組合せを順次走査する。",
+    "独立復旧ツール、no-clobber command公開、接続先固有の認証・receipt・再送抑止・互換importは維持する。"
+  ],
+  "refs": [
+    "adapters/common/registry.py",
+    "adapters/common/worker.py",
+    "hermes_plugin/__init__.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/ops/brain_export.py",
+    "mcs/ops/ext_contract.py",
+    "mcs/ops/mcs_refstats.py",
+    "mcs/ops/mcs_update.py",
+    "mcs/semantic/semantic_assessment.py",
+    "mcs/semantic/semantic_bench.py",
+    "mcs/semantic/semantic_blind.py",
+    "mcs/semantic/semantic_evaluation.py",
+    "mcs/semantic/semantic_relations.py",
+    "mcs/views/message_metadata.py"
+  ]
+}

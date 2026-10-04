@@ -56,3 +56,26 @@ def test_calibration_skips_malformed_or_nonprobability_records(monkeypatch, caps
     monkeypatch.setattr(bench, "LedgerReader", lambda _: fake)
     assert bench.cmd_calibrate(SimpleNamespace()) == 0
     assert "1 claim verdicts collected" in capsys.readouterr().out
+
+
+def test_report_delta_uses_the_same_reads_as_the_table(tmp_path, monkeypatch, capsys):
+    paths = [tmp_path / f"{tag}.json" for tag in ("first", "second")]
+    for path, count in zip(paths, (2, 1)):
+        path.write_text(json.dumps({"tag": path.stem, "aggregate": {
+            "cases": 1, "claims": 2, "findings_total": count,
+            "findings_per_claim": count / 2, "finding_codes": {"synthetic": count}}}))
+    read_text = bench.Path.read_text
+    reads = []
+
+    def read_once(path, *args, **kwargs):
+        assert path not in reads
+        reads.append(path)
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(bench.Path, "read_text", read_once)
+    assert bench.cmd_report(SimpleNamespace(results=paths)) == 0
+    output = capsys.readouterr().out
+    assert "[first] cases=1 claims=2 findings=2 per-claim=1.0" in output
+    assert "[second] cases=1 claims=2 findings=1 per-claim=0.5" in output
+    assert "synthetic: 2 -> 1" in output
+    assert reads == paths
