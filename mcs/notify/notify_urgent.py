@@ -121,7 +121,11 @@ def _initial(db, event_id, mid):
 def _base(db: sqlite3.Connection, row: sqlite3.Row, now) -> sqlite3.Row | None:
     """First proven delivery of this message, not merely an accepted partial batch."""
     candidates = db.execute("""
-        SELECT o.event_id,o.updated_at FROM notify_outbox o
+        SELECT o.event_id,o.updated_at,
+               CASE WHEN EXISTS(SELECT 1 FROM notification_intent_batches b
+                                WHERE b.event_id=o.event_id)
+                    THEN 'interactive' ELSE 'text' END delivery_route
+        FROM notify_outbox o
         WHERE o.kind='new_messages' AND o.state='accepted' AND o.project_id=?
           AND o.updated_at>0 AND o.updated_at<=?
           AND (
@@ -215,6 +219,8 @@ def _stage(row: sqlite3.Row, base: sqlite3.Row, history: list[dict],
     if (initial is not None and initial["urgency_source"] is None
             and row["created_at"] > base["updated_at"] and "E1" not in stages):
         return "E1", None
+    if base["delivery_route"] != "interactive":
+        return None, "text_confirmation_unavailable"
     if now < base["updated_at"] + opts["after_min"] * 60:
         return None, "after_window"
     if prior:

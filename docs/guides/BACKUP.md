@@ -75,6 +75,9 @@ JSON の `true` だけ。文字列・整数・`null` などは拒否する。`of
 `--state-dir` も明示した既存の私有 `0700` ディレクトリで、暗号化媒体と
 同一・親子関係にしない。記録は `0600` で原子的に保存される。
 別 `policy_id` の既存 `backup_state.json` を使い回すと拒否する。
+読取り専用の `plan` / `preflight` は、通常の `data` 記録先配下にある
+`data/snapshots/ledger-snapshot.db` を検査できる。元DBと記録を同じ
+ディレクトリへ置く配置、媒体・scratchとの重複は拒否する。
 媒体の identity が変わった場合も拒否するため、エラー回避だけを目的に
 pin を書き換えず、対象の確認と方針の再承認を行う。
 

@@ -896,11 +896,18 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
             res["uncertain"] = res.get("uncertain", 0) + 1
             return
-    content, files = _format_event(ledger, ev)
-    if ev["kind"] == "new_messages" and _send_never_began(ev):
-        import notify_urgent
+    import notify_urgent
+    if (ev["kind"] == "new_messages" and _send_never_began(ev)
+            and notify_urgent.settings(cfg) is not None):
         with ledger.db:
+            # Bind the initial urgency witness to the rendered snapshot.
+            # A concurrent extractor must not replace ordinary evidence
+            # with high between formatting and capture.
+            ledger.db.execute("BEGIN IMMEDIATE")
+            content, files = _format_event(ledger, ev)
             notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
+    else:
+        content, files = _format_event(ledger, ev)
     attachment_pins = None
     if target.startswith("lineworks:"):
         attachment_pins = {}

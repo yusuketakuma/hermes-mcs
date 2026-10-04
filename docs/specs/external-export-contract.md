@@ -210,6 +210,12 @@ faults write no receipt, so the sender stays held. Its transport tally is
 never a claim that a collection is complete or current; the receiver's own
 diagnostics report that separately. It is a local reference, not the
 counterpart's encrypted staging.
+Each `receive` invocation first removes expired parsed payloads, including an
+invocation without `--input`. The returned `expired` count reports this local
+maintenance; historical receipts and replay tombstones remain. This command
+writes local receiver state and is not a read-only diagnostic. No scheduler
+is installed: an operator must run it at the agreed retention cadence, and a
+stopped reference receiver does not prove timely deletion at a real destination.
 
 ## Withdrawal and deletion propagation
 

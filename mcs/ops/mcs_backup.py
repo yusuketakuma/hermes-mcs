@@ -1042,9 +1042,14 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
             report["unknowns"].append("backup_trusted_records_not_inspected")
         if snapshot is not None:
             source = Path(snapshot)
-            for root in roots:
+            # The normal source lives in DATA/snapshots while trusted records
+            # live in DATA. Only the medium/scratch need fully disjoint trees.
+            for root in (medium, scratch):
                 if source.parent.is_relative_to(root) or root.is_relative_to(source.parent):
                     raise BackupError("backup_source_requires_separate_directory")
+            if state_dir is not None and (
+                    source.parent == records.root or records.root.is_relative_to(source.parent)):
+                raise BackupError("backup_source_requires_separate_directory")
             size, inventory = _snapshot_info(
                 snapshot, policy, max_steps=max_steps, max_seconds=max_seconds)
             source_at = inventory["last_successful_run"]

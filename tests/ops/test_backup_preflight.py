@@ -79,6 +79,30 @@ def test_positive_static_plan_reports_facts_without_claiming_recovery(inspection
     assert len(report["human_decisions"]) == 7
 
 
+def test_standard_data_snapshot_under_trusted_records_is_inspectable(inspection, tmp_path):
+    snapshot, _, policy_path, state = inspection
+    snapshots = state / "snapshots"
+    snapshots.mkdir(mode=0o700)
+    nested = snapshots / "ledger-snapshot.db"
+    snapshot.rename(nested)
+    report = _inspect_unchanged(
+        tmp_path, policy_path, snapshot=str(nested), state_dir=str(state))
+    assert report["blockers"] == []
+    assert report["inspection_status"] == "complete"
+    assert report["facts"]["source_inventory"]["counts"]["patients"] == 1
+
+
+@pytest.mark.parametrize("location", ["same", "parent"])
+def test_source_cannot_share_or_contain_trusted_record_directory(
+        inspection, tmp_path, location):
+    snapshot, _, policy_path, state = inspection
+    target = (state if location == "same" else state.parent) / "source.db"
+    snapshot.rename(target)
+    report = _inspect_unchanged(
+        tmp_path, policy_path, snapshot=str(target), state_dir=str(state))
+    assert report["blockers"] == ["backup_source_requires_separate_directory"]
+
+
 @pytest.mark.parametrize("action", ["plan", "preflight"])
 def test_cli_drives_real_readonly_plan(inspection, tmp_path, capsys, action):
     snapshot, _, policy_path, state = inspection

@@ -1096,6 +1096,9 @@ def _receive(args) -> dict:
         raise ContractError("receipts_out_exists")
     try:
         receiver = ReferenceReceiver(args.receiver_root, source_label=args.source_label)
+        # Maintenance is part of this mutating receive command, including a
+        # run without input. Historical receipt/tombstone metadata is retained.
+        expiry = receiver.expire()
     except C1ContractError as e:
         raise ContractError(e.code) from e
     transport: Counter = Counter()
@@ -1149,6 +1152,7 @@ def _receive(args) -> dict:
         atomic_write(args.receipts_out, lambda fh: fh.write(bundle), mode=0o600,
                      tmp_prefix=".r-")
     return {"transport": dict(transport), "receipts": len(receipts),
+            "expired": expiry["expired"],
             "receiver": receiver.diagnostics(), "binding": "synthetic_reference_receiver"}
 
 

@@ -1,5 +1,6 @@
 """E1/E2 and real sender regressions using only a synthetic ledger and send stubs."""
 import json
+import sqlite3
 
 import pytest
 
@@ -34,12 +35,17 @@ def world(led, monkeypatch):
     return led, cfg, clock, calls
 
 
-def _base(store, *, mid=100, at=NOW - 1800, state="accepted"):
+def _base(store, *, mid=100, at=NOW - 1800, state="accepted", interactive=False):
     with store.db:
-        event = store.outbox_add_tx("new_messages", 1, {"message_ids": [mid]}, route="text")
+        event = store.outbox_add_tx("new_messages", 1, {"message_ids": [mid]},
+                                   route="interactive" if interactive else "text")
     row = store.db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event,)).fetchone()
-    notify_urgent.capture_initial(
-        store, {"urgency_escalation": {"mode": "shadow", "room_cooldown_min": 1}}, row, now=at)
+    with store.db:
+        notify_urgent.capture_initial(
+            store, {"urgency_escalation": {"mode": "shadow", "room_cooldown_min": 1}}, row, now=at)
+    if interactive:
+        assert _dispatch(store, row, now=at)["dispatched"]
+        _deliver(store)
     with store.db:
         store.db.execute("UPDATE notify_outbox SET state=?,created_at=?,updated_at=? "
                          "WHERE event_id=?", (state, at - 1, at, event))
@@ -49,7 +55,7 @@ def _base(store, *, mid=100, at=NOW - 1800, state="accepted"):
 def test_high_initial_delivery_is_not_a_late_high_transition(world):
     store, cfg, clock, _ = world
     _fact(store, at=NOW - 60)
-    _base(store, at=NOW - 30)
+    _base(store, at=NOW - 30, interactive=True)
     _fact(store, at=NOW - 1)
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
     clock[0] = NOW - 30 + 1800
@@ -59,7 +65,7 @@ def test_high_initial_delivery_is_not_a_late_high_transition(world):
 
 def test_missing_initial_observation_never_invents_ordinary_delivery(world):
     store, cfg, _, _ = world
-    _base(store)
+    _base(store, interactive=True)
     with store.db:
         store.db.execute("DELETE FROM artifacts WHERE kind='urgency_initial_v1'")
     _fact(store)
@@ -146,7 +152,7 @@ def test_e1_is_durable_and_independent_of_signals_switch(world):
 
 def test_e2_exact_deadline_repeat_interval_and_cap(world):
     store, cfg, clock, _ = world
-    _base(store)
+    _base(store, interactive=True)
     _fact(store, at=NOW - 1801)  # already high when first delivery completed
     clock[0] = NOW - .125
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
@@ -381,6 +387,70 @@ def test_real_initial_sender_captures_ordinary_then_late_high_e1(world):
     assert checked["observed_at"] == NOW + 600
     assert notify_flush.flush(store)["sent"] == 1
     assert len(calls) == 2 and "PRIVATE-BODY-CANARY" not in calls[1][0][1]
+    clock[0] += 7200
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
+    assert len(_events(store)) == 1  # Text permits E1, never unconfirmable E2.
+
+
+def test_text_initial_delivery_never_creates_e2_without_confirmation_route(world):
+    store, cfg, clock, calls = world
+    _fact(store, at=NOW - 3600)
+    _base(store)
+    clock[0] += 7200
+    result = notify_urgent.maybe_enqueue(store, cfg)
+    assert result["queued"] == 0
+    assert result["deferred"] == {"text_confirmation_unavailable": 1}
+    assert not _events(store) and not calls
+
+
+def test_preexisting_text_e2_is_cancelled_at_send_time(world):
+    store, _, _, calls = world
+    aid = _fact(store, at=NOW - 3600)
+    base = _base(store)
+    with store.db:
+        store.outbox_add_tx("urgent_notice", 1, {
+            "message_id": 100, "hash": f"{100:064x}", "stage": "E2:1",
+            "base_event_id": base, "urgency_artifact_id": aid, "shadow": False,
+        }, route="text")
+    assert notify_flush.flush(store)["suppressed"] == 1
+    assert not calls
+
+
+def test_text_initial_render_and_urgency_witness_share_writer_snapshot(world, monkeypatch):
+    store, cfg, clock, calls = world
+    aid = _fact(store, urgency="routine", at=NOW - 1)
+    with store.db:
+        base = store.outbox_add_tx("new_messages", 1, {"message_ids": [100]}, route="text")
+    other = Ledger(store.db.execute("PRAGMA database_list").fetchone()["file"])
+    other.db.execute("PRAGMA busy_timeout=0")
+    original = notify_flush._format_event
+    blocked = []
+
+    def concurrent_high(*args):
+        rendered = original(*args)
+        try:
+            with other.db:
+                other.db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",
+                                 (json.dumps({"urgency": "high"}), NOW + .1, aid))
+        except sqlite3.OperationalError as exc:
+            assert "locked" in str(exc)
+            blocked.append(True)
+        return rendered
+
+    monkeypatch.setattr(notify_flush, "_format_event", concurrent_high)
+    try:
+        assert notify_flush.flush(store)["sent"] == 1
+        assert blocked == [True]
+        assert "緊急度: 高（AI抽出）" not in calls[0][0][1]
+        assert notify_urgent._initial(store.db, base, 100)["urgency_source"] is None
+        with other.db:
+            other.db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",
+                             (json.dumps({"urgency": "high"}), NOW + .1, aid))
+        clock[0] += 1
+        assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+        assert json.loads(_events(store)[0]["payload"])["stage"] == "E1"
+    finally:
+        other.close()
 
 
 def test_page_ack_does_not_confirm_hidden_urgent_message(world):

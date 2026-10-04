@@ -77,6 +77,29 @@ def test_withdrawal_has_its_own_4kib_cap():
 
 # --- producer + receiver round trip ---------------------------------------
 
+
+def test_receive_without_input_expires_payloads_and_keeps_receipts(
+        staged, tmp_path, capsys, monkeypatch):
+    _, sink, eids = staged
+    root = tmp_path / "receiver"
+    code, out = _cli(capsys, ["receive", "--receiver-root", str(root), "--source-label", "s",
+                            "--input", str(sink), "--receipts-out", str(tmp_path / "acks.ndjson")])
+    assert code == 0 and out["transport"] == {"accepted": 3}
+    receiver = ReferenceReceiver(root, source_label="s")
+    before = receiver.ack(eids[0])
+    entry = json.loads((receiver.root / "state.json").read_text())["envelopes"][eids[0]]
+    monkeypatch.setattr(ext.time, "time", lambda: entry["expires_at"])
+    code, out = _cli(capsys, ["receive", "--receiver-root", str(root), "--source-label", "s"])
+    assert code == 0 and out["expired"] == 3
+    assert out["receiver"]["counts"]["payloads"] == 0
+    assert "retention_cleanup_pending" not in out["receiver"]["reasons"]
+    state = json.loads((receiver.root / "state.json").read_text())
+    assert all(e["records"] is None and e["status"] == "expired"
+               for e in state["envelopes"].values())
+    assert receiver.ack(eids[0]) == before
+    code, out = _cli(capsys, ["receive", "--receiver-root", str(root), "--source-label", "s"])
+    assert code == 0 and out["expired"] == 0
+
 def test_handoff_receive_reconcile_and_generation_withdraw(staged, tmp_path, capsys):
     state, sink, eids = staged
     root, receipts = tmp_path / "receiver", tmp_path / "r1.ndjson"

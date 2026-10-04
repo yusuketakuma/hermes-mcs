@@ -387,3 +387,86 @@ static 8/8が成功。旧の固定bytes/hash/ID/intentは維持し、実source/�
   tests/conftest.pyで実hermes/launchctlを遮断（子プロセスはPATHのguard）、該当テストをstub化。
 - 生成ブロック・Ruff全範囲・gates 10/10・incident・README同期・Slack画面例・changes・shellcheck・
   固定SDK（standalone 25 / Hermes 16）・全体回帰6,748件成功（skip 2）。CHANGELOG 1.0.13を生成。
+
+## 継続敵対的レビュー（Codex、2026-10-05）
+
+対象は `release/1.0.13` / `7074a85` と今回の未commit修正。
+`release/1.0.13-notes` / `7dfcd66` はCHANGELOG・README要約・見直し記録・
+changes archiveの差分だけを持つ別候補。今回の修正記録はまだその生成結果に含まれない。
+公開済み1.0.12の生成物と履歴は保持し、commit/push/PR/tag/公開/配備は行わない。
+未追跡 `8` / `recover` は開始前から存在するため保持した。
+
+既存の全体監査と1.0.12 baseline記録を再利用し、変更した入口・共有呼出元を
+復元/更新、C1/receipt/canonical、通知の3独立担当と親で再確認した。
+過去の「約30件のオーナー判断待ち」という件数だけを完了証拠にしない。
+人手・実API・実機・相手側の未完了条件は計画§6を引き続き正本として追跡する。
+
+| 領域・ファイル群 | 今回の証拠と判定 |
+|---|---|
+| 無駄・内部整理: mcs/core・extract・semantic、共通adapter | 既存baseline/全体監査の証拠を再利用。今回無関係な整理・依存追加は行わない。全行再読・全分岐網羅は主張しない |
+| 配置・生成元: scripts・deployment・文書・release資産 | branch間で実装とnotesの分離を確認。生成driftと画像7点を検証。今回のchangesを含むnotes再生成は未完了 |
+| 性能・並行性: notify・ingest・worker | text描画と緊急度初報証拠の並行writer境界を確認・修正。実tick分布・実モデル容量は未検証 |
+| 正しさ・保存・互換: backup・restore・update・ledger・C1 | 標準source配置の診断誤阻害と参照受信CLIの期限cleanup未接続を修正。旧版更新matrixは合成stub境界であり実Git/サービスの証明ではない |
+| 安全・privacy: adapter・plugin・export・通知 | receipt・復元hold・scope・canonical世代分離を再確認。患者情報・秘密・原本DB・稼働設定・実接続は対象外。保持期限処理は参照受信状態だけに限定 |
+| 依存・CI・供給: workflows・pins・SDK | CI定義と固定Hermes refを照合。固定SDK実行でstandalone 25件、Hermes 16件成功。Hermes archive 15,281ファイル一致。Python 3.13.16。リモート最終SHA CIは未確認 |
+| テスト・導入/更新: tests・integration・install | runner/guardsの隔離を読取り確認。全体runner進行中。新規導入/全更新元は既存の合成資産を利用し、実host・SDK導入副作用・配備は未検証 |
+| 文書・画面・運用: README・guides・specs・roadmap | E2 cards限定の明示受入を保持。backup配置とreceiveの書込み/保持cadenceを明記。既定offを本番受入済みとは扱わない |
+
+### 確認した指摘と修正
+
+1. `mcs_backup.plan` が `state-dir=data` と `data/snapshots/ledger-snapshot.db`
+   を衝突として拒否し、標準offsite配置と不整合だった。媒体/scratchの分離は維持し、
+   record配下のsnapshotを許可。同一directory・逆包含は引き続き拒否する合成回帰を追加。
+2. C1参照受信CLI `receive` は期限後の表示を隠すだけで、既存 `expire` へ到達できなかった。
+   実行時に期限後payloadを削除し、receipt/tombstoneは保持。入力なしでも書込みmaintenanceを
+   行う契約と、operatorの実行cadence・停止中の限界を文書化。期限境界・冪等再実行を検証。
+3. text経路でもE2再通知を出し、signals-stats計画の「cardsだけ」に違反していた。
+   sealed card配送証拠のある初報だけをE2対象にする。textのE1後追い通知は維持。
+4. text初報の描画直後に別writerがLLM highを保存すると、実際の通常表示と異なる
+   初報証拠を保存してE1を抑制できた。描画と初報証拠の同一transaction束縛を修正。
+
+backup/C1関連200件、通知全域573件、backup/restore/runtime/update/installerの
+既存6ファイル481件が成功。新規回帰の初回は参照受信状態のnamespace pathを
+fixture側で取り違えて失敗し、`receiver.root` に修正後成功。通知回帰の初回3件は
+E2用fixtureがtextのままだったため、実sealed card配送を行うfixtureへ訂正した。
+製品側のguard・E2 cards限定受入は緩和しない。
+親が編集したbackup/C1の最終差分を各独立担当が読取り確認し、追加指摘なし。
+媒体/scratchの双方向分離・私有/静的DB/hash検査と、C1のreceipt/tombstone保持・
+cleanup失敗時の無receipt・入力なしmaintenanceの契約を維持することを確認した。
+Ruff全範囲、生成文書/README、changes、static 10/10、incident、画面7点、shellcheck、
+diffチェック成功。修正前に開始した全体回帰は6,748 passed / 6 skipped /
+26 subtests passed、850.96秒、exit 0。今回の修正後の最終全体runnerは
+**6,755 passed / 6 skipped / 26 subtests passed、655.63秒、exit 0**。
+最終実行中にruntime/testソースの追加変更なし。6skipには通常環境で不足するSDKの4ファイルと
+明示SDK lane用の2件を含む。別の固定SDK laneはstandalone 25 / Hermes 16でskipなし。
+
+隔離したtracked-sourceコピーで今回のchanges 3件を含めて既存生成器の
+`build --version 1.0.13 --date 2026-10-05` と `export` を実行。
+候補の `check` / `readme_release --check` / `update_readme --check` が成功。
+修正runtimeと回帰7ファイルのhashが実作業treeと一致することを確認した。
+候補は一時領域 `mcs-1.0.13-review-preview-odm2w_7z` の `release-notes.md`。
+その生成結果を既存 `release/1.0.13-notes` の別worktree
+`~/.herdr/worktrees/mcs/release-1.0.13-notes-review-20261005` へ反映した。
+CHANGELOG・README・見直し記録と新しいarchive 3件だけが未commit差分で、
+形式/README同期/生成文書/diffチェック成功。実装修正は `release/1.0.13` に保持し、
+notes単体を実装統合済み候補とは扱わない。source変更後は再生成が必要。
+
+### 公開可能判定に不足する証拠
+
+| 計画の受入 | 現在不足する証拠・境界 |
+|---|---|
+| #1・追加提案4 | NAS mount/identity/容量/保存承認、鍵とreceipt custody、紙鍵回復、実backup/verify/drill/RPO。合成復元だけで実機訓練を成功扱いにしない |
+| #5/#6/#9・CLI-I/U/S/D | 実runtime選択・起動/更新/診断・wrapper適用・復元hold解除判断。実機操作は未承認範囲として実施しない |
+| #11 | 公式master版/SHAのpin承認、私有辞書設定と保守担当 |
+| #17/#20-D/E | 小集団閾値の判断、人手200件以上の本人receipt、実モデル比較・G6/calibration・容量実測・昇格判断。現資産のvalidate出力は220件pending、人手確認0、G6 not_evaluated、promotion_eligible=false |
+| #22/#23/#24/#25/#26/#27 | 非空実GET・未読保持・権限・ページングの受入、氏名保持/表示とpublication/freshnessの判断、group関連付け根拠 |
+| F-3/F-4/C0/C1 | 相手repoのCD-1〜CD-10・同一fixture set ID合意、実受領/Q6/相手側gate。本番外部有効化を合成参照receiverで代替しない |
+| #10・公開gate | ローカルの最終全体回帰と修正差分の独立確認は完了。実装と再生成済みnotesの統合・最終対象SHAの必須CIは未実施。独立レビューは他の未完了受入を免除しない |
+
+現在は**許可範囲のローカル修正・必須検証・ノート候補準備が完了し、
+外部受入証拠待ちで、1.0.13をリリース可能とはまだ判定しない**。
+同じ未完了条件を3回の継続goal turnで確認した。実行待ちのローカルrunnerは残っていない。
+計画§3の「実API前提が取れない場合は不明と阻害条件を残す。既定offだけで完成とはしない」
+と§4の全行受入条件を、合成テスト成功だけで免除しない。
+外部条件の完了記録をユーザーへ照会済み。範囲変更・gate緩和・別版への繰延べは行わない。
+再開には未完了条件の非機密な受入記録、または対象を限定した別工程の明示指示が必要。
