@@ -3,6 +3,10 @@ jobs, archived-patient handling (Oracle F1-F10, F01-F07), history
 floors, drain fairness."""
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 
 import pytest
@@ -12,6 +16,41 @@ import ledger
 import mcs_adapter
 import notify_flush
 from ingest_testkit import _ledger, _message, _unread_patient
+
+
+def test_default_command_drain_follows_mcs_root_and_preserves_other_root(tmp_path):
+    """A standalone root consumes its own queue into its own ledger."""
+    home = tmp_path / "home"
+    selected = tmp_path / "selected"
+    for root, pid in ((selected, 700001), (home / ".mcs", 700002)):
+        cmd = root / "data" / "cmd"
+        cmd.mkdir(parents=True)
+        (cmd / "synthetic.json").write_text(json.dumps({
+            "cmd": "import", "project_id": pid, "days": 14, "pages": 2,
+        }), encoding="utf-8")
+    code = """
+import json
+import _mcs_path
+import job_ops
+from ledger import Ledger
+from mcs_util import DB
+store = Ledger(DB)
+try:
+    result = {'errors': []}
+    job_ops.drain_commands(store, result)
+    print(json.dumps({'projects': [row[0] for row in store.db.execute(
+        'SELECT project_id FROM fetch_jobs WHERE kind=?', ('history',))],
+        'errors': result['errors']}))
+finally:
+    store.close()
+"""
+    env = dict(os.environ, HOME=str(home), MCS_ROOT=str(selected),
+               PYTHONPATH=str(Path(__file__).resolve().parents[2] / "mcs"))
+    proc = subprocess.run([sys.executable, "-c", code], env=env, check=True,
+                          capture_output=True, text=True, timeout=30)
+    assert json.loads(proc.stdout) == {"projects": [700001], "errors": []}
+    assert not (selected / "data/cmd/synthetic.json").exists()
+    assert (home / ".mcs/data/cmd/synthetic.json").exists()
 
 
 def test_reply_merge_result_is_per_call():
