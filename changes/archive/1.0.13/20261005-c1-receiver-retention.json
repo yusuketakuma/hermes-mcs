@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "参照受信CLIから保持期限後の本文を削除",
+  "summary": "合成参照受信CLIのreceiveは、実行時に保持期限を過ぎた本文を削除し、削除件数を返すようになりました。受領receiptと再送拒否用の記録は保持します。",
+  "upgrade": "receiveは入力ファイルがなくてもローカル受信状態を更新します。保持期限に合わせて明示的に実行してください。定期ジョブは追加されず、実受信側の期限内削除を証明するものではありません。",
+  "details": ["既存expireを接続し、期限ちょうどの削除・receipt保持・冪等再実行を合成回帰で確認。"],
+  "refs": ["mcs/ops/ext_contract.py", "tests/ops/test_c1_withdraw_receive.py"]
+}
