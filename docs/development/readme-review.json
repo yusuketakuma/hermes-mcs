@@ -2,7 +2,7 @@
   "version": "1.0.13",
   "sections": {
     "features": {
-      "notes": "1.0.13候補の先行レビュー。既存の収集・暫定集約・人承認を維持し、新しいローカル支援を候補欄へ分離した。mcs_cliのinstall/setup/update/doctor引数転送、backupのpolicy・専用鍵・同意待ち復元、metadataのpublicationとinclude_chat既定off、med_refの辞書承認・hash束縛をソースと変更記録で照合した。standaloneの全機能保証を削除し、SDK版metadataだけでは実機接続・worker反映の受入にならないと明記した。canonicalの人手held-out 200件以上/G6/calibration・昇格、urgencyのcaller/応答者/通知先/room冷却、有効化と統合は未受入として残す。この記録は公開版や全32項目の受入を宣言しない。 2026-10-05の最終照合: 1.0.13 build後、候補・未公開の表現を1.0.13のローカル支援（既定off・実機受入は別途）へ改め、構造化データの入口を実在するproject_metadata.pyへ訂正した。C1の撤回指示書・合成参照受信側・明示opt-inのsender分類、ケアチーム医師の見ました未観測人数はREADMEに追加せずCHANGELOGと仕様書へ置く。外部条件は計画§6で追跡する。",
+      "notes": "1.0.13候補の先行レビュー。既存の収集・暫定集約・人承認を維持し、新しいローカル支援を候補欄へ分離した。mcs_cliのinstall/setup/update/doctor引数転送、backupのpolicy・専用鍵・同意待ち復元、metadataのpublicationとinclude_chat既定off、med_refの辞書承認・hash束縛をソースと変更記録で照合した。standaloneの全機能保証を削除し、SDK版metadataだけでは実機接続・worker反映の受入にならないと明記した。canonicalの人手held-out 200件以上/G6/calibration・昇格、urgencyのcaller/応答者/通知先/room冷却、有効化と統合は未受入として残す。この記録は公開版や全32項目の受入を宣言しない。 2026-10-05の最終照合: 1.0.13 build後、候補・未公開の表現を1.0.13のローカル支援（既定off・実機受入は別途）へ改め、構造化データの入口を実在するproject_metadata.pyへ訂正した。C1の撤回指示書・合成参照受信側・明示opt-inのsender分類、ケアチーム医師の見ました未観測人数はREADMEに追加せずCHANGELOGと仕様書へ置く。外部条件は計画§6で追跡する。 継続敵対的レビュー: text初報のE2抑止とE1維持、C1 receiveの期限処理、標準backup配置の診断をソースと回帰で再照合。実API・人手評価・実機運用は引き続き未受入。",
       "sources": [
         "CHANGELOG.md",
         "README.md",
@@ -17,7 +17,10 @@
         "mcs/ops/mcs_setup.py",
         "mcs/semantic/semantic_facts.py",
         "mcs/views/mcs_view.py",
-        "mcs/views/project_metadata_view.py"
+        "mcs/views/project_metadata_view.py",
+        "changes/archive/1.0.13/20261005-urgency-route-render-binding.json",
+        "changes/archive/1.0.13/20261005-c1-receiver-retention.json",
+        "changes/archive/1.0.13/20261005-backup-plan-standard-source.json"
       ]
     },
     "demos": {

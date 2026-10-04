@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "標準配置の日次バックアップを診断できるよう修正",
+  "summary": "バックアップ記録先のdata配下にあるsnapshotを、planとpreflightが誤って保存先の衝突として拒否する問題を修正しました。診断は引き続き読取り専用です。",
+  "upgrade": "追加設定は不要です。媒体・scratchとの重複、元DBと記録の同一ディレクトリ配置は引き続き拒否します。",
+  "details": ["合成DBをdata/snapshotsへ配置した診断回帰と、記録先の同一・逆包含の拒否回帰を追加。"],
+  "refs": ["mcs/ops/mcs_backup.py", "tests/ops/test_backup_preflight.py"]
+}

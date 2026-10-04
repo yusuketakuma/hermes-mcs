@@ -194,6 +194,12 @@
 - **否定・過去・将来予定の緊急語を区別**
   明示された否定、対応済み、過去や先の予定を含む緊急語だけで通知の緊急度を上げないよう修正します。現在の至急指示は維持し、表示では機械照合とAI抽出の根拠を引き続き区別します。
 
+- **標準配置の日次バックアップを診断できるよう修正**
+  バックアップ記録先のdata配下にあるsnapshotを、planとpreflightが誤って保存先の衝突として拒否する問題を修正しました。診断は引き続き読取り専用です。
+
+- **参照受信CLIから保持期限後の本文を削除**
+  合成参照受信CLIのreceiveは、実行時に保持期限を過ぎた本文を削除し、削除件数を返すようになりました。受領receiptと再送拒否用の記録は保持します。
+
 - **数字だけのDiscord IDを設定するとカード操作が動かない問題を修正**
   hermes config setで設定したDiscordのチャンネル・サーバー・アプリケーションIDは、数字だけの値だと整数として保存されます。この場合、Discordのカード操作が起動しないか接続時に失敗し、操作の受付記録やカード操作が scope_mismatch で拒否されていました。整数として保存されたIDも文字列のIDと同じように扱うように修正しました。
 
@@ -253,6 +259,9 @@
 
 - **更新前検査でDBの版を読めないときに誤った版変更を報告しないよう修正**
   更新計画・適用の事前検査で稼働中DBの版を読み取れなかった場合、版0からの変更(schema_bump)と誤って報告せず、schema_version_unknownで停止します。版が不明なことと版0を区別します。
+
+- **緊急度の再確認通知を初回表示と確認可能な経路へ整合**
+  確認操作のないtext初報から未確認再通知（E2）を送らないよう修正しました。初報の通常表示後にAI抽出で緊急度が高くなる後追い通知（E1）は維持し、初報の描画と判定元の記録の間に並行抽出が入ってE1を取りこぼす問題を防ぎます。
 
 ### 更新時の注意
 
@@ -372,6 +381,10 @@
 
 - ルール抽出世代を6から7へ更新します。旧世代のルールartifactは通常の抽出処理で再生成され、再集約・通知表示へ反映されます。再抽出が完了するまでは旧結果が残り得ます。サービス反映は通常の更新手順で行い、暗黙の時制や臨床的緊急性を判定する機能ではありません。
 
+- 追加設定は不要です。媒体・scratchとの重複、元DBと記録の同一ディレクトリ配置は引き続き拒否します。
+
+- receiveは入力ファイルがなくてもローカル受信状態を更新します。保持期限に合わせて明示的に実行してください。定期ジョブは追加されず、実受信側の期限内削除を証明するものではありません。
+
 - Hermes連携でDiscordのカード操作を使っている場合は、プラグインを更新した後にgatewayを再起動してください。設定し直す必要はありません。
 
 - 次回の更新（mcs_update の適用後に自動実行される services）、復旧（mcs_recover）、`mcs_setup.py services` の実行、または install.sh の再実行で雛形が再描画され、内容が変わった常駐ジョブ（llama-server・抽出worker 2本・cmd/int 取込・独立実行）はそれぞれ1回再起動されて Umask 077 が適用されます。再起動で処理中のLLM抽出が中断され得るため、抽出が空いている時間帯の更新を推奨します。それまで稼働中のジョブは従来の権限のままです。既に作成済みのログ（例: extract_drain_2.log）の権限は変わらないため、必要に応じて所有者のみ（chmod 600）に変更してください。独立実行の定期ジョブ（mcs_setup.py の _cron_plist と mcs_standalone/service.py が生成する plist、data/cron.log・data/standalone.log）にはまだ Umask を設定しておらず、別項目で対応します。
@@ -405,6 +418,8 @@
 - 追加操作は不要です。
 
 - 追加操作は不要です。schema_version_unknownが出た場合はDBファイルの状態を確認してから更新をやり直してください。
+
+- 追加設定は不要です。urgency_escalationは既定offを維持します。有効化済みの場合、E2は初回通知のカード配送が証明できる投稿だけが対象となり、text初報にはE1だけを送ります。
 
 ### 技術詳細
 
@@ -894,6 +909,16 @@
 - 世代更新時は旧ルール結果を先に一括削除せず、再抽出した行ごとに同じトランザクションで置き換える。期限で中断しても未処理の行は旧結果を保持し、緊急度や処方シグナルが一時的に欠落しない。
 - 根拠: mcs/extract/v1/extract.py、mcs/views/structured_view.py、tests/extract/test_extraction_review.py
 
+#### 標準配置の日次バックアップを診断できるよう修正
+
+- 合成DBをdata/snapshotsへ配置した診断回帰と、記録先の同一・逆包含の拒否回帰を追加。
+- 根拠: mcs/ops/mcs_backup.py、tests/ops/test_backup_preflight.py
+
+#### 参照受信CLIから保持期限後の本文を削除
+
+- 既存expireを接続し、期限ちょうどの削除・receipt保持・冪等再実行を合成回帰で確認。
+- 根拠: mcs/ops/ext_contract.py、tests/ops/test_c1_withdraw_receive.py
+
 #### 数字だけのDiscord IDを設定するとカード操作が動かない問題を修正
 
 - hermes_pluginの_settingsと_interactive_settingsは、application_id・guild_id・channel_idを既存の_id_textで正規化する。0以上の整数と空でない文字列を受け付け、boolは受け付けない。
@@ -1000,6 +1025,13 @@
 
 - precheck_tagはsqlite3の読取り失敗時にcur_verを0とせずschema_version_unknownを返し、schema_bump判定を行わない。
 - 根拠: mcs/ops/mcs_update.py
+
+#### 緊急度の再確認通知を初回表示と確認可能な経路へ整合
+
+- 初報の配送証拠からsealedカード経路とtext経路を区別し、送信直前の再検査にも同じE2条件を適用します。
+- 未送信のtext初報は描画と初回緊急度の証拠記録を同じwriter transactionで実施します。送信処理はtransactionの外で実行します。
+- 合成DBと送信stubでtextのE2抑止・E1維持、カードE2の時刻境界、別接続の並行抽出と初回表示の整合を検証します。
+- 根拠: mcs/notify/notify_urgent.py、mcs/notify/notify_flush.py、tests/notify/test_notify_urgent.py、docs/roadmap/signals-stats.md
 
 </details>
 

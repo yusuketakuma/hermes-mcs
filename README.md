@@ -445,6 +445,10 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - ルール抽出世代を6から7へ更新します。旧世代のルールartifactは通常の抽出処理で再生成され、再集約・通知表示へ反映されます。再抽出が完了するまでは旧結果が残り得ます。サービス反映は通常の更新手順で行い、暗黙の時制や臨床的緊急性を判定する機能ではありません。
 
+- 追加設定は不要です。媒体・scratchとの重複、元DBと記録の同一ディレクトリ配置は引き続き拒否します。
+
+- receiveは入力ファイルがなくてもローカル受信状態を更新します。保持期限に合わせて明示的に実行してください。定期ジョブは追加されず、実受信側の期限内削除を証明するものではありません。
+
 - Hermes連携でDiscordのカード操作を使っている場合は、プラグインを更新した後にgatewayを再起動してください。設定し直す必要はありません。
 
 - 次回の更新（mcs_update の適用後に自動実行される services）、復旧（mcs_recover）、`mcs_setup.py services` の実行、または install.sh の再実行で雛形が再描画され、内容が変わった常駐ジョブ（llama-server・抽出worker 2本・cmd/int 取込・独立実行）はそれぞれ1回再起動されて Umask 077 が適用されます。再起動で処理中のLLM抽出が中断され得るため、抽出が空いている時間帯の更新を推奨します。それまで稼働中のジョブは従来の権限のままです。既に作成済みのログ（例: extract_drain_2.log）の権限は変わらないため、必要に応じて所有者のみ（chmod 600）に変更してください。独立実行の定期ジョブ（mcs_setup.py の _cron_plist と mcs_standalone/service.py が生成する plist、data/cron.log・data/standalone.log）にはまだ Umask を設定しておらず、別項目で対応します。
@@ -478,6 +482,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 - 追加操作は不要です。
 
 - 追加操作は不要です。schema_version_unknownが出た場合はDBファイルの状態を確認してから更新をやり直してください。
+
+- 追加設定は不要です。urgency_escalationは既定offを維持します。有効化済みの場合、E2は初回通知のカード配送が証明できる投稿だけが対象となり、text初報にはE1だけを送ります。
 
 </details>
 
