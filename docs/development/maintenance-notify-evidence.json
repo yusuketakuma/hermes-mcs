@@ -1,0 +1,1448 @@
+{
+  "schema_version": 1,
+  "packet": "maintenance-notify-20261005",
+  "status": "READY_FOR_PARENT_INTEGRATION_AND_INDEPENDENT_REVIEW",
+  "assignment": {
+    "owner": "maintenance_notify",
+    "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+    "branch": "audit/maintenance-notify-20261005",
+    "one_writer": true,
+    "child_spawned": false,
+    "assigned_model": "GPT-6.1-sol ultra (parent assignment)",
+    "effective_model_introspection": "worker tools do not expose runtime model identifier; no setting was changed"
+  },
+  "snapshots": {
+    "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+    "W_code_commit": "bd62135162a5ff556c4129e6d25312fe821b7c13",
+    "start_status": "clean",
+    "existing_changes": "none in this dedicated worktree",
+    "I": "not yet created by this worker",
+    "patch_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/P-to-W.patch",
+    "patch_sha256": "6679c73ac634f4222516a9a820c77854de721658a76b9f9a7cf760625776113f",
+    "evidence_commit": "the subsequent commit containing this report; resolve through git history"
+  },
+  "scope": {
+    "owned_sources": [
+      "mcs/notify/notify_urgent.py",
+      "mcs/notify/notify_flush.py",
+      "mcs/notify/notify_digest.py"
+    ],
+    "primary_audit_files": [
+      "mcs/notify/notify_urgent.py",
+      "mcs/notify/notify_flush.py",
+      "mcs/notify/notify_digest.py",
+      "tests/notify/test_notify_urgent.py",
+      "tests/notify/test_notify_flush.py",
+      "tests/notify/test_notify_flush_paths.py",
+      "tests/notify/test_notify_digest.py",
+      "tests/notify/test_notify_lineworks_flush.py",
+      "tests/notify/test_notify_standalone_flush.py",
+      "tests/notify/test_notify_summary.py",
+      "tests/notify/test_notify_summary_notice.py",
+      "tests/notify/test_notification_reliability.py",
+      "tests/notify/notify_testkit.py"
+    ],
+    "shared_owner_boundaries": "notify_cards/notify_transport/schema/callers readonly; no edits there",
+    "generated_doc_owner": "parent; update_readme not needed (no module addition/docstring/detector/statistic/subcommand change)"
+  },
+  "coverage": {
+    "REVIEWED": 13,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED": 0,
+    "primary_lines_P": 5159,
+    "primary_lines_W": 5237,
+    "counts_scope": "assigned 3 sources + 9 direct test files + 1 synthetic helper only",
+    "supporting_partial": 14,
+    "global_completion": "not asserted; parent has further packets"
+  },
+  "inventory": [
+    {
+      "path": "mcs/notify/notify_urgent.py",
+      "module": "notify",
+      "kind": "source",
+      "status": "REVIEWED",
+      "P_sha256": "6419b9bc19382f1b794c77ec674f6fe70fdab34c974eb8537d20734c0a245b23",
+      "W_sha256": "87e53f7c65d6874765eed26b3573264e28a327c24e4dd45fdca4ac3ed55e086e",
+      "P_lines": 366,
+      "W_lines": 366,
+      "P_full_read_ranges": [
+        [
+          1,
+          366
+        ]
+      ],
+      "W_rechecked_ranges": [
+        [
+          77,
+          87
+        ],
+        [
+          283,
+          301
+        ]
+      ],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "現在LLM高・配送証拠・確認/担当記録からE1/E2を保存し送信直前に再検査する。",
+      "callers": [
+        "run_check._deliver",
+        "notify_cards.dispatch_intent",
+        "notify_flush._format_event",
+        "notify_flush._send_text"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "module": "notify",
+      "kind": "source",
+      "status": "REVIEWED",
+      "P_sha256": "a7408acf82ef146de4d38bc25993d23d60a7286a22811d70854a5ba4e320c95f",
+      "W_sha256": "18f6c671712e063e90720bf2113ce15e95e9f1dd072f53f8a399bbf946c26b35",
+      "P_lines": 1128,
+      "W_lines": 1128,
+      "P_full_read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          670
+        ],
+        [
+          671,
+          900
+        ],
+        [
+          901,
+          1128
+        ]
+      ],
+      "W_rechecked_ranges": [
+        [
+          909,
+          927
+        ]
+      ],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "既存outboxをtext/interactiveへ配送し予算、取消、保留、部分配送receiptを制御する。",
+      "callers": [
+        "run_check._deliver",
+        "run_check._finish_run",
+        "notify_reconcile.reconcile_after_restore"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_digest.py",
+      "module": "notify",
+      "kind": "source",
+      "status": "REVIEWED",
+      "P_sha256": "f9791e69a417d5f6e3aaf6fc1ebeebc87e3022d3ccb0e084028f2ad11e9e1365",
+      "W_sha256": "f9791e69a417d5f6e3aaf6fc1ebeebc87e3022d3ccb0e084028f2ad11e9e1365",
+      "P_lines": 629,
+      "W_lines": 629,
+      "P_full_read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          420
+        ],
+        [
+          421,
+          629
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "件数・ID・任意氏名の日次/本人サマリーを集計し日次intentを一度だけ保存する。",
+      "callers": [
+        "run_check._deliver",
+        "notify_cards._dispatch_notice",
+        "notify_cards._act_view",
+        "adapters.common.summary.answer",
+        "notify_digest.main"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_urgent.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "3466538d45aee5cd2cac5ff1e89724a5afcab592659f2b3c05f4423ed1bd0c7e",
+      "W_sha256": "f881353e7ea0b5f7b1e79c8fcb853f1054d7e268b13a671f63fcc40b2237f722",
+      "P_lines": 581,
+      "W_lines": 612,
+      "P_full_read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          400
+        ],
+        [
+          401,
+          581
+        ]
+      ],
+      "W_rechecked_ranges": [
+        [
+          194,
+          238
+        ]
+      ],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "E1/E2、現行世代、確認ページ、担当/期限、budget、restore、text/card配送証拠の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_flush.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "495781586efdb474e57dab0f24171ffa3be9f585b21502b73bdcbabae1fe97d3",
+      "W_sha256": "495781586efdb474e57dab0f24171ffa3be9f585b21502b73bdcbabae1fe97d3",
+      "P_lines": 286,
+      "W_lines": 286,
+      "P_full_read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          286
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "control-syntaxの注入、配送不明、receipt、削除/患者境界の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_flush_paths.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "8b590110f060f6076777153ac2547ce33e7fdbf4c53d3de4bf1d7212be0acebc",
+      "W_sha256": "8b590110f060f6076777153ac2547ce33e7fdbf4c53d3de4bf1d7212be0acebc",
+      "P_lines": 528,
+      "W_lines": 528,
+      "P_full_read_ranges": [
+        [
+          1,
+          185
+        ],
+        [
+          186,
+          365
+        ],
+        [
+          366,
+          528
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "送信順、添付容量/alias、部分配送、隔離、未送信表示の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_digest.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "37d4c0f13d8032beb0f4ed43261b83ce23067f92d4bce5b403ecbb0aa1fa4e48",
+      "W_sha256": "37d4c0f13d8032beb0f4ed43261b83ce23067f92d4bce5b403ecbb0aa1fa4e48",
+      "P_lines": 335,
+      "W_lines": 335,
+      "P_full_read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          335
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "日次一意性、窓/時刻、本文抑制、coverage、滞留、設定取消の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_lineworks_flush.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "6850a875898621bb6a31c40aef645795efea1a250dc3dd6617bdbe529315db39",
+      "W_sha256": "6850a875898621bb6a31c40aef645795efea1a250dc3dd6617bdbe529315db39",
+      "P_lines": 108,
+      "W_lines": 108,
+      "P_full_read_ranges": [
+        [
+          1,
+          108
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "LINE WORKS JSON封印添付、差替え防止、配送不明の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "test_notify_standalone_flush.stored_attachment"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_standalone_flush.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "b1b00a49274472d64debb3fa7c3c86e7828745ed55bc225138998d213446a68a",
+      "W_sha256": "f069cb220bb54980f076624442077fb1ca9858f5ee46fa94ba92a8309359b953",
+      "P_lines": 134,
+      "W_lines": 181,
+      "P_full_read_ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "W_rechecked_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "standalone root隔離、JSON封印、retry/holdと保存添付pinsの合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_summary.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "884c36b1a2e931891f352631cb9e5fc515cf9f63b2e893ba939288bd78ee3080",
+      "W_sha256": "884c36b1a2e931891f352631cb9e5fc515cf9f63b2e893ba939288bd78ee3080",
+      "P_lines": 222,
+      "W_lines": 222,
+      "P_full_read_ranges": [
+        [
+          1,
+          222
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "サマリーscope/allowed、私有表示、fold、CLI読取り専用の合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_summary_notice.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "594178cb6357b814e5ce8790024d95b533982bc742c7d1f29cd14ba7457abc16",
+      "W_sha256": "594178cb6357b814e5ce8790024d95b533982bc742c7d1f29cd14ba7457abc16",
+      "P_lines": 274,
+      "W_lines": 274,
+      "P_full_read_ranges": [
+        [
+          1,
+          148
+        ],
+        [
+          149,
+          274
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "日次カード配送begin/receipt、kill-switch、旧日取消、scope付きsnapshotの合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notification_reliability.py",
+      "module": "notify",
+      "kind": "test",
+      "status": "REVIEWED",
+      "P_sha256": "c6b586080bd72c5c731845bde863825b05a3f73691f5b16baf7ab3ac1ad82d46",
+      "W_sha256": "c6b586080bd72c5c731845bde863825b05a3f73691f5b16baf7ab3ac1ad82d46",
+      "P_lines": 322,
+      "W_lines": 322,
+      "P_full_read_ranges": [
+        [
+          1,
+          165
+        ],
+        [
+          166,
+          322
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "text予算境界、crash/reopen、restore、未知配送/破損receiptの合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh"
+      ]
+    },
+    {
+      "path": "tests/notify/notify_testkit.py",
+      "module": "notify",
+      "kind": "helper",
+      "status": "REVIEWED",
+      "P_sha256": "20843cef264834c43c47495541303e9526ac313dcac49e33329a3ff9ffa2aafa",
+      "W_sha256": "20843cef264834c43c47495541303e9526ac313dcac49e33329a3ff9ffa2aafa",
+      "P_lines": 246,
+      "W_lines": 246,
+      "P_full_read_ranges": [
+        [
+          1,
+          100
+        ],
+        [
+          101,
+          246
+        ]
+      ],
+      "W_rechecked_ranges": [],
+      "full_read_evidence": "各範囲は切断のないreadで確認。WはP全文と完全P→W差分を照合し変更箇所を再読。",
+      "responsibility": "一時DB、完全合成投稿と実装上のdispatch/begin/receipt/clickを駆動する共通helper。",
+      "callers": [
+        "担当notify test family"
+      ]
+    }
+  ],
+  "supporting_context": [
+    {
+      "path": "mcs/core/ledger.py",
+      "status": "PARTIAL",
+      "sha256": "691d1d8a50dd260c82423aa088a9ff60ce9ed2c0101e5b1714a410d9d6230b4e",
+      "read_ranges": [
+        [
+          2306,
+          2395
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "status": "PARTIAL",
+      "sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "read_ranges": [
+        [
+          65,
+          95
+        ],
+        [
+          150,
+          225
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "status": "PARTIAL",
+      "sha256": "96b97db5f5ef6243bfabf16769e5051fad012af9b1b8bdbba8b6a5b628b52783",
+      "read_ranges": [
+        [
+          42,
+          120
+        ],
+        [
+          165,
+          179
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "status": "PARTIAL",
+      "sha256": "62a2f961c98d14d49b8ca6746b3b2d9d5c482bea085fe6f8c99d3f29c7b3b4d4",
+      "read_ranges": [
+        [
+          325,
+          365
+        ],
+        [
+          990,
+          1035
+        ],
+        [
+          1390,
+          1640
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "status": "PARTIAL",
+      "sha256": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
+      "read_ranges": [
+        [
+          25,
+          52
+        ],
+        [
+          111,
+          201
+        ],
+        [
+          204,
+          258
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "status": "PARTIAL",
+      "sha256": "da0b0da2b6c4bcc2a3b855733e1435d364503c78ffa3bc71d46678949536fffa",
+      "read_ranges": [
+        [
+          1740,
+          1840
+        ],
+        [
+          1928,
+          1998
+        ],
+        [
+          2190,
+          2220
+        ],
+        [
+          2316,
+          2365
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "status": "PARTIAL",
+      "sha256": "1cf0eca3d2b3384023e9dfdee4f19147832362ea6f53c785f48f64baf0fa691a",
+      "read_ranges": [
+        [
+          1540,
+          1600
+        ],
+        [
+          1790,
+          1832
+        ],
+        [
+          1860,
+          1875
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "status": "PARTIAL",
+      "sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "read_ranges": [
+        [
+          90,
+          135
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "status": "PARTIAL",
+      "sha256": "c9f4fd2b379274618417509b339ebedd960d9e98811b6af87858bab4729e4f92",
+      "read_ranges": [
+        [
+          360,
+          388
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs_standalone/__main__.py",
+      "status": "PARTIAL",
+      "sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
+      "read_ranges": [
+        [
+          1,
+          180
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "mcs_standalone/runtime.py",
+      "status": "PARTIAL",
+      "sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
+      "read_ranges": [
+        [
+          140,
+          177
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "docs/development/DEVELOPMENT.md",
+      "status": "PARTIAL",
+      "sha256": "2ad262639f4ff50a9eb2bb3e22251d25db0f9cab50320ec0ad61664d87399eeb",
+      "read_ranges": [
+        [
+          490,
+          526
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "docs/guides/INSTALLATION.md",
+      "status": "PARTIAL",
+      "sha256": "fb4f50d4399fb8172877fe06ad02296da8fd61eae0f6893dc742f6b2c8ee7d59",
+      "read_ranges": [
+        [
+          489,
+          500
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "docs/guides/USER_GUIDE.md",
+      "status": "PARTIAL",
+      "sha256": "7dfd910a0a1b08ecd3ca5e9b0e6db013b85f3d595de0abfbc8bb28b2ecd1b285",
+      "read_ranges": [
+        [
+          75,
+          125
+        ]
+      ],
+      "reason": "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "pyproject.toml",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "conftest.py",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "tests/conftest.py",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "AGENTS.md",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "5022b4fbc28963d7a3ba6106ae67f39cf6839be9c64c838169804268149b84a9",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "changes/README.md",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    },
+    {
+      "path": "adapters/common/summary.py",
+      "status": "REVIEWED_CONTEXT",
+      "sha256": "1bacdb4d366a21478eb946982275ae5dfc85a2767e7b1fd433252fe9ccd9fd0b",
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "reason": "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+    }
+  ],
+  "entry_to_consumer": {
+    "urgent": [
+      "run_check._deliver under run.lock",
+      "settings exact on/shadow + explicit cooldown",
+      "BEGIN IMMEDIATE / current_fact_pred",
+      "base accepted + frozen message_ids / delivered coverage",
+      "current manifest-generation ack/source_fp; triage/request/own post observation",
+      "stage/quota and outbox_add_tx",
+      "notify_flush._format_event and pre-chunk check_delivery",
+      "text CLI provider acceptance journal; uncertain outcome held"
+    ],
+    "text_queue": [
+      "run_check._deliver/_finish_run under run.lock",
+      "due limit/deadline + explicit target",
+      "archive/restore and interactive dispatch/kill-switch",
+      "format source at send time; semantic/urgent last-moment gates",
+      "attachment caps/hash + independent CLI storage pins",
+      "fingerprint and outbox_progress commit before subprocess",
+      "accept per chunk; 2 pre-delivery fallback,75 definitive standalone retry,other/timeout hold",
+      "accepted outbox + receipt/reconcile consumer"
+    ],
+    "digest": [
+      "run_check._deliver even no-notify",
+      "enabled/hour/target + parsed configured scope",
+      "counts/ids-only parts with live patients,scope/allowed intersection",
+      "build outside lock; BEGIN IMMEDIATE + latest-event compare",
+      "frozen parts/text/date/since/until in outbox",
+      "notify_flush text or notify_cards notice begin/receipt",
+      "private view through readonly snapshot and caller allowed projects"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "C01",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "共有判定とのJOIN不一致F02を修正。current_fact_predを正本として重複条件を除去。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "send driverとsemantic_send_gateの責務分離を確認。JSON送り先判定の重複F01を修正。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "同じpartsから日次/本人view/text/cardを生成。追加抽象化や分割は不要。"
+        }
+      }
+    },
+    {
+      "id": "C02",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "時刻はfinite/正値、初報と現在hash、highのみ、E1/E2間隔・回数・JST日次上限。境界/将来投稿をtestsで確認。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "next/sent/sending、fingerprint、accepted/failed/suppressedの状態遷移を確認。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "[since,until)、JSThour/day、過去投稿の新着窓、日数1..7、未取得≠0件の表示を確認。"
+        }
+      }
+    },
+    {
+      "id": "C03",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "BEGIN IMMEDIATEで候補/履歴/上限/insertを同時評価。shadowとlive履歴を分離。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "in-flightを送信前commit、acceptedごとprogress保存、未証明結果はhold、救済はreceipt再読と同一transaction。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "読取負荷のあるparts構築後にBEGIN IMMEDIATEとlatest-event再確認で日次競合を排除。"
+        }
+      }
+    },
+    {
+      "id": "C04",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧extract_llm project=NULL互換F02修正。現行hash/current_fact_predとDB g1 triggerを保持。schema/migration変更なし。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧route欠落はtext、壊れたprogressはinvalid_progressとして保持。schema/migration変更なし。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧payloadのuntil不正は初回24hへfallback。古いsnapshot例外はcallerが扱う。schema変更なし。"
+        }
+      }
+    },
+    {
+      "id": "C05",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "current_fact_predとcheck_deliveryでproject/hash/base/stageを束縛。確認はmanifest shownと現行source_fpを照合。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "explicit notify_target、system alertのみ別target、message/attachmentのproject範囲・削除を再検査、untrusted MEDIA syntaxをdefuse。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "scopeとallowedを積集合で適用。私有callerは許可済みproject scopeを渡す。患者識別子/名称は範囲内のみ。"
+        }
+      }
+    },
+    {
+      "id": "C06",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "urgent payloadはID/hash/stage、renderはIDと候補注記のみ。本文・氏名・業務完了の推定なし。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "患者本文は明示配送先だけへ送る。本文はstdin、ログ/hold理由はstable code。テストは合成のみ。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "本文・summary/staff名を含めず件数/ID、namesは明示opt-inまたは本人view。receiptからtext/partsを除くcallerを確認。"
+        }
+      }
+    },
+    {
+      "id": "C07",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "config mode/source/型/finite/正値とurgent payload型を確認。public signature維持。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "CLI argv/stdin、exit 0/2/75/unknown、1900 text budget、10件/24MiB/23MiB添付capsを維持。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "scope grammar、mine名前、ASCII数値、days上限、1900 notice budget、CLI読取り専用を確認。"
+        }
+      }
+    },
+    {
+      "id": "C08",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stale確認世代、非表示ページack、assigned/有効deferred、送信前状態変更で取り消す合成回帰。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "未知配送をformatより先にhold、archivedでも未知receipt保持。受理済みchunkは再送しない。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "private viewは再計算、snapshot6h超は注記。折畳みでもcoverageと注記を維持。"
+        }
+      }
+    },
+    {
+      "id": "C09",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "history/restore markerはtickで一度、追加候補はquotaへ反映。全候補走査は現仕様。性能数値の主張なし。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "due limit/deadline、chunk送信前budget再確認、添付stream hash、件数/容量caps。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "日次の読取計算をwrite lock外へ置く。一覧はMAX_LIST/fit_partsで表示制限。全記録集計の既存計算量は変更しない。"
+        }
+      }
+    },
+    {
+      "id": "C10",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "pending/failed履歴は反復を止め、restoreはdeferred、check_deliveryをformatとpre-chunkで反復。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "crash窓・timeout・usage拒否・部分配送・retry ceiling・alert starvation・deadlineを合成検証。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "日次競合は見たlatest-eventの再確認で片方を抑止、off/新しい日で旧notice取消。"
+        }
+      }
+    },
+    {
+      "id": "C11",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "F02修正前1FAIL/2PASS→最終PASS。g1制約を破る初期fixtureは制約を維持し拒否/rollback回帰へ修正。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "F01修正前6FAIL→最終PASS。subprocessだけを合成stub、実Ledger/receipt/送信sealを通す。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "本文canary、名前opt-in、日次race、scope、counts、stale/kill-switch/clicker-onlyの既存合成検証。"
+        }
+      }
+    },
+    {
+      "id": "C12",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stdlibのみ、flat import維持。runner一時HOME/socket/実LLM/Jev遮断。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "Hermes/standalone/LINE WORKS起動契約とroot選択を確認。依存追加なし。ruff0.16.10指定実行でPASS。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "CLI ro URIとimport bootstrapを維持。pyproject addoptsと対象収集をJunit224件で確認。"
+        }
+      }
+    },
+    {
+      "id": "X01",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "公開API/保存形式/既定offを維持。配備/再起動は未実施。更新時注意をchangesへ記録。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "sender package/argv選択を維持。新module/export/manifest/assetなし。実SDK/実配備の検証は含めない。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧日notice抑止、kill-switch unsentのみtext fallbackを合成検証。配布物構成変更なし。"
+        }
+      }
+    },
+    {
+      "id": "X02",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "依存・取得先・CI権限・ライセンスの変更なし。stdlib importを全文確認。"
+        },
+        "notify_flush": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "供給網の変更なし。ruffは既存uv cache/固定版の開発検証のみ。"
+        },
+        "notify_digest": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "依存・CI権限・ライセンスの変更なし。stdlib importを全文確認。"
+        }
+      }
+    },
+    {
+      "id": "X03",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "restore_pendingならenqueue/delivery保留、後続resumeを合成検証。バックアップや削除は本packetで実行しない。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "restore中は内容をdefer、system alertは可。復元不明receiptは救済しない既存caller境界を確認。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "読取り専用snapshot、削除/archived患者を集計から除外。復元/削除処理そのものは別owner。"
+        }
+      }
+    },
+    {
+      "id": "X04",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "E1は初報配送証明、E2はinteractiveでcovered member deliveredのみ。text E2を禁止。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "F01: standalone添付も保存sha256にpin。delivery開始前拒否はretry、timeout/不明/部分失敗はhold。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "daily intentはtextまたはnotice render。grant/receiptでaccepted、実失敗のみbounded resendを既存合成testで確認。"
+        }
+      }
+    },
+    {
+      "id": "X05",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "複数tab/native/offline cache所有なし。永続化と通知再試行はC03/C10で評価。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "Darwinで実行。extension alias/hardlink/copy fallbackと容量制限を合成テスト。別OS/実transportは未確認。"
+        },
+        "notify_digest": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "client tab/native/eviction所有なし。snapshot ageと読取り失敗復旧はC08で評価。"
+        }
+      }
+    },
+    {
+      "id": "X06",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "AI結果を候補として扱い現在世代/hashのみ使用。LLM/MCP呼出/人承認実行の権限は持たない。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "AI/投稿由来のMEDIA:/[[...]]をdefuse。semantic権限と世代gateは既存委譲を保持。実LLM/Jev未接続。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "AI高はIDの候補表示のみ。prompt/tool/記憶書込なし。業務完了の推定をしない注記を保持。"
+        }
+      }
+    },
+    {
+      "id": "X07",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "医療再確認候補のみ。記録未観測≠未対応、ack/triage/requestは観測証拠。新たな人承認/完了操作なし。"
+        },
+        "notify_flush": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "既読化/人承認APIを実行しない。外部送信は既存通知契約内。receiptの不確定を負のACKに読み替えない。"
+        },
+        "notify_digest": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "件数・暫定AIフラグ・タスク期限は記録ベースの表示。制度/算定/治療規則を変更しない。"
+        }
+      }
+    },
+    {
+      "id": "X08",
+      "modules": {
+        "notify_urgent": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "公開Web/フォーム/index/公開処理を所有しない。"
+        },
+        "notify_flush": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "公開Webの配備/公開なし。既存明示通知先へのCLI配送を所有する。"
+        },
+        "notify_digest": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "chat/ローカルCLI/private snapshot viewのみ。Webページ/公開導線変更なし。"
+        }
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "classification": "confirmed",
+      "priority": "P2/security",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_flush.py:912",
+      "root_cause": "JSON sender handles both independent packages but stored sha256 pins were enabled only for LINE WORKS. Standalone could reseal replaced/untracked bytes under their new hash.",
+      "fix": "use existing _hermes_free(cfg,target) for stored attachment pins; no dependencies/API/schema change",
+      "regression_before": {
+        "exit": 1,
+        "failed": 6,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/regression-before.log"
+      },
+      "regression_after": "six cases included in final 224-pass Junit (both Slack/Discord; before/after fingerprint and untracked attachment)",
+      "change_record": "changes/maintenance-notify-standalone-attachment-pins.json"
+    },
+    {
+      "id": "F02",
+      "classification": "confirmed",
+      "priority": "P2/correctness-compatibility",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_urgent.py:83,297",
+      "root_cause": "explicit artifact project equality in JOIN excluded legacy project=NULL LLM rows that current_fact_pred and urgency display intentionally permit by unique message/hash.",
+      "fix": "join by message_id; retain the shared current_fact_pred project/hash/current-generation restriction",
+      "regression_before": {
+        "exit": 1,
+        "failed": 1,
+        "passed": 2,
+        "deselected": 55,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-before.log"
+      },
+      "regression_after": "legacy NULL and scoped LLM both enqueue/check_delivery/send; incompatible project mutation is rejected by g1 and rolled back; all in final PASS",
+      "change_record": "changes/maintenance-notify-legacy-urgency-scope.json"
+    },
+    {
+      "id": "D01",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "top-level interactive accepted could escalate a suppressed/uncovered member",
+      "evidence": "_base requires intersection of frozen message_ids and delivered ic.coverage; test_partial_interactive_acceptance_is_not_delivery_of_suppressed_member and sealed E2 PASS"
+    },
+    {
+      "id": "D02",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "text initial delivery could create unconfirmable E2",
+      "evidence": "_stage stops text after E1, _base text excludes sealed batch; text E2 enqueue/send-time cancellation tests PASS"
+    },
+    {
+      "id": "D03",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "old generation or hidden page acknowledgement could silence urgency",
+      "evidence": "_confirmed matches current source_generation/source_fp and shown integer member; page/old-generation regressions PASS"
+    },
+    {
+      "id": "D04",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "digest built outside write lock could enqueue twice",
+      "evidence": "latest event id compared after BEGIN IMMEDIATE; test_body_is_built_outside_the_write_lock proves competing insert wins"
+    },
+    {
+      "id": "D05",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "hold could rescue an already/uncertain delivered event and duplicate it",
+      "evidence": "_hold_event reloads current receipt; holds disable rescue for unknown outcome, corrupt receipt retains invalid_progress; current-receipt/crash tests PASS"
+    },
+    {
+      "id": "D06",
+      "classification": "disproved_for_current_entry_paths",
+      "status": "NO_CHANGE",
+      "hypothesis": "_fail_event old ev.progress could suppress/park after a newly accepted chunk on StaleSend/DeferredSend",
+      "evidence": "semantic_gate/render_gate convert changes in_progress into FreezeSend (unconditional hold); current urgent fixed short text is below1900, and retry entry ev already has previous progress. No current production path was found; no speculative fix introduced."
+    },
+    {
+      "id": "L01",
+      "classification": "deferred",
+      "status": "PARENT_SCOPE",
+      "topic": "all caller auth/transport/schema and fresh independent fixed-I review",
+      "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance."
+    }
+  ],
+  "verification": {
+    "runtime": {
+      "test_python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "test_python_version": "3.13.12",
+      "audit_python_version": "3.14.8",
+      "os": "Darwin",
+      "test_environment": "scripts/run_tests.sh env -i; isolated HOME/TMP/XDG; MCS_TEST_SANDBOX=1; tests/conftest blocks real MCS/Keychain/Hermes/launchctl/network/LLM/Jev"
+    },
+    "runs": [
+      {
+        "phase": "F01 pre-fix",
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_standalone_flush.py -k never_reseals -q",
+        "exit": 1,
+        "counts": {
+          "failed": 6,
+          "passed": 0
+        },
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/regression-before.log"
+      },
+      {
+        "phase": "F01 post-fix",
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_standalone_flush.py tests/notify/test_notify_lineworks_flush.py -q",
+        "exit": 0,
+        "counts": {
+          "passed": 18,
+          "failed": 0
+        },
+        "count_evidence": "18 pytest progress dots; final XML independently includes these cases",
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/attachment-after.log"
+      },
+      {
+        "phase": "intermediate packet before F02",
+        "command": "same nine test files, before new urgency regressions",
+        "exit": 0,
+        "counts": {
+          "passed": 221,
+          "failed": 0
+        },
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-tests.log",
+        "junit": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-tests.xml"
+      },
+      {
+        "phase": "initial F02 regression fixture",
+        "command": "... test_notify_urgent.py -k legacy_llm_project_scope -o addopts='' -q",
+        "exit": 1,
+        "counts": {
+          "failed": 2,
+          "deselected": 55
+        },
+        "explanation": "one expected NULL defect; second was invalid fixture creation rejected by g1. Guard preserved and test revised to explicit rejection/rollback.",
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-initial-fixture.log"
+      },
+      {
+        "phase": "intermediate fixture failure",
+        "command": "same nine test files with initial F02 fixture",
+        "exit": 1,
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-fixture-failure.log",
+        "explanation": "only the conflicting-project fixture failed at g1 insertion; corrected without disabling/weakening the trigger."
+      },
+      {
+        "phase": "F02 pre-fix after fixture correction",
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_urgent.py -k 'legacy_llm_project_scope or conflicting_llm_project' -o addopts='' -q",
+        "exit": 1,
+        "counts": {
+          "failed": 1,
+          "passed": 2,
+          "deselected": 55
+        },
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-before.log"
+      },
+      {
+        "phase": "final W packet",
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_urgent.py tests/notify/test_notify_flush.py tests/notify/test_notify_flush_paths.py tests/notify/test_notify_digest.py tests/notify/test_notify_lineworks_flush.py tests/notify/test_notify_standalone_flush.py tests/notify/test_notify_summary.py tests/notify/test_notify_summary_notice.py tests/notify/test_notification_reliability.py -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-final-tests.xml",
+        "exit": 0,
+        "counts": {
+          "tests": 224,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "passed": 224
+        },
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-final-tests.log",
+        "junit": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-final-tests.xml"
+      },
+      {
+        "phase": "final W lint",
+        "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/notify/notify_urgent.py mcs/notify/notify_flush.py mcs/notify/notify_digest.py tests/notify/test_notify_urgent.py tests/notify/test_notify_flush.py tests/notify/test_notify_flush_paths.py tests/notify/test_notify_digest.py tests/notify/test_notify_lineworks_flush.py tests/notify/test_notify_standalone_flush.py tests/notify/test_notify_summary.py tests/notify/test_notify_summary_notice.py tests/notify/test_notification_reliability.py tests/notify/notify_testkit.py",
+        "exit": 0,
+        "full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/lint-final.log"
+      },
+      {
+        "phase": "diff/changes",
+        "command": "git diff --check; JSON schema field validation for the two new changes records",
+        "exit": 0,
+        "evidence": "tool output 7679e0; 6-file code commit is only this packet changes"
+      }
+    ],
+    "independent_review": "PENDING_PARENT (this is implementation evidence, not an independent code review)",
+    "integration": "PENDING_PARENT fixed I; worker 224 PASS is not I PASS",
+    "previous_6780_pass": "parent-provided baseline only; not counted as worker verification",
+    "not_run": [
+      "real platform SDK send/acceptance",
+      "real MCS/LLM/Jev/Keychain/production DB",
+      "live restart/deploy",
+      "public push/PR/merge",
+      "whole-repository integration or artifact distribution verification by this worker"
+    ],
+    "tool_probes": [
+      {
+        "command": "/Users/yusuke/.mcs/.venv/bin/ruff",
+        "exit": 127,
+        "result": "not installed; not a verification success"
+      },
+      {
+        "command": "command -v ruff",
+        "exit": 1,
+        "result": "not on PATH; successful fixed-version uv lint used afterwards"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/P-to-W.patch",
+      "sha256": "6679c73ac634f4222516a9a820c77854de721658a76b9f9a7cf760625776113f",
+      "bytes": 9774
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/attachment-after.log",
+      "sha256": "341d5dca33250b815baddbafb6001e174c20bf1716bb74f3d612e77777db8938",
+      "bytes": 80
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/lint-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/lint.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-final-tests.log",
+      "sha256": "4490b4c49dde4f5ef1a9c363804288af0e59284c529dfa1572a700ce0e33a2b2",
+      "bytes": 340
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-final-tests.xml",
+      "sha256": "4f228dfa03c96322a84a7b86d229bc10ff7a599e45829f8b8db95c97f09cd7ad",
+      "bytes": 31051
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-fixture-failure.log",
+      "sha256": "b8b119808ed7642fd6fc0eb6f6ec1572c8b520cce9501a7aade311873e0517e6",
+      "bytes": 1602
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-tests.log",
+      "sha256": "10a5acd1574e688726a9780f3156d32a230528bf9f344e1b21c97f931eeb3eef",
+      "bytes": 341
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/packet-tests.xml",
+      "sha256": "7710c7647d8d7447abcd47a4fa53b8b649ec1b4d4dddee875cf847d156cc1ee9",
+      "bytes": 30622
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/regression-before.log",
+      "sha256": "ed2339823083b505315e979a476bfc55829b58014a50cb3f27915d5cb6fe8730",
+      "bytes": 19046
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-before.log",
+      "sha256": "4dcb8701c5a47fa394eb77751f8f36971aeffb00fc7b21189e40b16348d78e0e",
+      "bytes": 1575
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-initial-fixture.log",
+      "sha256": "31d2f1277853cb0cd0551cc5e5bd1e9fea24d3e3e9734d97baa400b641bbfb8a",
+      "bytes": 2741
+    }
+  ],
+  "acceptance": {
+    "local_source_read": "PASS (13/13 assigned audit files fully read)",
+    "confirmed_fixes": "PASS (F01/F02 with before-fail regression)",
+    "local_required_checks": "PASS (224 tests, ruff, diff and change records)",
+    "shared_modules": "PARTIAL readonly context; parent owns full audit",
+    "independent_review": "PENDING",
+    "integration_candidate": "PENDING",
+    "global_goal_complete": false
+  }
+}
