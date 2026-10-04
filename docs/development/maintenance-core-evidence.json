@@ -1,0 +1,1576 @@
+{
+  "packet": "maintenance-core-20261005",
+  "status": "PARTIAL",
+  "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "W": "12a7dabc5762c7dc74aea8cff0bab5f1fcf34e9f",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+  "branch": "audit/maintenance-core-20261005",
+  "start_status": [],
+  "scope": [
+    "mcs/core/**",
+    "tests/core/**"
+  ],
+  "inventory": [
+    {
+      "path": "mcs/core/bounded_http.py",
+      "P_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "P_lines": 244,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          244
+        ]
+      ],
+      "responsibility": "stdin-only HTTP worker、宛先/認証情報境界、byte上限、deadline kill/reap。",
+      "callers": [
+        "mcs/core/local_llm.py",
+        "mcs/semantic/semantic_jev.py",
+        "mcs/ops/mcs_setup.py"
+      ],
+      "notes": [],
+      "W_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "W_lines": 244,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "P_sha256": "691d1d8a50dd260c82423aa088a9ff60ce9ed2c0101e5b1714a410d9d6230b4e",
+      "P_lines": 2651,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          350
+        ],
+        [
+          351,
+          720
+        ],
+        [
+          721,
+          1080
+        ],
+        [
+          1081,
+          1430
+        ],
+        [
+          1431,
+          1790
+        ],
+        [
+          1791,
+          2150
+        ],
+        [
+          2151,
+          2490
+        ],
+        [
+          2491,
+          2651
+        ]
+      ],
+      "responsibility": "SQLite source/archive、移行、FTS、世代・通知意図・メタデータ・queue・snapshotとreadonly writer/reader契約。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/init_data.py",
+        "mcs/ingest/job_ops.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/ops/mcs_backup.py"
+      ],
+      "notes": [],
+      "W_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "W_lines": 2657,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "W_recheck": {
+        "method": "変更箇所の全文とgit diffを再読し、変更前に全文確認した未変更境界と照合。全体の再読重複は行っていない。",
+        "diff_log": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+        "P_to_W_only": true
+      },
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "P_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "P_lines": 233,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          233
+        ]
+      ],
+      "responsibility": "明示した静的SQLiteだけをreadonly transactionとVM予算で件数監査するCLI、relation guardの状態表示。",
+      "callers": [
+        "mcs/ops/mcs_repair.py",
+        "mcs/ingest/run_check.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_backup.py"
+      ],
+      "notes": [],
+      "W_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "W_lines": 233,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "P_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "P_lines": 537,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          270
+        ],
+        [
+          271,
+          537
+        ]
+      ],
+      "responsibility": "独立SQLite storeとlifetime flockによりepoch/route/classを束縛し、予約からterminalまでRTとBACKLOGを排他制御。",
+      "callers": [
+        "mcs/core/local_llm.py",
+        "mcs/ops/mcs_setup.py"
+      ],
+      "notes": [],
+      "W_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "W_lines": 537,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "P_sha256": "b9a354b28244d7bdf5fc85f3569a7404a72c6260e487ec3120eb326d921d4d68",
+      "P_lines": 535,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          535
+        ]
+      ],
+      "responsibility": "loopback推論、固定slot、opt-in admission、出力制限とJSON/finish_reason/usage/timings、format probe。",
+      "callers": [
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ingest/run_check.py"
+      ],
+      "notes": [],
+      "W_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "W_lines": 542,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "W_recheck": {
+        "method": "変更箇所の全文とgit diffを再読し、変更前に全文確認した未変更境界と照合。全体の再読重複は行っていない。",
+        "diff_log": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+        "P_to_W_only": true
+      },
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "P_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "P_lines": 269,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          269
+        ]
+      ],
+      "responsibility": "verified daily/preupdate backup、参照による保持、copytruncate、配送journal保護付き添付retention、snapshot公開。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/health_watch.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/semantic/semantic.py"
+      ],
+      "notes": [],
+      "W_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "W_lines": 269,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "P_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "P_lines": 494,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          494
+        ]
+      ],
+      "responsibility": "current artifact/hash/project/generation predicateをstats/signals/viewsへ共有し、医療事実を未確認値と区別。",
+      "callers": [
+        "mcs/views/mcs_stats.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_urgent.py",
+        "mcs/ops/mcs_requests.py"
+      ],
+      "notes": [],
+      "W_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "W_lines": 494,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/mcs_runtime.py",
+      "P_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "P_lines": 38,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "responsibility": "明示runtime_modeを検証し、standalone rootまたはHermesのPython/scripts/homeを解決。",
+      "callers": [
+        "mcs_standalone/runtime.py",
+        "mcs_standalone/config.py",
+        "mcs_standalone/service.py",
+        "mcs/notify/notify_flush.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_update.py"
+      ],
+      "notes": [],
+      "W_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "W_lines": 38,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "P_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "P_lines": 399,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          399
+        ]
+      ],
+      "responsibility": "副作用のない共有config/text/JSON/pathとno-proxy/no-redirect、fsync atomic publish、run lock、LLM breaker/disk floor、launchd helper。",
+      "callers": [
+        "mcs/core/ledger.py",
+        "mcs/core/maintenance.py",
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_update.py"
+      ],
+      "notes": [],
+      "W_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "W_lines": 399,
+      "full_read_verified": true,
+      "entry_to_consumer": "入口と前提→検証/lock/readonly/宛先境界→処理→DB/file/response保存→列挙callerが消費。具体経路はflowsとcriteria。",
+      "criterion_evidence_ref": "criteria",
+      "module": "core"
+    },
+    {
+      "path": "tests/core/test_artifact_json_guards.py",
+      "P_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "P_lines": 168,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "responsibility": "不正artifact JSONとjoin planner変化でもstats/signals/QCの境界を保持。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "W_lines": 168,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "P_sha256": "f6a7a8848a6244ecbe4680c0498e12eedfaae2002a3ef3a3e94a0a72325e558c",
+      "P_lines": 1216,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          630
+        ],
+        [
+          631,
+          960
+        ],
+        [
+          961,
+          1216
+        ]
+      ],
+      "responsibility": "save/通知冪等性、患者スコープ、source hash、migration/FTS、backup/retention、既存metadataの合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "W_lines": 1314,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "W_recheck": {
+        "method": "変更箇所の全文とgit diffを再読し、変更前に全文確認した未変更境界と照合。全体の再読重複は行っていない。",
+        "diff_log": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+        "P_to_W_only": true
+      },
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_job_reasons.py",
+      "P_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "P_lines": 265,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          265
+        ]
+      ],
+      "responsibility": "取得理由の持続とretry/fail-fast/成功時消去、statusで不在を業務未対応へ読み替えない。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "W_lines": 265,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_ledger_audit.py",
+      "P_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "P_lines": 306,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          306
+        ]
+      ],
+      "responsibility": "静的DBの不変hash、legacy/future schema、budget、破損/違反件数、readonly CLI。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "W_lines": 306,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_ledger_candidate_validation.py",
+      "P_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "P_lines": 114,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          114
+        ]
+      ],
+      "responsibility": "全対応versionとv1形状、破損/重複/欠損source/中断候補の非破壊拒否。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "W_lines": 114,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_ledger_guards.py",
+      "P_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "P_lines": 223,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          223
+        ]
+      ],
+      "responsibility": "raw SQL接続でも関連制約、dirty relation shadow保持、NULL契約、snapshot/health表示。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "W_lines": 223,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "P_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "P_lines": 374,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          374
+        ]
+      ],
+      "responsibility": "backup中断・disk floor・marker・rotation・独立restore/FTS/添付hash・異なるHOMEからのreadonly CLI。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "W_lines": 374,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_ledger_reply_recovery.py",
+      "P_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "P_lines": 84,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "responsibility": "legacy NULL返信のjob予約、snippet sibling試行回数と失敗保持、再openの不要更新防止。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "W_lines": 84,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_llm_admission.py",
+      "P_sha256": "38e763dfdd9e04f4b87a9ff8f1f3d6b1c0732f322cb6fc7ca5232e6e6bba8d3a",
+      "P_lines": 724,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          370
+        ],
+        [
+          371,
+          724
+        ]
+      ],
+      "responsibility": "route/class排他、実SQLite競合、epoch再開、待機/cancel/unknown保持、共有callerの送信前引数回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "W_lines": 763,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "W_recheck": {
+        "method": "変更箇所の全文とgit diffを再読し、変更前に全文確認した未変更境界と照合。全体の再読重複は行っていない。",
+        "diff_log": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+        "P_to_W_only": true
+      },
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "P_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "P_lines": 327,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          327
+        ]
+      ],
+      "responsibility": "canonical/legacyの出力契約、format制約、slot、usage/timings、loopback拒否、深いJSON。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "W_lines": 327,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "P_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "P_lines": 149,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          149
+        ]
+      ],
+      "responsibility": "worker機構のdeadline/kill/reap、connection refused識別、実interpreterの合成slow-read中断。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "W_lines": 149,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_maintenance_root.py",
+      "P_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "P_lines": 27,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          27
+        ]
+      ],
+      "responsibility": "standalone明示rootがmaintenance/admission pathへ反映。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "W_lines": 27,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_mcs_util.py",
+      "P_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "P_lines": 77,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "responsibility": "atomic fsync/cleanup・壊れたbreaker・disk floor・quote span・chunk size・deep JSON。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "W_lines": 77,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_message_revisions.py",
+      "P_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "P_lines": 175,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          175
+        ]
+      ],
+      "responsibility": "terminal hash履歴だけを保持、batch rollback、snapshot、重複と競合revision。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "W_lines": 175,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_metadata_watch.py",
+      "P_sha256": "ea7912200be24001ef3ea64d53bc28d72cb77ad3e7189f3e7980356ac4e687f0",
+      "P_lines": 111,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "responsibility": "独立correlated referenceとのpriority同値、時刻/project境界、配列文字列要素のselector回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "W_lines": 134,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "W_recheck": {
+        "method": "変更箇所の全文とgit diffを再読し、変更前に全文確認した未変更境界と照合。全体の再読重複は行っていない。",
+        "diff_log": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+        "P_to_W_only": true
+      },
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_supported_schema_upgrade.py",
+      "P_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "P_lines": 359,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          359
+        ]
+      ],
+      "responsibility": "repo内historical DDL+完全合成seedの全released/pre-release shapeからupgrade/backup/restore/consent rollback。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "W_lines": 359,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    },
+    {
+      "path": "tests/core/test_thread_reply_pairs.py",
+      "P_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "P_lines": 65,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "responsibility": "half-open root cohort、観測horizon、unknown time、future/deleted/foreign-project返信とtie break。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "notes": [],
+      "W_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "W_lines": 65,
+      "full_read_verified": true,
+      "entry_to_consumer": "隔離runner→temporary HOME/socket/process guards→完全合成DBまたはstub→asserted DB/file/response→CI/worker acceptance。",
+      "criterion_evidence_ref": "criteria",
+      "module": "tests/core"
+    }
+  ],
+  "criteria": {
+    "C01": {
+      "title": "責務・依存・重複・契約",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "coreはmechanism、呼出側は宛先/公開/臨床policy。flat import、lazy Ledger→requests/cards/semanticとshared predicatesを確認。LOCだけの分割は不要。",
+      "evidence": [
+        "mcs/core/ledger.py:1-37,174-680",
+        "mcs/core/bounded_http.py:1-17",
+        "mcs/core/mcs_queries.py:1-11",
+        "mcs/_mcs_path.py",
+        "AGENTS.md"
+      ]
+    },
+    "C02": {
+      "title": "状態・日時・境界",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "full/deletedはsnippetで降格せず、hashと本文同期。JST/epoch/time-cohort・history floor(-1 absorbing)/coverage/watermark・freshness unknownを区別。metadata corruptionとdeadline不正を修正。",
+      "evidence": [
+        "tests/core/test_core_misc.py",
+        "tests/core/test_thread_reply_pairs.py",
+        "tests/core/test_message_revisions.py",
+        "tests/core/test_mcs_util.py",
+        "CORE-001",
+        "CORE-002",
+        "CORE-004"
+      ]
+    },
+    "C03": {
+      "title": "transaction・排他・冪等性",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "save+notify+semantic seedは同commit、project mismatch rollback、reply retirement、outbox partial-send hold、artifact relation trigger/shadow、Broker BEGIN IMMEDIATE/lifetime flock。FTS/backfill/versionを同transactionへ修正。",
+      "evidence": [
+        "mcs/core/ledger.py",
+        "mcs/core/llm_admission.py",
+        "tests/core/test_ledger_guards.py",
+        "tests/core/test_llm_admission.py",
+        "CORE-003"
+      ]
+    },
+    "C04": {
+      "title": "migration・途中失敗",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "未来version/中断rename/重複keyは拒否しsourceを保持。v1 attachment/read_marksをlossless rebuild、対応historical shapesを合成検証。初期FTSと派生backfillの中断4件を再現・修正。既存DDL fixture/SCHEMA_VERSIONを変更していない。",
+      "evidence": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/core/test_ledger_candidate_validation.py",
+        "mcs/core/ledger.py:198-679",
+        "CORE-003"
+      ]
+    },
+    "C05": {
+      "title": "認可・injection・宛先",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "SQL valuesはbind、alias/DDL/table識別子はinternal fixed contract。message/project整合性とreader mode=ro。HTTP loopback又はcaller allowlist、no proxy/redirect、credential stdin-only。admission route classはlocal trusted code registrationであり外部認証の代替ではない。",
+      "evidence": [
+        "mcs/core/bounded_http.py",
+        "mcs/core/ledger.py:_save_tree,_upsert_message,LedgerReader",
+        "mcs/core/llm_admission.py:acquire,token_valid",
+        "SECURITY.md"
+      ]
+    },
+    "C06": {
+      "title": "PHI・秘密・storage/log",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "実値を取得せずsyntheticのみ。Ledger/WAL/SHM/backup/snapshotはprivate mode。HTTP envelopeはargv/env/diagnosticsへsecret/bodyを出さず、auditは件数/codeだけを返す。source metadata/hash historyは既存公開契約のまま。",
+      "evidence": [
+        "mcs/core/ledger.py:__init__,publish_snapshot,valid_mcs_db",
+        "mcs/core/bounded_http.py:_worker_environment,_http_worker_main",
+        "mcs/core/ledger_audit.py",
+        "tests/core/test_message_revisions.py",
+        "tests/core/test_ledger_audit.py"
+      ]
+    },
+    "C07": {
+      "title": "API/CLI・上限・互換",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "公開signature 80 Ledger +11 local_llmのP/W同値をAST確認。worker response最大262144+1、caller262144拒否。snapshot/audit CLI明示db、JSON nonobject/deep failure、current artifact project/hash guardsを確認。変更された不正deadline/probe設定はpermit前ValueError。",
+      "evidence": [
+        "/tmp/mcs-maintenance-core-20261005/contracts.json",
+        "tests/core/test_local_llm.py",
+        "tests/core/test_ledger_audit.py",
+        "tests/core/test_artifact_json_guards.py",
+        "CORE-002"
+      ]
+    },
+    "C08": {
+      "title": "stale state・復旧の間接UI境界",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "coreには画面自体はないが、current v4/canonical hash世代、thread変更のinvalidated flag、snapshot generation、観測/failed/stale/not_fetchedを表示consumerへ渡す。selectorはbad配列を表示でvalidへ変えず再取得のみ継続。画面操作やa11yは本packet対象外。",
+      "evidence": [
+        "mcs/core/mcs_queries.py:current_fact_pred,current_v4_id",
+        "mcs/core/ledger.py:_invalidate_thread_projections,reaction_actor_summary",
+        "mcs/views/message_metadata.py",
+        "tests/notify/test_metadata_display.py",
+        "CORE-004"
+      ]
+    },
+    "C09": {
+      "title": "資源・scan・起動",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "HTTP response/time/process寿命に上限、slot concurrency/class occupancy bounded、metadata target8/actor4とage/backoff、backup two-copy disk floor、現在schemaでは不要backfill skip。全ledger stats/archiveの必要scanは保持。実規模perf計測/性能改善率の主張はしていない。",
+      "evidence": [
+        "mcs/core/bounded_http.py",
+        "mcs/core/ledger.py:metadata_watch_targets,reaction_actor_targets,_migrate",
+        "mcs/core/maintenance.py:daily_backup",
+        "tests/core/test_local_llm_deadline.py",
+        "tests/core/test_core_misc.py"
+      ]
+    },
+    "C10": {
+      "title": "retry・queue・timeout・cancel",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "HTTP workerはabsolute deadline後kill/reap、refusedとtimeoutを区別。Broker unknown/cancel_pendingはoccupancy継続、waiting未送信はcancelで退役。job理由はstableコード・fail-fast/attempt cap、metadata failure6h backoff、projection inputgenerationを保持。",
+      "evidence": [
+        "tests/core/test_local_llm_deadline.py",
+        "tests/core/test_llm_admission.py",
+        "tests/core/test_job_reasons.py",
+        "tests/core/test_ledger_reply_recovery.py",
+        "CORE-002"
+      ]
+    },
+    "C11": {
+      "title": "合成検証・偽陽性・競合",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "全17testファイル全文確認。runnerのenv -i/temporary HOME、socket/urllib/security/Chrome/Hermes/launchctl/production LLM workerガードを読取。新規39回帰は未修正codeで失敗し、最終541件収集・pass、skip0。期待値/guardsを弱めていない。",
+      "evidence": [
+        "scripts/run_tests.sh",
+        "tests/conftest.py",
+        "tests/core/**",
+        "verification"
+      ]
+    },
+    "C12": {
+      "title": "stdlib・runtime・CI",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "coreはstdlib/local importのみ、依存/lockfile変更なし。mcs_runtime Hermes/standalone選択維持、MCS_ROOT fixture検証。既存ruff0.16.10と生成文書check/差分check成功。全repoCI/Iチェックは親担当でworker passと区別。",
+      "evidence": [
+        "mcs/core/mcs_runtime.py",
+        "mcs/core/mcs_util.py",
+        "pyproject.toml",
+        "tests/core/test_maintenance_root.py",
+        "verification"
+      ]
+    },
+    "X01": {
+      "title": "起動・旧新version・切戻し境界",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "モジュール/manifest/export追加なし、既存import/CLI/readonly snapshot維持。old/new schemaとtrue historical released DDLのbackup/restore/receipt holdを合成で確認。実SDK/配布物/実gateway再起動は未実施で、親の固定I確認へ返す。",
+      "evidence": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/core/test_ledger_recovery_contract.py",
+        "mcs/core/mcs_runtime.py",
+        "changes/maintenance-core-preflight-20261005.json"
+      ]
+    },
+    "X02": {
+      "title": "依存取得・供給網境界",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "runtimeの新外部依存はゼロ、stdlib制約を維持。ruffは親指定固定0.16.10を既存uv cacheで利用。core変更はCI権限/取得元/ライセンスを変更しない。repo全体のCI供給網確認は本packet外で親ownerが継続。",
+      "evidence": [
+        "AGENTS.md",
+        "pyproject.toml",
+        "verification:ruff",
+        "git diff"
+      ]
+    },
+    "X03": {
+      "title": "backup・削除・復元",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "daily/preupdate snapshotはverified backup→fsync→atomic replace。ref付きpreupdateを保持、state不正は全保持。attachmentsは14日、pending/failed通知とdurable uncertain partsの参照を保護。tombstoneは正文を消しrevisionはhashのみ。復元consent holdはconsumer testsで保護。",
+      "evidence": [
+        "mcs/core/maintenance.py",
+        "mcs/core/ledger.py:publish_snapshot,valid_mcs_db,_upsert_message",
+        "tests/core/test_ledger_recovery_contract.py",
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/core/test_message_revisions.py"
+      ]
+    },
+    "X04": {
+      "title": "外部連携・再送・部分取込",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "coreはbounded HTTP機構とdurable outbox intentを所有。auth endpoint/worker method/caller allowlistを検証、通知はbody/file partial journalとunknown holdを保持。card/transport宛先主体認可はreadonly SCHEMA/receipt境界を照合し、実connectorは未実行。",
+      "evidence": [
+        "mcs/core/bounded_http.py",
+        "mcs/core/ledger.py:_attachment_followup_tx,outbox_progress,outbox_hold",
+        "mcs/core/maintenance.py:prune_attachments",
+        "mcs/notify/notify_cards.py:SCHEMA",
+        "mcs/ops/mcs_requests.py:validate,apply_command"
+      ]
+    },
+    "X05": {
+      "title": "OS・容量・offline",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "POSIX flock、directory fsync、SQLite FTS5とWAL/DELETE、foreign HOME/rootの既存macOS環境を合成検証。外部backend停止はdeferral/unknown保持、disk floorでbackupを延期。別OSや実ストレージ故障を実測したとはしていない。",
+      "evidence": [
+        "tests/core/test_maintenance_root.py",
+        "tests/core/test_mcs_util.py",
+        "tests/core/test_local_llm_deadline.py",
+        "tests/core/test_ledger_recovery_contract.py"
+      ]
+    },
+    "X06": {
+      "title": "AI/tool・権限・記憶境界",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "local inferenceはloopbackのみ、tools/body send actionなし。formatはaccepted JSON marker+finish_reason/sizeを確認。admissionはopt-inで既定のslot pinを維持。実LLM/Jev/記憶基盤/PHI送信をこのtaskで使わず、route enforcementの実backend受入を合成FakeBackendから推定しない。",
+      "evidence": [
+        "mcs/core/local_llm.py",
+        "mcs/core/llm_admission.py",
+        "tests/core/test_llm_admission.py",
+        "tests/core/test_local_llm.py",
+        "SECURITY.md"
+      ]
+    },
+    "X07": {
+      "title": "医療事実・根拠・人承認",
+      "applicability": "applicable",
+      "state": "REVIEWED",
+      "judgement": "current factはsource hash/project/pass版を束縛し未確認flagをfail closed。既読履歴はsnapshot timestampキー+confirmedのみ。保存/取得不在を業務不在へ変換しない。人承認reqのreason/receipt境界をreadonly照合し、臨床/算定ルールは変更していない。",
+      "evidence": [
+        "mcs/core/mcs_queries.py:current_fact_pred,item_unverified,med_is_patient_current",
+        "mcs/core/ledger.py:mark_read,was_marked,job_reason_class",
+        "mcs/ops/mcs_requests.py:validate,apply_command",
+        "tests/core/test_job_reasons.py",
+        "SECURITY.md"
+      ]
+    },
+    "X08": {
+      "title": "公開Web",
+      "applicability": "not_applicable",
+      "state": "REVIEWED",
+      "judgement": "公開Web/page/router/form/indexはcoreに存在しない。HTTPはloopback又は固定caller allowlistのclient機構でserver公開ではなく、公開処理は行っていない。",
+      "evidence": [
+        "mcs/core/bounded_http.py",
+        "mcs/core/ledger_audit.py",
+        "mcs/core/mcs_runtime.py"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "id": "CORE-001",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_save_message_metadata",
+      "evidence": "Pでloads_dict(nonobject/不正/deep JSON)→Noneを.content.updateへ渡し、20合成caseすべてAttributeError。capture再収集のsource transactionやshadow記録が停止。",
+      "fix": "parse failureを{}へ正規化し、新規observed fieldsとerror状態を既存transactionで保存。",
+      "contract": "有効な既存field/unchanged observed_at、capture vs shadow、unknown≠emptyは保持。",
+      "regression": [
+        "test_corrupt_optional_metadata_does_not_block_recapture"
+      ],
+      "before_cases": 20,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。"
+    },
+    {
+      "id": "CORE-002",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/local_llm.py:admitted_chat,admitted_probe_format,_validate_chat_args",
+      "evidence": "Pで不正deadline/endpoint/timeoutがpermit後に判定され、transport/unknown又は不正callback sendへ到達。11合成case fail。",
+      "fix": "deadline型/finite共通検証、probe endpoint/timeoutもpermit取得前に検証。",
+      "contract": "正当なdeadline/loopback/route/class/signature/response shapeは保持、未送信argument errorでpermitゼロ。",
+      "regression": [
+        "test_invalid_deadline_rejected_before_admission",
+        "test_invalid_probe_args_rejected_before_admission"
+      ],
+      "before_cases": 11,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。"
+    },
+    {
+      "id": "CORE-003",
+      "classification": "confirmed",
+      "priority": "P1",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_init,_migrate,_backfill_v3",
+      "evidence": "P相当_migrateはversion commit後にbackfillしbackfill自身もcommit。旧version2は失敗しても9になり、current9の初回FTSも空tableが残るため次openで補完をskip。途中/全更新後中断×2schema条件の4case fail。",
+      "fix": "FTS作成からmigration/derived fill/version保存まで同じBEGIN IMMEDIATEでcommit/rollback、backfill内部commit除去。",
+      "contract": "SCHEMA_VERSION=9/DDL/保存形式/正常時派生内容は維持、歴史DDL改変なし。_backfill_v3の実callerは_migrateのみ確認。",
+      "regression": [
+        "test_interrupted_derived_backfill_retries_without_advancing_version",
+        "test_backfill_exception_after_all_updates_rolls_back_the_batch"
+      ],
+      "before_cases": 4,
+      "before_log": "migration-before-expanded.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。"
+    },
+    {
+      "id": "CORE-004",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:metadata_watch_targets,reaction_actor_targets",
+      "evidence": "P相当SQLはjson_eachのstring valueをjson_extractへ直接渡すため、通常文字列/{broken要素でmalformed JSON。watch/actorの4caseが停止。",
+      "fix": "json_each.type=objectのvalueだけCASEでJSON operandへ渡す。",
+      "contract": "既存priority/latest/project/time/cap/backoff維持。取得selectorだけ修正し、display consumerのinvalid配列をvalid扱いしない。",
+      "regression": [
+        "test_invalid_reaction_element_does_not_abort_metadata_selectors"
+      ],
+      "before_cases": 4,
+      "before_log": "reaction-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。"
+    }
+  ],
+  "verification": [
+    {
+      "stage": "P baseline",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/ -q",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME + test guards; no live endpoints"
+      },
+      "exit": 0,
+      "passed": 376,
+      "failed": 0,
+      "skipped": 0,
+      "log": "/tmp/mcs-maintenance-core-20261005/baseline-core.log",
+      "count_source": "376 pytest outcome dots at -qq; regression/final XML provides machine counts"
+    },
+    {
+      "stage": "regression-before-metadata/admission",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_core_misc.py tests/core/test_llm_admission.py -k 'corrupt_optional_metadata or invalid_deadline_rejected or invalid_probe_args' --junitxml=/tmp/mcs-maintenance-core-20261005/regression-before.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 1,
+      "counts": {
+        "tests": 31,
+        "failures": 31,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/regression-before.log",
+      "log_sha256": "b078432ffe28a290e573dc321fc72c409f73653b2403413c3fb68982ca9b469c",
+      "xml": "/tmp/mcs-maintenance-core-20261005/regression-before.xml",
+      "xml_sha256": "e4e2969e59c66951685a4d67147c285ad8e9c42271ee3701e46041a0c0a55fa5",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "regression-before-migration-initial",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_core_misc.py -k 'interrupted_derived_backfill or backfill_exception' --junitxml=/tmp/mcs-maintenance-core-20261005/migration-before.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/migration-before.log",
+      "log_sha256": "c2715cccf941d65f1c689d710740904d0ea2bafbd8e999cf62ac1c888cd078fc",
+      "xml": "/tmp/mcs-maintenance-core-20261005/migration-before.xml",
+      "xml_sha256": "d5848119ecc1625d70b5083a8d55782f9bc8412bed5a5bc20169f90f5a4f6389",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "regression-before-migration-expanded",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_core_misc.py -k 'interrupted_derived_backfill or backfill_exception' --junitxml=/tmp/mcs-maintenance-core-20261005/migration-before-expanded.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 1,
+      "counts": {
+        "tests": 4,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/migration-before-expanded.log",
+      "log_sha256": "b2563c09706f44e29cfdb91014ad72a2cb3b278cd537c2115fdd1f2fc309a7ef",
+      "xml": "/tmp/mcs-maintenance-core-20261005/migration-before-expanded.xml",
+      "xml_sha256": "950a33b132447aaceb9f85cc88e96421c2e6279ea14b3955ee0f045325175318",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "regression-before-reaction",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_metadata_watch.py -k invalid_reaction_element --junitxml=/tmp/mcs-maintenance-core-20261005/reaction-before.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 1,
+      "counts": {
+        "tests": 4,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/reaction-before.log",
+      "log_sha256": "b6b1cd96e95bcb9eec7f348e3dff4f2d000faf059cf7a60aa1a6f7f92b27c206",
+      "xml": "/tmp/mcs-maintenance-core-20261005/reaction-before.xml",
+      "xml_sha256": "de79bf92c093ba5fe5720ef63f4133a990a40de95f28c6e4474c33aaa1b37de9",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "W-after-001/002",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/ tests/ingest/test_message_metadata.py tests/ingest/test_reaction_actors.py tests/notify/test_metadata_display.py tests/views/test_metadata_report.py --junitxml=/tmp/mcs-maintenance-core-20261005/final-core.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 0,
+      "counts": {
+        "tests": 533,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/final-core.log",
+      "log_sha256": "14e5b6c586b82061eaea6ea0aee88869616652e511e1f38657a7fc5333f6dd27",
+      "xml": "/tmp/mcs-maintenance-core-20261005/final-core.xml",
+      "xml_sha256": "b762ebed8b198abf660e6bc5819da3704cfc8d7d3e78a7fe3d15bfe112df2558",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "W-after-003",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/ tests/ingest/test_message_metadata.py tests/ingest/test_reaction_actors.py tests/notify/test_metadata_display.py tests/views/test_metadata_report.py --junitxml=/tmp/mcs-maintenance-core-20261005/final-core-migration.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 0,
+      "counts": {
+        "tests": 537,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/final-core-migration.log",
+      "log_sha256": "e30a145798683705c5c1a116ab51f7ce5b498b095e053f7bb64513f884c10291",
+      "xml": "/tmp/mcs-maintenance-core-20261005/final-core-migration.xml",
+      "xml_sha256": "abf53a01e413b58fbfbcd237cc53d9fb082e4e1dfaf4078d77a1ad08a2fb971f",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "W-final-after-004",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/ tests/ingest/test_message_metadata.py tests/ingest/test_reaction_actors.py tests/notify/test_metadata_display.py tests/views/test_metadata_report.py --junitxml=/tmp/mcs-maintenance-core-20261005/final-core-all.xml",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i + temporary HOME/XDG + tests/conftest socket/worker guards"
+      },
+      "exit": 0,
+      "counts": {
+        "tests": 541,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-core-20261005/final-core-all.log",
+      "log_sha256": "04a4e19f47067cef7457cc935e23eca3255e67a715dfacc96f0b3e9f97f39b1f",
+      "xml": "/tmp/mcs-maintenance-core-20261005/final-core-all.xml",
+      "xml_sha256": "e0dec080935af8bdb59d042a06257769d8930dc3e8df05a317f531ecb46885f7",
+      "input_note": "各beforeは対象欠陥の実装が未修正。migration/reaction beforeでは別の既修正箇所が存在するが、当該関数/SQLはPと同一。"
+    },
+    {
+      "stage": "ruff",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/core/ tests/core/",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-core-20261005/ruff-final.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "environment": {
+        "tool_version": "ruff==0.16.10",
+        "uv": "/Users/yusuke/.local/bin/uv",
+        "dependency_note": "既存cache使用、runtime dependency変更なし"
+      }
+    },
+    {
+      "stage": "generated-check",
+      "command": "env -i HOME=/tmp/mcs-maintenance-core-20261005/docs-home PATH=/usr/bin:/bin /Users/yusuke/.mcs/.venv/bin/python scripts/development/update_readme.py --check",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-core-20261005/generated-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "env": "-i",
+        "HOME": "/tmp/mcs-maintenance-core-20261005/docs-home",
+        "PATH": "/usr/bin:/bin",
+        "python": "/Users/yusuke/.mcs/.venv/bin/python"
+      }
+    },
+    {
+      "stage": "diff-check",
+      "command": "git diff --check",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-core-20261005/diff-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+        "note": "最終ソース/テスト差分、実装commit直前"
+      }
+    }
+  ],
+  "limitations": [
+    "実データ・実サービス・本番DB・Keychain・Chrome・実LLM・Jev・配備/再起動は未使用。",
+    "実backendへのadmission token enforcement/複数OS/実規模性能は合成結果から推定しない。",
+    "この変更は今後の補完中断をatomicに防ぐ。旧版で既にversionだけ進んだ実DBの存在調査やretroactive repairは実施していない。",
+    "matching Devin wikiは存在しない（git remote github.com/yusuketakuma/hermes-mcs とcacheのrepo_identifier全5件照合）。",
+    "生成DEVELOPMENT.mdは親owner。docstring先頭・testfile数・modules追加はなく --check成功、子が生成物へ直接編集はしていない。"
+  ],
+  "coverage": {
+    "P_files": 26,
+    "P_source_files": 9,
+    "P_test_files": 17,
+    "P_lines": 10164,
+    "REVIEWED": 26,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED": 0,
+    "W_lines": 10337,
+    "W_files": 26,
+    "new_regression_cases": 39
+  },
+  "flows": [
+    {
+      "name": "収集→保存/semantic/通知→reader",
+      "entry": "run_check / init_data / job_ops→save_patient,save_messages,save_thread_replies",
+      "authorization": "caller run.lock、project/message整合、収集済みのみ。既読APIはcore外のtimestamp gate。",
+      "processing": "正文/hash/tombstone/revision、attachment、thread generation",
+      "storage": "SQLite transactionでsource+outbox+semantic jobを同commit、trigger relation/FTS",
+      "consumer": "notify queue/cards/transport、semantic/extract、readonly View/stats/signals"
+    },
+    {
+      "name": "metadata refresh→監視/表示",
+      "entry": "run_check.stage_metadata_shadow / Message capture",
+      "authorization": "API parserのtarget/project/parentと型検証、stored message project照合",
+      "processing": "任意metadataのobserved_atを安定保持、invalid sourceを再構成、SQL配列objectだけ判定",
+      "storage": "capture/shadow別key、errors/checked_at、actor incompleteは保持",
+      "consumer": "metadata_watch/reaction_actor_targets→次回bounded GET、message_metadata表示はinvalid/unknownを区別"
+    },
+    {
+      "name": "推論→worker→admission",
+      "entry": "extract_llm._llm_call/_probe_format,semantic.llm_chat→local_llm",
+      "authorization": "loopback、finite prompt/timeout/deadline、固定slot又はopt-in route/class admission",
+      "processing": "bounded_http stdin envelope、no-proxy/no-redirect、deadline kill/reap、byte/JSON/finish validation",
+      "storage": "Broker独立SQLite permits/epoch。transport unknownは占有を保持",
+      "consumer": "extract/semanticのDEFERRED/LLMNotSentとcanonical acceptance"
+    },
+    {
+      "name": "backup→static audit→snapshot consumer",
+      "entry": "maintenance.daily_backup/preupdate_backup,publish_snapshot; ledger_audit CLI explicit --db",
+      "authorization": "source mode=ro、private directories、static DELETE candidate、予算付きreadonly transaction",
+      "processing": "SQLite backup・integrity/columns/version/key照合・fsync atomic publish・reference retention",
+      "storage": "private verified .db/.ok、snapshot generation metadata、auditは件数のみ",
+      "consumer": "mcs_update rollback/consent、mcs_repair、LedgerReader/View"
+    }
+  ],
+  "public_contracts": {
+    "mcs/core/ledger.py": {
+      "public_signatures_preserved": true,
+      "public_signature_count": 80
+    },
+    "mcs/core/local_llm.py": {
+      "public_signatures_preserved": true,
+      "public_signature_count": 11
+    }
+  },
+  "worker_scope_status": "READY_FOR_INTEGRATION",
+  "unresolved_findings": [],
+  "required_next": [
+    "親が専用統合候補Iへ今回commitを統合し必要なCI/gates/whole-repo testsを実施する。",
+    "固定Iを実装非担当のfresh-context reviewerへ渡す。workerの541 passはIと独立レビューの証明ではない。"
+  ],
+  "model_execution": {
+    "requested_model": "gpt-6.1-sol",
+    "requested_reasoning": "ultra",
+    "source": "親task指示。子内部から実効model/version/reasoningを独立照会するtoolは公開されていない。",
+    "effective_model": "NOT_INDEPENDENTLY_OBSERVABLE",
+    "effective_reasoning": "NOT_INDEPENDENTLY_OBSERVABLE",
+    "parent_verification_required": true
+  },
+  "patch": "/tmp/mcs-maintenance-core-20261005/core-P-W.patch",
+  "related_readonly": [
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "SECURITY.md",
+      "sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/views/message_metadata.py",
+      "sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "ranges": [
+        [
+          1,
+          313
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "da0b0da2b6c4bcc2a3b855733e1435d364503c78ffa3bc71d46678949536fffa",
+      "ranges": [
+        [
+          1,
+          296
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "ranges": [
+        [
+          1,
+          265
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "sha256": "df51a3cadf46d0eb6d73c1cd8252cdb13a05b50b3f5142875a7baa594920413d",
+      "ranges": [
+        [
+          462,
+          577
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "1cf0eca3d2b3384023e9dfdee4f19147832362ea6f53c785f48f64baf0fa691a",
+      "ranges": [
+        [
+          1040,
+          1120
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/semantic/semantic.py",
+      "sha256": "b4407b31c2a11b0ba400f19ec30d193b4910c33b49c2485a65d50e2802944ecd",
+      "ranges": [
+        [
+          280,
+          350
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/extract/v4/extract_llm.py",
+      "sha256": "f756eae8a4f80151141b1bfb5cd9676ede191d0a2c2cf9358f3fc523af3cf5ad",
+      "ranges": [
+        [
+          415,
+          455
+        ],
+        [
+          1140,
+          1200
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "tests/extract/extract_testkit.py",
+      "sha256": "86711e32c8060fff100f3b19bc78d9284be9bed4250a1d905606a62fa0e4a7c3",
+      "ranges": [
+        [
+          1,
+          40
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "scripts/development/update_readme.py",
+      "sha256": "59087f2d7d7cb0d0a078f445d1aec1a23b1ef6e81f8b48d733d6e386a38fc7a3",
+      "ranges": [
+        [
+          1,
+          200
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "changes/README.md",
+      "sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "status": "BOUNDARY_READ_ONLY"
+    },
+    {
+      "path": "mcs/_mcs_path.py",
+      "read_ranges": [
+        [
+          1,
+          26
+        ]
+      ],
+      "state": "REVIEWED",
+      "purpose": "C01 flat import依存の正本確認",
+      "sha256": "03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2"
+    }
+  ],
+  "W_definition": "検証済み実装の固定commit。run証拠JSONはこのcommitに続く専用記録commitへ保存し、最終HEADは外部receiptで識別する。",
+  "commits": [
+    {
+      "role": "implementation",
+      "sha": "12a7dabc5762c7dc74aea8cff0bab5f1fcf34e9f",
+      "message": "fix(core): recover interrupted backfills and guard metadata"
+    }
+  ],
+  "commit_receipt": "/tmp/mcs-maintenance-core-20261005/receipt.json",
+  "implementation_patch": "/tmp/mcs-maintenance-core-20261005/final-diff.patch",
+  "implementation_patch_sha256": "06c529c4a59956f915e2462d577c047877cd89e5534839766554c29cd3c23e26",
+  "evidence_validation": {
+    "command": "python3 /tmp/mcs-maintenance-core-20261005/validate-evidence.py",
+    "log": "/tmp/mcs-maintenance-core-20261005/evidence-validation.log",
+    "report": "/tmp/mcs-maintenance-core-20261005/evidence-validation.json",
+    "exit": 0,
+    "log_sha256": "ae8225dd62c3b958be647cd6206ea032d2abbc3d04be822c7eea912d5afb755b",
+    "report_sha256": "ae8225dd62c3b958be647cd6206ea032d2abbc3d04be822c7eea912d5afb755b",
+    "counts": {
+      "files": 26,
+      "P_lines": 10164,
+      "W_lines": 10337,
+      "criteria": 20,
+      "resolved_findings": 4,
+      "regression_before_cases": 39,
+      "final_tests": 541
+    }
+  }
+}
