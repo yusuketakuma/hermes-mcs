@@ -479,3 +479,18 @@ def test_conflicting_message_project_does_not_relabel_a_completed_page(replay, r
     assert not batch.reached and batch.pages == 1
     assert [m.message_id for m in batch.messages] == [MID]
     assert not pending
+
+
+@pytest.mark.parametrize("delay", ["nan", "inf"])
+def test_initial_import_nonfinite_delay_rejected_before_writer_lock(monkeypatch, delay):
+    import sys
+    import init_data
+
+    monkeypatch.setattr(sys, "argv", ["init_data", "--delay", delay])
+    monkeypatch.setattr(init_data, "acquire_run_lock", lambda *args:
+                        pytest.fail("invalid delay reached writer lock"))
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda *args, **kwargs:
+                        pytest.fail("invalid delay reached authentication"))
+    with pytest.raises(SystemExit) as error:
+        init_data.main()
+    assert error.value.code == 2
