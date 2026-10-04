@@ -800,9 +800,13 @@ def _rebind_check(hold, card, req) -> str | None:
         return "attempt_mismatch"
     try:
         scope = json.loads(hold["scope_json"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        return "hold_scope_corrupt"
+    if not isinstance(scope, dict):
         return "hold_scope_corrupt"
     transport = scope.get("transport", "discord")
+    if not isinstance(transport, str):
+        return "hold_scope_corrupt"
     if cards.TRANSPORT_VERSIONS.get(transport) != req.get("version") \
             or transport != req.get("transport", "discord"):
         return "scope_mismatch"

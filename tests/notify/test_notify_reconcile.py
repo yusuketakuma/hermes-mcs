@@ -503,6 +503,47 @@ def test_rebind_checks_the_held_attempt_and_its_journal_witness(world, mutation,
     assert all(h["released_at"] is None for h in world.holds())
 
 
+@pytest.mark.parametrize("scope_json", [
+    'synthetic-deep',
+    '[]', '"synthetic"', 'null', '{"transport":[]}', '{"transport":{}}',
+], ids=["deep", "array", "string", "null", "transport-array", "transport-object"])
+def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json):
+    if scope_json == 'synthetic-deep':
+        depth = 10000  # Python 3.13's C decoder has a separate stack limit.
+        scope_json = '{"profile":' + '[' * depth + '0' + ']' * depth + '}'
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = _journal_claim(str(world.data / "discord_state"), "w1",
+                         world.spec(render["delivery_id"]))
+    _journal_result(str(world.data / "discord_state"), "w1", aid,
+                    render["delivery_id"], "unknown")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert world.holds()
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_restore_holds SET scope_json=? "
+            "WHERE delivery_id=?", (scope_json, render["delivery_id"]))
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の破損した復旧scope確認",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **CFG["notify"]["discord"],
+           "message_id": "synthetic-known-message",
+           "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
+    receipt = notify_transport.apply_card_resolve(world.led, req, CFG)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "hold_scope_corrupt")
+    stored = world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()
+    assert json.loads(stored[0]) == receipt
+    assert notify_transport.apply_card_resolve(world.led, req, CFG) == receipt
+    assert all(h["released_at"] is None for h in world.holds())
+    assert world.card(render["card_id"])["message_id"] is None
+
+
 def test_lost_not_sent_attempt_resumes(world):
     """Journal proves the send never committed — the pending intent may
     redispatch without a hold."""
