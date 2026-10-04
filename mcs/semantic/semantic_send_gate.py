@@ -274,18 +274,14 @@ def semantic_chunk_parts(content: str,
     header and link. The payload is never rebuilt from the ledger here.
     """
     lines = content.splitlines()
-    footer_index = next(
-        (i for i, line in enumerate(lines) if line == "▶ MCSで確認"),
-        None,
-    )
-    link_index = next(
-        (i for i, line in enumerate(lines[footer_index + 1:], footer_index + 1)
-         if line.startswith("https://")),
-        None,
-    ) if footer_index is not None else None
-    if link_index is None or footer_index is None:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    # Only the renderer's terminal footer is structural. An evidence quote
+    # or model claim may contain the same marker/link inside the body.
+    if len(lines) < 2 or lines[-2] != "▶ MCSで確認":
         raise ValueError("semantic_provenance_missing")
-    link = lines[link_index].strip()
+    footer_index = len(lines) - 2
+    link = lines[-1].strip()
     if not link.startswith("https://"):
         raise ValueError("semantic_provenance_missing")
 
@@ -374,9 +370,15 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
         lines = [str(c.get("text", ""))
                  for c in summ.get("claims", [])
                  if isinstance(c, dict) and c.get("text")]
-        if not lines:
+        mfacts = [x for x in (summ.get("mandatory_facts") or [])
+                  if isinstance(x, str) and x]
+        if not lines and not mfacts:
             return ""
         body = "\n".join(f"・{x}" for x in lines)
+        if mfacts:
+            if body:
+                body += "\n"
+            body += "■ 抽出済み事実（監査済み）\n" + "\n".join(f"・{x}" for x in mfacts)
         lims = [str(x) for x in (summ.get("limitations") or [])
                 if isinstance(x, str)]
         if lims:
