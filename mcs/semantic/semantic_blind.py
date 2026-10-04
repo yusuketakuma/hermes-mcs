@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from semantic_evaluation import EvaluationError, _dict, _id, load_jsonl
+from mcs_requests import canonical, payload_hash
 
 METHODS = ("baseline", "assisted", "audited")
 
@@ -87,9 +88,8 @@ def prepare(records: list[dict]) -> tuple[list[dict], list[dict]]:
                         {"claim_id": c.get("claim_id"), "text": c.get("text")}
                         for c in claims] != choices[-1]["claims"]:
                     raise EvaluationError("evaluation_claims_mismatch")
-                frozen = json.dumps(candidate, ensure_ascii=False, sort_keys=True,
-                                    separators=(",", ":"), allow_nan=False)
-                candidate_hashes[label] = hashlib.sha256(frozen.encode()).hexdigest()
+                frozen = canonical(candidate)
+                candidate_hashes[label] = hashlib.sha256(frozen).hexdigest()
                 # Show the structured predictions that the evaluator will score.
                 frozen_candidate = json.loads(frozen)
                 choices[-1]["predictions"] = {field: frozen_candidate.get(field)
@@ -346,8 +346,7 @@ def merge_labels(records, worksheets, keys, method, manifest):
         expected = key_index[review["review_id"]].get("candidate_sha256", {}).get(label)
         if not expected:
             raise EvaluationError("evaluation_candidate_not_frozen")
-        digest = hashlib.sha256(json.dumps(candidate, ensure_ascii=False, sort_keys=True,
-                                           separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        digest = payload_hash(candidate)
         if digest != expected:
             raise EvaluationError("evaluation_candidate_mismatch")
         if record.get("label") is not None:

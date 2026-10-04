@@ -276,7 +276,7 @@ class DeliveryWorker:
         stats = {"receipt_republished": 0, "not_sent": 0, "unknown": 0}
         for aid, info in journal.unreported(records).items():
             row = info["record"]
-            claim = self._reg.claims().get(row.get("delivery_id"))
+            claim = self._reg.claimed(row.get("delivery_id"))
             env = self._receipt_env(aid, info["rows"], claim)
             if env is None or not self._ours(env):
                 continue
@@ -294,7 +294,7 @@ class DeliveryWorker:
             await self._retire_reconciled(aid, env, claim, info["rows"])
         for aid, info in journal.unfinished(records).items():
             row = info["record"]
-            claim = self._reg.claims().get(row.get("delivery_id"))
+            claim = self._reg.claimed(row.get("delivery_id"))
             env = self._receipt_env(aid, info["rows"], claim)
             if env is None or not self._ours(env):
                 continue
@@ -870,7 +870,7 @@ class DeliveryWorker:
         """settle claims whose spec vanished mid-flight — the runner
         may have cancelled the render; a granted attempt must not hang
         as an unsettled row forever."""
-        for delivery_id, claim in list(self._reg.claims().items()):
+        for delivery_id, claim in self._reg.claims().items():
             if delivery_id in live_ids:
                 continue
             if claim["phase"] in ("started", "result", "settled"):

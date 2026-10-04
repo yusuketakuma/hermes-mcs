@@ -50,6 +50,7 @@ import mcs_runtime  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
+from mcs_util import file_sha256 as _file_sha256  # noqa: E402
 
 DATA = os.path.join(HOME, "data")
 LEDGER = os.path.join(DATA, "ledger.db")
@@ -1886,14 +1887,6 @@ def _restore_content_digest(con):
             digest.update(len(encoded).to_bytes(8, "big"))
             digest.update(encoded)
     return digest.hexdigest()
-
-
-def _file_sha256(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _restore_loss_report(backup_path: str) -> dict:

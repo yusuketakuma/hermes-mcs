@@ -186,9 +186,11 @@ def cmd_run(args) -> int:
 
 
 def cmd_report(args) -> int:
+    aggregates = []
     for path in args.results:
         d = json.loads(Path(path).read_text())
         a = d["aggregate"]
+        aggregates.append(a)
         print(f"[{d.get('tag') or path}] cases={a['cases']} "
               f"claims={a['claims']} findings={a['findings_total']} "
               f"per-claim={a['findings_per_claim']}")
@@ -196,10 +198,7 @@ def cmd_report(args) -> int:
                               key=lambda x: -x[1]):
             print(f"    {code}: {n}")
     if len(args.results) == 2:
-        a = json.loads(Path(args.results[0])
-                       .read_text())["aggregate"]["finding_codes"]
-        b = json.loads(Path(args.results[1])
-                       .read_text())["aggregate"]["finding_codes"]
+        a, b = (aggregate["finding_codes"] for aggregate in aggregates)
         print("delta (first -> second):")
         for code in sorted(set(a) | set(b)):
             print(f"    {code}: {a.get(code, 0)} -> {b.get(code, 0)}")

@@ -9,7 +9,6 @@ dev, calibration, and test.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -24,6 +23,7 @@ import _mcs_path  # noqa: F401
 
 from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
+from mcs_requests import payload_hash
 
 
 SCHEMA_VERSION = "semantic-evaluation/v3"
@@ -736,9 +736,7 @@ def _gate(report: dict, criteria: dict, provenance: dict) -> dict:
 
 def criteria_sha256(criteria: dict) -> str:
     """SHA-256 of the canonical JSON of validated criteria."""
-    return hashlib.sha256(json.dumps(
-        criteria, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return payload_hash(criteria)
 
 
 def evaluate_records(records: list[dict], manifest: dict,

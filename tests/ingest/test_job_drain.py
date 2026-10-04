@@ -1099,6 +1099,29 @@ def test_fetch_thread_paginates_to_completion():
     assert b.calls == [1, 2, 3, 4, 5]
 
 
+@pytest.mark.parametrize("error", [
+    mcs_adapter.SchemaError("synthetic malformed page"),
+    mcs_adapter.SessionExpired("synthetic expired session"),
+    mcs_adapter.MCSError("synthetic_transport", retryable=True),
+])
+def test_full_thread_propagates_later_page_error_without_returning_partial_rows(error):
+    class Adapter(_PagedThreadAdapter):
+        def _get(self, path, params=None, extend_session=True):
+            if params["page"] == 2:
+                raise error
+            return super()._get(path, params, extend_session)
+
+    adapter = Adapter({1: ([11, 12], True)})
+    with pytest.raises(type(error)) as caught:
+        adapter.fetch_thread(1, 10)
+    assert caught.value is error
+
+    # The incremental API keeps completed rows while the full API raises.
+    batch = adapter.fetch_thread_window(1, 10)
+    assert [message.message_id for message in batch.messages] == [11, 12]
+    assert batch.pages == 1 and not batch.reached and batch.error is error
+
+
 def test_rearchive_resets_pending_head_cursor(tmp_path):
     """F02: re-archiving while a head job is still queued must restart
     it at page 1 (posts arrived during reactivation) and keep the

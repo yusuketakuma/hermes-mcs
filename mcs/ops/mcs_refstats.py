@@ -34,7 +34,6 @@ import os
 import re
 import sqlite3
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -44,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from mcs_util import file_sha256
+from mcs_util import atomic_write, file_sha256
 
 APPROVAL_KIND = "refstat_approval_v1"
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -177,17 +176,9 @@ def cmd_capture(args) -> int:
     ref = {"schema": "refstat_v1", "name": args.name,
            "captured_at": int(time.time()), **result}
     pending = _ref_path(args.data_dir, args.name, "pending")
-    os.makedirs(os.path.dirname(pending), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(pending),
-                               prefix=".capture-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(ref, f, ensure_ascii=False, sort_keys=True,
-                      allow_nan=False, indent=1)
-        os.replace(tmp, pending)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    atomic_write(pending, lambda f: json.dump(
+        ref, f, ensure_ascii=False, sort_keys=True, allow_nan=False, indent=1),
+        tmp_prefix=".capture-")
     print(json.dumps({"ok": True, "name": args.name,
                       "pending": pending,
                       "file_hash": file_sha256(pending),

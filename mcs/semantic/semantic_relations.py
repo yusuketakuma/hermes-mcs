@@ -16,6 +16,7 @@ COMPLEMENTS > UNRESOLVED.
 from __future__ import annotations
 
 import re
+from itertools import chain, combinations, product
 
 import semantic_facts as sf
 from mcs_requests import payload_hash
@@ -198,9 +199,7 @@ def reconcile_facts(active_facts: list, new_facts: list,
     relations = {}
     # New-vs-active is the reconciliation boundary; new-vs-new catches
     # intra-batch contradictions the same way (earlier index is "left").
-    pairs = [(a, n) for a in active for n in new]
-    pairs += [(new[i], new[j])
-              for i in range(len(new)) for j in range(i + 1, len(new))]
+    pairs = chain(product(active, new), combinations(new, 2))
     for left, right in pairs:
         rel = classify_pair(left, right)
         if rel is not None:

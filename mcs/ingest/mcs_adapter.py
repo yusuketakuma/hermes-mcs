@@ -1435,18 +1435,12 @@ class MCSAdapter:
         reply jobs to burn out permanently. A thread still reporting
         has_next after max_pages raises thread_incomplete rather than
         certify a truncated result — callers keep their durable retry."""
-        out: list[Message] = []
-        seen: set[int] = set()
-        for page in range(1, max_pages + 1):
-            msgs, has_next = self._thread_page(project_id, message_id,
-                                               page)
-            for m in msgs:
-                if m.message_id not in seen:
-                    seen.add(m.message_id)
-                    out.append(m)
-            if not has_next:
-                return out
-        raise MCSError("thread_incomplete", retryable=True)
+        batch = self.fetch_thread_window(project_id, message_id, max_pages=max_pages)
+        if batch.error is not None:
+            raise batch.error
+        if not batch.reached:
+            raise MCSError("thread_incomplete", retryable=True)
+        return batch.messages
 
     def fetch_thread_window(self, project_id: int, message_id: int,
                             start_page: int = 1,

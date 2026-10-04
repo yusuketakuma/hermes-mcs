@@ -201,10 +201,9 @@ def _authorize(settings: dict[str, Any], identity: dict[str, str | None], value:
     project_id = _project(value)
     if project_id is None:
         return None, "bad_project_id"
-    if identity["user_id"] not in settings["allowed_user_ids"]:
-        return None, "user_not_allowed"
-    if identity["chat_id"] not in settings["allowed_chat_ids"]:
-        return None, "chat_not_allowed"
+    error = _authorize_system(settings, identity)
+    if error:
+        return None, error
     if not projects.project_allowed(settings, project_id):
         return None, "project_not_allowed"
     return project_id, None

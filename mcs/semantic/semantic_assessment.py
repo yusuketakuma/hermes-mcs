@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import time
 
+from mcs_util import loads_dict
+
 
 KIND_ASSESS = "semantic_assess"
 SCHEMA_VERSION = "semantic-assessment/v2"
@@ -37,13 +39,6 @@ def _policy_fingerprint(scfg: dict) -> str | None:
     return semantic.policy_fingerprint(scfg)
 
 
-def _parse_json(value):
-    try:
-        return json.loads(value or "{}")
-    except (TypeError, ValueError):
-        return None
-
-
 def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
                    fact_id, dimension, options: dict) -> dict | None:
     if ledger is None:
@@ -51,8 +46,8 @@ def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
     rows = ledger.artifacts(KIND_ASSESS, project_id=project_id,
                             message_id=target_id)
     for row in reversed(rows):
-        meta = _parse_json(row["meta"])
-        if not isinstance(meta, dict):
+        meta = loads_dict(row["meta"])
+        if meta is None:
             continue
         row_source = meta.get("source_fingerprint", meta.get("fingerprint"))
         if (meta.get("schema") != SCHEMA_VERSION
@@ -62,8 +57,8 @@ def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
                 or meta.get("dimension") != dimension
                 or meta.get("technical_status") != "complete"):
             continue
-        content = _parse_json(row["content"])
-        if not isinstance(content, dict):
+        content = loads_dict(row["content"])
+        if content is None:
             continue
         choice = content.get("choice")
         confidence = _finite_confidence(content.get("confidence"))
