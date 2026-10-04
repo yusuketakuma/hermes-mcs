@@ -8,7 +8,7 @@ import notify_digest
 import notify_render
 import notify_views
 from message_metadata import (
-    flag_lines, get_message_metadata, mentions_self, own_post_reaction_text)
+    flag_lines, get_message_metadata, mentions_self, stamp_line)
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
 
 __all__ = ["led"]
@@ -53,16 +53,17 @@ def _section(text, head):
 def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
     _patient(led)
     _msg(led, 100)
-    meta = get_message_metadata(led.db, 100)
-    assert own_post_reaction_text(meta) == "MCS: スタンプ未取得"
+
+    def own():
+        return stamp_line(get_message_metadata(led.db, 100) | {"own_post": True})
+    assert own() == "MCS スタンプ未取得"
     _meta(led, 100, reactions=[_r("viewed", 3, True), _r("accepted", 1), _r("good", 0)])
-    text = own_post_reaction_text(get_message_metadata(led.db, 100))
-    assert text.startswith("MCS: 自分の投稿への反応 見ました2/承知1（観測 ")
-    assert "いいね" not in text
+    assert own().startswith("MCS 👀2 🙆1（自分 👀） · 観測 ")
+    assert "👍" not in own()
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert "他者0件" in own_post_reaction_text(get_message_metadata(led.db, 100))
+    assert own().startswith("MCS 他者なし（自分 👀）")
     _meta(led, 100, reactions=[])
-    assert "他者0件" in own_post_reaction_text(get_message_metadata(led.db, 100))
+    assert own().startswith("MCS スタンプなし · 観測 ")
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):
@@ -75,8 +76,12 @@ def test_card_footer_uses_sender_id_not_same_name(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     footer = "\n".join(i["text"] for i in
                        notify_render._card_content(led.db, _card(led))["footer"])
-    assert "#100 MCS: 自分の投稿への反応 見ました1" in footer
-    assert "#101 MCS: 本人 見ました" in footer
+    # own post counts others only (1), the other's post counts both (2)
+    assert "MCS 👀3 · 自分 2投稿" in footer
+    body = notify_render._card_body_text(
+        led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
+    own, other = body.split("\n\n")
+    assert "MCS 👀1（自分 👀）" in own and "MCS 👀2（自分 👀）" in other
 
 
 def test_unreacted_own_posts_section_only_when_published(led):
@@ -275,3 +280,65 @@ def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
     assert actors["counts"] == {"医師": {"viewed": 1}, "": {"accepted": 1}}
     assert actors["self_included"] is True
     assert "actor_id" not in json.dumps(actors) and other["reaction_actors"] is None
+
+
+def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
+    """Owner order (2026-10-03) for every message: header, 📋 summary,
+    MCS stamps, then the body as posted to MCS."""
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    _post(led, 101, SELF, ts=NOW - 50, parent=100)
+    _meta(led, 100, reactions=[_r("accepted", 2, True), _r("good", 1)])
+    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid: {
+        "type": "text", "text": f"📋 構造化\n・要約{mid}"})
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
+    body = notify_render._card_body_text(
+        led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
+    for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
+                                 ("MCS 🙆2 👍1（自分 🙆） · 観測 ",
+                                  "MCS スタンプ未取得")):
+        lines = post.split("\n")
+        assert lines[1:3] == ["📋 構造化", f"・要約{mid}"]
+        assert lines[3].startswith(stamps)
+        assert lines[4] == led.db.execute(
+            "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
+
+
+def test_long_post_keeps_summary_and_stamps_with_its_body():
+    """Regression: a long body started its own chunk, leaving the
+    header / summary / stamp lines as a post of their own."""
+    import notify_cards
+    head = "10-03 08:00 職員\n📋 構造化\n・要約\nMCS 👀9 🙏1 · 観測 10-03 08:05\n"
+    for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
+        chunks = notify_cards._split_body_chunks(head + body)
+        assert "".join(chunks) == head + body
+        assert all(len(c) <= notify_cards.THREAD_PART_LIMIT for c in chunks)
+        assert chunks[0].startswith(head) and len(chunks[0]) > len(head)
+
+
+def test_thread_post_names_who_pressed(led, monkeypatch):
+    """#22-D2 (2026-10-03): the thread post names the people behind each
+    stamp, right under the stamp line; the card face stays one line."""
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, SELF, ts=NOW - 100)
+    _meta(led, 100, reactions=[_r("viewed", 2), _r("accepted", 1, True)])
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    body = lambda: notify_render._card_body_text(  # noqa: E731
+        led.db, _card(led), {"shown": "[100]"}, max_chars=None)[1]
+    assert "押した人" not in body()                 # never walked yet
+    led.save_reaction_actors(100, [
+        {"actor_id": OTHER, "reaction_type": "viewed", "name": "合成 一郎", "profession": "医師"},
+        {"actor_id": 9, "reaction_type": "viewed", "name": "合成 花子"},
+        {"actor_id": SELF, "reaction_type": "accepted", "name": "合成 自分"}], True, now=NOW - 50)
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW + 86400)
+    lines = body().split("\n")
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("MCS "))
+    assert lines[i + 1] == ("押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
+                            "（09-21 23:12 時点）")       # pinned clock: 24h past
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    lines = body().split("\n")
+    assert lines[i + 1] == "押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
+    footer = "\n".join(x["text"] for x in notify_render._card_content(led.db, _card(led))["footer"])
+    assert "合成 一郎" not in footer

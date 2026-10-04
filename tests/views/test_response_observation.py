@@ -7,7 +7,7 @@ from ledger import Ledger, publish_snapshot
 from mcs_adapter import _norm_message
 from mcs_signals import record_station_staff
 from mcs_view import View
-from message_metadata import get_message_metadata, self_reaction_text
+from message_metadata import get_message_metadata
 from notify_render import card_reaction_lines
 
 NOW = 1_800_000_000.25
@@ -76,7 +76,15 @@ def test_snapshot_and_render_keep_operation_evidence_separate(store, tmp_path, f
     assert observation["self_reaction"]["basis"] == "ui_operation_only"
     assert observation["reply"] == {"state": "not_observed", "posted_at": None}
     assert all(observation[k] is None for k in ("clinical_completion", "nonresponse", "unread"))
-    assert rendered == [self_reaction_text(metadata)]
+    expected = "MCS 未取得 1投稿" if state in ("not_fetched", "invalid") else (
+        "MCS スタンプなし" if fields["reactions"] == [] else
+        "MCS ✅1" if not types else
+        {"completed": "MCS ✅1 · 自分 1投稿",
+         "accepted": "MCS 🙆1 · 自分 1投稿",
+         "unknown": "MCS ❔1 · 自分 1投稿"}[types[0]])
+    if state == "invalid":
+        expected += " · 再取得失敗"
+    assert rendered == [expected]
     assert "synthetic-private-name" not in json.dumps(observation)
 
 

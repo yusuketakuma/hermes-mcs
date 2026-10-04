@@ -56,6 +56,11 @@ def single_attempt(client):
     return sender
 
 
+# chat.update rejections that prove the prior reply cannot be edited
+_REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
+                               "edit_window_closed"})
+
+
 def _failed(exc, op, message_id):
     response = getattr(exc, "response", None)
     data = _payload(response)
@@ -354,8 +359,13 @@ class DeliveryWorker(_BaseWorker):
             raise
         except Exception as exc:
             out = _failed(exc, "body_part", thread_ts)
-            # a rejected update never committed — post the chunk afresh
-            return None if out["result"] == "not_sent" else out
+            # only a target that can no longer be edited is re-posted;
+            # a rate limit or any other rejection stays not_sent for the
+            # next render — posting afresh would leave a duplicate reply
+            if out["result"] == "not_sent" \
+                    and out["error_code"] in _REPOST_ON_UPDATE:
+                return None
+            return out
         data = _payload(response)
         if data.get("ok") is not True or data.get("ts") != prior:
             return {"result": "unknown", "error_code": "bad_slack_response"}

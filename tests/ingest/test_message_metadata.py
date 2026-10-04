@@ -272,12 +272,12 @@ def test_watch_set_is_bounded_fair_and_failure_backs_off(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     with db.db:
         record_station_staff(db.db, [{"staff_id": 11, "is_self": True}])
-    for mid in range(1, 8):
+    for mid in range(1, 11):
         save(db, message(mid))
     now = time.time()
     with db.db:
         db.db.execute("UPDATE messages SET posted_at_ts=?", (now,))
-    assert len(db.metadata_watch_targets()) == 5
+    assert len(db.metadata_watch_targets()) == 8
     calls = []
 
     def fetch(pid, mid):
@@ -290,14 +290,14 @@ def test_watch_set_is_bounded_fair_and_failure_backs_off(tmp_path):
     stage_metadata_shadow(
         shadow_adapter(fetch), db, result, time.monotonic() + 60
     )
-    assert calls == [1, 2, 3, 4, 5]
-    assert result["metadata_shadow"]["due"] == 7
+    assert calls == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert result["metadata_shadow"]["due"] == 10
     assert result["metadata_shadow"]["deferred"] == 2
-    assert result["metadata_shadow"]["fetched"] == 4
+    assert result["metadata_shadow"]["fetched"] == 7
     assert result["metadata_shadow"]["errors"] == [
         {"message_id": 1, "kind": "network_error"}
     ]
-    assert [r["message_id"] for r in db.metadata_watch_targets()] == [6, 7]
+    assert [r["message_id"] for r in db.metadata_watch_targets()] == [9, 10]
     calls.clear()
     stage_metadata_shadow(
         shadow_adapter(fetch), db, {}, time.monotonic() + 10
@@ -310,7 +310,7 @@ def test_missing_shadow_fields_do_not_starve_later_targets(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     with db.db:
         record_station_staff(db.db, [{"staff_id": 11, "is_self": True}])
-    for mid in range(1, 8):
+    for mid in range(1, 11):
         save(db, message(mid))
     with db.db:
         db.db.execute("UPDATE messages SET posted_at_ts=?", (time.time(),))
@@ -320,7 +320,7 @@ def test_missing_shadow_fields_do_not_starve_later_targets(tmp_path):
         {},
         time.monotonic() + 60,
     )
-    assert [r["message_id"] for r in db.metadata_watch_targets()] == [6, 7]
+    assert [r["message_id"] for r in db.metadata_watch_targets()] == [9, 10]
     assert get_message_metadata(db.db, 1)["reactions"] is None
     db.close()
 
@@ -400,34 +400,79 @@ def test_capture_metadata_preserves_semantic_generation_and_projections(tmp_path
 
 
 def test_watch_signal_latest_state_and_patient_message_boundaries(tmp_path):
+    """Watch set (2026-10-03): every root and reply of a thread active in
+    the last 30 days, any sender; older posts only while an open
+    pharmacist request points at them; deleted and archived never."""
     db = Ledger(str(tmp_path / "ledger.db"))
     with db.db:
         record_station_staff(db.db, [{"staff_id": 11, "is_self": True}])
-    for mid in range(1, 7):
+    for mid in range(1, 8):
         save(db, message(mid))
     now = time.time()
     with db.db:
-        db.db.execute("UPDATE messages SET sender_id=12,posted_at_ts=?", (now - 8 * 86400,))
+        db.db.execute("UPDATE messages SET sender_id=12,posted_at_ts=?", (now - 31 * 86400,))
         db.db.execute("UPDATE messages SET parent_id=3 WHERE message_id=1")
-        db.db.execute("UPDATE messages SET sender_id=11,posted_at_ts=? WHERE message_id=3",
-                      (now - 7 * 86400,))
-        db.db.execute("UPDATE messages SET sender_id=11,posted_at_ts=? WHERE message_id=4",
-                      (now - 7 * 86400 - 1,))
+        # an old root whose thread got a reply 29 days ago: both watched
+        db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1",
+                      (now - 29 * 86400,))
         db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=5")
         db.ensure_patient(2)
         db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
         db.db.execute("UPDATE messages SET project_id=2 WHERE message_id=6")
-    for mid in (1, 2, 5, 6):
+    for mid in (2, 5, 6, 7):
         db.artifact_add("signal_v1", json.dumps({
             "type": "pharmacist_request_unanswered", "state": "open",
             "evidence": {"message_ids": [mid]}}),
             project_id=2 if mid == 6 else 1, meta={"key": f"synthetic:{mid}"})
     db.artifact_add("signal_v1", '{"state":"resolved"}', project_id=1,
                     meta={"key": "synthetic:2"})
+    # 7: open request (30-min floor) first; then the active thread (1, 3);
+    # 2 resolved, 4 too old, 5 deleted, 6 archived
     assert [(row["message_id"], row["parent_id"])
-            for row in db.metadata_watch_targets(now=now)] == [(1, 3), (3, None)]
+            for row in db.metadata_watch_targets(now=now)] == [(7, None), (1, 3), (3, None)]
     db.close()
 
+
+def test_refresh_interval_follows_thread_activity(tmp_path):
+    """Stamps land after a post is written: a fresh thread is re-read
+    every 10 minutes, and a new reply brings an old thread back."""
+    db = Ledger(str(tmp_path / "ledger.db"))
+    for mid in (1, 2):
+        save(db, message(mid))
+    now = time.time()
+    with db.db:
+        db.db.execute("UPDATE messages SET posted_at_ts=?", (now - 5 * 86400,))
+        db.db.executemany(
+            "INSERT INTO message_metadata(message_id,source,content,checked_at,last_error) "
+            "VALUES(?,'shadow','{}',?,NULL)", [(1, now), (2, now)])
+    assert db.metadata_watch_targets(now=now + 6 * 3600 - 1) == []
+    assert len(db.metadata_watch_targets(now=now + 6 * 3600)) == 2   # 3-7 days: 6h
+    with db.db:
+        db.db.execute("UPDATE messages SET parent_id=1,posted_at_ts=? WHERE message_id=2",
+                      (now,))                                       # a reply arrives
+    assert [r["message_id"] for r in db.metadata_watch_targets(now=now + 600)] == [1, 2]
+    db.close()
+
+
+
+@pytest.mark.parametrize("reply_state", ["future", "deleted"])
+def test_refresh_thread_activity_excludes_future_and_deleted_replies(tmp_path, reply_state):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    now = time.time()
+    for mid in (1, 2):
+        save(db, message(mid))
+    with db.db:
+        db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1", (now - 31 * 86400,))
+        db.db.execute("UPDATE messages SET parent_id=1,posted_at_ts=?,body_state=? WHERE message_id=2",
+                      (now + 1 if reply_state == "future" else now,
+                       "deleted" if reply_state == "deleted" else "full"))
+    assert db.metadata_watch_targets(now=now) == []
+    if reply_state == "future":
+        with db.db:
+            db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1", (now,))
+        assert [r["message_id"] for r in db.metadata_watch_targets(now=now)] == [1]
+        assert [r["message_id"] for r in db.metadata_watch_targets(now=now + 1)] == [1, 2]
+    db.close()
 
 def test_shadow_routes_root_and_signal_reply_by_parent_id(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
@@ -471,8 +516,8 @@ def test_shadow_success_poll_and_failure_backoff_are_distinct(tmp_path):
             "INSERT INTO message_metadata(message_id,source,content,checked_at,last_error) "
             "VALUES(?,'shadow','{}',?,?)",
             [(1, now, None), (2, now, "network_error")])
-    assert db.metadata_watch_targets(now=now + 1799) == []
-    assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 1800)] == [1]
+    assert db.metadata_watch_targets(now=now + 599) == []
+    assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 600)] == [1]
     assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 21599)] == [1]
     assert [row["message_id"] for row in db.metadata_watch_targets(now=now + 21600)] == [1, 2]
     db.close()
@@ -542,7 +587,7 @@ def test_shadow_config_and_manual_selection(monkeypatch, cfg, manual, expected):
     monkeypatch.setattr(run_check, "stage_metadata_shadow", lambda adapter, store, result, deadline,
                         **kwargs: result.update(metadata_shadow={"mode": "shadow"}))
     result = {"errors": []}
-    store = SimpleNamespace(prune_reaction_actors=lambda: 0)
+    store = SimpleNamespace()
     run_check._run_metadata_shadow(None, store, result, 100, cfg, manual=manual)
     assert result["metadata_shadow"] == ({"mode": "shadow"} if expected == "shadow"
                                          else {"mode": "off", "reason": expected})

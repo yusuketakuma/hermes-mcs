@@ -90,7 +90,8 @@ def test_report_classifies_and_orients_time(db_path):
     assert rep["capture_to_shadow_lag"] == {"1h_6h": 1, "lt_1h": 1,
                                              "shadow_before_capture": 1}
     # due: 5 and 9-11 never shadowed, 1 past the interval, 6 past backoff
-    assert rep["watch"] == {"available": True, "due": 6,
+    # roots and replies of recently active threads are all watched (2026-10-03)
+    assert rep["watch"] == {"available": True, "due": 9,
                             "due_never_attempted": 4,
                             "oldest_shadow_check_age_s": 30 * 86400}
     assert "未読保持の証明ではありません" in rep["note"]

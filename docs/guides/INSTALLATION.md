@@ -475,7 +475,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
 | `metadata_shadow` | bool | `false` | 監視対象のスタンプを保存のみ再取得。未読保持の実証と監視集合・予算の運用合意後に限り有効化する。shadowの反応値はカード・digest・CLIの反応表示に出さず、CLIでは取得状態・日時・理由のみ参照できる |
 | `metadata_refresh_publish` | bool | `false` | `metadata_shadow`の再取得が成功した値をカード・digest・CLIの反応表示へ反映する。失敗時と保存済みのshadow値は反映しない。未読保持の実証と`mcs/views/metadata_report.py`での照合後に限り有効化する |
-| `metadata_actors` | bool | `false` | 自分の投稿のスタンプ押下者をID・種別・職種だけ取得する（氏名・アイコン・施設名は保存しない）。shadowと同じtickの予算内で最大2件。押下者の表示・保持の判断（#22-D2・D3）後に有効化する |
+| `metadata_actors` | bool | `false` | 直近7日に動きのあったスレッドの全投稿（先頭・返信）について、スタンプを押した人の氏名・所属・職種を取得し、Slack等のスレッド投稿に表示する（アイコンは保存しない）。最後の観測状態は無期限に保持し、取消観測時刻を残す（再押下時は解除、全操作履歴は復元しない）（#22-D2・D3、2026-10-03）。shadowと同じtickの予算内で最大4件 |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |

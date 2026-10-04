@@ -74,6 +74,15 @@ HEAD_SYNC_OVERLAP_S = 120
 # selection this long, so one broken karte cannot burn every tick's cap
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
 METADATA_SHADOW_INTERVAL_S = 30 * 60
+# Stamp re-read interval by the age of the thread's newest post (owner
+# 2026-10-03: stamps land after a post is written, on roots and replies
+# alike). Sized from live volume (~18 posts/day): about 65 GET/h, peak
+# under METADATA_SHADOW_TICK_CAP per 5-minute tick. Older than 30 days:
+# no longer re-read (the last observation is kept).
+METADATA_REFRESH_TIERS = ((2 * 3600, 10 * 60), (24 * 3600, 30 * 60),
+                          (3 * 86400, 2 * 3600), (7 * 86400, 6 * 3600),
+                          (30 * 86400, 24 * 3600))
+METADATA_SHADOW_TICK_CAP = 8
 METADATA_SHADOW_BACKOFF_S = 6 * 3600
 # 第2層: a complete actor set older than this is refetched even when the
 # post's counts and self flag look unchanged — actors can swap silently
@@ -426,6 +435,13 @@ class Ledger:
             observed_at REAL NOT NULL,
             PRIMARY KEY(message_id,actor_id,reaction_type))
         """)
+        actor_cols = {r[1] for r in self.db.execute(
+            "PRAGMA table_info(message_reaction_actors)")}
+        for col in ("actor_name", "organization", "removed_at"):
+            if col not in actor_cols:   # additive within the current schema
+                kind = "REAL" if col == "removed_at" else "TEXT"
+                self.db.execute(
+                    f"ALTER TABLE message_reaction_actors ADD COLUMN {col} {kind}")
         self.db.execute("""
           CREATE TABLE IF NOT EXISTS message_reaction_actor_fetch(
             message_id INTEGER PRIMARY KEY, complete_at REAL,
@@ -1412,21 +1428,23 @@ class Ledger:
                 self._save_message_metadata(m, source="capture", now=now)
 
     def _reaction_actor_watch_sql(self):
-        """Own root posts of the last 7 days in active rooms (第2層 watch set)."""
-        from mcs_signals import self_sender_id
+        """Roots and replies of threads active in the last 7 days in active
+        rooms (第2層 watch set) — stamps are pressed on both."""
         return ("""SELECT m.message_id FROM messages m
           JOIN patients p ON p.project_id=m.project_id
           WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?""",
-                self_sender_id(self.db))
+            AND m.posted_at_ts<=?
+            AND (SELECT MAX(x.posted_at_ts) FROM messages x
+                 WHERE x.project_id=m.project_id
+                   AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
+                   AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?""",
+                None)
 
-    def reaction_actor_targets(self, limit=2, *, now=None):
-        """Watched own roots whose captured reactions changed since the last
+    def reaction_actor_targets(self, limit=4, *, now=None):
+        """Watched posts whose captured reactions changed since the last
         complete actor fetch, or whose complete set expired; failures back off."""
         now = time.time() if now is None else now
-        watch, self_id = self._reaction_actor_watch_sql()
-        if self_id is None:
-            return []
+        watch, _ = self._reaction_actor_watch_sql()
         return self.db.execute(f"""
           SELECT m.message_id,m.project_id FROM messages m
           JOIN ({watch}) w ON w.message_id=m.message_id
@@ -1446,26 +1464,45 @@ class Ledger:
                  ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
                    OR f.complete_at<=? END)
           ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
-        """, (self_id, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
+        """, (now, now, now - 7*86400, now - METADATA_SHADOW_BACKOFF_S,
               now - REACTION_ACTORS_TTL_S, limit)).fetchall()
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
-        """Replace the current actor set only from a complete walk.
+        """Merge a complete walk into the kept actor history.
 
-        An incomplete walk records checked_at/last_error and keeps the
-        previous set — a partial list never proves a cancellation. Only
-        actor id, kind and profession are stored (no names/icons/facilities)."""
+        Retention is unlimited (#22-D3, 2026-10-03): a present actor keeps
+        its first observed_at and gets its current name, an actor missing
+        from a complete walk is marked removed_at (never deleted), and a
+        re-press clears it. An incomplete walk records checked_at /
+        last_error only — a partial list never proves a cancellation."""
         now = time.time() if now is None else now
         with self.db:
             if complete is True:
-                self.db.execute(
-                    "DELETE FROM message_reaction_actors WHERE message_id=?", (message_id,))
+                seen = [(r["actor_id"], r["reaction_type"]) for r in rows]
                 self.db.executemany("""
                   INSERT INTO message_reaction_actors(
-                    message_id,actor_id,reaction_type,profession,observed_at)
-                  VALUES(?,?,?,?,?)""", [
+                    message_id,actor_id,reaction_type,profession,observed_at,
+                    actor_name,organization,removed_at)
+                  VALUES(?,?,?,?,?,?,?,NULL)
+                  ON CONFLICT(message_id,actor_id,reaction_type) DO UPDATE SET
+                    profession=excluded.profession,
+                    actor_name=COALESCE(excluded.actor_name,actor_name),
+                    organization=COALESCE(excluded.organization,organization),
+                    observed_at=CASE WHEN removed_at IS NULL THEN observed_at
+                                     ELSE excluded.observed_at END,
+                    removed_at=NULL""", [
                     (message_id, r["actor_id"], r["reaction_type"],
-                     r.get("profession") or None, now) for r in rows])
+                     r.get("profession") or None, now, r.get("name") or None,
+                     r.get("organization") or None) for r in rows])
+                for actor, kind in self.db.execute(
+                        "SELECT actor_id,reaction_type FROM message_reaction_actors "
+                        "WHERE message_id=? AND removed_at IS NULL",
+                        (message_id,)).fetchall():
+                    if (actor, kind) not in seen:
+                        self.db.execute(
+                            "UPDATE message_reaction_actors SET removed_at=? WHERE "
+                            "message_id=? AND actor_id=? AND reaction_type=?",
+                            (now, message_id, actor, kind))
             self.db.execute("""
               INSERT INTO message_reaction_actor_fetch(
                 message_id,complete_at,checked_at,last_error) VALUES(?,?,?,?)
@@ -1475,27 +1512,19 @@ class Ledger:
             """, (message_id, now if complete is True else None, now,
                   None if complete is True else (error or "incomplete")))
 
-    def prune_reaction_actors(self, *, now=None) -> int:
-        """Drop actor rows for posts that left the watch set (deleted, archived, aged out)."""
+    def metadata_watch_targets(self, limit=METADATA_SHADOW_TICK_CAP, *, now=None):
+        """Every post — thread root and reply alike — due for a stamp
+        re-read, most overdue first. Stamps keep arriving after a post is
+        written, mostly while the thread is active, so the interval
+        follows the thread's newest post (METADATA_REFRESH_TIERS): a new
+        reply brings the whole thread back to short intervals. Unacked
+        delivered cards and open pharmacist requests are re-read at least
+        every 30 minutes whatever their age; failures back off."""
+        from mcs_signals import _thresholds
         now = time.time() if now is None else now
-        watch, self_id = self._reaction_actor_watch_sql()
-        if self_id is None:
-            return 0   # unknown identity: keep rows rather than wipe them
-        with self.db:
-            n = 0
-            for table in ("message_reaction_actors", "message_reaction_actor_fetch"):
-                n += self.db.execute(
-                    f"DELETE FROM {table} WHERE message_id NOT IN ({watch})",
-                    (self_id, now - 7*86400)).rowcount
-        return n
-
-    def metadata_watch_targets(self, limit=5, *, now=None):
-        """Oldest observations in the bounded active watch set, excluding backoff."""
-        from mcs_signals import _thresholds, self_sender_id
-        now = time.time() if now is None else now
-        # Evidence of the newest signal_v1 per key is expanded once (not per
-        # message); a NULL key never matches a "newer" row, so each stays latest.
-        return self.db.execute("""
+        tiers = " ".join(f"WHEN ?-act.last<{age} THEN {iv}"
+                         for age, iv in METADATA_REFRESH_TIERS)
+        return self.db.execute(f"""
           WITH latest AS MATERIALIZED (
             SELECT MAX(artifact_id) AS artifact_id FROM artifacts
             WHERE kind='signal_v1' AND json_valid(meta)
@@ -1509,7 +1538,7 @@ class Ledger:
             SELECT a.project_id,e.value AS message_id,
                    json_extract(a.content,'$.state') AS state
             FROM latest l JOIN artifacts a ON a.artifact_id=l.artifact_id,
-                 json_each(CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,
+                 json_each(CASE WHEN json_valid(a.content) THEN a.content ELSE '{{}}' END,
                            '$.evidence.message_ids') e
             WHERE json_valid(a.content)
               AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
@@ -1520,32 +1549,49 @@ class Ledger:
             WHERE s.state='open'
               OR (s.state='resolved' AND sm.posted_at_ts>=?
                 AND EXISTS(SELECT 1 FROM message_metadata cap,json_each(
-                  CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{}' END,
+                  CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{{}}' END,
                   '$.reactions.value') r
                   WHERE cap.message_id=sm.message_id AND cap.source='capture'
                     AND json_extract(r.value,'$.self_reacted')=1
-                    AND json_extract(r.value,'$.type') IN ('accepted','completed'))))
-          SELECT m.message_id,m.project_id,m.parent_id,COUNT(*) OVER() AS due_total FROM messages m
-          JOIN patients p ON p.project_id=m.project_id
-          LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
-          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND (md.checked_at IS NULL OR md.checked_at<=? -
-              CASE WHEN md.last_error IS NULL THEN ? ELSE ? END)
-            AND ((m.sender_id=? AND m.parent_id IS NULL AND m.posted_at_ts>=?)
-              OR EXISTS(SELECT 1 FROM notification_cards c
-                WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
-                  AND c.delivery_state='delivered'
-                  AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
-                    JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
-                    WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
-                      AND vm.source_generation=c.source_generation
-                      AND vm.shown=(SELECT shown FROM notification_view_manifests
-                        WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
-              OR m.message_id IN (SELECT message_id FROM watched))
-          ORDER BY COALESCE(md.checked_at,0),m.message_id LIMIT ?
+                    AND json_extract(r.value,'$.type') IN ('accepted','completed')))),
+          act AS (
+            SELECT project_id, COALESCE(parent_id,message_id) AS root,
+                   MAX(posted_at_ts) AS last FROM messages
+            WHERE body_state IS NOT 'deleted' AND posted_at_ts<=? GROUP BY 1,2),
+          w AS (
+            SELECT m.message_id,m.project_id,m.parent_id,
+                   md.checked_at,md.last_error,
+                   CASE {tiers} END AS tier,
+                   (EXISTS(SELECT 1 FROM notification_cards c
+                     WHERE c.project_id=m.project_id AND c.root_message_id=COALESCE(m.parent_id,m.message_id)
+                       AND c.delivery_state='delivered'
+                       AND NOT EXISTS(SELECT 1 FROM notification_acknowledgements a
+                         JOIN notification_view_manifests vm ON vm.manifest_id=a.manifest_id
+                         WHERE a.card_id=c.card_id AND a.withdrawn_at IS NULL
+                           AND vm.source_generation=c.source_generation
+                           AND vm.shown=(SELECT shown FROM notification_view_manifests
+                             WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
+                    OR m.message_id IN (SELECT message_id FROM watched)) AS priority
+            FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN act ON act.project_id=m.project_id
+              AND act.root=COALESCE(m.parent_id,m.message_id)
+            LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
+            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+              AND (m.posted_at_ts IS NULL OR m.posted_at_ts<=?)),
+          due AS (
+            SELECT *, CASE WHEN priority THEN MIN(COALESCE(tier,?),?) ELSE tier END AS iv
+            FROM w)
+          SELECT message_id,project_id,parent_id,COUNT(*) OVER() AS due_total FROM due
+          WHERE iv IS NOT NULL
+            AND (checked_at IS NULL OR checked_at<=? -
+                 CASE WHEN last_error IS NULL THEN iv ELSE ? END)
+          ORDER BY checked_at IS NOT NULL, COALESCE(checked_at+iv,iv), message_id
+          LIMIT ?
         """, (now - _thresholds(self.db)["fyi_max_age_d"] * 86400,
-              now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
-              self_sender_id(self.db), now - 7*86400, limit)).fetchall()
+              now, *[now] * len(METADATA_REFRESH_TIERS), now,
+              METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_INTERVAL_S,
+              now, METADATA_SHADOW_BACKOFF_S, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -2466,7 +2512,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
 
 
 def reaction_actor_summary(db, message_id, *, now=None) -> dict:
-    """押下者の職種×種別件数・本人の有無・取得状態を氏名なしで返す。
+    """押下者の職種×種別件数・氏名・本人の有無・取得状態を返す（#22-D2で氏名表示）。
 
     state: complete | stale (expired or reactions changed since) |
     failed (last walk incomplete; counts are the last complete set) |
@@ -2474,7 +2520,7 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     from mcs_signals import self_sender_id
     now = time.time() if now is None else now
     out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
-           "counts": {}, "self_included": None}
+           "counts": {}, "self_included": None, "actors": []}
     with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
         f = db.execute("SELECT complete_at,checked_at,last_error FROM "
                        "message_reaction_actor_fetch WHERE message_id=?",
@@ -2484,11 +2530,20 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
         out.update(complete_at=f[0], checked_at=f[1])
         if f[0] is not None:
             self_id = self_sender_id(db)
-            for actor, kind, prof in db.execute(
-                    "SELECT actor_id,reaction_type,profession FROM message_reaction_actors "
-                    "WHERE message_id=?", (message_id,)):
+            columns = {r[1] for r in db.execute(
+                "PRAGMA table_info(message_reaction_actors)")}
+            name_col = "actor_name" if "actor_name" in columns else "NULL"
+            org_col = "organization" if "organization" in columns else "NULL"
+            current = " AND removed_at IS NULL" if "removed_at" in columns else ""
+            for actor, kind, prof, name, org in db.execute(
+                    "SELECT actor_id,reaction_type,profession," + name_col + "," + org_col +
+                    " FROM message_reaction_actors WHERE message_id=?" + current +
+                    " ORDER BY observed_at,actor_id", (message_id,)):
                 by_kind = out["counts"].setdefault(prof or "", {})
                 by_kind[kind] = by_kind.get(kind, 0) + 1
+                out["actors"].append({"reaction_type": kind, "name": name,
+                                      "profession": prof, "organization": org,
+                                      "self": self_id is not None and actor == self_id})
                 if self_id is not None and actor == self_id:
                     out["self_included"] = True
             if self_id is not None and out["self_included"] is None:

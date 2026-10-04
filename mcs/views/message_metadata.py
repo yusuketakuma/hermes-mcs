@@ -187,33 +187,93 @@ def get_metadata_shadow_status(db, mid, *, as_of=None) -> dict:
             "age_as_of": _timestamp(as_of), "last_error": metadata["last_error"]}
 
 
-def self_reaction_text(metadata) -> str:
-    """本人のスタンプまたは取得状態を表示し、観測日時を押下時刻と区別する。"""
+# MCS stamp -> chat emoji. Unicode stand-ins for the official stamp
+# images (the images themselves are not fetched); unknown future types
+# stay visible as ❔ rather than being dropped.
+STAMP_EMOJI = {"viewed": "👀", "accepted": "🙆", "thanked": "🙏",
+               "good": "👍", "completed": "✅"}
+
+
+def stamp_counts(metadata) -> dict | None:
+    """{emoji: count} in STAMP_EMOJI order — for one's own post the
+    count excludes one's own stamp. None when unfetched or invalid."""
     reactions = metadata["reactions"]
     if reactions is None:
-        return "MCS: スタンプ未取得"
+        return None
+    own = metadata.get("own_post")
+    out: dict = {}
+    for r in sorted(reactions, key=lambda r: list(STAMP_EMOJI).index(r["type"])
+                    if r["type"] in STAMP_EMOJI else len(STAMP_EMOJI)):
+        n = r["count"] - (1 if own and r["self_reacted"] else 0)
+        if n > 0:
+            e = STAMP_EMOJI.get(r["type"], "❔")
+            out[e] = out.get(e, 0) + n
+    return out
+
+
+def self_stamps(metadata) -> str:
+    """Emoji of the stamps one pressed oneself on this post ("" if none)."""
+    return "".join(dict.fromkeys(
+        STAMP_EMOJI.get(r["type"], "❔")
+        for r in metadata["reactions"] or [] if r["self_reacted"]))
+
+
+def stamp_line(metadata) -> str:
+    """One compact line for a single post: emoji counts, own stamps and
+    the observation time (never the press time)."""
+    counts = stamp_counts(metadata)
+    if counts is None:
+        return "MCS スタンプ未取得"
     when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    labels = list(dict.fromkeys(reaction_label(r["type"]) for r in reactions
-                                if r["self_reacted"]))
-    value = ("本人 " + "/".join(labels) if labels else
-             "スタンプ0件" if not reactions else "本人反応は記録されていません")
-    return (f"MCS: {value}（観測 {when:%m-%d %H:%M} JST）"
+    mine = self_stamps(metadata)
+    text = "MCS " + (" ".join(f"{e}{n}" for e, n in counts.items())
+                     or ("他者なし" if mine else "スタンプなし"))
+    if mine:
+        text += f"（自分 {mine}）"
+    return (text + f" · 観測 {when:%m-%d %H:%M}"
             + ("・再取得失敗" if metadata["last_error"] else ""))
+
+
+def self_reaction_text(metadata) -> str:
+    """既存呼出元にも絵文字と観測日時を持つスタンプ行を返す。"""
+    return stamp_line(metadata)
 
 
 def own_post_reaction_text(metadata) -> str:
-    """自分の投稿への他者反応を種別ごとの件数で表示する（氏名・押下者は出さない）。"""
-    reactions = metadata["reactions"]
-    if reactions is None:
-        return "MCS: スタンプ未取得"
-    when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
-    others: dict = {}
-    for r in reactions:
-        label = reaction_label(r["type"])
-        others[label] = others.get(label, 0) + max(0, r["count"] - r["self_reacted"])
-    value = "/".join(f"{k}{n}" for k, n in others.items() if n) or "他者0件"
-    return (f"MCS: 自分の投稿への反応 {value}（観測 {when:%m-%d %H:%M} JST）"
-            + ("・再取得失敗" if metadata["last_error"] else ""))
+    """自投稿の互換入口で本人分を除いたスタンプ行を返す。"""
+    return stamp_line(dict(metadata, own_post=True))
+
+
+ACTOR_NAMES_MAX = 12
+
+
+def actor_line(summary) -> str | None:
+    """Who pressed which stamp (#22-D2: names shown), one line grouped by
+    emoji. None until a walk completed once. A stale or failed walk is
+    labelled with its last complete time — never presented as current."""
+    if not summary or summary.get("complete_at") is None:
+        return None
+    groups: dict = {}
+    for a in summary["actors"]:
+        label = "自分" if a["self"] else (a["name"] or "氏名不明")
+        if a["profession"] and not a["self"]:
+            label += f"（{a['profession']}）"
+        groups.setdefault(STAMP_EMOJI.get(a["reaction_type"], "❔"), []).append(label)
+    shown, parts = 0, []
+    for e in [*STAMP_EMOJI.values(), "❔"]:
+        names = groups.get(e, [])
+        take = names[:max(0, ACTOR_NAMES_MAX - shown)]
+        shown += len(take)
+        if take:
+            parts.append(f"{e} " + "・".join(take)
+                         + (f" 他{len(names) - len(take)}名" if len(names) > len(take) else ""))
+        elif names:
+            parts.append(f"{e} {len(names)}名")
+    text = "押した人: " + (" / ".join(parts) or "なし")
+    if summary["state"] != "complete":
+        when = datetime.fromtimestamp(summary["complete_at"], JST)
+        text += f"（{when:%m-%d %H:%M} 時点）"
+    return text
 
 
 def others_reaction_count(metadata) -> int | None:

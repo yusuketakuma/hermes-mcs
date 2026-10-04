@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
-from ledger import Ledger, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S
+from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
 from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
@@ -219,8 +219,19 @@ def _health(ledger, result: dict, status: str,
         "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
         "WHERE state IN ('pending','failed') AND next_try IS NOT NULL"
     ).fetchone()
-    held_reasons = {
-        row["reason"]: row["count"] for row in ledger.db.execute(f"""
+    retired = notify_cards.retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    # Preserve retired receipts while excluding only events whose sealed
+    # batches all belong to retired transports from live held work.
+    on_retired = (
+        "o.route='interactive' AND EXISTS(SELECT 1 FROM "
+        "notification_intent_batches b WHERE b.event_id=o.event_id "
+        f"AND b.transport IN ({marks})) AND NOT EXISTS(SELECT 1 FROM "
+        "notification_intent_batches b WHERE b.event_id=o.event_id "
+        f"AND b.transport NOT IN ({marks}))") if retired else "0"
+    held_reasons = {}
+    retired_held = 0
+    for row in ledger.db.execute(f"""
           SELECT CASE
             WHEN code IN ('send_outcome_unknown','restore_text_unverified',
                           'payload_or_progress_invalid','delivery_changed',
@@ -231,12 +242,17 @@ def _health(ledger, result: dict, status: str,
               THEN code
             WHEN code IS NULL THEN 'not_recorded'
             ELSE 'unknown'
-          END AS reason, COUNT(*) AS count
+          END AS reason, retired, COUNT(*) AS count
           FROM (
-            SELECT json_extract({json_or_null('progress')},'$.hold_reason') AS code
-            FROM notify_outbox WHERE state='failed' AND next_try IS NULL
-          ) GROUP BY reason ORDER BY reason
-        """)}
+            SELECT json_extract({json_or_null('o.progress')},'$.hold_reason') AS code,
+                   ({on_retired}) AS retired
+            FROM notify_outbox o WHERE state='failed' AND next_try IS NULL
+          ) GROUP BY reason, retired ORDER BY reason
+        """, retired * 2):
+        if row["retired"]:
+            retired_held += row["count"]
+        else:
+            held_reasons[row["reason"]] = row["count"]
     held = sum(held_reasons.values())
     if held:
         notify_state = "incomplete"
@@ -266,7 +282,7 @@ def _health(ledger, result: dict, status: str,
     """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
     coll = _collection(result)
     free_mb = _free_mb()
-    cards_health = notify_cards.health_cards(ledger)
+    cards_health = notify_cards.health_cards(ledger, cfg)
     # Itemized attention block (2026-09-30): 'degraded' alone did not
     # say WHERE — 12 extract_qc rows sat at attempts=0 for ~8h and two
     # unsettled deliveries aged ~31h while everything read "incomplete".
@@ -364,6 +380,7 @@ def _health(ledger, result: dict, status: str,
                    "pending": outbox["c"],
                    "held": held,
                    "held_reasons": held_reasons,
+                   "retired_held": retired_held,
                    "oldest_age_s": (round(now - outbox["o"], 1)
                                     if outbox["o"] else 0)},
         "semantic_jobs": {"pending": sem["c"],
@@ -1036,7 +1053,7 @@ def stage_karte_summary(adapter, ledger, result, deadline,
 # ---------- stage: derived data ----------
 
 # 第2層 actor walks per tick, inside whatever the shadow budget left
-REACTION_ACTORS_TICK_CAP = 2
+REACTION_ACTORS_TICK_CAP = 4
 
 
 def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
@@ -1051,10 +1068,10 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
              "published": 0, "deferred": 0, "errors": [],
              "budget_s": round(max(0, shadow_deadline - started), 3),
              "elapsed_s": 0, "deferred_reasons": {},
-             "interval_s": METADATA_SHADOW_INTERVAL_S,
+             "interval_s": "tiered",
              "backoff_s": METADATA_SHADOW_BACKOFF_S}
     result["metadata_shadow"] = stats
-    targets = ledger.metadata_watch_targets(limit=5)
+    targets = ledger.metadata_watch_targets()
     stats["due"] = targets[0]["due_total"] if targets else 0
     stats["deferred"] = max(0, stats["due"] - len(targets))
     if stats["deferred"]:
@@ -1130,12 +1147,6 @@ def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False
     if reason:
         result["metadata_shadow"] = {"mode": "off", "reason": reason}
         return
-    try:   # housekeeping: actor rows of posts that left the watch set
-        pruned = ledger.prune_reaction_actors()
-        if pruned:
-            result["reaction_actors_pruned"] = pruned
-    except sqlite3.Error as e:
-        result["errors"].append(f"reaction_actors_prune: {type(e).__name__}")
     # a non-bool switch is off: publishing or actor walks need an explicit true
     stage_metadata_shadow(adapter, ledger, result, deadline,
                           publish=cfg.get("metadata_refresh_publish") is True,

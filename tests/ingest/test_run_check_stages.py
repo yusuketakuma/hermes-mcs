@@ -780,6 +780,67 @@ def test_health_groups_only_safe_held_reason_codes(tmp_path, monkeypatch, progre
         db.close()
 
 
+@pytest.mark.parametrize(("cfg", "expected_held", "expected_retired"), [
+    ({"notify": {"interactive": "slack"}}, 3, 1),
+    ({"notify": {"interactive": "discord"}}, 3, 1),
+    ({"notify": {"interactive": False}}, 4, 0),
+    (None, 4, 0),
+])
+def test_health_retired_holds_preserve_live_reason_evidence(
+        tmp_path, monkeypatch, cfg, expected_held, expected_retired):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check, "_config", lambda: pytest.fail("health must use supplied config"))
+    try:
+        for route, transport in (("interactive", "discord"),
+                                 ("interactive", "slack"),
+                                 ("interactive", None), ("text", "discord")):
+            eid = db.outbox_add("new_messages", None, {})
+            db.outbox_hold(eid, "send_outcome_unknown")
+            db.db.execute("UPDATE notify_outbox SET route=? WHERE event_id=?", (route, eid))
+            if transport:
+                db.db.execute(
+                    "INSERT INTO notification_intent_batches("
+                    "event_id,frozen_payload,payload_hash,route_epoch,transport,sealed_at) "
+                    "VALUES(?,'{}','synthetic',1,?,1000)", (eid, transport))
+        db.db.commit()
+        health = run_check._health(db, {"errors": [], "notify": {}}, "ok", cfg=cfg)
+        assert health["notify"]["held"] == expected_held
+        assert health["notify"]["retired_held"] == expected_retired
+        assert health["notify"]["held_reasons"] == {"send_outcome_unknown": expected_held}
+        assert db.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE state='failed'").fetchone()[0] == 4
+        assert health["overall"] == "degraded"
+    finally:
+        db.close()
+
+
+def test_health_retired_only_hold_no_longer_degrades_live_delivery(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    try:
+        eid = db.outbox_add("new_messages", None, {})
+        db.outbox_hold(eid, "send_outcome_unknown")
+        db.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (eid,))
+        db.db.execute(
+            "INSERT INTO notification_intent_batches("
+            "event_id,frozen_payload,payload_hash,route_epoch,transport,sealed_at) "
+            "VALUES(?,'{}','synthetic',1,'discord',1000)", (eid,))
+        db.db.commit()
+        health = run_check._health(db, {"errors": [], "notify": {}}, "ok",
+                                   cfg={"notify": {"interactive": "slack"}})
+        assert health["notify"]["held"] == 0
+        assert health["notify"]["held_reasons"] == {}
+        assert health["notify"]["retired_held"] == 1
+        assert health["notify"]["state"] == "ok"
+        assert health["overall"] == "ok"
+        assert "notification_held" not in health["state_reasons"]
+        assert db.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()[0] == "failed"
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize(("previous", "last_ok"), [
     ({}, None),
     ({"overall": "ok", "at": 100.0}, 100.0),
@@ -1761,6 +1822,23 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     assert "run_deadline_exceeded" in health["state_reasons"]
     with sqlite3.connect(data / "ledger.db") as db:
         assert db.execute("SELECT status FROM runs").fetchone()[0] == "partial"
+
+
+
+def test_backup_health_database_failure_remains_machine_readable(monkeypatch):
+    import sqlite3
+    import mcs_backup
+    import mcs_setup
+    monkeypatch.setattr(mcs_setup, "_backup_config", lambda setting: [])
+    monkeypatch.setattr(mcs_backup, "load_policy", lambda path: (object(), True))
+
+    def fail(*args):
+        raise sqlite3.DatabaseError("synthetic database failure")
+
+    monkeypatch.setattr(mcs_backup, "status", fail)
+    assert run_check._backup_health(
+        {"backup": {"enabled": True, "policy": "synthetic-unused"}}, 1000) == {
+            "state": "failed", "reasons": ["backup_io_or_policy_failed"]}
 
 
 def test_crash_before_config_load_reports_backup_unknown(

@@ -1,0 +1,15 @@
+{
+  "category": "breaking",
+  "title": "スタンプを押した人の氏名をSlackに表示し、記録を無期限に保持",
+  "summary": "スレッドの各投稿で、スタンプ行の下に押した人の氏名と職種を表示します。押下者ごとの最後の観測状態を無期限に保持し、取消を観測した時刻を残します。再押下時には取消状態を解除し、過去の全操作履歴は復元しません。",
+  "upgrade": "metadata_actors=trueの環境で反映されます。反映にはHermesではgateway、独立実行では対応adapterの再起動が必要です。既定offのままで、実機有効化・再起動は別作業です。氏名・所属を新たに保存するため、押下者表に列を加法で追加します(統合後のschemaは9)。アイコンは保存しません。カード本体には氏名を出しません。最後の完全取得から24時間を過ぎた・取得に失敗した場合は時点を併記します。",
+  "details": [
+    "押下者一覧の氏名と所属を保存し、完全取得で見えなくなった押下はremoved_atを記録する。再押下でremoved_atを消し、observed_atを更新する。prune処理は削除した。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/core/ledger.py",
+    "mcs/views/message_metadata.py",
+    "mcs/notify/notify_render.py"
+  ]
+}

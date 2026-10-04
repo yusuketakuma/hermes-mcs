@@ -11,7 +11,7 @@ import notify_digest
 import notify_render
 import notify_views
 from message_metadata import (
-    get_message_metadata, get_metadata_shadow_status, self_reaction_text)
+    get_message_metadata, get_metadata_shadow_status, stamp_line)
 from notify_testkit import (
     CFG, NOW, _add_request, _card, _delivered_card, _dispatch, _intent, _msg, _patient,
     led, pinned_clock,
@@ -37,7 +37,7 @@ def test_old_snapshot_and_shadow_are_unfetched(led):
     with sqlite3.connect(":memory:") as old:
         meta = get_message_metadata(old, 100)
         assert meta["reactions"] is None
-        assert self_reaction_text(meta) == "MCS: スタンプ未取得"
+        assert stamp_line(meta) == "MCS スタンプ未取得"
         shadow = get_metadata_shadow_status(old, 100, as_of=NOW)
         assert shadow["state"] == "not_attempted"
         assert shadow["reactions_observed_at"] is None
@@ -47,7 +47,7 @@ def test_old_snapshot_and_shadow_are_unfetched(led):
     _metadata(led, 100, [_react()], source="shadow")
     assert get_message_metadata(led.db, 100)["reactions"] is None
     _metadata(led, 100, [])
-    assert "スタンプ0件" in self_reaction_text(get_message_metadata(led.db, 100))
+    assert stamp_line(get_message_metadata(led.db, 100)).startswith("MCS スタンプなし · 観測 ")
     _metadata(led, 100, None)
     assert get_message_metadata(led.db, 100)["reactions"] is None
 
@@ -73,13 +73,19 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
               error="reaction_error")
     content = notify_render._card_content(led.db, card)
     footer = "\n".join(item["text"] for item in content["footer"])
-    assert "MCS: 本人 完了/未知" in footer and "観測" in footer
+    assert "MCS ✅1 ❔1 · 自分 1投稿" in footer
     assert "再取得失敗" in footer and "@" not in footer
     assert content["toggles"] == {"acked": False, "has_tasks": False, "assigned": False}
     assert (content["pages"], content["shown"]) == (
         before_content["pages"], before_content["shown"])
     assert notify_render._source_fp(led.db, card) == before_source
-    assert notify_render._card_body_text(led.db, card, {"shown": "[100]"})[1] == before_body
+    # stamps change only each post's own MCS line, never the rest
+    after_body = notify_render._card_body_text(led.db, card, {"shown": "[100]"})[1]
+
+    def strip(t):
+        return [ln for ln in t.split("\n") if not ln.startswith("MCS ")]
+    assert strip(after_body) == strip(before_body)
+    assert "MCS ✅1 ❔1（自分 ✅❔） · 観測 " in after_body
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
@@ -227,7 +233,7 @@ def test_stamps_and_busy_footer_fit_card_budget(
         assert notify_render._footer_len(content["footer"]) == \
             spec_mod._footer_cost(content["footer"])[1]
         footer = "\n".join(item["text"] for item in content["footer"])
-        assert "MCS: 本人 見ました/承知" in footer
+        assert "MCS 👀" in footer and "自分 " in footer and "再取得失敗" in footer
         assert f"{page + 1}/{first['pages']} ページ" in footer
         _, body = notify_render._card_body_text(
             led.db, card, {"shown": json.dumps(content["shown"])}, max_chars=None)
@@ -249,14 +255,16 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
     assert view["head"] == ["未確認 2件（うち担当者あり 0件）",
                             "MCSで本人反応あり 1件（確認状態は変えません）"]
     assert "MCSスタンプも承認・作業完了を保証せず" in view["notes"][0]
-    assert "本人 承知" not in view["items"][0]["text"]
-    assert "本人 承知" in view["items"][1]["text"]
+    assert "🙆" not in view["items"][0]["text"]
+    assert "MCS 🙆1 · 自分 1投稿" in view["items"][1]["text"]
     assert "未確認" in view["items"][1]["text"]
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
 def test_shadow_watch_uses_current_ack_generation(led, pinned_clock):
     _delivered_card(led)
+    with led.db:   # older than the activity tiers: only the unacked card keeps it watched
+        led.db.execute("UPDATE messages SET posted_at_ts=?", (NOW - 40 * 86400,))
     manifest = led.db.execute(
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id DESC LIMIT 1"
     ).fetchone()

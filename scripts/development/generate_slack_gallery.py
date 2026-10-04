@@ -149,7 +149,7 @@ def notification():
     y = s.card(x, y)
     s.line(x, y + 8, 1028, y + 8)
     s.text(x, y + 45, "確認: 田中さん / 担当: 田中さん", 18, MUTED)
-    s.text(x, y + 77, "MCS: 本人 見ました（観測 10-03 09:00 JST）", 18, GREEN)
+    s.text(x, y + 77, "MCS 👀5 🙆2 · 自分 2投稿", 18, GREEN)
     s.actions(x, y + 105, confirmed=True)
     s.text(x, y + 171, "MCSで開く", 19, "#1264a3")
     s.text(x, y + 204, "本文・添付はスレッドに投稿済み", 17, MUTED)

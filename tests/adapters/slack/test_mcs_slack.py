@@ -874,6 +874,19 @@ def test_slack_rejected_update_falls_back_to_a_new_reply(led, error):
     assert w.client.thread_posts[-1]["text"] == "変更後の本文"
 
 
+@pytest.mark.parametrize("status,error", [(429, "ratelimited"),
+                                          (200, "invalid_blocks")])
+def test_slack_rate_limited_update_never_posts_a_duplicate(led, status, error):
+    """Regression: a 429 on chat.update fell back to chat.postMessage,
+    leaving the old reply plus a notifying duplicate (mass re-render)."""
+    w, spec, replies = _rewrite_world(led)
+    posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
+    w.client.update_failure = FakeSlackError(status, error)
+    out = _rewrite(w, spec, "変更後の本文", our_ts)
+    assert out == {"result": "not_sent", "error_code": error}
+    assert len(w.client.thread_posts) == posted
+
+
 def test_slack_unknown_update_outcome_never_posts_a_second_reply(led):
     w, spec, replies = _rewrite_world(led)
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]

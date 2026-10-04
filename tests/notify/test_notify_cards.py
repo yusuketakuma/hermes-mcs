@@ -611,8 +611,9 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    assert "職員（薬剤師・薬局Y）: 本文" in text
-    assert "職員: 本文" in text
+    # header -> (summary) -> stamps -> posted body, in that order
+    assert "08:40 職員（薬剤師・薬局Y）\nMCS スタンプ未取得\n本文" in text
+    assert "08:41 職員\nMCS スタンプ未取得\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -2656,6 +2657,55 @@ def test_task_status_rejects_non_ephemeral_mismatch(led, tmp_path):
         CFG, now=NOW)
     assert out["outcome"] == "rejected" \
         and out["error"] == "origin_mismatch"
+
+
+def test_switched_away_transport_leaves_live_health(led, tmp_path,
+                                                   monkeypatch):
+    """Regression: after notify.interactive moved from discord to slack,
+    a discord attempt left 'unknown' and its held event kept health
+    degraded forever. They stay recorded (never auto-settled) but count
+    only as retired."""
+    import run_check
+    _seed_thread(led)
+    ev = _intent(led)
+    _dispatch(led, ev)
+    _begin(led, _latest_render(led), n=1)
+    led.db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL "
+                   "WHERE event_id=?", (ev["event_id"],))
+    led.db.execute("INSERT OR IGNORE INTO notification_intent_batches("
+                   "event_id,frozen_payload,payload_hash,route_epoch,"
+                   "sealed_at,transport,scope_json) VALUES(?,?,?,?,?,?,?)",
+                   (ev["event_id"], "{}", "h", 1, NOW, "discord", "{}"))
+    led.db.commit()
+    slack = {"notify": {**CFG["notify"], "interactive": "slack"}}
+    assert notify_cards.health_cards(led, CFG)["attempts_unsettled"] == 1
+    h = notify_cards.health_cards(led, slack)
+    assert (h["attempts_unsettled"], h["retired_unsettled"]) == (0, 1)
+    assert h["unsettled"] == []
+    assert [i["transport"] for i in h["retired_items"]] == ["discord"]
+    assert h["retired_items"][0]["resolve_scope"]["channel_id"]
+    # a claim left on the retired transport is disclosed, not an error
+    root = notify_cards.data_root(led)
+    notify_cards.ensure_dirs(root)
+    claim = os.path.join(notify_cards.notify_dirs(root)["discord_render"],
+                         "x.json.claimed")
+    open(claim, "w").close()
+    os.utime(claim, (NOW - 3600, NOW - 3600))
+    for cfg, live in ((slack, 0), (CFG, 1)):
+        result = {"errors": []}
+        fixed = notify_cards.recover(led, cfg, result)
+        assert fixed["missing_claimed"] == live
+        assert bool(result["errors"]) == bool(live)
+    os.remove(claim)
+    assert notify_cards.health_cards(led)["attempts_unsettled"] == 1
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(tmp_path / "h.json"))
+    for cfg, held, retired in ((CFG, 1, 0), (slack, 0, 1)):
+        health = run_check._health(led, {"errors": [], "notify": {}}, "ok", cfg=cfg)
+        assert (health["notify"]["held"],
+                health["notify"]["retired_held"]) == (held, retired)
+        assert (health["notify"]["state"] == "incomplete") == bool(held)
+    assert led.db.execute("SELECT state FROM notification_delivery_attempts"
+                          ).fetchone()[0] == "granted"
 
 
 def test_health_cards_lists_unsettled_attempts_for_resolve(led, tmp_path):
