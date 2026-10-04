@@ -25,7 +25,8 @@ def test_check_runs_around_the_clock(tmp_path):
     runner = tmp_path / "runner.sh"
     body = body.replace("__DATA__", str(tmp_path)) \
         .replace("__REPO__", str(tmp_path)) \
-        .replace("__PYTHON__", str(tmp_path / "py"))
+        .replace("__PYTHON__", str(tmp_path / "py")) \
+        .replace("__WATCHDOG_GRACE__", "60")
     (tmp_path / "py").write_text(
         f'#!/bin/sh\n[ "$1" = "-" ] && exec {sys.executable} "$@"\n'
         'echo ran >> "$0.log"\n')
@@ -46,7 +47,8 @@ def test_check_incomplete_alert_names_its_cause(tmp_path):
     runner = tmp_path / "runner.sh"
     runner.write_text(body.replace("__DATA__", str(tmp_path))
                       .replace("__REPO__", str(tmp_path))
-                      .replace("__PYTHON__", str(tmp_path / "py")))
+                      .replace("__PYTHON__", str(tmp_path / "py"))
+                      .replace("__WATCHDOG_GRACE__", "60"))
     # run_check stub exits 0; the health heredoc runs on a real python
     (tmp_path / "py").write_text(
         f'#!/bin/sh\n[ "$1" = "-" ] && exec {sys.executable} "$@"\nexit 0\n')

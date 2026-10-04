@@ -112,8 +112,20 @@ def send(root: str, target: str) -> int:
     return 1
 
 
+def _coded(call, *args, errors=(ValueError,), **kwargs):
+    """Surface the fixed, secret-free code of a known raise site.
+
+    Only wraps call sites whose exceptions carry fixed codes; arbitrary
+    native exceptions still print just their type name in main().
+    """
+    try:
+        return call(*args, **kwargs)
+    except errors as exc:
+        raise config.ConfigError(str(exc)) from None
+
+
 def initialize(root, transport, *, yes=False):
-    config.connector_settings(root, transport, require_interactive=False)
+    _coded(config.connector_settings, root, transport, require_interactive=False)
     path = config.credentials_path(root, transport)
     if os.path.lexists(path):
         config.load_credentials(root, transport)
@@ -126,7 +138,7 @@ def initialize(root, transport, *, yes=False):
             raise config.ConfigError("credential_entry_requires_terminal") from None
         fields = ["bot_token", *(["app_token"] if transport == "slack" else [])]
         value = {key: getpass.getpass(transport + " " + key + ": ").strip() for key in fields}
-        config.validate_credentials(value, transport)
+        _coded(config.validate_credentials, value, transport)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".standalone-init-", dir=path.parent)
     try:
@@ -182,10 +194,14 @@ def check(root: str) -> int:
         serving = config.interactive(cfg) == transport
         config.tokens(root, transport, socket=serving)
         if serving:
-            config.settings(cfg, root, transport)
-    if "lineworks" in config.transports(root):
+            # The connector builds its settings with connector_settings,
+            # which is stricter than config.load: validate the same rules
+            # here so check/run fail with the code instead of crash-looping.
+            _coded(config.connector_settings, root, transport)
+    if "lineworks" in _coded(config.transports, root):
         from adapters.lineworks.__main__ import check as lineworks_check
-        lineworks_check(root)
+        from adapters.lineworks.client import ClientError
+        _coded(lineworks_check, root, errors=(ClientError,))
     problem = _sdk_problem() if used else None
     if problem:
         print(problem, file=sys.stderr)

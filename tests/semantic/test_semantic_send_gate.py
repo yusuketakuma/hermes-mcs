@@ -134,3 +134,41 @@ def test_semantic_chunks_output_and_part_bodies_are_pinned():
     assert parts == expected
     assert bodies == ["■経過\n・合成事実一\n・合成事実", "二"]
     assert "".join(bodies) == "■経過\n・合成事実一\n・合成事実二"
+
+
+def test_stale_summary_rejected_by_gate_render_state_and_block(
+        tmp_path, monkeypatch):
+    """One shared predicate: a stale-flagged summary is unpublishable for
+    the send gate, the render snapshot, and the rendered body alike."""
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    raw = db.db.execute(
+        "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+    notify_flush._semantic_gate(db, event, payload)
+    assert notify_flush._semantic_render_state(db, raw)
+    assert "要約（自動検査済）" in notify_flush._format_event(db, raw)[0]
+
+    summary = db.db.execute(
+        "SELECT artifact_id,meta FROM artifacts "
+        "WHERE kind='semantic_summary' AND message_id=1 "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    meta = dict(json.loads(summary["meta"]), stale=True)
+    db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                  (json.dumps(meta), summary["artifact_id"]))
+    db.db.commit()
+    with pytest.raises(notify_flush._StaleSend, match="summary_stale"):
+        notify_flush._semantic_gate(db, event, payload)
+    assert notify_flush._semantic_render_state(db, raw) == ()
+    assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
+
+    # Unpublishable meta short-circuits before the whole-thread bundle.
+    calls = []
+    real = semantic.thread_bundle
+    monkeypatch.setattr(semantic, "thread_bundle",
+                        lambda *a, **k: calls.append(a) or real(*a, **k))
+    assert notify_flush._semantic_render_state(db, raw) == ()
+    assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
+    assert calls == []
+    db.close()

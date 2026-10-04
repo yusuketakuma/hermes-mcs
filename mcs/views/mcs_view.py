@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader, reaction_actor_summary
+from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict
@@ -27,8 +28,11 @@ UNKNOWN_TIME = -(2**63)
 WARNINGS = ["history_completeness_unverified", "snapshot_may_lag_live_state"]
 REASONS = frozenset({
     "schema_error", "network_error", "http_error", "session_expired", "no_token",
-    "pages_exceeded", "unread_capped", "thread_incomplete", "replies_missing", "body_incomplete",
-    "download_failed", "download_too_large", "url_not_allowed", "db_write_failed",
+    "forbidden", "bad_snapshot_ts", "mark_result_unknown", "bootstrap_error", "response_too_large",
+    "pages_exceeded", "unread_capped", "thread_incomplete", "replies_missing",
+    "parent_body_incomplete",
+    "download_failed", "download_too_large", "download_empty", "disk_full",
+    "url_not_allowed", "db_write_failed",
     "deadline_exceeded", "fs_OSError", "fs_PermissionError", "fs_FileNotFoundError",
     "OperationalError", "IntegrityError", "DatabaseError",
 })
@@ -59,8 +63,9 @@ class View:
             # reader declares the schema generations it understands —
             # v6 added patients.is_archived, v7 messages.notified_at
             # v8 adds capture/shadow message metadata (read-compatible)
+            # v9 adds bounded acquisition job reasons (read-compatible)
             if self.db.execute("PRAGMA user_version").fetchone()[0] \
-                    not in (5, 6, 7, 8):
+                    not in (5, 6, 7, 8, 9):
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
@@ -147,6 +152,10 @@ class View:
         row["reaction_actors"] = (reaction_actor_summary(
             self.db, mid, now=self.meta["generated_at"])
             if row["is_self_sender"] else None)
+        # #24 x 22-F: care-team physicians whose 見ました is not observed
+        row["physician_viewed"] = (physician_viewed_status(
+            self.db, pid, mid, now=self.meta["generated_at"])
+            if row["is_self_sender"] else None)
         return row
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):
@@ -186,6 +195,11 @@ class View:
         return page
 
     def _status(self, pid, limit, cursor):
+        from ledger import job_reason_class, job_reason_code
+
+        reason_column = ("reason_code" if any(
+            col[1] == "reason_code" for col in self.db.execute(
+                "PRAGMA table_info(fetch_jobs)")) else "NULL")
         sql = """SELECT project_id AS _key,project_id,fetch_state,fetch_reason,
           last_complete_fetch AS last_successful_unread_fetch,last_seen,
           coverage_ts,history_floor,history_target,history_page FROM patients WHERE 1=1"""
@@ -194,6 +208,8 @@ class View:
             sql += " AND project_id=?"
             params.append(pid)
         page = self._page(sql, params, ["project_id"], ["status", pid], limit, cursor)
+        from ledger_audit import guard_status
+        page["ledger_guards"] = guard_status(self.db)
         for row in page["items"]:
             pid = row["project_id"]
             row["fetch_reason"] = _reason(row["fetch_reason"])
@@ -219,8 +235,29 @@ class View:
               SELECT kind,state,count(*) AS count,max(attempts) AS max_attempts,min(next_try) AS next_try
               FROM fetch_jobs WHERE project_id=? GROUP BY kind,state
             """, (pid,))]
+            job_reasons = {}
+            for kind, state, code, count in self.db.execute(f"""
+              SELECT kind,state,{reason_column},COUNT(*) FROM fetch_jobs
+              WHERE project_id=? GROUP BY kind,state,{reason_column}
+            """, (pid,)):
+                counts = job_reasons.setdefault((kind, state), {})
+                code = job_reason_code(code) or "not_recorded"
+                counts[code] = counts.get(code, 0) + count
+            row["known_gaps"] = []
             for job in row["jobs"]:
-                job["reason"] = "not_recorded"
+                counts = job_reasons[(job["kind"], job["state"])]
+                job["reason"] = next(iter(counts)) if len(counts) == 1 else "multiple"
+                job["reason_codes"] = counts
+                job["reason_classes"] = {}
+                for code, count in counts.items():
+                    reason_class = job_reason_class(code)
+                    job["reason_classes"][reason_class] = (
+                        job["reason_classes"].get(reason_class, 0) + count)
+                    if job["state"] == "failed":
+                        row["known_gaps"].append({
+                            "kind": job["kind"], "reason": code,
+                            "reason_class": reason_class, "count": count,
+                            "status": "verification_failed"})
             row["attachment_states"] = [dict(r) for r in self.db.execute("""
               SELECT a.state,count(*) AS count FROM attachments a JOIN messages m USING(message_id)
               WHERE m.project_id=? GROUP BY a.state
@@ -813,11 +850,54 @@ class View:
 
     def read(self, kind, project=None, limit=50, cursor=None, query=None,
              message_id=None, request_id=None, status=None, command_id=None,
-             payload_hash=None, since=None, until=None, scope="aggregate"):
-        projectless = ("status", "read_model")
+             payload_hash=None, since=None, until=None, scope="aggregate",
+             dataset=None, item_id=None, publication=False, unread_only=False,
+             include_chat=False, max_age_s=None):
+        projectless = ("status", "read_model", "cross_lists", "response_observations")
         if (project is not None and not requests.positive(project)) \
                 or (kind not in projectless and project is None):
             raise ValueError("project_required")
+        if (type(include_chat) is not bool
+                or include_chat and (kind != "project_metadata" or dataset not in (
+                    "medication_periods", "observation_items", "observation_values"))):
+            raise ValueError("bad_comparison_scope")
+        if kind == "response_observations":
+            if type(publication) is not bool:
+                raise ValueError("bad_publication")
+            from response_observation_view import get_response_observation_list
+            result = get_response_observation_list(
+                self.db, enabled=publication,
+                projects=None if project is None else [project],
+                limit=limit, cursor=cursor, max_age_s=max_age_s)
+            return {"snapshot": self.meta, "project_id": project, **result,
+                    "warnings": list(dict.fromkeys(WARNINGS + result["warnings"]))}
+        if kind in ("project_metadata", "cross_lists"):
+            if not isinstance(dataset, str):
+                raise ValueError("bad_dataset")
+            if type(publication) is not bool or type(unread_only) is not bool:
+                raise ValueError("bad_publication")
+            if not publication:
+                result = {"state": "publication_disabled", "rows": []}
+            elif kind == "project_metadata":
+                if not isinstance(project, int):
+                    raise ValueError("project_required")
+                from project_metadata import DATASETS
+                from project_metadata_view import get_project_metadata
+                if dataset not in DATASETS:
+                    raise ValueError("bad_dataset")
+                result = get_project_metadata(
+                    self.db, project, dataset, item_id=item_id,
+                    include_chat=include_chat,
+                    now=self.meta["generated_at"])
+            else:
+                from cross_lists_view import get_cross_list
+                if dataset not in ("mentioned", "bookmarked") or project is not None:
+                    raise ValueError("bad_cross_list_scope")
+                result = get_cross_list(
+                    self.db, dataset, enabled=True, unread_only=unread_only,
+                    now=self.meta["generated_at"])
+            return {"snapshot": self.meta, "warnings": WARNINGS,
+                    "project_id": project, "dataset": dataset, **result}
         handlers = {
             **dict.fromkeys(("search", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
@@ -856,7 +936,7 @@ def _parser():
                         default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -880,7 +960,7 @@ def _parser():
             # card_resolve derives its project set from the stored
             # render/coverage — a --project input would be meaningless
             # and wrong; notification_receipt keys on command_id only
-            projectless = (kind in ("status", "signals",
+            projectless = (kind in ("status", "signals", "cross_lists", "response_observations",
                                     "notification_receipt", "read_model")
                            or (kind == "control" and index == len(parsers) - 1))
             child.add_argument("--project", type=int,
@@ -891,13 +971,28 @@ def _parser():
                 # machine output defaults to COMPLETE records — an
                 # explicit --limit bounds honestly via 'truncated'
                 child.add_argument("--limit", type=int, default=None)
-            elif kind not in ("evidence", "receipt", "notification_receipt",
+            elif kind not in ("evidence", "receipt", "notification_receipt", "project_metadata", "cross_lists",
                             "control") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 if kind != "signals":
                     child.add_argument("--cursor")
         if kind == "search":
             sub.add_argument("--query", required=True)
+        if kind == "response_observations":
+            sub.add_argument("--publication", action="store_true")
+            sub.add_argument("--max-age-s", type=float)
+        if kind in ("project_metadata", "cross_lists"):
+            from project_metadata import DATASETS
+            sub.add_argument("--dataset", required=True, choices=(
+                DATASETS if kind == "project_metadata" else ("mentioned", "bookmarked")))
+            sub.add_argument("--publication", action="store_true",
+                             help="explicit local read publication; acquisition remains separate")
+            if kind == "project_metadata":
+                sub.add_argument("--item-id", type=int)
+                sub.add_argument("--include-chat", action="store_true",
+                                 help="show distinct unconfirmed chat candidates without merging")
+            else:
+                sub.add_argument("--unread-only", action="store_true")
         if kind == "stats":
             group = sub.add_mutually_exclusive_group(required=True)
             group.add_argument("--stat")

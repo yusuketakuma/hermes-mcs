@@ -7,7 +7,6 @@ from pathlib import Path
 from mcs_util import HOME
 
 HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
-HERMES_SCRIPTS = os.path.expanduser("~/.hermes/scripts")
 STANDALONE_LABEL = "ai.mcs.standalone"
 
 

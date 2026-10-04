@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -76,6 +77,11 @@ def freshness_deadline(cfg: dict) -> int:
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)
 
 
+def _is_code(value) -> bool:
+    """Producer reason code (run_check emits lowercase snake_case only)."""
+    return isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value) is not None
+
+
 def classify_health(path: str, now: float, deadline_s: int) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
@@ -112,6 +118,43 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
               "disk_free_mb": h.get("disk_free_mb")}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
+    run = h.get("run")
+    if isinstance(run, dict):
+        overshoot = run.get("overshoot_s")
+        report["run"] = run
+        if (report["status"] == "ok" and isinstance(overshoot, (int, float))
+                and _finite_number(overshoot)
+                and overshoot > 0):
+            report["status"] = "degraded"
+    # explain non-ok from the producer's own codes/counters (never text):
+    # absent or malformed fields stay unknown (None), never "no reason"
+    reasons = h.get("state_reasons")
+    reasons = (reasons if isinstance(reasons, list)
+               and all(_is_code(r) for r in reasons) else None)
+    if report["status"] == "stale":
+        # the stale file's codes describe its own run, not the current
+        # staleness: keep them labelled as recorded, the cause unknown
+        report["recorded_state_reasons"] = reasons
+        reasons = None
+    report["state_reasons"] = reasons
+    last_ok = h.get("last_ok_at")
+    report["last_ok_at"] = (last_ok if _finite_number(last_ok)
+                            and last_ok >= 0 else None)
+    notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
+    held = notify.get("held_reasons")
+    report["held_reasons"] = (
+        held if isinstance(held, dict)
+        and all(_is_code(k) and _finite_number(v) and v >= 0
+                for k, v in held.items())
+        else None)
+    # every queue key always present: missing block == malformed == None
+    report["oldest_age_s"] = {
+        q: (block.get("oldest_age_s")
+            if isinstance(block, dict)
+            and _finite_number(block.get("oldest_age_s")) else None)
+        for q, block in (("notify", h.get("notify")),
+                         ("semantic_jobs", h.get("semantic_jobs")),
+                         ("extract_qc_jobs", h.get("extract_qc_jobs")))}
     # dedup stamp: unread_at only when that age is what made it stale
     report["evidence_at"] = (binding if report["status"] == "stale"
                              else h["at"])
@@ -215,12 +258,18 @@ def main(argv: list | None = None) -> int:
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
     if report["alert"]:
         age = report.get("age_s")
+        reasons = report.get("state_reasons")
         print("mcs health: {status} (overall={overall} "
-              "health_at={health_at} age_s={age} deadline_s={dl})".format(
+              "health_at={health_at} age_s={age} deadline_s={dl} "
+              "reasons={reasons} last_ok_at={last_ok})".format(
                   status=report["status"],
                   overall=report.get("overall"),
                   health_at=report.get("health_at"),
-                  age=age, dl=report["deadline_s"]))
+                  age=age, dl=report["deadline_s"],
+                  reasons=(",".join(reasons) or "none")
+                  if reasons is not None else "unknown",
+                  last_ok=report.get("last_ok_at")
+                  if report.get("last_ok_at") is not None else "unknown"))
     if report["disk_alert"]:
         print("mcs disk: {} (free_mb={})".format(
             "low" if report["disk_low"] else "recovered",

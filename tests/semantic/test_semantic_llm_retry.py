@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-import conftest as test_guard
+import mcs_test_guard as test_guard
 import semantic
 from semantic_testkit import _FakeJev, _cfg, _seeded
 

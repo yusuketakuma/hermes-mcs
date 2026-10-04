@@ -32,6 +32,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -65,7 +66,6 @@ BACKUP_DIR = os.path.join(DATA, "backups")
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 WRAPPER = os.path.join(SCRIPTS_DIR, "mcs_update.sh")
-RECOVERY_TOOL = os.path.expanduser("~/.mcs-recovery/mcs_recover.py")
 
 RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
 # v1.0.2-1.0.7 KeepAlive drainer: stopped by quiesce, never restarted —
@@ -78,8 +78,8 @@ INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
 REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed")
 T_INSTALL = 3600
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
-# install.sh-owned labels the updater must never touch (S5).
-EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
+# S5: only the labels listed above are touched; install.sh-owned
+# ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
 SEMVER_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$")
@@ -121,7 +121,6 @@ ESCALATE_REALERT_S = 6 * 3600
 GIT_LOCK_MIN_AGE_S = 600  # younger .git/*.lock may belong to a live op
 RUN_LOCK_TRIES = 40       # 30s x 40 = 20min > RUN_DEADLINE_S (S21)
 RUN_LOCK_INTERVAL = 30
-UPDATE_OPS = ("ops.update_apply", "ops.update_rollback")
 _UPDATE_ENV_STRIP = (
     "_HERMES_GATEWAY", "_HERMES_GATEWAY_BREAKAWAY",
     "HERMES_SUPERVISED_CHILD", "HERMES_S6_SUPERVISED_CHILD",
@@ -425,6 +424,9 @@ def precheck_local(cfg: dict) -> list[str]:
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
     import mcs_setup
+    # an owned idle watchdog whose explicit selection drifted is repaired by
+    # the post-merge `services`; anything else still blocks before merge
+    errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO))
     if cfg.get("runtime_mode") == "standalone":
         if mcs_setup._standalone_py_problem(cfg):
             errors.append("standalone_interpreter_unavailable")
@@ -532,8 +534,12 @@ def precheck_tag(tag: str) -> list[str]:
                 finally:
                     con.close()
             except sqlite3.Error:
-                cur_ver = 0
-            if new_ver < cur_ver:
+                # unknown is not zero: never report a bump from 0
+                cur_ver = None
+                errors.append("schema_version_unknown")
+            if cur_ver is None:
+                pass
+            elif new_ver < cur_ver:
                 errors.append(f"schema_downgrade:{cur_ver}->{new_ver}")
             elif new_ver > cur_ver:
                 errors.append(f"schema_bump:{cur_ver}->{new_ver}")
@@ -714,8 +720,22 @@ def _plan(tag, cfg, state, current, target_sha) -> dict:
         "schema_bump": bump[0] if bump else None,
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
-        "notes": [] if noop else upgrade_notes(tag, cur_tag),
+        "notes": [] if noop else upgrade_notes(tag, cur_tag) + _recovery_notes(cfg, blockers, reinstall),
     }
+
+
+def _recovery_notes(cfg, blockers, reinstall) -> list[str]:
+    """The operator step for a recovery runtime the update cannot fix itself."""
+    import mcs_setup
+    notes = []
+    if "recovery_python" not in cfg and any(b.startswith("recovery_runtime:") for b in blockers):
+        notes.append("recovery_runtime — config.json の recovery_python に checkout 外の安全な"
+                     " interpreter の絶対パスを設定して再実行。所有済みで停止中の watchdog は"
+                     " merge 後の services が置き換えます")
+    if reinstall and mcs_setup.recovery_repair_pending(cfg):
+        notes.append("recovery_python と配備済み watchdog が不一致 — apply に"
+                     " --install-arg=--no-recovery を付けます（merge 後の services が置き換えます）")
+    return notes
 
 
 def _standalone_target_supported(ref):
@@ -1393,6 +1413,19 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             or any(a not in INSTALL_ARGS for a in install_args):
         print("apply: bad reinstall options")
         return 2
+    cfg = load_config()
+    import mcs_setup
+    runtime_errors = mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO)
+    if reinstall and "--no-recovery" not in install_args \
+            and mcs_setup.recovery_repair_pending(cfg):
+        # install.sh stops on that drift after merge; services repairs it
+        runtime_errors.append("recovery_runtime: selection repair pending — "
+                              "add --install-arg=--no-recovery")
+    if runtime_errors:
+        # Even acquiring update.lock or writing local_checks is a mutation.
+        # Keep an existing interrupted journal untouched for safe recovery.
+        print("apply: " + "; ".join(runtime_errors) + " — nothing changed")
+        return 1
     state = load_state()
     if state.get("_corrupt"):
         print("update_state corrupt — refusing to act")
@@ -1400,7 +1433,6 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     if state.get("applying") or state.get("stages"):
         return recover_interrupted()
 
-    cfg = load_config()
     run_fd = upd_fd = None
     quiesced = False
     rollback_failed = False
@@ -1644,8 +1676,22 @@ def _reconcile_membership(desired: dict) -> list[str]:
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
                     (desired or {}).get("cron", [])}
-    owned_scripts = {s for _, _, s in mcs_setup.CRON_JOBS}
-    owned_scripts |= set(desired_cron)
+    known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
+    current = {}
+    try:
+        fd = os.open(MANIFEST_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as manifest:
+            st = os.fstat(manifest.fileno())
+            if (stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
+                    and stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 262144):
+                current = json.loads(manifest.read(262145))
+    except (OSError, ValueError, RecursionError):
+        pass
+    evidence = list(desired_cron.values())
+    if isinstance(current, dict) and isinstance(current.get("cron"), list):
+        evidence += current["cron"]
+    desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
+                     for script in desired_cron if script}
     if mcs_runtime.standalone(cfg):
         pass        # launchd agents (below) carry the schedule; no hermes cron
     elif mcs_setup._hermes_ok(hermes):
@@ -1663,8 +1709,15 @@ def _reconcile_membership(desired: dict) -> list[str]:
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
                 script = (fields.get("Script") or "").strip()
-                if script and script in owned_scripts \
-                        and script not in desired_cron:
+                actual = os.path.normpath(os.path.join(SCRIPTS_DIR, script))
+                owned = any(
+                    isinstance(row, dict) and row.get("id") == jid
+                    and isinstance(row.get("script"), str) and row["script"]
+                    and actual == os.path.normpath(os.path.join(SCRIPTS_DIR, row["script"]))
+                    for row in evidence)
+                owned |= (os.path.isabs(script) and os.path.basename(script) in known_scripts
+                          and actual == os.path.join(SCRIPTS_DIR, os.path.basename(script)))
+                if script and owned and actual not in desired_paths:
                     rr = subprocess.run(
                         [hermes, "cron", "remove", jid],
                         capture_output=True, text=True, timeout=30)
@@ -2530,6 +2583,14 @@ def cmd_check() -> int:
             impact = impact_summary(cur_sha, tag) if cur_sha else []
         except UpdateError:
             impact = []
+    # HEAD already containing the newest tag (a checkout ahead of it) is
+    # not "newer"; only an exit-0 ancestry proof suppresses — missing
+    # objects (128) or a git failure keep the notice/auto path
+    newer = bool(tag and sha and sha != cur_sha)
+    if newer and cur_sha:
+        with suppress(UpdateError):
+            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
+                         ).returncode != 0
     # --- serialized state update + decision --------------------------
     picked = auto = None
     held = False
@@ -2552,7 +2613,7 @@ def cmd_check() -> int:
                               "current_tag": cur_tag,
                               "current_sha": cur_sha,
                               "first_seen": time.time()})
-            need_notify = cur_sha and sha != cur_sha \
+            need_notify = cur_sha and newer \
                 and state.get("notified_at") != tag
             if need_notify:
                 lines = [f"[MCS] 新しいバージョン {tag} を検出しました"
@@ -2572,8 +2633,7 @@ def cmd_check() -> int:
                 state.setdefault("executed", {})[cid] = {
                     "result": result, "at": time.time()}
             picked = pendings[0] if pendings else None
-            if not picked and mode == "auto" and tag and sha \
-                    and sha != cur_sha:
+            if not picked and mode == "auto" and newer:
                 delay = upd.get("auto_delay_h", 24)
                 first_seen = state.get("first_seen") or 0
                 if time.time() - first_seen >= delay * 3600 \

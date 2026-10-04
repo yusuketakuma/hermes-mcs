@@ -6,16 +6,17 @@ import pytest
 import semantic_assessment as assessment
 import semantic_jev as jev
 from semantic_runtime import RuntimeGuardError
-from semantic_testkit import _ledger
+from semantic_testkit import _ledger, _message
 
 
 SCFG = {"model": jev.JEV_MODEL, "match_threshold": 0.7,
         "nomatch_threshold": 0.3, "calibration_version": "test-v1"}
 
 
-def _bundle_and_facts():
+def _bundle_and_facts(ledger=None):
     body = ("アムロジピンを開始します。"
             "ワルファリンは中止します。")
+    context_body = "用量の確認をお願いします。"
     members = [{
         "project_id": 1, "message_id": 10, "parent_id": None,
         "revision": "rev-10", "posted_at": "2026-09-20T00:00:00+09:00",
@@ -25,7 +26,7 @@ def _bundle_and_facts():
         "project_id": 1, "message_id": 11, "parent_id": 10,
         "revision": "rev-11", "posted_at": "2026-09-20T00:01:00+09:00",
         "sender": {"id": 2, "type": "clinician"}, "role": "context",
-        "body_original": "用量の確認をお願いします。",
+        "body_original": context_body,
     }]
 
     def fact(fact_id, statement, quote, drug, status, polarity):
@@ -48,6 +49,9 @@ def _bundle_and_facts():
         fact("f-stop", "ワルファリンを中止するイベント",
              "ワルファリンは中止", "warfarin", "cancelled", "negated"),
     ]
+    if ledger is not None:
+        ledger.save_messages([_message(10, body=body),
+                              _message(11, parent=10, body=context_body)], project_id=1)
     return {
         "project_id": 1, "root_id": 10, "source_fingerprint": "source-v1",
         "members": members,
@@ -81,7 +85,7 @@ class _EventJev:
 
 def test_each_medication_event_has_own_detail_target_and_review_finding(tmp_path):
     db = _ledger(tmp_path)
-    bundle, facts, source = _bundle_and_facts()
+    bundle, facts, source = _bundle_and_facts(db)
     client = _EventJev()
     try:
         result = assessment.evaluate_medication_events(
@@ -112,7 +116,7 @@ def test_each_medication_event_has_own_detail_target_and_review_finding(tmp_path
 
 def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
     db = _ledger(tmp_path)
-    bundle, facts, _source = _bundle_and_facts()
+    bundle, facts, _source = _bundle_and_facts(db)
     one_fact = facts[:1]
     first_client = _EventJev(fail_dimension="status")
     try:
@@ -154,7 +158,7 @@ def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
 def test_confident_detail_disagreement_blocks_audit_without_rewriting_fact(tmp_path):
     import semantic
     db = _ledger(tmp_path)
-    bundle, facts, _ = _bundle_and_facts()
+    bundle, facts, _ = _bundle_and_facts(db)
     facts[0]["status"] = "execution_reported"
     try:
         result = assessment.evaluate_medication_events(
@@ -170,7 +174,7 @@ def test_confident_detail_disagreement_blocks_audit_without_rewriting_fact(tmp_p
 
 def test_invalid_confidence_is_unassessed_without_persisting_detail(tmp_path):
     db = _ledger(tmp_path)
-    bundle, facts, _ = _bundle_and_facts()
+    bundle, facts, _ = _bundle_and_facts(db)
     try:
         result = assessment.evaluate_medication_events(
             db, bundle, 10, facts, _EventJev(confidence=10**1000),

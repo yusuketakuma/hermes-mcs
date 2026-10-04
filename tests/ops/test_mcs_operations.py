@@ -315,6 +315,29 @@ def test_update_apply_unresolvable_tag_rejected(tmp_path, monkeypatch):
     db.close()
 
 
+def test_update_apply_unresolvable_base_rejected(tmp_path, monkeypatch):
+    """A HEAD that fails to resolve pre-tx rejects the receipt — never a
+    committed approval with base_sha null, and no in-tx git retry."""
+    mcs_update = _update_env(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: "b" * 40)
+
+    def boom():
+        calls.append(1)
+        raise mcs_update.UpdateError("x")
+    monkeypatch.setattr(mcs_update, "current_version", boom)
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        receipt = mcs_requests.apply_command(
+            db, _update_command("ops.update_apply", tag="v1.2.3"))
+        assert receipt["outcome"] == "rejected"
+        assert receipt["error"] == "update_base_unresolvable"
+        assert "base_sha" not in receipt
+        assert calls == [1]                  # pre-tx only
+    finally:
+        db.close()
+
+
 def test_update_apply_pinned_sha_skips_remote(tmp_path, monkeypatch):
     """A pre-pinned target_sha must not trigger any remote lookup —
     neither pre-tx nor in-tx."""

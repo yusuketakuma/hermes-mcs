@@ -1,0 +1,308 @@
+{
+ "contract": "mcs-ext-export/2",
+ "fixed_now": 1790000000.5,
+ "fixture_set": "ext_contract_c0",
+ "fixtures": [
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/01-basic.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/02-signals-truncated.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/03-heartbeat.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/04-no-facts.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/05-split-1of3.json",
+   "profile": "c1",
+   "set": "05-split"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/05-split-2of3.json",
+   "profile": "c1",
+   "set": "05-split"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/05-split-3of3.json",
+   "profile": "c1",
+   "set": "05-split"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/06-int-valued-float.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/07-message-body.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/08-body-truncated.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/09-no-body-states.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/10-patient-coverage.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/11-history-floor.json",
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "accepted/12-fixed-point-float.json",
+   "profile": "c1"
+  },
+  {
+   "code": "forbidden_field:statement",
+   "expect": "reject",
+   "path": "rejected/01-forbidden-statement.json",
+   "profile": "c1"
+  },
+  {
+   "code": "forbidden_field:sender",
+   "expect": "reject",
+   "path": "rejected/02-forbidden-sender.json",
+   "profile": "c1"
+  },
+  {
+   "code": "record_field_not_exportable",
+   "expect": "reject",
+   "path": "rejected/03-fact-not-exportable.json",
+   "profile": "c1"
+  },
+  {
+   "code": "record_field_not_exportable",
+   "expect": "reject",
+   "path": "rejected/04-message-not-exportable.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_integrity_invalid",
+   "expect": "reject",
+   "path": "rejected/05-integrity-sha.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_integrity_invalid",
+   "expect": "reject",
+   "path": "rejected/06-integrity-count.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_integrity_invalid",
+   "expect": "reject",
+   "path": "rejected/07-integrity-id.json",
+   "profile": "c1"
+  },
+  {
+   "code": "snapshot_generation_mixed",
+   "expect": "reject",
+   "path": "rejected/08-generation-mixed.json",
+   "profile": "c1"
+  },
+  {
+   "code": "sink_scope_not_aggregate",
+   "expect": "reject",
+   "path": "rejected/09-scope-not-aggregate.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_fields_invalid",
+   "expect": "reject",
+   "path": "rejected/10-envelope-fields.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_id_invalid",
+   "expect": "reject",
+   "path": "rejected/11-envelope-id-format.json",
+   "profile": "c1"
+  },
+  {
+   "code": "record_type_not_accepted:stat",
+   "expect": "reject",
+   "path": "rejected/12-type-stat.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_coverage_missing",
+   "expect": "reject",
+   "path": "rejected/13-coverage-missing.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_meta_missing",
+   "expect": "reject",
+   "path": "rejected/14-meta-missing.json",
+   "profile": "c1"
+  },
+  {
+   "code": "forbidden_field:sender_name",
+   "expect": "reject",
+   "path": "rejected/16-body-sender-name.json",
+   "profile": "c1"
+  },
+  {
+   "code": "body_hash_invalid",
+   "expect": "reject",
+   "path": "rejected/17-body-hash-mismatch.json",
+   "profile": "c1"
+  },
+  {
+   "code": "body_too_large",
+   "expect": "reject",
+   "path": "rejected/18-body-over-8kib.json",
+   "profile": "c1"
+  },
+  {
+   "code": "patient_coverage_state_invalid",
+   "expect": "reject",
+   "path": "rejected/19-fetch-state-enum.json",
+   "profile": "c1"
+  },
+  {
+   "code": "body_format_invalid",
+   "expect": "reject",
+   "path": "rejected/20-body-format-html.json",
+   "profile": "c1"
+  },
+  {
+   "code": "patient_coverage_floor_invalid",
+   "expect": "reject",
+   "path": "rejected/21-history-floor-negative.json",
+   "profile": "c1"
+  },
+  {
+   "code": "message_body_state_invalid",
+   "expect": "reject",
+   "path": "rejected/22-body-state-null.json",
+   "profile": "c1"
+  },
+  {
+   "code": "body_message_required",
+   "expect": "reject",
+   "path": "rejected/23-body-orphan.json",
+   "profile": "c1"
+  },
+  {
+   "code": "part_invalid",
+   "expect": "reject",
+   "path": "rejected/24-part-invalid.json",
+   "profile": "c1"
+  },
+  {
+   "code": "envelope_too_large",
+   "expect": "reject",
+   "generated_only": true,
+   "id": "rejected/15-envelope-too-large",
+   "path": null,
+   "profile": "c1"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "journal": "acked",
+   "path": "receipts/receive-accepted.json",
+   "profile": "receipt"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "journal": "rejected",
+   "path": "receipts/receive-rejected.json",
+   "profile": "receipt"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "journal": "held",
+   "path": "receipts/receive-mismatch-sha.json",
+   "profile": "receipt"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "journal": "withdrawn",
+   "path": "receipts/delete-deleted.json",
+   "profile": "receipt"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "journal": "delete_held",
+   "path": "receipts/delete-failed.json",
+   "profile": "receipt"
+  },
+  {
+   "code": "receipt_fields_invalid",
+   "expect": "reject",
+   "journal": null,
+   "path": "receipts/bad-unknown-field.json",
+   "profile": "receipt"
+  },
+  {
+   "code": null,
+   "expect": "accept",
+   "path": "withdraw/01-basic.json",
+   "profile": "withdraw"
+  },
+  {
+   "code": "withdraw_reason_invalid",
+   "expect": "reject",
+   "path": "withdraw/02-reason-enum.json",
+   "profile": "withdraw"
+  },
+  {
+   "code": "withdraw_fields_invalid",
+   "expect": "reject",
+   "path": "withdraw/03-free-text.json",
+   "profile": "withdraw"
+  },
+  {
+   "code": "withdraw_too_large",
+   "expect": "reject",
+   "path": "withdraw/04-over-4kib.json",
+   "profile": "withdraw"
+  }
+ ],
+ "receipt_contract": "mcs-ext-receipt/1",
+ "withdraw_contract": "mcs-ext-withdraw/1"
+}

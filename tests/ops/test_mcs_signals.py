@@ -314,6 +314,26 @@ def test_rx_period_lapsed_window_bound(led):
     assert res["open"] == 0
 
 
+@pytest.mark.parametrize("end,raw,stype", [
+    ("2026-09-24", "9/1-9/24", "rx_period_expiry"),
+    ("2026-09-20", "9/1-9/20", "rx_period_lapsed")])
+def test_rx_period_skips_archived_room_and_resolves(led, end, raw, stype):
+    """アーカイブ済みの部屋は期間表現シグナルの候補にならず、既存の
+    open は project_archived として解消される。"""
+    _msg(led.db, 1)
+    _extract_v1(led.db, 1, "h1",
+                [{"start": "2026-09-01", "end": end, "raw": raw}])
+    assert _ev(led)["open"] == 1
+    assert mcs_signals.current_open(led.db)["items"][0]["type"] == stype
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    res = _ev(led, now=NOW + 1)
+    assert (res["open"], res["resolved"]) == (0, 1)
+    assert mcs_signals.current_open(led.db)["items"] == []
+    row = next(c for c in mcs_signals._latest_signal_states(led.db).values()
+               if c["type"] == stype)
+    assert row["resolution"]["cause"] == "project_archived"
+
+
 # --- lifecycle (append-only transitions) ---
 
 def test_signal_resolves_when_condition_clears(led):
@@ -729,6 +749,24 @@ def test_policy_requires_provenance(led):
     assert _ev(led)["open"] == 0          # provenance missing -> default
     _policy(led, {"req_age_days": 7})
     assert _ev(led)["open"] == 1          # approved policy applies
+
+
+
+def test_policy_view_requires_str_provenance(led):
+    """current_open reports the same policy _thresholds applies: a latest
+    row with a truthy non-str command_id is not shown as active."""
+    _policy(led, {"req_age_days": 7})
+    assert mcs_signals.current_open(led.db)["policy"] is not None
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('signal_policy_v1',NULL,?,?,0)",
+        (json.dumps({"command_id": 1, "actor": "x",
+                     "policy": {"req_age_days": 9}}), "{}"))
+    view = mcs_signals.current_open(led.db)
+    assert view["policy"] is None
+    assert view["thresholds"] == mcs_signals._thresholds(led.db)
+    assert view["thresholds"]["req_age_days"] == \
+        mcs_signals.THRESHOLDS["req_age_days"][0]
 
 
 def test_dismiss_corrupt_signal_row(led):
@@ -1349,7 +1387,8 @@ def test_urgency_high_escalates_to_immediate(led, monkeypatch):
                         lambda: {"signals": {"notify": True}})
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     text, _ = notify_flush._format_event(led, ev)
-    assert "urgency:high" in text
+    import structured_view
+    assert structured_view.URGENCY_LABEL["llm"] in text
 
 
 def test_tier_override_config(led):

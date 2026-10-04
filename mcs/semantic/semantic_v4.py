@@ -125,6 +125,78 @@ def current_v4(ledger, mid: int, content_hash: str):
              "meta": json.loads(row["meta"])} if row else None)
 
 
+def stage_request_following(ledger, bundle, doc, *, policy):
+    """Persist a current-source candidate; never publish, change Loop IDs or mint grants."""
+    import hashlib
+    import semantic
+    import semantic_facts as sf
+    from semantic_projection import project_v2_doc_legacy, project_v2_facts
+
+    clean = sf.validate_facts_doc(doc)
+    current = semantic.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
+        raise sf.ContractError("request_following_source_stale")
+    source = clean["source"]
+    member = next((m for m in current["members"]
+                   if str(m["message_id"]) == source["message_id"]), None)
+    if member is None or member["body_state"] == "deleted" \
+            or source["revision"] != member["revision"] \
+            or source["source_fingerprint"] != current["source_fingerprint"] \
+            or source["content_quality"] != (
+                "full" if member["body_state"] == "full" else "partial") \
+            or source["body_codepoints"] != len(member["body_original"]) \
+            or source["content_hash"] != hashlib.sha256(
+                member["body_original"].encode("utf-8")).hexdigest():
+        raise sf.ContractError("request_following_source_mismatch")
+    if any(member["body_original"][e["start"]:e["end"]] != e["quote"]
+           for e in clean["evidence"]):
+        raise sf.ContractError("request_following_evidence_mismatch")
+    if not isinstance(policy, str) or not policy.strip():
+        raise sf.ContractError("request_following_policy_required")
+    candidate = {
+        "source": clean["source"], "source_doc_hash": _doc_hash(doc),
+        "doc_hash": _doc_hash(clean),
+        "projection": project_v2_doc_legacy(clean, request_details=True),
+        "loop_facts": project_v2_facts(clean, request_details=True),
+        "promotion_ready": False,
+        "required_promotion_gates": [
+            "request_detail_audit", "loop_identity_owner_decision",
+            "extraction_generation_owner_decision", "human_200_g6", "calibration"],
+    }
+    record_stage(ledger, current["project_id"], member["message_id"], current["source_fingerprint"],
+                 policy, "request_following_candidate", "PENDING", candidate=candidate)
+    return candidate
+
+
+def extract_request_following(llm_fn, ledger, bundle, message_id, *, policy,
+                              deadline=None, chunk_size=3000, retry_coverage=False):
+    """Extract into a separate candidate generation and source-bound PENDING staging."""
+    import semantic
+    import semantic_facts as sf
+    from semantic_extraction import extract_facts_v2
+
+    if not isinstance(policy, str) or not policy.strip():
+        raise sf.ContractError("request_following_policy_required")
+    current = semantic.thread_bundle(ledger, bundle["project_id"], bundle["root_id"])
+    if current is None or current["source_fingerprint"] != bundle["source_fingerprint"]:
+        raise sf.ContractError("request_following_source_stale")
+    member = next((m for m in current["members"] if m["message_id"] == message_id), None)
+    if member is None or member["body_state"] == "deleted":
+        raise sf.ContractError("request_following_source_mismatch")
+    result = extract_facts_v2(
+        llm_fn, member, deadline, ledger=ledger, project_id=current["project_id"],
+        source_fingerprint=current["source_fingerprint"], chunk_size=chunk_size,
+        retry_coverage=retry_coverage, request_following=True)
+    candidate = (stage_request_following(ledger, current, result["doc"], policy=policy)
+                 if result["extraction_complete"] else None)
+    record_stage(
+        ledger, current["project_id"], member["message_id"], current["source_fingerprint"],
+        policy, "request_following_extraction", "PENDING",
+        generation=result["generation"], extraction_complete=result["extraction_complete"],
+        doc_hash=_doc_hash(result["doc"]))
+    return {"extraction": result, "candidate": candidate}
+
+
 def publish(ledger, pid: int, mid: int, fp: str, policy: str,
             member: dict, v2_doc: dict) -> int | None:
     """Atomically mint the PASS-only v4 row (S8). MUST be called inside
@@ -413,7 +485,7 @@ def declare_cohort(ledger, cohort: str, items: list[dict],
         doc["items"] = fixed
         ledger.artifact_add_tx(
             KIND_V4_COHORT, json.dumps(doc, ensure_ascii=False, allow_nan=False),
-            project_id=0, message_id=0,
+            project_id=None, message_id=None,
             meta={"cohort": cohort, "engine_version": ENGINE_VERSION})
     return doc
 
@@ -467,11 +539,14 @@ def _source_current(ledger, item: dict) -> bool:
 
 
 def _item_receipt(ledger, cohort, mid, action, **detail):
+    source = ledger.db.execute(
+        "SELECT project_id FROM messages WHERE message_id=?", (mid,)).fetchone()
     ledger.artifact_add_tx(
         KIND_V4_ITEM,
         json.dumps({**detail, "cohort": cohort, "message_id": mid,
                     "action": action}, ensure_ascii=False, allow_nan=False),
-        project_id=0, message_id=mid, meta={"cohort": cohort})
+        project_id=source["project_id"] if source is not None else None,
+        message_id=mid if source is not None else None, meta={"cohort": cohort})
 
 
 def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:

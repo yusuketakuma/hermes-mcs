@@ -21,7 +21,8 @@ Exit 1 on any error so it can gate automation.
 
   python3 mcs/ops/mcs_setup.py init [--login-id ID ...]
   python3 mcs/ops/mcs_setup.py check    # blockers summarized last
-  python3 mcs/ops/mcs_setup.py doctor   # check + interpreter/launchd facts
+  python3 mcs/ops/mcs_setup.py doctor   # local read-only counts by scope;
+                                        # exit 1 only on a blocked scope
 
 Secrets are never accepted as argv flags (they would persist in shell
 history and `ps`). MCS / Jev and the existing Hermes integration keep
@@ -31,6 +32,8 @@ use hidden prompts and private files; they are not inferred from the environment
 from __future__ import annotations
 
 import argparse
+import fcntl
+import stat
 import getpass
 import hashlib
 from html import escape as xml_escape
@@ -40,11 +43,13 @@ import plistlib
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 from contextlib import closing, suppress
 from pathlib import Path
+from typing import Literal, TypedDict
 
 # mcs/ requires >=3.10 (runtime PEP-604 unions) — fail loudly before the
 # first project import instead of a cryptic TypeError inside mcs_util.
@@ -71,7 +76,6 @@ from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
 ENV_PATH = os.path.join(HOME, ".env")
 KEYCHAIN_SERVICE = "mcs-adapter"
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-LLM_MODELS_URL = "http://127.0.0.1:8080/v1/models"
 
 # ---- typesafe config rules ------------------------------------------
 # name -> (required, check) — check(v) -> error string | None
@@ -105,9 +109,80 @@ def _dict(v):
     return None if isinstance(v, dict) else "must be an object"
 
 
+def _drug_map_config(value):
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        return "must contain only path and sha256"
+    if not isinstance(value["path"], str) or not os.path.isabs(value["path"]):
+        return "path must be absolute"
+    if not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]):
+        return "sha256 must be a pinned lowercase SHA256"
+    return None
+
+
+def _backup_config(value):
+    keys = {"enabled", "policy", "snapshot", "snapshot_dir", "schedule",
+            "verify_interval_s", "drill_interval_s"}
+    if (not isinstance(value, dict) or set(value) - keys
+            or type(value.get("enabled")) is not bool):
+        return "must contain a boolean enabled and only supported backup keys"
+    if not value["enabled"]:
+        return None
+    sources = [key for key in ("snapshot", "snapshot_dir") if key in value]
+    if len(sources) != 1:
+        return "exactly one of snapshot or snapshot_dir must be explicit"
+    for key in ("policy", *sources):
+        if not isinstance(value.get(key), str) or not os.path.isabs(value[key]):
+            return f"{key} must be an explicit absolute path"
+    for key in ("verify_interval_s", "drill_interval_s"):
+        if type(value.get(key)) is not int or value[key] < 1:
+            return f"{key} must be an explicit positive integer"
+    schedule = value.get("schedule")
+    match = re.fullmatch(
+        r"([0-5]?[0-9])\s+((?:[01]?[0-9]|2[0-3])(?:,(?:[01]?[0-9]|2[0-3])){0,23})"
+        r"\s+\*\s+\*\s+\*", schedule) if isinstance(schedule, str) else None
+    if match is None:
+        return "schedule must have one explicit minute and 1–24 distinct explicit hours"
+    hours = [int(hour) for hour in match[2].split(",")]
+    if len(hours) != len(set(hours)):
+        return "schedule hours must be distinct"
+    return None
+
+
+def _recovery_python_problem(path, update_repo=None):
+    """An independent runtime cannot live in either mutable checkout."""
+    if not isinstance(path, str) or not os.path.isabs(path):
+        return "must be an explicit absolute interpreter path"
+    try:
+        for root in (REPO_ROOT, update_repo):
+            if root is not None and Path(path).resolve().is_relative_to(Path(root).resolve()):
+                return "recovery interpreter must be outside the mutable checkout"
+    except (OSError, RuntimeError):
+        return "recovery interpreter path unverifiable"
+    return None
+
+
+def _urgency_escalation(v):
+    """Reuse notify_urgent.settings(): on/shadow with a policy it would
+    silently drop (no explicit room_cooldown_min, bad type) is an error."""
+    if not isinstance(v, dict):
+        return "must be an object"
+    mode = v.get("mode", "off")
+    if mode not in ("off", "on", "shadow"):
+        return 'mode: must be "off", "on" or "shadow"'
+    if mode == "off":
+        return None
+    import notify_urgent
+    if notify_urgent.settings({"urgency_escalation": v}) is None:
+        return ("policy incomplete: source must be \"llm\", room_cooldown_min "
+                "is required, after_min/repeat_min/room_cooldown_min must be "
+                "positive numbers and max_repeats/max_per_day non-negative integers")
+    return None
+
+
 CONFIG_RULES = {
     "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
                              else 'must be "hermes" or "standalone"'),
+    "recovery_python":       (False, _recovery_python_problem),
     "mcs_login_id":          (True,  _nonempty_str),
     "notify_target":         (True,  _nonempty_str),
     "notify_bot_profile":    (False, _bot_profile),
@@ -130,6 +205,11 @@ CONFIG_RULES = {
     "local_llm":             (False, _dict),
     "health":                (False, _dict),
     "daily_digest":          (False, _dict),
+    "drug_map":              (False, _drug_map_config),
+    "backup":                (False, _backup_config),
+    "urgency_escalation":    (False, _urgency_escalation),
+    "watchdog_grace_s":      (False, lambda v: None if type(v) is int and 0 <= v <= 3600
+                             else "must be an integer between 0 and 3600"),
 }
 
 
@@ -566,45 +646,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
                         "re-register via `mcs_setup init`")
     if not os.path.exists(CHROME_BIN):
         errors.append(f"Chrome binary missing: {CHROME_BIN}")
-    # probe the CONFIGURED endpoint — a self-hosted server on another
-    # port (local_llm.url) is a valid deployment, not a failure
-    try:
-        import local_llm
-        llm_ep, _ = local_llm.resolve(cfg)
-        models_url, slots_url = local_llm.probe_urls(llm_ep)
-    except Exception:
-        models_url, slots_url = LLM_MODELS_URL, None
-    try:
-        status, _, raw = local_llm.bounded_request(models_url, "GET", None, 3)
-        if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-            raise ValueError("models probe failed")
-    except Exception:
-        warnings.append(f"local LLM endpoint not reachable "
-                        f"({models_url}) — extract_llm/semantic jobs "
-                        "will stall until the server is up")
-    else:
-        # T19: a server advertising FEWER slots than the selected count
-        # is a mismatch — a call pinned past the advertised width goes
-        # unpinned and can land on the real-time slot. Flag it; never
-        # run unpinned.
-        try:
-            status, _, raw = local_llm.bounded_request(slots_url, "GET", None, 3)
-            if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-                raise ValueError("slots response too large")
-            slots = json.loads(raw.decode("utf-8"))
-            if status != 200 or not isinstance(slots, list) \
-                    or not all(isinstance(slot, dict) for slot in slots):
-                raise ValueError("invalid slots response")
-            advertised = len(slots)
-            if advertised < local_llm.SLOT_COUNT:
-                errors.append(
-                    f"llama-server advertises {advertised} slots but the "
-                    f"selected count is {local_llm.SLOT_COUNT} — fix -np "
-                    "or lower SLOT_COUNT; background work would pin "
-                    "out-of-range (unpinned) slots")
-        except Exception:
-            warnings.append("local LLM /slots unreadable — slot-count "
-                            "mismatch cannot be verified")
+    llm_errors, llm_warnings = _check_llm(cfg)
+    errors.extend(llm_errors)
+    warnings.extend(llm_warnings)
     profile = cfg.get("notify_bot_profile")
     if isinstance(profile, str) and profile \
             and not re.fullmatch(r"[a-z0-9_-]+", profile):
@@ -747,7 +791,7 @@ def _env_write(path: str, updates: dict[str, str]):
     _write_atomic(path, "\n".join(out) + "\n", 0o600)
 
 
-def _keychain_store(account: str, pw: str) -> bool:
+def _keychain_store(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:
     """Store the MCS password in the login keychain without exposing it
     in child-process argv (`ps` shows argv to every local user).
 
@@ -763,33 +807,34 @@ def _keychain_store(account: str, pw: str) -> bool:
     def _q(v: str) -> str:
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    if any(c in value for value in (account, pw) for c in "\r\n\x00"):
+    if (not service.strip()
+            or any(c in value for value in (account, pw, service) for c in "\r\n\x00")):
         return False
     previous = _run(
-        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
+        ["security", "find-generic-password", "-s", service,
          "-a", account, "-w"])
     if previous.returncode not in (0, 44):  # 44: no existing item
         return False
     old_password = previous.stdout.rstrip("\n") if previous.returncode == 0 else None
     if old_password is not None and any(c in old_password for c in "\r\n\x00"):
         return False
-    cmd = (f"add-generic-password -s {_q(KEYCHAIN_SERVICE)} "
+    cmd = (f"add-generic-password -s {_q(service)} "
            f"-a {_q(account)} -U -w {_q(pw)}\n")
     written = _run(["security", "-i"], input_text=cmd)
     chk = _run(
-        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
+        ["security", "find-generic-password", "-s", service,
          "-w"])
     if chk.returncode == 0 and chk.stdout.rstrip("\n") == pw:
         return True
     # Preserve a credential that existed before this attempt. Only a
     # successfully created item with verified prior absence may be deleted.
     if old_password is not None:
-        rollback = (f"add-generic-password -s {_q(KEYCHAIN_SERVICE)} "
+        rollback = (f"add-generic-password -s {_q(service)} "
                     f"-a {_q(account)} -U -w {_q(old_password)}\n")
         _run(["security", "-i"], input_text=rollback)
     elif written.returncode == 0:
         _run(["security", "delete-generic-password", "-s",
-              KEYCHAIN_SERVICE, "-a", account])
+              service, "-a", account])
     return False
 
 
@@ -849,11 +894,6 @@ def _digest_on(cfg):
 def _semantic_on(cfg):
     m = (cfg.get("semantic") or {}).get("mode", "off")
     return m != "off"
-
-
-def _standalone_on(transport):
-    return lambda cfg: mcs_runtime.standalone(cfg) and (
-        (cfg.get("notify") or {}).get("interactive") == transport)
 
 
 WIZARD = [
@@ -1136,6 +1176,18 @@ def _csv_yaml(text: str) -> str:
                       ensure_ascii=False)
 
 
+def _project_ids_yaml(text: str) -> str | None:
+    """project ids (csv or a JSON/YAML list) -> int list literal; the
+    plugin rejects string ids. None when any id is not a positive int."""
+    text = text.strip()
+    if text.startswith("["):
+        text = text.strip("[]")
+    items = [x.strip().strip("'\"") for x in text.split(",") if x.strip()]
+    if not items or not all(x.isdecimal() and int(x) > 0 for x in items):
+        return None
+    return json.dumps([int(x) for x in items])
+
+
 def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
@@ -1285,8 +1337,17 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         if not flag_val:
             missing.append(key)
             continue
-        lit = flag_val if flag_val.lstrip().startswith("[") \
-            else _csv_yaml(flag_val)
+        if key == "project_ids":
+            lit = _project_ids_yaml(flag_val)
+            if lit is None:
+                print(f"  settings.{key}: 正の整数の project ID を"
+                      "カンマ区切りで指定してください")
+                missing.append(key)
+                failed = True
+                continue
+        else:
+            lit = flag_val if flag_val.lstrip().startswith("[") \
+                else _csv_yaml(flag_val)
         if _hermes_config_set(exe, profile, f"{PLUGIN_SETTINGS}.{key}",
                               lit):
             print(f"  settings.{key}: 設定")
@@ -1395,13 +1456,24 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
+def _init_recovery_problem(cfg) -> str | None:
+    if "recovery_python" not in cfg:
+        return None
+    return _recovery_python_problem(cfg["recovery_python"]) or _runtime_problem(
+        _runtime_probe(cfg["recovery_python"]), recovery=True)
+
+
 def cmd_init(args) -> int:
-    if not _guard_config(args.yes):
+    # --yes may archive a corrupt config: defer that write until the desired
+    # interpreter (including --set overrides) has been verified.
+    if not args.yes and not _guard_config(False):
         return 1
     cfg = load_config()
     mode_before = mcs_runtime.mode(cfg)
     if getattr(args, "runtime_mode", None):
         cfg["runtime_mode"] = args.runtime_mode
+    if getattr(args, "recovery_python", None) is not None:
+        cfg["recovery_python"] = args.recovery_python
     def pick(flag, key):
         # flag wins, else the existing value is kept — the wizard's req
         # items do the interactive prompting for these
@@ -1439,6 +1511,13 @@ def cmd_init(args) -> int:
               "only be set via `mcs_setup.py fact-source canonical "
               "--gate-evidence <report>` — config not written")
         return 1
+
+    # before any secret reaches Keychain/.env
+    why = _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — nothing written")
+        return 1
+    checked_recovery = cfg.get("recovery_python")
 
     # secrets come from the environment (or getpass) — never argv flags,
     # which persist in shell history and `ps` (FIX-SU1)
@@ -1546,6 +1625,14 @@ def cmd_init(args) -> int:
 
     if not args.yes:
         _wizard(cfg)
+
+    # re-checked: the wizard edits cfg after the secrets above were stored
+    why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — config.json not written")
+        return 1
+    if args.yes and not _guard_config(True):
+        return 1
 
     for d in (os.path.join(HOME, "data"),
               os.path.join(HOME, "data", "cmd"),
@@ -1880,29 +1967,407 @@ def cmd_check(args) -> int:
     return 1 if errors else 0
 
 
+class DoctorCheck(TypedDict):
+    status: Literal["healthy", "warning", "blocked", "not_checked"]
+    errors: int
+    warnings: int
+
+
+def _doctor_check(errors: list[str], warnings: list[str]) -> DoctorCheck:
+    """Discard arbitrary diagnostic text at the shared-output boundary."""
+    return {"status": "blocked" if errors else "warning" if warnings else "healthy",
+            "errors": len(errors), "warnings": len(warnings)}
+
+
+def _check_llm(cfg: dict) -> tuple[list[str], list[str]]:
+    """Probe only configured model metadata and slot availability, not inference."""
+    import local_llm
+
+    errors, warnings = [], []
+    try:
+        endpoint, _ = local_llm.resolve(cfg)
+        models_url, slots_url = local_llm.probe_urls(endpoint)
+        status, _, raw = local_llm.bounded_request(models_url, "GET", None, 3)
+        if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+            return [], ["local LLM models probe failed"]
+    except (OSError, ValueError, RuntimeError):
+        return [], ["local LLM models unavailable"]
+    try:
+        status, _, raw = local_llm.bounded_request(slots_url, "GET", None, 3)
+        if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+            return [], ["local LLM /slots unreadable — response too large"]
+        slots = json.loads(raw.decode("utf-8"))
+        if status != 200 or not isinstance(slots, list) \
+                or not all(isinstance(slot, dict) for slot in slots):
+            return [], ["local LLM /slots unreadable — mismatch cannot be verified"]
+        if len(slots) < local_llm.SLOT_COUNT:
+            errors.append(
+                f"llama-server advertises {len(slots)} slots but the "
+                f"selected count is {local_llm.SLOT_COUNT} — fix -np "
+                "or lower SLOT_COUNT")
+    except (OSError, ValueError, RuntimeError, RecursionError):
+        warnings.append("local LLM /slots unreadable — mismatch cannot be verified")
+    return errors, warnings
+
+
+def sqlite_wal_safe(version: tuple[int, ...]) -> bool:
+    """Official WAL-reset fixes, including the two maintained backports."""
+    return version >= (3, 51, 3) or (
+        version[:2] == (3, 50) and version >= (3, 50, 7)) or (
+        version[:2] == (3, 44) and version >= (3, 44, 6))
+
+
+class RuntimeFacts(TypedDict):
+    python: str
+    sqlite: str
+    packages: dict[str, str | None]
+
+
+def _runtime_probe(exe: str) -> RuntimeFacts | None:
+    # Only stdlib and distribution metadata: never import SDK clients or MCS.
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        return None
+    r = _run([exe, "-I", "-c", """
+import sys, sqlite3, json
+from importlib.metadata import version, PackageNotFoundError
+packages = {}
+for name in ('discord.py', 'slack-bolt', 'slack-sdk'):
+    try:
+        packages[name] = version(name)
+    except PackageNotFoundError:
+        packages[name] = None
+print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
+                  'sqlite': sqlite3.sqlite_version, 'packages': packages}))
+"""], timeout=20)
+    if r.returncode:
+        return None
+    try:
+        data = json.loads(getattr(r, "stdout", ""))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or not all(
+            isinstance(data.get(key), str) and
+            re.fullmatch(r"\d+\.\d+\.\d+", data[key])
+            for key in ("python", "sqlite")):
+        return None
+    packages = data.get("packages")
+    names = ("discord.py", "slack-bolt", "slack-sdk")
+    if not isinstance(packages, dict) or set(packages) != set(names):
+        return None
+    if any(value is not None and (
+            not isinstance(value, str) or
+            re.fullmatch(r"\d+(?:\.\d+)+(?:[a-z]+\d+)?", value) is None)
+           for value in packages.values()):
+        return None
+    return {"python": data["python"], "sqlite": data["sqlite"],
+            "packages": packages}
+
+
+def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False) -> str | None:
+    if facts is None:
+        return "runtime metadata unavailable"
+    minimum = (3, 9) if recovery else (3, 10)
+    if tuple(map(int, facts["python"].split("."))) < minimum:
+        return "runtime Python version unsupported"
+    if not sqlite_wal_safe(tuple(map(int, facts["sqlite"].split(".")))):
+        return "runtime SQLite WAL-reset fix missing"
+    return None
+
+
+def _recovery_python(cfg) -> str:
+    return cfg.get("recovery_python", "/usr/bin/python3")
+
+
+def _recovery_executable(plist) -> str | None:
+    if not isinstance(plist, dict):
+        return None
+    if "Program" in plist:
+        exe = plist["Program"]
+    else:
+        argv = plist.get("ProgramArguments")
+        exe = argv[0] if isinstance(argv, list) and argv else None
+    return exe if isinstance(exe, str) and os.path.isabs(exe) else None
+
+
+def _recovery_runtime(plist_path: str | Path | None = None) -> RuntimeFacts | None:
+    # Inspect the deployed watchdog's command, not ambient /usr/bin/python3.
+    try:
+        with open(plist_path if plist_path is not None else
+                  os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as f:
+            plist = plistlib.load(f)
+        exe = _recovery_executable(plist)
+        if exe is None or _recovery_python_problem(exe):
+            return None
+    except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
+        return None
+    return _runtime_probe(exe)
+
+
+def _recovery_owned() -> bool:
+    """Existing private tool, repo pointer and exact command prove ownership."""
+    try:
+        root = Path(RECOVERY_DIR)
+        st = root.lstat()
+        if (root.resolve() != root or not stat.S_ISDIR(st.st_mode)
+                or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700):
+            return False
+        contents = {}
+        for name, path, mode in (
+                ("tool", root / "mcs_recover.py", 0o700),
+                ("pointer", root / "repo_path", 0o600),
+                ("plist", Path(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), 0o600)):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                st = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                        or stat.S_IMODE(st.st_mode) != mode or st.st_size > 1048576):
+                    return False
+                contents[name] = stream.read(1048577)
+        if Path(contents["pointer"].decode().strip()).resolve() != Path(REPO_ROOT).resolve():
+            return False
+        plist = plistlib.loads(contents["plist"])
+        argv = plist.get("ProgramArguments")
+        return (plist.get("Label") == RECOVERY_LABEL and isinstance(argv, list)
+                and len(argv) == 3 and argv[1:] == [str(root / "mcs_recover.py"), "--if-stale"]
+                and _recovery_executable(plist) is not None)
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return False
+
+
+def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None) -> list[str]:
+    """Refuse mutations on unsafe selected or explicitly deployed runtimes."""
+    errors = []
+    try:
+        python = _service_subs(cfg)["PYTHON"]
+    except ValueError as e:     # backup / watchdog_grace_s invalid
+        errors.append(f"config: {e}")
+    else:
+        why = _runtime_problem(_runtime_probe(python))
+        if why:
+            errors.append("selected_runtime: " + why)
+    # Absence is the existing optional-watchdog warning, not an invented
+    # interpreter choice. A present but broken plist must fail closed.
+    explicit = "recovery_python" in cfg
+    desired = _recovery_python(cfg)
+    desired_problem = None
+    if explicit:
+        desired_problem = _recovery_python_problem(desired, update_repo) or _runtime_problem(
+            _runtime_probe(desired), recovery=True)
+        if desired_problem:
+            errors.append("desired_recovery_runtime: " + desired_problem)
+    if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
+        why = _runtime_problem(_recovery_runtime(), recovery=True)
+        try:
+            with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
+                actual = _recovery_executable(plistlib.load(stream))
+        except (OSError, ValueError, TypeError):
+            actual = None
+        if actual is not None:
+            why = _recovery_python_problem(actual, update_repo) or why
+        repair = (repair_recovery and explicit and actual != desired
+                  and not desired_problem and _recovery_owned())
+        if explicit and actual != desired and not repair:
+            errors.append("recovery_runtime: desired/deployed selection drift")
+        if why and not repair:
+            errors.append("recovery_runtime: " + why)
+    return errors
+
+
+def recovery_repair_pending(cfg) -> bool:
+    """An explicit selection differs from the deployed watchdog command."""
+    path = os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
+    if "recovery_python" not in cfg or not os.path.lexists(path):
+        return False
+    try:
+        with open(path, "rb") as stream:
+            return _recovery_executable(plistlib.load(stream)) != _recovery_python(cfg)
+    except (OSError, ValueError, TypeError):
+        return True
+
+
+def _update_parent_holds_locks(data: Path) -> bool:
+    """True only in the update's post-merge child: the parent apply keeps
+    update.lock and run.lock, and spawned it with the journal's sha as
+    handshake token (mcs_update._UPDATE_PM_ENV)."""
+    token = os.environ.get("_MCS_UPDATE_PM")
+    try:
+        with open(data / "update_state.json", encoding="utf-8") as stream:
+            applying = json.load(stream).get("applying")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return bool(token) and isinstance(applying, dict) and applying.get("sha") == token
+
+
+def _sync_recovery(cfg, note, dry) -> int:
+    """Change only an owned, quiescent installed watchdog; never enable a missing one."""
+    path = Path(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")
+    if "recovery_python" not in cfg or not os.path.lexists(path):
+        return 0
+    desired = _recovery_python(cfg)
+    with path.open("rb") as stream:
+        actual = _recovery_executable(plistlib.load(stream))
+    if actual == desired:
+        return 0
+    if sys.platform != "darwin" or not _recovery_owned():
+        note("recovery: ownership or platform unverifiable — not replaced")
+        return 1
+    try:
+        text = Path(REPO_ROOT, "deployment/launchagents",
+                    f"{RECOVERY_LABEL}.plist").read_text()
+        body = _render_template(text, {key: xml_escape(value, quote=False) for key, value in {
+            "RECOVERY_PYTHON": desired, "RECOVERY": RECOVERY_DIR,
+            "DATA": str(Path(HOME, "data"))}.items()})
+        if _recovery_executable(plistlib.loads(body.encode())) != desired:
+            note("recovery: template differs from desired executable — not replaced")
+            return 1
+    except (OSError, ValueError, TypeError):
+        note("recovery: template unverifiable — not replaced")
+        return 1
+    uid = os.getuid()
+    target = f"gui/{uid}/{RECOVERY_LABEL}"
+    current = _run(["launchctl", "print", target], timeout=10)
+    loaded = current.returncode == 0
+    if (loaded and (re.search(r"^\s*pid\s*=", current.stdout or "", re.M)
+                    or not re.search(r"^\s*state = (?:not running|waiting)\s*$",
+                                     current.stdout or "", re.M))) \
+            or (not loaded and current.returncode != 113):
+        note("recovery: active or state unknown — not replaced")
+        return 1
+    note("recovery: owned idle interpreter selection drift")
+    if dry:
+        return 0
+    data = Path(HOME, "data")
+    try:
+        st = data.lstat()
+    except OSError:
+        note("recovery: data lock directory unavailable — not replaced")
+        return 1
+    if (data.resolve() != data or not stat.S_ISDIR(st.st_mode)
+            or st.st_uid != uid or stat.S_IMODE(st.st_mode) != 0o700):
+        note("recovery: data lock directory unsafe — not replaced")
+        return 1
+    fds = []
+    parent_held = _update_parent_holds_locks(data)
+    try:
+        for name in ("update.lock", "run.lock"):
+            fd = os.open(data / name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         0o600)
+            fds.append(fd)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+                note("recovery: lock ownership unknown — not replaced")
+                return 1
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if not parent_held:
+                    raise
+        if loaded:
+            if _run(["launchctl", "bootout", target]).returncode != 0:
+                return 1
+            if _run(["launchctl", "print", target], timeout=10).returncode != 113:
+                note("recovery: unload unverifiable — plist unchanged")
+                return 1
+        _write_atomic(str(path), body, 0o600)
+        if loaded and _run(["launchctl", "bootstrap", f"gui/{uid}", str(path)]).returncode != 0:
+            note("recovery: safe desired plist installed but bootstrap failed — no fallback")
+            return 1
+        if loaded and _run(["launchctl", "print", target], timeout=10).returncode != 0:
+            note("recovery: desired watchdog load unverifiable — no fallback")
+            return 1
+        return 0
+    except (OSError, BlockingIOError):
+        note("recovery: lock busy or operation failed — not replaced")
+        return 1
+    finally:
+        for fd in reversed(fds):
+            os.close(fd)
+
+
 def cmd_doctor(args) -> int:
-    """`check` plus the environment facts a bug report needs."""
+    """Local read-only diagnostics; explicit probes return only safe counts."""
     cfg = load_config()
-    print(f"python   : {sys.executable} ({sys.version.split()[0]})")
+    config_errors, config_warnings = validate_config(cfg)
+    if _config_problem():
+        config_errors.append("configuration unreadable")
+    checks: dict[str, DoctorCheck] = {
+        "configuration": _doctor_check(config_errors, config_warnings),
+        "interpreter": _doctor_check(
+            [] if sqlite_wal_safe(sqlite3.sqlite_version_info)
+            else ["SQLite WAL-reset fix missing"], []),
+    }
+    selected = None
+    recovery = None
+    checks["recovery_runtime"] = {"status": "not_checked", "errors": 0, "warnings": 0}
     try:
         mcs_runtime.mode(cfg)
     except ValueError:
-        print("mode     : invalid")
-        return cmd_check(args)
-    standalone = cfg.get("runtime_mode") == "standalone"
-    print(f"mode     : {cfg.get('runtime_mode', 'hermes')}")
-    print(f"services : {_service_subs(cfg)['PYTHON']} "
-          f"({(_standalone_py_problem(cfg) if standalone else _hermes_py_problem()) or 'ok'})")
-    if not standalone:
-        print(f"hermes   : {_hermes_exe(cfg)} "
-              f"(launchd PATH: {_hermes_exe(cfg, LAUNCHD_PATH)})")
-    print(f"repo     : {REPO_ROOT}")
-    print(f"config   : {CONF_PATH}")
-    if sys.platform == "darwin":
-        for label in ([STANDALONE_LABEL] if standalone else AGENT_LABELS) + [RECOVERY_LABEL, *LLAMA_LABELS]:
-            state = "loaded" if _agent_loaded(label) else "not loaded"
-            print(f"launchd  : {label} {state}")
-    return cmd_check(args)
+        mode = "invalid"
+        checks["runtime"] = _doctor_check(["runtime mode invalid"], [])
+    else:
+        mode = mcs_runtime.mode(cfg)
+        selected = _runtime_probe(_services_py(cfg))
+        why = _runtime_problem(selected)
+        checks["runtime"] = _doctor_check([why] if why else [], [])
+        if sys.platform == "darwin" and os.path.isfile(
+                os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
+            recovery = _recovery_runtime()
+            why = _runtime_problem(recovery, recovery=True)
+            checks["recovery_runtime"] = _doctor_check([why] if why else [], [])
+    probes = frozenset(getattr(args, "probe", None) or [])
+    for scope in ("llm", "services", "credentials", "data"):
+        checks[scope] = {"status": "not_checked", "errors": 0, "warnings": 0}
+    if not config_errors and mode != "invalid":
+        if "llm" in probes:
+            checks["llm"] = _doctor_check(*_check_llm(cfg))
+        if "services" in probes:
+            if sys.platform == "darwin":
+                domain = _run(["launchctl", "print", f"gui/{os.getuid()}"],
+                              timeout=10)
+                if domain.returncode:
+                    checks["services"]["warnings"] = 1
+                else:
+                    checks["services"] = _doctor_check(*check_runtime(cfg))
+            elif mcs_runtime.standalone(cfg):
+                checks["services"] = _doctor_check(*check_runtime(cfg))
+    # No paths, values, messages from validators/subprocesses, IDs or raw
+    # responses cross this boundary. Unchecked scopes never imply health.
+    desired = None
+    matches = None
+    if not config_errors and "recovery_python" in cfg:
+        desired = _runtime_probe(_recovery_python(cfg))
+        why = _runtime_problem(desired, recovery=True)
+        checks["desired_recovery_runtime"] = _doctor_check([why] if why else [], [])
+        if os.path.lexists(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist")):
+            try:
+                with open(os.path.join(AGENTS_DIR, f"{RECOVERY_LABEL}.plist"), "rb") as stream:
+                    matches = _recovery_executable(plistlib.load(stream)) == _recovery_python(cfg)
+            except (OSError, ValueError, TypeError):
+                matches = False
+            checks["recovery_selection"] = _doctor_check(
+                ["desired/deployed recovery selection drift"] if not matches else [], [])
+    runtimes: dict[str, RuntimeFacts | None] = {
+        "selected": selected, "recovery": recovery, "desired_recovery": desired}
+    report = {"mode": mode, "python": sys.version.split()[0],
+              "sqlite": sqlite3.sqlite_version, "checks": checks,
+              "runtimes": runtimes,
+              "recovery_selection": {"explicit": "recovery_python" in cfg,
+                                     "matches_deployed": matches}}
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(f"doctor: mode={mode}, Python={report['python']}, SQLite={report['sqlite']}")
+        for role, facts in runtimes.items():
+            if facts is not None:
+                print(f"  {role}: Python={facts['python']}, SQLite={facts['sqlite']}, "
+                      f"SDK metadata={json.dumps(facts['packages'])}")
+        for scope, check in checks.items():
+            print(f"  {scope}: {check['status']} "
+                  f"({check['errors']} errors, {check['warnings']} warnings)")
+        print("configuration: mcs setup check (fix steps); runtime/SQLite: review mcs install "
+              "(SQLite >=3.51.3, 3.50.7 or 3.44.6); "
+              "unchecked probes: --probe llm / --probe services")
+    return 1 if any(check["status"] == "blocked" for check in checks.values()) else 0
 
 
 # ---- scheduled services (launchd + hermes cron) -----------------------
@@ -1928,6 +2393,19 @@ CRON_JOBS = [
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),
 ]
+
+
+def configured_cron_jobs(cfg: dict) -> list[tuple[str, str, str]]:
+    """Keep default jobs and append only an explicitly configured offsite schedule."""
+    jobs = list(CRON_JOBS)
+    backup = cfg.get("backup", {"enabled": False})
+    if _backup_config(backup):
+        raise ValueError("backup_config_invalid")
+    if backup["enabled"]:
+        jobs.append(("MCS offsite backup", backup["schedule"], "mcs_offsite.sh"))
+    return jobs
+
+
 # RESIDENT = KeepAlive drainers the updater quiesces/restarts itself;
 # WATCHER = WatchPaths triggers — verified loaded, never keep-alive.
 RESIDENT_LABELS = ["ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"]
@@ -1962,12 +2440,6 @@ def _hermes_py_problem() -> str | None:
     return _py_problem(HERMES_PY)
 
 
-def _services_py_problem(cfg: dict) -> str | None:
-    """_hermes_py_problem for the interpreter the selected runtime uses."""
-    return _py_problem(_services_py(cfg)) if mcs_runtime.standalone(cfg) \
-        else _hermes_py_problem()
-
-
 def _py_problem(exe: str) -> str | None:
     """None when `exe` is an executable Python >= 3.10."""
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
@@ -1978,6 +2450,16 @@ def _py_problem(exe: str) -> str | None:
     if r.returncode != 0:
         return (f"interpreter {exe} is not a working Python >= 3.10 "
                 f"(rc={r.returncode})")
+    # Inspect the actual service interpreter's linked SQLite, not the
+    # version of a sqlite3 executable or a different Python on PATH.
+    r = _run([exe, "-c",
+              "import sqlite3,sys; v=sqlite3.sqlite_version_info; "
+              "sys.exit(0 if v >= (3,51,3) or "
+              "(v[:2] == (3,50) and v >= (3,50,7)) or "
+              "(v[:2] == (3,44) and v >= (3,44,6)) else 1)"],
+             timeout=20)
+    if r.returncode:
+        return "service interpreter lacks the SQLite WAL-reset fix (need >=3.51.3, 3.50.7 or 3.44.6)"
     return None
 
 
@@ -2109,6 +2591,10 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                         f"installed — a broken update cannot self-heal; "
                         + fix)
     else:
+        why = _runtime_problem(_recovery_runtime(), recovery=True)
+        if why:
+            errors.append(f"recovery watchdog {why} — restore-time writes/checkpoints "
+                          "are not verified safe; " + fix)
         with suppress(OSError):
             if deployed != Path(REPO_ROOT, "deployment", "recovery",
                                 "mcs_recover.py").read_bytes():
@@ -2258,9 +2744,22 @@ def _save_manifest(manifest: dict) -> None:
 def _service_subs(cfg=None) -> dict:
     cfg = load_config() if cfg is None else cfg
     python = mcs_runtime.python_executable(cfg, root=HOME) if cfg.get("runtime_mode") == "standalone" else HERMES_PY
-    return {"PYTHON": python, "REPO": REPO_ROOT,
+    subs = {"PYTHON": python, "REPO": REPO_ROOT,
             "DATA": os.path.join(HOME, "data"),
             "RUNTIME_HOME": mcs_runtime.runtime_home(cfg, root=HOME)}
+    backup = cfg.get("backup", {"enabled": False})
+    error = _backup_config(backup)
+    if error:
+        raise ValueError("backup_config_invalid")
+    subs.update(BACKUP_ENABLED="1" if backup["enabled"] else "0",
+                BACKUP_POLICY=backup["policy"] if backup["enabled"] else "",
+                BACKUP_SNAPSHOT=backup.get("snapshot", "") if backup["enabled"] else "",
+                BACKUP_SNAPSHOT_DIR=backup.get("snapshot_dir", "") if backup["enabled"] else "")
+    grace = cfg.get("watchdog_grace_s", 60)
+    if CONFIG_RULES["watchdog_grace_s"][1](grace):
+        raise ValueError("watchdog_grace_config_invalid")
+    subs["WATCHDOG_GRACE"] = str(grace)
+    return subs
 
 
 def _scripts_dir(cfg=None):
@@ -2288,7 +2787,11 @@ def _script_drift() -> tuple[list[str], list[str]]:
     the session limit) — drift is an error, absence only a warning."""
     drifted, missing = [], []
     directory = _scripts_dir()
-    for name, body in _rendered_scripts(_service_subs()):
+    try:
+        subs = _service_subs()
+    except ValueError as e:     # validate_config names the offending key
+        return [f"config: {e} — scripts not compared"], []
+    for name, body in _rendered_scripts(subs):
         try:
             cur = Path(directory, name).read_text(encoding="utf-8")
         except OSError:
@@ -2647,7 +3150,8 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         # Keep its native entry until the replacement cron is verified.
         return 0
     labels = {row.get("label") for row in prev.get("agents", []) if isinstance(row, dict)} & set(AGENT_LABELS)
-    scripts = {row.get("script") for row in prev.get("cron", []) if isinstance(row, dict)} & {script for _, _, script in CRON_JOBS}
+    scripts = {row.get("script") for row in prev.get("cron", []) if isinstance(row, dict)} & (
+        {script for _, _, script in CRON_JOBS} | {"mcs_offsite.sh"})
     if dry:
         note("previous Hermes MCS jobs: stop " + ", ".join(sorted(labels | scripts)))
         return 0
@@ -2764,7 +3268,11 @@ def cmd_services(args) -> int:
     except ValueError:
         print("services: invalid runtime_mode — nothing changed")
         return 1
-    subs = _service_subs(cfg)
+    try:
+        subs = _service_subs(cfg)
+    except ValueError as e:
+        print(f"services: config: {e} — nothing changed")
+        return 1
     problems = 0
     persist_partial = False
     prev = _load_manifest()
@@ -2783,6 +3291,12 @@ def cmd_services(args) -> int:
               + _install_fix("stage 2 rebuilds the standalone venv" if selected_mode == "standalone" else "stage 2 rebuilds the hermes-agent venv")
               + ", then re-run services")
         return 1
+    runtime_errors = runtime_gate_errors(cfg, repair_recovery=True)
+    if runtime_errors:
+        print("services: " + "; ".join(runtime_errors) + " — nothing changed")
+        return 1
+    if _sync_recovery(cfg, note, dry):
+        return 1
     if _retire_previous_runtime(prev, selected_mode, note, dry):
         return 1
     _sync_scripts(subs, manifest, note, dry)
@@ -2797,7 +3311,8 @@ def cmd_services(args) -> int:
                 problems += 1
         return 1 if problems else 0
     hermes = _hermes_exe(cfg)
-    cron_labels = frozenset(_cron_label(script) for _, _, script in CRON_JOBS)
+    cron_labels = frozenset(
+        _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
     problems += _sync_agents(subs, prev, manifest, note, dry, cfg,
                              cron_labels | {STANDALONE_LABEL})
     # the Hermes plugin decides from these flags whether to stand down
@@ -2813,7 +3328,7 @@ def cmd_services(args) -> int:
         problems += 1
     else:
         cron_problems, persist_partial = _sync_cron(
-            prev, hermes, manifest, note, dry)
+            prev, hermes, manifest, note, dry, jobs=configured_cron_jobs(cfg))
         problems += cron_problems
         retire_problems = 0
         if not cron_problems:
@@ -2846,7 +3361,7 @@ def cmd_services(args) -> int:
     return 1 if problems else 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser(
@@ -2866,6 +3381,8 @@ def main() -> int:
     p.add_argument("--login-id")
     p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
                    help="select the runtime explicitly (omitted keeps the existing mode)")
+    p.add_argument("--recovery-python",
+                   help="explicit absolute independent Python path outside the mutable checkout")
     p.add_argument("--notify-target",
                    help="hermes send target for notifications "
                         "(e.g. slack:C0CHANNELID, discord:1234)")
@@ -2934,10 +3451,14 @@ def main() -> int:
     p.set_defaults(fn=cmd_services, yes=True)
     p = sub.add_parser("check", help="validate required conditions")
     p.set_defaults(fn=cmd_check, yes=True)
-    p = sub.add_parser("doctor", help="check + environment facts "
-                                      "(interpreters, repo, launchd state)")
+    p = sub.add_parser("doctor", help="local read-only counts by scope "
+                                      "(not_checked is not healthy; exit 1 only "
+                                      "on a blocked scope); use check for blockers")
+    p.add_argument("--json", action="store_true", help="safe shared JSON result")
+    p.add_argument("--probe", action="append", choices=("llm", "services"),
+                   help="explicit read-only scope (repeatable); default is local only")
     p.set_defaults(fn=cmd_doctor, yes=True)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     return args.fn(args)
 
 

@@ -139,6 +139,7 @@ def test_human_receipt_is_tracked_before_publication_can_lose_its_ack(tmp_path, 
     monkeypatch.setattr(w.actions, "_publish", interrupted)
     with pytest.raises(OSError):
         asyncio.run(w.actions._confirm(confirm_id, False, "operator", actor))
+    assert w.client.calls[-1][1]["text"] == "受付結果を確認できませんでした。結果の通知をお待ちください。"
     assert command_files(w) == [payload]
     assert w.reg.followup(payload["command_id"]) is not None
     asyncio.run(w.actions._confirm(confirm_id, False, "operator", actor))
@@ -180,3 +181,101 @@ def test_dm_without_words_is_ignored(tmp_path, text):
     w = world(tmp_path, action="summary")
     asyncio.run(w.actions.handle(event(text=text, channel=None)))
     assert w.client.calls == []
+
+
+def _hold_api_lock(w):
+    import threading
+
+    from adapters.lineworks import delivery
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with delivery.api_lock(str(w.data)):
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(5)
+    return holder, release
+
+
+def _summary_followup(w):
+    asyncio.run(w.actions.handle(event(postback="mcs:a:" + TOKEN)))
+    request_id = command_files(w)[0]["request_id"]
+    _result(w, request_id, {"request_id": request_id, "outcome": "applied",
+                            "action": "summary", "body": "合成の要約"})
+
+
+def test_followup_dm_waits_out_a_briefly_held_api_lock(tmp_path, monkeypatch):
+    from adapters.lineworks import actions
+    w = world(tmp_path, action="summary")
+    _summary_followup(w)
+    holder, release = _hold_api_lock(w)
+
+    async def first_retry_releases(_seconds):
+        release.set()
+        await asyncio.to_thread(holder.join, 5)
+
+    monkeypatch.setattr(actions.asyncio, "sleep", first_retry_releases)
+    asyncio.run(w.actions.sweep_followups())
+    assert len(w.client.calls) == 1
+    assert "合成の要約" in w.client.calls[0][1]["text"]
+
+
+def test_followup_survives_a_lock_held_past_the_retry_budget(tmp_path, monkeypatch):
+    from adapters.lineworks import actions
+    from adapters.lineworks.client import ClientError
+    w = world(tmp_path, action="summary")
+    _summary_followup(w)
+    holder, release = _hold_api_lock(w)
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(actions.asyncio, "sleep", no_wait)
+    with pytest.raises(ClientError):
+        asyncio.run(w.actions.sweep_followups())
+    release.set()
+    holder.join(5)
+    assert w.client.calls == []
+    assert len(w.reg.followups()) == 1
+    asyncio.run(w.actions.sweep_followups())
+    assert len(w.client.calls) == 1
+    assert w.reg.followups() == {}
+
+
+def test_other_send_errors_stay_at_most_once(tmp_path):
+    from adapters.lineworks.client import ClientError
+    w = world(tmp_path)
+    w.client.error = ClientError("server_error", 500)
+    with pytest.raises(ClientError):
+        asyncio.run(w.actions._say("operator", "合成の個別回答"))
+    assert len(w.client.calls) == 1
+
+
+@pytest.mark.parametrize("error", [OSError("synthetic disk full"), ValueError("command_too_large")])
+def test_unpublished_confirm_failure_replies_and_allows_retry(tmp_path, monkeypatch, error):
+    w = world(tmp_path)
+    actor = "lineworks:40029600:operator"
+    payload = envelopes.request_create(actor, w.reg.token(TOKEN)["context"], {
+        "title": "完全合成タスク", "reason": "合成の確認理由"})
+    confirm_id = "b" * 16
+    w.reg.put_confirm(confirm_id, {
+        "actor": actor, "token": TOKEN, "origin": SCOPE, "payload": payload})
+    publish = w.actions._publish
+
+    async def failing(payload):
+        raise error
+
+    monkeypatch.setattr(w.actions, "_publish", failing)
+    asyncio.run(w.actions._confirm(confirm_id, False, "operator", actor))
+    assert w.client.calls[-1][1]["text"] == "送信に失敗しました。もう一度「確定する」を押してください。"
+    assert command_files(w) == []
+    assert w.reg.take_confirm(confirm_id, False) == "taken"
+    w.reg.end_confirm(confirm_id)
+    monkeypatch.setattr(w.actions, "_publish", publish)
+    asyncio.run(w.actions._confirm(confirm_id, False, "operator", actor))
+    assert w.client.calls[-1][1]["text"] == "受け付けました。"
+    assert command_files(w) == [payload]
+    assert w.reg.followup(payload["command_id"]) is not None

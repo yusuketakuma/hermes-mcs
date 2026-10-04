@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry, text
 
 from .cards import buttons
+from .client import ClientError
 
 ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
 
 
 SUMMARY_WORD = "サマリー"
+SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
 
 
 class Actions:
@@ -21,6 +24,7 @@ class Actions:
         self.settings, self.dirs, self.reg = settings, dirs, reg
         self.sender, self.log = sender, log
         self._followup_cursor = 0
+        self._sent = 0
 
     def _allowed(self):
         flags = paths.read_flags(self.settings["data_root"])
@@ -57,7 +61,20 @@ class Actions:
         chunks = text.split_body(value, limit=1000 if actions else 1900, max_chunks=None)
         for i, chunk in enumerate(chunks):
             content = buttons(chunk, actions if i == len(chunks) - 1 else [])
-            await asyncio.to_thread(self.sender.send, content, user_id=user)
+            await self._send(content, user)
+
+    async def _send(self, content, user):
+        # sender_busy is a local lock preflight (nothing sent), so a bounded retry
+        # cannot duplicate a DM; every other error stays at most once.
+        for attempt in range(SENDER_BUSY_TRIES):
+            try:
+                sent = await asyncio.to_thread(self.sender.send, content, user_id=user)
+                self._sent += 1
+                return sent
+            except ClientError as exc:
+                if exc.error_code != "sender_busy" or attempt == SENDER_BUSY_TRIES - 1:
+                    raise
+            await asyncio.sleep(SENDER_BUSY_WAIT)
 
     async def _publish(self, payload):
         await asyncio.to_thread(envelopes.publish_command, self.dirs["cmd_int"], payload)
@@ -231,7 +248,23 @@ class Actions:
             "token": pending["token"], "user": user,
             "route_epoch": self.settings["route_epoch"],
             "project_id": pending["payload"]["project_id"]})
-        await self._publish(pending["payload"])
+        try:
+            await self._publish(pending["payload"])
+        except (OSError, ValueError):
+            name = paths.safe_name(pending["payload"]["command_id"]) + ".json"
+            if not await asyncio.to_thread(os.path.exists, os.path.join(self.dirs["cmd_int"], name)):
+                # Nothing reached cmd_int (atomic_write unlinks its tmp): release in_flight so
+                # 確定 can be retried. The followup stays — a retry overwrites it, and a
+                # command the runner consumed in between still reports its receipt.
+                self.reg.end_confirm(cid)
+                await self._say(user, "送信に失敗しました。もう一度「確定する」を押してください。")
+                return
+            # 公開済みの可能性があるため確認とフォローアップは残し、結果待ちだけ伝える。
+            try:
+                await self._say(user, "受付結果を確認できませんでした。結果の通知をお待ちください。")
+            except ClientError:
+                pass  # the publish failure, not the notice failure, is what callers must see
+            raise
         self.reg.drop_confirm(cid)
         await self._say(user, "受け付けました。")
 
@@ -269,24 +302,35 @@ class Actions:
                 continue
             # At most once: a DM with a lost response must never be automatically posted again.
             self.reg.drop_followup(cid)
-            if rec["kind"] == "form" and result.get("modal") and result.get("outcome") == "applied":
-                session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
-                           "definitions": text.modal_fields(rec["action"], result.get("form"), "")}
-                self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
-                await self._prompt(user, session)
-                continue
-            answer = text.view_answer(result, lambda p: projects.project_allowed(self.settings, p), markdown=False)
-            if answer is None:
-                await self._say(user, text.ja(result))
-                continue
-            token_ctx = result.get("token_ctx") or {}
-            self.reg.put_tokens({token: {**ctx, **rec["origin"], "route_epoch": self.settings["route_epoch"]}
-                                 for token, ctx in token_ctx.items()})
-            for message, tasks in answer:
-                await self._say(user, message)
-                if tasks:
-                    actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}"[:20],
-                                "postback": "mcs:a:" + tr["token"]}
-                               for task in tasks for tr in (task.get("transitions") or {}).values()]
-                    for i in range(0, len(actions), 10):
-                        await self._say(user, "タスクの操作", actions[i:i + 10])
+            sent = self._sent
+            try:
+                await self._deliver_followup(user, rec, result)
+            except ClientError as exc:
+                # sender_busy outlasting the retry budget is a pre-send refusal; when no
+                # chunk of this followup went out, restore it so the next sweep retries.
+                if exc.error_code == "sender_busy" and self._sent == sent:
+                    self.reg.put_followup(cid, rec)
+                raise
+
+    async def _deliver_followup(self, user, rec, result):
+        if rec["kind"] == "form" and result.get("modal") and result.get("outcome") == "applied":
+            session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
+                       "definitions": text.modal_fields(rec["action"], result.get("form"), "")}
+            self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
+            await self._prompt(user, session)
+            return
+        answer = text.view_answer(result, lambda p: projects.project_allowed(self.settings, p), markdown=False)
+        if answer is None:
+            await self._say(user, text.ja(result))
+            return
+        token_ctx = result.get("token_ctx") or {}
+        self.reg.put_tokens({token: {**ctx, **rec["origin"], "route_epoch": self.settings["route_epoch"]}
+                             for token, ctx in token_ctx.items()})
+        for message, tasks in answer:
+            await self._say(user, message)
+            if tasks:
+                actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}"[:20],
+                            "postback": "mcs:a:" + tr["token"]}
+                           for task in tasks for tr in (task.get("transitions") or {}).values()]
+                for i in range(0, len(actions), 10):
+                    await self._say(user, "タスクの操作", actions[i:i + 10])

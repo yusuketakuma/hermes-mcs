@@ -480,6 +480,7 @@ def test_write_result_is_idempotent_for_identical_outcome(tmp_path):
     the durable summary+audit pair must be recorded once, not once per
     attempt (production showed 3 identical PENDING rows in 13 min)."""
     db = _ledger(tmp_path)
+    db.save_messages([_message(7)])
     members = {7: {"revision": 3}}
     r = _drain_result()
     for _ in range(3):
@@ -499,6 +500,7 @@ def test_write_result_records_status_transition(tmp_path):
     """Dedup keys on the outcome — a real status change must still
     append a new pair."""
     db = _ledger(tmp_path)
+    db.save_messages([_message(7)])
     members = {7: {"revision": 3}}
     with db.db:
         semantic_drain._write_result(

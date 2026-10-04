@@ -138,3 +138,111 @@ def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_pa
         asyncio.run(runtime.serve(tmp_path, cfg, connector))
     assert len(children) == 1 and children[0].code == 0
     assert not hosts[0].children and closed == [True]
+
+
+def test_interactive_command_intake_retries_sooner_only_after_success(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    for name in runtime.COMMANDS:
+        (data / name).mkdir(parents=True)
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    for job, code in (("cmd_int", 0), ("cmd", 0), ("extract-0", 0)):
+        host.children[job] = {"process": SimpleNamespace(pid=1, poll=lambda c=code: c),
+                              "kind": "core", "stopping_at": None}
+    host.tick(100, draining=True)
+    assert host.retry_at == {"cmd_int": 110, "cmd": 130, "extract-0": 130}
+    host.children["cmd_int"] = {"process": SimpleNamespace(pid=1, poll=lambda: 1),
+                                "kind": "core", "stopping_at": None}
+    host.tick(200, draining=True)
+    assert host.retry_at["cmd_int"] == 230
+
+    started = []
+    monkeypatch.setattr(runtime.subprocess, "Popen",
+                        lambda argv, **kw: started.append(argv) or SimpleNamespace(pid=2, poll=lambda: None))
+    host.retry_at = {"cmd_int": 110}
+    (data / "cmd_int" / "synthetic.json").write_text("{}")
+    host.start("cmd_int", "core", 109)
+    assert not started
+    host.start("cmd_int", "core", 110)
+    assert len(started) == 1
+
+
+def test_new_command_file_after_success_starts_without_backoff(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    for name in runtime.COMMANDS:
+        (data / name).mkdir(parents=True)
+    inbox = data / "cmd_int"
+    codes = []
+
+    def spawn(argv, **kw):
+        codes.append(None)
+        index = len(codes) - 1
+        return SimpleNamespace(pid=10 + index, poll=lambda: codes[index])
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    monkeypatch.setattr(host, "schedules", [])
+    host.argv = {job: argv for job, argv in host.argv.items() if job in runtime.COMMANDS}
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+
+    (inbox / "a.json").write_text("{}")
+    host.tick(100)
+    assert host.children["cmd_int"]["pending"] == {"a.json"}
+    codes[0] = 0
+    (inbox / "a.json").unlink()
+    host.tick(101)
+    assert "cmd_int" not in host.children
+    (inbox / "b.json").write_text("{}")
+    host.tick(103)  # a new click 2 s later starts at once
+    assert "cmd_int" in host.children and len(codes) == 2
+
+    # A consent hold exits 0 but leaves the same files: keep the backoff.
+    codes[1] = 0
+    host.tick(104)
+    host.tick(105)
+    assert "cmd_int" not in host.children and len(codes) == 2
+
+    # After a failure (e.g. lock_held rc 3) even a new file waits for the backoff.
+    host.tick(115)
+    codes[2] = 3
+    host.tick(116)
+    (inbox / "c.json").write_text("{}")
+    host.tick(117)
+    assert "cmd_int" not in host.children and len(codes) == 3
+    host.tick(146)
+    assert "cmd_int" in host.children and len(codes) == 4
+
+    # `cmd` contacts MCS: a new file after success still waits for its backoff.
+    cmd = data / "cmd"
+    (cmd / "r.json").write_text("{}")
+    host.tick(150)
+    assert "cmd" in host.children and len(codes) == 5
+    codes[4] = 0
+    (cmd / "r.json").unlink()
+    host.tick(151)
+    (cmd / "s.json").write_text("{}")
+    host.tick(153)
+    assert "cmd" not in host.children and len(codes) == 5
+
+
+def test_scheduled_slot_runs_even_if_previous_run_ended_just_before(tmp_path, monkeypatch):
+    codes = []
+
+    def spawn(argv, **kw):
+        codes.append(None)
+        index = len(codes) - 1
+        return SimpleNamespace(pid=10 + index, poll=lambda: codes[index])
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+    (tmp_path / "data").mkdir()
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    slot = 6000 * 60  # a whole minute
+    minute = runtime.time.localtime(slot).tm_min
+    host.schedules = [("mcs_check", [{"Minute": minute}])]
+    host.argv["mcs_check"] = ["synthetic"]
+    host.children["mcs_check"] = {"process": SimpleNamespace(pid=1, poll=lambda: 0),
+                                  "kind": "core", "stopping_at": None}
+    host.tick(slot - 10)  # the previous run ends 10 s before the slot
+    assert host.retry_at["mcs_check"] == slot + 20
+    host.tick(slot)
+    assert "mcs_check" in host.children and len(codes) == 1

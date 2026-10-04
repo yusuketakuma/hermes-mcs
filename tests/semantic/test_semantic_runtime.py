@@ -9,7 +9,7 @@ from ledger import Ledger
 import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
-from semantic_testkit import _cfg, _llm, _seeded
+from semantic_testkit import _cfg, _llm, _message, _seeded
 
 
 def _job(tmp_path):
@@ -66,6 +66,7 @@ def test_guard_rechecks_config_generation_and_off(tmp_path):
 
 def test_usage_reservation_survives_unknown_post_failure(tmp_path):
     db, row = _job(tmp_path)
+    db.save_messages([_message(1, body="synthetic reservation")], project_id=1)
     token = runtime.JobToken.from_row(row)
     calls = []
 

@@ -33,6 +33,16 @@ def json_or_null(col: str) -> str:
     return f"CASE WHEN json_valid({col}) THEN {col} END"
 
 
+# `progress=` assignment that records a stable hold code (one `?`) while
+# keeping any existing receipt; an unparseable receipt is preserved under
+# invalid_progress, as the text-route hold does.
+HOLD_PROGRESS_SET = (
+    "progress=json_set(CASE WHEN progress IS NULL OR progress='' THEN '{}' "
+    "WHEN json_valid(progress) AND json_type(progress)='object' "
+    "THEN progress ELSE json_object('invalid_progress',progress) END,"
+    "'$.hold_reason',?)")
+
+
 def json_object_or_null(col: str) -> str:
     """Like json_or_null, but also NULL unless `col` is a JSON object."""
     return (f"CASE WHEN json_valid({col}) AND json_type({col})='object' "
@@ -383,13 +393,62 @@ def extract_feedback(db, project_id=None, limit=100):
 
 
 def incomplete_reply_roots(db, project_id) -> int:
-    """Thread roots whose reported reply_count exceeds the replies
-    stored with a full body — replies not (yet) fetched."""
+    """Thread roots whose reported reply_count exceeds the stored full or
+    tombstoned replies — the thread job's criterion, not a completeness claim."""
     return db.execute("""
       SELECT count(*) FROM messages m WHERE m.project_id=? AND m.parent_id IS NULL
         AND m.reply_count > (SELECT count(*) FROM messages r
-          WHERE r.project_id=m.project_id AND r.parent_id=m.message_id AND r.body_state='full')
+          WHERE r.project_id=m.project_id AND r.parent_id=m.message_id
+            AND r.body_state IN ('full','deleted'))
     """, (project_id,)).fetchone()[0]
+
+
+def thread_reply_pairs(db, *, since=None, until=None, as_of, project_id=None):
+    """One root and its earliest observed full reply, including coverage gaps.
+
+    Root posting time defines the half-open cohort; replies are observed through
+    as_of, not until. Unplaceable roots remain explicitly unplaced. A missing
+    reply time sorts first so a later timed reply cannot fabricate first latency.
+    IDs and raw professions are internal evidence, never aggregate output.
+    """
+    valid = "typeof(m.posted_at_ts)='integer' AND m.posted_at_ts>0 AND m.posted_at_ts<=253402300799"
+    where, params = "m.posted_at_ts<=?", [as_of]
+    if since is not None:
+        where += " AND m.posted_at_ts>=?"
+        params.append(since)
+    if until is not None:
+        where += " AND m.posted_at_ts<?"
+        params.append(until)
+    project = ""
+    if project_id is not None:
+        project = " AND m.project_id=?"
+        params.append(project_id)
+    return db.execute(f"""
+        SELECT m.project_id, m.message_id root_id, m.sender_id root_actor,
+               m.sender_type root_actor_type,
+               m.profession root_profession, m.posted_at_ts root_ts,
+               m.body_state root_state, m.reply_count,
+               r.message_id reply_id, r.sender_id reply_actor,
+               r.sender_type reply_actor_type,
+               r.profession reply_profession, r.posted_at_ts reply_ts,
+               (SELECT COUNT(*) FROM messages f
+                WHERE f.project_id=m.project_id AND f.parent_id=m.message_id
+                  AND f.body_state='full') stored_full_replies
+        FROM messages m LEFT JOIN messages r ON r.message_id=(
+            SELECT x.message_id FROM messages x
+            WHERE x.project_id=m.project_id AND x.parent_id=m.message_id
+              AND x.body_state='full'
+              AND (typeof(x.posted_at_ts)!='integer' OR x.posted_at_ts<=0
+                   OR x.posted_at_ts>253402300799 OR x.posted_at_ts<=?)
+            ORDER BY CASE WHEN typeof(x.posted_at_ts)='integer'
+                               AND x.posted_at_ts>0 AND x.posted_at_ts<=253402300799
+                          THEN 1 ELSE 0 END,
+                     x.posted_at_ts, x.message_id LIMIT 1)
+        WHERE m.parent_id IS NULL AND m.body_state IS NOT 'deleted'
+          AND (NOT ({valid}) OR m.posted_at_ts IS NULL OR ({where}))
+          {project}
+        ORDER BY m.message_id
+        """, [as_of, *params]).fetchall()
 
 
 def coverage_gaps(db) -> dict:

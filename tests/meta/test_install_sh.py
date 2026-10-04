@@ -13,6 +13,7 @@ contract — stage ordering, idempotent rerun, partial-failure recovery —
 is what is tested.
 """
 import os
+import json
 import plistlib
 import re
 import shutil
@@ -160,6 +161,9 @@ exit 0
     # ambient python3 answers every version probe as 3.11–3.13
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
+if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
+    exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
+fi
 if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
     exec "$STUB_PARSE_PYTHON" "$@"
 fi
@@ -191,11 +195,14 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 # copied into the venv by the uv stub (not on PATH)
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
+if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
+    exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
+fi
 if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
     exec "$STUB_PARSE_PYTHON" "$@"
 fi
 if [ "$1" = "-" ] && [ -n "$STUB_REAL_PYTHON" ]; then
-    exec "$STUB_REAL_PYTHON" "$@"
+    exec "$STUB_REAL_PYTHON" -B "$STUB_ROOT/runtime-check.py" --persist "$@"
 fi
 case "$*" in
   *"mcs_setup.py services"*)
@@ -238,6 +245,43 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
                        ("venv-hermes", VENV_HERMES)):
         (stub_root / name).write_text(body)
         (stub_root / name).chmod(0o755)
+    # Run the production template parser and metadata validator, replacing
+    # only the target interpreter's process result with synthetic facts.
+    (stub_root / "runtime-check.py").write_text(f"""
+import json, os, runpy, subprocess, sys
+fixture_home = os.environ['HOME']
+runpy.run_path({str(ROOT / 'tests/conftest.py')!r})
+os.environ['HOME'] = fixture_home
+os.environ['MCS_ROOT'] = os.path.join(fixture_home, '.mcs')
+import mcs_util
+mcs_util.HOME = os.environ['MCS_ROOT']
+mcs_util.CONF_PATH = os.path.join(mcs_util.HOME, 'config.json')
+sys.path.insert(0, {str(ROOT / 'mcs')!r})
+import _mcs_path
+import mcs_setup
+def metadata(argv, **kwargs):
+    with open(os.environ['STUB_LOG'], 'a') as stream:
+        stream.write('runtime-metadata ' + argv[0] + '\\n')
+    case = os.environ.get('STUB_RECOVERY_RUNTIME', 'safe')
+    facts = {{'python': '3.9.6', 'sqlite': '3.51.3',
+              'packages': {{'discord.py': None, 'slack-bolt': None, 'slack-sdk': None}}}}
+    if case == 'unsafe':
+        facts['sqlite'] = '3.51.0'
+    if case == 'unsupported':
+        facts['python'] = '3.8.10'
+    return subprocess.CompletedProcess(
+        argv, 127 if case == 'failed' else 0,
+        'not-json' if case == 'unknown' else json.dumps(facts), '')
+mcs_setup._run = metadata
+if sys.argv[1] == '--persist':
+    code = sys.stdin.read()
+    sys.argv = sys.argv[2:]
+else:
+    index = sys.argv.index('-c')
+    code = sys.argv[index + 1]
+    sys.argv = ['-c', *sys.argv[index + 2:]]
+exec(compile(code, '<installer-runtime-check>', 'exec'))
+""")
     env = {k: v for k, v in os.environ.items()
            if k not in ("HERMES_HOME", "CDPATH")}
     env.update({
@@ -268,6 +312,121 @@ def _calls(stub_root):
 def _bootstraps(stub_root, label):
     return [c for c in _calls(stub_root)
             if c.startswith("launchctl bootstrap") and label in c]
+
+
+@pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])
+@pytest.mark.parametrize("mode", ["install", "preflight", "dry-run"])
+def test_recovery_runtime_gate_fails_before_watchdog_installation(
+        tmp_path, runtime, mode):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env["STUB_RECOVERY_RUNTIME"] = runtime
+    flags = ["--no-brew", "--no-llm", "--no-plugin", "--no-services"]
+    if mode != "install":
+        flags.insert(0, "--" + mode)
+    r = _run(env, hermes_home, *flags)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "recovery" in r.stdout + r.stderr
+    assert not (home / ".mcs-recovery").exists()
+    assert not (home / "Library/LaunchAgents/org.mcs.recovery.plist").exists()
+    assert _bootstraps(stub_root, "org.mcs.recovery") == []
+    assert not any(c.startswith("launchctl bootout") and "org.mcs.recovery" in c
+                   for c in _calls(stub_root))
+    assert "runtime-metadata /usr/bin/python3" in _calls(stub_root)
+    if mode != "install":
+        assert list(home.iterdir()) == []
+
+
+def test_unsafe_recovery_probe_preserves_prior_tool_plist_and_receipt(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    recovery = home / ".mcs-recovery"
+    recovery.mkdir()
+    prior = {
+        recovery / "mcs_recover.py": b"synthetic prior tool",
+        recovery / "mcs_recover.py.prev": b"synthetic prior generation",
+        recovery / "repo_path": (str(ROOT) + "\n").encode(),
+    }
+    watch = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    watch.parent.mkdir(parents=True)
+    prior[watch] = b"synthetic old plist"
+    for path, content in prior.items():
+        path.write_bytes(content)
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in prior}
+    env["STUB_RECOVERY_RUNTIME"] = "unsafe"
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert r.returncode == 1
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in prior} == before
+    assert not list(recovery.glob("*.tmp"))
+    assert _bootstraps(stub_root, "org.mcs.recovery") == []
+
+
+def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    repo = tmp_path / "synthetic-checkout"
+    (repo / "deployment/launchagents").mkdir(parents=True)
+    (repo / "deployment/recovery").mkdir()
+    shutil.copy2(INSTALL, repo / "install.sh")
+    shutil.copy2(ROOT / "deployment/recovery/mcs_recover.py",
+                 repo / "deployment/recovery/mcs_recover.py")
+    executable = stub_root / "explicit-recovery-python"
+    executable.touch()
+    executable.chmod(0o700)
+    template = repo / "deployment/launchagents/org.mcs.recovery.plist"
+    document = plistlib.loads(
+        (ROOT / "deployment/launchagents/org.mcs.recovery.plist").read_bytes())
+    document["Program"] = str(executable)
+    template.write_bytes(plistlib.dumps(document))
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+             script=repo / "install.sh")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "runtime-metadata " + str(executable) in _calls(stub_root)
+    assert "runtime-metadata /usr/bin/python3" not in _calls(stub_root)
+    installed = plistlib.loads((home / "Library/LaunchAgents/org.mcs.recovery.plist").read_bytes())
+    assert installed["Program"] == str(executable)
+
+
+def test_explicit_no_recovery_keeps_watchdog_unconfigured_without_probe(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env["STUB_RECOVERY_RUNTIME"] = "unsafe"
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not any(c.startswith("runtime-metadata") for c in _calls(stub_root))
+    assert not (home / ".mcs-recovery").exists()
+
+
+def test_explicit_recovery_flag_persists_and_renders_selected_target(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    selected = stub_root / "python & independent"
+    selected.touch()
+    selected.chmod(0o700)
+    env["STUB_REAL_PYTHON"] = sys.executable
+    flags = ["--no-brew", "--no-llm", "--no-plugin", "--no-services"]
+    first = _run(env, hermes_home, *flags, "--recovery-python", str(selected))
+    assert first.returncode == 0, first.stdout + first.stderr
+    config = home / ".mcs/config.json"
+    assert json.loads(config.read_text())["recovery_python"] == str(selected)
+    assert config.stat().st_mode & 0o777 == 0o600
+    path = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    assert plistlib.loads(path.read_bytes())["ProgramArguments"][0] == str(selected)
+    second = _run(env, hermes_home, *flags)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert plistlib.loads(path.read_bytes())["ProgramArguments"][0] == str(selected)
+    assert "runtime-metadata " + str(selected) in _calls(stub_root)
+    assert "runtime-metadata /usr/bin/python3" not in _calls(stub_root)
+
+
+@pytest.mark.parametrize("runtime", ["unsafe", "unknown", "unsupported"])
+def test_bad_explicit_recovery_selection_precedes_any_installer_write(tmp_path, runtime):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    selected = stub_root / "independent-python"
+    selected.touch()
+    selected.chmod(0o700)
+    env["STUB_RECOVERY_RUNTIME"] = runtime
+    result = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+                  "--no-services", "--recovery-python", str(selected))
+    assert result.returncode == 1
+    assert list(home.iterdir()) == []
+    assert _bootstraps(stub_root, "org.mcs.recovery") == []
 
 
 def test_install_run_then_rerun_converges(tmp_path):
@@ -439,7 +598,7 @@ def test_no_brew_and_no_services_flags(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "stage skipped (--no-brew)" in r.stdout
     assert not any(c.startswith("brew install") for c in _calls(stub_root))
-    assert not any("mcs_setup" in c for c in _calls(stub_root))
+    assert not any("mcs_setup.py" in c for c in _calls(stub_root))
 
 
 @pytest.mark.parametrize("flag", ["--bogus", "-x", "-no-llm"])
@@ -840,6 +999,22 @@ def test_dry_run_prints_plan_and_writes_nothing(tmp_path):
     assert list(home.iterdir()) == []
 
 
+def test_foreign_mcs_launcher_blocks_preflight_and_install_before_stage1(tmp_path):
+    """A foreign ~/.local/bin/mcs is an NG in --dry-run, and install stops
+    before brew/hermes run instead of partway through; it is never touched."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    shim = home / ".local" / "bin" / "mcs"
+    shim.parent.mkdir(parents=True)
+    shim.write_text("#!/bin/sh\n# some other tool\n")
+    r = _run(env, None, "--dry-run", "--no-llm")
+    assert r.returncode == 1, r.stdout
+    assert "NG    " + str(shim) + " exists and is not an MCS lifecycle launcher" in r.stdout
+    r = _run(env, hermes_home)
+    assert r.returncode != 0 and "not an MCS lifecycle launcher" in r.stderr
+    assert not any(c.startswith(("brew", "git", "uv", "venv-python")) for c in _calls(stub_root))
+    assert shim.read_text() == "#!/bin/sh\n# some other tool\n"
+
+
 STOPPED = "installation stopped; repair the failed stage and re-run install.sh"
 
 
@@ -911,6 +1086,9 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     first = _run(env, None, "--mode", "standalone", "--no-llm")
     assert first.returncode == 0, first.stdout + first.stderr
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
+    assert "-m lineworks_adapter init" in first.stdout
+    assert "do not also run a separate lineworks_adapter service" in " ".join(first.stdout.split())
+    assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)
     assert "requirements-standalone.txt" in text
@@ -932,3 +1110,49 @@ def test_standalone_preflight_does_not_write_runtime(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (home / ".mcs").exists() and not (home / ".hermes").exists()
     assert not any(call.startswith(("git clone", "uv pip")) for call in _calls(stub))
+
+
+def _without_supported_python(stub_root):
+    stub = stub_root / "bin" / "python3"
+    stub.write_text('#!/bin/sh\n[ "$1" = "-c" ] && exit 1\nexit 0\n')  # e.g. a 3.9 system Python
+
+
+def test_fresh_mac_without_python_explains_instead_of_silent_exit(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _without_supported_python(stub_root)
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+             "--recovery-python", "/synthetic/recovery/python3")
+    assert r.returncode != 0
+    assert "--recovery-python is verified before anything is written" in r.stderr
+    assert not (home / ".mcs").exists()
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert "the recovery interpreter is checked in stage 6" in r.stderr
+    assert "1/6 Homebrew packages" in r.stdout
+
+
+def test_fresh_mac_preflight_defers_recovery_check_when_brew_installs_python(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _without_supported_python(stub_root)
+    r = _run(env, None, "--preflight")
+    assert r.returncode == 0, r.stdout
+    assert "0 blocker(s)" in r.stdout
+    assert "recovery interpreter is checked in stage 6" in r.stdout  # uname stub = Darwin
+    # --recovery-python cannot be verified without Python: still a blocker
+    r = _run(env, None, "--preflight", "--recovery-python", "/synthetic/recovery/python3")
+    assert r.returncode == 1 and "recovery template interpreter unsafe" in r.stdout
+
+
+def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
+    """LINE WORKS uses its own adapter: --no-plugin must not claim every
+    interactive transport needs the plugin, and the final guidance names
+    the lineworks_adapter steps (no secret values are printed)."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    plan = _run(env, None, "--dry-run", "--no-plugin", "--no-llm")
+    assert "skipped (--no-plugin; LINE WORKS does not use it)" in plan.stdout
+    r = _run(env, hermes_home, "--no-llm", "--no-plugin", "--no-recovery")
+    assert r.returncode == 0, r.stderr
+    assert "notify.interactive=lineworks does not use it" in r.stdout
+    assert "interactive cards need this plugin" not in r.stdout
+    for sub in ("init", "check", "service"):
+        assert f"-m lineworks_adapter {sub}" in r.stdout
+    assert "docs/guides/LINEWORKS.md" in r.stdout

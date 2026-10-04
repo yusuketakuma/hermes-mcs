@@ -156,8 +156,8 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
     return out
 
 
-# where a high urgency came from — the source is always shown: the rule
-# extractor is a keyword match that also fires on negated phrases
+# Where high urgency came from: explicit exclusions still leave a lexical
+# rule match, not a clinical assessment, so the source is always shown.
 URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
                  "rule": "緊急語を含む（機械照合）"}
 
@@ -221,20 +221,37 @@ def _vital_line(llm: dict, v1: dict):
     return "バイタル: " + "  ".join(parts) if parts else None
 
 
-def _lab_lines(llm: dict) -> list[str]:
+def _lab_lines(llm: dict, body: str | None = None) -> list[str]:
     """Reported lab values (v4) — name+value+unit plus the body's own
     out-of-range marker; the view never invents reference ranges."""
+    from clinical_values import lab_candidate
+    from mcs_util import locate_quote_span
+
     confirmed, candidates = [], []
     for lb in _items(llm, "labs"):
         if not isinstance(lb, dict) or not isinstance(lb.get("name"), str) \
                 or not lb["name"]:
             continue
+        if type(lb.get("value")) not in (int, float, str):
+            continue
+        evidence = lb.get("evidence")
+        located = (isinstance(evidence, str) and body is not None
+                   and locate_quote_span(body, evidence) is not None)
+        normalized = lab_candidate(
+            lb["name"], lb["value"],
+            lb.get("unit") if isinstance(lb.get("unit"), str) else None,
+            evidence if located else None,
+            unverified=item_unverified(lb),
+            flag=lb.get("flag") if lb.get("flag") in ("high", "low") else None)
         d = f"{lb['name']} {lb.get('value')}"
         if isinstance(lb.get("unit"), str) and lb["unit"]:
             d += lb["unit"]
         if (flag := _label(_LAB_FLAG_JP, lb.get("flag"))):
             d += f"({flag})"
-        (candidates if item_unverified(lb) else confirmed).append(d)
+        if normalized["measured_on"]:
+            d += f"(測定日:{normalized['measured_on']})"
+        (candidates if normalized["confirmation"] == "unverified"
+         else confirmed).append(d)
         if len(confirmed) + len(candidates) == 6:
             break
     lines = []
@@ -400,7 +417,10 @@ def structured_lines(db, mid: int) -> list[str]:
     lines: list[str] = _head_lines(llm, v1, message_urgency(db, mid))
     if (line := _vital_line(llm, v1)) is not None:
         lines.append(line)
-    lines.extend(_lab_lines(llm))
+    if _items(llm, "labs"):
+        lab_source = db.execute(
+            "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()
+        lines.extend(_lab_lines(llm, lab_source["body_text"] if lab_source else None))
     if (line := _symptom_line(llm, v1)) is not None:
         lines.append(line)
     lines.extend(_med_lines(llm, v1))

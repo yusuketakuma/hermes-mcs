@@ -54,6 +54,19 @@ def _reset_environment() -> None:
     # the historical "every pending message is extracted" contract; the
     # prefilter path is exercised by tests that opt in explicitly.
     os.environ["MCS_EXTRACT_PREFILTER"] = "off"
+    # Child processes do not pass through the subprocess guard: drop every
+    # PATH entry that resolves a real Hermes CLI, so `hermes` is unreachable.
+    # launchctl lives in /bin, so shadow both with fail-closed guards first.
+    guard = os.path.join(_TEST_HOME, "guard-bin")
+    os.makedirs(guard, exist_ok=True)
+    for name in ("hermes", "launchctl"):
+        script = os.path.join(guard, name)
+        with open(script, "w") as stream:
+            stream.write("#!/bin/sh\necho 'real %s is disabled in MCS tests' >&2\nexit 97\n" % name)
+        os.chmod(script, 0o755)
+    os.environ["PATH"] = os.pathsep.join([guard] + [
+        d for d in os.environ.get("PATH", "").split(os.pathsep)
+        if d and d != guard and not os.access(os.path.join(d, "hermes"), os.X_OK)])
     for name in ("config", "cache", "data", "tmp"):
         os.makedirs(os.path.join(_TEST_HOME, name), exist_ok=True)
 
@@ -76,13 +89,25 @@ def _command_parts(command) -> list[str]:
             for part in command]
 
 
-def _blocked_process(command) -> bool:
+def _blocked_process(command, env=None) -> bool:
     parts = _command_parts(command)
     if not parts:
         return False
     executable = os.path.basename(parts[0]).casefold()
     if executable == "security":
         return True
+    if executable in {"hermes", "launchctl"}:
+        # A real Hermes CLI or launchd writes the user's LaunchAgents and
+        # services even under a temp HOME (2026-10-04: a services test
+        # replaced the live gateway plist). Only stubs under the test
+        # temp tree may run.
+        path = (env or os.environ).get("PATH") if isinstance(env, dict) else None
+        found = parts[0] if os.sep in parts[0] else shutil.which(parts[0], path=path)
+        if found is None:
+            return False      # not runnable: the caller sees its own OSError
+        real = os.path.realpath(found)
+        return not any(real.startswith(os.path.realpath(root) + os.sep)
+                       for root in (_TEST_HOME, tempfile.gettempdir()))
     return executable in {
         "chrome", "google chrome", "chromium", "chromium-browser",
         "google-chrome", "google-chrome-stable", "msedge",
@@ -91,15 +116,17 @@ def _blocked_process(command) -> bool:
 
 def _guarded_run(*args, **kwargs):
     command = kwargs.get("args", args[0] if args else None)
-    if _blocked_process(command):
-        raise RuntimeError("Keychain and Chrome processes are disabled in MCS tests")
+    if _blocked_process(command, kwargs.get("env")):
+        raise RuntimeError("Keychain, Chrome, real Hermes and launchctl processes "
+                           "are disabled in MCS tests")
     return _ORIGINAL_RUN(*args, **kwargs)
 
 
 def _guarded_popen(*args, **kwargs):
     command = kwargs.get("args", args[0] if args else None)
-    if _blocked_process(command):
-        raise RuntimeError("Keychain and Chrome processes are disabled in MCS tests")
+    if _blocked_process(command, kwargs.get("env")):
+        raise RuntimeError("Keychain, Chrome, real Hermes and launchctl processes "
+                           "are disabled in MCS tests")
     return _ORIGINAL_POPEN(*args, **kwargs)
 
 
@@ -109,6 +136,9 @@ def _install(module, name: str, replacement) -> None:
 
 
 _reset_environment()
+# A stable name for tests that inspect the guards; several conftest.py
+# files (root, tests/, integration/) may share the bare "conftest" name.
+sys.modules.setdefault("mcs_test_guard", sys.modules[__name__])
 _ORIGINAL_RUN = subprocess.run
 _ORIGINAL_POPEN = subprocess.Popen
 _install(urllib.request, "urlopen", _blocked)

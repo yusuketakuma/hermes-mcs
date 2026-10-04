@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 import bounded_http
+import clinical_values
 import local_llm
 from ledger import Ledger, _posted_epoch
 from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
@@ -65,6 +66,7 @@ EXTRACT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
+                       ("clinical_values", clinical_values.__file__),
                        ("local_llm", local_llm.__file__))}
 # evidence quotes lengthen output; 900 truncated dense messages mid-JSON
 # (which then burned all 5 retries into permanent errors).  v4 adds
@@ -822,6 +824,7 @@ class _Validator:
             if st is None or sj is None or "negated" not in m:
                 item["unverified"] = True
             self.ev(item, m)
+            item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
         out["meds"] = meds
 
@@ -905,6 +908,18 @@ class _Validator:
             if fl:
                 item["flag"] = fl
             self.ev(item, lb)
+            item["normalized"] = clinical_values.lab_candidate(
+                item["name"], item["value"], item.get("unit"),
+                item.get("evidence"), unverified=(
+                    item.get("unverified", False)
+                    or lb.get("unverified", False) is not False),
+                flag=item.get("flag"))
+            if item["normalized"]["confirmation"] == "unverified":
+                item["unverified"] = True
+                if self.drops is not None:
+                    notes = self.drops.setdefault("labs", [])
+                    if len(notes) < 5:
+                        notes.append(f"labs.{item['name']} の値・単位・根拠を確認できません")
             labs.append(item)
         out["labs"] = labs
 
@@ -1206,6 +1221,7 @@ def _merge(outs: list[dict]) -> dict:
     planned restart coexist; symptoms keep the LAST status per text —
     a later "resolved" must overwrite an earlier "new" or downstream
     resolvers never fire; vitals keep the latest reading per key;
+    labs retain distinct explicit sampling dates and confirmation groups;
     requests dedupe on (to, from, action, due, condition, due_text). urgency is high if any
     chunk said high. `summary` is dropped — a first-chunk summary is a
     PARTIAL viewpoint and must not be displayed as the whole message's
@@ -1232,11 +1248,13 @@ def _merge(outs: list[dict]) -> dict:
                 sym_idx[key] = len(out.setdefault("symptoms", []))
                 out["symptoms"].append(s)
         for lab in d.get("labs") or []:
-            name = lab["name"]
-            if name in lab_idx:
-                out["labs"][lab_idx[name]] = lab
+            normalized = lab.get("normalized") or {}
+            key = (lab["name"], normalized.get("measured_on"),
+                   lab.get("unverified", False))
+            if key in lab_idx:
+                out["labs"][lab_idx[key]] = lab
             else:
-                lab_idx[name] = len(out.setdefault("labs", []))
+                lab_idx[key] = len(out.setdefault("labs", []))
                 out["labs"].append(lab)
         for rq in d.get("requests") or []:
             # condition/due_text change what is asked: two chunks'
@@ -1283,7 +1301,8 @@ def _drop_total(v: dict | None) -> float:
     repair always wins."""
     if v is None:
         return float("inf")
-    return v.get("_evidence_dropped", 0) + v.get("_items_dropped", 0)
+    return (v.get("_evidence_dropped", 0) + v.get("_items_dropped", 0)
+            + sum(bool(lab.get("unverified")) for lab in v.get("labs") or []))
 
 
 _FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "requests")
@@ -1302,7 +1321,7 @@ def _facts(v: dict | None, split_conditions: bool = False) -> set:
             if isinstance(item, dict):
                 item = {k: x for k, x in item.items()
                         if not k.startswith("_")
-                        and k not in ("unverified", "evidence")}
+                        and k not in ("unverified", "evidence", "normalized")}
                 if split_conditions and key == "requests" \
                         and "condition" in item:
                     facts.add(("request_condition", json.dumps(
@@ -1354,6 +1373,7 @@ def _repair_issues(drops: dict, v: dict | None) -> list[str]:
               for q in drops.get("ev") or []]
     issues += [f"{s} (vitalsのキーは本文の測定名に合わせてください)"
                for s in drops.get("vitals") or []]
+    issues += list(drops.get("labs") or [])
     issues += [f"event「{e}」の根拠表現を確認できませんでした"
                "（対象本文の言い換え・活用も再確認し、根拠がなければ省いてください）"
                for e in drops.get("events") or []]
@@ -1722,13 +1742,17 @@ def _fail(ledger, r, attempts: int):
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:
-    """Nightly revivals already spent on this body hash (0 for a new
-    body) — carried so a refail keeps the per-input cap."""
+    """Nightly revivals already spent on this body hash under the CURRENT
+    extract version (0 for a new body or version) — carried so a refail
+    keeps the per-input cap without an older version's spent revivals
+    blocking the current version's budget."""
     return ledger.db.execute(
-        "SELECT COALESCE(MAX(json_extract(meta,'$.auto_retry')),0) "
+        "SELECT COALESCE(MAX(" + _AUTO_RETRY_SQL + "),0) "
         "FROM artifacts WHERE kind=? AND message_id=? AND json_valid(meta) "
-        "AND json_extract(meta,'$.error')=1 AND json_extract(meta,'$.hash')=?",
-        (KIND, mid, content_hash)).fetchone()[0] or 0
+        "AND json_extract(meta,'$.error')=1 "
+        "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
+        "AND json_extract(meta,'$.hash')=?",
+        (KIND, mid, EXTRACT_VERSION, content_hash)).fetchone()[0] or 0
 
 
 def _error_attempts(ledger, mid: int, content_hash) -> int:
@@ -2623,16 +2647,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 with lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
-                        with ledger.db:
-                            # read attempts BEFORE clearing so a
-                            # concurrent writer's row can't roll the
-                            # count back
-                            prev = _error_attempts(ledger,
-                                                   r["message_id"],
-                                                   r["content_hash"])
-                            _clear_error_tx(ledger, r["message_id"])
-                            _fail_tx(ledger, r,
-                                     max(r["attempts"], prev))
+                        # _fail carries auto_retry so a revived refail
+                        # keeps the REVIVE_PER_INPUT cap
+                        _fail(ledger, r, r["attempts"])
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
             if r["thin_src"] and qc is None and not r["human_src"]:

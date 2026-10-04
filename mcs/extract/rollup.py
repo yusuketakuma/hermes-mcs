@@ -33,15 +33,16 @@ from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import acquire_run_lock
 from mcs_signals import normalize_sender_id
+from drug_map import KIND as REF_KIND, current_refs
 
 HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
-# rebuilds every row stamped with another version (3: sender-ID replies).
+# rebuilds every row stamped with another version (4: medication candidates).
 # Rebuilds only rewrite artifacts; no notification reads patient_rollup.
-PERIOD_CHECK_VERSION = 3
+PERIOD_CHECK_VERSION = 4
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -102,6 +103,13 @@ def build_rollup(ledger, project_id: int) -> dict:
       ORDER BY a.artifact_id
     """, (project_id,)):
         arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
+    # current_refs needs a med_ref row on the exact message: look it up
+    # only for those instead of two queries per message (superset filter;
+    # current_refs keeps its own project/binding checks).
+    ref_mids = {r[0] for r in db.execute(
+        "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
+        (REF_KIND, project_id))}
 
     latest_vitals = None
     latest_labs = {}
@@ -178,6 +186,17 @@ def build_rollup(ledger, project_id: int) -> dict:
         if chk is not None \
                 and (next_period_check is None or chk < next_period_check):
             next_period_check = chk
+        # Annotate the exact source index without changing surface-name state.
+        for ref in (current_refs(db, m["message_id"])
+                    if m["message_id"] in ref_mids else ()):
+            container, key = ((v1, "medications") if ref["source_kind"] == "extract_v1"
+                              else (lm, "meds"))
+            meds = container.get(key)
+            i = ref["i"]
+            if (isinstance(meds, list) and i < len(meds)
+                    and isinstance(meds[i], dict)
+                    and meds[i].get("name") == ref["name"]):
+                meds[i] = {**meds[i], "ref": ref}
         _med_states(m, v1, lm, med_state)
         _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg)
         requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
@@ -237,7 +256,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                              ("unverified", "unverified_medications", 20),
                              ("planned", "planned_medications", 10)):
         rows = [{"name": k, "dose": v[1].get("dose"), "last": v[2],
-                 **{f: v[1][f] for f in ("route", "freq", "prn")
+                 **{f: v[1][f] for f in ("route", "freq", "prn", "ref")
                     if f in v[1]}}
                 for k, v in med_state.items() if v[0] == bucket][:cap]
         if rows:
@@ -394,10 +413,19 @@ def msgs_by_ts(msgs, ts: float) -> str:
     return str(ts)
 
 
+# derive replaces med_ref by DELETE+INSERT, so any rewrite raises MAX(id)
+# and any removal lowers COUNT: together they change on every edit (M5).
+_REF_SIG_SQL = ("SELECT COUNT(*) || ':' || IFNULL(MAX(artifact_id), '') "
+                "FROM artifacts WHERE kind=? AND project_id={pid}")
+
+
 def rebuild(ledger, project_id: int) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
     but generated_at equal) writes nothing and returns the existing id."""
+    # sign before building: a rewrite racing the build stays dirty (M5)
+    ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
+                                (REF_KIND, project_id)).fetchone()[0]
     d = build_rollup(ledger, project_id)
     # compare in JSON space (tuples→lists, int keys→str) like the stored row
     new = json.loads(json.dumps(d, ensure_ascii=False))
@@ -419,7 +447,8 @@ def rebuild(ledger, project_id: int) -> int:
                 if (oc == new and om.get("period_check_version")
                         == PERIOD_CHECK_VERSION
                         and om.get("next_med_period_check")
-                        == d.get("_next_med_period_check")):
+                        == d.get("_next_med_period_check")
+                        and om.get("med_ref_sig") == ref_sig):
                     return old[0]["artifact_id"]
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND project_id=?",
@@ -432,16 +461,21 @@ def rebuild(ledger, project_id: int) -> int:
              json.dumps({"generated_at": d["generated_at"],
                          "period_check_version": PERIOD_CHECK_VERSION,
                          "next_med_period_check":
-                         d.get("_next_med_period_check")}), time.time()))
+                         d.get("_next_med_period_check"),
+                         "med_ref_sig": ref_sig}), time.time()))
     return cur.lastrowid
 
 
 def dirty_projects(ledger) -> list:
     """Patients whose rollup is missing or older than its newest source
     (message/artifact). Rolls forward artifact-only changes too — an LLM
-    pass landing after the last message must still refresh (Oracle B23)."""
+    pass landing after the last message must still refresh (Oracle B23).
+    med_ref rewrites/removals show as a changed signature, not via art_ts:
+    derive rewrites every row on a dictionary change, and a rollup whose
+    content is unchanged never advances generated_at (M5)."""
     rows = ledger.db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
+        r.ref_sig, ({sig}) AS cur_ref_sig,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
@@ -458,17 +492,22 @@ def dirty_projects(ledger) -> list:
                             END) period_version,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.next_med_period_check')
-                            END) next_check
+                            END) next_check,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.med_ref_sig')
+                            END) ref_sig
                  FROM artifacts WHERE kind=?
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
                     WHERE m3.project_id=p.project_id)
-    """, (KIND,)).fetchall()
+    """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id")),
+        (REF_KIND, KIND)).fetchall()
     now = time.time()
     return [x["project_id"] for x in rows
             if type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
+            or x["ref_sig"] != x["cur_ref_sig"]
             or (x["next_check"] is not None and (
                 type(x["next_check"]) not in (int, float)
                 or not 0 <= x["next_check"] < 1e12
@@ -477,12 +516,17 @@ def dirty_projects(ledger) -> list:
             or (x["msg_ts"] or 0) > x["gen"]]
 
 
-def rebuild_many(ledger, project_ids, dirty_only: bool = False) -> int:
+def rebuild_many(ledger, project_ids, dirty_only: bool = False,
+                 *, deadline: float | None = None) -> int:
+    if deadline is not None and time.monotonic() >= deadline:
+        return 0
     if dirty_only:
         dirty = set(dirty_projects(ledger))
         project_ids = [p for p in project_ids if p in dirty]
     n = 0
     for pid in project_ids:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         rebuild(ledger, pid)
         n += 1
     return n

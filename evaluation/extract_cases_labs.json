@@ -1,0 +1,508 @@
+{
+ "version": 1,
+ "_comment": "FROZEN fully synthetic #15 labs corpus (no real messages). Changing it changes corpus_sha256.",
+ "cases": [
+  {
+   "id": "range-high-flag",
+   "category": "基準内外",
+   "body": "2026-10-01採血 K 5.8mEq/L 高値",
+   "expect": {
+    "labs": [
+     {
+      "name": "K",
+      "value": 5.8,
+      "unit": "mEq/L",
+      "flag": "high",
+      "measured_on": "2026-10-01"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "range-low-arrow",
+   "category": "基準内外",
+   "body": "Alb 2.9g/dL↓",
+   "expect": {
+    "labs": [
+     {
+      "name": "Alb",
+      "value": 2.9,
+      "unit": "g/dL",
+      "flag": "low"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "range-normal-remark",
+   "category": "基準内外",
+   "body": "Cr 0.8mg/dL、基準内です",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 0.8,
+      "unit": "mg/dL"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "range-invented-flag",
+   "category": "基準内外",
+   "body": "HbA1c 7.2%",
+   "expect": {
+    "labs": [
+     {
+      "name": "HbA1c",
+      "value": 7.2,
+      "unit": "%"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "HbA1c",
+      "value": 7.2,
+      "unit": "%",
+      "flag": "high",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "range-interval-only",
+   "category": "基準内外",
+   "body": "Na 基準 135-145",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Na",
+      "value": 135,
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "unit-case",
+   "category": "単位表記ゆれ",
+   "body": "Cr 1.1 MG/DL",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.1,
+      "unit": "mg/dL"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "unit-egfr",
+   "category": "単位表記ゆれ",
+   "body": "eGFR 45 mL/min/1.73m2",
+   "expect": {
+    "labs": [
+     {
+      "name": "eGFR",
+      "value": 45,
+      "unit": "mL/min/1.73m2"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "unit-no-conversion",
+   "category": "単位表記ゆれ",
+   "body": "Cr 106μmol/L",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 106,
+      "unit": "μmol/L"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "fullwidth-hba1c",
+   "category": "全角",
+   "body": "ＨｂＡ１ｃ ７．０％",
+   "expect": {
+    "labs": [
+     {
+      "name": "HbA1c",
+      "value": "7.0",
+      "unit": "%"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "fullwidth-date",
+   "category": "全角",
+   "body": "２０２６年１０月２日採血 ＣＲＰ ０．３ｍｇ／ｄＬ",
+   "expect": {
+    "labs": [
+     {
+      "name": "CRP",
+      "value": 0.3,
+      "unit": "mg/dL",
+      "measured_on": "2026-10-02"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "prev-now",
+   "category": "前回→今回",
+   "body": "前回Cr 1.5mg/dL、今回Cr 1.2mg/dL",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.5,
+      "unit": "mg/dL"
+     },
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.35,
+      "unit": "mg/dL",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "prev-now-hb",
+   "category": "前回→今回",
+   "body": "Hb 9.8g/dL（前回10.6g/dL）",
+   "expect": {
+    "labs": [
+     {
+      "name": "Hb",
+      "value": 9.8,
+      "unit": "g/dL"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "family-value",
+   "category": "家族の値",
+   "body": "娘さんのHbA1c 6.5%、本人は未検査",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "HbA1c",
+      "value": 6.5,
+      "unit": "%",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "family-mother",
+   "category": "家族の値",
+   "body": "母のK 3.2mEq/L",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "K",
+      "value": 3.2,
+      "unit": "mEq/L",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "plan-only",
+   "category": "予定/依頼だけ",
+   "body": "来週Cr採血予定です",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": "採血予定",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "request-only",
+   "category": "予定/依頼だけ",
+   "body": "主治医よりHbA1c検査依頼あり",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "HbA1c",
+      "value": "検査依頼",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "no-value",
+   "category": "値なし",
+   "body": "BNPは結果待ち",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "BNP",
+      "value": 100,
+      "unit": "pg/mL",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "qualitative",
+   "category": "値なし",
+   "body": "尿蛋白 陰性",
+   "expect": {
+    "labs": [
+     {
+      "name": "尿蛋白",
+      "value": "陰性"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "confuse-crp-cr",
+   "category": "別検査名の混同",
+   "body": "CRP 1.2mg/dL、Cr 0.9mg/dL",
+   "expect": {
+    "labs": [
+     {
+      "name": "CRP",
+      "value": 1.2,
+      "unit": "mg/dL"
+     },
+     {
+      "name": "Cr",
+      "value": 0.9,
+      "unit": "mg/dL"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "unverified": false
+     },
+     {
+      "name": "CRP",
+      "value": 0.9,
+      "unit": "mg/dL",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "confuse-ast-alt",
+   "category": "別検査名の混同",
+   "body": "AST 35U/L、ALT 52U/L",
+   "expect": {
+    "labs": [
+     {
+      "name": "AST",
+      "value": 35,
+      "unit": "U/L"
+     },
+     {
+      "name": "ALT",
+      "value": 52,
+      "unit": "U/L"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "AST",
+      "value": 52,
+      "unit": "U/L",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "alias-got",
+   "category": "別検査名の混同",
+   "body": "GOT 40 U/L",
+   "expect": {
+    "labs": [
+     {
+      "name": "AST",
+      "value": 40,
+      "unit": "U/L"
+     }
+    ]
+   },
+   "forbid": {
+    "labs": []
+   }
+  },
+  {
+   "id": "k-not-lab",
+   "category": "別検査名の混同",
+   "body": "Kさん4.1回",
+   "expect": {
+    "labs": []
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "K",
+      "value": 4.1,
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "dates-two",
+   "category": "複数日付",
+   "body": "2026-09-01採血Cr 1.5mg/dL、2026-10-01採血Cr 1.2mg/dL",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.5,
+      "unit": "mg/dL",
+      "measured_on": null
+     },
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "measured_on": null
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "measured_on": "2026-09-01",
+      "unverified": false
+     },
+     {
+      "name": "Cr",
+      "value": 1.5,
+      "unit": "mg/dL",
+      "measured_on": "2026-10-01",
+      "unverified": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "dates-posting",
+   "category": "複数日付",
+   "body": "2026-10-03連絡。Cr 1.2mg/dL",
+   "expect": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "measured_on": null
+     }
+    ]
+   },
+   "forbid": {
+    "labs": [
+     {
+      "name": "Cr",
+      "value": 1.2,
+      "unit": "mg/dL",
+      "measured_on": "2026-10-03",
+      "unverified": false
+     }
+    ]
+   }
+  }
+ ]
+}

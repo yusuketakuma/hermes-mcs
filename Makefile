@@ -4,8 +4,8 @@
 # commands are assumed to be installed on PATH / in the active venv.
 UV := $(shell command -v uv 2>/dev/null)
 ifdef UV
-PYTEST = uv run --with "pytest==9.1.1" scripts/run_tests.sh
-RUFF   = uv run --with "ruff==0.16.10" ruff
+PYTEST = uv run --no-project --with "pytest==9.1.1" scripts/run_tests.sh
+RUFF   = uv run --no-project --with "ruff==0.16.10" ruff
 else
 PYTEST = scripts/run_tests.sh
 RUFF   = ruff

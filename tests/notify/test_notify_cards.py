@@ -851,6 +851,50 @@ def test_sweep_revokes_archived_card(led):
     assert r["render_rev"] == 1 and r["state"] == "cancelled"
 
 
+def test_sweep_skips_content_for_settled_revoked_cards(
+        led, tmp_path, monkeypatch):
+    """Revoked cards stay in sweep's rotation forever; once nothing can
+    be rendered (never delivered, or the delete already landed) the
+    thread content must not be recomputed every tick."""
+    calls = []
+    real = notify_cards._card_content
+    monkeypatch.setattr(notify_cards, "_card_content",
+                        lambda db, card: calls.append(card["card_id"])
+                        or real(db, card))
+    # (1) revoked before delivery: no message_id -> op None
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    calls.clear()
+    notify_cards.sweep(led, CFG)
+    assert calls == []
+    assert _latest_render(led)["render_rev"] == 1
+
+
+def test_sweep_skips_content_after_revoke_delivered(
+        led, tmp_path, monkeypatch):
+    _delivered_card(led, tmp_path)
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    led.db.commit()
+    notify_cards.sweep(led, CFG)
+    rv = _latest_render(led)
+    assert rv["op"] == "revoke"
+    _begin(led, rv, n=2)
+    _receipt(led, rv, "0" * 15 + "2", message_id="m-9", n=10)
+    assert _latest_render(led)["state"] == "delivered"
+    calls = []
+    real = notify_cards._card_content
+    monkeypatch.setattr(notify_cards, "_card_content",
+                        lambda db, card: calls.append(card["card_id"])
+                        or real(db, card))
+    _msg(led, 105, 1, parent=100)            # drift is irrelevant now
+    notify_cards.sweep(led, CFG)
+    assert calls == []
+    assert _latest_render(led)["render_rev"] == rv["render_rev"]
+
+
 def test_queued_render_cancelled_when_stale(led):
     _seed_thread(led)
     ev = _intent(led)
@@ -1645,6 +1689,23 @@ def test_gc_removes_old_cmd_results(led, tmp_path):
     out = notify_cards.gc(led, CFG, now=NOW)
     assert out["result_files"] == 1
     assert not old.exists() and fresh.exists()
+
+
+def test_gc_cmd_results_picks_by_age_not_name(led, tmp_path):
+    """More than `limit` fresh files sorting before an old one must not
+    hide it from GC."""
+    res_dir = tmp_path / "data" / "cmd_results"
+    res_dir.mkdir(parents=True)
+    for i in range(5):
+        (res_dir / f"0000-{i}.json").write_text("{}")
+    old = res_dir / "ffff.json"
+    old.write_text("{}")
+    stale = notify_cards.TOKEN_WRITE_S + 100
+    os.utime(old, (NOW - stale, NOW - stale))
+    out = notify_cards.gc(led, CFG, now=NOW, limit=2)
+    assert out["result_files"] == 1
+    assert not old.exists()
+    assert len(list(res_dir.iterdir())) == 5
 
 
 @pytest.mark.parametrize("raw", ["{not json", "null", "[]", "true", "7",

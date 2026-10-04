@@ -86,6 +86,9 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         lambda db, result: drain(db, result, str(data / "cmd")),
     )
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
+    # This test is about budgets; concurrent edits to the checkout under test
+    # must not trip the separate code-change stop and skip derive/semantic.
+    monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: False)
     monkeypatch.setattr(semantic.jev, "JevClient", _BudgetJev)

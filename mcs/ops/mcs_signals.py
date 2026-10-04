@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 import time
 from datetime import datetime
 
@@ -38,6 +39,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
 from structured_view import message_urgency
 
 ARTIFACT_KIND = "signal_v1"
+FEEDBACK_KIND = "signal_feedback_v1"
 
 FOLLOWUP_DAYS = 7          # med_change_no_followup window
 FOLLOWUP_MAX_AGE_D = 90    # only mentions within this horizon — older
@@ -79,30 +81,39 @@ THRESHOLDS = {
 }
 
 
+def _approved_policy(db):
+    """Latest signal_policy_v1 artifact as (artifact_id, content), or
+    None when absent or lacking provenance. Provenance required: a policy
+    only counts when it arrived through the human-confirmed command path
+    (non-empty str command_id + actor recorded by _apply_signal_policy_tx).
+    A bare artifact insert cannot move thresholds — same identity
+    boundary as the command envelope."""
+    row = db.execute(
+        "SELECT artifact_id, content FROM artifacts WHERE kind=? AND "
+        "json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        (POLICY_KIND,)).fetchone()
+    if row is None:
+        return None
+    content = json.loads(row["content"])
+    if not (isinstance(content, dict)
+            and isinstance(content.get("command_id"), str)
+            and content["command_id"]
+            and isinstance(content.get("actor"), str)
+            and content["actor"]):
+        return None
+    return row["artifact_id"], content
+
+
 def _thresholds(db):
     """Resolved thresholds: defaults overlaid by the latest approved
     signal_policy_v1 artifact. Malformed/out-of-range values in the
     artifact are ignored per key rather than failing the whole run."""
     th = {name: default for name, (default, lo, hi)
           in THRESHOLDS.items()}
-    row = db.execute(
-        "SELECT content FROM artifacts WHERE kind=? AND "
-        "json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
-        (POLICY_KIND,)).fetchone()
-    if row is None:
+    approved = _approved_policy(db)
+    if approved is None:
         return th
-    content = json.loads(row["content"])
-    # provenance required: a policy only counts when it arrived through
-    # the human-confirmed command path (command_id + actor recorded by
-    # _apply_signal_policy_tx). A bare artifact insert cannot move
-    # thresholds — same identity boundary as the command envelope.
-    if not (isinstance(content, dict)
-            and isinstance(content.get("command_id"), str)
-            and content["command_id"]
-            and isinstance(content.get("actor"), str)
-            and content["actor"]):
-        return th
-    policy = content.get("policy")
+    policy = approved[1].get("policy")
     if isinstance(policy, dict):
         for name, (_default, lo, hi) in THRESHOLDS.items():
             v = policy.get(name)
@@ -515,6 +526,13 @@ def _request_aging(db, now, th, sig_cfg):
                     "す（登録上の状態です）"}
 
 
+def _archived_pids(db):
+    """Archived rooms — med_period_artifacts (shared with mcs_stats) does
+    not join patients, so the rx_period detectors exclude them here."""
+    return {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=1")}
+
+
 def _rx_period_expiry(db, now, th, sig_cfg):
     """extract_v1 med_periods whose end date lands within the horizon.
     These are parsed surface expressions (e.g. '4/8-4/21'), not
@@ -522,7 +540,10 @@ def _rx_period_expiry(db, now, th, sig_cfg):
     horizon is relative to now, so no incremental watermark applies."""
     today = datetime.fromtimestamp(now, JST).date()
     seen = set()
+    archived = _archived_pids(db)
     for pid, mid, content in med_period_artifacts(db):
+        if pid in archived:
+            continue
         for p, end_d in iter_period_ends(content):
             days = (end_d - today).days
             if not (0 <= days <= th["expiry_ahead_days"]):
@@ -549,7 +570,10 @@ def _rx_period_lapsed(db, now, th, sig_cfg):
     record style rather than a fresh alert."""
     today = datetime.fromtimestamp(now, JST).date()
     latest = {}                    # pid -> (end_d, mid, raw)
+    archived = _archived_pids(db)
     for pid, mid, content in med_period_artifacts(db):
+        if pid in archived:
+            continue
         for p, end_d in iter_period_ends(content):
             cur = latest.get(pid)
             if cur is None or (end_d, mid) > (cur[0], cur[1]):
@@ -1003,6 +1027,129 @@ def _latest_signal_states(db):
     return latest
 
 
+def signal_message_ids(sig):
+    """Stored message evidence only; never expand it to unrelated room posts."""
+    ev = sig.get("evidence") or {}
+    values = [ev.get("message_id"), ev.get("discharge_message_id")]
+    for field in ("message_ids", "med_change_message_ids"):
+        if isinstance(ev.get(field), list):
+            values.extend(ev[field])
+    return sorted({mid for mid in values if type(mid) is int and mid > 0})
+
+
+def _resolution(db, old, now, th, sig_cfg):
+    """Observe exclusion gates AFTER the detector has decided to resolve.
+
+    The cause describes a sufficient exclusion of the stored evidence, not
+    clinical completion. Unexplained absence stays unclassified, rather than
+    being labelled care completed or condition cleared. Multiple simultaneous
+    exclusions are not assigned a counterfactual causal priority.
+    """
+    causes = []
+    stype, pid = old["type"], old["project_id"]
+    ev = old["evidence"]
+    try:
+        if stype in ("request_overdue", "request_aging"):
+            row = db.execute(
+                "SELECT status,due_date,created_at FROM requests "
+                "WHERE request_id=? AND project_id=?",
+                (ev.get("request_id"), pid)).fetchone()
+            if row is None:
+                causes.append("request_missing")
+            elif row["status"] not in ("open", "in_progress"):
+                causes.append("request_status_changed")
+            elif stype == "request_overdue" and row["due_date"] != ev.get("due_date"):
+                causes.append("request_due_changed")
+            elif stype == "request_aging" and row["created_at"] > now - th["req_age_days"] * DAY_S:
+                causes.append("request_age_changed")
+        else:
+            patient = db.execute(
+                "SELECT is_archived FROM patients WHERE project_id=?", (pid,)).fetchone()
+            if patient is None:
+                causes.append("project_missing")
+            elif patient[0]:
+                causes.append("project_archived")
+            mids = signal_message_ids(old)
+            # Med episodes may have truncated evidence; do not claim all their
+            # mentions aged out or were answered from a partial evidence list.
+            complete = ev.get("mention_count", len(mids)) == len(mids)
+            messages = [db.execute(
+                "SELECT posted_at_ts,body_state FROM messages "
+                "WHERE message_id=? AND project_id=?", (mid, pid)).fetchone()
+                for mid in mids]
+            if mids and any(m is None for m in messages):
+                causes.append("evidence_missing")
+            elif mids and all(m["body_state"] == "deleted" for m in messages):
+                causes.append("evidence_deleted")
+            horizon = {
+                "med_change_no_followup": th["followup_max_age_d"],
+                "pharmacist_request_unanswered": th["fyi_max_age_d"],
+                "rx_request_visibility": th["fyi_max_age_d"],
+                "adherence_concern": th["fyi_max_age_d"],
+                "symptom_after_med_change": th["fyi_max_age_d"],
+                "discharge_notice": th["transition_lookback_d"],
+                "transition_reconciliation": th["transition_lookback_d"],
+            }.get(stype)
+            anchors = messages[:1] if stype == "transition_reconciliation" else messages
+            if stype == "transition_reconciliation":
+                anchor = db.execute(
+                    "SELECT posted_at_ts,body_state FROM messages WHERE message_id=?",
+                    (ev.get("discharge_message_id"),)).fetchone()
+                anchors = [anchor]
+            if (horizon is not None and anchors and complete
+                    and all(m is not None and m["posted_at_ts"] is not None
+                            and m["posted_at_ts"] < now - horizon * DAY_S
+                            for m in anchors)):
+                causes.append("evidence_aged_out")
+            engagement_types = (
+                "pharmacist_request_unanswered", "rx_request_visibility",
+                "adherence_concern", "symptom_after_med_change", "discharge_notice")
+            if stype in engagement_types and len(mids) == 1:
+                mid, message = mids[0], messages[0]
+                if _request_registered(db, mid):
+                    causes.append("request_registered")
+                orgs, profs, _ = _self_sets(sig_cfg, db)
+                if (message is not None and message["posted_at_ts"] is not None
+                        and _self_post_exists(db, pid, message["posted_at_ts"], profs, orgs)):
+                    causes.append("responder_post")
+                if (stype == "pharmacist_request_unanswered"
+                        and isinstance(sig_cfg, dict)
+                        and sig_cfg.get("self_reaction_response") is True
+                        and _self_reaction_response(db, mid)):
+                    causes.append("self_reaction_observed")
+            elif stype == "med_change_no_followup" and mids and complete:
+                if all(_request_registered(db, mid) for mid in mids):
+                    causes.append("request_registered")
+                if all(m is not None and m["posted_at_ts"] is not None
+                       and db.execute(
+                           "SELECT 1 FROM messages WHERE project_id=? "
+                           "AND posted_at_ts>? AND posted_at_ts<=? LIMIT 1",
+                           (pid, m["posted_at_ts"],
+                            m["posted_at_ts"] + th["followup_days"] * DAY_S)).fetchone()
+                       for m in messages):
+                    causes.append("followup_record")
+            if stype in ("rx_period_expiry", "rx_period_lapsed"):
+                end = datetime.strptime(ev["end"], "%Y-%m-%d").date()
+                age = (datetime.fromtimestamp(now, JST).date() - end).days
+                if age > (0 if stype == "rx_period_expiry" else th["rx_lapsed_days"]):
+                    causes.append("evidence_aged_out")
+            if stype == "comm_concentration" and not causes:
+                count = db.execute(
+                    "SELECT COUNT(*) FROM messages WHERE project_id=? "
+                    "AND posted_at_ts>=? AND posted_at_ts<?",
+                    (pid, now - th["conc_window_h"] * 3600, now)).fetchone()[0]
+                if count < th["conc_min_posts"]:
+                    causes.append("volume_below_threshold")
+    except (sqlite3.Error, KeyError, TypeError, ValueError, OverflowError):
+        # Measurement cannot veto the already-made lifecycle decision.
+        return {"cause": "unclassified", "observed_causes": [],
+                "reason": "measurement_unavailable", "prior_state": old["state"]}
+    return {"cause": causes[0] if len(causes) == 1 else
+            "multiple_exclusions" if causes else "unclassified",
+            "observed_causes": causes, "prior_state": old["state"],
+            "basis": "stored_evidence_exclusion"}
+
+
 def evaluate(ledger, cfg: dict, now: float | None = None,
              deadline: float | None = None) -> dict:
     """Recompute candidates; append lifecycle transitions; enqueue
@@ -1035,11 +1182,16 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
 
     opened = superseded = resolved = enqueued = dig_merged = 0
     newly = []
+    suppression = {}
     with ledger.db:
         for key, sig in current.items():
             if key in existing and existing[key] is None:
                 continue  # unknown latest state: never reopen/notify from history
             old = existing.get(key)
+            if old is not None and old["state"] == "dismissed":
+                counts = suppression.setdefault((sig["project_id"], sig["type"]), [0, 0])
+                counts[0] += 1
+                counts[1] += old.get("evidence") == sig["evidence"]
             if old is None or old["state"] == "resolved" or (
                     old["state"] == "dismissed"
                     and old.get("evidence") != sig["evidence"]):
@@ -1047,7 +1199,10 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 # human dismissed an earlier evidence set that has since
                 # changed — a genuinely new situation, open again
                 sig.update(v=1, state="open", detected_at=now,
-                           resolved_at=None)
+                           resolved_at=None,
+                           lifecycle={"event": "reopened" if old else "opened",
+                                      "at": now,
+                                      "from_state": old["state"] if old else None})
                 _insert(ledger.db, key, sig)
                 opened += 1
                 newly.append((key, sig))
@@ -1059,7 +1214,8 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 # (volatile context stays frozen at each detection)
                 sig.update(v=1, state="open",
                            detected_at=old.get("detected_at", now),
-                           resolved_at=None)
+                           resolved_at=None,
+                           lifecycle={"event": "superseded", "at": now})
                 _insert(ledger.db, key, sig)
                 superseded += 1
             # else: still open with identical evidence — nothing to write
@@ -1075,13 +1231,52 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             if (old is not None and key not in current
                     and old["state"] in ("open", "dismissed")
                     and old.get("type") in ran_types):
-                row = dict(old, state="resolved", resolved_at=now)
+                row = dict(old, state="resolved", resolved_at=now,
+                           lifecycle={"event": "resolved", "at": now},
+                           resolution=_resolution(ledger.db, old, now, th, sig_cfg))
                 row.pop("reopened_at", None)
                 _insert(ledger.db, key, row)
                 resolved += 1
         if notify:
             enqueued, dig_merged = _notify_opened(
                 ledger, newly, now, th, sig_cfg)
+        # one accumulating row per project/type/JST day — a per-evaluate
+        # row grew ~288/day per suppressed pair. "at" stays the day's first
+        # observation, so sums and first-observed time are unchanged;
+        # "last_at" lets stats refuse a row that straddles as_of/since/until.
+        # ponytail: a sub-day window drops the straddled day as partial;
+        # bucket finer if sub-day windows ever matter.
+        day = datetime.fromtimestamp(now, JST).date().isoformat()
+        for (pid, stype), (eligible, suppressed) in suppression.items():
+            meta = json.dumps({"type": stype, "day": day})
+            row = ledger.db.execute(
+                "SELECT artifact_id,content FROM artifacts WHERE kind=? "
+                "AND project_id=? AND meta=? ORDER BY artifact_id DESC LIMIT 1",
+                (FEEDBACK_KIND, pid, meta)).fetchone()
+            prev = None
+            if row:
+                try:
+                    prev = json.loads(row[1])
+                except (ValueError, TypeError, RecursionError):
+                    prev = None
+            if (isinstance(prev, dict)
+                    and type(prev.get("dismissed_candidates")) is int
+                    and type(prev.get("same_evidence_suppressed")) is int):
+                prev["dismissed_candidates"] += eligible
+                prev["same_evidence_suppressed"] += suppressed
+                prev["last_at"] = now
+                ledger.db.execute(
+                    "UPDATE artifacts SET content=? WHERE artifact_id=?",
+                    (json.dumps(prev), row[0]))
+                continue
+            ledger.db.execute(
+                "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (FEEDBACK_KIND, pid, json.dumps({
+                    "v": 1, "type": stype, "at": now, "last_at": now,
+                    "dismissed_candidates": eligible,
+                    "same_evidence_suppressed": suppressed}),
+                 meta, now))
     return {"open": len(current), "opened": opened,
             "superseded": superseded, "resolved": resolved,
             "notify_enqueued": enqueued,
@@ -1433,7 +1628,8 @@ def _notify(ledger, members, now, th):
     return 1
 
 
-def dismiss_reason_counts(db, project_id=None) -> dict:
+def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
+                          as_of=None) -> dict:
     """Human dismissals per signal type and reason code — every
     'dismissed' transition counts once; rows from before reason codes
     existed count as 'unclassified'. Read-only; no actor or free text.
@@ -1448,6 +1644,14 @@ def dismiss_reason_counts(db, project_id=None) -> dict:
         c = json.loads(content_s)
         if not isinstance(c, dict):
             continue
+        if since is not None or until is not None or as_of is not None:
+            at = c.get("dismissed_at")
+            if (not isinstance(at, (int, float)) or isinstance(at, bool)
+                    or not 0 <= at < 1e12
+                    or (since is not None and at < since)
+                    or (until is not None and at >= until)
+                    or (as_of is not None and at > as_of)):
+                continue
         code = c.get("dismiss_reason_code")
         if code not in DISMISS_REASON_CODES:
             code = "unclassified"
@@ -1474,19 +1678,13 @@ def current_open(db, project_id=None, limit=50):
     last_run = db.execute(
         "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
     ).fetchone()[0]
-    prow = db.execute(
-        "SELECT artifact_id, content FROM artifacts WHERE kind=? AND "
-        "json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
-        (POLICY_KIND,)).fetchone()
+    approved = _approved_policy(db)
     policy = None
-    if prow is not None:
-        pc = json.loads(prow["content"])
-        if (isinstance(pc, dict) and pc.get("command_id")
-                and pc.get("actor")):
-            policy = {"artifact_id": prow["artifact_id"],
-                      "actor": pc["actor"],
-                      "approved_at": pc.get("approved_at"),
-                      "overrides": pc.get("policy")}
+    if approved is not None:
+        aid, pc = approved
+        policy = {"artifact_id": aid, "actor": pc["actor"],
+                  "approved_at": pc.get("approved_at"),
+                  "overrides": pc.get("policy")}
     return {"total": len(items), "returned": min(len(items), limit),
             "truncated": len(items) > limit, "items": items[:limit],
             "pipeline_last_run_at": last_run,

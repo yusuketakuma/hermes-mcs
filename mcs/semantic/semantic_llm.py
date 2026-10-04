@@ -88,6 +88,16 @@ symptom_state|vital_lab|care_event|request_pending|preference|other_observation
 >>>
 JSON:"""
 
+_FACT_V2_REQUEST_FOLLOWING_PROMPT = _FACT_V2_PROMPT.rsplit("JSON:", 1)[0] + """
+request_pendingのみ、次の任意項目も保持してください:
+- "request_to"・"request_from": 原文の宛先・依頼者の呼称。根拠がなければunknown
+- "due_text"・"condition": 期限原文・条件原文。根拠がなければunknown
+- "request_kind": request|question|self_plan|unknown
+追加項目の原文も同じ事実のevidence_quoteに含めてください。
+相対期限を推測した日付へ変換せず、依頼者や宛先を文脈から補完しないでください。
+返信・回答・受領・了承を新しい依頼や臨床対応の完了に変換しないでください。
+JSON:"""
+
 _FACT_V2_REPAIR_SUFFIX = """
 前回この本文から抽出した以下の事実が監査で不合格でした:
 %s

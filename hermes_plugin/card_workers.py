@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-from . import _config_ids, _settings
+from . import _config_ids, _id_text, _settings
 
 
 def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
@@ -14,17 +14,18 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     if ctx.get_config("interactive", False) is not True:
         return None
     data_root = ctx.get_config("data_root", None)
-    application_id = ctx.get_config("application_id", None)
-    if not (isinstance(application_id, str) and application_id.strip()):
+    # `hermes config set` stores bare-digit ids as int — accept both
+    application_id = _id_text(ctx.get_config("application_id", None))
+    if application_id is None:
         # The connected bot IS the application — for bot accounts the
         # interaction's application_id equals the bot user id. Deriving
         # it here removes a misconfig surface.
         application_id = getattr(
             getattr(native, "user", None), "id", None) or getattr(
             native, "application_id", None)
-    channel_id = ctx.get_config("channel_id", None)
-    if not all(isinstance(v, str) and v.strip()
-               for v in (data_root, channel_id)):
+    channel_id = _id_text(ctx.get_config("channel_id", None))
+    if channel_id is None or not (
+            isinstance(data_root, str) and data_root.strip()):
         return None
     if application_id is None or not str(application_id).strip():
         return None
@@ -35,7 +36,7 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
     # cards like an allowed user (invalid/absent -> no role grants)
     roles = _config_ids(ctx.get_config("allowed_role_ids", None),
                         projects=False) or frozenset()
-    guild_id = (ctx.get_config("guild_id", None) or "").strip() or None
+    guild_id = _id_text(ctx.get_config("guild_id", None))
     # the guild id is the @everyone role — never a grant
     roles = frozenset(r for r in roles if str(r) != guild_id)
     return {**settings, "data_root": data_root.strip(),
@@ -43,7 +44,7 @@ def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
             "profile": ctx.get_config("profile", None)
             or getattr(ctx, "profile_name", None) or "default",
             "application_id": str(application_id).strip(),
-            "channel_id": channel_id.strip(),
+            "channel_id": channel_id,
             "guild_id": guild_id}
 
 

@@ -1,4 +1,5 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
+import json
 from pathlib import Path
 
 import pytest
@@ -440,7 +441,8 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_resta
     assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is needs_restart
 
 
-def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
+@pytest.mark.parametrize("service", [mcs_setup.KEYCHAIN_SERVICE, "mcs-backup"])
+def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch, service):
     """FIX-SU1: the password must travel on `security -i` stdin and be
     verified by read-back — it must never appear in any child argv."""
     calls = []
@@ -458,10 +460,13 @@ def test_keychain_store_sends_password_via_stdin_not_argv(monkeypatch):
         return R()
 
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
-    assert mcs_setup._keychain_store("mcs", "s3cret pw") is True
+    assert mcs_setup._keychain_store("mcs", "s3cret pw", service=service) is True
     assert not any("s3cret pw" in a for argv, _ in calls for a in argv)
     write = next(call for call in calls if call[0] == ["security", "-i"])
     assert "s3cret pw" in write[1]["input"]
+    assert all(argv[argv.index("-s") + 1] == service
+               for argv, _ in calls if "-s" in argv)
+    assert f'-s "{service}"' in write[1]["input"]
     assert any("-w" in argv for argv, _ in calls)   # verify pass ran
 
 
@@ -734,6 +739,9 @@ def _init_env(monkeypatch, tmp_path, cfg):
     # real hermes CLI entirely
     monkeypatch.setattr(mcs_setup, "_apply_plugin_integration",
                         lambda c, a: True)
+    # init syncs the gateway: a real `hermes gateway install` under a temp
+    # HOME rewrote the live gateway LaunchAgent on 2026-10-04.
+    monkeypatch.setattr(mcs_setup, "_sync_gateway", lambda *a, **k: 0)
     monkeypatch.setattr(mcs_setup, "load_config", lambda: dict(cfg))
 
 
@@ -946,6 +954,8 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     monkeypatch.setattr(mcs_setup, "MANIFEST_PATH",
                         str(tmp_path / "data" / "service_manifest.json"))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", "/h/venv/bin/python")
+    from test_runtime_compatibility import _facts
+    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts())
     # interpreter probe has its own tests — keep it out of `calls`
     monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
@@ -1010,7 +1020,10 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     import json as _json
     manifest = _json.loads(
         (tmp_path / "data" / "service_manifest.json").read_text())
-    assert len(manifest["scripts"]) == 6
+    assert len(manifest["scripts"]) == 7
+    offsite = tmp_path / "scripts" / "mcs_offsite.sh"
+    assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
+    assert not any("mcs_offsite.sh" in command for command in creates)
     assert len(manifest["agents"]) == 4
     assert len(manifest["cron"]) == 6
 
@@ -1489,7 +1502,7 @@ def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys
     monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
     monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
     assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
-    assert "check: FAIL" in capsys.readouterr().out
+    assert "runtime: blocked" in capsys.readouterr().out
 
 def _plugin_args(**kw):
     from types import SimpleNamespace
@@ -1540,6 +1553,25 @@ def test_plugin_integration_writes_scope_and_lists(monkeypatch):
             '["u1", "u2"]') in sets
     # allowed_chat_ids: no flag, no existing value, --yes -> skipped
     assert all(not k.endswith("allowed_chat_ids") for _, k, _ in sets)
+
+
+@pytest.mark.parametrize("flag", ["1,2", " 1 , 2 ", "[1, 2]", '["1","2"]'])
+def test_plugin_integration_project_ids_are_ints(monkeypatch, flag):
+    """The plugin accepts only int project ids; string ids disabled /mcs."""
+    sets = _plugin_env(monkeypatch)
+    mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_project_ids=flag))
+    lits = [v for _, k, v in sets
+            if k == f"{mcs_setup.PLUGIN_SETTINGS}.project_ids"]
+    assert [json.loads(v) for v in lits] == [[1, 2]]
+
+
+@pytest.mark.parametrize("flag", ["a,2", "0", "-1", "1.5", "[]"])
+def test_plugin_integration_rejects_non_int_project_ids(monkeypatch, flag):
+    sets = _plugin_env(monkeypatch)
+    assert mcs_setup._apply_plugin_integration(
+        dict(_DISCORD_CFG), _plugin_args(plugin_project_ids=flag)) is False
+    assert all(not k.endswith(".project_ids") for _, k, _ in sets)
 
 
 def test_plugin_integration_off_is_noop(monkeypatch):
@@ -1995,16 +2027,23 @@ def test_check_ok_prints_no_blocker_summary(monkeypatch, capsys):
     assert "blockers" not in capsys.readouterr().out
 
 
-def test_doctor_prints_facts_then_runs_check(monkeypatch, capsys):
+def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup, "load_config",
-                        lambda path=None: mcs_util.load_config(path) if path else {})
-    monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
-    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 7)
-    assert mcs_setup.cmd_doctor(None) == 7
-    out = capsys.readouterr().out
-    assert f"repo     : {mcs_setup.REPO_ROOT}" in out
-    assert mcs_setup.sys.executable in out
+                        lambda: {"mcs_login_id": "synthetic", "notify_target": "local"})
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
+        "python": "3.11.15", "sqlite": "3.51.3",
+        "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
+    monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
+    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: pytest.fail("not local"))
+    assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 0
+    checks = json.loads(capsys.readouterr().out)["checks"]
+    assert checks["runtime"]["status"] == "healthy"
+    assert checks["services"]["status"] == "not_checked"
 
 
 # ---- runtime: services interpreter, launchd hermes, recovery, llama ----
@@ -2064,6 +2103,9 @@ def _runtime_darwin(monkeypatch, tmp_path, loaded=()):
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path / "agents"))
     monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
+    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
+        "python": "3.9.6", "sqlite": "3.51.3",
+        "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup, "_run",
                         lambda *a, **k: SimpleNamespace(returncode=0))
     loaded = set(loaded)
@@ -2088,7 +2130,9 @@ def test_check_runtime_recovery_watchdog(monkeypatch, tmp_path):
     rec = tmp_path / "recovery"
     (rec / "mcs_recover.py").write_text("v1")
     (rec / "repo_path").write_text(f"{repo}\n")
-    (tmp_path / "agents" / "org.mcs.recovery.plist").write_text("x")
+    import plistlib
+    (tmp_path / "agents" / "org.mcs.recovery.plist").write_bytes(
+        plistlib.dumps({"ProgramArguments": ["/synthetic/recovery-python", "watchdog.py"]}))
     assert mcs_setup.check_runtime({"hermes_bin": "/x"}) == ([], [])
 
     (rec / "mcs_recover.py").write_text("v0")

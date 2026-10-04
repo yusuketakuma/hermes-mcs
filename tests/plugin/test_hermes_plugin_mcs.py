@@ -301,6 +301,38 @@ def test_snapshot_read_preview_confirm_and_receipt_pipeline(tmp_path):
         db.close()
 
 
+def test_preview_denial_codes_are_specific_not_operation_failed(tmp_path):
+    db = _source(tmp_path)
+    (tmp_path / "cmd").mkdir()
+    assert ledger.publish_snapshot(str(tmp_path / "source.db"),
+                                   str(tmp_path / "snapshots"))
+    handler = _handler(tmp_path)
+    base = {"op": "request", "phase": "preview", "project_id": 1,
+            "reason": "synthetic human reason"}
+    try:
+        cases = (
+            ({**base, "action": "create", "source_message_id": 999999,
+              "title": "synthetic"}, "source_missing"),
+            ({**base, "action": "create", "source_message_id": 1,
+              "title": "synthetic", "due_date": "nope"}, "bad_due_date"),
+            ({**base, "action": "update", "request_id": 999999,
+              "patch": {"status": "done"}}, "request_not_found"),
+        )
+        for payload, expected in cases:
+            assert _call(handler, payload, _context()) == {
+                "ok": False, "error": expected}
+    finally:
+        db.close()
+
+
+def test_dispatch_hides_non_code_value_errors(monkeypatch):
+    def boom(*args, **kwargs):
+        raise ValueError("/private/path value=42")
+    monkeypatch.setattr(hermes_plugin, "_dispatch_op", boom)
+    assert json.loads(hermes_plugin._dispatch({}, {}, {})) == {
+        "ok": False, "error": "operation_failed"}
+
+
 def test_request_loop_ref_binds_candidate_and_rejects_stale_preview(tmp_path):
     db = _source(tmp_path)
     inbox = tmp_path / "cmd"
@@ -719,3 +751,46 @@ def test_interactive_settings_derives_application_id(tmp_path):
         ctx, SimpleNamespace(user=None)) is None
     settings["interactive"] = False
     assert hermes_plugin._interactive_settings(ctx, bot) is None
+
+
+def test_interactive_settings_accepts_int_ids(tmp_path):
+    """`hermes config set` coerces bare-digit ids to int: the card worker
+    and receipt scope must still bind them as strings."""
+    settings = _settings(tmp_path)
+    settings.update({
+        "interactive": True,
+        "data_root": str(tmp_path / "data"),
+        "channel_id": 42, "guild_id": 7, "application_id": 999,
+        "allowed_role_ids": ["7", "8"],
+    })
+    ctx = _Context(settings)
+    resolved = hermes_plugin._interactive_settings(ctx, None)
+    assert resolved is not None
+    assert (resolved["channel_id"], resolved["guild_id"],
+            resolved["application_id"]) == ("42", "7", "999")
+    assert {str(r) for r in resolved["allowed_role_ids"]} == {"8"}
+    scope = hermes_plugin._settings(ctx)
+    assert (scope["application_id"], scope["guild_id"]) == ("999", "7")
+
+
+def test_adapter_modules_adds_repo_root_when_loaded_by_file_location():
+    """Hermes loads the plugin by path without the repo on sys.path;
+    op=summary still needs `adapters.common` importable."""
+    import subprocess
+    plugin = Path(hermes_plugin.__file__).resolve()
+    code = (
+        "import importlib.util, sys, types\n"
+        "sys.modules['hermes_plugins'] = types.ModuleType('hermes_plugins')\n"
+        f"spec = importlib.util.spec_from_file_location('hermes_plugins.mcs', {str(plugin)!r},"
+        f" submodule_search_locations=[{str(plugin.parent)!r}])\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "sys.modules[spec.name] = mod\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod._adapter_modules()\n"
+        "from adapters.common import summary\n"
+        "print(callable(summary.answer))\n"
+    )
+    done = subprocess.run([sys.executable, "-I", "-c", code],
+                          cwd="/", capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "True"

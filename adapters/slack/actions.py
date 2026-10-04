@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 
@@ -227,6 +228,16 @@ class Actions:
                 and team.get("id") == self._settings["team_id"]
                 and body.get("api_app_id") == self._settings["application_id"]
                 and user.get("id") in self._settings["allowed_user_ids"])
+
+    async def _interactive(self):
+        """The effective flags still route interactive cards to Slack."""
+        flags = await asyncio.to_thread(
+            paths.read_flags, os.path.dirname(self._dirs["flags"]))
+        epoch = self._settings.get("route_epoch")
+        return (flags.get("interactive") is True
+                and flags.get("transport") == "slack"
+                and not flags.get("restore_pending")
+                and (epoch is None or flags.get("route_epoch") == epoch))
 
     def _client(self):
         # The adapter vends a send-safe snapshot of the shared native
@@ -574,7 +585,9 @@ class Actions:
         self._reg.drop_confirm(confirm_id)
         self._reg.put_followup(payload["command_id"], {
             "kind": "human", "origin": origin, "actor": actor,
-            "token": pending["token"], "user": user})
+            "token": pending["token"], "user": user,
+            "route_epoch": self._settings.get("route_epoch"),
+            "project_id": payload["project_id"]})
         await self._say(origin["channel_id"], user, "受け付けました。")
         await self.sweep_followups()
 
@@ -589,6 +602,7 @@ class Actions:
         start = self._followup_cursor % len(followups)
         count = min(32, len(followups))
         self._followup_cursor = (start + count) % len(followups)
+        interactive = None  # flags read at most once per sweep
         for offset in range(count):
             cid, rec = followups[(start + offset) % len(followups)]
             if self._reg.followup(cid) is None:
@@ -603,9 +617,24 @@ class Actions:
                     f"slack:{self._settings['team_id']}:{rec['user']}"):
                 self._reg.drop_followup(cid)
                 continue
-            if not self._pinned(rec["token"],
-                                {**origin, "actor": rec["actor"]},
-                                rec["actor"]):
+            if rec["kind"] == "human" and "project_id" in rec:
+                # the applied mutation re-renders (and prunes) its card
+                # before the receipt is swept — pin current authority
+                # instead of the retired button token
+                if interactive is None:
+                    interactive = await self._interactive()
+                allowed = (interactive
+                           and rec.get("route_epoch")
+                           == self._settings.get("route_epoch")
+                           and projects.project_allowed(
+                               self._settings, rec["project_id"]))
+            else:
+                # followups saved before route_epoch/project_id were
+                # recorded keep the token pin
+                allowed = bool(self._pinned(
+                    rec["token"], {**origin, "actor": rec["actor"]},
+                    rec["actor"]))
+            if not allowed:
                 self._reg.drop_followup(cid)
                 continue
             result = await asyncio.to_thread(

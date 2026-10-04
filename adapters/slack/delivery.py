@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import re
+import time
 from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
@@ -16,6 +17,9 @@ from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+# A failed users.info (missing scope, 429, network) is retried after this
+# long — same idea as registry.CAPABILITY_NEG_S; successes never expire.
+NAME_NEG_S = 900
 
 
 def _upload_file_id(data) -> str | None:
@@ -89,9 +93,12 @@ class SlackCardAdapter:
     async def display_name(self, uid):
         """The member's Slack display (or real) name via users.info —
         cached per worker, None when unknown. A missing users:read
-        scope or any API error is cached as unknown, never raised."""
-        if uid in self._names:
-            return self._names[uid]
+        scope or any API error is cached as unknown for NAME_NEG_S
+        (then re-asked), never raised."""
+        hit = self._names.get(uid)
+        if hit is not None and (hit[1] is None
+                                or time.monotonic() < hit[1]):
+            return hit[0]
         name = None
         try:
             user = _payload(await self._client.users_info(user=uid)) \
@@ -106,7 +113,8 @@ class SlackCardAdapter:
             raise
         except Exception:
             pass
-        self._names[uid] = name
+        self._names[uid] = (name, None if name
+                            else time.monotonic() + NAME_NEG_S)
         return name
 
     async def bind(self):

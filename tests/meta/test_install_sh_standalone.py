@@ -42,30 +42,58 @@ def test_standalone_install_never_clones_hermes(tmp_path):
                for c in calls), calls
     python = [c for c in calls if c.startswith("venv-python")]
     # the chosen mode is persisted to config.json, then services run on ~/.mcs/venv
-    assert any(c.endswith(" standalone") and c.startswith("venv-python - ") for c in python)
+    # (an empty trailing argument means no --recovery-python was given)
+    assert any(c.rstrip().endswith(" standalone") and c.startswith("venv-python - ")
+               for c in python)
     assert any("mcs_setup.py services" in c for c in python)
     assert (home / ".mcs" / "venv" / "bin" / "python3").exists() and venv
 
 
 def test_interactive_install_asks_for_the_runtime(tmp_path):
+    import os
+    import selectors
     import shutil
     import subprocess
     import sys
+    import time
     import pytest
     if sys.platform != "darwin" or not shutil.which("script"):
         pytest.skip("BSD script(1) gives the installer a terminal")
     from test_install_sh import INSTALL
     home, hermes_home, stub_root, env = _world(tmp_path)
-    # type the answer only once the prompt is up, as a person would
-    feeder = subprocess.Popen(["sh", "-c", "sleep 2; printf '2\\n'; sleep 60"],
-                              stdout=subprocess.PIPE)
-    try:
-        r = subprocess.run(["script", "-q", "/dev/null", "sh", str(INSTALL), "--no-llm", "--no-brew"],
-                           stdin=feeder.stdout, env=env, capture_output=True, text=True, timeout=120)
-    finally:
-        feeder.kill()
-    assert "choose 1 or 2" in r.stdout, r.stdout
-    assert "2/6 standalone runtime" in r.stdout, r.stdout
+    # The pipe retains the exact prompt until subscribed; answer only on that signal.
+    with subprocess.Popen(
+        ["script", "-q", "/dev/null", "sh", str(INSTALL), "--no-llm", "--no-brew"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+    ) as process, selectors.DefaultSelector() as ready:
+        assert process.stdout is not None and process.stdin is not None
+        ready.register(process.stdout, selectors.EVENT_READ)
+        output = b""
+        deadline = time.monotonic() + 10
+        try:
+            while b"choose 1 or 2 [1]: " not in output:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and ready.select(remaining), output
+                chunk = os.read(process.stdout.fileno(), 4096)
+                assert chunk and len(output) + len(chunk) <= 65536, output
+                output += chunk
+            # Keep stdin open until the installer has consumed the answer:
+            # closing it at once lets script(1) deliver EOF (^D) first.
+            process.stdin.write(b"2\n")
+            process.stdin.flush()
+            while b"=== 1/6" not in output:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and ready.select(remaining), output
+                chunk = os.read(process.stdout.fileno(), 4096)
+                assert chunk and len(output) + len(chunk) <= 65536, output
+                output += chunk
+            tail, _ = process.communicate(timeout=120)
+            output += tail
+        finally:
+            if process.poll() is None:
+                process.kill()
+        assert process.returncode == 0, output
+    assert b"2/6 standalone runtime" in output, output
     assert not hermes_home.exists()
 
 

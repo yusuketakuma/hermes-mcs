@@ -9,10 +9,15 @@ PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 LOG=__DATA__/run.log
 PY=__PYTHON__
+WATCHDOG_GRACE=__WATCHDOG_GRACE__
+set -- --json --download-files --mark-read
+if [ "$WATCHDOG_GRACE" -gt 0 ]; then
+  set -- "$@" --watchdog-grace "$WATCHDOG_GRACE"
+fi
 
 export MCS_LLM_SLOT=1
 
-"$PY" __REPO__/mcs/ingest/run_check.py --json --download-files --mark-read >>"$LOG" 2>&1
+"$PY" __REPO__/mcs/ingest/run_check.py "$@" >>"$LOG" 2>&1
 rc=$?
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs check: run_check exited %d — see %s\n' "$rc" "$LOG"

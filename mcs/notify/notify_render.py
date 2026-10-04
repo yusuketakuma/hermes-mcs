@@ -316,11 +316,13 @@ def _source_fp(db, card) -> str:
     # Evidence may change before the signal evaluator publishes its
     # next artifact, including on pages other than the one displayed.
     evidence_state = []
+    ready = structured_view.fact_generations(db, [mid for _, mid in evidence_ids])
     for pid, mid in sorted(evidence_ids):
         row = db.execute(
             "SELECT content_hash,body_state FROM messages WHERE message_id=? AND project_id=?",
             (mid, pid)).fetchone()
-        evidence_state.append((pid, mid, tuple(row) if row else None))
+        evidence_state.append((pid, mid, tuple(row) if row else None,
+                               ready.get(mid, {}) if row else {}))
     return payload_hash({"k": kind, "m": [
         (k, sigs[k]["artifact_id"], sigs[k]["content"].get("state"))
         for k in keys if k in sigs], "names": names,
@@ -382,6 +384,12 @@ def _signal_compact(db, pid, contents: list) -> list:
         state = s.get("state")
         if state and state != "open":
             line += f"（{state}）"
+        mid, message = _signal_evidence(db, s)
+        urgency = (structured_view.message_urgency(db, mid)
+                   if message is not None and mid is not None and s.get("project_id") == pid
+                   else None)
+        if urgency:
+            line = "・" + structured_view.URGENCY_LABEL[urgency] + " — " + line[1:]
         lines.append(line)
     return _fit_item([{"type": "text", "text": name},
                       {"type": "text", "text": "\n".join(lines)}])

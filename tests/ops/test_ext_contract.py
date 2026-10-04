@@ -329,12 +329,24 @@ def test_reconciliation_never_revives_a_withdrawn_envelope(tmp_path):
     assert exp.reconcile(env["envelope_id"], sink)["status"] == "withdrawn"
 
 
-def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path):
+def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from threading import Barrier
 
     path = _auth(tmp_path)
     env = ext.build_envelope(_records(), ext.load_authorization(path), NOW - 10)
     state = tmp_path / "state"
+    ready = Barrier(4)
+    locked = ext.GovernedExporter._locked
+
+    @contextmanager
+    def simultaneous_lock(exporter):
+        ready.wait(timeout=5)
+        with locked(exporter):
+            yield
+
+    monkeypatch.setattr(ext.GovernedExporter, "_locked", simultaneous_lock)
 
     class ObservingSink(ext.LocalSink):
         calls = 0
@@ -343,7 +355,12 @@ def test_concurrent_exporters_reserve_before_effect_and_send_once(tmp_path):
             self.calls += 1
             journal = json.loads((state / "journal" / f'{env["envelope_id"]}.json').read_text())
             assert journal["status"] == "sent"
-            time.sleep(0.02)  # widen the read-before-send race
+            fd = ext.os.open(state / ".lock", ext.os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    ext.fcntl.flock(fd, ext.fcntl.LOCK_EX | ext.fcntl.LOCK_NB)
+            finally:
+                ext.os.close(fd)
             return super().receive(envelope)
 
     sink = ObservingSink(tmp_path / "sink")

@@ -72,14 +72,16 @@ EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
-    "mcs_update.sh", "llamacpp_restart_if_idle.sh"})
+    "mcs_update.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
+SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 # runtime_mode=standalone (mcs_setup._agent_labels): launchd calendar
 # agents replace hermes cron, ai.mcs.standalone replaces the gateway
+# Optional offsite is host-owned, not an extra external calendar agent.
 STANDALONE_LABEL = "ai.mcs.standalone"
 CRON_LABEL_PREFIX = "ai.mcs.cron."
 KNOWN_AGENT_LABELS |= frozenset(
     {STANDALONE_LABEL} | {CRON_LABEL_PREFIX + s[:-3].replace("_", "-")
-                          for s in KNOWN_CRON_SCRIPTS})
+                          for s in KNOWN_CRON_SCRIPTS if s != "mcs_offsite.sh"})
 STALE_S = 1800
 ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
 GIT_LOCK_MIN_AGE_S = 600
@@ -265,15 +267,6 @@ def _try_lock(path):
     except OSError:
         os.close(fd)
         return None
-
-
-def _standalone():
-    """config.json runtime_mode — read directly: the repo may be broken."""
-    try:
-        with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
-            return json.load(f).get("runtime_mode") == "standalone"
-    except (OSError, ValueError, AttributeError):
-        return False
 
 
 def _setup_python():
@@ -492,6 +485,22 @@ def _clean_stale_git_locks():
     return removed
 
 
+def _owned_cron(job_id, script_path, evidence):
+    """Require a matching owned ID/Script pair or a known wrapper identity."""
+    actual = os.path.normpath(os.path.join(SCRIPTS_DIR, script_path))
+    for row in evidence:
+        if not isinstance(row, dict) or row.get("id") != job_id:
+            continue
+        script = row.get("script")
+        if isinstance(script, str) and script and actual == os.path.normpath(
+                os.path.join(SCRIPTS_DIR, script)):
+            return True
+    # A basename alone is ambiguous in a shared Hermes scheduler.
+    return (os.path.isabs(script_path)
+            and os.path.basename(script_path) in KNOWN_CRON_SCRIPTS
+            and actual == os.path.join(SCRIPTS_DIR, os.path.basename(script_path)))
+
+
 def _reconcile_membership(snapshot):
     """Delete owned-but-undesired cron entries + agents per the
     pre-update manifest snapshot. Union with the CURRENT desired sets
@@ -501,6 +510,29 @@ def _reconcile_membership(snapshot):
     standalone = _runtime_mode() == "standalone"
     if _runtime_mode() not in ("hermes", "standalone"):
         return ["runtime_mode_unverifiable"]
+    try:
+        manifest_path = Path(MANIFEST_PATH)
+        if manifest_path.is_symlink() or manifest_path.stat().st_size > 262144:
+            manifest = {}
+        else:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        manifest = {}
+    evidence = []
+    for source in (snapshot, manifest):
+        rows = source.get("cron", []) if isinstance(source, dict) else []
+        if isinstance(rows, list):
+            evidence.extend(rows)
+    current_cron = KNOWN_CRON_SCRIPTS - {"mcs_offsite.sh"}
+    backup = _runtime_config().get("backup", {"enabled": False})
+    if not isinstance(backup, dict) or type(backup.get("enabled")) is not bool:
+        # Unknown intent cannot authorize retirement of an owned backup job.
+        problems.append("backup_config_unverifiable")
+        current_cron |= {"mcs_offsite.sh"}
+    elif backup["enabled"] and os.path.isfile(
+            os.path.join(REPO, "deployment", "scripts", "mcs_offsite.sh")):
+        current_cron |= {"mcs_offsite.sh"}
     desired_cron = {os.path.basename(c.get("script") or "")
                     for c in (snapshot or {}).get("cron", [])
                     if isinstance(c, dict)}
@@ -540,11 +572,12 @@ def _reconcile_membership(snapshot):
                 jid, body = block.group(1), block.group(2)
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
-                script = os.path.basename(
-                    (fields.get("Script") or "").strip())
+                script_path = (fields.get("Script") or "").strip()
+                script = os.path.basename(script_path)
                 if script.startswith("mcs_") and script.endswith(".sh") \
                         and script not in desired_cron \
-                        and script not in KNOWN_CRON_SCRIPTS:
+                        and script not in current_cron \
+                        and _owned_cron(jid, script_path, evidence):
                     removed = subprocess.run([hermes, "cron", "remove", jid],
                                              capture_output=True, timeout=T_GIT)
                     if removed.returncode != 0:
@@ -572,11 +605,10 @@ def _reconcile_membership(snapshot):
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
-    if _standalone():
+    cfg = _runtime_config()
+    if cfg.get("runtime_mode") == "standalone":
         # best-effort to the system-alert channel (notify_flush's choice)
         try:
-            with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
-                cfg = json.load(f)
             target = cfg.get("notify_system_target") or cfg.get("notify_target")
             python = os.path.join(HOME, "venv", "bin", "python3")
             entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
@@ -601,23 +633,7 @@ def _notify(text):
             pass
         return
     try:
-        if _runtime_mode() == "standalone":
-            cfg = _runtime_config()
-            target = cfg.get("notify_system_target") or cfg.get("notify_target")
-            exe = _setup_python()
-            entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
-            if exe and isinstance(target, str) and os.path.isfile(entry):
-                process = subprocess.Popen([exe, entry, "send", "--root", str(Path(DATA).parent),
-                                            "--to", target], stdin=subprocess.PIPE,
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                           close_fds=True, start_new_session=True)
-                try:
-                    process.communicate(json.dumps({"text": text, "files": []}).encode(), timeout=30)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.communicate(timeout=5)
-            return
-        if _runtime_mode() != "hermes":
+        if cfg.get("runtime_mode", "hermes") != "hermes":
             return
         import shutil
         hermes = shutil.which("hermes") \

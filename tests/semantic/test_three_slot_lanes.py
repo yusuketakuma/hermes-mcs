@@ -55,6 +55,12 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
     seen = []
     monkeypatch.setattr(semantic, '_process_job',
                         lambda ledger, cfg, job, *a, **k: seen.append(job['message_id']) or 'stale')
+
+    def no_fairness(*a, **k):
+        raise AssertionError('explicit lane must not compute fairness lanes')
+    # an explicit lane selects its own rows; the lane=None fairness
+    # computation would be discarded, so it must not run at all
+    monkeypatch.setattr(semantic_drain, '_due_lanes', no_fairness)
     try:
         semantic.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1,

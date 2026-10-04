@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -45,7 +46,29 @@ _SYMPTOMS = ("発熱", "お熱", "高熱", "血尿", "疼痛", "痛み", "嘔気
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
-_URGENT = ("至急", "緊急", "早急", "すぐに", "急ぎ", "救急", "搬送")
+_URGENT = re.compile(
+    r"至急|緊急(?:搬送|受診|対応)?|早急|すぐに|急ぎ|救急(?:搬送|受診)?|搬送")
+_URGENT_CLAUSES = re.compile(
+    r"[。！？!?;\n]|しかし|ただし|けれど(?:も)?|"
+    r"(?<=ない)が|(?<=ません)が|(?<=した)が|(?<=ました)が|(?<=です)が")
+# A past/future word negates only when it directly modifies the urgent
+# word (「来週、緊急受診」); 「明日の訪問前に至急」 or 「昨日の採血で…、至急」 stay current,
+# and 「昨日から/より」「明日までに」 bound a current need, so they never match here.
+_URGENT_NONCURRENT = re.compile(
+    r"(?:昨日|一昨日|先日|先週|先月|昨年|以前|過去|"
+    r"明日|明後日|来週|来月|来年|後日|今度|\d+日前|\d+日後)"
+    r"(?:には|にも|は|に|も)?[、,\s　]*$")
+# A request in the same clause stays current even after a time word
+# (「明日、至急ご連絡ください」); only plans/reports are cancelled.
+_URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
+_URGENT_INACTIVE = re.compile(
+    r"^(?:性|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
+    r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|し|する)?"
+    r"(?:ありません|ません|ない|なく|なし|"
+    r"不要(?!では(?:ありません|ない))|必要(?:は|が)?(?:ありません|ない|なし)|"
+    r"済み|完了|(?:た|ました|された|されました)"
+    # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
+    r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
              (r"共有(?:いたします|します|をお願い|させて)", "share"),
@@ -61,7 +84,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 6
+RULE_VERSION = 7
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -302,72 +325,114 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["soap"] = soap
 
     # --- urgency ---
-    if any(u in body for u in _URGENT):
-        out["urgency"] = "high"
+    # ponytail: explicit lexical scope only; implicit tense needs grounded LLM extraction.
+    for clause in _URGENT_CLAUSES.split(body):
+        # Adjacent urgent words (「すぐに搬送」「緊急で搬送」) share one scope.
+        spans: list[list[int]] = []
+        for match in _URGENT.finditer(clause):
+            if spans and clause[spans[-1][1]:match.start()].strip() in ("", "で"):
+                spans[-1][1] = match.end()
+            else:
+                spans.append([match.start(), match.end()])
+        cursor = 0
+        for i, (start, end) in enumerate(spans):
+            before = clause[cursor:start]
+            cursor = end
+            stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
+            if ((_URGENT_NONCURRENT.search(before)
+                 and not _URGENT_REQUEST.search(clause[end:]))
+                    or _URGENT_INACTIVE.match(clause[end:stop].strip())):
+                continue
+            out["urgency"] = "high"
+            break
+        if out.get("urgency") == "high":
+            break
     return out
 
 
-def _delete_stale(ledger) -> int:
-    """Drop extract_v1 artifacts whose pinned hash no longer matches the
-    live body (content_hash drift — MCS allows edits). NULL meta hashes
-    (legacy CLI artifacts) count as stale — a missing hash must never
-    shield a changed body (Oracle B19). Returns the dropped row count."""
-    stale = ledger.db.execute("""
-      SELECT DISTINCT a.message_id FROM artifacts a
-      JOIN messages m ON m.message_id=a.message_id
-      WHERE a.kind=? AND CASE WHEN json_valid(a.meta) THEN
+_STALE = """CASE WHEN json_valid(a.meta) THEN
         json_extract(a.meta,'$.hash') IS NULL
         OR json_extract(a.meta,'$.hash') != m.content_hash
         OR COALESCE(json_extract(a.meta,'$.rule_version'),0) != ?
-      ELSE 0 END
+      ELSE 0 END"""
+_EXTRACTABLE = """m.body_text IS NOT NULL AND m.body_text != ''
+        AND (m.body_state IS NULL OR m.body_state='full')"""
+
+
+def _delete_stale(ledger) -> set:
+    """Find extract_v1 artifacts whose pinned hash no longer matches the
+    live body (content_hash drift — MCS allows edits) or whose rule
+    version is old. NULL meta hashes (legacy CLI artifacts) count as stale
+    — a missing hash must never shield a changed body (Oracle B19).
+    Stale rows whose body can no longer be extracted are dropped here; the
+    rest are returned and kept until _extract_rows replaces them, so a
+    deadline cut never leaves a message without extract_v1."""
+    stale = ledger.db.execute(f"""
+      SELECT DISTINCT a.message_id, {_EXTRACTABLE} AS ok FROM artifacts a
+      JOIN messages m ON m.message_id=a.message_id
+      WHERE a.kind=? AND {_STALE}
     """, (KIND, RULE_VERSION)).fetchall()
-    for r in stale:
-        ledger.db.execute(
-            "DELETE FROM artifacts WHERE kind=? AND message_id=?",
-            (KIND, r["message_id"]))
-    ledger.db.commit()
-    return len(stale)
+    with ledger.db:
+        for r in stale:
+            if not r["ok"]:
+                ledger.db.execute(
+                    "DELETE FROM artifacts WHERE kind=? AND message_id=?",
+                    (KIND, r["message_id"]))
+    return {r["message_id"] for r in stale if r["ok"]}
 
 
-def run_pending(ledger) -> dict:
+def run_pending(ledger, *, deadline: float | None = None) -> dict:
     """Extract messages lacking an extract_v1 artifact, and re-extract
     ones whose body changed on the server (content_hash drift — see
     _delete_stale). Returns {done, pids} so rollups can rebuild touched
     patients."""
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"done": 0, "pids": []}
     _delete_stale(ledger)
-    rows = ledger.db.execute("""
+    rows = ledger.db.execute(f"""
       SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
              m.content_hash
       FROM messages m
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
-        AND m.message_id NOT IN (SELECT message_id FROM artifacts
-                                 WHERE kind=? AND message_id IS NOT NULL)
+      WHERE {_EXTRACTABLE}
+        AND (m.message_id NOT IN (SELECT message_id FROM artifacts
+                                  WHERE kind=? AND message_id IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM artifacts a
+                        WHERE a.kind=? AND a.message_id=m.message_id
+                          AND {_STALE}))
       ORDER BY m.posted_at_ts DESC
-    """, (KIND,)).fetchall()
-    return {"done": len(rows), "pids": sorted(_extract_rows(ledger, rows))}
+    """, (KIND, KIND, RULE_VERSION)).fetchall()
+    done, pids = _extract_rows(ledger, rows, deadline=deadline)
+    return {"done": done, "pids": sorted(pids)}
 
 
 _CHUNK = 200   # rows per commit: a RULE_VERSION bump re-extracts ~17k rows,
                # but the drainer's per-write lock must not wait long
 
 
-def _extract_rows(ledger, rows) -> set:
-    """Insert one extract_v1 artifact per row, committing every _CHUNK
-    rows; a crash keeps committed chunks and the rest stays pending.
+def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, set[int]]:
+    """Replace each row's extract_v1 artifact (delete + insert in the same
+    transaction), committing every _CHUNK rows; a crash keeps committed
+    chunks and the rest keeps its old artifact until the next pass.
     Returns the touched project ids."""
     pids = set()
+    done = 0
     for i in range(0, len(rows), _CHUNK):
         with ledger.db:
             for r in rows[i:i + _CHUNK]:
+                if deadline is not None and time.monotonic() >= deadline:
+                    return done, pids
                 d = extract_message(r["body_text"], r["posted_at"])
+                ledger.db.execute(
+                    "DELETE FROM artifacts WHERE kind=? AND message_id=?",
+                    (KIND, r["message_id"]))
                 ledger.artifact_add_tx(
                     KIND, json.dumps(d, ensure_ascii=False),
                     project_id=r["project_id"], message_id=r["message_id"],
                     model="rules-v1", meta={"hash": r["content_hash"],
                                             "rule_version": RULE_VERSION})
                 pids.add(r["project_id"])
-    return pids
+                done += 1
+    return done, pids
 
 
 def main() -> int:
@@ -403,14 +468,13 @@ def main() -> int:
         params.append(args.project)
     rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
 
-    if not args.stats:
-        # Same stale cleanup as the tick path: a hash-drifted artifact
-        # (edited body, or a legacy row without a pinned hash) must not
-        # count as done — otherwise --all could never re-extract it.
-        _delete_stale(led)
+    # Same stale handling as the tick path: a hash-drifted artifact
+    # (edited body, or a legacy row without a pinned hash) must not
+    # count as done — otherwise --all could never re-extract it.
+    stale = set() if args.stats else _delete_stale(led)
     done = {r["message_id"] for r in led.db.execute(
         "SELECT message_id FROM artifacts WHERE kind=? "
-        "AND message_id IS NOT NULL", (KIND,))}
+        "AND message_id IS NOT NULL", (KIND,))} - stale
     todo = [r for r in rows if r["message_id"] not in done]
     if args.stats:
         todo = []
