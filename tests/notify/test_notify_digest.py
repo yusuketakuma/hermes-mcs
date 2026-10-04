@@ -285,6 +285,8 @@ def test_stale_alerts_skip_acked(led):
 
 
 def test_task_counts(led):
+    _patient(led, 1)
+    _msg(led, 1)
     for due, status in (("2026-09-30", "open"), ("2026-10-01", "in_progress"),
                         (None, "open"), ("2026-09-01", "done")):
         led.db.execute(

@@ -2509,7 +2509,7 @@ def test_structured_view_shows_v4_detail(tmp_path):
     joined = "\n".join(lines)
     assert "トラマドール 25mg[開始](内服・1日2回)" in joined
     assert "疼痛(中等度・昨日から)" in joined
-    assert "検査: HbA1c 7.2%(高)" in joined
+    assert "検査候補（未確認）: HbA1c 7.2%(高)" in joined
     db.close()
 
 
@@ -2553,6 +2553,8 @@ def test_invalid_chunk_checkpoint_is_reinferred(tmp_path, monkeypatch, bad):
     elif bad == "content_scalar":
         db.db.execute("UPDATE artifacts SET content='7' WHERE kind='extract_llm_chunk'")
     else:
+        # Plant a malformed legacy checkpoint without disabling other guards.
+        db.db.execute("DROP TRIGGER g1_artifacts_msg_upd")
         db.db.execute("UPDATE artifacts SET project_id=2 WHERE kind='extract_llm_chunk'")
     db.db.commit()
     calls = []
@@ -2781,6 +2783,7 @@ def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
     from ledger import Ledger
     db = Ledger(str(tmp_path / "revive.db"))
     try:
+        db.save_messages([_message(7)])
         now = time.time()
         r = {"project_id": 1, "message_id": 7, "content_hash": "h1"}
         extract_llm._fail(db, r, 4)                       # attempts=5
@@ -2802,5 +2805,58 @@ def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
             db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
                           (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
         assert extract_llm.revive_failed(db, now)["revived"] == 1
+    finally:
+        db.close()
+
+
+def test_nightly_revive_refail_through_run_pending_keeps_cap(tmp_path, monkeypatch):
+    """The production refail path (run_pending with a failing model)
+    carries auto_retry forward, so REVIVE_PER_INPUT still stops a body
+    that always fails."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(body="合成の本文 常に失敗")])
+        r = {"project_id": 1, "message_id": 1, "content_hash": _hash(db)}
+        extract_llm._fail(db, r, 4)                       # attempts=5
+        monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **_: True)
+        now = time.time()
+
+        def age():
+            with db.db:
+                db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
+                              (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
+        age()
+        for night in range(1, extract_llm.REVIVE_PER_INPUT + 1):
+            assert extract_llm.revive_failed(db, now)["revived"] == 1
+            assert extract_llm.run_pending(db, limit=10, budget_s=30)["failed"] == 1
+            metas = [json.loads(x["meta"]) for x in db.artifacts("extract_llm", message_id=1)]
+            assert len(metas) == 1
+            assert metas[0]["error"] and metas[0]["attempts"] == 5
+            assert metas[0]["auto_retry"] == night
+            age()
+        assert extract_llm.revive_failed(db, now) == {"revived": 0, "skipped_cap": 1}
+    finally:
+        db.close()
+
+
+def test_refail_ignores_older_version_auto_retry(tmp_path):
+    """An older extract version's spent revivals for the same body must
+    not carry into the current version's first failure."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(body="合成の本文 版違い")])
+        r = {"project_id": 1, "message_id": 1, "content_hash": _hash(db)}
+        extract_llm._fail(db, r, 4)
+        with db.db:
+            db.db.execute(
+                "UPDATE artifacts SET meta=json_set(meta,'$.extract_version',?,"
+                "'$.auto_retry',?) WHERE kind='extract_llm'",
+                (extract_llm.EXTRACT_VERSION - 1, extract_llm.REVIVE_PER_INPUT))
+        extract_llm._fail(db, r, 0)
+        metas = [json.loads(x["meta"]) for x in db.artifacts("extract_llm", message_id=1)]
+        assert len(metas) == 1
+        assert metas[0]["extract_version"] == extract_llm.EXTRACT_VERSION
+        assert "auto_retry" not in metas[0]
     finally:
         db.close()

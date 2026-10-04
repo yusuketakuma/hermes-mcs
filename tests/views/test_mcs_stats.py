@@ -218,6 +218,20 @@ def test_meds_counts_actions(db):
     assert st["distinct_names"] == 2
 
 
+def test_meds_scans_med_messages_once(db, monkeypatch):
+    """ST-007's name table and candidate block share one read."""
+    _msg(db, 1, chash="h1")
+    _extract(db, 1, "h1", [{"name": "マグミット", "action": "start"}])
+    calls = []
+    real = mcs_stats._med_messages
+    monkeypatch.setattr(mcs_stats, "_med_messages",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+    st = run(db, stat="meds")["meds"]
+    assert len(calls) == 1
+    assert st["by_ingredient_candidate"]["mentions"] == \
+        sum(st["action_totals"].values()) == 1
+
+
 def test_med_change_burden_excludes_unknown_day(db):
     """posted_at_ts NULL -> day 'unknown' must not leak into dated
     windows (string compare 'unknown' >= cutoff is always true)."""
@@ -380,3 +394,21 @@ def test_request_is_not_overdue_on_its_due_date(db):
     days = {r["request_id"]: r["days_since_due"]
             for r in st["formal_open_requests"]["items"]}
     assert days == {1: 0, 2: 1}
+
+
+def test_capability_evidence_is_not_a_med_change(db):
+    """「〜は出来ない」 capability spans are excluded from change burden and
+    follow-up stats (same contract as the signals); a plain stop counts."""
+    old = SNAP_TS - 30 * 86400
+    _msg(db, 1, chash="h1", ts=old)
+    _extract(db, 1, "h1", [{"name": "インスリン", "action": "stop",
+                            "evidence": "自己注射は出来ない"}])
+    _msg(db, 2, pid=2, chash="h2", ts=old)
+    _extract(db, 2, "h2", [{"name": "薬B", "action": "stop",
+                            "evidence": "薬Bは中止"}])
+    st = run(db, stat="med_change_followup")
+    nf = st["med_change_followup"]["no_followup_record"]
+    assert [r["message_id"] for r in nf["items"]] == [2]
+    st = run(db, stat="med_change_burden")
+    days = st["med_change_burden"]["busiest_days"]["items"]
+    assert [r["project_id"] for r in days] == [2]

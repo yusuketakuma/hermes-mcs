@@ -57,7 +57,7 @@ def _watch(reader, now, project_id=None):
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
-    from message_metadata import _read_metadata
+    from message_metadata import REACTION_LABELS, _read_metadata
     now = time.time() if now is None else now
     db = reader.db
     counts = Counter()
@@ -94,7 +94,7 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
         if not cap_seen:
             counts["shadow_only"] += 1
             continue
-        lag[_lag_bucket(sh["checked_at"] - cap["reactions_observed_at"])] += 1
+        lag[_lag_bucket(sh["reactions_observed_at"] - cap["reactions_observed_at"])] += 1
         c, s = _by_type(cap["reactions"]), _by_type(sh["reactions"])
         types = sorted(set(c) | set(s))
         diff_types = [t for t in types
@@ -102,8 +102,8 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
         flag_types = [t for t in types
                       if c.get(t, {}).get("self_reacted", False)
                       != s.get(t, {}).get("self_reacted", False)]
-        count_diff.update(diff_types)
-        self_diff.update(flag_types)
+        count_diff.update(t if t in REACTION_LABELS else "unknown" for t in diff_types)
+        self_diff.update(t if t in REACTION_LABELS else "unknown" for t in flag_types)
         outcome = "mismatch" if diff_types or flag_types else "match"
         counts[outcome] += 1
         newer = ("capture_newer" if cap["checked_at"] > sh["checked_at"] else

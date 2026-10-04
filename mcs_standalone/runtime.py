@@ -17,7 +17,7 @@ import uuid
 from xml.sax.saxutils import escape
 
 from mcs_runtime import python_executable
-from mcs_setup import CRON_JOBS, CRON_TIMEOUT_S, _TIMEOUT_PL, _calendar, _render_template
+from mcs_setup import CRON_TIMEOUT_S, _TIMEOUT_PL, _calendar, _render_template, configured_cron_jobs
 from mcs_util import UPDATE_MARKER_NAME, atomic_write
 
 from . import config, service
@@ -36,6 +36,8 @@ class Runtime:
         self.generation = uuid.uuid4().hex
         self.children = {}
         self.retry_at = {}
+        # Command inbox names drained by the last successful run; None after a failure.
+        self.drained = {}
         self.last_minute = None
         self.restarting = False
         subs = {"PYTHON": python_executable(cfg, root=self.root), "REPO": str(REPO),
@@ -49,13 +51,13 @@ class Runtime:
             self.argv["lineworks"] = [subs["PYTHON"], "-m", "lineworks_adapter", "run",
                                       "--root", str(self.root)]
         self.schedules = []
-        for _, schedule, script in CRON_JOBS:
+        for _, schedule, script in configured_cron_jobs(cfg):
             job = "update" if script == "mcs_update.sh" else script.removesuffix(".sh")
             self.argv[job] = ["/usr/bin/perl", "-e", _TIMEOUT_PL, str(CRON_TIMEOUT_S),
                               "/bin/bash", str(self.root / "scripts" / script)]
             self.schedules.append((job, _calendar(schedule)))
 
-    def start(self, job, kind, now):
+    def start(self, job, kind, now, pending=None):
         if job in self.children or now < self.retry_at.get(job, 0):
             return
         path = self.data / (job + ".log")
@@ -70,7 +72,8 @@ class Runtime:
             self.restarting = True
             log("child_start_failed", job=job)
             return
-        self.children[job] = {"process": child, "kind": kind, "stopping_at": None}
+        self.children[job] = {"process": child, "kind": kind, "stopping_at": None,
+                              "pending": pending}
         log("child_started", job=job)
 
     def _restart_requested(self, now):
@@ -94,9 +97,14 @@ class Runtime:
         updating = os.path.lexists(self.data / UPDATE_MARKER_NAME)
         for job, row in list(self.children.items()):
             child = row["process"]
-            if child.poll() is not None:
+            code = child.poll()
+            if code is not None:
                 del self.children[job]
-                self.retry_at[job] = now if updating else now + 30
+                # Card/approval intake is local and cheap: match launchd's 10 s throttle
+                # after success. `cmd` contacts MCS, so it keeps the 30 s backoff.
+                backoff = 10 if job == "cmd_int" and code == 0 else 30
+                self.retry_at[job] = now if updating else now + backoff
+                self.drained[job] = row.get("pending") if code == 0 else None
                 log("child_ended", job=job)
             elif (updating or self.restarting) and row["kind"] == "background":
                 if row["stopping_at"] is None:
@@ -108,8 +116,16 @@ class Runtime:
             for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
                 self.start(job, "background", now)
             for job in COMMANDS:
-                if any((self.data / job).glob("*.json")):
-                    self.start(job, "core", now)
+                names = {path.name for path in (self.data / job).glob("*.json")}
+                if not names:
+                    continue
+                # A new card click after a successful run must not wait out the backoff
+                # (Discord waits 20 s). Only cmd_int: `cmd` contacts MCS. Failures and
+                # files left by a consent hold still wait.
+                drained = self.drained.get(job)
+                if job == "cmd_int" and drained is not None and names - drained:
+                    self.retry_at.pop(job, None)
+                self.start(job, "core", now, names)
             minute = int(now // 60)
             if minute != self.last_minute:
                 self.last_minute = minute
@@ -117,6 +133,9 @@ class Runtime:
                 for job, entries in self.schedules:
                     if any(entry.get("Hour", local.tm_hour) == local.tm_hour
                            and entry.get("Minute", local.tm_min) == local.tm_min for entry in entries):
+                        # The crash-loop backoff is for workers; a slot fires only once,
+                        # so a run that ended just before it must not drop it (launchd parity).
+                        self.retry_at.pop(job, None)
                         self.start(job, "core", now)
         snapshot = {"pid": os.getpid(), "generation": self.generation, "updated_at": now,
                     "update_in_progress": updating,

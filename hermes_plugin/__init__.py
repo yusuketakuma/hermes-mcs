@@ -9,6 +9,7 @@ confirmed command file handed to ``mcs_requests.enqueue``.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import uuid
 from collections.abc import Mapping
@@ -186,9 +187,10 @@ def _settings(ctx) -> dict[str, Any] | None:
     # receipt scoping can only compare fields we actually know — the
     # interactive card config is optional for the /mcs surface
     for key in ("application_id", "guild_id"):
-        value = ctx.get_config(key, None)
-        if isinstance(value, str) and value.strip():
-            settings[key] = value.strip()
+        # `hermes config set` stores bare-digit ids as int
+        value = _id_text(ctx.get_config(key, None))
+        if value is not None:
+            settings[key] = value
     return settings
 
 
@@ -221,8 +223,11 @@ def _authorize_system(settings: dict[str, Any],
 
 
 def _adapter_modules():
-    if str(_ADAPTER_DIR) not in sys.path:
-        sys.path.insert(0, str(_ADAPTER_DIR))
+    # Hermes loads this plugin by file location without the repo root on
+    # sys.path; `adapters.common` (op=summary) needs it, as the shims do.
+    for root in (_ADAPTER_DIR.parent, _ADAPTER_DIR):
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
     import _mcs_path  # noqa: F401  registers every subdir as import root
     import mcs_requests
     import mcs_view
@@ -637,16 +642,18 @@ def _build_preview(data: dict, settings: dict[str, Any],
     finally:
         if view is not None:
             view.close()
+    extra = {"loop_candidate": loop_candidate} if loop_ref is not None else {}
+    return _preview(requests, identity, "request", payload, **extra)
+
+
+def _preview(requests, identity: dict[str, str | None], operation: str,
+             payload: dict, **extra) -> str:
+    """The human-confirmation envelope; `_confirmation_parts` recomputes
+    this payload+origin hash on confirm, so every preview goes through here."""
     origin = _confirmation_origin(identity)
-    confirmation = requests.payload_hash({"payload": payload, "origin": origin})
-    fields = {
-        "operation": "request", "phase": "preview", "payload": payload,
-        "payload_hash": confirmation, "origin": origin, "queued": False,
-        "confirmation_required": True,
-    }
-    if loop_ref is not None:
-        fields["loop_candidate"] = loop_candidate
-    return _ok(**fields)
+    return _ok(operation=operation, phase="preview", payload=payload,
+               payload_hash=requests.payload_hash({"payload": payload, "origin": origin}),
+               origin=origin, queued=False, confirmation_required=True, **extra)
 
 
 def _build_control_preview(data: dict, settings: dict[str, Any],
@@ -669,10 +676,7 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
             view.close()
         if error or requests.validate(payload):
             return _deny(error or "invalid_command")
-        origin = _confirmation_origin(identity)
-        return _ok(operation="control", phase="preview", payload=payload, origin=origin,
-                   payload_hash=requests.payload_hash({"payload": payload, "origin": origin}),
-                   queued=False, confirmation_required=True)
+        return _preview(requests, identity, "control", payload)
     if action in ("update_apply", "update_rollback", "restore_approve"):
         # Projectless lifecycle ops — user/chat allowlist only; no view
         # needed (there is no project scope to resolve against).
@@ -688,12 +692,7 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
                                    f"ops.{action}")
         except ValueError as e:
             return _deny(str(e))
-        origin = _confirmation_origin(identity)
-        confirmation = requests.payload_hash(
-            {"payload": payload, "origin": origin})
-        return _ok(operation="control", phase="preview", payload=payload,
-                   payload_hash=confirmation, origin=origin, queued=False,
-                   confirmation_required=True)
+        return _preview(requests, identity, "control", payload)
     project_id, error = _authorize(settings, identity, data.get("project_id"))
     if error:
         return _deny(error)
@@ -773,18 +772,10 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
     finally:
         if view is not None:
             view.close()
-    origin = _confirmation_origin(identity)
-    confirmation = requests.payload_hash({"payload": payload, "origin": origin})
-    fields = {
-        "operation": "control", "phase": "preview", "payload": payload,
-        "payload_hash": confirmation, "origin": origin, "queued": False,
-        "confirmation_required": True,
-    }
-    if comparison is not None:
-        fields["comparison"] = comparison
+    extra = {"comparison": comparison} if comparison is not None else {}
     if retry_budget is not None:
-        fields["retry_budget"] = retry_budget
-    return _ok(**fields)
+        extra["retry_budget"] = retry_budget
+    return _preview(requests, identity, "control", payload, **extra)
 
 
 def _confirmation_parts(data: dict, requests,
@@ -918,10 +909,9 @@ def _notification_receipt(data: dict, settings: dict[str, Any],
     scope, and the caller's allowed projects."""
     if set(data) - (_RECEIPT_FIELDS | ({"phase"} if operator else set())):
         return _deny("unknown_field")
-    if identity["user_id"] not in settings["allowed_user_ids"]:
-        return _deny("user_not_allowed")
-    if identity["chat_id"] not in settings["allowed_chat_ids"]:
-        return _deny("chat_not_allowed")
+    error = _authorize_system(settings, identity)
+    if error:
+        return _deny(error)
     command_id = _id_text(data.get("command_id"))
     if command_id is None:
         return _deny("bad_receipt_identity")
@@ -950,8 +940,24 @@ def _notification_receipt(data: dict, settings: dict[str, Any],
     return _ok(operation="receipt", result=result)
 
 
+_DENIAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
 def _dispatch(data: dict, settings: dict[str, Any],
               identity: dict[str, str | None]) -> str:
+    # Helpers raise ValueError(code) for source_missing, request_not_found,
+    # bad_due_date, ...; surface the code so the reader can tell a typo from
+    # an incomplete fetch. Anything that is not a bare code (paths, values)
+    # still collapses to operation_failed.
+    try:
+        return _dispatch_op(data, settings, identity)
+    except ValueError as error:
+        code = str(error)
+        return _deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
+
+
+def _dispatch_op(data: dict, settings: dict[str, Any],
+                 identity: dict[str, str | None]) -> str:
     op = data.get("op")
     if op == "status":
         if set(data) - _STATUS_FIELDS:
@@ -1069,5 +1075,4 @@ def register(ctx) -> None:
 # names keep the historical test-facing surface of this module.
 from .card_workers import _interactive_settings  # noqa: E402,F401
 from .card_workers import _slack_adapter_settings  # noqa: E402,F401
-from .card_workers import make_discord_factory as _make_discord_factory  # noqa: E402,F401
 from .card_workers import make_slack_factory as _make_slack_factory  # noqa: E402,F401

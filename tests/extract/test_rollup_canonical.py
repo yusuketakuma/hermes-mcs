@@ -96,6 +96,8 @@ def test_rule_rollup_requires_current_patient_source(db, invalid):
     _add(db, 1, "extract_v1", {"vitals": {"temp": 38.1}},
          "2026-09-18T00:00:00+09:00")
     if invalid == "foreign_patient":
+        # Deliberate old-row corruption for the reader-defense assertion.
+        db.db.execute("DROP TRIGGER g1_artifacts_msg_upd")
         db.db.execute("UPDATE artifacts SET project_id=2")
     else:
         db.db.execute("UPDATE messages SET body_state='deleted'")

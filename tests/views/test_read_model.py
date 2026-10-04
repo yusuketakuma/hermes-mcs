@@ -165,6 +165,7 @@ def test_v4_read_model_rejects_unusable_newer_rows(tmp_path, fault):
                   changed)
         if fault == 'wrong_project':
             with db.db:
+                db.db.execute("DROP TRIGGER g1_artifacts_msg_upd")
                 db.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id='
                               '(SELECT MAX(artifact_id) FROM artifacts)')
         rec = read_model.read_model(db.db)['records'][0]

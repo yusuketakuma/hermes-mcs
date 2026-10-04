@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: no secrets or data dirs tracked
         run: |
-          bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|config\.json$|token_cache\.json$)' || true)
+          bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|\.env\.[^/]*$|config\.json$|config\.json\.[^/]*$|token_cache\.json$)' || true)
           if [ -n "$bad" ]; then
             echo "::error::forbidden files tracked:"; echo "$bad"; exit 1
           fi
@@ -77,7 +77,7 @@ jobs:
       - name: secret pattern scan
         run: |
           bad=$(git ls-files -z | xargs -0 grep -lnE \
-                '(xox[baprs]-[0-9A-Za-z-]+|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{20,})' || true)
+                '(xox[baprs]-[0-9A-Za-z-]+|xapp-[0-9]-[A-Z0-9]{8,}-[0-9]+-[0-9a-f]{20,}|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{20,}|BEGIN [A-Z ]*PRIVATE KEY)' || true)
           if [ -n "$bad" ]; then
             echo "::error::possible secret committed:"; echo "$bad"; exit 1
           fi
@@ -99,10 +99,9 @@ jobs:
           python-version: "3.13"
       - name: pinned standalone SDKs
         run: pip install "pytest==9.1.1" -r deployment/requirements-standalone.txt
+      # pinned-version assertion + required-collection check + test guards
       - name: standalone SDK integration
-        run: >-
-          scripts/run_tests.sh integration/test_standalone_sdk.py
-          integration/test_standalone_discord.py integration/test_standalone_slack_sdk.py -x
+        run: MCS_TEST_PYTHON="$(command -v python)" sh scripts/check_pinned_sdks.sh standalone
 
   incident-gates:
     runs-on: ubuntu-latest

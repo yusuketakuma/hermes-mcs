@@ -216,20 +216,21 @@ def _own_unreacted(db, until, ok, room, self_id) -> list:
     return head + _listed(rows)
 
 
-def _response_state(db, r, self_id) -> tuple:
+def _response_state(db, r, self_id, as_of) -> tuple:
     """(本人の後続返信あり, 本人スタンプ表示) — 同スレッド・投稿後のみ数える。"""
-    root = r["parent_id"] or r["message_id"]
-    replied = any(mcs_signals.normalize_sender_id(x[0]) == self_id for x in db.execute(
-        "SELECT sender_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?) "
-        "AND posted_at_ts>? AND COALESCE(body_state,'')!='deleted'",
-        (r["project_id"], root, root, r["posted_at_ts"] or 0)))
-    meta = get_message_metadata(db, r["message_id"])
-    mine = (None if meta["reactions"] is None else
-            any(x["self_reacted"] for x in meta["reactions"]))
+    meta = get_message_metadata(db, r["message_id"], as_of=as_of)
+    observed = meta["response_observation"]
+    replied = observed["reply"]["state"] == "observed"
+    stamp_state = observed["self_reaction"]["state"]
+    mine = (bool(observed["self_reaction"]["types"])
+            if stamp_state == "observed" else None)
     stamp = ("本人スタンプ" + ("取得不正" if meta["reactions_status"] == "invalid"
+                              else "再取得失敗" if stamp_state == "failed"
                               else "未取得") if mine is None
              else "本人スタンプあり" if mine else "本人スタンプ観測なし")
-    return replied, mine, f"自分の返信{'あり' if replied else '観測なし'}・{stamp}"
+    reply = ("あり" if replied else "判定不可（本人ID・時刻不明）"
+             if observed["reply"]["state"] == "unknown" or self_id is None else "観測なし")
+    return replied, mine, f"自分の返信{reply}・{stamp}"
 
 
 def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
@@ -242,8 +243,10 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                     and c["type"] == "pharmacist_request_unanswered" and mids):
                 continue
             msg = db.execute("SELECT message_id,project_id,parent_id,posted_at_ts "
-                             "FROM messages WHERE message_id=?", (mids[0],)).fetchone()
-            state = _response_state(db, msg, self_id)[2] if msg and self_id else "本人ID不明"
+                             "FROM messages WHERE message_id=? AND project_id=?",
+                             (mids[0], c["project_id"])).fetchone()
+            state = (_response_state(db, msg, self_id, until)[2]
+                     if msg and self_id else "本人ID不明")
             rows.append(f"・{room(c['project_id'])} / message {mids[0]} "
                         f"薬剤師宛依頼の応答未確認（シグナル）・{state}")
     unknown, station = 0, 0
@@ -259,7 +262,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             station += any(m["type"] == "station" for m in meta["mentions"])
             if not hit:
                 continue
-            replied, mine, state = _response_state(db, r, self_id)
+            replied, mine, state = _response_state(db, r, self_id, until)
             if not replied and not mine:
                 rows.append(f"・{room(r['project_id'])} / message {r['message_id']} "
                             f"本人宛メンション・{_ago(until - r['posted_at_ts'])}・{state}")
@@ -317,9 +320,11 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     project ids; ``allowed`` is the caller's project scope."""
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
+    live = {r[0] for r in db.execute(
+        "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0")}
 
     def ok(pid) -> bool:
-        return keep is None or pid in keep
+        return pid in live and (keep is None or pid in keep)
 
     def room(pid) -> str:
         name_ = _plain(_patient_name(db, pid)) if names else ""
@@ -372,8 +377,6 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             if ok(c["project_id"]):
                 stale_by[c["type"]] = stale_by.get(c["type"], 0) + 1
 
-    live = {r[0] for r in db.execute(
-        "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=0")}
     patients = len(live if keep is None else live & keep)
     summary = (f"新着 {len(rows)}件・緊急度高 {len(urgent)}件"
                + (f"・アラート {sum(by_type.values())}件" if signals_on else "")
@@ -609,10 +612,15 @@ def main(argv=None) -> int:
     # read-only: the CLI never writes or migrates the ledger
     db = sqlite3.connect(Path(DB).resolve().as_uri() + "?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
-    now = time.time()
-    parts = build(db, load_config(), now - flt["days"] * DAY_S, now, flt,
-                  names=args.names, name=args.name, private=True)
-    print(parts_text(parts, "plain"))
+    try:
+        answer = view(db, load_config(), " ".join(args.scope),
+                      names=args.names, name=args.name)
+    finally:
+        db.close()
+    if "error" in answer:
+        print(answer["error"], file=sys.stderr)
+        return 2
+    print(parts_text(answer["parts"], "plain"))
     return 0
 
 

@@ -43,6 +43,10 @@ import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
 from contextlib import suppress
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from project_metadata import MetadataFetch
 
 from mcs_util import atomic_write, env_value, load_config, no_proxy_opener
 from mcs_worker import WorkerError, bounded_call
@@ -1238,6 +1242,40 @@ class MCSAdapter:
         return out
 
     # ---------- reads ----------
+
+    def fetch_cross_list(self, dataset: str, *, unread_only: bool = False,
+                         max_pages: int = 5, per_page: int = 20,
+                         max_rows: int = 100, deadline_s: float = 25):
+        """Explicit bounded mentioned/bookmarked GET; no login or read-mark writes."""
+        from cross_lists import fetch_cross_list
+        return fetch_cross_list(self, dataset, unread_only=unread_only,
+                                max_pages=max_pages, per_page=per_page,
+                                max_rows=max_rows, deadline_s=deadline_s)
+
+    def fetch_project_members(self, project_id: int, *, max_pages: int = 5,
+                              per_page: int = 50, retain_names: bool = False) -> MetadataFetch:
+        """Bounded current membership GET; no photos, contacts or departed members."""
+        from project_metadata import fetch_metadata
+        return fetch_metadata(self._get, "care_team", project_id,
+                              max_pages=max_pages, per_page=per_page,
+                              retain_names=retain_names)
+
+    def fetch_observation_values(self, karte_id: int, lab_test_item_id: int, *,
+                                 max_pages: int = 5, per_page: int = 50) -> MetadataFetch:
+        """Read one evidenced lab-test item's values without fetching full karte data."""
+        from project_metadata import fetch_metadata
+        return fetch_metadata(self._get, "observation_values", karte_id,
+                              item_id=lab_test_item_id,
+                              max_pages=max_pages, per_page=per_page)
+
+    def fetch_group_consultations(self, project_id: int, *, project_type: str,
+                                  max_pages: int = 5, per_page: int = 20) -> MetadataFetch:
+        """Read group consultation metadata only; never infer patient associations."""
+        from project_metadata import fetch_metadata
+        if project_type != "group":
+            raise ValueError("group project evidence required")
+        return fetch_metadata(self._get, "consultations", project_id,
+                              max_pages=max_pages, per_page=per_page, project_type=project_type)
 
     def fetch_memo_summary(self, karte_id: int) -> dict | None:
         """Read the patient's 連携サマリー (memo_summary); None when none is registered.

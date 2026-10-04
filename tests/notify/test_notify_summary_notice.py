@@ -85,6 +85,25 @@ def test_real_failure_reissues_until_the_budget_then_holds(led):
     out = notify_cards.dispatch_intent(led, dict(ev), DAILY, now=NOW)
     assert out == {"error": "resend_exhausted"}
     assert len(_notices(led, ev)) == notify_cards.MAX_RESEND
+    assert json.loads(led.db.execute(
+        "SELECT progress FROM notify_outbox WHERE event_id=?",
+        (ev["event_id"],)).fetchone()[0])["hold_reason"] == "resend_exhausted"
+
+
+@pytest.mark.parametrize("payload", ["not-json", '{"parts":{}}'])
+def test_invalid_frozen_notice_payload_holds_with_reason(led, payload):
+    ev = _enqueue(led)
+    led.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?",
+                   (payload, ev["event_id"]))
+    led.db.commit()
+    out = notify_cards.dispatch_intent(
+        led, dict(led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                 (ev["event_id"],)).fetchone()), DAILY, now=NOW)
+    assert out == {"error": "payload_invalid"}
+    row = led.db.execute("SELECT state,progress FROM notify_outbox WHERE "
+                         "event_id=?", (ev["event_id"],)).fetchone()
+    assert row["state"] == "failed"
+    assert json.loads(row["progress"]) == {"hold_reason": "payload_invalid"}
 
 
 def test_kill_switch_falls_back_to_text_only_while_provably_unsent(led):

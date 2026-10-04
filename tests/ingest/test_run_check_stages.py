@@ -169,6 +169,7 @@ def test_notify_pending_attachments_jump_download_queue(tmp_path,
     without files and an accepted event never re-sends them."""
     db = _ledger(tmp_path)
     db.upsert_patient_info(_unread_patient(1))
+    db.save_messages([_message(mid) for mid in [*range(100, 110), 999]])
     # deep backlog of older pending attachments
     for i in range(10):
         db.db.execute(
@@ -743,6 +744,99 @@ def test_health_counts_held_sends_and_age_from_creation(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize(("progress", "reason"), [
+    ('{"hold_reason":"send_outcome_unknown"}', "send_outcome_unknown"),
+    ('{"hold_reason":"restore_text_unverified"}', "restore_text_unverified"),
+    ('{"hold_reason":"payload_or_progress_invalid"}', "payload_or_progress_invalid"),
+    (None, "not_recorded"),
+    ("not-json", "not_recorded"),
+    ("[]", "not_recorded"),
+    ('{"hold_reason":"SYNTHETIC_PRIVATE_REASON"}', "unknown"),
+    ('{"hold_reason":{"body":"SYNTHETIC_PRIVATE_REASON"}}', "unknown"),
+])
+def test_health_groups_only_safe_held_reason_codes(tmp_path, monkeypatch, progress, reason):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
+    try:
+        for _ in range(2):
+            eid = db.outbox_add("run_failed", None, {})
+            db.outbox_hold(eid)
+            db.db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                          (progress, eid))
+        # A reason on a pending event must not become held evidence.
+        pending = db.outbox_add("run_failed", None, {})
+        db.db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                      (progress, pending))
+        db.db.commit()
+        health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        assert health["overall"] == "degraded"
+        assert health["notify"]["held"] == 2
+        assert health["notify"]["held_reasons"] == {reason: 2}
+        assert health["notify"]["pending"] == 1
+        assert "SYNTHETIC_PRIVATE_REASON" not in json.dumps(health)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(("previous", "last_ok"), [
+    ({}, None),
+    ({"overall": "ok", "at": 100.0}, 100.0),
+    ({"overall": "degraded", "last_ok_at": 100.0}, 100.0),
+    ({"overall": "failed", "at": 100.0}, None),
+    ({"last_ok_at": None}, None),
+    ({"last_ok_at": True}, None),
+    ({"last_ok_at": "100"}, None),
+    ({"last_ok_at": -1}, None),
+    ({"last_ok_at": float("nan")}, None),
+    ({"last_ok_at": float("inf")}, None),
+])
+def test_health_preserves_known_success_without_fabricating_it(
+        tmp_path, monkeypatch, previous, last_ok):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: previous)
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
+    try:
+        health = run_check._health(db, {"errors": [], "notify": {}}, "failed")
+        assert health["overall"] == "failed"
+        assert health["last_ok_at"] == last_ok
+        assert health["state_reasons"] == ["run_failed"]
+    finally:
+        db.close()
+
+
+def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {"last_ok_at": 100.0})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
+    try:
+        db.outbox_hold(db.outbox_add("new_messages", 1, {"message_ids": [1]}))
+        result = {"errors": ["synthetic stage error"], "incomplete": [1],
+                  "notify": {"failed": 1, "skipped": 1, "parked": 1},
+                  "backup_skipped": "disk_low"}
+        health = run_check._health(db, result, "partial")
+        assert health["overall"] == "degraded"
+        assert health["last_ok_at"] == 100.0
+        assert health["state_reasons"] == [
+            "stage_errors", "collection_incomplete", "notification_failed",
+            "notification_deferred", "notification_parked", "notification_held",
+            "disk_low"]
+        assert health["notify"]["held"] == 1
+        healthy = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        assert healthy["overall"] == "degraded"
+        db.db.execute("UPDATE notify_outbox SET state='sent'")
+        db.db.commit()
+        healthy = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        assert healthy["overall"] == "ok"
+        assert healthy["last_ok_at"] == 1000.0
+        assert healthy["state_reasons"] == []
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("content,project,extra", [
     ("{}", 2, {}), ("{}", 1, {"error": "failed"}),
     ("[]", 1, {}), ("invalid", 1, {}),
@@ -752,6 +846,11 @@ def test_health_coverage_requires_usable_scoped_extraction(tmp_path, content, pr
     try:
         db.save_messages([_message()])
         source_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+        if project != 1:
+            # Plant pre-guard corruption to verify the reader's independent scope gate.
+            with db.db:
+                for suffix in ("ins", "upd"):
+                    db.db.execute(f"DROP TRIGGER g1_artifacts_msg_{suffix}")
         db.artifact_add("extract_llm", content, project_id=project, message_id=1,
                         meta={"hash": source_hash, "extract_version": extract_llm.EXTRACT_VERSION,
                               **extra})
@@ -1612,6 +1711,78 @@ def _point_run_check_at(tmp_path, monkeypatch):
         monkeypatch.setattr(run_check, name, str(value))
     data.mkdir(exist_ok=True)
     return data
+
+
+def test_overdue_tick_defers_later_stages_but_records_run_and_health(
+        tmp_path, monkeypatch, capsys):
+    import sqlite3
+    from unittest.mock import Mock
+
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(run_check, "_config", lambda: {})
+    monkeypatch.setattr(run_check, "_semantic_enabled", lambda *args: False)
+    monkeypatch.setattr(run_check, "_code_changed", lambda *args: False)
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check, "MCSAdapter",
+                        lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
+    def slow_fetch(*args):
+        clock[0] += run_check.RUN_DEADLINE_S + 1
+
+    monkeypatch.setattr(run_check, "_stage_fetch", slow_fetch)
+    later = Mock()
+    for name in ("_run_jobs", "stage_derive", "_deliver", "_with_relogin",
+                 "_run_semantic", "_run_metadata_shadow", "_housekeeping"):
+        monkeypatch.setattr(run_check, name, later)
+    # the real _finish_run decides the stored status; only its I/O tail is stubbed
+    import maintenance
+    import notify_cards
+    import notify_cmds
+    monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
+    for name in ("publish_flags", "clear_snapshot_dirty"):
+        monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+    assert run_check._main() == 0
+    later.assert_not_called()
+    result = json.loads(capsys.readouterr().out)
+    assert [e for e in result["errors"] if e.startswith("deadline_deferred:")] == [
+        "deadline_deferred:jobs,derive,deliver,karte_summary,semantic,"
+        "metadata_shadow,housekeeping"]
+    assert result["deferred_stages"] == [
+        "jobs", "derive", "deliver", "karte_summary", "semantic",
+        "metadata_shadow", "housekeeping"]
+    health = json.loads((data / "health.json").read_text())
+    assert health["run"] == {
+        "elapsed_s": 481, "overshoot_s": 1, "slowest_stage": "fetch",
+        "deferred_stages": result["deferred_stages"]}
+    assert health["overall"] == "degraded"
+    assert "run_deadline_exceeded" in health["state_reasons"]
+    with sqlite3.connect(data / "ledger.db") as db:
+        assert db.execute("SELECT status FROM runs").fetchone()[0] == "partial"
+
+
+def test_crash_before_config_load_reports_backup_unknown(
+        tmp_path, monkeypatch, capsys):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, "MCSAdapter",
+                        lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
+    loads = []
+
+    def config():
+        loads.append(None)
+        if len(loads) > 1:          # the Ledger probe succeeds, the run load crashes
+            raise RuntimeError("synthetic config failure")
+        return {}
+
+    monkeypatch.setattr(run_check, "_config", config)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+    assert run_check._main() == 1
+    capsys.readouterr()
+    health = json.loads((data / "health.json").read_text())
+    assert health["backup"] == {"state": "unknown", "reasons": ["config_not_loaded"]}
+    assert "backup_not_verified" in health["state_reasons"]
 
 
 def test_tick_waits_for_a_run_lock_released_between_batches(
@@ -2616,3 +2787,49 @@ def test_health_attention_splits_failures_unstarted_and_unsettled(tmp_path):
     att = run_check._health(db, {"notify": {}, "errors": []}, "ok")["attention"]
     assert att["pending_unstarted"] == {}
     db.close()
+
+
+def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
+    import notify_cards
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(notify_cards, "interactive_enabled", lambda cfg: True)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(notify_cards, "dispatch_intent", boom)
+    try:
+        eid = db.outbox_add("new_messages", None, {})
+        db.db.execute("UPDATE notify_outbox SET route='interactive',attempts=4,"
+                      "progress='not-json' WHERE event_id=?", (eid,))
+        db.db.commit()
+        ev = db.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                           (eid,)).fetchone()
+        res = {"failed": 0}
+        assert notify_flush._dispatch_interactive(db, ev, {}, res) is True
+        monkeypatch.setattr(notify_cards, "dispatch_intent",
+                            lambda *_a, **_k: {"error": "delivery_scope_missing"})
+        stuck = db.outbox_add("new_messages", None, {})
+        db.db.execute("UPDATE notify_outbox SET route='interactive',attempts=4"
+                      " WHERE event_id=?", (stuck,))
+        db.db.commit()
+        assert notify_flush._dispatch_interactive(db, db.db.execute(
+            "SELECT * FROM notify_outbox WHERE event_id=?", (stuck,)).fetchone(),
+            {}, res) is True
+        receipt = db.outbox_add("run_failed", None, {})
+        db.db.execute("UPDATE notify_outbox SET progress='{\"next\":1}' "
+                      "WHERE event_id=?", (receipt,))
+        db.outbox_hold(receipt, "payload_invalid")
+        rows = {r["event_id"]: json.loads(r["progress"]) for r in db.db.execute(
+            "SELECT event_id,progress FROM notify_outbox")}
+        # the existing receipt survives; an unparseable one is preserved
+        assert rows[eid] == {"invalid_progress": "not-json",
+                             "hold_reason": "internal_failure"}
+        assert rows[receipt] == {"next": 1, "hold_reason": "payload_invalid"}
+        assert rows[stuck] == {"hold_reason": "dispatch_failed"}
+        health = run_check._health(db, {"errors": [], "notify": {}}, "ok")
+        assert health["notify"]["held_reasons"] == {
+            "internal_failure": 1, "payload_invalid": 1, "dispatch_failed": 1}
+    finally:
+        db.close()

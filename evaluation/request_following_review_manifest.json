@@ -1,0 +1,18 @@
+{
+  "version": "request-following-review-queue/1",
+  "dataset_id": "fictional-request-following-heldout-20261004",
+  "source": "fully_synthetic",
+  "split": "test",
+  "case_count": 220,
+  "min_cases": 200,
+  "human_review_status": "pending",
+  "promotion_eligible": false,
+  "source_files": {
+    "request_following_heldout_sources_a.json": "63a1c27e27f85e15b0e3a699ca266e24ef6d22923dad33a2aa238df26e636358",
+    "request_following_heldout_sources_b.json": "570b669a6e4332171261595745c9ddd6ca096028363eeff5ae28205977feae2d"
+  },
+  "proposal_files": {
+    "request_following_heldout_proposals_a.json": "f9987b7a41ca56d49cd6fe23e326b9fa416ec6d83b73552c5a29a2a566dcaa65",
+    "request_following_heldout_proposals_b.json": "d6e1bb8c97e361cb31da7e1d90b963a5ca8f7b7bf5c2da37d3e823f88237207e"
+  }
+}

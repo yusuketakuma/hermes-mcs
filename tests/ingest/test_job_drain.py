@@ -1332,24 +1332,38 @@ def test_reconcile_job_rewalks_history_without_since(tmp_path):
     db.close()
 
 
-def test_reconcile_full_pass_parks_then_rotates(tmp_path):
+def test_reconcile_full_pass_parks_then_rotates(tmp_path, monkeypatch):
     """F04: after a complete pass the job idles for the rotation
     interval and restarts at page 1."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
+    monkeypatch.setattr(job_ops.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(job_ops.time, "monotonic", lambda: 10.0)
     db.job_add("reconcile", 1, payload={"page": 5})
 
     class Adapter:
-        def fetch_history(self, *a, **k):
-            return mcs_adapter.MessageBatch([], pages=0, reached=True)
+        reached = True
 
-    job_ops.run_reconcile_jobs(Adapter(), db, {"errors": []},
+        def fetch_history(self, *a, **k):
+            return mcs_adapter.MessageBatch([], pages=1, reached=self.reached)
+
+    adapter = Adapter()
+    job_ops.run_reconcile_jobs(adapter, db, {"errors": []},
                                time.monotonic() + 100)
     job = db.job_pending("reconcile", 1)
     payload = json.loads(job["payload"])
     assert payload["page"] == 1
-    assert job["next_try"] > \
-        time.time() + job_ops.RECONCILE_INTERVAL_S - 60
+    assert payload["passes"] == 1
+    assert payload["last_pass_at"] == 1000.0
+    assert job["next_try"] == 1000.0 + job_ops.RECONCILE_INTERVAL_S
+    with db.db:
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE job_id=?", (job["job_id"],))
+    adapter.reached = False
+    job_ops.run_reconcile_jobs(adapter, db, {"errors": []}, 110.0)
+    partial = json.loads(db.job_pending("reconcile", 1)["payload"])
+    assert partial["page"] == 2
+    assert partial["passes"] == 1
+    assert partial["last_pass_at"] == 1000.0
     db.close()
 
 

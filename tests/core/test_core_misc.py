@@ -578,6 +578,7 @@ def test_prune_attachments_14d_retention(tmp_path):
     import maintenance
     dbp = tmp_path / "ledger.db"
     db = _ledger(tmp_path)
+    db.save_messages([_message(1)])
     old_file = tmp_path / "old.bin"
     old_file.write_bytes(b"old-payload")
     new_file = tmp_path / "new.bin"
@@ -729,6 +730,7 @@ def test_prune_removes_alias_and_keeps_pending_refs(tmp_path):
     notice is kept, and only real deletions count."""
     import maintenance
     db = _ledger(tmp_path)
+    db.save_messages([_message(10), _message(11)])
     old = time.time() - maintenance.ATTACHMENT_KEEP_S - 1
     att = tmp_path / "att"
     att.mkdir()
@@ -762,6 +764,7 @@ def test_prune_removes_alias_and_keeps_pending_refs(tmp_path):
 def test_prune_removes_alias_from_previous_attachment_name(tmp_path):
     import maintenance
     db = _ledger(tmp_path)
+    db.save_messages([_message(10)])
     path = tmp_path / "1"
     path.write_bytes(b"synthetic")
     alias = tmp_path / "1.pdf"
@@ -844,6 +847,7 @@ def test_rotate_log_copytruncate_keeps_writer_on_live_path(tmp_path):
 def test_prune_preserves_followup_and_retires_withdrawn_payload(tmp_path):
     import maintenance
     db = _ledger(tmp_path)
+    db.save_messages([_message(1), _message(2)])
     old = time.time() - maintenance.ATTACHMENT_KEEP_S - 60
     for aid, state in ((1, "downloaded"), (2, "withdrawn")):
         path = tmp_path / str(aid)

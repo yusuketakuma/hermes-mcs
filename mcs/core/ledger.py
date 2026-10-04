@@ -1,6 +1,6 @@
 """SQLite ledger for MCS unread capture + history archive.
 
-Schema v8 (reuse-oriented):
+Schema v9 (reuse-oriented):
   runs          : one row per check run (kind: tick | init)
   patients      : per-project fetch state + history_floor (deepest completed
                   cutoff) + history_page (resume cursor for deep imports)
@@ -20,6 +20,7 @@ a mid-write failure rolls back the whole block.
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -30,7 +31,40 @@ from contextlib import suppress
 from mcs_util import html_to_text, loads_dict, publish_tmp
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+JOB_REASON_CODES = frozenset({
+    "invalid_payload", "schema_error", "fetch_error", "network_error",
+    "worker_error", "worker_timeout", "deadline_exceeded", "session_expired",
+    "replies_missing", "window_stalled", "waiting_replies",
+})
+
+
+def job_reason_code(value: object) -> str | None:
+    """Recognized acquisition reason, without raw exception text."""
+    if isinstance(value, str) and (
+            value in JOB_REASON_CODES or re.fullmatch(r"http_[45][0-9]{2}", value)):
+        return value
+    return None
+
+
+def job_reason_class(value: object) -> str:
+    """Classify availability without claiming an absent clinical action."""
+    code = job_reason_code(value)
+    if code is None:
+        return "unknown"
+    if code in ("schema_error", "invalid_payload"):
+        return "structural"
+    if code in ("replies_missing", "window_stalled"):
+        return "incomplete"
+    if code == "session_expired":
+        return "authentication"
+    if code == "waiting_replies":
+        return "deferred"
+    # 408/425/429 are retry-later by definition, not a permanent 4xx
+    if code.startswith("http_") and code not in ("http_408", "http_425", "http_429") \
+            and int(code[5:]) < 500:
+        return "unavailable"
+    return "transient"
 
 # overlap between a verified boundary and an archived patient's final
 # head reconciliation walk
@@ -144,6 +178,7 @@ class Ledger:
             self.db.execute("PRAGMA foreign_keys=ON")
             self.db.execute("PRAGMA busy_timeout=30000")
             self._init()
+            self._install_relation_guards(new_database=not tables)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             for side in (path + "-wal", path + "-shm"):
@@ -226,6 +261,7 @@ class Ledger:
           state TEXT DEFAULT 'pending',
           attempts INTEGER DEFAULT 0, next_try REAL,
           created_at REAL, updated_at REAL,
+          reason_code TEXT,
           UNIQUE(kind, project_id, message_id));
         """)
         had_fts = self.db.execute(
@@ -275,6 +311,63 @@ class Ledger:
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.db.commit()
 
+    def _install_relation_guards(self, *, new_database: bool = False) -> None:
+        # Audit and activation share a writer lock: no unguarded write can
+        # slip between the zero-count check and trigger installation.
+        # Dirty relations stay shadow-only, including after observed shadow
+        # violations are repaired; their counters require owner review.
+        relations = (
+            ("artifacts", "message_id, project_id",
+             "a.message_id IS NOT NULL AND NOT EXISTS "
+             "(SELECT 1 FROM messages m WHERE m.message_id=a.message_id "
+             "AND (a.project_id IS NULL OR m.project_id=a.project_id))"),
+            ("attachments", "message_id",
+             "NOT EXISTS (SELECT 1 FROM messages m "
+             "WHERE m.message_id=a.message_id)"),
+        )
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.db:
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS ledger_relation_guards(
+                  relation TEXT PRIMARY KEY,
+                  mode TEXT NOT NULL CHECK(mode IN ('shadow','enforce')),
+                  existing_count INTEGER NOT NULL,
+                  shadow_count INTEGER NOT NULL DEFAULT 0)
+            """)
+            for table, columns, condition in relations:
+                count = self.db.execute(
+                    f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
+                ).fetchone()[0]
+                self.db.execute("""
+                    INSERT INTO ledger_relation_guards(relation,mode,existing_count)
+                    VALUES(?, ?, ?)
+                    ON CONFLICT(relation) DO UPDATE SET
+                      existing_count=excluded.existing_count,
+                      mode=CASE WHEN ledger_relation_guards.mode='enforce'
+                                     AND excluded.existing_count=0
+                                     AND ledger_relation_guards.shadow_count=0
+                                THEN 'enforce' ELSE 'shadow' END
+                    WHERE existing_count!=excluded.existing_count
+                       OR mode!=CASE WHEN mode='enforce'
+                                     AND excluded.existing_count=0 AND shadow_count=0
+                                     THEN 'enforce' ELSE 'shadow' END
+                """, (table, "enforce" if new_database and not count else "shadow", count))
+                for suffix, event in (
+                        ("ins", "INSERT"), ("upd", f"UPDATE OF {columns}")):
+                    self.db.execute(f"""
+                        CREATE TRIGGER IF NOT EXISTS g1_{table}_msg_{suffix}
+                        BEFORE {event} ON {table}
+                        WHEN {condition.replace('a.', 'NEW.')}
+                        BEGIN
+                          SELECT RAISE(ABORT,'g1: {table} message relation')
+                          WHERE (SELECT mode FROM ledger_relation_guards
+                                 WHERE relation='{table}')='enforce';
+                          UPDATE ledger_relation_guards
+                          SET shadow_count=shadow_count+1
+                          WHERE relation='{table}' AND mode='shadow';
+                        END
+                    """)
+
     def _script(self, s: str):
         """Run a ;-separated DDL/DML script inside the caller's transaction
         (executescript commits implicitly — do NOT use it mid-migration)."""
@@ -291,20 +384,7 @@ class Ledger:
         def cols(t):
             return {r[1] for r in
                     self.db.execute(f"PRAGMA table_info({t})")}
-        if "attachment_id" in cols("attachments"):
-            duplicate = self.db.execute("""
-              SELECT 1 FROM attachments
-              GROUP BY message_id,file_id HAVING COUNT(*) > 1 LIMIT 1
-            """).fetchone()
-            if duplicate:
-                raise MigrationError("duplicate attachment keys")
-        if "id" in cols("read_marks"):
-            duplicate = self.db.execute("""
-              SELECT 1 FROM read_marks
-              GROUP BY project_id,snapshot_ts HAVING COUNT(*) > 1 LIMIT 1
-            """).fetchone()
-            if duplicate:
-                raise MigrationError("duplicate read mark keys")
+        # duplicate-key fence: Ledger._preflight already ran before _init
         # the schema version fence moves WITH the migration commit — a
         # crash must never leave "new columns, old version" behind, or an
         # old writer would keep writing a DB whose one-time backfills
@@ -322,6 +402,15 @@ class Ledger:
             self._backfill_v3()
 
     def _migrate_body(self, cols, old_version: int):
+        self.db.execute("""
+          CREATE TABLE IF NOT EXISTS message_revisions(
+            message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+            content_hash TEXT NOT NULL, prev_content_hash TEXT,
+            body_state TEXT NOT NULL, observed_at REAL NOT NULL,
+            PRIMARY KEY(message_id,seq))
+        """)
+        if "reason_code" not in cols("fetch_jobs"):
+            self.db.execute("ALTER TABLE fetch_jobs ADD COLUMN reason_code TEXT")
         self.db.execute("""
           CREATE TABLE IF NOT EXISTS message_metadata(
             message_id INTEGER NOT NULL REFERENCES messages(message_id),
@@ -728,7 +817,7 @@ class Ledger:
         the reply-job drain own that decision."""
         if m.body_state in TERMINAL_BODY_STATES:
             self.db.execute(
-                "UPDATE fetch_jobs SET state='done',updated_at=? "
+                "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
                 "WHERE kind='reply' AND project_id=? AND message_id=? "
                 "AND state != 'done'",
                 (now, m.project_id, m.message_id))
@@ -1161,7 +1250,7 @@ class Ledger:
                     (m.message_id,)).fetchone()
                 if st and st["s"] in TERMINAL_BODY_STATES:
                     self.db.execute(
-                        "UPDATE fetch_jobs SET state='done',updated_at=? "
+                        "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
                         "WHERE kind='reply' AND project_id=? "
                         "AND message_id=? AND state != 'done'",
                         (now, project_id, m.message_id))
@@ -1189,10 +1278,33 @@ class Ledger:
         now = time.time()
         chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
         existing = self.db.execute(
-            "SELECT project_id FROM messages WHERE message_id=?",
+            "SELECT project_id,body_state,content_hash,first_seen FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()
         if existing is not None and existing["project_id"] != m.project_id:
             raise ValueError("message_project_mismatch")
+        if (existing is not None and existing["content_hash"] is not None
+                and existing["body_state"] in TERMINAL_BODY_STATES
+                and m.body_state in TERMINAL_BODY_STATES
+                and existing["content_hash"] != chash):
+            # seed seq 1 once, then chain off the latest revision inside the
+            # INSERT itself: seq and prev_content_hash come from the row
+            # read under the write lock, and an edit an overlapping writer
+            # already recorded is skipped instead of logged twice.
+            # ponytail: `existing` is still read before the lock, so the
+            # messages row itself relies on run.lock serializing writers
+            self.db.execute("""
+              INSERT OR IGNORE INTO message_revisions
+                (message_id,seq,content_hash,prev_content_hash,body_state,observed_at)
+              VALUES(?,1,?,NULL,?,?)
+            """, (m.message_id, existing["content_hash"],
+                  existing["body_state"], existing["first_seen"] or now))
+            self.db.execute("""
+              INSERT INTO message_revisions
+                (message_id,seq,content_hash,prev_content_hash,body_state,observed_at)
+              SELECT message_id,seq+1,?,content_hash,?,? FROM message_revisions
+              WHERE message_id=? AND content_hash != ? AND seq=(
+                SELECT MAX(seq) FROM message_revisions WHERE message_id=?)
+            """, (chash, m.body_state, now, m.message_id, chash, m.message_id))
         body_text = html_to_text(m.body_html)
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
@@ -1381,7 +1493,38 @@ class Ledger:
         """Oldest observations in the bounded active watch set, excluding backoff."""
         from mcs_signals import _thresholds, self_sender_id
         now = time.time() if now is None else now
+        # Evidence of the newest signal_v1 per key is expanded once (not per
+        # message); a NULL key never matches a "newer" row, so each stays latest.
         return self.db.execute("""
+          WITH latest AS MATERIALIZED (
+            SELECT MAX(artifact_id) AS artifact_id FROM artifacts
+            WHERE kind='signal_v1' AND json_valid(meta)
+              AND json_extract(meta,'$.key') IS NOT NULL
+            GROUP BY json_extract(meta,'$.key')
+            UNION ALL
+            SELECT artifact_id FROM artifacts
+            WHERE kind='signal_v1' AND json_valid(meta)
+              AND json_extract(meta,'$.key') IS NULL),
+          sig AS MATERIALIZED (
+            SELECT a.project_id,e.value AS message_id,
+                   json_extract(a.content,'$.state') AS state
+            FROM latest l JOIN artifacts a ON a.artifact_id=l.artifact_id,
+                 json_each(CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,
+                           '$.evidence.message_ids') e
+            WHERE json_valid(a.content)
+              AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
+              AND json_extract(a.content,'$.state') IN ('open','resolved')),
+          watched AS MATERIALIZED (
+            SELECT sm.message_id FROM sig s
+            JOIN messages sm ON sm.message_id=s.message_id AND sm.project_id=s.project_id
+            WHERE s.state='open'
+              OR (s.state='resolved' AND sm.posted_at_ts>=?
+                AND EXISTS(SELECT 1 FROM message_metadata cap,json_each(
+                  CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{}' END,
+                  '$.reactions.value') r
+                  WHERE cap.message_id=sm.message_id AND cap.source='capture'
+                    AND json_extract(r.value,'$.self_reacted')=1
+                    AND json_extract(r.value,'$.type') IN ('accepted','completed'))))
           SELECT m.message_id,m.project_id,m.parent_id,COUNT(*) OVER() AS due_total FROM messages m
           JOIN patients p ON p.project_id=m.project_id
           LEFT JOIN message_metadata md ON md.message_id=m.message_id AND md.source='shadow'
@@ -1398,28 +1541,11 @@ class Ledger:
                       AND vm.source_generation=c.source_generation
                       AND vm.shown=(SELECT shown FROM notification_view_manifests
                         WHERE card_id=c.card_id ORDER BY manifest_id DESC LIMIT 1)))
-              OR EXISTS(SELECT 1 FROM artifacts a,json_each(
-                CASE WHEN json_valid(a.content) THEN a.content ELSE '{}' END,'$.evidence.message_ids') e
-                WHERE a.kind='signal_v1' AND json_valid(a.content) AND json_valid(a.meta)
-                  AND a.project_id=m.project_id AND e.value=m.message_id
-                  AND json_extract(a.content,'$.type')='pharmacist_request_unanswered'
-                  AND (json_extract(a.content,'$.state')='open'
-                    OR (json_extract(a.content,'$.state')='resolved'
-                      AND m.posted_at_ts>=?
-                      AND EXISTS(SELECT 1 FROM message_metadata cap,json_each(
-                        CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{}' END,
-                        '$.reactions.value') r
-                        WHERE cap.message_id=m.message_id AND cap.source='capture'
-                          AND json_extract(r.value,'$.self_reacted')=1
-                          AND json_extract(r.value,'$.type') IN ('accepted','completed'))))
-                  AND NOT EXISTS(SELECT 1 FROM artifacts newer
-                    WHERE newer.kind=a.kind AND json_valid(newer.meta)
-                      AND json_extract(newer.meta,'$.key')=json_extract(a.meta,'$.key')
-                      AND newer.artifact_id>a.artifact_id)))
+              OR m.message_id IN (SELECT message_id FROM watched))
           ORDER BY COALESCE(md.checked_at,0),m.message_id LIMIT ?
-        """, (now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
-              self_sender_id(self.db), now - 7*86400,
-              now - _thresholds(self.db)["fyi_max_age_d"] * 86400, limit)).fetchall()
+        """, (now - _thresholds(self.db)["fyi_max_age_d"] * 86400,
+              now, METADATA_SHADOW_INTERVAL_S, METADATA_SHADOW_BACKOFF_S,
+              self_sender_id(self.db), now - 7*86400, limit)).fetchall()
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
@@ -1639,7 +1765,7 @@ class Ledger:
             parent_id,payload,state,next_try,created_at,updated_at)
           VALUES(?,?,?,?,?,'pending',?,?,?)
           ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
-            state='pending',payload=excluded.payload,attempts=0,
+            state='pending',payload=excluded.payload,attempts=0,reason_code=NULL,
             next_try=excluded.next_try,updated_at=excluded.updated_at
           {where}
         """, (kind, project_id, message_id, parent_id,
@@ -1672,46 +1798,59 @@ class Ledger:
 
     def job_done(self, job_id: int):
         self.db.execute(
-            "UPDATE fetch_jobs SET state='done',updated_at=? WHERE job_id=?",
+            "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? WHERE job_id=?",
             (time.time(), job_id))
         self.db.commit()
 
     def job_defer(self, job_id: int, retry_in: float,
-                  payload: dict | None = None):
+                  payload: dict | None = None, *, reason_code: str | None = None):
         """Reschedule WITHOUT consuming an attempt — used for progress
         checkpoints and waiting on sub-jobs, not failures."""
+        if reason_code is not None and job_reason_code(reason_code) is None:
+            raise ValueError("invalid_job_reason")
         if payload is not None:
             self.db.execute(
-                "UPDATE fetch_jobs SET payload=?,next_try=?,updated_at=? "
+                "UPDATE fetch_jobs SET payload=?,next_try=?,updated_at=?,reason_code=? "
                 "WHERE job_id=?",
                 (json.dumps(payload), time.time() + retry_in,
-                 time.time(), job_id))
+                 time.time(), reason_code, job_id))
         else:
             self.db.execute(
-                "UPDATE fetch_jobs SET next_try=?,updated_at=? "
+                "UPDATE fetch_jobs SET next_try=?,updated_at=?,reason_code=? "
                 "WHERE job_id=?", (time.time() + retry_in,
-                                  time.time(), job_id))
+                                  time.time(), reason_code, job_id))
         self.db.commit()
 
     def job_retry(self, job_id: int, retry_in: float = 300,
-                  max_attempts: int = 8, *, payload: dict | None = None):
+                  max_attempts: int = 8, *, payload: dict | None = None,
+                  reason_code: str | None = None, fail_fast: bool = True):
+        if reason_code is not None and job_reason_code(reason_code) is None:
+            raise ValueError("invalid_job_reason")
         if payload is not None:
             self.db.execute(
                 "UPDATE fetch_jobs SET payload=? WHERE job_id=?",
                 (json.dumps(payload), job_id))
         self.db.execute(
-            "UPDATE fetch_jobs SET attempts=attempts+1,next_try=?,updated_at=? "
-            "WHERE job_id=?", (time.time() + retry_in, time.time(), job_id))
+            "UPDATE fetch_jobs SET attempts=attempts+1,next_try=?,updated_at=?,reason_code=? "
+            "WHERE job_id=?", (time.time() + retry_in, time.time(), reason_code, job_id))
+        # permanent classes (4xx except 429, schema/payload mismatch) cannot
+        # heal by retrying: fail on the first attempt, like attachment_failed
+        # fail_fast=False keeps a rotating job (reconcile) on the plain
+        # attempt budget while still recording the code in this commit
+        permanent = fail_fast and job_reason_class(reason_code) in (
+            "unavailable", "structural")
         self.db.execute(
             "UPDATE fetch_jobs SET state='failed' "
-            "WHERE job_id=? AND attempts>=?",
-            (job_id, max_attempts))
+            "WHERE job_id=? AND (attempts>=? OR ?)",
+            (job_id, max_attempts, permanent))
         self.db.commit()
 
-    def job_fail(self, job_id: int):
+    def job_fail(self, job_id: int, *, reason_code: str | None = None):
+        if reason_code is not None and job_reason_code(reason_code) is None:
+            raise ValueError("invalid_job_reason")
         self.db.execute(
-            "UPDATE fetch_jobs SET state='failed',updated_at=? WHERE job_id=?",
-            (time.time(), job_id))
+            "UPDATE fetch_jobs SET state='failed',updated_at=?,reason_code=? WHERE job_id=?",
+            (time.time(), reason_code, job_id))
         self.db.commit()
 
     def history_jobs_due(self) -> list:
@@ -2155,11 +2294,19 @@ class Ledger:
               time.time(), event_id))
         self.db.commit()
 
-    def outbox_hold(self, event_id: int):
-        """Quarantine an event whose partial-send receipt is unsafe."""
-        self.db.execute(
-            "UPDATE notify_outbox SET state='failed',next_try=NULL,updated_at=? "
-            "WHERE event_id=?", (time.time(), event_id))
+    def outbox_hold(self, event_id: int, reason: str | None = None):
+        """Quarantine an event whose partial-send receipt is unsafe;
+        `reason` is a stable code recorded as progress.hold_reason."""
+        from mcs_queries import HOLD_PROGRESS_SET
+        if reason is None:
+            self.db.execute(
+                "UPDATE notify_outbox SET state='failed',next_try=NULL,"
+                "updated_at=? WHERE event_id=?", (time.time(), event_id))
+        else:
+            self.db.execute(
+                "UPDATE notify_outbox SET state='failed',next_try=NULL,"
+                f"{HOLD_PROGRESS_SET},updated_at=? WHERE event_id=?",
+                (reason, time.time(), event_id))
         self.db.commit()
 
     def outbox_defer(self, event_id: int, delay: float, commit: bool = True):

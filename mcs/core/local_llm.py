@@ -123,7 +123,8 @@ def admission_enabled() -> bool:
 def _admission_db_path() -> str:
     v = os.environ.get("MCS_LLM_ADMISSION") or ""
     if v == "1":
-        return os.path.join(os.path.expanduser("~/.mcs"), "data",
+        from mcs_util import HOME
+        return os.path.join(HOME, "data",
                             "llm_admission.db")
     return v
 

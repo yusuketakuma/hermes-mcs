@@ -5,7 +5,7 @@ import time
 import pytest
 
 import semantic
-from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
+from semantic_testkit import _FakeJev, _cfg, _llm, _message, _seeded
 
 
 @pytest.mark.parametrize('slow_stage', ['jev', 'llm'])
@@ -174,6 +174,7 @@ def test_foreign_artifacts_do_not_count_as_progress(tmp_path):
     try:
         base = semantic_drain._last_stage_artifact(db, 1)
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1)
+        db.save_messages([_message(9, pid=2, body="synthetic other project")], project_id=2)
         db.artifact_add("semantic_facts", "{}", project_id=2, message_id=9)
         assert semantic_drain._last_stage_artifact(db, 1) == base
         db.artifact_add("semantic_facts", "{}", project_id=1, message_id=1)

@@ -34,6 +34,14 @@ give `context` (formatted thread block) and `posted_at`, passed through
 to llm_extract. `expect.reply` is {"kind": ...} or null (must be
 absent); `forbid.reply` is {"kind": ...} or a list of them; the run
 JSON's `reply_confusion` is {expected_kind: {got_kind: n}}.
+
+Labs (scored only when a case gives `expect.labs`; separate corpus
+evaluation/extract_cases_labs.json) key on analyte (or folded name) and
+the value/unit as clinical_values normalizes them — no unit conversion.
+flag and measured_on must match when the label carries them (null pins
+absent). Only quote-supported outputs count: an unverified lab is shown
+apart as a candidate, so it is neither TP nor FP. A forbid lab label
+pinning "unverified": false is violated only by a confirmed output.
 """
 from __future__ import annotations
 
@@ -107,6 +115,32 @@ def _match_request(expected: dict, got: list) -> bool:
                for item in got)
 
 
+def _lab_key(item: dict) -> tuple:
+    import clinical_values
+    n = clinical_values.lab_candidate(
+        item.get("name", ""), item.get("value", ""), item.get("unit"), None)
+    return (n["analyte"] or clinical_values.fold_surface(item.get("name", "")),
+            n["value"], n["unit"])
+
+
+def _match_lab(expected: dict, got: list) -> bool:
+    want = _lab_key(expected)
+    return any(isinstance(item, dict)
+               and isinstance(item.get("name"), str)
+               and type(item.get("value")) in (int, float, str)
+               and _lab_key(item)[:2] == want[:2]
+               and ("unit" not in expected or _lab_key(item)[2] == want[2])
+               and ("flag" not in expected
+                    or expected["flag"] == item.get("flag"))
+               and ("measured_on" not in expected
+                    or expected["measured_on"]
+                    == (item.get("normalized") or {}).get("measured_on"))
+               and ("unverified" not in expected
+                    or bool(expected["unverified"])
+                    == bool(item.get("unverified")))
+               for item in got)
+
+
 def _reply_kind(section) -> str | None:
     return section.get("kind") if isinstance(section, dict) else None
 
@@ -160,6 +194,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
             fields[f] = {"tp": 0, "fp": 0, "fn": len(items or [])}
         if "vitals" in exp:
             fields["vitals"] = {"tp": 0, "fp": 0, "fn": len(exp["vitals"])}
+        if "labs" in exp:
+            fields["labs"] = {"tp": 0, "fp": 0, "fn": len(exp["labs"])}
         if "urgency" in exp:
             fields["urgency"] = {"tp": 0, "fp": 0, "fn": 1}
         if "reply" in exp:
@@ -189,6 +225,11 @@ def _score_case(case: dict, out: dict | None) -> dict:
         wanted = exp["vitals"]
         tp = sum(actual.get(k) == v for k, v in wanted.items())
         fields["vitals"] = {"tp": tp, "fp": len(actual) - tp, "fn": len(wanted) - tp}
+    got_labs = out.get("labs") or []
+    if "labs" in exp:
+        fields["labs"] = _field_pr(
+            exp["labs"], [lab for lab in got_labs if isinstance(lab, dict)
+                          and not lab.get("unverified")], _match_lab)
     if "urgency" in exp:
         ok = out.get("urgency") == exp["urgency"]
         fields["urgency"] = {"tp": int(ok), "fp": int(not ok),
@@ -227,6 +268,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
     violations.extend(f"requests:{request.get('action')}"
                       for request in forbid.get("requests", [])
                       if _match_request(request, got_requests))
+    violations.extend(f"labs:{fl.get('name')}" for fl in
+                      forbid.get("labs", []) if _match_lab(fl, got_labs))
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
         violations.append(f"urgency:{forbid['urgency']}")
     forbid_reply = forbid.get("reply")
@@ -241,6 +284,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
              "raw": {k: out.get(k) for k in
                      ("meds", "symptoms", "events", "requests", "urgency")}}
     score["raw"]["reply"] = got_reply
+    if "labs" in exp:
+        score["raw"]["labs"] = got_labs
     if "reply" in exp:
         score["reply_expected"] = _reply_kind(exp["reply"])
     return score
@@ -326,8 +371,26 @@ def _section_valid(section) -> bool:
         if isinstance(r, dict) and r.get("kind") is not None \
                 and r["kind"] not in extract_llm._REQ_KINDS:
             return False
+    # bench-only lab keys _validate ignores: a typo ("false", 2026/10/01)
+    # would make a forbid label match nothing and pass vacuously
+    for lab in section.get("labs") or []:
+        if not isinstance(lab, dict):
+            continue
+        if "unverified" in lab and not isinstance(lab["unverified"], bool):
+            return False
+        d = lab.get("measured_on")
+        if d is not None and not _iso_date(d):
+            return False
     v = extract_llm._validate(section)
     return isinstance(v, dict) and not v.get("_items_dropped")
+
+
+def _iso_date(d) -> bool:
+    import datetime
+    try:
+        return datetime.date.fromisoformat(d).isoformat() == d
+    except (TypeError, ValueError):
+        return False
 
 
 def cmd_run(args) -> int:

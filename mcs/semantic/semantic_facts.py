@@ -83,6 +83,8 @@ RELATION_TYPES = (
 CONTENT_QUALITIES = ("full", "partial")
 
 UNKNOWN = "unknown"
+REQUEST_DETAIL_FIELDS = ("request_to", "request_from", "due_text", "condition", "request_kind")
+REQUEST_KINDS = ("request", "question", "self_plan", UNKNOWN)
 
 
 class ContractError(ValueError):
@@ -369,6 +371,29 @@ def validate_evidence(evidence: dict) -> dict:
     }
 
 
+def request_details(fact, evidence_quotes=None):
+    """Keep supplied request fields; ungrounded fields degrade, not the fact."""
+    if fact.get("kind") != "request_pending":
+        return {}
+    out = {}
+    for key in REQUEST_DETAIL_FIELDS:
+        if key not in fact:
+            continue  # preserve the exact old document shape and lineage
+        value = fact[key]
+        value = value.strip() if isinstance(value, str) else UNKNOWN
+        if key == "request_kind":
+            valid = value in REQUEST_KINDS
+            # A kind is a classification, not a verbatim English quote.
+            grounded = evidence_quotes is None or bool(evidence_quotes)
+        else:
+            limit = 30 if key in ("request_to", "request_from") else 60
+            valid = bool(value) and len(value) <= limit
+            grounded = evidence_quotes is None or any(
+                value in quote for quote in evidence_quotes)
+        out[key] = value if valid and grounded else UNKNOWN
+    return out
+
+
 def validate_fact(fact: dict) -> dict:
     if not isinstance(fact, dict):
         _fail("fact_object_required")
@@ -407,6 +432,7 @@ def validate_fact(fact: dict) -> dict:
     if out["kind"] == "medication_event":
         _enum(fact.get("action", UNKNOWN), "fact_action", MED_ACTIONS)
         out["action"] = fact.get("action", UNKNOWN)
+    out.update(request_details(fact))
     return out
 
 
@@ -518,7 +544,8 @@ def validate_facts_doc(doc: dict) -> dict:
     if owned != atom_ids:
         _fail("doc_core_coverage_incomplete")
 
-    evidence_ids = {e["evidence_id"] for e in evidence}
+    evidence_by_id = {e["evidence_id"]: e for e in evidence}
+    evidence_ids = set(evidence_by_id)
     if len(evidence_ids) != len(evidence):
         _fail("doc_evidence_id_duplicate")
     atoms_by_id = {a["atom_id"]: a for a in atoms}
@@ -548,6 +575,8 @@ def validate_facts_doc(doc: dict) -> dict:
         if f["validation_status"] == "verified" \
                 and not f["evidence_ids"]:
             _fail("doc_verified_without_evidence")
+        f.update(request_details(f, [
+            evidence_by_id[ref]["quote"] for ref in f["evidence_ids"]]))
     for o in obligations:
         if o["owner_id"] not in atom_ids and o["owner_id"] not in chunk_ids:
             _fail("doc_obligation_owner_unknown")

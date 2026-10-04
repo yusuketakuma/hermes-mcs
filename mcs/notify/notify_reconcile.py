@@ -41,6 +41,7 @@ import time
 import uuid
 
 import notify_cards as cards
+from mcs_queries import HOLD_PROGRESS_SET
 import notify_transport
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
@@ -167,8 +168,9 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
             # state='failed' with next_try NULL leaves the due queue
             db.execute(
                 "UPDATE notify_outbox SET state='failed',next_try=NULL,"
-                "updated_at=? WHERE event_id=? AND state='pending'",
-                (now, eid))
+                f"{HOLD_PROGRESS_SET},updated_at=? "
+                "WHERE event_id=? AND state='pending'",
+                ("restore_hold", now, eid))
         existing = db.execute(
             "SELECT 1 FROM notification_restore_holds WHERE "
             "released_at IS NULL AND attempt_id IS ? AND delivery_id IS ?",
@@ -474,9 +476,43 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     if unlinked:
         mass_held = db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,"
-            "updated_at=? WHERE state='pending' AND route='interactive'",
-            (now,)).rowcount
+            f"{HOLD_PROGRESS_SET},updated_at=? "
+            "WHERE state='pending' AND route='interactive'",
+            ("restore_unlinked", now)).rowcount
         db.commit()
+    # Text sends have no independent transport journal. A restored pending
+    # receipt cannot prove that its content was never posted. Keep these
+    # intents quarantined even after the card reconciliation marker clears;
+    # card_resolve must not acquire authority over unscoped text deliveries.
+    text_held = []
+    new_text_holds = 0
+    import notify_flush
+    # Only intents that existed at the restore point are unverifiable. Later
+    # events just wait in flush's restore gate and resume when it clears.
+    restored_at = (marker or {}).get("restored_at")
+    if type(restored_at) not in (int, float):
+        restored_at = None     # unknown restore point: hold every intent
+    for ev in db.execute(
+            "SELECT * FROM notify_outbox WHERE COALESCE(route,'text')='text' "
+            "AND state IN ('pending','failed')").fetchall():
+        if ev["kind"] in notify_flush._ALERT_KINDS:
+            continue
+        if marker and ev["next_try"] is not None and (
+                restored_at is None or ev["created_at"] is None
+                or ev["created_at"] <= restored_at):
+            notify_flush._hold_event(
+                ledger, ev, cfg, reason="restore_text_unverified", rescue=False)
+            new_text_holds += 1
+        else:
+            try:
+                progress = json.loads(ev["progress"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(progress, dict) \
+                    or progress.get("hold_reason") != "restore_text_unverified":
+                continue
+        text_held.append({"event_id": ev["event_id"], "kind": ev["kind"],
+                          "reason": "restore_text_unverified"})
     counts = {}
     for v in verdicts:
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
@@ -491,7 +527,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                   "scope": h.get("scope") or {}}
                  for h in held],
         "events_held": sum(h.get("events_held", 0) for h in held)
-                        + mass_held,
+                        + mass_held + len(text_held),
+        "text_held": text_held,
         "journal_incomplete": journal_incomplete,
     }
     cards.publish_file(root, cards.RESTORE_RECEIPT,
@@ -503,11 +540,13 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     # a tainted journal keeps the marker, so reconcile re-runs every
     # tick — alert only when this run recorded a new hold, never repeat
     # the same notice for holds already announced
-    if held and _hold_rows(db) > holds_before:
+    if (held and _hold_rows(db) > holds_before) or new_text_holds:
         ledger.outbox_add("update_notice", None, {
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
-                    f"（held={len(held)}件）。restore_reconcile.json と "
-                    "ops.card_resolve で確認・解除してください"})
+                    f"（card held={len(held)}件、text held={len(text_held)}件）。"
+                    "restore_reconcile.json を確認してください。"
+                    "カードは ops.card_resolve で確認・解除し、"
+                    "text は個別の配送確認と復旧方針の判断が必要です。"})
         cards.mark_snapshot_dirty(db)
         db.commit()
     return receipt

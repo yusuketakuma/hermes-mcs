@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>ai.mcs.llamaserver</string>
+  <key>Umask</key><integer>63</integer>
   <key>ProgramArguments</key>
   <array>
     <string>__LLAMA_BIN__</string>

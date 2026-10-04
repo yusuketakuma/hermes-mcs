@@ -53,6 +53,9 @@ def rec(tmp_path, monkeypatch):
                         str(tmp_path / "data" / "marker"))
     monkeypatch.setattr(mod, "REPORT_PATH",
                         str(tmp_path / "data" / "recovery_report.json"))
+    monkeypatch.setattr(mod, "MANIFEST_PATH",
+                        str(tmp_path / "data" / "service_manifest.json"))
+    monkeypatch.setattr(mod, "SCRIPTS_DIR", str(tmp_path / "hermes-scripts"))
     monkeypatch.setattr(mod, "AGENTS_DIR", str(tmp_path / "agents"))
     monkeypatch.setattr(mod, "RESIDENT_LABELS", ())
     os.makedirs(tmp_path / "data", exist_ok=True)
@@ -410,6 +413,8 @@ def test_cron_job_removal_requires_successful_list(
         rec, tmp_path, monkeypatch, returncode):
     hermes = tmp_path / "synthetic-hermes"
     hermes.write_text("# synthetic executable placeholder")
+    Path(rec.MANIFEST_PATH).write_text(json.dumps(
+        {"cron": [{"id": "abcdef", "script": "/synthetic/mcs_removed.sh"}]}))
     monkeypatch.setattr(rec.shutil, "which", lambda name: str(hermes))
     calls = []
 
@@ -773,6 +778,142 @@ def test_known_cron_scripts_cover_setup_cron_jobs():
     rec = _load()
     desired = {script for _name, _sched, script in mcs_setup.CRON_JOBS}
     assert desired <= rec.KNOWN_CRON_SCRIPTS
+    assert "mcs_offsite.sh" in rec.KNOWN_CRON_SCRIPTS
+    assert "ai.mcs.cron.mcs-offsite" not in rec.KNOWN_AGENT_LABELS
+
+
+@pytest.mark.parametrize(("listed", "evidence", "owned"), [
+    ("mcs_offsite.sh", [], False),
+    ("/shared/mcs_offsite.sh", [], False),
+    ("mcs_custom.sh", [], False),
+    ("mcs_offsite.sh", [{"id": "abcdef", "script": "mcs_offsite.sh"}], True),
+    ("mcs_offsite.sh", [{"id": "badbad", "script": "mcs_offsite.sh"}], False),
+    ("/shared/mcs_offsite.sh", [{"id": "abcdef", "script": "mcs_offsite.sh"}], False),
+    ("mcs_offsite.sh", [{"id": "abcdef", "script": "mcs_check.sh"}], False),
+    ("mcs_custom.sh", [None, {}, {"id": "abcdef", "script": "mcs_custom.sh"}], True),
+])
+def test_cron_owner_requires_id_script_pair_or_canonical_identity(
+        rec, listed, evidence, owned):
+    assert rec._owned_cron("abcdef", listed, evidence) is owned
+
+
+def test_canonical_offsite_identity_is_distinct_from_shared_basename(rec):
+    canonical = str(Path(rec.SCRIPTS_DIR, "mcs_offsite.sh"))
+    assert rec._owned_cron("abcdef", canonical, [])
+    assert not rec._owned_cron(
+        "abcdef", str(Path(rec.SCRIPTS_DIR, "mcs_shared.sh")), [])
+
+
+def _backup_membership(rec, tmp_path, monkeypatch, *, enabled=False, template=False,
+                       proof="manifest", listed="mcs_offsite.sh", returncode=0):
+    root = Path(rec.DATA).parent
+    root.joinpath("config.json").write_text(json.dumps(
+        {"runtime_mode": "hermes", "backup": {"enabled": enabled}}))
+    if template:
+        wrapper = Path(rec.REPO, "deployment/scripts/mcs_offsite.sh")
+        wrapper.parent.mkdir(parents=True, exist_ok=True)
+        wrapper.write_text("# synthetic template: never executed")
+    evidence = {"cron": [{"id": "abcdef", "script": "mcs_offsite.sh"}]}
+    if proof == "manifest":
+        Path(rec.MANIFEST_PATH).write_text(json.dumps(evidence))
+    hermes = tmp_path / "synthetic-hermes"
+    hermes.write_text("# synthetic placeholder: never executed")
+    monkeypatch.setattr(rec.shutil, "which", lambda name: str(hermes))
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv == [str(hermes), "cron", "list", "--all"]:
+            return subprocess.CompletedProcess(
+                argv, returncode,
+                f"  abcdef [disabled]\n    Script:  {listed}\n"
+                "  123abc [active]\n    Script:  /shared/mcs_custom.sh\n"
+                "  456def [active]\n    Script:  mcs_health.sh\n", "")
+        assert argv == [str(hermes), "cron", "remove", "abcdef"]
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    return hermes, calls, evidence
+
+
+@pytest.mark.parametrize(("enabled", "template", "retired"), [
+    (False, False, True), (False, True, True),
+    (True, False, True), (True, True, False),
+])
+def test_optional_backup_current_desire_requires_opt_in_and_restored_capability(
+        rec, tmp_path, monkeypatch, enabled, template, retired):
+    hermes, calls, _ = _backup_membership(
+        rec, tmp_path, monkeypatch, enabled=enabled, template=template)
+    rec._reconcile_membership({"cron": [], "agents": []})
+    expected = [[str(hermes), "cron", "list", "--all"]]
+    if retired:
+        expected.append([str(hermes), "cron", "remove", "abcdef"])
+    assert calls == expected
+
+
+def test_snapshot_desire_protects_backup_without_installing_it(rec, tmp_path, monkeypatch):
+    hermes, calls, snapshot = _backup_membership(
+        rec, tmp_path, monkeypatch, proof="snapshot")
+    rec._reconcile_membership(snapshot)
+    assert calls == [[str(hermes), "cron", "list", "--all"]]
+
+
+@pytest.mark.parametrize("listed", ["mcs_offsite.sh", "/shared/mcs_offsite.sh"])
+def test_missing_or_retargeted_backup_ownership_never_deletes_shared_job(
+        rec, tmp_path, monkeypatch, listed):
+    hermes, calls, _ = _backup_membership(
+        rec, tmp_path, monkeypatch, proof="none", listed=listed)
+    rec._reconcile_membership({"cron": [], "agents": []})
+    assert calls == [[str(hermes), "cron", "list", "--all"]]
+
+
+def test_canonical_identity_can_retire_old_owned_backup(rec, tmp_path, monkeypatch):
+    hermes, calls, _ = _backup_membership(
+        rec, tmp_path, monkeypatch, proof="none",
+        listed=str(Path(rec.SCRIPTS_DIR, "mcs_offsite.sh")))
+    rec._reconcile_membership({"cron": [], "agents": []})
+    assert calls == [[str(hermes), "cron", "list", "--all"],
+                     [str(hermes), "cron", "remove", "abcdef"]]
+
+
+@pytest.mark.parametrize("contents", ["broken", "[]", '{"cron":null}', '{"cron":[null]}'])
+def test_unusable_manifest_does_not_turn_basename_into_ownership(
+        rec, tmp_path, monkeypatch, contents):
+    hermes, calls, _ = _backup_membership(rec, tmp_path, monkeypatch, proof="none")
+    Path(rec.MANIFEST_PATH).write_text(contents)
+    rec._reconcile_membership({"cron": [], "agents": []})
+    assert calls == [[str(hermes), "cron", "list", "--all"]]
+
+
+def test_failed_job_list_never_retires_optional_backup(rec, tmp_path, monkeypatch):
+    hermes, calls, _ = _backup_membership(rec, tmp_path, monkeypatch, returncode=1)
+    assert "cron_list_unverifiable" in rec._reconcile_membership({})
+    assert calls == [[str(hermes), "cron", "list", "--all"]]
+
+
+@pytest.mark.parametrize("backup", [None, [], {}, {"enabled": "false"}])
+def test_unknown_backup_intent_holds_owned_job(rec, tmp_path, monkeypatch, backup):
+    hermes, calls, _ = _backup_membership(rec, tmp_path, monkeypatch)
+    Path(rec.DATA).parent.joinpath("config.json").write_text(json.dumps({"backup": backup}))
+    assert "backup_config_unverifiable" in rec._reconcile_membership({})
+    assert calls == [[str(hermes), "cron", "list", "--all"]]
+
+
+def test_backup_manifest_never_adds_external_scheduler_to_standalone_host(
+        rec, tmp_path, monkeypatch):
+    _standalone_recovery(rec)
+    Path(rec.MANIFEST_PATH).write_text(json.dumps(
+        {"cron": [{"id": "abcdef", "script": "mcs_offsite.sh"}]}))
+    setup = Path(rec.REPO, "mcs/ops/mcs_setup.py")
+    setup.parent.mkdir(parents=True)
+    setup.write_text("# synthetic services entry: never executed")
+    monkeypatch.setattr(rec, "_setup_python", lambda: "/synthetic/python")
+    calls = []
+    def run(argv, **kw):
+        assert argv == ["/synthetic/python", str(setup), "services"]
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    assert rec._reconcile_membership({"cron": [], "agents": []}) == []
+    assert calls == [["/synthetic/python", str(setup), "services"]]
 
 
 def _standalone_recovery(rec):
@@ -1249,6 +1390,7 @@ def test_notify_kills_a_wedged_standalone_sender(tmp_path, monkeypatch):
     must not outlive the watchdog."""
     mod = _load()
     monkeypatch.setattr(mod, "HOME", str(tmp_path))
+    monkeypatch.setattr(mod, "DATA", str(tmp_path / "data"))
     repo = tmp_path / "repo"
     (repo / "mcs_standalone").mkdir(parents=True)
     (repo / "mcs_standalone" / "__main__.py").write_text("#")
@@ -1274,3 +1416,28 @@ def test_notify_kills_a_wedged_standalone_sender(tmp_path, monkeypatch):
     monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **k: Wedged())
     mod._notify("synthetic")
     assert calls == ["kill", "wait"]
+
+
+def test_notify_refuses_a_symlinked_standalone_config(tmp_path, monkeypatch):
+    """_notify reads config through _runtime_config's symlink guard —
+    a symlinked config.json must not drive any sender."""
+    mod = _load()
+    monkeypatch.setattr(mod, "HOME", str(tmp_path))
+    monkeypatch.setattr(mod, "DATA", str(tmp_path / "data"))
+    repo = tmp_path / "repo"
+    (repo / "mcs_standalone").mkdir(parents=True)
+    (repo / "mcs_standalone" / "__main__.py").write_text("#")
+    monkeypatch.setattr(mod, "REPO", str(repo))
+    python = tmp_path / "venv" / "bin" / "python3"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!")
+    python.chmod(0o755)
+    real = tmp_path / "elsewhere.json"
+    real.write_text(json.dumps(
+        {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTH"}))
+    (tmp_path / "config.json").symlink_to(real)
+    calls = []
+    monkeypatch.setattr(mod.subprocess, "Popen",
+                        lambda *a, **k: calls.append(a) or None)
+    mod._notify("synthetic")
+    assert calls == []

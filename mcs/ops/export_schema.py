@@ -14,6 +14,18 @@ def finite_number(value):
         return False
 
 
+# Explicit diagnostics for familiar raw-content keys. The exhaustive
+# nested allowlist below is enforced after this quick check.
+FORBIDDEN_KEYS = frozenset({
+    "body", "body_text", "text", "statement", "evidence_quote",
+    "sender", "sender_name", "patient_name", "note",
+    "disease", "station_name",
+})
+# per-type additions — 'name' is a legitimate stat key but on an
+# attachment record it is a user-authored file name
+TYPE_FORBIDDEN = {"attachment": frozenset({"name"})}
+
+
 def _integer(value):
     return type(value) is int and value >= 0
 
@@ -53,6 +65,23 @@ _STATE = _enum("current", "stale", "pending", "unknown")
 _KINDS = ("extract_v1", "extract_llm", "canonical_projection", "semantic_facts_v4")
 _ATT_STATES = ("pending", "downloaded", "failed", "pruned", "withdrawn", "unknown")
 _BODY_STATES = ("full", "snippet", "unknown", "deleted", "null")
+FACT_KINDS = (
+    "medication_event", "medication_exposure", "allergy_intolerance",
+    "adverse_drug_event", "adherence_administration", "symptom_state",
+    "vital_lab", "care_event", "request_pending", "preference", "other_observation")
+WORKFLOW_STATUSES = (
+    "reported", "ordered", "planned", "considering", "in_progress", "performed",
+    "done", "cancelled", "on_hold", "pending", "unknown")
+RELATION_TYPES = (
+    "EXACT_DUPLICATE", "EXPLICIT_SUPERSESSION", "TRANSITION",
+    "CONTRADICTION", "COMPLEMENTS", "UNRESOLVED")
+SIGNAL_TYPES = (
+    "request_overdue", "request_aging", "med_change_no_followup",
+    "comm_concentration", "rx_period_expiry", "rx_period_lapsed",
+    "transition_reconciliation", "pharmacist_request_unanswered",
+    "rx_request_visibility", "adherence_concern", "discharge_notice",
+    "symptom_after_med_change")
+STAT_PRESETS = ("operational", "pharmacy")
 _SCOPE = {"since": finite_number, "until": finite_number,
           "as_of": finite_number, "project_id": _integer}
 _RATIO = {"numerator": _integer, "denominator": _integer,
@@ -104,14 +133,9 @@ _STATS = {
 }
 _BASE = {"type": _token, "contract": _enum("mcs-read-model/1"),
          "snapshot_generation_id": _token, "content_omitted": _BOOL}
-_FACT = {"fact_id": _token, "kind": _enum(
-             "medication_event", "medication_exposure", "allergy_intolerance",
-             "adverse_drug_event", "adherence_administration", "symptom_state",
-             "vital_lab", "care_event", "request_pending", "preference", "other_observation"),
+_FACT = {"fact_id": _token, "kind": _enum(*FACT_KINDS),
          "validation_status": _enum("verified", "unverified", "rejected", "unknown"),
-         "workflow_status": _enum("reported", "ordered", "planned", "considering",
-                                   "in_progress", "performed", "done", "cancelled",
-                                   "on_hold", "pending", "unknown"),
+         "workflow_status": _enum(*WORKFLOW_STATUSES),
          "evidence_ids": [_token]}
 _SCHEMAS = {
     "meta": {"snapshot": {"generation_id": _token, "generated_at": finite_number,
@@ -120,12 +144,7 @@ _SCHEMAS = {
         "collection": _counts("patients", "messages", "deleted", "extraction_eligible"),
         "extraction": {k: _counts("current", "stale", "pending", "unknown") for k in _KINDS},
         "attachments": _counts("total", *_ATT_STATES)}},
-    "signal": {"signal_type": _enum(
-                   "request_overdue", "request_aging", "med_change_no_followup",
-                   "comm_concentration", "rx_period_expiry", "rx_period_lapsed",
-                   "transition_reconciliation",
-                   "pharmacist_request_unanswered", "rx_request_visibility",
-                   "adherence_concern", "discharge_notice", "symptom_after_med_change"),
+    "signal": {"signal_type": _enum(*SIGNAL_TYPES),
                "project_id": _integer,
                "detected_at": finite_number,
                "evidence": {**_counts("project_id", "message_id", "request_id",
@@ -142,9 +161,7 @@ _SCHEMAS = {
                     "state": _STATE, "artifact_id": _integer,
                     "last_error": _BOOL, "engine_version": _integer} for k in _KINDS},
                 "facts": [_FACT], "relations": [{"left_fact_id": _token,
-                    "right_fact_id": _token, "kind": _enum(
-                        "EXACT_DUPLICATE", "EXPLICIT_SUPERSESSION", "TRANSITION",
-                        "CONTRADICTION", "COMPLEMENTS", "UNRESOLVED")}]},
+                    "right_fact_id": _token, "kind": _enum(*RELATION_TYPES)}]},
 }
 RECORD_TYPES = (*_SCHEMAS, "stat")
 
@@ -171,7 +188,7 @@ def project_record(record: dict) -> dict:
         name = record.get("name")
         if not isinstance(name, str) or name not in _STATS:
             raise ValueError("stat_not_exportable")
-        schema = {"preset": _enum("operational", "pharmacy"), "name": _enum(name),
+        schema = {"preset": _enum(*STAT_PRESETS), "name": _enum(name),
                   "value": {**_STAT_COMMON, **_STATS[name]}}
     elif isinstance(kind, str) and kind in _SCHEMAS:
         schema = _SCHEMAS[kind]

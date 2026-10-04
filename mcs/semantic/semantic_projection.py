@@ -57,12 +57,14 @@ def _v2_drug_ref(statement: str) -> str | None:
     return sorted(tokens, key=lambda t: (-len(t), t))[0]
 
 
-def project_v2_facts(doc: dict) -> list:
+def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
     """Project a validated ``semantic-facts/v2`` document into the
     legacy fact shape consumed by assessment/loops/render.
 
     Facts without verified evidence keep ``evidence_refs`` empty and
     ``validation_status`` ``unverified`` — projection never upgrades.
+    ``request_details=True`` is staging-only: feeding its assignee/time
+    values into persisted Loop identities requires an owner decision.
     """
     def _mid(v):
         # v2 doc JSON carries message ids as strings; bundle members key
@@ -124,6 +126,20 @@ def project_v2_facts(doc: dict) -> list:
             "_v2_provenance": fact.get("provenance"),
             "_v2_importance": fact.get("importance"),
         })
+    if request_details:
+        from semantic_facts import request_details as bound_details
+        for fact, projected in zip(doc.get("facts", []), out, strict=True):
+            details = bound_details(fact, [
+                evidence_by_id[ref]["quote"] for ref in fact.get("evidence_ids", [])
+                if ref in evidence_by_id])
+            if details:
+                projected["request_details"] = details
+                projected["request_details_unverified"] = True
+                projected["assignee_text"] = details.get("request_to") \
+                    if details.get("request_to") not in (None, "unknown") else None
+                if "due_text" in details:
+                    projected["time_text"] = details["due_text"] \
+                        if details["due_text"] != "unknown" else None
     return out
 
 
@@ -171,11 +187,12 @@ def _v2_med_status(fact: dict) -> str:
     return "current"
 
 
-def project_v2_doc_legacy(doc: dict) -> dict:
+def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
     """Project an audited semantic-facts/v2 document into the
     extract_llm content shape consumed by the read side.  Only
     ``verified`` facts project; quotes come from the document's own
-    evidence records."""
+    evidence records. ``request_details=True`` keeps candidate fields
+    explicitly unverified; the released projection remains the default."""
     evidence_by_id = {e["evidence_id"]: e
                       for e in doc.get("evidence", [])
                       if isinstance(e, dict) and e.get("evidence_id")}
@@ -262,10 +279,29 @@ def project_v2_doc_legacy(doc: dict) -> dict:
             due = fact.get("event_time")
             due = due if isinstance(due, str) and due[:1].isdigit() \
                 else None
-            out.setdefault("requests", []).append(
-                {"to": "不明", "from": None,
-                 "action": fact.get("statement") or "",
-                 "due": due, "unverified": uncertain or negated})
+            item = {"to": "不明", "from": None,
+                    "action": fact.get("statement") or "",
+                    "due": due, "unverified": uncertain or negated}
+            if request_details:
+                from semantic_facts import request_details as bound_details
+                details = bound_details(fact, [
+                    evidence_by_id[ref]["quote"] for ref in fact.get("evidence_ids", [])
+                    if ref in evidence_by_id])
+                if details:
+                    item["unverified"] = True  # existing fact audit does not audit new fields
+                    for source, target in (("request_to", "to"), ("request_from", "from"),
+                                           ("due_text", "due_text"), ("condition", "condition"),
+                                           ("request_kind", "kind")):
+                        if source not in details:
+                            continue
+                        value = details[source]
+                        if value != "unknown":
+                            item[target] = value
+                        elif target == "to":
+                            item[target] = "不明"
+                        elif target != "kind":
+                            item[target] = None
+            out.setdefault("requests", []).append(item)
     _carry_canonical(doc, out, evidence_by_id)
     return out
 

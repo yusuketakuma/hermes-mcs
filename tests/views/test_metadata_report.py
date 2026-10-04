@@ -136,3 +136,32 @@ def test_cli_runs_against_db(db_path):
         [sys.executable, str(SCRIPT), "--db", str(db_path), "--json"],
         capture_output=True, text=True, check=True).stdout)
     assert data["messages"] == 8 and data["as_of"] <= time.time() + 1
+
+
+def test_unknown_reaction_types_are_not_echoed_in_aggregate(db_path):
+    led = Ledger(str(db_path))
+    try:
+        with led.db:
+            led.db.execute("DELETE FROM message_metadata")
+            _row(led.db, 1, "capture", [])
+            _row(led.db, 1, "shadow", [_stamp("synthetic-name-id-canary", 1, True)])
+        rep = metadata_report.build_report(led, now=NOW)
+        assert rep["count_diff_by_type"] == {"unknown": 1}
+        assert rep["self_flag_diff_by_type"] == {"unknown": 1}
+        assert "synthetic-name-id-canary" not in json.dumps(rep)
+        assert "synthetic-name-id-canary" not in metadata_report.render_text(rep)
+    finally:
+        led.close()
+
+
+def test_lag_uses_exact_observation_time_not_last_unchanged_check(db_path):
+    led = Ledger(str(db_path))
+    try:
+        with led.db:
+            led.db.execute("DELETE FROM message_metadata")
+            _row(led.db, 1, "capture", [], observed=NOW - 7200.25)
+            _row(led.db, 1, "shadow", [], observed=NOW - 7200.125)
+        rep = metadata_report.build_report(led, now=NOW)
+        assert rep["capture_to_shadow_lag"] == {"lt_1h": 1}
+    finally:
+        led.close()

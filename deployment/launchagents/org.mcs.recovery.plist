@@ -3,9 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>org.mcs.recovery</string>
+  <key>Umask</key><integer>63</integer>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>__RECOVERY_PYTHON__</string>
     <string>__RECOVERY__/mcs_recover.py</string>
     <string>--if-stale</string>
   </array>

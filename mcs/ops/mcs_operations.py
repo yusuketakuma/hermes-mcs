@@ -551,7 +551,8 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     dismissed = dict(content, state="dismissed", dismissed_at=now,
                      resolved_at=None, dismissed_by=req["actor"],
                      dismiss_reason=req["reason"],
-                     dismiss_command_id=req["command_id"])
+                     dismiss_command_id=req["command_id"],
+                     lifecycle={"event": "dismissed", "at": now})
     if req.get("reason_code"):
         dismissed["dismiss_reason_code"] = req["reason_code"]
     db.execute(
@@ -844,10 +845,9 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
         extra["target_sha"] = sha
         base = req.get("base_sha")
         if base is None:
-            try:
-                base = mcs_update.current_version()[1]
-            except Exception:
-                base = None
+            # same contract as target_sha: an approval without the
+            # reviewed-HEAD pin would let apply() skip its base check
+            return "update_base_unresolvable", {}
         extra["base_sha"] = base
     return None, extra
 

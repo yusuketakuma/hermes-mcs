@@ -17,7 +17,7 @@ from mcs_requests import payload_hash, positive, valid_hash
 def _json_object(value, code: str) -> dict:
     try:
         parsed = json.loads(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         raise ValueError(code) from None
     if not isinstance(parsed, dict):
         raise ValueError(code)

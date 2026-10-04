@@ -87,6 +87,106 @@ def test_boundary_age_is_fresh(tmp_path):
     assert r["status"] == "ok"
 
 
+@pytest.mark.parametrize(("at", "overshoot", "expected"), [
+    (900, 0, "ok"), (900, 1, "degraded"), (50, 1, "stale"),
+])
+def test_run_deadline_overshoot_degrades_only_fresh_health(tmp_path, at, overshoot, expected):
+    run = {"elapsed_s": 480 + overshoot, "overshoot_s": overshoot,
+           "slowest_stage": "derive"}
+    path = _health_file(tmp_path, {"overall": "ok", "at": at, "run": run})
+    report = health_watch.classify_health(str(path), now=1000, deadline_s=900)
+    assert report["status"] == expected
+    assert report["run"] == run
+
+
+def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys):
+    _health_file(tmp_path, {
+        "overall": "degraded", "at": 990, "last_ok_at": 400,
+        "state_reasons": ["notification_held", "backup_not_verified"],
+        "notify": {"held_reasons": {"send_outcome_unknown": 2},
+                   "oldest_age_s": 120.5},
+        "semantic_jobs": {"pending": 3, "oldest_age_s": 60},
+        "extract_qc_jobs": {"pending": 0, "oldest_age_s": "bad"}})
+    assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
+                              "--config", str(tmp_path / "none.json")]) == 0
+    out = capsys.readouterr().out
+    assert "reasons=notification_held,backup_not_verified" in out
+    assert "last_ok_at=400" in out
+    st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
+    assert st["held_reasons"] == {"send_outcome_unknown": 2}
+    assert st["oldest_age_s"] == {"notify": 120.5, "semantic_jobs": 60,
+                                  "extract_qc_jobs": None}
+    # older health.json without the fields: unknown, never "no reason"
+    _health_file(tmp_path, {"overall": "failed", "at": 995})
+    r = health_watch.classify_health(
+        str(tmp_path / "data" / "health.json"), now=1000, deadline_s=900)
+    assert r["state_reasons"] is None and r["last_ok_at"] is None
+    assert health_watch.main(["--home", str(tmp_path), "--now", "1001",
+                              "--config", str(tmp_path / "none.json")]) == 0
+    out = capsys.readouterr().out
+    assert "reasons=unknown" in out and "last_ok_at=unknown" in out
+    assert r["held_reasons"] is None
+    assert r["oldest_age_s"] == {"notify": None, "semantic_jobs": None,
+                                 "extract_qc_jobs": None}
+
+
+@pytest.mark.parametrize("reasons,held", [
+    ([1], {"ok_code": "x"}),
+    ([None], {"code": None}),
+    (["run_failed", 5], {"Free text": 1}),
+    (["has space"], {"a\nb": 1}),
+    (["run_failed\nINJECT"], {"code": True}),
+])
+def test_malformed_reason_fields_stay_unknown(tmp_path, capsys, reasons, held):
+    _health_file(tmp_path, {"overall": "failed", "at": 995,
+                            "state_reasons": reasons,
+                            "notify": {"held_reasons": held}})
+    assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
+                              "--config", str(tmp_path / "none.json")]) == 0
+    assert "reasons=unknown" in capsys.readouterr().out
+    st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
+    assert st["state_reasons"] is None and st["held_reasons"] is None
+
+
+def test_well_formed_empty_reasons_mean_none(tmp_path):
+    _health_file(tmp_path, {"overall": "failed", "at": 995,
+                            "state_reasons": [],
+                            "notify": {"held_reasons": {}}})
+    r = health_watch.classify_health(
+        str(tmp_path / "data" / "health.json"), now=1000, deadline_s=900)
+    assert r["state_reasons"] == [] and r["held_reasons"] == {}
+
+
+@pytest.mark.parametrize("now,printed", [(1000, "reasons=none"),
+                                         (5000, "reasons=unknown")])
+def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
+                                                  printed):
+    _health_file(tmp_path, {"overall": "ok", "at": 995,
+                            "state_reasons": []})
+    r = health_watch.classify_health(
+        str(tmp_path / "data" / "health.json"), now=now, deadline_s=900)
+    if now == 5000:
+        assert r["status"] == "stale" and r["state_reasons"] is None
+        assert r["recorded_state_reasons"] == []
+    else:
+        assert r["status"] == "ok" and r["state_reasons"] == []
+    # first observation of ok does not alert; seed a prior non-ok state
+    (tmp_path / "data" / "health_watch.json").write_text(
+        json.dumps({"last": {"status": "failed", "health_at": 1}}))
+    assert health_watch.main(["--home", str(tmp_path), "--now", str(now),
+                              "--config", str(tmp_path / "none.json")]) == 0
+    assert printed in capsys.readouterr().out
+
+
+def test_out_of_range_counts_and_last_ok_stay_unknown(tmp_path):
+    _health_file(tmp_path, {"overall": "failed", "at": 995,
+                            "last_ok_at": -1,
+                            "notify": {"held_reasons": {"x": -2}}})
+    r = health_watch.classify_health(
+        str(tmp_path / "data" / "health.json"), now=1000, deadline_s=900)
+    assert r["last_ok_at"] is None and r["held_reasons"] is None
+
+
 def test_deadline_derives_from_config_not_hardcode():
     cfg = {"health": {"tick_interval_s": 300, "max_missed_runs": 2}}
     assert health_watch.freshness_deadline(cfg) == 300 * 3

@@ -275,6 +275,9 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
             [{"message_id": i, "content_hash": hashes[i]}
              for i in (1, 2, 3)],
             {"items": 2}, NOW + 3600)
+        assert tuple(db.db.execute(
+            "SELECT project_id,message_id FROM artifacts WHERE kind=?",
+            (v4.KIND_V4_COHORT,)).fetchone()) == (None, None)
         res = v4.run_cohort(db, "c2", now=NOW)
         assert res["scheduled"] == 2          # ceiling respected
         # item receipts bound the cursor — re-running doesn't re-seed
@@ -293,6 +296,20 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
             "SELECT state FROM fetch_jobs")} == {"failed"}
         assert v4.run_cohort(db, "c2", now=NOW + 7200)["error"] == \
             "cohort_expired"
+    finally:
+        db.close()
+
+
+def test_gone_source_item_receipt_preserves_target_without_dangling_reference(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        with db.db:
+            v4._item_receipt(db, "synthetic-cohort", 999, "source_changed")
+        row = db.db.execute(
+            "SELECT project_id,message_id,content FROM artifacts WHERE kind=?",
+            (v4.KIND_V4_ITEM,)).fetchone()
+        assert tuple(row)[:2] == (None, None)
+        assert json.loads(row["content"])["message_id"] == 999
     finally:
         db.close()
 

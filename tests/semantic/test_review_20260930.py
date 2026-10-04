@@ -117,6 +117,7 @@ def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
     now = time.time()
     try:
         for i in range(extract_llm.REVIVE_MAX * 4 + 1):
+            db.save_messages([_message(i + 1, body="synthetic exhausted input")], project_id=1)
             db.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=i+1,
                             meta={"error": True, "extract_version": extract_llm.EXTRACT_VERSION,
                                   "attempts": 5, "hash": "synthetic",

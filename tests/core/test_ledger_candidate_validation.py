@@ -101,6 +101,8 @@ def test_versioned_backup_requires_complete_base_tables(tmp_path):
 def test_unmigratable_candidate_is_rejected_without_modifying_it(tmp_path, damage):
     path = tmp_path / "damaged.db"
     db = Ledger(str(path))
+    with db.db:
+        db.db.execute("INSERT INTO messages(message_id,project_id) VALUES(1,1)")
     db.close()
     con = sqlite3.connect(path)
     con.executescript(damage)

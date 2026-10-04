@@ -49,32 +49,48 @@ def _stale(reason: str, in_progress: bool):
 
 
 def _summary_current(ledger, project_id: int, message_id: int,
-                     bundle: dict,
-                     fingerprint: str, policy: str) -> bool:
-    """Require the frozen notice to still have its current PASS summary."""
+                     bundle, policy: str):
+    """The newest semantic_summary for this message when it is publishable
+    on the CURRENT generation (PASS, not stale, enforce, same policy,
+    whole-thread fingerprint and target revision), else None. The single
+    predicate shared by the send gate, render state and summary block.
+    Returns ``{artifact_id, content, meta}``. ``bundle`` may be a dict or
+    a zero-arg callable resolved only after the cheap row/meta checks pass
+    (thread_bundle reads the whole thread); a raising callable -> None."""
     row = ledger.db.execute(
-        "SELECT content,meta FROM artifacts "
+        "SELECT artifact_id,content,meta FROM artifacts "
         "WHERE kind='semantic_summary' AND project_id=? AND message_id=? "
         "ORDER BY artifact_id DESC LIMIT 1",
         (project_id, message_id)).fetchone()
     if row is None:
-        return False
+        return None
     try:
         content = json.loads(row["content"] or "null")
         meta = json.loads(row["meta"] or "{}")
     except (json.JSONDecodeError, TypeError):
-        return False
+        return None
     if not isinstance(content, dict) or not isinstance(meta, dict):
-        return False
+        return None
+    if (meta.get("audit_status") != "PASS"
+            or meta.get("stale")
+            or meta.get("publication_mode") != "enforce"
+            or meta.get("policy_fingerprint") != policy):
+        return None
+    if callable(bundle):
+        try:
+            bundle = bundle()
+        except Exception:
+            return None
+    if not isinstance(bundle, dict):
+        return None
     target = next((m for m in bundle.get("members", [])
                    if m["message_id"] == message_id), None)
-    return (meta.get("audit_status") == "PASS"
-            and not meta.get("stale")
-            and meta.get("publication_mode") == "enforce"
-            and meta.get("policy_fingerprint") == policy
-            and meta.get("fingerprint") == fingerprint
+    if (meta.get("fingerprint") == bundle.get("source_fingerprint")
             and target is not None
-            and meta.get("target_revision") == target["revision"])
+            and meta.get("target_revision") == target["revision"]):
+        return {"artifact_id": row["artifact_id"], "content": content,
+                "meta": meta}
+    return None
 
 
 def _source_event(ledger, project_id: int, event_id: int):
@@ -179,8 +195,8 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                        if m["message_id"] == target), None)
         if member is None or member["revision"] != target_revision:
             _stale("stale_generation", in_progress)
-        if not _summary_current(ledger, project_id, target, bundle,
-                                fp, policy):
+        if _summary_current(ledger, project_id, target, bundle,
+                            policy) is None:
             _stale("summary_stale", in_progress)
 
 
@@ -213,30 +229,15 @@ def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
             (project_id, mid)).fetchone()
         if row is None:
             continue
-        art = ledger.db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
-            "WHERE kind='semantic_summary' AND project_id=? "
-            "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
-            (project_id, mid)).fetchone()
-        if art is None:
+        root = row["parent_id"] or row["message_id"]
+        cur = _summary_current(
+            ledger, project_id, mid,
+            lambda r=root, m=mid: _sem.thread_bundle(
+                ledger, project_id, r, [m]),
+            _sem.policy_fingerprint(scfg))
+        if cur is None:
             continue
-        try:
-            meta = json.loads(art["meta"] or "{}")
-            root = row["parent_id"] or row["message_id"]
-            bundle = _sem.thread_bundle(ledger, row["project_id"], root, [mid])
-        except Exception:
-            continue
-        target = next((m for m in (bundle or {}).get("members", [])
-                       if m["message_id"] == mid), None)
-        if (bundle is None or meta.get("audit_status") != "PASS"
-                or meta.get("stale")
-                or meta.get("publication_mode") != "enforce"
-                or meta.get("policy_fingerprint") != _sem.policy_fingerprint(scfg)
-                or meta.get("fingerprint") != bundle["source_fingerprint"]
-                or target is None
-                or meta.get("target_revision") != target["revision"]):
-            continue
-        state.append((mid, art["artifact_id"], meta["fingerprint"]))
+        state.append((mid, cur["artifact_id"], cur["meta"]["fingerprint"]))
     return tuple(state)
 
 
@@ -357,35 +358,17 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
             return ""
         if scfg["project_ids"] is not None and r["project_id"] not in scfg["project_ids"]:
             return ""
-        art = ledger.db.execute(
-            "SELECT content,meta FROM artifacts "
-            "WHERE kind='semantic_summary' AND message_id=? "
-            "ORDER BY artifact_id DESC LIMIT 1",
-            (r["message_id"],)).fetchone()
-        if not art:
-            return ""
-        meta = json.loads(art["meta"] or "{}")
-        if (meta.get("audit_status") != "PASS" or meta.get("stale")
-                or meta.get("publication_mode") != "enforce"
-                or meta.get("policy_fingerprint") != _sem.policy_fingerprint(scfg)):
-            return ""
-        try:
-            root = r["parent_id"] or r["message_id"]
-            bundle = _sem.thread_bundle(ledger, r["project_id"], root,
-                                        [r["message_id"]])
-        except Exception:
-            return ""
+        root = r["parent_id"] or r["message_id"]
         # The audited summary must describe the current whole-thread
         # generation, not only the target's body revision (INV-15).
-        if bundle is None or meta.get("fingerprint") != \
-                bundle["source_fingerprint"]:
+        cur = _summary_current(
+            ledger, r["project_id"], r["message_id"],
+            lambda: _sem.thread_bundle(ledger, r["project_id"], root,
+                                       [r["message_id"]]),
+            _sem.policy_fingerprint(scfg))
+        if cur is None:
             return ""
-        target = next((m for m in bundle["members"]
-                       if m["message_id"] == r["message_id"]), None)
-        if target is None or meta.get("target_revision") != \
-                target["revision"]:
-            return ""
-        summ = json.loads(art["content"])
+        summ = cur["content"]
         # Keep every audited claim; the send path's chunker is the one
         # place that splits a notification.
         lines = [str(c.get("text", ""))

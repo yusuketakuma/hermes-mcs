@@ -7,7 +7,7 @@ import pytest
 import semantic_audit
 import semantic_extraction as extraction
 from semantic_runtime import RuntimeGuardError
-from semantic_testkit import BODY, _FakeJev, _ledger, _llm, _seeded, _cfg
+from semantic_testkit import BODY, _FakeJev, _ledger, _llm, _message, _seeded, _cfg
 
 
 def _member(body):
@@ -34,6 +34,7 @@ def test_chunk_failure_persists_prefix_and_replay_reuses_it(tmp_path):
 
     db = _ledger(tmp_path)
     try:
+        db.save_messages([_message(7, body=body)], project_id=1)
         first = extraction.extract_facts_resumable(
             fail_on_second, _member(body), ledger=db, project_id=1,
             source_fingerprint="bundle-fp", chunker=chunker, chunk_size=8)

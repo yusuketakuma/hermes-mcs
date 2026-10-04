@@ -31,6 +31,7 @@ def _fail_extraction(monkeypatch):
 
 
 def test_failed_thin_preserves_same_patient_content(db, monkeypatch):
+    db.save_messages([_message(1)])
     db.artifact_add('synthetic_other_kind',
                     json.dumps({'summary': '別患者Aの情報'}),
                     project_id=1, message_id=1)

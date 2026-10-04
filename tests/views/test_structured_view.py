@@ -286,6 +286,8 @@ def test_malformed_canonical_qualifiers_preserve_readable_finding(db, value):
 @pytest.mark.parametrize("kind", ["extract_v1", "extract_llm",
                                  "canonical_projection", "semantic_facts_v4"])
 def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
+    # Preserve the reader's negative assertion against malformed legacy data.
+    db.db.execute("DROP TRIGGER g1_artifacts_msg_ins")
     db.artifact_add(kind, json.dumps({"summary": "別患者の合成情報",
                                      "medications": [{"name": "別患者薬"}]}),
                     project_id=2, message_id=1,
@@ -337,9 +339,12 @@ def test_unreadable_selected_fields_never_restore_rule_mentions(db, value):
 
 
 def test_unhashable_labels_and_event_items_do_not_hide_valid_facts(db):
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text='合成検査1' WHERE message_id=1")
     joined = _render(db, {
         "events": [{"bad": "visit"}, ["visit"], "visit"],
-        "labs": [{"name": "合成検査", "value": 1, "flag": ["high"]}],
+        "labs": [{"name": "合成検査", "value": 1, "flag": ["high"],
+                  "evidence": "合成検査1"}],
         "symptoms": [{"text": "合成症状", "severity": ["severe"]}],
         "meds": [{"name": "合成薬", "action": ["start"], "route": ["oral"]}],
         "canonical_facts": [
@@ -373,11 +378,16 @@ def test_empty_selected_collections_keep_supported_rule_fallback(db):
 @pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection"])
 @pytest.mark.parametrize("flag", [True, "false", 0, None, [], {}])
 def test_unverified_labs_render_apart_from_confirmed(db, kind, flag):
+    with db.db:
+        db.db.execute(
+            "UPDATE messages SET body_text=? WHERE message_id=1",
+            ("合成確認検査1。合成候補検査2mg/dL高。合成旧形式検査3。",))
     _fact_artifact(db, kind, {"labs": [
-        {"name": "合成確認検査", "value": 1, "unverified": False},
+        {"name": "合成確認検査", "value": 1, "unverified": False,
+         "evidence": "合成確認検査1"},
         {"name": "合成候補検査", "value": 2, "unit": "mg/dL",
-         "flag": "high", "unverified": flag},
-        {"name": "合成旧形式検査", "value": 3}]})
+         "flag": "high", "unverified": flag, "evidence": "合成候補検査2mg/dL高"},
+        {"name": "合成旧形式検査", "value": 3, "evidence": "合成旧形式検査3"}]})
     assert structured_view.structured_lines(db.db, 1) == [
         "検査: 合成確認検査 1・合成旧形式検査 3",
         "検査候補（未確認）: 合成候補検査 2mg/dL(高)"]
@@ -394,8 +404,12 @@ def test_unverified_only_labs_keep_candidate_label_and_total_limit(db):
 
 
 def test_mixed_labs_preserve_total_limit(db):
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text=? WHERE message_id=1",
+                      ("。".join(f"合成検査{n}:{n}" for n in range(7)),))
     joined = _render(db, {"labs": [
-        {"name": f"合成検査{n}", "value": n, "unverified": n % 2 == 0}
+        {"name": f"合成検査{n}", "value": n, "unverified": n % 2 == 0,
+         "evidence": f"合成検査{n}:{n}"}
         for n in range(7)]})
     assert joined.splitlines() == [
         "検査: 合成検査1 1・合成検査3 3・合成検査5 5",

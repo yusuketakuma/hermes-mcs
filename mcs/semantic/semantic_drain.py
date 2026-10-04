@@ -1516,23 +1516,26 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # the semantic lanes leave unused. A 1-job window cannot be split —
         # QC falls back to the persisted cohort alternation inside the
         # non-eligible lane.
-        qc_rows = []
-        if qc_active and max_jobs > 1:
-            qc_rows = ledger.db.execute(
-                "SELECT * FROM fetch_jobs WHERE state='pending' "
-                "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
-                (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
-        qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
-        qc_jobs = list(qc_rows[:qc_share])
-        arrivals, backfill, sched_mut = _due_lanes(
-            ledger, (JOB_KIND,) if qc_jobs else kinds,
-            max_jobs - len(qc_jobs))
-        # unused lane capacity flows back to QC — same rule the backfill
-        # cohort uses against an idle arrival lane
-        spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
-        if spare > 0:
-            qc_jobs += list(qc_rows[qc_share:qc_share + spare])
-        if lane is not None:
+        if lane is None:
+            qc_rows = []
+            if qc_active and max_jobs > 1:
+                qc_rows = ledger.db.execute(
+                    "SELECT * FROM fetch_jobs WHERE state='pending' "
+                    "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+                    (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+            qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
+            qc_jobs = list(qc_rows[:qc_share])
+            arrivals, backfill, sched_mut = _due_lanes(
+                ledger, (JOB_KIND,) if qc_jobs else kinds,
+                max_jobs - len(qc_jobs))
+            # unused lane capacity flows back to QC — same rule the backfill
+            # cohort uses against an idle arrival lane
+            spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
+            if spare > 0:
+                qc_jobs += list(qc_rows[qc_share:qc_share + spare])
+        else:
+            # explicit lane: the fairness/QC selection is never computed
+            # (it would be discarded), saving its queries per tick
             eligible = ("json_valid(payload) AND "
                         "COALESCE(json_extract(payload,'$.eligible'),0)=1")
             # Fresh arrivals use realtime. Background workers may also finish

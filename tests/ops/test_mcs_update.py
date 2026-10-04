@@ -99,6 +99,22 @@ def test_standalone_heartbeat_is_evidence_not_an_assumption(updater, bad):
 def updater(tmp_path, monkeypatch):
     """mcs_update pointed at temp dirs — REPORT_PATH included so a
     recovery path can never scribble on the real runtime."""
+    import mcs_setup
+    from test_runtime_compatibility import _facts
+    runtime_home = tmp_path / "runtime"
+    (runtime_home / "venv/bin").mkdir(parents=True)
+    selected = runtime_home / "venv/bin/python3"
+    selected.touch()
+    selected.chmod(0o700)
+    monkeypatch.setattr(mcs_setup, "HOME", str(runtime_home))
+    monkeypatch.setattr(mcs_setup, "HERMES_PY", str(selected))
+    agents = runtime_home / "agents"
+    agents.mkdir()
+    import plistlib
+    (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
+        {"ProgramArguments": [str(selected), "synthetic-recovery.py"]}))
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: _facts())
     monkeypatch.setattr(mcs_update, "REPO", str(tmp_path / "repo"))
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path / "data"))
     monkeypatch.setattr(mcs_update, "STATE_PATH",
@@ -357,6 +373,25 @@ def test_precheck_schema_uses_exact_live_uri_path(updater, tmp_path, monkeypatch
     assert updater.precheck_tag("v1.1.0") == []
 
 
+def test_precheck_schema_unreadable_ledger_is_unknown_not_zero(
+        updater, tmp_path, monkeypatch):
+    live = tmp_path / "data" / "ledger.db"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_bytes(b"not a sqlite database" * 64)
+    monkeypatch.setattr(updater, "LEDGER", str(live))
+    monkeypatch.setattr(updater, "_ls_tree_paths", lambda *args: [])
+    monkeypatch.setattr(updater, "_git", lambda argv:
+                        subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(updater, "_git_out", lambda argv:
+                        "SCHEMA_VERSION = 8" if argv[0] == "show" else "")
+    monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kwargs:
+                        subprocess.CompletedProcess(argv, 0, "[]", ""))
+
+    errors = updater.precheck_tag("v1.1.0")
+    assert "schema_version_unknown" in errors
+    assert not any(e.startswith("schema_bump:") for e in errors)
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returncode):
     import mcs_setup
@@ -370,7 +405,8 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
         calls.append(argv)
         if argv[1:] == ["cron", "list", "--all"]:
             return subprocess.CompletedProcess(
-                argv, returncode, f"  abcdef [disabled]\n    Script:  {script}\n",
+                argv, returncode,
+                f"  abcdef [disabled]\n    Script:  {updater.SCRIPTS_DIR}/{script}\n",
                 "synthetic listing failure")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -382,6 +418,32 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
         expected.append(["synthetic-hermes", "cron", "remove", "abcdef"])
     assert calls == expected
 
+
+@pytest.mark.parametrize(("script", "evidence", "removed"), [
+    ("mcs_offsite.sh", None, False),
+    ("other/mcs_offsite.sh", {"id": "abcdef", "script": "mcs_offsite.sh"}, False),
+    ("mcs_offsite.sh", {"id": "111111", "script": "mcs_offsite.sh"}, False),
+    ("mcs_offsite.sh", {"id": "abcdef", "script": "mcs_offsite.sh"}, True),
+])
+def test_rollback_offsite_cron_requires_matching_owned_identity(
+        updater, monkeypatch, script, evidence, removed):
+    import mcs_setup
+
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    if evidence is not None:
+        path = Path(updater.MANIFEST_PATH)
+        path.write_text(json.dumps({"cron": [evidence]}))
+        path.chmod(0o600)
+    calls = []
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        output = f"  abcdef [disabled]\n    Script:  {script}\n" if argv[2] == "list" else ""
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(updater.subprocess, "run", execute)
+    assert updater._reconcile_membership({"cron": [], "agents": []}) == []
+    assert (["synthetic-hermes", "cron", "remove", "abcdef"] in calls) is removed
 
 @pytest.mark.parametrize("name", ["user-added.txt", "新規ファイル.txt", "sp ace.txt"])
 def test_rollback_preserves_untracked_update_name(updater, tmp_path, monkeypatch, name):
@@ -2216,3 +2278,36 @@ def test_rollback_applying_journal_shape():
                                    True, "cid-rb")
     with pytest.raises(KeyError):
         mcs_update._rollback_applying({}, None, None)
+
+
+@pytest.mark.parametrize("ancestry_rc, expect_notice", [(0, False), (1, True),
+                                                        (128, True)])
+def test_check_skips_notice_and_auto_when_head_contains_tag(
+        updater, monkeypatch, ancestry_rc, expect_notice):
+    """HEAD ahead of the newest tag is not an update; only rc 0 proves it."""
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {
+        "update": {"mode": "auto", "auto_delay_h": 0}})
+    monkeypatch.setattr(mcs_update, "detect_latest",
+                        lambda pre: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(mcs_update, "current_version",
+                        lambda: ("v9.0.0", "b" * 40))
+    monkeypatch.setattr(mcs_update, "fetch_notes", lambda tag: "notes")
+    monkeypatch.setattr(mcs_update, "impact_summary", lambda a, b: [])
+    monkeypatch.setattr(mcs_update, "scan_pending_approvals",
+                        lambda state: ([], []))
+    calls = []
+
+    def fake_git(args, timeout=None):
+        calls.append(args)
+        rc = ancestry_rc if args[0] == "merge-base" else 0
+        return subprocess.CompletedProcess(args, rc, "", "")
+    monkeypatch.setattr(mcs_update, "_git", fake_git)
+    notices, applied = [], []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(mcs_update, "apply",
+                        lambda *a, **k: applied.append(a) or 0)
+    assert mcs_update.cmd_check() == 0
+    assert ["merge-base", "--is-ancestor", "a" * 40, "HEAD"] in calls
+    assert bool(notices) is expect_notice
+    assert bool(applied) is expect_notice

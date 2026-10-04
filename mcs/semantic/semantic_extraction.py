@@ -809,6 +809,7 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
         if kind == "medication_event":
             fact["action"] = _enum_or_unknown(item.get("action"),
                                               sf.MED_ACTIONS)
+        fact.update(sf.request_details(item, [ev_rec["quote"]] if ev_rec else []))
         if obligation_ids:
             obligations[oid]["fact_ids"].append(fact["fact_id"])
         facts.append(fact)
@@ -923,7 +924,8 @@ def extract_facts_v2(llm_fn, member: dict,
                      deadline: float | None = None, *,
                      ledger=None, source_fingerprint: str | None = None,
                      project_id=None, chunk_size: int = 3000,
-                     jev_client=None, retry_coverage: bool = False) -> dict:
+                     jev_client=None, retry_coverage: bool = False,
+                     request_following: bool = False) -> dict:
     """Extract a contract-validated ``semantic-facts/v2`` document.
 
     Returns ``{"doc", "complete", "coverage", ...}``.  ``doc`` is always
@@ -935,6 +937,10 @@ def extract_facts_v2(llm_fn, member: dict,
     import semantic
     import semantic_llm
 
+    if type(request_following) is not bool:
+        raise ValueError("request_following must be boolean")
+    prompt_template = (semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT
+                       if request_following else semantic_llm._FACT_V2_PROMPT)
     source, message_id, project_id, revision, source_fp, body_hash = \
         _member_prelude(member, llm_fn, project_id, source_fingerprint)
     posted_at = member.get("posted_at") or ""
@@ -943,8 +949,7 @@ def extract_facts_v2(llm_fn, member: dict,
     _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
-    generation = _chunk_generation(semantic.llm_model(),
-                                   semantic_llm._FACT_V2_PROMPT)
+    generation = _chunk_generation(semantic.llm_model(), prompt_template)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
@@ -1000,7 +1005,7 @@ def extract_facts_v2(llm_fn, member: dict,
             jev_verdicts[cid] = _preflight_verdict(
                 jev_client, spec["text"], deadline, cid)
         parsed, reason = _chunk_llm(
-            llm_fn, semantic_llm._FACT_V2_PROMPT % spec["text"], deadline)
+            llm_fn, prompt_template % spec["text"], deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -1160,6 +1165,7 @@ def extract_facts_v2(llm_fn, member: dict,
         "extraction_complete": complete,
         **_chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
+        **({"generation": generation} if request_following else {}),
     }
 
 
@@ -1189,12 +1195,26 @@ def _merge_dupe_facts(facts: list) -> list:
     obligation links rather than emitting a duplicate ID."""
     merged_facts = []
     by_fact_id = {}
+    # Keys whose known values already disagreed stay "unknown" for good,
+    # so a later duplicate cannot revive one side of the conflict.
+    conflicted = {}
     for fact in facts:
         existing = by_fact_id.get(fact["fact_id"])
         if existing is None:
             by_fact_id[fact["fact_id"]] = fact
             merged_facts.append(fact)
             continue
+        if fact["kind"] == "request_pending":
+            seen = conflicted.setdefault(fact["fact_id"], set())
+            for key in sf.REQUEST_DETAIL_FIELDS:
+                # "unknown" means not determined, not a conflicting value.
+                if key in seen or fact.get(key, sf.UNKNOWN) == sf.UNKNOWN:
+                    continue
+                if existing.get(key, sf.UNKNOWN) == sf.UNKNOWN:
+                    existing[key] = fact[key]
+                elif existing[key] != fact[key]:
+                    existing[key] = sf.UNKNOWN
+                    seen.add(key)
         for oid in fact["obligation_ids"]:
             if oid not in existing["obligation_ids"]:
                 existing["obligation_ids"].append(oid)
@@ -1297,7 +1317,8 @@ def _jev_obligations(manifest: dict, obligations: dict,
 
 def repair_facts_v2(llm_fn, member: dict, doc: dict,
                     rejected: dict, deadline: float | None = None,
-                    *, chunk_size: int = 3000) -> dict:
+                     *, chunk_size: int = 3000,
+                     request_following: bool = False) -> dict:
     """Re-extract only the chunks owning ``rejected`` facts and merge the
     repaired items into a re-validated document.
 
@@ -1307,12 +1328,22 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     unusable input) — the caller then keeps the prior doc and holds the
     generation rather than degrading it.
     """
+    if type(request_following) is not bool:
+        raise ValueError("request_following must be boolean")
+    generation_detail = {}
+    if request_following:
+        import semantic
+        import semantic_llm
+        generation_detail["generation"] = _chunk_generation(
+            semantic.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT)
     if not isinstance(doc, dict) or not isinstance(member, dict) \
             or not rejected or not callable(llm_fn):
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
     import semantic
     import semantic_llm
+    prompt_template = (semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT
+                       if request_following else semantic_llm._FACT_V2_PROMPT)
 
     source = member.get("body_original")
     source_meta = doc.get("source")
@@ -1321,7 +1352,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             or source_meta.get("message_id") != str(member.get("message_id"))
             or source_meta.get("revision") != str(member.get("revision", ""))):
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
     source_fp = doc["source"]["source_fingerprint"]
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
@@ -1331,7 +1362,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         # The stored doc does not match a fresh atomization of the
         # source — repair cannot locate owners safely.
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -1346,7 +1377,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     rejected_ids = [fid for fid in rejected if fid in facts_by_id]
     if not rejected_ids:
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
     # rejected fact -> owning chunks via obligation links; evidence
     # quotes inside a chunk's text are a fallback locator.
@@ -1366,7 +1397,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                         owner_ids.add(spec["chunk_id"])
     if not owner_ids:
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
     repaired_items = {}
     dispatched = []
@@ -1383,7 +1414,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             if any(obligations.get(oid, {}).get("owner_id") == cid
                    for oid in facts_by_id[fid].get("obligation_ids", []))
             or not facts_by_id[fid].get("obligation_ids"))
-        base = semantic_llm._FACT_V2_PROMPT % spec["text"]
+        base = prompt_template % spec["text"]
         base = base.rsplit("JSON:", 1)[0]
         prompt = base + semantic_llm._FACT_V2_REPAIR_SUFFIX % feedback
         parsed, _reason = _chunk_llm(llm_fn, prompt, deadline)
@@ -1396,7 +1427,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         dispatched.append(cid)
     if not dispatched:
         return {"doc": doc, "repaired": False,
-                "repaired_fact_ids": [], "owner_chunk_ids": []}
+                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
     # Normalise repaired items per owning chunk, then merge by fact_id.
     facts = [f for f in doc["facts"]
@@ -1491,4 +1522,4 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     sf.validate_facts_doc(new_doc)
     return {"doc": new_doc, "repaired": True,
             "repaired_fact_ids": repaired_fact_ids,
-            "owner_chunk_ids": dispatched}
+             "owner_chunk_ids": dispatched, **generation_detail}

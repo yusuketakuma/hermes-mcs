@@ -243,3 +243,15 @@ def test_legacy_runtime_import_is_the_platform_module(transport, monkeypatch):
     monkeypatch.setattr(old, "_client", marker)
     assert current._client is marker
     assert cli._runtime(transport) is import_module(f"adapters.{transport}.standalone")
+
+
+@pytest.mark.parametrize("key,value", [("allowed_role_ids", ["abc"]),
+                                       ("allowed_user_ids", [" 4000000000000000004"])])
+def test_check_rejects_grants_the_connector_would_refuse(tmp_path, monkeypatch, key, value):
+    cfg = write_root(tmp_path)
+    cfg["notify"]["discord"] = {**DISCORD, key: value}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    monkeypatch.setattr(cli, "_sdk_problem", lambda: None)
+    with pytest.raises(config.ConfigError, match="standalone_grants_invalid"):
+        cli.check(tmp_path)
+    assert cli.main(["check", "--root", str(tmp_path)]) == 1

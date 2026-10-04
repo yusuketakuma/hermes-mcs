@@ -42,7 +42,7 @@ from contextlib import suppress
 
 import mcs_runtime
 from mcs_adapter import project_url
-from mcs_queries import current_extract_pred, current_v4_id
+from mcs_queries import HOLD_PROGRESS_SET, current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
@@ -378,12 +378,21 @@ def restore_pending(root: str) -> dict | None:
     """A restore marker blocks every send grant until reconcile runs.
     A corrupt or unreadable marker still blocks — fail closed."""
     path = os.path.join(root, RESTORE_MARKER)
+    backup_restore = any(os.path.lexists(os.path.join(root, name)) for name in (
+        "restore.json", "backup_restore_approval.json",
+        "backup_restore_resume.json", "backup_restore_blocked.json"))
     try:
         with open(path, "rb") as handle:
             data = json.loads(handle.read().decode("utf-8"))
     except FileNotFoundError:
-        return {"unreadable": True} if os.path.lexists(path) else None
+        return {"unreadable": True} if backup_restore or os.path.lexists(path) else None
     except (OSError, ValueError, RecursionError):
+        return {"unreadable": True}
+    if (backup_restore or isinstance(data, dict)
+            and data.get("by") == "mcs_backup_restore") and (
+            not isinstance(data, dict)
+            or data.get("by") != "mcs_backup_restore"
+            or data.get("phase") != "awaiting_consent"):
         return {"unreadable": True}
     if isinstance(data, dict) and (
             data.get("phase") in ("restored", "awaiting_consent")
@@ -411,6 +420,12 @@ def mark_restored(root: str, backup_path=None, by="manual",
 def restore_awaiting_consent(root: str) -> dict | None:
     """Hold writers for pending consent or an unreadable restore phase."""
     marker = restore_pending(root)
+    if isinstance(marker, dict) and marker.get("by") == "mcs_backup_restore":
+        from mcs_restore import writers_resumed
+        if writers_resumed(root):
+            # Adoption does not authorize delivery or reconciliation. Keep the
+            # awaiting_consent marker intact for both of those independent gates.
+            return None
     if isinstance(marker, dict) \
             and (marker.get("phase") == "awaiting_consent"
                  or marker.get("unreadable")):
@@ -419,6 +434,10 @@ def restore_awaiting_consent(root: str) -> dict | None:
 
 
 def clear_restore_pending(root: str) -> None:
+    marker = restore_pending(root)
+    if ((marker or {}).get("by") == "mcs_backup_restore"
+            or os.path.lexists(os.path.join(root, "restore.json"))):
+        raise ValueError("backup_restore_delivery_remains_held")
     with suppress(FileNotFoundError):
         os.unlink(os.path.join(root, RESTORE_MARKER))
 def _restore_hold_active(db, *, card_id=None, delivery_id=None) -> bool:
@@ -1267,16 +1286,20 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         # delivery_id instead
         _cancel_open_renders(db, card_id, now)
         return None
-    content = _card_content(db, card)
-    gens = _generation_drift(card, content)
+    op = _render_op(card)
+    if op is None:
+        return None      # revoked & never delivered: nothing to render
     latest = db.execute(
         "SELECT * FROM notification_renders WHERE card_id=? "
         "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+    if op == "revoke" and latest is not None and latest["op"] == "revoke" \
+            and latest["state"] == "delivered":
+        return None      # delete already landed — _render_needed would
+                         # say no regardless of drift, so skip content
+    content = _card_content(db, card)
+    gens = _generation_drift(card, content)
     if not _render_needed(db, card, latest, gens, cfg, now, force):
         return None                        # delivered/terminal & no drift
-    op = _render_op(card)
-    if op is None:
-        return None
     if op == "update" and _parts_in_flight(db, latest):
         return None                        # a later sweep issues it
     rev = (latest["render_rev"] + 1) if latest is not None else 1
@@ -1746,8 +1769,9 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             _reseat(db, event_id, now)
         elif _notice_failures(db, event_id) >= MAX_RESEND:
             db.execute("UPDATE notify_outbox SET state='failed',"
-                       "next_try=NULL,updated_at=? WHERE event_id=?",
-                       (now, event_id))
+                       f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
+                       "WHERE event_id=?",
+                       ("resend_exhausted", now, event_id))
             mark_snapshot_dirty(db)
             return {"error": "resend_exhausted"}
         else:
@@ -1763,8 +1787,9 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                 ok = False
             if not ok:
                 db.execute("UPDATE notify_outbox SET state='failed',"
-                           "next_try=NULL,updated_at=? WHERE event_id=?",
-                           (now, event_id))
+                           f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
+                           "WHERE event_id=?",
+                           ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
             transport = active_transport(cfg)
             db.execute(
@@ -1875,8 +1900,9 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
             if not isinstance(frozen, dict):
                 db.execute(
                     "UPDATE notify_outbox SET state='failed',"
-                    "next_try=NULL,updated_at=? WHERE event_id=?",
-                    (now, event_id))
+                    f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
+                    "WHERE event_id=?",
+                    ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
             db.execute(
                 "INSERT INTO notification_intent_batches("
@@ -1886,6 +1912,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                  payload_hash(frozen), epoch, now, active_transport(cfg),
                  canonical(scope).decode() if active_transport(cfg) in ("slack", "lineworks") else None))
             card_ids = []
+            covered = set()
             for target in _resolve_targets(db, row, frozen):
                 cid = _card_for(db, target, scope, now)
                 db.execute(
@@ -1895,9 +1922,17 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                      json.dumps(target["coverage"],
                                 ensure_ascii=False)))
                 card_ids.append(cid)
+                covered.update(target["coverage"])
             if card_ids:
                 for cid in card_ids:
                     _issue_render(db, cid, cfg, now, specs)
+                if row["kind"] == "new_messages":
+                    from notify_urgent import capture_initial
+                    capture_initial(ledger, cfg, {
+                        "event_id": event_id, "kind": row["kind"],
+                        "project_id": row["project_id"],
+                        "payload": json.dumps({**frozen, "message_ids": sorted(covered)}),
+                    }, now=now)
                 _reseat(db, event_id, now)
                 outcome.update(dispatched=True, cards=len(card_ids))
             else:
@@ -2713,19 +2748,26 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         # cmd_results files are a transport artifact — the durable audit
         # lives in command_receipts. The plugin polls a result for
         # minutes at most; anything a week old is dead weight.
+        # Names are random uuids, so pick candidates by age, oldest first
+        # — a name-sorted window would stall once it held only fresh files.
         results = 0
+        expired = []
         try:
-            names = sorted(os.listdir(dirs["cmd_results"]))
+            with os.scandir(dirs["cmd_results"]) as it:
+                for e in it:
+                    if not e.name.endswith(".json"):
+                        continue
+                    with suppress(OSError):
+                        mtime = e.stat(follow_symlinks=False).st_mtime
+                        if now - mtime > TOKEN_WRITE_S:
+                            expired.append((mtime, e.path))
         except OSError:
-            names = []
-        for n in names[:limit]:
-            if not n.endswith(".json"):
-                continue
-            path = os.path.join(dirs["cmd_results"], n)
+            pass
+        expired.sort()
+        for _mtime, path in expired[:limit]:
             with suppress(OSError):
-                if now - os.stat(path).st_mtime > TOKEN_WRITE_S:
-                    os.unlink(path)
-                    results += 1
+                os.unlink(path)
+                results += 1
         return {"tokens": tokens, "spec_json_cleared": cleared,
                 "spec_files": removed, "result_files": results}
 

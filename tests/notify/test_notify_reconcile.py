@@ -277,12 +277,18 @@ def test_lost_delivered_attempt_holds_scope(world):
     aid = _journal_claim(state, "w1", spec)
     _journal_result(state, "w1", aid, render["delivery_id"],
                     "delivered", message_id="999001")
+    world.led.db.execute("UPDATE notify_outbox SET progress='{\"next\":1}'"
+                         " WHERE event_id=?", (eid,))
+    world.led.db.commit()
     notify_cards.mark_restored(str(world.data), backup_path="b.db")
 
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
     assert verdict["detail"] == "attempt_lost:delivered"
+    assert json.loads(world.led.db.execute(
+        "SELECT progress FROM notify_outbox WHERE event_id=?",
+        (eid,)).fetchone()[0]) == {"next": 1, "hold_reason": "restore_hold"}
     # render held, card unknown, outbox event quarantined
     assert world.render()["state"] == "held"
     assert world.card()["delivery_state"] == "delivery_unknown"
@@ -302,6 +308,31 @@ def test_lost_delivered_attempt_holds_scope(world):
          "spec": spec, "payload_hash": envelopes.payload_hash(spec)})
     out = notify_transport.apply_transport_begin(world.led, req, CFG)
     assert out["granted"] is False
+
+
+def test_unlinked_lost_delivery_holds_pending_interactive_with_reason(world):
+    """Spec file gone: every pending interactive intent is held with a
+    stable reason while its receipt keys survive."""
+    world.seed()
+    eid = world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    state = str(world.data / "discord_state")
+    aid = _journal_claim(state, "w1", spec)
+    _journal_result(state, "w1", aid, render["delivery_id"],
+                    "delivered", message_id="999001")
+    (world.data / "discord_render" / (render["delivery_id"] + ".json")).unlink()
+    world.led.db.execute("UPDATE notify_outbox SET progress='{\"next\":1}'"
+                         " WHERE event_id=?", (eid,))
+    world.led.db.commit()
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    row = world.led.db.execute(
+        "SELECT state,progress FROM notify_outbox WHERE event_id=?",
+        (eid,)).fetchone()
+    assert row["state"] == "failed"
+    assert json.loads(row["progress"]) == {"next": 1,
+                                           "hold_reason": "restore_unlinked"}
 
 
 def test_rebind_delivered_releases_hold(world):

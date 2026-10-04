@@ -1230,6 +1230,41 @@ def test_dismiss_flow_pins_artifact(world):
     assert row is not None
 
 
+class SignalBot(FakeBot):
+    """FakeBot that signals listener wiring (set) and removal (clear), so
+    supervisor tests wait on an event instead of polling a time budget.
+    The supervisor wires its listener only after taking the scope lock."""
+
+    def __init__(self):
+        super().__init__()
+        self.wired = asyncio.Event()
+
+    def add_listener(self, fn, name):
+        super().add_listener(fn, name)
+        self.wired.set()
+
+    def remove_listener(self, fn, name):
+        super().remove_listener(fn, name)
+        if not self.listeners:
+            self.wired.clear()
+
+
+def test_signal_bot_wiring_event_tracks_listeners():
+    """The wait signal the supervisor tests rely on: set on wiring, cleared
+    only when the last listener is removed (so a re-wire is observable)."""
+    async def run():
+        bot = SignalBot()
+        assert not bot.wired.is_set()
+        bot.add_listener(print, "on_a")
+        bot.add_listener(len, "on_b")
+        assert bot.wired.is_set()
+        bot.remove_listener(print, "on_a")
+        assert bot.wired.is_set()
+        bot.remove_listener(len, "on_b")
+        assert not bot.wired.is_set()
+    asyncio.run(run())
+
+
 def test_supervisor_registers_and_stops(world):
     """Listener lands once per Bot, unload removes it, and the
     supervisor drives the loop through spawn_task."""
@@ -1247,17 +1282,14 @@ def test_supervisor_registers_and_stops(world):
             self._unload = cb
 
     async def run():
-        bot = FakeBot()
+        bot = SignalBot()
         sup = tasks.Supervisor(
             ctx=FakeCtx(), bot=bot,
             settings={**SETTINGS, "data_root": str(world.data)},
             log=lambda e, **f: world.logs.append((e, f)))
         assert sup.start() is True
         assert spawned and not spawned[0].done()
-        async def ready():
-            while not bot.listeners:
-                await asyncio.sleep(0.01)
-        await asyncio.wait_for(ready(), 5)
+        await asyncio.wait_for(bot.wired.wait(), 5)
         assert len(bot.listeners) == 1
         sup.unload()
         spawned[0].cancel()
@@ -1868,15 +1900,12 @@ def test_supervisor_profile_scopes_do_not_mix(world, monkeypatch):
             log=lambda e, **f: world.logs.append((e, f)))
 
     async def run():
-        bot_a, bot_b = FakeBot(), FakeBot()
+        bot_a, bot_b = SignalBot(), SignalBot()
         sup_a = _sup(bot_a, "mcs")
         sup_b = _sup(bot_b, "other")
         assert sup_a.start() and sup_b.start()
-        for _ in range(50):
-            await asyncio.sleep(0.02)
-            if len(list((world.data / "discord_state")
-                        .glob("send-*.lock"))) == 2:
-                break
+        await asyncio.wait_for(
+            asyncio.gather(bot_a.wired.wait(), bot_b.wired.wait()), 5)
         locks = list((world.data / "discord_state")
                      .glob("send-*.lock"))
         assert len(locks) == 2        # different profiles, both live
@@ -1900,10 +1929,8 @@ def test_supervisor_profile_scopes_do_not_mix(world, monkeypatch):
         # A returns -> exactly one listener on the fresh binding
         sup_a2 = _sup(bot_a, "mcs")
         assert sup_a2.start()
-        async def ready_again():
-            while not bot_a.listeners:
-                await asyncio.sleep(0.01)
-        await asyncio.wait_for(ready_again(), 5)
+        assert not bot_a.wired.is_set()
+        await asyncio.wait_for(bot_a.wired.wait(), 5)
         assert len(bot_a.listeners) == 1
 
         sup_b.unload()
@@ -1943,29 +1970,23 @@ def test_supervisor_yields_scope_when_bot_closes(world):
 
     async def run():
         closed = {"a": False}
-        bot_a = FakeBot()
+        bot_a = SignalBot()
         bot_a.is_closed = lambda: closed["a"]
         sup_a = _sup(bot_a)
         assert sup_a.start()
-        async def ready():
-            while not bot_a.listeners:
-                await asyncio.sleep(0.01)
-        await asyncio.wait_for(ready(), 5)
+        await asyncio.wait_for(bot_a.wired.wait(), 5)
 
         # fatal adapter error path: host closes the old client, then a
         # rebuilt adapter wires a successor on the new bot
         closed["a"] = True
-        bot_b = FakeBot()
+        bot_b = SignalBot()
         sup_b = _sup(bot_b)
         assert sup_b.start()
 
         # predecessor notices the closed client and releases the lock;
         # the successor waits out the handoff and takes over intake
         await asyncio.wait_for(spawned[0], 10)
-        async def taken_over():
-            while not bot_b.listeners:
-                await asyncio.sleep(0.05)
-        await asyncio.wait_for(taken_over(), 10)
+        await asyncio.wait_for(bot_b.wired.wait(), 10)
         assert len(bot_b.listeners) == 1
         assert not bot_a.listeners
         assert any(e == "bot_closed" for e, _ in world.logs)

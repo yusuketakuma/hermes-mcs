@@ -117,6 +117,35 @@ def test_card_footer_mentions_post_as_names_never_as_mentions():
     asyncio.run(scenario())
 
 
+def test_failed_display_name_is_reasked_after_negative_ttl(monkeypatch):
+    """A transient users.info failure must not pin a member to the
+    neutral label for the worker's life; a success stays cached."""
+    from adapters.slack import delivery as slack_delivery
+    clock = [1000.0]
+    monkeypatch.setattr(slack_delivery.time, "monotonic", lambda: clock[0])
+
+    async def scenario():
+        client = FakeClient()
+        looked = []
+
+        async def users_info(user):
+            looked.append(user)
+            if len(looked) == 1:
+                raise RuntimeError("ratelimited")
+            return {"ok": True, "user": {"profile": {"display_name": "佐藤"}}}
+        client.users_info = users_info
+        adapter = _adapter(client)
+        assert await adapter.display_name("U0OP") is None
+        assert await adapter.display_name("U0OP") is None   # within TTL
+        clock[0] += slack_delivery.NAME_NEG_S
+        assert await adapter.display_name("U0OP") == "佐藤"
+        clock[0] += 10 * slack_delivery.NAME_NEG_S
+        assert await adapter.display_name("U0OP") == "佐藤"
+        assert looked == ["U0OP", "U0OP"]
+
+    asyncio.run(scenario())
+
+
 def test_retrying_native_client_sends_once_without_shared_mutation():
     async def scenario():
         retries = [object()]
@@ -1105,12 +1134,19 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
         def __init__(self):
             self.client = FakeClient()
             self.handlers = []
+            self.wired = asyncio.Event()
+
+        def _wire(self, key):
+            def deco(fn):
+                self.handlers.append(key)
+                self.wired.set()
+            return deco
 
         def action(self, pattern):
-            return lambda fn: self.handlers.append(pattern)
+            return self._wire(pattern)
 
         def view(self, name):
-            return lambda fn: self.handlers.append(name)
+            return self._wire(name)
 
     class Ctx:
         def spawn_task(self, coro, name=None):
@@ -1119,25 +1155,18 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
         def on_unload(self, fn):
             pass
 
-    async def until(cond):
-        for _ in range(500):
-            if cond():
-                return True
-            await asyncio.sleep(0.01)
-        return False
-
     async def scenario():
         old_app, new_app = App(), App()
         old = slack_tasks.Supervisor(ctx=Ctx(), app=old_app, adapter=None,
                                      settings=settings,
                                      log=lambda e, **f: logs.append(e))
         assert old.start()
-        assert await until(lambda: old_app.handlers)
+        await asyncio.wait_for(old_app.wired.wait(), 5)
         new = slack_tasks.Supervisor(ctx=Ctx(), app=new_app, adapter=None,
                                      settings=settings,
                                      log=lambda e, **f: logs.append(e))
         assert new.start()
-        assert await until(lambda: new_app.handlers)
+        await asyncio.wait_for(new_app.wired.wait(), 5)
         assert old._task.done()
         assert not old._actions._active and new._actions._active
         assert "scope_lock_unavailable" not in logs

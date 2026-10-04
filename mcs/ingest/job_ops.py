@@ -192,7 +192,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                         if not _valid_history_payload(pl):
                             raise ValueError
                     except ValueError:
-                        ledger.job_fail(existing["job_id"])
+                        ledger.job_fail(existing["job_id"],
+                                        reason_code="invalid_payload")
                         existing = None
                 if existing:
                     pl["since"] = min(since, pl.get("since", since))
@@ -310,6 +311,16 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
 
 # ---------- job drains ----------
 
+def _job_failure_reason(error: MCSError) -> str:
+    from ledger import job_reason_code
+
+    if job_reason_code(error.kind):
+        return error.kind
+    if type(error.status) is int and 400 <= error.status <= 599:
+        return f"http_{error.status}"
+    return "fetch_error"
+
+
 def run_reply_jobs(adapter, ledger, result, deadline,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None):
@@ -337,7 +348,7 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             if type(page) is not int or page < 1:
                 raise ValueError
         except ValueError:
-            ledger.job_fail(job["job_id"])
+            ledger.job_fail(job["job_id"], reason_code="invalid_payload")
             result["errors"].append("reply: invalid_payload")
             continue
         try:
@@ -358,7 +369,7 @@ def run_reply_jobs(adapter, ledger, result, deadline,
         except SessionExpired:
             raise  # auth failure aborts the run — never consumed as job retry
         except MCSError as e:
-            ledger.job_retry(job["job_id"])
+            ledger.job_retry(job["job_id"], reason_code=_job_failure_reason(e))
             result["errors"].append(
                 f"reply {job['message_id']}: {e.kind}")
             continue
@@ -383,9 +394,11 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             if job["kind"] == "thread" or ledger.job_state(
                     "reply", job["project_id"], job["message_id"]) == "pending":
                 pl["page"] = next_page
-                ledger.job_defer(job["job_id"], 300, payload=pl)
+                ledger.job_defer(job["job_id"], 300, payload=pl,
+                                 reason_code=_job_failure_reason(window_error))
                 if not isinstance(window_error, SessionExpired):
-                    ledger.job_retry(job["job_id"])
+                    ledger.job_retry(job["job_id"],
+                                     reason_code=_job_failure_reason(window_error))
             result["errors"].append(f"thread {job['parent_id']}: {window_error.kind}")
             if isinstance(window_error, SessionExpired):
                 raise window_error
@@ -416,7 +429,7 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             if parent and complete < (parent["reply_count"] or 0):
                 pl["page"] = 1
                 ledger.job_defer(job["job_id"], 0, payload=pl)
-                ledger.job_retry(job["job_id"])
+                ledger.job_retry(job["job_id"], reason_code="replies_missing")
                 result["errors"].append(
                     f"thread {job['parent_id']}: replies_missing")
             else:
@@ -426,7 +439,7 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             # on the next attempt, not retried forever at the tail.
             pl["page"] = 1
             ledger.job_defer(job["job_id"], 0, payload=pl)
-            ledger.job_retry(job["job_id"])
+            ledger.job_retry(job["job_id"], reason_code="replies_missing")
 
 
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
@@ -450,7 +463,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             if not _valid_history_payload(pl):
                 raise ValueError
         except ValueError:
-            ledger.job_fail(job["job_id"])
+            ledger.job_fail(job["job_id"], reason_code="invalid_payload")
             result["errors"].append("import job: invalid_payload")
             continue
         if bool(pl.get("trickle")) != trickle:
@@ -470,7 +483,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         except SessionExpired:
             raise
         except MCSError as e:
-            ledger.job_retry(job["job_id"])
+            ledger.job_retry(job["job_id"], reason_code=_job_failure_reason(e))
             result["errors"].append(f"import {pid}: {e.kind}")
             continue
         hist = batch.messages
@@ -525,21 +538,23 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             # SessionExpired stays attempt-free (auth aborts the run below,
             # matching the raised path).
             if isinstance(batch.error, SessionExpired):
-                ledger.job_defer(job["job_id"], 300, payload=pl)
+                ledger.job_defer(job["job_id"], 300, payload=pl,
+                                 reason_code=_job_failure_reason(batch.error))
             else:
-                ledger.job_retry(job["job_id"], 300, payload=pl)
+                ledger.job_retry(job["job_id"], 300, payload=pl,
+                                 reason_code=_job_failure_reason(batch.error))
         elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
             # window can never certify (e.g. 'snippet' parent whose full
             # body has no API surface) — fail visibly; the job is still
             # revivable by a new import request (P-2)
-            ledger.job_fail(job["job_id"])
+            ledger.job_fail(job["job_id"], reason_code="window_stalled")
             result["errors"].append(f"import {pid}: window_stalled")
         elif batch.reached:
             # replies still pending — keep job alive to re-check floor,
             # backing off as stalls accumulate
             ledger.job_defer(job["job_id"],
                              min(3600, 600 * pl.get("stalls", 1)),
-                             payload=pl)
+                             payload=pl, reason_code="waiting_replies")
         else:
             # progress checkpoint: resume from this page next tick without
             # consuming attempts (only real failures do)
@@ -599,8 +614,11 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
             page = pl.get("page")
             if type(page) is not int or page < 1:
                 raise ValueError
+            passes = pl.get("passes", 0)
+            if type(passes) is not int or passes < 0:
+                raise ValueError
         except ValueError:
-            ledger.job_fail(job["job_id"])
+            ledger.job_fail(job["job_id"], reason_code="invalid_payload")
             result["errors"].append("reconcile: invalid_payload")
             continue
         pid = job["project_id"]
@@ -610,7 +628,11 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
         except SessionExpired:
             raise
         except MCSError as e:
-            ledger.job_retry(job["job_id"])
+            # plain attempt budget: a first-attempt permanent failure would
+            # drop the row and the reseed would lose page/passes/last_pass_at
+            ledger.job_retry(job["job_id"], 300,
+                             reason_code=_job_failure_reason(e),
+                             fail_fast=False)
             result["errors"].append(f"reconcile {pid}: {e.kind}")
             continue
         merged = merge_full_replies(adapter, batch.messages, 0, deadline,
@@ -624,14 +646,18 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
         if batch.reached and not batch.error and merged.checkpoint_safe:
             # full pass complete — restart the rotation after a pause
             pl["page"] = 1
+            pl["passes"] = passes + 1
+            pl["last_pass_at"] = time.time()
             ledger.job_defer(job["job_id"], RECONCILE_INTERVAL_S,
                              payload=pl)
         elif batch.error:
             if isinstance(batch.error, SessionExpired):
-                ledger.job_defer(job["job_id"], 300, payload=pl)
+                ledger.job_defer(job["job_id"], 300, payload=pl,
+                                 reason_code=_job_failure_reason(batch.error))
                 raise batch.error
-            ledger.job_defer(job["job_id"], 0, payload=pl)
-            ledger.job_retry(job["job_id"], 300)
+            ledger.job_retry(job["job_id"], 300, payload=pl,
+                             reason_code=_job_failure_reason(batch.error),
+                             fail_fast=False)
             result["errors"].append(f"reconcile {pid}: {batch.error.kind}")
         else:
             ledger.job_defer(job["job_id"],

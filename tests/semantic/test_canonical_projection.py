@@ -107,6 +107,11 @@ def test_projection_readers_agree_after_newer_unusable_row(
             db.db.execute("UPDATE artifacts SET meta='[]' WHERE artifact_id=?", (broken,))
         elif fault == "wrong_project":
             db.ensure_patient(2)
+            # Plant old damage for reader-defense assertions, not a valid write.
+            db.db.execute("DROP TRIGGER g1_artifacts_msg_upd")
+            assert db.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                "AND name='g1_artifacts_msg_ins'").fetchone()
             db.db.execute("UPDATE artifacts SET project_id=2 WHERE artifact_id=?", (broken,))
         rows = db.db.execute(
             "SELECT a.artifact_id FROM artifacts a JOIN messages m "

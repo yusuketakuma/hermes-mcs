@@ -138,8 +138,8 @@ def test_walk_rejects_inconsistent_pages(defect):
 
 # ---------- ledger storage ----------
 
-def test_schema_version_unchanged_and_tables_created(db):
-    assert SCHEMA_VERSION == 8
+def test_reaction_tables_use_current_schema_version(db):
+    assert db.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     tables = {r[0] for r in db.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"message_reaction_actors", "message_reaction_actor_fetch"} <= tables
 

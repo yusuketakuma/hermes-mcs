@@ -88,11 +88,6 @@ def _connect(path: str) -> sqlite3.Connection:
     return conn
 
 
-class AdmissionError(Exception):
-    """Raised for invalid calls — never for admission denial (a denial
-    is a returned verdict, not an exception)."""
-
-
 class Broker:
     """The admission broker. Owns its own SQLite store so a ledger
     restore cannot resurrect retired permits into a live epoch."""

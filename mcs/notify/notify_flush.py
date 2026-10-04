@@ -54,6 +54,10 @@ _MAX_LEN = 1900
 _MAX_FILES = 10
 _MAX_FILE_BYTES = 24 * 1024 * 1024
 _MAX_FILES_BYTES = 23 * 1024 * 1024
+SEND_MIN_BUDGET_S = 30
+_ALERT_KINDS = frozenset({
+    "session_expired", "session_recovered", "run_failed", "update_notice",
+})
 
 
 def _config() -> dict:
@@ -77,8 +81,7 @@ def _target(cfg: dict, kind: str) -> str | None:
     config must never spill bodies into a fallback destination
     (Oracle B15). System alerts may override via notify_system_target."""
     t = cfg.get("notify_target")
-    if kind in ("session_expired", "session_recovered",
-                "run_failed", "update_notice"):
+    if kind in _ALERT_KINDS:
         st = cfg.get("notify_system_target")
         if isinstance(st, str) and st.strip():
             t = st
@@ -233,11 +236,19 @@ def _signal_unit_text(ledger, sigs: list[dict]):
                                  .get("message_ids") or [])
                        if type(m) is int})
         sig_view = {"evidence": {"message_ids": mids}}
-    return _signal_text(
+    text = _signal_text(
         ledger,
         {"text": merged or mcs_signals.signal_notice_text(latest),
          "project_id": latest.get("project_id")},
         sig_view)
+    mid, message = _signal_evidence(
+        ledger.db, {**sig_view, "project_id": latest.get("project_id")})
+    urgency = (structured_view.message_urgency(ledger.db, mid)
+               if message is not None and mid is not None else None)
+    if urgency:
+        head, sep, tail = text.partition("\n")
+        text = f"{head} — {structured_view.URGENCY_LABEL[urgency]}{sep}{tail}"
+    return text
 
 
 def _signal_notice_text(ledger, payload: dict) -> str:
@@ -278,10 +289,6 @@ def _signal_notice_text(ledger, payload: dict) -> str:
                 f"（{len(open_sigs)}件）\n\n" + "\n\n".join(parts))
     else:
         text = _signal_unit_text(ledger, open_sigs)
-        if payload.get("urgent") is True:
-            head, _, tail = text.partition("\n")
-            text = f"{head} — 原投稿が urgency:high" \
-                   + (f"\n{tail}" if tail else "")
     if not isinstance(text, str) or not text:
         raise ValueError("payload_invalid")
     return text
@@ -360,6 +367,12 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         return text, []
     if ev["kind"] == "signal":
         return _signal_notice_text(ledger, payload), []
+    if ev["kind"] == "urgent_notice":
+        import notify_urgent
+        checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
+        if not checked["ok"]:
+            raise _StaleSend(checked["reason"])
+        return notify_urgent.render_text(checked), []
     if ev["kind"] == "attachment_followup":
         return _followup_files(ledger, payload, ev["project_id"])
     return _message_notice(ledger, ev, payload)
@@ -522,11 +535,14 @@ def _send_never_began(ev) -> bool:
         return False
     if not isinstance(progress, dict):
         return False
+    if "invalid_progress" in progress:
+        return False
     return (not progress.get("next") and progress.get("sending") is None
             and not progress.get("sent"))
 
 
-def _hold_event(ledger, ev, cfg, proven_undelivered=False):
+def _hold_event(ledger, ev, cfg, proven_undelivered=False,
+                reason="delivery_held", rescue=True):
     """Quarantine an event; for an unsent digest payload, first move
     its still-open member keys into a fresh scheduled digest — a held
     intent stops covering its keys but nothing else would ever
@@ -540,7 +556,19 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False):
                            (ev["event_id"],)).fetchone()
     if ev is None:
         return
-    if (proven_undelivered or _send_never_began(ev)) \
+    # Store only a stable code alongside the existing receipt; never replace
+    # its in-flight evidence with a guessed negative acknowledgement.
+    try:
+        progress = json.loads(ev["progress"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        progress = None
+    if not isinstance(progress, dict):
+        progress = {"invalid_progress": ev["progress"]}
+    progress["hold_reason"] = reason
+    ledger.db.execute(
+        "UPDATE notify_outbox SET progress=? WHERE event_id=?",
+        (json.dumps(progress), ev["event_id"]))
+    if rescue and (proven_undelivered or _send_never_began(ev)) \
             and not _has_sent_progress(ev):
         try:
             payload = json.loads(ev["payload"])
@@ -594,6 +622,18 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False):
 
 class _SendFailed(OSError):
     """Delivery did not begin; the outbox may safely retry."""
+
+
+class _SendBudget(_SendFailed):
+    """Insufficient send time; defer without consuming an attempt."""
+
+
+def _send_budget(deadline: float | None) -> float:
+    """Check before reserving in-flight and again before starting transport."""
+    remain = 180 if deadline is None else deadline - time.monotonic()
+    if remain < SEND_MIN_BUDGET_S:
+        raise _SendBudget("send_budget_insufficient")
+    return min(180, remain)
 
 
 class _SendUncertain(OSError):
@@ -688,12 +728,7 @@ def _send(argv: list[str], content: str,
         body = json.dumps({"text": content, "files": sealed}, ensure_ascii=False)
     else:
         body = _compose_body(content, files)
-    timeout = 180
-    if deadline is not None:
-        remain = deadline - time.monotonic()
-        if remain <= 0:
-            raise _SendFailed("deadline_exceeded")
-        timeout = min(timeout, remain)
+    timeout = _send_budget(deadline)
     try:
         r = subprocess.run(argv, input=body, text=True,
                            capture_output=True, timeout=timeout)
@@ -735,6 +770,7 @@ def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  deadline: float | None,
                  attachment_pins: dict[str, str] | None = None) -> None:
     """Retain the in-flight marker unless non-delivery is established."""
+    _send_budget(deadline)
     ledger.outbox_progress(ev["event_id"], i, list(sent_ids),
                            fingerprint, i + 1)
     try:
@@ -752,7 +788,8 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
         d = json.loads(raw or "{}")
     except json.JSONDecodeError as e:
         raise ValueError("progress_invalid") from e
-    if not isinstance(d, dict) or type(d.get("next", 0)) is not int:
+    if (not isinstance(d, dict) or "invalid_progress" in d
+            or type(d.get("next", 0)) is not int):
         raise ValueError("progress_invalid")
     next_chunk = d.get("next", 0)
     sent = d.get("sent", [])
@@ -794,14 +831,14 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         if outcome.get("error") in ("payload_invalid", "resend_exhausted"):
             # dispatch already quarantined it — a malformed frozen
             # payload cannot heal, so never re-arm an hourly retry
-            ledger.outbox_hold(ev["event_id"])
+            ledger.outbox_hold(ev["event_id"], outcome["error"])
             res["failed"] += 1
         elif outcome.get("error"):
             # a sealed intent whose transport/scope no longer matches the
             # config never heals on its own — quarantine like the
             # exception path instead of failing hourly forever
             if ev["attempts"] >= 4:
-                ledger.outbox_hold(ev["event_id"])
+                ledger.outbox_hold(ev["event_id"], "dispatch_failed")
             else:
                 ledger.outbox_mark(ev["event_id"], "failed",
                                    retry_in=3600)
@@ -812,7 +849,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
             res["dispatched"] = res.get("dispatched", 0) + 1
     except Exception:
         if ev["attempts"] >= 4:
-            ledger.outbox_hold(ev["event_id"])
+            ledger.outbox_hold(ev["event_id"], "internal_failure")
         else:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
         res["failed"] += 1
@@ -843,12 +880,27 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
     return True
 
 
-def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
+def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     """Format, chunk and send one text event — per-chunk progress is
     journaled so a crash mid-event resumes at the first unacknowledged
-    chunk rather than duplicating accepted posts. Returns False when
-    the deadline cut the chunk loop short (caller ends the flush)."""
+    chunk rather than duplicating accepted posts. Insufficient time raises
+    _SendBudget without consuming an attempt or reserving a new send."""
+    _send_budget(deadline)
+    # An unknown send outcome is held before formatting: a stale/closed
+    # source would otherwise suppress the event and lose the receipt.
+    if ev["progress"]:
+        early_progress = json.loads(ev["progress"])
+        if not isinstance(early_progress, dict):
+            raise ValueError("progress_invalid")
+        if early_progress.get("sending") is not None:
+            _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+            res["uncertain"] = res.get("uncertain", 0) + 1
+            return
     content, files = _format_event(ledger, ev)
+    if ev["kind"] == "new_messages" and _send_never_began(ev):
+        import notify_urgent
+        with ledger.db:
+            notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
     attachment_pins = None
     if target.startswith("lineworks:"):
         attachment_pins = {}
@@ -866,27 +918,26 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
                for i in range(0, len(content), _MAX_LEN)])
     # resume at the first unacknowledged chunk — a crash after a
     # partial send must not duplicate accepted chunks (B25)
-    start, sent_ids, previous, sending = _progress(
+    # an unacknowledged `sending` chunk was already held above (F19)
+    start, sent_ids, previous, _ = _progress(
         ev["progress"], len(chunks))
-    if sending is not None and sending > start:
-        # a previous attempt began chunk `sending` and died before
-        # recording the ack — delivery is UNCERTAIN: resending
-        # could duplicate a post that did go out. Hold it for
-        # human reconciliation instead (F19)
-        _hold_event(ledger, ev, cfg)
-        res["uncertain"] = res.get("uncertain", 0) + 1
-        return True
     fingerprint = _delivery_fingerprint(target, chunks, files)
     if start and previous != fingerprint:
-        _hold_event(ledger, ev, cfg)
+        _hold_event(ledger, ev, cfg, reason="delivery_changed")
         res["failed"] += 1
-        return True
+        return
     if not start:
         ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
     post_files = files
 
     def gate(i, payload) -> bool:
         """Last-moment pre-chunk gate, re-evaluated before a retry."""
+        if ev["kind"] == "urgent_notice":
+            import notify_urgent
+            checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
+            if not checked["ok"]:
+                raise _StaleSend(checked["reason"])
+            return True
         if ev["kind"] == "semantic_notice":
             _semantic_gate(ledger, ev, payload,
                            in_progress=bool(start or i))
@@ -895,8 +946,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             ledger, ev, render_state, bool(start or i), res)
 
     for i in range(start, len(chunks)):
-        if deadline is not None and time.monotonic() >= deadline:
-            return False
+        _send_budget(deadline)
         payload = None
         if ev["kind"] == "semantic_notice":
             try:
@@ -904,7 +954,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
             except (json.JSONDecodeError, TypeError) as e:
                 raise ValueError("payload_invalid") from e
         if not gate(i, payload):
-            return True
+            return
         # files ride the FIRST post only; on resume (start>0) they
         # were already delivered with chunk 0. A usage rejection
         # of the file-bearing send (exit 2 — never a delivery
@@ -921,7 +971,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
                 raise
             post_files = None
             if not gate(i, payload):
-                return True
+                return
             _send_marked(ledger, ev, i, sent_ids, fingerprint,
                          argv, chunks[i], None, deadline, attachment_pins=attachment_pins)
         sent_ids.append(str(i + 1))
@@ -930,20 +980,22 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> bool:
     ledger.outbox_mark(ev["event_id"], "accepted",
                        sent_ids[-1] if sent_ids else "")
     res["sent"] += 1
-    return True
 
 
 def _fail_event(ledger, ev, cfg, res, exc):
     """Per-event failure accounting — quarantine, park, suppress or
     backoff according to the exception class (_SendUncertain must be
     checked before OSError, which it subclasses)."""
-    if isinstance(exc, _DeferredSend):
+    if isinstance(exc, _SendBudget):
+        res["skipped"] += 1
+        res["send_budget_insufficient"] = res.get("send_budget_insufficient", 0) + 1
+    elif isinstance(exc, _DeferredSend):
         # stays pending but re-checks hourly, not every flush. A
         # parked enforce intent is policy-blocked, not incomplete —
         # count it separately so run_check's notify_incomplete signal
         # doesn't flag every other tick while the mode gate is down
         if _has_sent_progress(ev):
-            _hold_event(ledger, ev, cfg)
+            _hold_event(ledger, ev, cfg, reason="deferred_after_partial")
             res["failed"] += 1
         else:
             ledger.db.execute(
@@ -955,11 +1007,11 @@ def _fail_event(ledger, ev, cfg, res, exc):
     elif isinstance(exc, _FreezeSend):
         # An accepted chunk is immutable. Keep its receipt/progress and
         # freeze the remaining chunks until an explicit retry decision.
-        _hold_event(ledger, ev, cfg)
+        _hold_event(ledger, ev, cfg, reason="policy_changed")
         res["failed"] += 1
     elif isinstance(exc, _StaleSend):
         if _has_sent_progress(ev):
-            _hold_event(ledger, ev, cfg)
+            _hold_event(ledger, ev, cfg, reason="stale_after_partial")
             res["failed"] += 1
         else:
             ledger.outbox_suppress(ev["event_id"])
@@ -969,14 +1021,14 @@ def _fail_event(ledger, ev, cfg, res, exc):
         # problem; retrying cannot fix it, quarantine the event.
         # The refusal is provably pre-delivery, so held digest
         # members may be salvaged.
-        _hold_event(ledger, ev, cfg, proven_undelivered=True)
+        _hold_event(ledger, ev, cfg, proven_undelivered=True, reason="send_usage")
         res["failed"] += 1
     elif isinstance(exc, _SendUncertain):
-        _hold_event(ledger, ev, cfg)
+        _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
         res["uncertain"] = res.get("uncertain", 0) + 1
         res["failed"] += 1
     elif isinstance(exc, ValueError):
-        _hold_event(ledger, ev, cfg)
+        _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid")
         res["failed"] += 1
     elif isinstance(exc, OSError | TimeoutError | KeyError):
         # Same 5-attempt ceiling as the generic path: a permanent
@@ -985,7 +1037,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
         # members still salvage — while a transient fault self-heals on
         # the backoff retries instead of either looping forever.
         if ev["attempts"] >= 4:
-            _hold_event(ledger, ev, cfg)
+            _hold_event(ledger, ev, cfg, reason="pre_send_failure")
         else:
             backoff = min(3600, 60 * (2 ** ev["attempts"]))
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
@@ -998,7 +1050,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
         # deterministic bug quarantines after 5 attempts instead of
         # looping forever.
         if ev["attempts"] >= 4:
-            _hold_event(ledger, ev, cfg)
+            _hold_event(ledger, ev, cfg, reason="internal_failure")
         else:
             ledger.outbox_mark(ev["event_id"], "failed",
                                retry_in=3600)
@@ -1024,7 +1076,17 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if ev["project_id"] and ledger.is_archived(ev["project_id"]):
             # queued before the patient was archived — archived patient
             # events must never reach the channel; drop terminally, do
-            # not count as sent OR as a retryable failure (Oracle F2)
+            # not count as sent OR as a retryable failure (Oracle F2).
+            # A send that began with unknown outcome is held instead,
+            # so the receipt is counted as send_outcome_unknown.
+            try:
+                began = (json.loads(ev["progress"] or "{}") or {}).get("sending")
+            except (ValueError, AttributeError):
+                began = None
+            if began is not None:
+                _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+                res["uncertain"] = res.get("uncertain", 0) + 1
+                continue
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
@@ -1042,12 +1104,18 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
+        if ev["kind"] not in _ALERT_KINDS:
+            import notify_cards
+            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
+                # move it out of the ORDER BY event_id window so held
+                # content can never starve a later alert (no attempt used)
+                ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
+                res["skipped"] += 1
+                res["restore_pending"] = res.get("restore_pending", 0) + 1
+                continue
         argv = _send_argv(cfg, target)
         try:
-            if not _send_text(ledger, ev, cfg, argv, target, res,
-                              deadline):
-                res["skipped"] += len(due) - event_index
-                return res
+            _send_text(ledger, ev, cfg, argv, target, res, deadline)
         except Exception as exc:
             _fail_event(ledger, ev, cfg, res, exc)
     return res

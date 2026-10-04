@@ -232,6 +232,88 @@ def test_date_rule_revision_replaces_fabricated_year(db):
     assert extract.run_pending(db)['done'] == 0
 
 
+@pytest.mark.parametrize(('body', 'high'), [
+    ('急ぎではありません', False),
+    ('緊急の対応は不要です', False),
+    ('緊急性はありません', False),
+    ('至急連絡する必要はありません', False),
+    ('救急搬送はしません', False),
+    ('先月、緊急搬送された', False),
+    ('救急搬送しました', False),
+    ('緊急対応は済みです', False),
+    ('明日すぐに連絡します', False),
+    ('来週、緊急受診の予定です', False),
+    ('発熱について連絡します', False),
+    ('至急ご確認ください', True),
+    ('緊急搬送してください', True),
+    ('すぐに連絡をお願いします', True),
+    ('至急対応予定です', True),
+    ('急ぎではありませんが至急ご確認ください', True),
+    ('救急搬送しましたが現在すぐに連絡をお願いします', True),
+    ('来週は緊急受診の予定。本日至急ご確認ください', True),
+    ('先月緊急搬送されました。今は至急対応が必要です', True),
+    ('緊急の対応は不要ではありません', True),
+    ('昨日から38度の発熱、至急往診お願いします', True),
+    ('至急ただちに受診してください', True),
+    ('明日までに至急ご返信ください', True),
+    ('緊急搬送されたので連絡します', False),
+    ('搬送の必要はありません', False),
+    ('救急要請なし', False),
+    ('昨日の採血でK 6.5、至急ご連絡ください', True),
+    ('先週処方した薬で発疹、すぐに中止してください', True),
+    ('明日の訪問前に至急ご連絡ください', True),
+    ('昨日より発熱、至急往診お願いします', True),
+    ('明日、至急ご連絡ください', True),
+    ('明日、緊急でお願いします', True),
+    ('明日、至急受診してください', True),
+    ('明日は至急往診をお願いします', True),
+    ('今度は至急お願いします', True),
+    ('緊急で搬送しました', False),
+    ('すぐに搬送の必要はないが、経過観察', False),
+    ('明日すぐに至急連絡します', False),
+])
+def test_urgency_requires_current_affirmative_evidence(body, high):
+    assert (extract.extract_message(body, '2026-10-04').get('urgency')
+            == 'high') is high
+
+
+def test_urgency_revision_replaces_old_rule_and_shared_display(db):
+    from structured_view import message_urgency
+
+    db.save_messages([_message(body='急ぎではありません')])
+    content_hash = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
+    db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': content_hash,
+                          'rule_version': extract.RULE_VERSION - 1})
+    assert message_urgency(db.db, 1) == 'rule'
+    assert extract.run_pending(db)['done'] == 1
+    assert message_urgency(db.db, 1) is None
+    artifacts = db.artifacts('extract_v1')
+    assert len(artifacts) == 1
+    assert json.loads(artifacts[0]['meta'])['rule_version'] == extract.RULE_VERSION
+    assert extract.run_pending(db)['done'] == 0
+
+
+def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):
+    db.save_messages([_message(1, body='至急ご確認ください', day=19),
+                      _message(2, body='至急ご確認ください', day=20)])
+    for mid, h in db.db.execute('SELECT message_id, content_hash FROM messages'):
+        db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
+                        project_id=1, message_id=mid,
+                        meta={'hash': h, 'rule_version': extract.RULE_VERSION - 1})
+    clock = iter([0, 0, 10, 10, 10])
+    monkeypatch.setattr(extract.time, 'monotonic', lambda: next(clock))
+    assert extract.run_pending(db, deadline=5)['done'] == 1
+    metas = sorted(json.loads(a['meta'])['rule_version']
+                   for a in db.artifacts('extract_v1'))
+    assert metas == [extract.RULE_VERSION - 1, extract.RULE_VERSION]
+    monkeypatch.undo()
+    assert extract.run_pending(db)['done'] == 1
+    assert [json.loads(a['meta'])['rule_version']
+            for a in db.artifacts('extract_v1')] == [extract.RULE_VERSION] * 2
+
+
 @pytest.mark.parametrize('workers', [1, 2])
 def test_ambiguous_batch_index_retries_only_its_message(db, monkeypatch, workers):
     db.save_messages([_message(1, body='合成本文A', day=19),

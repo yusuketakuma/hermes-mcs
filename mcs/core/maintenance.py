@@ -14,9 +14,8 @@ from pathlib import Path
 from contextlib import suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
-from mcs_util import atomic_write, disk_floor_mb, publish_tmp
+from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
 
-HOME = os.path.expanduser("~/.mcs")
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
 SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
 LOGFILE = os.path.join(HOME, "data", "run.log")

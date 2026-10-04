@@ -20,7 +20,6 @@ class Host:
         self.settings = {key: sorted(value) if isinstance(value, frozenset) else value
                          for key, value in settings.items()}
         self.tasks = set()
-        self._tasks = self.tasks
         self._unload = []
         self._closing = False
 

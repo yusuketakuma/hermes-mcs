@@ -157,8 +157,52 @@ def _collection(result: dict) -> dict:
         stalled)))
 
 
+# identity marker: a run that crashed before _config() has no backup evidence
+CONFIG_NOT_LOADED: dict = {}
+
+
+def _backup_health(cfg: dict, now: float) -> dict:
+    """Read only configured backup evidence; missing proof is never success."""
+    from mcs_backup import BackupError, load_policy, status
+    from mcs_setup import _backup_config
+
+    setting = cfg.get("backup", {"enabled": False})
+    if _backup_config(setting):
+        return {"state": "invalid", "reasons": ["backup_config_invalid"]}
+    if not setting["enabled"]:
+        return {"state": "disabled", "reasons": []}
+    try:
+        policy, scheduled = load_policy(setting["policy"])
+        assert policy is not None
+        recorded = status(os.path.join(HOME, "data"), policy)
+    except (BackupError, OSError, ValueError, TypeError, sqlite3.Error, RecursionError):
+        return {"state": "failed", "reasons": ["backup_io_or_policy_failed"]}
+    reasons = []
+    if not scheduled:
+        reasons.append("backup_schedule_disabled")
+    if recorded["last_attempt_failed"]:
+        reasons.append("backup_failed")
+    source = recorded["source_last_successful_run"]
+    if source is None:
+        reasons.append("backup_source_unknown")
+    elif not 0 <= now - source <= policy.max_rpo_seconds:
+        reasons.append("backup_rpo_exceeded")
+    for field, interval in (
+            ("last_verify_at", setting["verify_interval_s"]),
+            ("last_drill_at", setting["drill_interval_s"])):
+        at = recorded[field]
+        if at is None:
+            reasons.append("backup_" + field.removeprefix("last_") + "_unknown")
+        elif not 0 <= now - at <= interval:
+            reasons.append("backup_" + field.removeprefix("last_") + "_stale")
+    return {"state": "degraded" if reasons else "ok", "reasons": reasons,
+            **{key: recorded[key] for key in (
+                "last_offsite_at", "last_verify_at", "last_drill_at",
+                "last_restore_at", "source_last_successful_run", "max_rpo_seconds")}}
+
+
 def _health(ledger, result: dict, status: str,
-            run_id: int | None = None) -> dict:
+            run_id: int | None = None, *, cfg: dict | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
     notification completion, extract/QC backlog lag, and current
     extraction-generation coverage. Every query is a count — never bodies.
@@ -175,9 +219,25 @@ def _health(ledger, result: dict, status: str,
         "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
         "WHERE state IN ('pending','failed') AND next_try IS NOT NULL"
     ).fetchone()
-    held = ledger.db.execute(
-        "SELECT COUNT(*) FROM notify_outbox "
-        "WHERE state='failed' AND next_try IS NULL").fetchone()[0]
+    held_reasons = {
+        row["reason"]: row["count"] for row in ledger.db.execute(f"""
+          SELECT CASE
+            WHEN code IN ('send_outcome_unknown','restore_text_unverified',
+                          'payload_or_progress_invalid','delivery_changed',
+                          'deferred_after_partial','policy_changed','stale_after_partial',
+                          'send_usage','pre_send_failure','internal_failure',
+                          'payload_invalid','resend_exhausted','dispatch_failed',
+                          'restore_hold','restore_unlinked')
+              THEN code
+            WHEN code IS NULL THEN 'not_recorded'
+            ELSE 'unknown'
+          END AS reason, COUNT(*) AS count
+          FROM (
+            SELECT json_extract({json_or_null('progress')},'$.hold_reason') AS code
+            FROM notify_outbox WHERE state='failed' AND next_try IS NULL
+          ) GROUP BY reason ORDER BY reason
+        """)}
+    held = sum(held_reasons.values())
     if held:
         notify_state = "incomplete"
     sem = ledger.db.execute(
@@ -249,9 +309,52 @@ def _health(ledger, result: dict, status: str,
         "mode", "reason", "due", "fetched", "published", "deferred", "budget_s", "elapsed_s",
         "interval_s", "backoff_s", "deferred_reasons") if key in shadow}
     shadow_health["error_count"] = len(shadow.get("errors") or [])
+    run = dict(result.get("run") or {})
+    if result.get("deferred_stages"):
+        run["deferred_stages"] = list(result["deferred_stages"])
+    run_overdue = run.get("overshoot_s", 0) > 0
+    from ledger_audit import guard_status
+    guards = guard_status(ledger.db)
+    guard_violations = any(
+        relation["existing_count"] or relation["shadow_count"]
+        for relation in guards["relations"])
+    # no loaded config is no backup evidence — never report it 'disabled'
+    backup = (_backup_health(cfg or {}, now) if cfg is not CONFIG_NOT_LOADED
+              else {"state": "unknown", "reasons": ["config_not_loaded"]})
+    backup_bad = backup["state"] not in ("ok", "disabled")
+    if (run_overdue or guard_violations or backup_bad) and overall == "ok":
+        overall = "degraded"
+    previous = _prev_health()
+    last_ok_at = (now if overall == "ok" else previous.get(
+        "last_ok_at", previous.get("at") if previous.get("overall") == "ok" else None))
+    if (isinstance(last_ok_at, bool)
+            or not isinstance(last_ok_at, (int, float))
+            or not 0 <= last_ok_at < float("inf")):
+        last_ok_at = None
+    state_reasons = [
+        code for code, present in (
+            ("run_failed", status == "failed"),
+            ("session_expired", status == "session_expired"),
+            ("stage_errors", bool(result.get("errors"))),
+            ("run_deadline_exceeded", run_overdue),
+            ("ledger_relation_violations", guard_violations),
+            ("backup_not_verified", backup_bad),
+            ("collection_incomplete", coll["collection"] != "ok"),
+            ("notification_failed", bool(notify_res.get("failed"))),
+            ("notification_deferred", bool(notify_res.get("skipped"))),
+            ("notification_parked", bool(notify_res.get("parked"))),
+            ("notification_held", bool(held)),
+            ("notification_pending", bool(outbox["c"])),
+            ("disk_low", _disk_low(free_mb) or bool(result.get("backup_skipped"))),
+        ) if present]
     return {
         "overall": overall, "run_status": status,
+        "last_ok_at": last_ok_at,
+        "state_reasons": state_reasons,
         "run_id": run_id,
+        "run": run,
+        "ledger_guards": guards,
+        "backup": backup,
         "at": now,
         "unread_at": _unread_at(result, status, now),
         **coll,
@@ -260,6 +363,7 @@ def _health(ledger, result: dict, status: str,
         "notify": {"state": notify_state,
                    "pending": outbox["c"],
                    "held": held,
+                   "held_reasons": held_reasons,
                    "oldest_age_s": (round(now - outbox["o"], 1)
                                     if outbox["o"] else 0)},
         "semantic_jobs": {"pending": sem["c"],
@@ -281,13 +385,13 @@ def _health(ledger, result: dict, status: str,
 
 
 def _write_health(ledger, result: dict, status: str,
-                  run_id: int | None = None) -> None:
+                  run_id: int | None = None, *, cfg: dict | None = None) -> None:
     """Atomic health.json — monitoring consumes this file. A write
     failure must never turn committed ingest work into a crash, but it
     must not be silent either: a durable 'health_write_failed' incident
     is queued so the gap is itself visible (GAP-1)."""
     try:
-        health = _health(ledger, result, status, run_id=run_id)
+        health = _health(ledger, result, status, run_id=run_id, cfg=cfg)
         result["health"] = health
         maintenance.atomic_publish_text(
             HEALTH_FILE, json.dumps(health, ensure_ascii=False))
@@ -1049,7 +1153,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     the rule pass has not."""
     try:
         import extract
-        ex = extract.run_pending(ledger)
+        ex = extract.run_pending(ledger, deadline=deadline - 45)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
     except Exception as e:
@@ -1094,16 +1198,42 @@ def stage_derive(ledger, result, deadline, cfg=None,
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
+    try:
+        import drug_map
+        from mcs_setup import _drug_map_config
+        setting = (cfg or {}).get("drug_map")
+        dictionary = None
+        invalid = setting is not None and _drug_map_config(setting) is not None
+        if invalid:
+            result["errors"].append("drug_map: invalid_config")
+        elif setting is not None:
+            try:
+                dictionary = drug_map.load(
+                    setting["path"], expected_sha256=setting["sha256"])
+            except ValueError:
+                invalid = True
+                result["errors"].append("drug_map: invalid_dictionary")
+        result["drug_map"] = drug_map.derive(
+            ledger, dictionary, deadline=deadline - 30)
+        if invalid:
+            result["drug_map"]["status"] = "invalid"
+        elif result["drug_map"]["status"] == "partial":
+            result["errors"].append("drug_map: partial")
+    except Exception as e:
+        result["errors"].append(f"drug_map: {type(e).__name__}")
+
     # rebuild rollups for patients whose underlying data changed —
     # union of touched-this-run + dirty detection (Oracle B23)
     try:
         import rollup
         touched = set(result.get("extracted_pids", []))
         touched |= set(result.get("extract_llm", {}).get("pids", []))
+        touched |= set(result.get("drug_map", {}).get("pids", []))
         for k in ("cmd_imports", "trickle_imports"):
             touched |= {c["pid"] for c in result.get(k, [])}
         touched |= set(rollup.dirty_projects(ledger))
-        result["rollups"] = rollup.rebuild_many(ledger, touched)
+        result["rollups"] = rollup.rebuild_many(
+            ledger, touched, deadline=deadline - 30)
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
 
@@ -1431,6 +1561,11 @@ def _deliver(ledger, args, cfg, result, deadline):
             result["daily_digest"] = 1
     except Exception as e:
         result["errors"].append(f"daily_digest: {type(e).__name__}")
+    try:
+        import notify_urgent
+        result["urgency_followups"] = notify_urgent.maybe_enqueue(ledger, cfg)
+    except Exception as e:
+        result["errors"].append(f"urgency_followups: {type(e).__name__}")
     if not args.no_notify:
         try:
             # ⏰ due/overdue task reminders join this tick's flush
@@ -1576,6 +1711,42 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         pass                                             # later flush
 
 
+def _arm_watchdog(deadline: float, grace_s: int) -> None:
+    """Exit a wedged tick after its deadline and explicit operator grace."""
+    import faulthandler
+    faulthandler.dump_traceback_later(
+        max(0.001, deadline - time.monotonic() + grace_s), exit=True)
+
+
+def _run_stage(result, name, deadline, function, *args, required=False, **kwargs):
+    """Measure a stage and defer optional work once the run budget is spent."""
+    started = time.monotonic()
+    if started >= deadline and not required:
+        deferred = result.setdefault("deferred_stages", [])
+        deferred.append(name)
+        # skipped work is not success: the run record must be partial.
+        # One compact entry so later errors survive the runs.error [:8] cut.
+        errors = result.setdefault("errors", [])
+        prev = "deadline_deferred:" + ",".join(deferred[:-1])
+        entry = "deadline_deferred:" + ",".join(deferred)
+        if prev in errors:
+            errors[errors.index(prev)] = entry
+        else:
+            errors.append(entry)
+        return None
+    try:
+        return function(*args, **kwargs)
+    finally:
+        finished = time.monotonic()
+        durations = result.setdefault("stage_elapsed_s", {})
+        durations[name] = round(max(0, finished - started), 3)
+        result["run"] = {
+            "elapsed_s": round(max(0, finished - (deadline - RUN_DEADLINE_S)), 3),
+            "overshoot_s": round(max(0, finished - deadline), 3),
+            "slowest_stage": max(durations, key=durations.get),
+        }
+
+
 def main() -> int:
     import local_llm
     with local_llm.pinned_slot(local_llm.REALTIME_SLOT):
@@ -1583,6 +1754,7 @@ def main() -> int:
 
 
 def _main() -> int:
+    import faulthandler
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--mark-read", action="store_true",
@@ -1595,11 +1767,15 @@ def _main() -> int:
                          "(used by the idle-time deep-import agent)")
     ap.add_argument("--metadata-shadow", action="store_true",
                     help="opt-in bounded metadata GETs after contract verification; storage only")
+    ap.add_argument("--watchdog-grace", type=int,
+                    help="opt-in process watchdog grace seconds (1..3600)")
     ap.add_argument("--commands-only", action="store_true",
                     help="drain cmd/cmd_int command traffic only — no "
                          "adapter, network, ingest, derive or notify; "
                          "the interactive-card watcher job uses this")
     args = ap.parse_args()
+    if args.watchdog_grace is not None and not 1 <= args.watchdog_grace <= 3600:
+        ap.error("--watchdog-grace must be 1..3600")
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
     os.makedirs(ATTACH_DIR, mode=0o700, exist_ok=True)
@@ -1626,11 +1802,16 @@ def _main() -> int:
         return _consent_only(lock_fd)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
+    watchdog_armed = args.watchdog_grace is not None
+    if args.watchdog_grace is not None:
+        _arm_watchdog(deadline, args.watchdog_grace)
     try:
         ledger = Ledger(
             DB, notify_all_replies=(not args.jobs_only
                                     and _config().get("notify_all_replies") is True))
     except Exception:
+        if watchdog_armed:
+            faulthandler.cancel_dump_traceback_later()
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
@@ -1639,6 +1820,7 @@ def _main() -> int:
     result = {"run_id": run_id, "ok": False, "projects": 0, "messages": 0,
               "new_messages": 0, "backfilled": 0, "incomplete": [],
               "marked_read": [], "notify": {}, "errors": []}
+    cfg = CONFIG_NOT_LOADED
     try:
         run_id = ledger.begin_run(
             None, kind="deep" if args.jobs_only else "tick")
@@ -1646,34 +1828,43 @@ def _main() -> int:
         cfg = _config()
         sem_on = _semantic_enabled(ledger, cfg, result)
         notify_max_age_s = _notify_max_age_s(cfg, result)
-        _stage_fetch(adapter, ledger, args, cfg, result, deadline,
-                     run_id, sem_on, notify_max_age_s)
-        _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
-                  notify_max_age_s)
+        _run_stage(result, "fetch", deadline, _stage_fetch,
+                   adapter, ledger, args, cfg, result, deadline,
+                   run_id, sem_on, notify_max_age_s)
+        _run_stage(result, "jobs", deadline, _run_jobs,
+                   adapter, ledger, args, cfg, result, deadline, sem_on,
+                   notify_max_age_s)
 
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice
         # can be wider than the 15-min tick's — still capped well under
         # RUN_DEADLINE_S so history/trickle stages keep their share.
         if not _code_changed(result):
-            stage_derive(ledger, result, deadline, cfg,
-                         llm_budget_cap=0 if args.jobs_only else 90)
+            _run_stage(result, "derive", deadline, stage_derive,
+                       ledger, result, deadline, cfg,
+                       llm_budget_cap=0 if args.jobs_only else 90)
 
-        _deliver(ledger, args, cfg, result, deadline)
+        _run_stage(result, "deliver", deadline, _deliver,
+                   ledger, args, cfg, result, deadline)
         # 連携サマリー GETs sit behind unread collection and notify (spec:
         # 取得段は unread 収集・通知の後) so a late tick spends its tail
         # on sends, not on summaries
-        _with_relogin(adapter, ledger, result, "karte_summary",
-                      stage_karte_summary, adapter, ledger, result,
-                      deadline, jobs_only=args.jobs_only)
+        _run_stage(result, "karte_summary", deadline, _with_relogin,
+                   adapter, ledger, result, "karte_summary",
+                   stage_karte_summary, adapter, ledger, result,
+                   deadline, jobs_only=args.jobs_only)
         if not _code_changed(result):
-            _run_semantic(ledger, args, cfg, result, deadline, sem_on,
-                          run_lock_fd=lock_fd)
-        _run_metadata_shadow(adapter, ledger, result, deadline, cfg,
-                             manual=args.metadata_shadow)
-        _housekeeping(result)
-        status = _finish_run(ledger, cfg, result, run_id, deadline)
-        _write_health(ledger, result, status, run_id=run_id)
+            _run_stage(result, "semantic", deadline, _run_semantic,
+                       ledger, args, cfg, result, deadline, sem_on,
+                       run_lock_fd=lock_fd)
+        _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
+                   adapter, ledger, result, deadline, cfg,
+                   manual=args.metadata_shadow)
+        _run_stage(result, "housekeeping", deadline, _housekeeping, result)
+        status = _run_stage(result, "finish", deadline, _finish_run,
+                            ledger, cfg, result, run_id, deadline, required=True)
+        assert isinstance(status, str)
+        _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
     except SessionExpired as e:
         detail = _err_str(e)
         recovered = False
@@ -1690,13 +1881,13 @@ def _main() -> int:
         _fail_run(ledger, args, result, run_id, "session_expired",
                   detail, deadline,
                   alert=None if recovered else "session")
-        _write_health(ledger, result, "session_expired", run_id=run_id)
+        _write_health(ledger, result, "session_expired", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 2
     except MCSError as e:
         _fail_run(ledger, args, result, run_id, "failed", _err_str(e),
                   deadline, alert="run_failed")
-        _write_health(ledger, result, "failed", run_id=run_id)
+        _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1
     except Exception as e:
@@ -1706,10 +1897,12 @@ def _main() -> int:
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
-        _write_health(ledger, result, "failed", run_id=run_id)
+        _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1
     finally:
+        if watchdog_armed:
+            faulthandler.cancel_dump_traceback_later()
         try:
             ledger.close()
         finally:

@@ -1,0 +1,103 @@
+{
+  "version": "canonical-request-evaluation/1",
+  "source": "synthetic",
+  "capacity_days": [],
+  "cases": [
+    {
+      "case_id": "fictional-request-details",
+      "text": "架空担当Aから架空薬剤師へ、架空資料Xを確認してください。架空条件Yの場合、2026年10月6日までです。",
+      "expected": {"requests": [{"action": "架空資料Xを確認", "to": "薬剤師", "from": "架空担当A", "kind": "request", "condition": "架空条件Yの場合", "due": "2026-10-06", "due_text": "2026年10月6日まで"}]},
+      "legacy": {"requests": [{"action": "架空資料Xを確認", "to": "薬剤師", "from": "架空担当A", "kind": "request", "condition": "架空条件Yの場合", "due": "2026-10-06", "due_text": "2026年10月6日まで"}]},
+      "canonical_old": [{"statement": "架空資料Xを確認", "event_time": "2026-10-06"}],
+      "canonical_new": [{"statement": "架空資料Xを確認", "event_time": "2026-10-06", "request_to": "薬剤師", "request_from": "架空担当A", "request_kind": "request", "condition": "架空条件Yの場合", "due_text": "2026年10月6日まで"}]
+    },
+    {
+      "case_id": "fictional-question",
+      "text": "架空資料Zは届きましたか。宛先や期限は書いていません。",
+      "expected": {"requests": [{"action": "架空資料Zの到着確認", "kind": "question", "to": null, "from": null, "condition": null, "due": null, "due_text": null}]},
+      "legacy": {"requests": [{"action": "架空資料Zの到着確認", "kind": "question", "to": "不明"}]},
+      "canonical_old": [{"statement": "架空資料Zの到着確認"}],
+      "canonical_new": [{"statement": "架空資料Zの到着確認", "request_kind": "question"}]
+    },
+    {
+      "case_id": "fictional-self-plan",
+      "text": "架空担当Bが架空資料Wを確認する予定です。まだ確認していません。",
+      "expected": {"requests": [{"action": "架空資料Wを確認", "kind": "self_plan", "to": null, "from": "架空担当B", "due_text": null}]},
+      "legacy": {"requests": [{"action": "架空資料Wを確認", "kind": "self_plan", "from": "架空担当B"}]},
+      "canonical_old": [{"statement": "架空資料Wを確認", "workflow_status": "planned"}],
+      "canonical_new": [{"statement": "架空資料Wを確認", "workflow_status": "planned", "request_kind": "self_plan", "request_from": "架空担当B"}]
+    },
+    {
+      "case_id": "fictional-multiple-and-duplicate",
+      "text": "架空資料Pと架空資料Qを別々に確認してください。",
+      "expected": {"requests": [{"action": "架空資料Pを確認", "kind": "request"}, {"action": "架空資料Qを確認", "kind": "request"}]},
+      "legacy": {"requests": [{"action": "架空資料Pを確認", "kind": "request"}, {"action": "架空資料Pを確認", "kind": "request"}, {"action": "架空資料Qを確認", "kind": "request"}]},
+      "canonical_old": [{"statement": "架空資料Pを確認"}, {"statement": "架空資料Qを確認"}],
+      "canonical_new": [{"statement": "架空資料Pを確認", "request_kind": "request"}, {"statement": "架空資料Qを確認", "request_kind": "request"}]
+    },
+    {
+      "case_id": "fictional-ack",
+      "text": "架空依頼を承知しました。完了報告ではありません。",
+      "expected": {"reply": {"kind": "ack"}},
+      "legacy": {"reply": {"kind": "ack"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-intent-false-done",
+      "text": "架空依頼には明日対応します。まだ実施していません。",
+      "expected": {"reply": {"kind": "intent"}},
+      "legacy": {"reply": {"kind": "done"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-progress",
+      "text": "架空資料Rの一部分だけ確認しました。残りは未確認です。",
+      "expected": {"reply": {"kind": "progress"}},
+      "legacy": {"reply": {"kind": "progress"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-answer-request-confusion",
+      "text": "架空質問への回答です。架空資料Sは届いています。",
+      "expected": {"reply": {"kind": "answer"}},
+      "legacy": {"reply": {"kind": "answer"}},
+      "canonical_old": [{"statement": "架空資料Sの到着回答"}],
+      "canonical_new": [{"statement": "架空資料Sの到着回答", "request_kind": "question"}]
+    },
+    {
+      "case_id": "fictional-done",
+      "text": "架空資料Tを提出しました。",
+      "expected": {"reply": {"kind": "done"}},
+      "legacy": {"reply": {"kind": "done"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-cancel",
+      "text": "架空資料Uの提出は不要になりました。",
+      "expected": {"reply": {"kind": "cancel"}},
+      "legacy": {"reply": {"kind": "cancel"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-thanks-false-done",
+      "text": "架空担当へのお礼です。ありがとうございます。",
+      "expected": {},
+      "legacy": {"reply": {"kind": "done"}},
+      "canonical_old": [],
+      "canonical_new": []
+    },
+    {
+      "case_id": "fictional-pending-canonical-false-done",
+      "text": "架空資料Vを確認してください。確認は未実施です。",
+      "expected": {"requests": [{"action": "架空資料Vを確認", "to": null, "from": null, "kind": "request", "due": null, "due_text": null, "condition": null}]},
+      "legacy": {"requests": [{"action": "架空資料Vを確認", "kind": "request"}]},
+      "canonical_old": [{"statement": "架空資料Vを確認", "workflow_status": "pending"}],
+      "canonical_new": [{"statement": "架空資料Vを確認", "workflow_status": "done", "request_kind": "request"}]
+    }
+  ]
+}

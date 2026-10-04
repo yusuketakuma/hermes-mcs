@@ -8,7 +8,7 @@ import notify_digest
 import notify_render
 import notify_views
 from message_metadata import (
-    flag_lines, get_message_metadata, own_post_reaction_text, self_mentioned)
+    flag_lines, get_message_metadata, mentions_self, own_post_reaction_text)
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
 
 __all__ = ["led"]
@@ -176,6 +176,9 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
+    def self_mentioned(db, mid):
+        return mentions_self(get_message_metadata(db, mid), mcs_signals.self_sender_id(db))
+
     _patient(led)
     _post(led, 100, OTHER, ts=NOW - 100)
     assert self_mentioned(led.db, 100) is None
@@ -233,6 +236,7 @@ def test_fit_parts_folds_list_rows_not_disclosures(led):
 
 def test_patient_summary_request_reply_states(led):
     _patient(led)
+    _msg(led, 101)
     reqs = [{"kind": "pharmacist", "ctx": "残薬確認", "at": "2026-09-30T09:00",
              "mid": 100, "reply_state": "done", "reply_conflict": True},
             {"kind": "doctor", "ctx": "処方変更", "at": "2026-09-29T09:00", "mid": 101}]

@@ -25,6 +25,8 @@ STANDALONE = ROOT / "mcs_standalone"
 LEDGER_WRITERS = {
     "extract.py", "extract_llm.py", "init_data.py", "rollup.py",
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
+    "project_metadata.py",
+    "cross_lists.py",
 }
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter", "mcs_standalone"}
@@ -448,6 +450,54 @@ def gate_records_isolation() -> list[str]:
     return bad
 
 
+# C1 export layer (connector.md C1 deliverables): the contract/schema
+# modules stay pure transforms, and the 5-minute tick never loads them.
+# Both gates check direct imports/references only: mcs_util (imported by
+# ext_contract/c1_receiver) loads urllib.request transitively.
+_EXT_REFERENCE = re.compile(r"\b(?:ext_contract|export_schema|c1_\w+)\b")
+
+
+def _is_ext_module(stem: str) -> bool:
+    return stem in {"ext_contract", "export_schema"} or stem.startswith("c1_")
+
+
+def gate_ext_contract_offline() -> list[str]:
+    """The C1 contract/export modules directly import no network or subprocess
+    module (transitive imports such as mcs_util -> urllib are not checked)."""
+    bad = []
+    for path in _py_files(MCS / "ops"):
+        if not _is_ext_module(path.stem):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                mods = [node.module.split(".")[0]]
+            else:
+                continue
+            bad.extend(f"{path.name}:{node.lineno} imports {m}"
+                       for m in mods if m in _PLUGIN_FORBIDDEN_IMPORTS)
+    return bad
+
+
+def gate_tick_no_ext() -> list[str]:
+    """The tick path (mcs/ingest, mcs/notify, mcs_standalone/, deployment/)
+    never directly references the manual-only C1 export modules."""
+    bad = []
+    for base in (MCS / "ingest", MCS / "notify", ROOT / "mcs_standalone",
+                 ROOT / "deployment"):
+        for path in sorted(p for p in base.rglob("*") if p.is_file()
+                           and "__pycache__" not in p.parts):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if _EXT_REFERENCE.search(line):
+                    bad.append(f"{path.name}:{i} references C1 export module")
+    return bad
+
+
 GATES = {
     "stdlib_only": gate_stdlib_only,
     "no_direct_platform_api": gate_no_direct_platform_api,
@@ -457,6 +507,8 @@ GATES = {
     "notify_fail_closed": gate_notify_fail_closed,
     "install_pin": gate_install_pin,
     "records_isolation": gate_records_isolation,
+    "ext_contract_offline": gate_ext_contract_offline,
+    "tick_no_ext": gate_tick_no_ext,
 }
 
 

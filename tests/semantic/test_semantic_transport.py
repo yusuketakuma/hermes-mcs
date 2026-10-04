@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-import conftest as test_guard
+import mcs_test_guard as test_guard
 import semantic_jev as jev
 
 

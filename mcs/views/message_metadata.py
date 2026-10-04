@@ -44,7 +44,7 @@ _FIELDS = {"reactions": (_valid_reactions, "reactions_status"),
 def _read_metadata(db, mid, source) -> dict:
     result = {"reactions": None, "reactions_status": "not_fetched",
               "reactions_observed_at": None, "checked_at": None,
-              "last_error": None}
+              "last_error": None, "mentions_observed_at": None}
     for key, (_, status) in _FIELDS.items():
         result.setdefault(key, None)
         result[status] = "not_fetched"
@@ -85,6 +85,8 @@ def _read_metadata(db, mid, source) -> dict:
         result[key], result[status] = value, "observed"
         if key == "reactions":
             result["reactions_observed_at"] = observed
+        elif key == "mentions":
+            result["mentions_observed_at"] = observed
     return result
 
 
@@ -103,7 +105,71 @@ def get_message_metadata(db, mid, *, as_of=None) -> dict:
             reactions_age_s=_observation_age(result, as_of),
             freshness_note="通常収集時の観測です。古い投稿の反応更新には遅延があり、"
                            "shadowの再取得結果はこの表示に反映しません。")
+        result["response_observation"] = response_observation(
+            db, mid, result, as_of=as_of)
     return result
+
+
+def response_observation(
+        db, mid, metadata, *, as_of
+) -> dict[str, dict[str, str | float | list[str] | None] | str | None]:
+    """保存済み返信と本人のUI操作を別々に示し、業務完了や未対応を推定しない。"""
+    import mcs_signals
+    self_id = mcs_signals.self_sender_id(db)
+    row = db.execute(
+        "SELECT project_id,parent_id,posted_at_ts FROM messages WHERE message_id=?",
+        (mid,)).fetchone()
+    reply_at = None
+    time_context = "unknown"
+    known = (self_id is not None and row is not None
+             and _timestamp(row[2]) is not None and _timestamp(as_of) is not None)
+    if known and row is not None:
+        root = row[1] or mid
+        time_context = "bounded"
+        for reply in db.execute(
+            "SELECT sender_id,posted_at_ts FROM messages WHERE project_id=? "
+            "AND parent_id=? "
+            "AND COALESCE(body_state,'')!='deleted' ORDER BY posted_at_ts,message_id",
+            (row[0], root)):
+            actor = mcs_signals.normalize_sender_id(reply[0])
+            at = _timestamp(reply[1])
+            if actor is None:
+                if at is None or at > row[2]:
+                    time_context = "unknown"
+                continue
+            if actor != self_id:
+                continue
+            if at is None or at > as_of:
+                time_context = "unknown"
+            elif at > row[2] and reply_at is None:
+                reply_at = at
+    if known and reply_at is None and row is not None:
+        # Fewer stored replies than the thread reports: an unseen reply may be ours.
+        total = db.execute("SELECT reply_count FROM messages WHERE message_id=?",
+                           (row[1] or mid,)).fetchone()
+        stored = db.execute("SELECT COUNT(*) FROM messages WHERE project_id=? AND parent_id=?",
+                            (row[0], row[1] or mid)).fetchone()[0]
+        if total is not None and type(total[0]) is int and total[0] > stored:
+            known = False
+    reactions = metadata["reactions"]
+    return {
+        "reply": {"state": "observed" if reply_at is not None else
+                  "not_observed" if known else "unknown", "posted_at": reply_at},
+        "reply_time_context": time_context,
+        "self_reaction": {
+            "state": "invalid" if metadata["reactions_status"] == "invalid" else
+                     "failed" if metadata["last_error"] else metadata["reactions_status"],
+            "types": sorted({r["type"] if r["type"] in REACTION_LABELS else "unknown"
+                             for r in reactions or [] if r["self_reacted"]}),
+            "observed_at": metadata["reactions_observed_at"],
+            "checked_at": metadata["checked_at"],
+            "age_s": _observation_age(metadata, as_of),
+            "current_state": "unknown",
+            "basis": "ui_operation_only"},
+        "clinical_completion": None,
+        "nonresponse": None,
+        "unread": None,
+    }
 
 
 def get_metadata_shadow_status(db, mid, *, as_of=None) -> dict:
@@ -163,12 +229,6 @@ def mentions_self(metadata, self_id) -> bool | None:
         return None
     return any(m["type"] == "user" and m["id"] == self_id
                for m in metadata["mentions"])
-
-
-def self_mentioned(db, mid) -> bool | None:
-    """captureのメンションが本人宛か（True/False）、判定できなければ None。"""
-    import mcs_signals
-    return mentions_self(get_message_metadata(db, mid), mcs_signals.self_sender_id(db))
 
 
 def flag_lines(db, metadata) -> list:

@@ -21,6 +21,7 @@
 #                   when unspecified). Standalone installs
 #                   its own venv and official connector SDKs; Hermes
 #                   is neither downloaded nor configured.
+#   --recovery-python PATH  existing independent Python outside the mutable checkout
 #   --dry-run       preflight + the per-stage plan of what would be
 #                   written or changed; nothing is written
 #   --force-repo    allow re-pointing an existing install (plugin
@@ -57,6 +58,8 @@ usage() {
 MODE=install
 RUNTIME_MODE=hermes
 RUNTIME_EXPLICIT=0
+RECOVERY_OPTION=""
+RECOVERY_PYTHON=""
 SKIP_BREW=0; SKIP_LLM=0; SKIP_PLUGIN=0; SKIP_SERVICES=0; SKIP_RECOVERY=0
 FORCE_REPO=0
 ARG_HOME=""
@@ -66,6 +69,8 @@ while [ $# -gt 0 ]; do
                       RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
                       case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' 'invalid --mode' >&2; exit 2 ;; esac ;;
         --no-brew)     SKIP_BREW=1 ;;
+        --recovery-python) [ $# -ge 2 ] && [ -n "$2" ] || { printf '%s\n' '--recovery-python needs an absolute path' >&2; exit 2; }
+                      RECOVERY_OPTION="$2"; shift ;;
         --no-llm)      SKIP_LLM=1 ;;
         --no-plugin)   SKIP_PLUGIN=1 ;;
         --no-services) SKIP_SERVICES=1 ;;
@@ -89,7 +94,8 @@ if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
         "  1) hermes      — through Hermes Agent" \
         "  2) standalone  — without Hermes Agent"
     printf 'choose 1 or 2 [1]: '
-    read -r _answer || _answer=""
+    _answer=""
+    read -r _answer || :
     case "$_answer" in
         2|standalone) RUNTIME_MODE=standalone ;;
         ""|1|hermes) RUNTIME_MODE=hermes ;;
@@ -184,6 +190,7 @@ VENV_HERMES="$VENV/bin/hermes"
 PIP_MARK="$VENV/.mcs-pip-incomplete"
 HERMES_BIN_DIR="$HOME/.local/bin"
 SHIM="$HERMES_BIN_DIR/hermes"
+MCS_SHIM="$HERMES_BIN_DIR/mcs"
 PLUGIN_LINK="$HERMES_HOME/plugins/mcs-discord-commands"
 LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
 MODEL_DIR="$RUNTIME_HOME/models"
@@ -197,6 +204,7 @@ HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
 MCS_DATA="$HOME/.mcs/data"
 RECOVERY_DIR="$HOME/.mcs-recovery"
 WATCH_PLIST="$AGENTS_DIR/org.mcs.recovery.plist"
+RECOVERY_TEMPLATE="$REPO/deployment/launchagents/org.mcs.recovery.plist"
 SETUP="$REPO/mcs/ops/mcs_setup.py"
 # shellcheck disable=SC2016  # printed for the user, never run here
 BREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
@@ -230,6 +238,59 @@ find_py() {
     done
     return 1
 }
+recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
+    "$1" -I -B -c '
+import json, os, plistlib, stat, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + "/mcs")
+import _mcs_path
+import mcs_setup
+cfg = {}
+path = Path(sys.argv[3])
+if os.path.lexists(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        st = os.fstat(stream.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 65536:
+            raise SystemExit("recovery config size/ownership/type invalid")
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise SystemExit("recovery config too large")
+    cfg = json.loads(raw)
+    if not isinstance(cfg, dict):
+        raise SystemExit("recovery config must be an object")
+if sys.argv[4]:
+    cfg["recovery_python"] = sys.argv[4]
+if sys.argv[5] == "1" and "recovery_python" not in cfg:
+    sys.exit(0)
+desired = mcs_setup._recovery_python(cfg)
+problem = mcs_setup._recovery_python_problem(desired, sys.argv[1])
+if problem:
+    raise SystemExit("recovery " + problem)
+if "recovery_python" in cfg and os.path.lexists(
+        Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist")):
+    with open(Path(mcs_setup.AGENTS_DIR, mcs_setup.RECOVERY_LABEL + ".plist"), "rb") as stream:
+        deployed = mcs_setup._recovery_executable(plistlib.load(stream))
+    if deployed != desired:
+        raise SystemExit("existing recovery selection drift: use mcs setup init --yes then mcs setup services for owned idle repair")
+from html import escape
+text = Path(sys.argv[2]).read_text()
+rendered = mcs_setup._render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False)})
+actual = mcs_setup._recovery_executable(plistlib.loads(rendered.encode()))
+problem = mcs_setup._recovery_python_problem(actual, sys.argv[1])
+if problem:
+    raise SystemExit("recovery template " + problem)
+if "recovery_python" in cfg and actual != desired:
+    raise SystemExit("recovery template target differs from explicit selection")
+facts = mcs_setup._runtime_probe(actual) if actual is not None else None
+problem = mcs_setup._runtime_problem(facts, recovery=True)
+if problem:
+    print("recovery " + problem, file=sys.stderr)
+if problem:
+    sys.exit(1)
+print(desired)
+' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY"
+}
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
 # output error") — retry briefly; success is the label being loaded, not
@@ -261,6 +322,17 @@ repo_conflict() {
     if [ "$RUNTIME_MODE" = hermes ] && [ -L "$PLUGIN_LINK" ] && _t="$(link_target "$PLUGIN_LINK")" \
             && [ "$_t" != "$REPO/hermes_plugin" ]; then
         dirname -- "$_t"
+    fi
+}
+# why ~/.local/bin/mcs blocks the launcher step: "foreign" (not an MCS
+# lifecycle launcher), "other" (another checkout's launcher) or nothing
+mcs_shim_conflict() {
+    [ -e "$MCS_SHIM" ] || [ -L "$MCS_SHIM" ] || return 0
+    if ! { [ -f "$MCS_SHIM" ] && [ ! -L "$MCS_SHIM" ] \
+        && grep -qx '# MCS lifecycle launcher' "$MCS_SHIM"; }; then
+        printf 'foreign\n'
+    elif ! grep -qF "$(shell_quote "$REPO/mcs/ops/mcs_cli.py")" "$MCS_SHIM"; then
+        printf 'other\n'
     fi
 }
 
@@ -318,6 +390,17 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.11–3.13: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.11–3.13 yet — stage 1 installs python@3.13"
     else pf_ng "no Python 3.11–3.13 on PATH" "brew install python@3.13"; fi
+    if [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; then
+        if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
+            pf_ok "recovery template interpreter: Python >=3.9 and safe SQLite"
+        elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
+            # same as the install path: stage 6 re-verifies after stage 1 adds Python
+            pf_warn "recovery interpreter is checked in stage 6 after python@3.13 is installed" ""
+        else
+            pf_ng "recovery template interpreter unsafe or unverified" \
+                "select an existing safe independent executable with --recovery-python; no fallback or binary installation is performed"
+        fi
+    fi
     _need_clone=0
     if [ "$RUNTIME_MODE" = hermes ] && { [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; }; then _need_clone=1; fi
     if command -v git >/dev/null 2>&1; then pf_ok "git: $(command -v git)"
@@ -371,6 +454,12 @@ preflight() {
     elif [ -n "$_c" ]; then
         pf_warn "--force-repo: will switch the install from $_c to $REPO" ""
     fi
+    case "$(mcs_shim_conflict)" in
+        foreign) pf_ng "$MCS_SHIM exists and is not an MCS lifecycle launcher" "mv $(shell_quote "$MCS_SHIM") $(shell_quote "$MCS_SHIM.bak")   # it is never overwritten" ;;
+        other) if [ "$FORCE_REPO" -eq 0 ]; then
+                   pf_ng "$MCS_SHIM points at another checkout" "re-run with --force-repo to switch it to $REPO"
+               else pf_warn "--force-repo: will switch $MCS_SHIM to $REPO" ""; fi ;;
+    esac
     if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
         pf_ng "custom HERMES_HOME ($HERMES_HOME) is not supported by the services stage" "use the default ~/.hermes, or add --no-services"
     fi
@@ -399,6 +488,7 @@ plan_line() { printf '  %-14s %s\n' "$1" "$2"; }
 state() { if [ -e "$1" ] || [ -L "$1" ]; then printf 'exists'; else printf 'new'; fi; }
 dry_run_plan() {
     say "plan (--dry-run: nothing below is executed)"
+    plan_line "launcher" "$HOME/.local/bin/mcs -> selected runtime + $REPO/mcs/ops/mcs_cli.py"
     if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 brew" "skipped (--no-brew)"
     else plan_line "1/6 brew" "brew install any of: git python@3.13 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
@@ -409,7 +499,7 @@ dry_run_plan() {
     plan_line "" "shim $SHIM [$(state "$SHIM")] (a foreign file there is left alone)"
     fi
     if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 plugin" "not used in standalone mode"
-    elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin)"
+    elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 plugin" "skipped (--no-plugin; LINE WORKS does not use it)"
     else plan_line "3/6 plugin" "symlink $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
     if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 llm" "skipped"
     else
@@ -459,8 +549,24 @@ if [ -n "$CONFLICT" ]; then
     [ "$FORCE_REPO" -eq 1 ] || die "this machine is installed from another checkout ($CONFLICT); run that checkout's install.sh, or re-run with --force-repo to switch the plugin, recovery tool and services to $REPO"
     warn "--force-repo: switching the install from $CONFLICT to $REPO"
 fi
+case "$(mcs_shim_conflict)" in
+    foreign) die "$MCS_SHIM is not an MCS lifecycle launcher; left untouched — move it aside and re-run" ;;
+    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM points at another checkout; use --force-repo to switch" ;;
+esac
 if [ -f "$REPO/.git" ]; then
     warn "running from a git worktree ($REPO) — services and the plugin will point here and break if the worktree is removed; prefer the main checkout"
+fi
+
+if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
+    if _probe_host="$(find_py)"; then
+        RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
+            || die "desired recovery interpreter unsafe/unknown or deployed selection drift — nothing written"
+    elif [ -n "$RECOVERY_OPTION" ]; then
+        die "--recovery-python is verified before anything is written, which needs Python 3.11-3.13 (e.g. brew install python@3.13); install one and re-run — nothing written"
+    else
+        # A fresh Mac gets Python from stage 1; stage 6 checks the recovery runtime then.
+        warn "no Python 3.11-3.13 yet — the recovery interpreter is checked in stage 6"
+    fi
 fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
@@ -648,9 +754,36 @@ esac
 sum "2/6 hermes:   $_ck; $_venv; $_shimsum"
 fi
 
-# Persist only an explicitly selected mode; never discard an unreadable config.
-if [ "$RUNTIME_EXPLICIT" -eq 1 ]; then
-    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" <<'PYMODE'
+# Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
+# is never overwritten; an MCS shim from another checkout needs --force-repo.
+MCS_BODY="$(printf '#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\nexport MCS_LIFECYCLE_PINNED=1\nexec %s %s "$@"' \
+    "$(shell_quote "$MCS_PY")" "$(shell_quote "$REPO/mcs/ops/mcs_cli.py")")"
+case "$(mcs_shim_conflict)" in
+    foreign) die "$MCS_SHIM is not an MCS lifecycle launcher; left untouched" ;;
+    other) [ "$FORCE_REPO" -eq 1 ] || die "$MCS_SHIM points at another checkout; use --force-repo to switch" ;;
+esac
+mkdir -p "$HERMES_BIN_DIR"
+printf '%s\n' "$MCS_BODY" > "$MCS_SHIM.tmp.$$"
+chmod 700 "$MCS_SHIM.tmp.$$"
+if cmp -s "$MCS_SHIM.tmp.$$" "$MCS_SHIM"; then
+    rm -f "$MCS_SHIM.tmp.$$"
+else
+    mv -f "$MCS_SHIM.tmp.$$" "$MCS_SHIM"
+fi
+sum "launcher:    $MCS_SHIM (interpreter $MCS_PY)"
+case ":$PATH:" in
+    *":$HERMES_BIN_DIR:"*) ;;
+    *) warn "$HERMES_BIN_DIR is not on PATH — add it to your shell profile to run 'mcs'" ;;
+esac
+
+# Verify the desired target before even the first private config write.
+if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
+    RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
+        || die "recovery desired interpreter unsafe or unknown — config not written"
+fi
+# Persist explicit selections only; never discard an unreadable config.
+if [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
+    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" <<'PYMODE'
 import json, os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
@@ -664,6 +797,14 @@ except (OSError, ValueError):
 if not isinstance(cfg, dict):
     raise SystemExit("config.json must be an object")
 cfg["runtime_mode"] = sys.argv[2]
+if sys.argv[3]:
+    cfg["recovery_python"] = sys.argv[3]
+if "recovery_python" in cfg:
+    import mcs_setup
+    why = mcs_setup._recovery_python_problem(cfg["recovery_python"], sys.argv[1]) or \
+        mcs_setup._runtime_problem(mcs_setup._runtime_probe(cfg["recovery_python"]), recovery=True)
+    if why:
+        raise SystemExit("desired recovery " + why + " — config not written")
 atomic_write(str(path), lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
 PYMODE
 fi
@@ -675,7 +816,7 @@ if [ "$SKIP_PLUGIN" -eq 1 ]; then
         skip "not used in standalone mode — the standalone connector serves the cards"
         sum "3/6 plugin:   not used (standalone)"
     else
-        skip "stage skipped (--no-plugin) — interactive cards need this plugin; re-run without the flag before enabling notify.interactive"
+        skip "stage skipped (--no-plugin) — Slack/Discord cards need this plugin; re-run without the flag before enabling notify.interactive=slack or discord (notify.interactive=lineworks does not use it — see docs/guides/LINEWORKS.md)"
         sum "3/6 plugin:   skipped (--no-plugin)"
     fi
 else
@@ -820,6 +961,10 @@ if [ "$SKIP_RECOVERY" -eq 1 ]; then
     skip "stage skipped (--no-recovery)"
     sum "6/6 recovery: skipped (--no-recovery)"
 else
+    if [ "$OS" = Darwin ]; then
+        RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
+            || die "recovery desired interpreter unsafe or unverified — nothing in stage 6 installed; no fallback was selected"
+    fi
     mkdir -p "$RECOVERY_DIR"
     RECOVERY_SRC="$REPO/deployment/recovery/mcs_recover.py"
     RECOVERY_DST="$RECOVERY_DIR/mcs_recover.py"
@@ -849,7 +994,8 @@ else
         mkdir -p "$AGENTS_DIR"
         sed -e "s|__RECOVERY__|$(xml_sed "$RECOVERY_DIR")|g" \
             -e "s|__DATA__|$(xml_sed "$MCS_DATA")|g" \
-            "$REPO/deployment/launchagents/org.mcs.recovery.plist" \
+            -e "s|__RECOVERY_PYTHON__|$(xml_sed "$RECOVERY_PYTHON")|g" \
+            "$RECOVERY_TEMPLATE" \
             > "$WATCH_PLIST.tmp"
         if publish "$WATCH_PLIST.tmp" "$WATCH_PLIST"; then _rchanged=1; fi
         if [ "$_rchanged" -eq 0 ] && loaded org.mcs.recovery; then
@@ -876,6 +1022,8 @@ printf 'Installed. Summary:\n'
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
 printf '\nOne guided step remains — it needs your secrets/choices:\n\n'
+printf '    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+printf '    # equivalent existing entrypoint:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
     cat <<'EOF'
@@ -888,6 +1036,13 @@ Then run the required-condition check and inspect status:
 EOF
     printf '    %s %s check\n' "$PYQ" "$SETUPQ"
     printf '    %s -m mcs_standalone status\n' "$PYQ"
+    cat <<'EOF'
+
+LINE WORKS (notify.interactive=lineworks): enter its secrets on your own
+terminal with the command below; the standalone host starts the adapter,
+so do not also run a separate lineworks_adapter service.
+EOF
+    printf '    %s -m lineworks_adapter init\n' "$PYQ"
     printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
     exit 0
 fi
@@ -924,6 +1079,17 @@ cat <<'EOF'
     # Discord: notify.interactive="discord" + notify.discord={profile,
     #   application_id, guild_id, channel_id}; the token comes from
     #   DISCORD_BOT_TOKEN in the environment
+
+LINE WORKS (notify.interactive=lineworks) uses neither the Hermes
+plugin nor the gateway. After init, enter its secrets on your own
+terminal (hidden prompts, owner-only file), check, then run it or
+generate the resident service (docs/guides/LINEWORKS.md):
+
+EOF
+for sub in init check service; do
+    printf '    %s -m lineworks_adapter %s\n' "$PYQ" "$sub"
+done
+cat <<'EOF'
 
 init already syncs the gateway and validates the install.
 Only when services were skipped, or check reports deployed-script drift,

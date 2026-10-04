@@ -20,6 +20,7 @@ import mcs_view
 import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
+from drug_map import candidate_note
 from mcs_util import atomic_write, loads_dict
 
 HOME = Path(os.path.expanduser("~/.mcs"))
@@ -191,9 +192,10 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
                      + json.dumps(roll["current_med_period"],
                                   ensure_ascii=False)[:1000] + "\n```\n")
     if roll.get("medications"):
-        lines.append("\n## current medications\n\n| name | dose | last |\n| --- | --- | --- |\n")
+        lines.append("\n## current medications\n\n| name | dose | last | 成分候補（未確認） |\n"
+                     "| --- | --- | --- | --- |\n")
         lines.extend(f"| {_cell(m.get('name'))} | {_cell(m.get('dose') or '')} "
-                     f"| {m.get('last') or ''} |\n"
+                     f"| {m.get('last') or ''} | {_cell(candidate_note(m.get('ref')))} |\n"
                      for m in roll["medications"])
     if roll.get("recent_symptoms"):
         lines.append("\n## recent symptoms\n\n| symptom | last |\n| --- | --- |\n")

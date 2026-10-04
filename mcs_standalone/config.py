@@ -45,10 +45,6 @@ def load(root):
     return cfg
 
 
-def read_config(root):
-    return load(root)
-
-
 def interactive(cfg):
     value = (cfg.get("notify") or {}).get("interactive")
     return value if value in TOKENS else None
@@ -87,7 +83,7 @@ def settings(cfg, root, transport):
 
 
 def transports(root):
-    cfg = read_config(root)
+    cfg = load(root)
     notify = cfg.get("notify", {})
     found = set()
     active = notify.get("interactive") if isinstance(notify, dict) else None
@@ -107,7 +103,7 @@ def connector_settings(root, transport, *, require_interactive=True, target=None
     if transport not in {"slack", "discord", "lineworks"}:
         raise ValueError("standalone_transport_invalid")
     root = Path(root).expanduser().resolve()
-    cfg = read_config(root)
+    cfg = load(root)
     notify = cfg.get("notify")
     if not isinstance(notify, dict) or _validate_notify({**notify, "interactive": transport}):
         raise ValueError("standalone_scope_invalid")
