@@ -46,6 +46,47 @@ def test_normal_gate_requires_source_target_revision_and_pass_summary(
     db.close()
 
 
+@pytest.mark.parametrize("claims", [[], [{"text": "合成の補助要約"}]])
+def test_raw_notice_keeps_all_verified_mandatory_facts(tmp_path, monkeypatch, claims):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        cfg = _cfg("enforce")
+        monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+        _semantic_event(db)
+        row = db.db.execute("SELECT artifact_id,content FROM artifacts "
+                            "WHERE kind='semantic_summary'").fetchone()
+        summary = json.loads(row["content"])
+        facts = [f"合成必須事実{i} [fact_{i}; ev_{i}]" for i in range(41)]
+        summary.update(claims=claims, mandatory_facts=facts)
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(summary, ensure_ascii=False), row["artifact_id"]))
+        raw = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+        text = notify_flush._format_event(db, raw)[0]
+        assert all("・" + fact in text for fact in facts)
+        assert all(claim["text"] in text for claim in claims)
+    finally:
+        db.close()
+
+
+def test_chunker_preserves_embedded_footer_text_and_uses_terminal_source_link():
+    import semantic_send_gate
+    body = "■経過\n・合成事実一\n▶ MCSで確認\nhttps://untrusted.invalid/body\n・合成必須事実二"
+    text = "【合成】患者A\n取得：全件\n要約：PASS\n\n" + body + \
+        "\n\n▶ MCSで確認\nhttps://example.invalid/p/1\n"
+    parts, bodies = semantic_send_gate.semantic_chunk_parts(text, 150)
+    assert "".join(bodies) == body
+    assert all(part.endswith("▶ MCSで確認\nhttps://example.invalid/p/1") for part in parts)
+
+
+def test_chunker_rejects_unexpected_text_after_source_footer():
+    import semantic_send_gate
+    text = "【合成】患者A\n取得：全件\n要約：PASS\n\n■経過\n・合成事実\n" \
+        "▶ MCSで確認\nhttps://example.invalid/p/1\n合成の未配送末尾"
+    with pytest.raises(ValueError, match="semantic_provenance_missing"):
+        semantic_send_gate.semantic_chunk_parts(text, 200)
+
+
 def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
         tmp_path, monkeypatch):
     db = _delivery_db(tmp_path, [_message()])

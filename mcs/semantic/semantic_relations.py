@@ -16,6 +16,7 @@ COMPLEMENTS > UNRESOLVED.
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from itertools import chain, combinations, product
 
 import semantic_facts as sf
@@ -88,18 +89,28 @@ def _entity_overlap(left: dict, right: dict) -> set:
     return {t for t in shared if not _GENERIC_TOKEN.fullmatch(t)}
 
 
-def _iso(value) -> str | None:
-    return value if isinstance(value, str) \
-        and re.match(r"^\d{4}-\d{2}-\d{2}", value) else None
+def _iso(value) -> date | datetime | None:
+    if not isinstance(value, str) or not re.match(r"^\d{4}-\d{2}-\d{2}", value):
+        return None
+    try:
+        return date.fromisoformat(value) if len(value) == 10 else datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _ordered_before(left: dict, right: dict) -> bool:
     """True when left strictly precedes right on an explicit time axis."""
-    lt, rt = _iso(left.get("event_time")), _iso(right.get("event_time"))
-    if lt and rt:
-        return lt < rt
-    lv, rv = _iso(left.get("valid_time")), _iso(right.get("valid_time"))
-    return bool(lv and rv and lv < rv)
+    for axis in ("event_time", "valid_time"):
+        lt, rt = _iso(left.get(axis)), _iso(right.get(axis))
+        if lt is not None and rt is not None:
+            # Date-only precision and missing timezone never imply an instant
+            # on the other fact's clock. Aware datetime compares UTC instants.
+            if type(lt) is not type(rt):
+                return False
+            if isinstance(lt, datetime) and (lt.tzinfo is None) != (rt.tzinfo is None):
+                return False
+            return lt < rt
+    return False
 
 
 def classify_pair(left: dict, right: dict) -> dict | None:
