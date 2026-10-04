@@ -1,0 +1,2879 @@
+{
+  "schema": "maintenance-audit-evidence-v7",
+  "packet": "semantic-packet2-extraction-facts-drain",
+  "status": "PACKET COMPLETE BY EXPLICIT OWNERSHIP; GLOBAL AUDIT NOT COMPLETE",
+  "generated_at_utc": "2026-10-04T23:32:07.294902+00:00",
+  "owner": "/root/maintenance_semantic",
+  "requested_model": "Astra -> GPT-6.1-sol ultra as parent packet requested; no subagent spawned.",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+  "branch": "audit/maintenance-semantic-packet2-20261005",
+  "B": {
+    "commit": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+    "initial_status": "Clean dedicated worktree confirmed before git switch -c; no reset/rebase/stash."
+  },
+  "P": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+  "W": {
+    "behavior_commit": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+    "behavior_tree": "0502c2183ff19f88e71a96cfcdee9448c2a247c1",
+    "evidence_delivery": "Separate following evidence-only commit; its SHA is delivered to parent outside this self-referential file."
+  },
+  "I": null,
+  "owned_inventory_summary": {
+    "new_reviewed_source_files": 7,
+    "new_reviewed_test_helper_files": 1,
+    "new_reviewed_test_files": 24,
+    "new_reviewed_files": 32,
+    "input_lines": 12464,
+    "reused_prior_reviewed_source_files": 3,
+    "reused_prior_reviewed_test_files": 12,
+    "remaining_semantic_full_reviews": 39,
+    "scope_complete": true,
+    "global_review_complete": false
+  },
+  "inventory": [
+    {
+      "path": "mcs/semantic/semantic_drain.py",
+      "state": "REVIEWED",
+      "sha256_P": "857c2ce2efd05a36e485fc25e48f5d0fd9ad3fadbf24c2f22396eab455f291cd",
+      "sha256_W": "d30c80e40a8dc07e4d9b33dcd2ece0d2781bcb9a33ab9377ea66b3aec9d78fcf",
+      "line_count_P": 2003,
+      "line_count_W": 2005,
+      "read_ranges_P": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          890
+        ],
+        [
+          891,
+          1120
+        ],
+        [
+          1121,
+          1340
+        ],
+        [
+          1341,
+          1570
+        ],
+        [
+          1571,
+          1790
+        ],
+        [
+          1791,
+          2003
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1840,
+          1940
+        ]
+      ],
+      "responsibility": "Generation-bound queue worker; audited extraction/coverage/summary and v4 publication; atomic final artifacts/outbox/job commit; bounded scheduling, retries and failed-job revival.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_extraction.py",
+      "state": "REVIEWED",
+      "sha256_P": "7b526453db005923ea739ea36c3325d5a69c3566a66263c3898cfe506ee6d078",
+      "sha256_W": "7b526453db005923ea739ea36c3325d5a69c3566a66263c3898cfe506ee6d078",
+      "line_count_P": 1525,
+      "line_count_W": 1525,
+      "read_ranges_P": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          865
+        ],
+        [
+          866,
+          1075
+        ],
+        [
+          1076,
+          1300
+        ],
+        [
+          1301,
+          1525
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          865
+        ],
+        [
+          866,
+          1075
+        ],
+        [
+          1076,
+          1300
+        ],
+        [
+          1301,
+          1525
+        ]
+      ],
+      "responsibility": "Source atom/chunk manifest; resumable LLM extraction; canonical source/evidence normalization; mandatory coverage obligations and conservative repair.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_llm.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_v4.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_facts.py",
+      "state": "REVIEWED",
+      "sha256_P": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
+      "sha256_W": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
+      "line_count_P": 611,
+      "line_count_W": 611,
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          611
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          611
+        ]
+      ],
+      "responsibility": "Canonical fact/evidence/relation/coverage contract; stable source identities and exact source binding; enum/reference/range validation.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_projection.py",
+        "mcs/semantic/semantic_relations.py",
+        "mcs/semantic/semantic_extraction.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_audit.py",
+      "state": "REVIEWED",
+      "sha256_P": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
+      "sha256_W": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
+      "line_count_P": 411,
+      "line_count_W": 411,
+      "read_ranges_P": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          411
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          411
+        ]
+      ],
+      "responsibility": "Deterministic source/quantity checks and bounded Jev support/omission audits; coverage and facts-audit PASS/HOLD/REPAIR/REJECT decision.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_bench.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_store.py",
+      "state": "REVIEWED",
+      "sha256_P": "57fcf812101a5ffcf409a237150896e736fba844437f760be7ccc1e8065e6d20",
+      "sha256_W": "57fcf812101a5ffcf409a237150896e736fba844437f760be7ccc1e8065e6d20",
+      "line_count_P": 284,
+      "line_count_W": 284,
+      "read_ranges_P": [
+        [
+          1,
+          284
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          284
+        ]
+      ],
+      "responsibility": "Current thread/source bundle and guarded artifact reads; stale projection invalidation; durable JST daily Jev usage reads.",
+      "callers_or_consumers": [
+        "mcs/ingest/run_check.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_bench.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_metrics.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_projection.py",
+      "state": "REVIEWED",
+      "sha256_P": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
+      "sha256_W": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
+      "line_count_P": 361,
+      "line_count_W": 361,
+      "read_ranges_P": [
+        [
+          1,
+          361
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          361
+        ]
+      ],
+      "responsibility": "Deterministic canonical-to-legacy fact/LLM projections; projection-version/hash compatibility; carry canonical subject/source evidence to existing readers.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_v4.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "mcs/semantic/semantic_policy.py",
+      "state": "REVIEWED",
+      "sha256_P": "1d3df6a30680c93c6b3458b0611cc8973d7343897fe64bea4ab887e0c310dffa",
+      "sha256_W": "970e6d932b9a975d96ddc12401264ae8438916067c16ccba7a4e99fdf0b8de14",
+      "line_count_P": 160,
+      "line_count_W": 167,
+      "read_ranges_P": [
+        [
+          1,
+          160
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          130,
+          167
+        ]
+      ],
+      "responsibility": "Fail-closed configuration and leaf policy constants; interpretation fingerprint distinguishing canonical/shadow fact sources while retaining historical legacy hash.",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_store.py",
+        "mcs/semantic/semantic_metrics.py",
+        "mcs/semantic/semantic_extraction.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality."
+    },
+    {
+      "path": "tests/semantic/semantic_testkit.py",
+      "state": "REVIEWED",
+      "sha256_P": "1adf7a84a321177d7481da9e13191c3537ee8abc46ef6983235ea8cf9850bc42",
+      "sha256_W": "1adf7a84a321177d7481da9e13191c3537ee8abc46ef6983235ea8cf9850bc42",
+      "line_count_P": 481,
+      "line_count_W": 481,
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          481
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          481
+        ]
+      ],
+      "responsibility": "Fully synthetic temporary ledger/patient/source fixtures and fake LLM/Jev/audit/delivery result constructors; no real-data fixtures.",
+      "callers_or_consumers": [
+        "All semantic test modules importing semantic_testkit"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null
+    },
+    {
+      "path": "tests/semantic/test_canonical_drain.py",
+      "state": "REVIEWED",
+      "sha256_P": "709243aa4cf9cdbbcd15faa1df9e194c408cfa0ab58c5c2aab543fe53146903b",
+      "sha256_W": "173cfcc02b46e012854ef969a042493f40933eb4489b6d9c65d5a9cb59df0672",
+      "line_count_P": 442,
+      "line_count_W": 482,
+      "read_ranges_P": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          442
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          430,
+          482
+        ]
+      ],
+      "responsibility": "Canonical publication, repair/gate outcomes, resource wait idempotency and fact-source switch mandatory rendering.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_canonical_projection.py",
+      "state": "REVIEWED",
+      "sha256_P": "7adcce4ecfc88b58914da43b066707dee8b5101dd596bc235c0178a7ef741a8a",
+      "sha256_W": "7adcce4ecfc88b58914da43b066707dee8b5101dd596bc235c0178a7ef741a8a",
+      "line_count_P": 864,
+      "line_count_W": 864,
+      "read_ranges_P": [
+        [
+          1,
+          285
+        ],
+        [
+          286,
+          575
+        ],
+        [
+          576,
+          864
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          285
+        ],
+        [
+          286,
+          575
+        ],
+        [
+          576,
+          864
+        ]
+      ],
+      "responsibility": "Projection compatibility and canonical mandatory clinical/workflow fields; source/evidence binding and current projection gates.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_fact_source.py",
+      "state": "REVIEWED",
+      "sha256_P": "4996c182160ace49c0e84e61219075a35d56f26c2a3f5b450c8729105910a65b",
+      "sha256_W": "4996c182160ace49c0e84e61219075a35d56f26c2a3f5b450c8729105910a65b",
+      "line_count_P": 288,
+      "line_count_W": 288,
+      "read_ranges_P": [
+        [
+          1,
+          288
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          288
+        ]
+      ],
+      "responsibility": "Legacy/shadow/canonical configuration and audited canonical-fact authority boundaries.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_malformed_meta_queries.py",
+      "state": "REVIEWED",
+      "sha256_P": "5aa19e59730ead7237597d326cf3a38a7334ba9540c746c83c9393badcf3db15",
+      "sha256_W": "5aa19e59730ead7237597d326cf3a38a7334ba9540c746c83c9393badcf3db15",
+      "line_count_P": 117,
+      "line_count_W": 117,
+      "read_ranges_P": [
+        [
+          1,
+          117
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          117
+        ]
+      ],
+      "responsibility": "Malformed persisted JSON/meta remains fail-closed across current-reader queries.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_mcs_semantic.py",
+      "state": "REVIEWED",
+      "sha256_P": "c3bdf91d4e791c12ad739479cebf63df78e8353e5672de44f1575399a91959a4",
+      "sha256_W": "7a2597f224276ced79cef59f86eb82dc3cb1332408baf2ff93e9201794149ac1",
+      "line_count_P": 1717,
+      "line_count_W": 1756,
+      "read_ranges_P": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          600
+        ],
+        [
+          601,
+          900
+        ],
+        [
+          901,
+          1200
+        ],
+        [
+          1201,
+          1470
+        ],
+        [
+          1471,
+          1717
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1700,
+          1756
+        ]
+      ],
+      "responsibility": "Legacy worker state/publication and malformed responses, retry bounds, source/member changes and concurrent failed-job revival.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_review_20260930.py",
+      "state": "REVIEWED",
+      "sha256_P": "742c491a8afd422cab90f36b171884e2f177f44781f424f2cfa7d5771be5f462",
+      "sha256_W": "742c491a8afd422cab90f36b171884e2f177f44781f424f2cfa7d5771be5f462",
+      "line_count_P": 142,
+      "line_count_W": 142,
+      "read_ranges_P": [
+        [
+          1,
+          142
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          142
+        ]
+      ],
+      "responsibility": "Prior semantic safety/coverage regressions and artifact/source invalidation.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_atomization.py",
+      "state": "REVIEWED",
+      "sha256_P": "278990c48c5ab5b6832092041bee845fdb4590b59bfd30f50beea95b34679015",
+      "sha256_W": "278990c48c5ab5b6832092041bee845fdb4590b59bfd30f50beea95b34679015",
+      "line_count_P": 252,
+      "line_count_W": 252,
+      "read_ranges_P": [
+        [
+          1,
+          252
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          252
+        ]
+      ],
+      "responsibility": "Source atom boundaries, stable manifest identities, overlapping chunk/evidence ownership.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_attachment_context.py",
+      "state": "REVIEWED",
+      "sha256_P": "81f9569aaee14b8c07fe978c880e0e2d26f9e4cb663ce4cdd0ba32076521947e",
+      "sha256_W": "81f9569aaee14b8c07fe978c880e0e2d26f9e4cb663ce4cdd0ba32076521947e",
+      "line_count_P": 102,
+      "line_count_W": 102,
+      "read_ranges_P": [
+        [
+          1,
+          102
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          102
+        ]
+      ],
+      "responsibility": "Attachment context/source hashes and source-revision-sensitive bundle invalidation.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_claim_quantity_guard.py",
+      "state": "REVIEWED",
+      "sha256_P": "cfd9873077684d3b2d78bc211cf9b32a24f21d9f57f4863e5ccc52bb1e38a211",
+      "sha256_W": "cfd9873077684d3b2d78bc211cf9b32a24f21d9f57f4863e5ccc52bb1e38a211",
+      "line_count_P": 60,
+      "line_count_W": 60,
+      "read_ranges_P": [
+        [
+          1,
+          60
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          60
+        ]
+      ],
+      "responsibility": "Summary quantities must be grounded in bound source/facts.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_degraded_coverage.py",
+      "state": "REVIEWED",
+      "sha256_P": "7368cb1f9e6bda21596a875e8a91e601516a495e0a0c1e38eb6916d9042795ea",
+      "sha256_W": "7368cb1f9e6bda21596a875e8a91e601516a495e0a0c1e38eb6916d9042795ea",
+      "line_count_P": 53,
+      "line_count_W": 53,
+      "read_ranges_P": [
+        [
+          1,
+          53
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          53
+        ]
+      ],
+      "responsibility": "Incomplete coverage retains degraded notice semantics without an invented PASS summary.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_extraction.py",
+      "state": "REVIEWED",
+      "sha256_P": "151760860e4fbe2f3dba56b0236cd36a41479252d1e991f43ff6be6c4d542376",
+      "sha256_W": "151760860e4fbe2f3dba56b0236cd36a41479252d1e991f43ff6be6c4d542376",
+      "line_count_P": 167,
+      "line_count_W": 167,
+      "read_ranges_P": [
+        [
+          1,
+          167
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          167
+        ]
+      ],
+      "responsibility": "Resumable bounded chunks, complete/not-complete receipts, source/generation cache fences.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_fact_contract.py",
+      "state": "REVIEWED",
+      "sha256_P": "9301ff2ebfa67b17cff3cb93a6dcd6910124d88c981f20e8b4d552d4bfaa4b23",
+      "sha256_W": "9301ff2ebfa67b17cff3cb93a6dcd6910124d88c981f20e8b4d552d4bfaa4b23",
+      "line_count_P": 316,
+      "line_count_W": 316,
+      "read_ranges_P": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          316
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          316
+        ]
+      ],
+      "responsibility": "Stable canonical identifiers and contract rejection of invalid references/types/enums/source ranges.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_audit.py",
+      "state": "REVIEWED",
+      "sha256_P": "e0a60bf20a5496579658c893d625ee2d87e0840c2e2c979acc89a9531fd2915f",
+      "sha256_W": "e0a60bf20a5496579658c893d625ee2d87e0840c2e2c979acc89a9531fd2915f",
+      "line_count_P": 171,
+      "line_count_W": 171,
+      "read_ranges_P": [
+        [
+          1,
+          171
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          171
+        ]
+      ],
+      "responsibility": "Canonical fact support/omission, probability shape, threshold and incomplete-coverage audit gates.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_facts_v2.py",
+      "state": "REVIEWED",
+      "sha256_P": "80e84470d135c73c0537b951d7c694b9be04e67a19f9cb8660e781326f6de02c",
+      "sha256_W": "80e84470d135c73c0537b951d7c694b9be04e67a19f9cb8660e781326f6de02c",
+      "line_count_P": 602,
+      "line_count_W": 602,
+      "read_ranges_P": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          602
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          602
+        ]
+      ],
+      "responsibility": "Canonical extraction subjects/evidence, category obligations, caches, normalization and coverage completeness.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_input_contract.py",
+      "state": "REVIEWED",
+      "sha256_P": "6002d73467ac68778fcd9109a6c8a4ce0ccaf49ab44821165a99d0079f829f6b",
+      "sha256_W": "6002d73467ac68778fcd9109a6c8a4ce0ccaf49ab44821165a99d0079f829f6b",
+      "line_count_P": 98,
+      "line_count_W": 98,
+      "read_ranges_P": [
+        [
+          1,
+          98
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          98
+        ]
+      ],
+      "responsibility": "Source prelude/context and model input contract; source remains data and source fields remain bound.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_mandatory_render.py",
+      "state": "REVIEWED",
+      "sha256_P": "de2aff83b223ea943b7e78bc6bb2eb7be76f57208ad2c18da4d6ffd5bf21b4dd",
+      "sha256_W": "de2aff83b223ea943b7e78bc6bb2eb7be76f57208ad2c18da4d6ffd5bf21b4dd",
+      "line_count_P": 214,
+      "line_count_W": 214,
+      "read_ranges_P": [
+        [
+          1,
+          214
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          214
+        ]
+      ],
+      "responsibility": "Mandatory fact lines/IDs and page provenance survive canonical summary formatting.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_policy_generation.py",
+      "state": "REVIEWED",
+      "sha256_P": "6c36cb514e31f57a4022aa778a84545b00c499a7ef2e549f732a951c8d8a3d85",
+      "sha256_W": "4d3640a77209103f013eeb4e58214b9620bed63944c14abb69afc15614ea50a3",
+      "line_count_P": 89,
+      "line_count_W": 144,
+      "read_ranges_P": [
+        [
+          1,
+          89
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          80,
+          144
+        ]
+      ],
+      "responsibility": "Policy/source generation invalidates old summaries and unsent intents; legacy hash compatibility and both source-switch directions.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair.py",
+      "state": "REVIEWED",
+      "sha256_P": "35b6f484958d02b47fb61c0d54a483838a6940bbb7fb655527e8ed112090e096",
+      "sha256_W": "35b6f484958d02b47fb61c0d54a483838a6940bbb7fb655527e8ed112090e096",
+      "line_count_P": 273,
+      "line_count_W": 273,
+      "read_ranges_P": [
+        [
+          1,
+          273
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          273
+        ]
+      ],
+      "responsibility": "Conservative chunk/category repair, rejection removal and open obligations without silent complete coverage.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_repair_recovery.py",
+      "state": "REVIEWED",
+      "sha256_P": "e984229783d1f5a57b69898c67175f226099bce0958b6b74bfc69f5707fd9e2f",
+      "sha256_W": "e984229783d1f5a57b69898c67175f226099bce0958b6b74bfc69f5707fd9e2f",
+      "line_count_P": 39,
+      "line_count_W": 39,
+      "read_ranges_P": [
+        [
+          1,
+          39
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          39
+        ]
+      ],
+      "responsibility": "Retry recovery retains repair receipts without false publication.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_store.py",
+      "state": "REVIEWED",
+      "sha256_P": "583cc6a09f4c466992e3dbf59f36bb671845932dbbd10634b031b6d8c9cee4c2",
+      "sha256_W": "583cc6a09f4c466992e3dbf59f36bb671845932dbbd10634b031b6d8c9cee4c2",
+      "line_count_P": 93,
+      "line_count_W": 93,
+      "read_ranges_P": [
+        [
+          1,
+          93
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          93
+        ]
+      ],
+      "responsibility": "Current artifact identity and source revision/fingerprint contract.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_scope_edges.py",
+      "state": "REVIEWED",
+      "sha256_P": "706914ea1810f2fd2670a64a4c450405c02622af3688efb16c1940305877489d",
+      "sha256_W": "706914ea1810f2fd2670a64a4c450405c02622af3688efb16c1940305877489d",
+      "line_count_P": 76,
+      "line_count_W": 76,
+      "read_ranges_P": [
+        [
+          1,
+          76
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          76
+        ]
+      ],
+      "responsibility": "Project scope/config edges and semantic reentry eligibility.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_feature_modes.py",
+      "state": "REVIEWED",
+      "sha256_P": "30351cf4ad4a96a16b37ceeaaa3a24bfb9c76d70da589af848652fbf16a5bf45",
+      "sha256_W": "30351cf4ad4a96a16b37ceeaaa3a24bfb9c76d70da589af848652fbf16a5bf45",
+      "line_count_P": 63,
+      "line_count_W": 63,
+      "read_ranges_P": [
+        [
+          1,
+          63
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          63
+        ]
+      ],
+      "responsibility": "Off/shadow/enforce configuration and publication-mode compatibility.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_fairness.py",
+      "state": "REVIEWED",
+      "sha256_P": "ca0bf8e815131308fafbc3a70c39198a73b0be50a4ac1b4df07795ea4938eabc",
+      "sha256_W": "ca0bf8e815131308fafbc3a70c39198a73b0be50a4ac1b4df07795ea4938eabc",
+      "line_count_P": 367,
+      "line_count_W": 367,
+      "read_ranges_P": [
+        [
+          1,
+          367
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          367
+        ]
+      ],
+      "responsibility": "Bounded fresh/backlog lane scheduling and fairness state persistence.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    },
+    {
+      "path": "tests/semantic/test_semantic_smoke.py",
+      "state": "REVIEWED",
+      "sha256_P": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e",
+      "sha256_W": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e",
+      "line_count_P": 23,
+      "line_count_W": 23,
+      "read_ranges_P": [
+        [
+          1,
+          23
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          23
+        ]
+      ],
+      "responsibility": "Import/entry facade compatibility smoke.",
+      "callers_or_consumers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ],
+      "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
+      "review_limit": null,
+      "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch."
+    }
+  ],
+  "prior_complete_review_reuse": [
+    {
+      "path": "mcs/semantic/semantic.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "e3d5d9b29d581c1d28c9b86937f9416fd4b40f8f35ac1d90ccfa37740f248ab9",
+      "sha256_W": "e3d5d9b29d581c1d28c9b86937f9416fd4b40f8f35ac1d90ccfa37740f248ab9",
+      "line_count_P": 543,
+      "line_count_W": 543,
+      "read_ranges_P": [
+        [
+          283,
+          376
+        ],
+        [
+          1,
+          282
+        ],
+        [
+          377,
+          543
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          283,
+          376
+        ],
+        [
+          1,
+          282
+        ],
+        [
+          377,
+          543
+        ]
+      ],
+      "read_method": "Full numbered P source read; W changed ranges and complete diff reread; unchanged ranges reused after exact Git diff comparison.",
+      "responsibility": "Stable semantic facade, CLI status/replay/drain, local LLM format/length fallback and bounded metadata caches.",
+      "callers_or_consumers": [
+        "semantic_drain.run_due/_process_job_inner",
+        "semantic_extraction.extract_facts_resumable",
+        "semantic_llm wrappers",
+        "run_check semantic stages",
+        "semantic CLI"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "mcs/semantic/semantic_llm.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "7422da351f0baa4dc93c7df3eab8f3cf7ae8b872d2b3f0ce66316c26ab8f764f",
+      "sha256_W": "7422da351f0baa4dc93c7df3eab8f3cf7ae8b872d2b3f0ce66316c26ab8f764f",
+      "line_count_P": 326,
+      "line_count_W": 326,
+      "read_ranges_P": [
+        [
+          263,
+          326
+        ],
+        [
+          1,
+          262
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          263,
+          326
+        ],
+        [
+          1,
+          262
+        ]
+      ],
+      "read_method": "Full numbered P source read; W changed ranges and complete diff reread; unchanged ranges reused after exact Git diff comparison.",
+      "responsibility": "Fact/summary/repair prompts, resumable extraction facade, validated Claim candidate normalization and oversize stub.",
+      "callers_or_consumers": [
+        "semantic_drain._process_job_inner summary/repair",
+        "semantic_extraction v2 prompt constants",
+        "semantic facade",
+        "tests/semantic"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "mcs/semantic/semantic_runtime.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "fabbcb84bd10820e53c6cbac1f458436a6a6a502b3dfaeb9e90a72cb77927d49",
+      "sha256_W": "fabbcb84bd10820e53c6cbac1f458436a6a6a502b3dfaeb9e90a72cb77927d49",
+      "line_count_P": 600,
+      "line_count_W": 600,
+      "read_ranges_P": [
+        [
+          1,
+          600
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          600
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Job/config/source identity guards, payload-local attempt limit, CAS transitions, durable circuit state, bounded LLM/Jev wrappers and usage reservation.",
+      "callers_or_consumers": [
+        "semantic_drain._process_job_inner/run_due",
+        "semantic_qc",
+        "semantic_v4",
+        "semantic status_report",
+        "tests/semantic"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_runtime.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "2750e4c4dc7f571496a9ad9e0fc451c650ad00b609225d64663356d709793b34",
+      "sha256_W": "2750e4c4dc7f571496a9ad9e0fc451c650ad00b609225d64663356d709793b34",
+      "line_count_P": 327,
+      "line_count_W": 327,
+      "read_ranges_P": [
+        [
+          1,
+          327
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          327
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "stale worker CAS, config/off recheck, durable usage, terminal attempts, status, metrics, restart and call reserve",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_llm_retry.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "1cd8b5667d451a105c7debc9ac639ace093a9a082abd66ef0159b8af9fdee41d",
+      "sha256_W": "1cd8b5667d451a105c7debc9ac639ace093a9a082abd66ef0159b8af9fdee41d",
+      "line_count_P": 815,
+      "line_count_W": 815,
+      "read_ranges_P": [
+        [
+          1,
+          735
+        ],
+        [
+          736,
+          815
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          735
+        ],
+        [
+          736,
+          815
+        ]
+      ],
+      "read_method": "Full numbered P source read; W changed ranges and complete diff reread; unchanged ranges reused after exact Git diff comparison.",
+      "responsibility": "bounded model failures, not-sent classification, sibling durability, repair reservation, format/length retries and new malformed-output/deadline regressions",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_detail_deadline.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "d733061b8e2bfb75c4665f6ed3d0ea8605557d1598cb5a08b673b0516c91ffb1",
+      "sha256_W": "d733061b8e2bfb75c4665f6ed3d0ea8605557d1598cb5a08b673b0516c91ffb1",
+      "line_count_P": 29,
+      "line_count_W": 29,
+      "read_ranges_P": [
+        [
+          1,
+          29
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          29
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "completed primary classification must not promote timed-out later stages",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_budget_retry.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "060e1d7044ebd3c80b625f18a3ea0c1b60c91f70c3d3e0539ba347a5fa7a9bd0",
+      "sha256_W": "060e1d7044ebd3c80b625f18a3ea0c1b60c91f70c3d3e0539ba347a5fa7a9bd0",
+      "line_count_P": 262,
+      "line_count_W": 262,
+      "read_ranges_P": [
+        [
+          1,
+          262
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          262
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "post-dispatch overrun accounting, pre-dispatch free defer, durable multi-pass progress and repair budgets",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0",
+      "sha256_W": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0",
+      "line_count_P": 106,
+      "line_count_W": 106,
+      "read_ranges_P": [
+        [
+          1,
+          106
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          106
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "retryable failure classes, restart, finite cooldown, malformed state and confidential error detail reduction",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_circuit_drain.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "9bb8e4030a888bd3f7fe8e902c6fd90e97f6d1e0f4805a9ee2d8584cd8534628",
+      "sha256_W": "9bb8e4030a888bd3f7fe8e902c6fd90e97f6d1e0f4805a9ee2d8584cd8534628",
+      "line_count_P": 40,
+      "line_count_W": 40,
+      "read_ranges_P": [
+        [
+          1,
+          40
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          40
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "durable outage holds existing jobs and resumes without lost attempts",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_tick_budget.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "ab5e15537e75228a48c8134c796b8ce482dd2649a9ad279041fb163bc2aa710b",
+      "sha256_W": "ab5e15537e75228a48c8134c796b8ce482dd2649a9ad279041fb163bc2aa710b",
+      "line_count_P": 143,
+      "line_count_W": 143,
+      "read_ranges_P": [
+        [
+          1,
+          143
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          143
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "real tick with synthetic adapter preserves rule extraction/notification/snapshot while semantic waits",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_three_slot_lanes.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "53f8d293cd8a7ae1add21ae36994ea76433e28e0894ab2fc353c83bf355e0a20",
+      "sha256_W": "53f8d293cd8a7ae1add21ae36994ea76433e28e0894ab2fc353c83bf355e0a20",
+      "line_count_P": 123,
+      "line_count_W": 123,
+      "read_ranges_P": [
+        [
+          1,
+          123
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          123
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "ingestion lock release, per-job exclusion, lane selection, usage reservation before unlocked transport",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_transport.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "c1bbdbcdacabe3df97fddd78e5490606de55a6691b70a8370dc73a4ec0786017",
+      "sha256_W": "c1bbdbcdacabe3df97fddd78e5490606de55a6691b70a8370dc73a4ec0786017",
+      "line_count_P": 199,
+      "line_count_W": 199,
+      "read_ranges_P": [
+        [
+          1,
+          199
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          199
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "synthetic loopback Jev deadline/wire/no-redirect/response-byte cap",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_pause.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "36d8e1865c1f8b72fc7e8b4fc9f3e6b1fc2c0c106c3a7fecce3d44b550a74108",
+      "sha256_W": "36d8e1865c1f8b72fc7e8b4fc9f3e6b1fc2c0c106c3a7fecce3d44b550a74108",
+      "line_count_P": 104,
+      "line_count_W": 104,
+      "read_ranges_P": [
+        [
+          1,
+          104
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          104
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "human pause/resume source/job/receipt preservation and post-response promotion stop",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_manual_retry.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "9f302eec802cbab4d3eda897d8328c57cdf4f7f0f4e23212a95113ace54a297b",
+      "sha256_W": "9f302eec802cbab4d3eda897d8328c57cdf4f7f0f4e23212a95113ace54a297b",
+      "line_count_P": 157,
+      "line_count_W": 157,
+      "read_ranges_P": [
+        [
+          1,
+          157
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          157
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "human retry extension bounded to one input, restart/seed persistence and overflow rejection",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    },
+    {
+      "path": "tests/semantic/test_semantic_acceptance_edges.py",
+      "module": "semantic-runtime-llm",
+      "state": "REVIEWED",
+      "sha256_P": "aee3ffbfb2df128c754b0040c5d3a99f44809be92cc567f75671b5006af4e068",
+      "sha256_W": "aee3ffbfb2df128c754b0040c5d3a99f44809be92cc567f75671b5006af4e068",
+      "line_count_P": 127,
+      "line_count_W": 127,
+      "read_ranges_P": [
+        [
+          1,
+          127
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          127
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Unicode codepoint evidence and human-owned completed request preservation",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh -> pytest; semantic_testkit synthetic fixtures"
+      ],
+      "review_limit": null,
+      "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read."
+    }
+  ],
+  "readonly_boundary_inventory": [
+    {
+      "path": "mcs/semantic/semantic_v4.py",
+      "state": "PARTIAL",
+      "sha256_P": "5d040cea543512230e5fe2522ca7c8b75a8b463bcce66f402d957085726f2082",
+      "sha256_W": "5d040cea543512230e5fe2522ca7c8b75a8b463bcce66f402d957085726f2082",
+      "line_count_P": 666,
+      "line_count_W": 666,
+      "read_ranges_P": [
+        [
+          171,
+          385
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          171,
+          385
+        ]
+      ],
+      "responsibility": "Fact publication/reprojection, request-following boundary and exact newest facts-audit verdict.",
+      "callers_or_consumers": [
+        "semantic_drain; semantic_store"
+      ],
+      "read_method": "Only the explicit numbered boundary ranges read. This is not a full-module audit.",
+      "review_limit": "Full source responsibility is retained for its owning packet."
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "state": "PARTIAL",
+      "sha256_P": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
+      "sha256_W": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
+      "line_count_P": 386,
+      "line_count_W": 386,
+      "read_ranges_P": [
+        [
+          1,
+          180
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          180
+        ]
+      ],
+      "responsibility": "Frozen notice source/project/policy checks; old source-switch intent becomes stale before send.",
+      "callers_or_consumers": [
+        "notify_flush delegates"
+      ],
+      "read_method": "Only the explicit numbered boundary ranges read. This is not a full-module audit.",
+      "review_limit": "Full source responsibility is retained for its owning packet."
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "state": "PARTIAL",
+      "sha256_P": "a7408acf82ef146de4d38bc25993d23d60a7286a22811d70854a5ba4e320c95f",
+      "sha256_W": "a7408acf82ef146de4d38bc25993d23d60a7286a22811d70854a5ba4e320c95f",
+      "line_count_P": 1128,
+      "line_count_W": 1128,
+      "read_ranges_P": [
+        [
+          470,
+          530
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          470,
+          530
+        ]
+      ],
+      "responsibility": "Actual _semantic_gate delegates resolved current config into semantic_send_gate; frozen progress vocabulary.",
+      "callers_or_consumers": [
+        "Synthetic policy-generation tests; notification owner"
+      ],
+      "read_method": "Only the explicit numbered boundary ranges read. This is not a full-module audit.",
+      "review_limit": "Full source responsibility is retained for its owning packet."
+    }
+  ],
+  "prior_partial_boundary_reuse": [
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "sha256_W": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "line_count_P": 645,
+      "line_count_W": 645,
+      "read_ranges_P": [
+        [
+          1,
+          108
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          108
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Fixed Jev endpoint/model, safe error labels and DATA instruction wrapper",
+      "callers_or_consumers": [
+        "runtime.bind_jev",
+        "semantic_llm verdict labels",
+        "semantic_drain"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "b9a354b28244d7bdf5fc85f3569a7404a72c6260e487ec3120eb326d921d4d68",
+      "sha256_W": "b9a354b28244d7bdf5fc85f3569a7404a72c6260e487ec3120eb326d921d4d68",
+      "line_count_P": 535,
+      "line_count_W": 535,
+      "read_ranges_P": [
+        [
+          1,
+          65
+        ],
+        [
+          80,
+          200
+        ],
+        [
+          280,
+          535
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          65
+        ],
+        [
+          80,
+          200
+        ],
+        [
+          280,
+          535
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Loopback argument validation, no-tools wire, structured acceptance, deadline-aware probe and admission outcome contract",
+      "callers_or_consumers": [
+        "semantic.llm_chat"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "sha256_W": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "line_count_P": 399,
+      "line_count_W": 399,
+      "read_ranges_P": [
+        [
+          1,
+          125
+        ],
+        [
+          234,
+          339
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          125
+        ],
+        [
+          234,
+          339
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Config/durable JSON loading, atomic text publication, LLM JSON parser and evidence/chunk helpers",
+      "callers_or_consumers": [
+        "semantic facade",
+        "semantic_llm",
+        "semantic_runtime"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "sha256_W": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "line_count_P": 269,
+      "line_count_W": 269,
+      "read_ranges_P": [
+        [
+          1,
+          90
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          90
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "atomic_publish_text delegates to atomic_write; no real housekeeping invoked",
+      "callers_or_consumers": [
+        "semantic._remember_plain/_long_mark"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "sha256_W": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "line_count_P": 461,
+      "line_count_W": 461,
+      "read_ranges_P": [
+        [
+          1,
+          53
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          53
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Canonical non-NaN JSON payload hashing",
+      "callers_or_consumers": [
+        "semantic_runtime generations"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+      "sha256_W": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+      "line_count_P": 911,
+      "line_count_W": 911,
+      "read_ranges_P": [
+        [
+          883,
+          911
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          883,
+          911
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Latest control state corruption fails paused",
+      "callers_or_consumers": [
+        "semantic_runtime.guard",
+        "semantic.seed/status_report"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    },
+    {
+      "path": "mcs/_mcs_path.py",
+      "module": "read-only-boundary",
+      "state": "PARTIAL",
+      "sha256_P": "03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2",
+      "sha256_W": "03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2",
+      "line_count_P": 26,
+      "line_count_W": 26,
+      "read_ranges_P": [
+        [
+          1,
+          26
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          26
+        ]
+      ],
+      "read_method": "numbered bounded source reads; final changed ranges and diff reread; no sample-only review",
+      "responsibility": "Recursive flat-import bootstrap",
+      "callers_or_consumers": [
+        "semantic CLI",
+        "pytest import setup"
+      ],
+      "review_limit": "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+      "review_reuse": "Prior packet PARTIAL ranges reused by exact input SHA equality; never counted as full review."
+    }
+  ],
+  "remaining_semantic_inventory": [
+    {
+      "path": "mcs/semantic/semantic_assessment.py",
+      "state": "UNSEEN",
+      "sha256_P": "17359c2920443794e8b8ab709e9d6a6675f0a6799cccb86b683c5cea8915f8bf",
+      "sha256_W": "17359c2920443794e8b8ab709e9d6a6675f0a6799cccb86b683c5cea8915f8bf",
+      "line_count": 329,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_bench.py",
+      "state": "UNSEEN",
+      "sha256_P": "776a506518956012afc955c8c2fa3ca88fc127562b08e8ea124afae0fd310800",
+      "sha256_W": "776a506518956012afc955c8c2fa3ca88fc127562b08e8ea124afae0fd310800",
+      "line_count": 394,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_blind.py",
+      "state": "UNSEEN",
+      "sha256_P": "07c85a44880fd8d6f480f72aadda9bccad3ecdcdb01347fd1adf0c5c7483ba5d",
+      "sha256_W": "07c85a44880fd8d6f480f72aadda9bccad3ecdcdb01347fd1adf0c5c7483ba5d",
+      "line_count": 426,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_evaluation.py",
+      "state": "UNSEEN",
+      "sha256_P": "6e97b38b5c3ac89e84c66b05a4ba7192e6fabbc30c18e01199c71d6ee42f05ae",
+      "sha256_W": "6e97b38b5c3ac89e84c66b05a4ba7192e6fabbc30c18e01199c71d6ee42f05ae",
+      "line_count": 1172,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "state": "PARTIAL",
+      "sha256_P": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "sha256_W": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "line_count": 645,
+      "read_ranges": [
+        [
+          1,
+          108
+        ]
+      ],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_lifecycle.py",
+      "state": "UNSEEN",
+      "sha256_P": "ee3b393e05e8254b9a1aa1a8a0767de978708d0f0c31182bc216ab919dc3791d",
+      "sha256_W": "ee3b393e05e8254b9a1aa1a8a0767de978708d0f0c31182bc216ab919dc3791d",
+      "line_count": 263,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_loops.py",
+      "state": "UNSEEN",
+      "sha256_P": "047ec3084aebfe2979446c25b73dcde887c35598e520e9a971c255729caa337f",
+      "sha256_W": "047ec3084aebfe2979446c25b73dcde887c35598e520e9a971c255729caa337f",
+      "line_count": 252,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_metrics.py",
+      "state": "UNSEEN",
+      "sha256_P": "8ec5e844dc8b38ad3625967381fd1c0e4769bc749e69d47f00eb9af18fe63780",
+      "sha256_W": "8ec5e844dc8b38ad3625967381fd1c0e4769bc749e69d47f00eb9af18fe63780",
+      "line_count": 117,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_observe.py",
+      "state": "UNSEEN",
+      "sha256_P": "b6e190e6867ee23abca04dcfd49d806c5a1a4537d85171da830db4aab2112f60",
+      "sha256_W": "b6e190e6867ee23abca04dcfd49d806c5a1a4537d85171da830db4aab2112f60",
+      "line_count": 318,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_qc.py",
+      "state": "UNSEEN",
+      "sha256_P": "89bbb34dbdc3e86afe809230bd6c7e17cef87516840847088897aa85a179390e",
+      "sha256_W": "89bbb34dbdc3e86afe809230bd6c7e17cef87516840847088897aa85a179390e",
+      "line_count": 345,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_quantities.py",
+      "state": "UNSEEN",
+      "sha256_P": "6e783f5450f93cb0250ba00b04fd1c86f622e12307f9418af4de9cfaee846492",
+      "sha256_W": "6e783f5450f93cb0250ba00b04fd1c86f622e12307f9418af4de9cfaee846492",
+      "line_count": 380,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_relations.py",
+      "state": "UNSEEN",
+      "sha256_P": "ce640633600afeb42d257986b23864330f472c5c176241b8f51bffaa69a7f49f",
+      "sha256_W": "ce640633600afeb42d257986b23864330f472c5c176241b8f51bffaa69a7f49f",
+      "line_count": 215,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_render.py",
+      "state": "UNSEEN",
+      "sha256_P": "c3193faba38e0b46b8570c2309a72c470873d933b9b4804ca8fa52242f506551",
+      "sha256_W": "c3193faba38e0b46b8570c2309a72c470873d933b9b4804ca8fa52242f506551",
+      "line_count": 411,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "state": "PARTIAL",
+      "sha256_P": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
+      "sha256_W": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
+      "line_count": 386,
+      "read_ranges": [
+        [
+          1,
+          180
+        ]
+      ],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_v4.py",
+      "state": "PARTIAL",
+      "sha256_P": "5d040cea543512230e5fe2522ca7c8b75a8b463bcce66f402d957085726f2082",
+      "sha256_W": "5d040cea543512230e5fe2522ca7c8b75a8b463bcce66f402d957085726f2082",
+      "line_count": 666,
+      "read_ranges": [
+        [
+          171,
+          385
+        ]
+      ],
+      "full_review_required": true
+    },
+    {
+      "path": "mcs/semantic/semantic_workflow.py",
+      "state": "UNSEEN",
+      "sha256_P": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80",
+      "sha256_W": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80",
+      "line_count": 276,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_canonical_human_review_assets.py",
+      "state": "UNSEEN",
+      "sha256_P": "ea65c64d2771e9814b89689f5dfbae5b7a136ddfde6d272b8e191fe47869bda1",
+      "sha256_W": "ea65c64d2771e9814b89689f5dfbae5b7a136ddfde6d272b8e191fe47869bda1",
+      "line_count": 161,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_canonical_request_evaluation.py",
+      "state": "UNSEEN",
+      "sha256_P": "6df64ce292efb104000a380d3bf9d73e2628dd0270454b754b8e52c5463228aa",
+      "sha256_W": "6df64ce292efb104000a380d3bf9d73e2628dd0270454b754b8e52c5463228aa",
+      "line_count": 169,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_canonical_request_following.py",
+      "state": "UNSEEN",
+      "sha256_P": "16898ab7c30d366482df9cd835a95b73857ca1bff162e46bd0391e91ac64905a",
+      "sha256_W": "16898ab7c30d366482df9cd835a95b73857ca1bff162e46bd0391e91ac64905a",
+      "line_count": 284,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_jev_value.py",
+      "state": "UNSEEN",
+      "sha256_P": "86b3142481f8cd78b1900e10a9f7ec00fc265742c61e6ad87a2b62045a8c493c",
+      "sha256_W": "86b3142481f8cd78b1900e10a9f7ec00fc265742c61e6ad87a2b62045a8c493c",
+      "line_count": 307,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_request_following_generation.py",
+      "state": "UNSEEN",
+      "sha256_P": "8fd00b02902683b127582d26d64cbe4f5dcd1464990b8e2ba6ab7a6f518c9825",
+      "sha256_W": "8fd00b02902683b127582d26d64cbe4f5dcd1464990b8e2ba6ab7a6f518c9825",
+      "line_count": 337,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_assessment.py",
+      "state": "UNSEEN",
+      "sha256_P": "3a86414788f4a8aaa26ad7687abf6abfcf10dc5575477cffc8f1f44f32480487",
+      "sha256_W": "3a86414788f4a8aaa26ad7687abf6abfcf10dc5575477cffc8f1f44f32480487",
+      "line_count": 185,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_bench.py",
+      "state": "UNSEEN",
+      "sha256_P": "f721350c5ea277736bad4939c860baf589995eb8829d491c71efab0735e28b85",
+      "sha256_W": "f721350c5ea277736bad4939c860baf589995eb8829d491c71efab0735e28b85",
+      "line_count": 81,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_blind.py",
+      "state": "UNSEEN",
+      "sha256_P": "f7fa903d0d20f83e3e52f16c5a307ac38025fbf6931eeeaa123b6f97451ef634",
+      "sha256_W": "f7fa903d0d20f83e3e52f16c5a307ac38025fbf6931eeeaa123b6f97451ef634",
+      "line_count": 248,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_cli_contract.py",
+      "state": "UNSEEN",
+      "sha256_P": "1740678377247046eee361cb955441f22a6476a6027e7f4b33ade83a5801066a",
+      "sha256_W": "1740678377247046eee361cb955441f22a6476a6027e7f4b33ade83a5801066a",
+      "line_count": 24,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_delivery.py",
+      "state": "UNSEEN",
+      "sha256_P": "41afe480cd0fc7c20ae197d68980fbf356d8195a9fbf595ce2bb3a9dab95938b",
+      "sha256_W": "41afe480cd0fc7c20ae197d68980fbf356d8195a9fbf595ce2bb3a9dab95938b",
+      "line_count": 295,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_evaluation.py",
+      "state": "UNSEEN",
+      "sha256_P": "43bccbb14c02c3f742d64bd3615cfe7e0978012ae5e99652cb940cb061be218c",
+      "sha256_W": "43bccbb14c02c3f742d64bd3615cfe7e0978012ae5e99652cb940cb061be218c",
+      "line_count": 506,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_jev_contract.py",
+      "state": "UNSEEN",
+      "sha256_P": "b8f59cd82dee6a5d968088f6bae8fae2f48d08b250c0339d3b1a068189b4fc30",
+      "sha256_W": "b8f59cd82dee6a5d968088f6bae8fae2f48d08b250c0339d3b1a068189b4fc30",
+      "line_count": 159,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_lifecycle.py",
+      "state": "UNSEEN",
+      "sha256_P": "e2d4b0ea1c77804a1cc00ebbd9c21cc52c565e82cf8f999b17fe62a22219c4ae",
+      "sha256_W": "e2d4b0ea1c77804a1cc00ebbd9c21cc52c565e82cf8f999b17fe62a22219c4ae",
+      "line_count": 391,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_generations.py",
+      "state": "UNSEEN",
+      "sha256_P": "f495961bd719a047c2adfa3df6858b5dea5d5ef6b0fab0645f97691ce50fd2cb",
+      "sha256_W": "f495961bd719a047c2adfa3df6858b5dea5d5ef6b0fab0645f97691ce50fd2cb",
+      "line_count": 77,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_loop_view.py",
+      "state": "UNSEEN",
+      "sha256_P": "506e6eb556dd2b9d75dcdb2cefa64ec1e963481abf1d28a00e217395e2444233",
+      "sha256_W": "506e6eb556dd2b9d75dcdb2cefa64ec1e963481abf1d28a00e217395e2444233",
+      "line_count": 126,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_notice_contract.py",
+      "state": "UNSEEN",
+      "sha256_P": "262553cf5b48ba83904007d4b78c5bb974f0702e6263c38a0357964695446b8f",
+      "sha256_W": "262553cf5b48ba83904007d4b78c5bb974f0702e6263c38a0357964695446b8f",
+      "line_count": 25,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_observe.py",
+      "state": "UNSEEN",
+      "sha256_P": "6cdce29a0f8039f2d1878d7f3dbf5074877bb9691e4a8fef755d0c83a1f2ba50",
+      "sha256_W": "6cdce29a0f8039f2d1878d7f3dbf5074877bb9691e4a8fef755d0c83a1f2ba50",
+      "line_count": 237,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_quantities.py",
+      "state": "UNSEEN",
+      "sha256_P": "51f6ca10a34f97c5f3e476dc9523fe385f3a189b63ae357e76f06dc07d55f2f6",
+      "sha256_W": "51f6ca10a34f97c5f3e476dc9523fe385f3a189b63ae357e76f06dc07d55f2f6",
+      "line_count": 119,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_relations.py",
+      "state": "UNSEEN",
+      "sha256_P": "ea9481267bcd4c7098fbbccd17b707e500b60c21130b289ad48cc7518b0fd455",
+      "sha256_W": "ea9481267bcd4c7098fbbccd17b707e500b60c21130b289ad48cc7518b0fd455",
+      "line_count": 204,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_send_gate.py",
+      "state": "UNSEEN",
+      "sha256_P": "3f4fd94c8cd77624b53a783c8c875c03a341ccf0a6622e344e330850cc4f8f7c",
+      "sha256_W": "3f4fd94c8cd77624b53a783c8c875c03a341ccf0a6622e344e330850cc4f8f7c",
+      "line_count": 174,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_v4.py",
+      "state": "UNSEEN",
+      "sha256_P": "c98d3033f69b330678ba14a6724bcd0ffe52c700e4c8fdf8885c7d3fc19922bd",
+      "sha256_W": "c98d3033f69b330678ba14a6724bcd0ffe52c700e4c8fdf8885c7d3fc19922bd",
+      "line_count": 581,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_view_generation.py",
+      "state": "UNSEEN",
+      "sha256_P": "dc60ae96c97c03086895b92abd033773d895251e0f0d7e706bd57a68250eb1d7",
+      "sha256_W": "dc60ae96c97c03086895b92abd033773d895251e0f0d7e706bd57a68250eb1d7",
+      "line_count": 39,
+      "read_ranges": [],
+      "full_review_required": true
+    },
+    {
+      "path": "tests/semantic/test_semantic_workflow.py",
+      "state": "UNSEEN",
+      "sha256_P": "cfc043b5bef2f245aa342fd2f85434574e671e79897600e7f8db6e52514d2e10",
+      "sha256_W": "cfc043b5bef2f245aa342fd2f85434574e671e79897600e7f8db6e52514d2e10",
+      "line_count": 167,
+      "read_ranges": [],
+      "full_review_required": true
+    }
+  ],
+  "prerequisite_reads": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "5022b4fbc28963d7a3ba6106ae67f39cf6839be9c64c838169804268149b84a9",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "SECURITY.md",
+      "sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "changes/README.md",
+      "sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "use": "instruction/test safety prerequisite; full read, not owner-wide audit",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "docs/specs/semantic-evaluation.md",
+      "sha256": "d2804b499ec732b41dfe25a22082d30725c1dd27f9a9ab26d7b6c22eff3d7945",
+      "read_ranges": [
+        [
+          310,
+          368
+        ]
+      ],
+      "use": "published generation/deadline/no-silent-drop/evidence/promotion contracts only; remaining document not audited",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md",
+      "sha256": "562eaf42717a70ce98299f521fd9a355953ef1e2e89e903cdd7f2c052e2f166e",
+      "read_ranges": [
+        [
+          1,
+          52
+        ]
+      ],
+      "use": "full standing/task instructions",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    },
+    {
+      "path": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+      "sha256": "5207aa2fe1d3b7a0e67eb64b4b8577ae21e305f222903c5d67beeb8bf01226bf",
+      "read_ranges": [
+        [
+          1,
+          67
+        ]
+      ],
+      "use": "full standing/task instructions",
+      "review_reuse": "Full or explicitly partial prior read reused only by exact input SHA equality; scripts/run_tests.sh and changes/README.md reread for this packet."
+    }
+  ],
+  "devin_wiki": "No .devin/wiki.md; none of the five cached repo_identifier values matches github.com/yusuketakuma/hermes-mcs, so no unrelated wiki was read.",
+  "criteria": [
+    {
+      "id": "C01",
+      "criterion": "設計・責務・依存・循環・重複・dead code・文書乖離",
+      "applicability": "APPLICABLE",
+      "decision": "責務とflat importを全文で確認。policyをleaf、extractionを入力/事実構築、auditを判定、projectionを互換変換、storeを読取/invalidation、drainを状態遷移として維持。機械分割・新依存・推測的抽象化なし。",
+      "source_evidence": "source owned inventory/full ranges; drain:23-46; store:143-255",
+      "verification_evidence": "owned32 Ruff pass; 828 semantic tests",
+      "limits": "他領域の呼出元は依存照合であり全文監査の代用ではない。"
+    },
+    {
+      "id": "C02",
+      "criterion": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+      "applicability": "APPLICABLE",
+      "decision": "source/revision/fingerprint、enum/reference/evidence/coverageの不変条件を確認。fact_source切替で旧PASSを再利用する欠陥F01を修正。事実不存在と対応不存在を混同しない監査/表示契約を維持。",
+      "source_evidence": "facts:249-611; extraction:164-299,718-818,1172-1525; audit:183-411; policy:157-167",
+      "verification_evidence": "canonical switch regression; fact contract/facts v2/audit/mandatory tests",
+      "limits": "合成の医学・数量例だけで臨床妥当性を保証しない。"
+    },
+    {
+      "id": "C03",
+      "criterion": "制約・transaction・upsert・排他・冪等性・削除",
+      "applicability": "APPLICABLE",
+      "decision": "drainのgeneration/token/CASと最終artifacts/outbox/job transactionを全文照合。lockなしfailed revivalにstate-only更新の競合F02を確認し、選択時attempts/payload/updated_atを条件に追加し更新件数のみ集計。",
+      "source_evidence": "drain:1130-1172,1391-1837,1852-1905; extraction cache/persist routines",
+      "verification_evidence": "2 deterministic concurrent-update regressions: before fail, after pass; family828",
+      "limits": "共有ledger/schemaの全transaction/migration監査はcore owner。"
+    },
+    {
+      "id": "C04",
+      "criterion": "migration・旧schema・値/FK/index/trigger・途中失敗",
+      "applicability": "BOUNDARY",
+      "decision": "保存schemaを変更せず、canonical/legacy投影version、旧artifactのcurrent判定と再評価契約を確認。legacy fingerprintをbyte互換で維持しshadow/canonicalは再評価が必要。",
+      "source_evidence": "policy:157-167; projection:20-49; store:143-255; readonly v4:200-385",
+      "verification_evidence": "historical legacy hash and budget-invariance test; canonical projection tests",
+      "limits": "DDL/migration/旧DB復旧は所有外で未完了。"
+    },
+    {
+      "id": "C05",
+      "criterion": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+      "applicability": "BOUNDARY",
+      "decision": "project/member/sourceが入力とartifactの主体を縛り、SQL値はparameter binding。LLM出力は信頼せず事実/引用/enum/量を検証。固定endpoint、認証、no-redirect/no-proxyはpacket1/core境界を維持。",
+      "source_evidence": "facts:249-611; store:64-172; extraction:299-341,447-516,718-818; readonly send_gate:96-180",
+      "verification_evidence": "input/fact contract/source/meta tests; source-switch _StaleSend assertions",
+      "limits": "サービス認証・tenant/authz/transport全体は他owner。"
+    },
+    {
+      "id": "C06",
+      "criterion": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+      "applicability": "APPLICABLE",
+      "decision": "source本文は必要な内部artifact/LLM inputに限る。例外・Jev失敗の観測はlabel/固定理由中心で、今回fixture/log/changes/evidenceに秘密値や実投稿を含めない。",
+      "source_evidence": "drain:60-82,1218-1240; owned synthetic testkit:1-481; extraction normalization/audit code",
+      "verification_evidence": "env-i temporary HOME; synthetic fixtures only; no real DB or secret read",
+      "limits": "既存実DB/通知/remote telemetry/バックアップは未アクセス・未検証。"
+    },
+    {
+      "id": "C07",
+      "criterion": "API/CLI/イベント契約・入力上限・互換性・pagination",
+      "applicability": "APPLICABLE",
+      "decision": "config異常はoffへ、project IDsは正整数、JSON/object/evidence/coverage shapeを厳密に保持。既存public facadeと保存形式を変更せず、retry件数を実更新件数に整合。",
+      "source_evidence": "policy:41-154; facts:249-611; extraction:299-306,570-683,923-1171; drain:1852-1905",
+      "verification_evidence": "fact/input/malformed meta, feature mode and policy-generation tests",
+      "limits": "CLI全サブコマンド、ページ分割/render全体は次packet。"
+    },
+    {
+      "id": "C08",
+      "criterion": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+      "applicability": "BOUNDARY",
+      "decision": "canonical必須事実の消失は表示契約の欠陥としてF01で修正。旧notificationは切替直前のpolicy gateで停止し、再評価後の新intentが発行される。",
+      "source_evidence": "drain:947-1129; projection:60-361; readonly notify_flush:491-506/send_gate:111-180",
+      "verification_evidence": "mandatory render and legacy→canonical case; canonical→legacy new coverage and intent count",
+      "limits": "Slack/Discord/LINE WORKS画面・操作/accessibility全経路はnotify owner。"
+    },
+    {
+      "id": "C09",
+      "criterion": "N+1・計算量・無制限処理・memory・起動/import・費用",
+      "applicability": "APPLICABLE",
+      "decision": "chunks/questions/job/lane/repair/revivalをboundedに保ち、cache identityを照合。新規性能数値や依存費用を主張せず、今回SELECT列/CAS条件追加のみ。",
+      "source_evidence": "extraction:45-77,372-446,570-683,923-1171,1318-1525; drain:46-59,1310-1375,1391-1837,1840-1905",
+      "verification_evidence": "fairness/chunk/cache/resource wait tests",
+      "limits": "本番計測・起動distribution/cost・全query N+1解析は未実施。"
+    },
+    {
+      "id": "C10",
+      "criterion": "race/retry/queue/timeout・キャンセル・例外・観測性",
+      "applicability": "APPLICABLE",
+      "decision": "deadline/runtimeGuard/transport loss/retry classification/failed revivalを確認。timeoutはshared runtimeへ渡し、format/malformed responseはbounded再試行。F02の交差更新を古い状態のまま書かない。",
+      "source_evidence": "extraction:324-352; audit:183-259,274-382; drain:1130-1282,1391-1905",
+      "verification_evidence": "828 tests include reused runtime/deadline/circuit/manual-retry cases; 2 new race cases",
+      "limits": "実backend cancel terminal/admission brokerはcore境界で未検証。"
+    },
+    {
+      "id": "C11",
+      "criterion": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+      "applicability": "APPLICABLE",
+      "decision": "全24 direct tests + testkitを全文評価。修正前失敗を残し、source switchの旧PASS再利用/必須表示と、別generation revival上書きを決定的な合成で検出。期待値緩和・skip・real network依存なし。",
+      "source_evidence": "owned test inventory/full source read and preserved before logs",
+      "verification_evidence": "1 source-switch failure + 2 race failures before fix; 828 pass/0 skip after",
+      "limits": "family実行だけで未読source/testsをREVIEWEDにしない。"
+    },
+    {
+      "id": "C12",
+      "criterion": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+      "applicability": "BOUNDARY",
+      "decision": "stdlib-only収集解析契約とflat importを維持。既存isolated runnerを使用しRuff0.16.10で所有32filesを検証。外部依存やlockfile/CI config変更なし。",
+      "source_evidence": "owned import declarations; scripts/run_tests.sh:1-46; reused _mcs_path",
+      "verification_evidence": "Ruff all checks passed; Python3.13.12 semantic828",
+      "limits": "CI full repo/build/distribution、Hermes SDKは親/他owner。"
+    },
+    {
+      "id": "X01",
+      "criterion": "配布物・起動終了・旧新version・切戻し",
+      "applicability": "BOUNDARY",
+      "decision": "旧legacy評価hashを維持。canonical/shadow旧評価の再処理と切戻し時の旧通知停止を合成確認し、日本語changesへ更新条件を記録。",
+      "source_evidence": "policy:157-167; changes/20261005-semantic-policy-revival.json; drain:1908-2005",
+      "verification_evidence": "both source-switch directions; 828 pass",
+      "limits": "実install/update/recovery配布・プロセス再起動は親の別所有。"
+    },
+    {
+      "id": "X02",
+      "criterion": "供給網・取得元・CI権限・ライセンス",
+      "applicability": "BOUNDARY",
+      "decision": "新dependency/取得元/ライセンス変更なし。既存runnerと親承認pinned Ruffのみ。",
+      "source_evidence": "owned source imports; unchanged lock/CI files",
+      "verification_evidence": "Ruff0.16.10 metadata command",
+      "limits": "供給網/CI権限/全license監査はこのbackend packet範囲外。"
+    },
+    {
+      "id": "X03",
+      "criterion": "backup/restore/削除・派生物/鍵・削除データ復活",
+      "applicability": "BOUNDARY",
+      "decision": "deleted/stale sourceをcurrentに復活させないstore/projectionの条件と、選択後更新された新generationを上書きしないF02を確認。保存データ・migration・鍵は削除しない。",
+      "source_evidence": "store:64-121,143-255; readonly v4:240-347; drain:1852-1905",
+      "verification_evidence": "canonical projection and 2 revival conflict tests",
+      "limits": "実backup/restore/暗号鍵・原本削除経路はcore/ops owner。"
+    },
+    {
+      "id": "X04",
+      "criterion": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+      "applicability": "BOUNDARY",
+      "decision": "semantic_noticeはsource-event/project/policy/source fingerprintを保持し最終transactionでintent生成。事実ソース切替で古いreceipt/intentを継承しない。",
+      "source_evidence": "drain:947-1129; readonly send_gate:96-180; notify_flush:491-506",
+      "verification_evidence": "both source-switch old-notice gates and new legacy intent assertion",
+      "limits": "署名/外部送信/部分配送/real adapterはnotify owner; no external send. "
+    },
+    {
+      "id": "X05",
+      "criterion": "offline・複数tab・容量/eviction・OS差・native/FFI",
+      "applicability": "BOUNDARY",
+      "decision": "ローカルcache/chunk進捗/queueはgeneration boundで保持。復旧/retry/fairnessは合成の一時SQLiteで確認し、容量やoffline OS機差の全評価へ広げない。",
+      "source_evidence": "extraction:372-570; drain:1283-1390; store:143-255",
+      "verification_evidence": "repair recovery/fairness/resource wait tests",
+      "limits": "複数tab/native/FFI/OS配布/capacity試験は未実施または所有外。"
+    },
+    {
+      "id": "X06",
+      "criterion": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+      "applicability": "APPLICABLE",
+      "decision": "LLM/Jevはdata提案と判定のみ。事実/引用/coverageを検証し、出力からtool呼出し・権限付与・人承認を生成しない。sourceの指示を実行するコード経路なし。",
+      "source_evidence": "extraction:299-352,718-818,923-1171; facts:249-611; audit:1-411; reused runtime/LLM boundary",
+      "verification_evidence": "input/facts-audit/fact contract tests; all fixture LLM/Jev fake",
+      "limits": "prompt injectionに対する実model評価、AI/MCPサービス全体は未実施。"
+    },
+    {
+      "id": "X07",
+      "criterion": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+      "applicability": "APPLICABLE",
+      "decision": "患者/投稿/版/根拠quote/page/数量をbindingし監査PASSとcomplete coverageだけを公開候補にする。必須事実をsummary省略から保護し、人承認条件は変更しない。",
+      "source_evidence": "facts:133-243,249-611; audit:19-176,274-411; extraction:718-818; projection:318-361; drain publication gates",
+      "verification_evidence": "quantity, canonical fact/mandatory render/source contract regressions",
+      "limits": "医学・介護・算定の臨床精度/適用法令は合成テストで保証しない。"
+    },
+    {
+      "id": "X08",
+      "criterion": "公開Webの導線・フォーム・link/index・公開境界",
+      "applicability": "NOT_APPLICABLE",
+      "decision": "所有範囲はローカルbackend/合成testsで公開Web/page/form/index/配備設定を持たず、外部公開を行わない。",
+      "source_evidence": "owned7 source responsibilities and worktree patch",
+      "verification_evidence": "No Web artifact or external deployment in changed files",
+      "limits": "Web/notify掲載の全リンク導線は他所有で監査未完了。"
+    }
+  ],
+  "findings": [
+    {
+      "id": "SEM-P2-F01",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_policy.py",
+        "tests/semantic/test_canonical_drain.py",
+        "tests/semantic/test_semantic_policy_generation.py"
+      ],
+      "cause": "fact_source omitted from policy fingerprint. A legacy PASS summary/coverage/audit could survive canonical switch and skip required canonical mandatory facts; old frozen intent also passed unchanged policy identity.",
+      "change": "Add non-legacy fact_source to interpretation hash; retain exact historical legacy hash and leave retry budgets outside interpretation identity.",
+      "before_evidence": "policy-regression-before.log: new mandatory-render source-switch case failed on reuse without new summary call.",
+      "after_evidence": "Final828 tests and explicit both-direction old gate/new receipt cases pass.",
+      "compatibility": "No schema, thresholds, model, human approval, endpoint, mode/default or retry allowance change. Old shadow/canonical policy artifacts require normal reevaluation or replay; pending old intents stop at send-time gate.",
+      "notification_handoff": "Parent informed and shared with notify owner; source display/page full adapter proof remains notify-owned."
+    },
+    {
+      "id": "SEM-P2-F02",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_mcs_semantic.py"
+      ],
+      "cause": "Lock-free revival selected failed payload then UPDATE fenced only failed state, allowing replacement failed generation to be overwritten; unconditional increment also counted zero-row update after another revival.",
+      "change": "CAS on selected failed state, attempts, payload and updated_at; increment actual SQLite rowcount.",
+      "before_evidence": "revive-regression-before.log: 2 deterministic pending/failed interleavings fail.",
+      "after_evidence": "revive-regression-after.log:2pass; final semantic828 pass.",
+      "compatibility": "Same cooldown/per-input/pass bounds and retry receipt mechanism; unchanged public return keys; only truthful revival count and preservation of replacement input."
+    }
+  ],
+  "disproved_findings": [
+    {
+      "candidate": "Changing retry budgets alone invalidates clinical interpretation or legacy historical hash",
+      "resolution": "New explicit fingerprint test proves historical legacy byte equality and daily_request_budget invariance; model/threshold/calibration identities remain included."
+    },
+    {
+      "candidate": "Canonical->legacy fallback carries canonical mandatory facts through old PASS receipt",
+      "resolution": "New complete synthetic source-switch case creates fresh coverage/summary and new intent, without canonical mandatory_facts; both old intents raise StaleSend."
+    },
+    {
+      "candidate": "Repair drops rejected facts and falsely closes every obligation after an incomplete replacement chunk",
+      "resolution": "Complete repair/extraction source and conservative repair tests require unresolved/open obligations and non-PASS/needs-review outcomes on unsuccessful repair."
+    },
+    {
+      "candidate": "An older fact-audit PASS can be resurrected after a newer unevaluated/wrong-document audit",
+      "resolution": "Readonly semantic_v4.fact_audit_verdict validates the newest matching-policy row doc_hash and evaluated True; complete canonical-drain/projection tests cover blocked outcomes."
+    }
+  ],
+  "deferred_findings": [
+    {
+      "id": "SEM-P2-D01",
+      "class": "verification-boundary",
+      "paths": [
+        "mcs/core/ledger.py",
+        "mcs/core/local_llm.py",
+        "mcs/core/bounded_http.py",
+        "mcs/core/llm_admission.py"
+      ],
+      "reason": "Shared ledger/schema/migration/admission owner remains read-only; schema is owned by ledger.py rather than a separate nonexistent ledger_schema.py. No evidence of required extra core write from confirmed fixes; real backend cancellation and runtime distribution not exercised."
+    },
+    {
+      "id": "SEM-P2-D02",
+      "class": "remaining-full-read",
+      "paths": [
+        "mcs/semantic/semantic_assessment.py",
+        "mcs/semantic/semantic_bench.py",
+        "mcs/semantic/semantic_blind.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_jev.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic_loops.py",
+        "mcs/semantic/semantic_metrics.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/semantic/semantic_quantities.py",
+        "mcs/semantic/semantic_relations.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/semantic/semantic_send_gate.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_workflow.py",
+        "tests/semantic/test_canonical_human_review_assets.py",
+        "tests/semantic/test_canonical_request_evaluation.py",
+        "tests/semantic/test_canonical_request_following.py",
+        "tests/semantic/test_jev_value.py",
+        "tests/semantic/test_request_following_generation.py",
+        "tests/semantic/test_semantic_assessment.py",
+        "tests/semantic/test_semantic_bench.py",
+        "tests/semantic/test_semantic_blind.py",
+        "tests/semantic/test_semantic_cli_contract.py",
+        "tests/semantic/test_semantic_delivery.py",
+        "tests/semantic/test_semantic_evaluation.py",
+        "tests/semantic/test_semantic_jev_contract.py",
+        "tests/semantic/test_semantic_lifecycle.py",
+        "tests/semantic/test_semantic_loop_generations.py",
+        "tests/semantic/test_semantic_loop_view.py",
+        "tests/semantic/test_semantic_notice_contract.py",
+        "tests/semantic/test_semantic_observe.py",
+        "tests/semantic/test_semantic_quantities.py",
+        "tests/semantic/test_semantic_relations.py",
+        "tests/semantic/test_semantic_send_gate.py",
+        "tests/semantic/test_semantic_v4.py",
+        "tests/semantic/test_semantic_view_generation.py",
+        "tests/semantic/test_semantic_workflow.py"
+      ],
+      "reason": "These source/test files are not yet full REVIEWED. Partial boundary ranges and family828 execution do not substitute for their next owning packet full source audit."
+    },
+    {
+      "id": "SEM-P2-D03",
+      "class": "verification-boundary",
+      "paths": [
+        "adapters/slack",
+        "adapters/discord",
+        "adapters/lineworks",
+        "mcs/notify"
+      ],
+      "reason": "All notification text/provenance/page rendering and external delivery proof belong to notify owner. F01 semantic mandatory-layer defect shared; no actual service or send exercised."
+    }
+  ],
+  "verification": [
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_canonical_drain.py -k canonical_switch_reaudits_summary_and_renders_new_facts -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "P production + first new canonical-switch regression",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 1,
+      "counts": {
+        "failed": 1,
+        "passed": 0,
+        "deselected": 10,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/policy-regression-before.log",
+      "log_sha256": "b16a64b0af32b1246205af506fc70ce9255ae1b1ded4af054d63aa8039597cec",
+      "log_bytes": 2591,
+      "notes": "Equivalent argv reconstructed from captured selected case/count; original wrapper ended with zsh readonly status-variable error after expected pytest exit1. Failure output is fully preserved."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_canonical_drain.py tests/semantic/test_semantic_policy_generation.py -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "F01 fixed; first new canonical-switch case; prior generation tests",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 0,
+      "counts": {
+        "passed": 14,
+        "failed": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/policy-regression-after.log",
+      "log_sha256": "11b84c569f06649415c34dfb17d406ad3ef87f07378621ba25f665949274ca63",
+      "log_bytes": 99,
+      "notes": "Before adding the additional source-switch/hash compatibility cases."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_semantic_policy_generation.py -k fact_source -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "F01 fixed + complete source-switch regression additions",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 0,
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "deselected": 3,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/policy-switch-after.log",
+      "log_sha256": "4a2a53b6c3adccc7aa630e38c2d0d440edbd48fd359e2690c43988e47faeeb89",
+      "log_bytes": 112,
+      "notes": "Both directions invalidate old notice; returning to legacy reevaluates coverage/summary and mints new intent."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/ -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "F01 fixed; before F02 additions",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 0,
+      "counts": {
+        "passed": 826,
+        "failed": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/semantic-family-check.log",
+      "log_sha256": "59663053808e3c801acc590d8fa2797c90fc43375f0e2dfcb32d3991872115c6",
+      "log_bytes": 981,
+      "notes": "Reused after success until F02 production change made rerun necessary."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_mcs_semantic.py -k revive_preserves_job_changed_after_selection -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "F01 fixed, P revive_failed production + 2 new conflict cases",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 2,
+        "deselected": 74,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/revive-regression-before.log",
+      "log_sha256": "4cfa98fd380aaf7fd78281d204a1b5c05229b26b480cabbe5ea516afbfb356cf",
+      "log_bytes": 5424,
+      "notes": "Pending case reports false revival; failed/new-generation case overwrites the replacement payload. Equivalent argv reconstructed from captured selected case/count."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_mcs_semantic.py -k revive_preserves_job_changed_after_selection -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "F01 and F02 fixed",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 0,
+      "counts": {
+        "passed": 2,
+        "failed": 0,
+        "deselected": 74,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/revive-regression-after.log",
+      "log_sha256": "944f5651243d722cd011508f093b5764e64b2e69b9dcd46fe3387559c3edd17a",
+      "log_bytes": 113,
+      "notes": "Deterministic interleaving in fake JSON parse boundary, with temporary DB only; verifies replacement row preserved and revived count0."
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/ -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "Python": "3.13.12",
+        "isolation": "scripts/run_tests.sh env -i; temporary HOME/TMPDIR/XDG directories; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; existing conftest guards unchanged",
+        "network": "No real LLM/Jev/MCS/Slack/Discord/LINE WORKS. Existing fixture-scoped synthetic no-auth 127.0.0.1:0 HTTP stub only, parent authorized; shutdown/server_close/join preserved."
+      },
+      "exit_status": 0,
+      "counts": {
+        "passed": 828,
+        "failed": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/semantic-family-final.log",
+      "log_sha256": "3519dafe8bcf2aac5934bd5cd242dcd998fb7740179e223756a837c1f59b7bf7",
+      "log_bytes": 981,
+      "notes": "Final changed source state; includes six additional parameter cases over packet1 family822."
+    },
+    {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/semantic/semantic_drain.py mcs/semantic/semantic_extraction.py mcs/semantic/semantic_facts.py mcs/semantic/semantic_audit.py mcs/semantic/semantic_store.py mcs/semantic/semantic_projection.py mcs/semantic/semantic_policy.py tests/semantic/semantic_testkit.py tests/semantic/test_canonical_drain.py tests/semantic/test_canonical_projection.py tests/semantic/test_fact_source.py tests/semantic/test_malformed_meta_queries.py tests/semantic/test_mcs_semantic.py tests/semantic/test_review_20260930.py tests/semantic/test_semantic_atomization.py tests/semantic/test_semantic_attachment_context.py tests/semantic/test_semantic_claim_quantity_guard.py tests/semantic/test_semantic_degraded_coverage.py tests/semantic/test_semantic_extraction.py tests/semantic/test_semantic_fact_contract.py tests/semantic/test_semantic_facts_audit.py tests/semantic/test_semantic_facts_v2.py tests/semantic/test_semantic_input_contract.py tests/semantic/test_semantic_mandatory_render.py tests/semantic/test_semantic_policy_generation.py tests/semantic/test_semantic_repair.py tests/semantic/test_semantic_repair_recovery.py tests/semantic/test_semantic_store.py tests/semantic/test_semantic_scope_edges.py tests/semantic/test_semantic_feature_modes.py tests/semantic/test_semantic_fairness.py tests/semantic/test_semantic_smoke.py",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+      "environment": {
+        "ruff": "0.16.10",
+        "scope": "all32 owned Python files; no fixes or gate changes"
+      },
+      "exit_status": 0,
+      "counts": {
+        "checked_python_files": 32
+      },
+      "full_log_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/ruff-final.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "log_bytes": 19
+    }
+  ],
+  "additional_checks": [
+    {
+      "command": "git diff --check",
+      "exit_status": 0,
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328"
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit_status": 0,
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328"
+    },
+    {
+      "command": "JSON parse and mandatory changes fields",
+      "exit_status": 0,
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328"
+    },
+    {
+      "command": "Evidence JSON parse; all32 input read-range coverage, current file/log SHA-256, base commit and unchanged packet1 evidence checks",
+      "exit_status": 0,
+      "snapshot": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328"
+    }
+  ],
+  "git": {
+    "behavior_commit": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+    "behavior_commit_paths": [
+      "mcs/semantic/semantic_drain.py",
+      "mcs/semantic/semantic_policy.py",
+      "tests/semantic/test_canonical_drain.py",
+      "tests/semantic/test_mcs_semantic.py",
+      "tests/semantic/test_semantic_policy_generation.py",
+      "changes/20261005-semantic-policy-revival.json"
+    ],
+    "patch": {
+      "base": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+      "head": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+      "full_patch_path": "/tmp/mcs-maintenance-semantic-packet2-20261005-logs/packet2-code.patch",
+      "patch_sha256": "0ec489c8108ecab472388889bf16545c22d5cac9883ad9f0d271aaa97eb1e7d3",
+      "patch_bytes": 13665
+    },
+    "evidence_path": "docs/development/maintenance-semantic-packet2-evidence.json"
+  },
+  "constraints": [
+    "Dedicated one-writer branch; no child spawn.",
+    "No real LLM/Jev/MCS or DB/secrets/PHI; all fixtures completely synthetic, no anonymized real posts.",
+    "Runner isolation and conftest guards unchanged; only existing explicitly approved loopback synthetic HTTP stub permitted.",
+    "No push/PR/merge/deploy/restart/external messages; local own-branch commits only.",
+    "Shared schema/core and generated DEVELOPMENT.md read-only; packet1 evidence untouched.",
+    "6780 baseline and828 family passes are execution evidence, not global source review proof."
+  ],
+  "parent_handoff": [
+    "Integrate behavior commit then this evidence-only commit serially; parent supplies I and regenerates DEVELOPMENT if required.",
+    "Scope ownership32 files fully REVIEWED; prior15 complete source reviews reused after SHA check.",
+    "Remaining semantic source/test inventory retains UNSEEN/PARTIAL and must continue in next packets.",
+    "No further repeated successful tests or speculative reviews; request next semantic ownership after parent receipt."
+  ]
+}
