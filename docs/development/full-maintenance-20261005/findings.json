@@ -211,6 +211,62 @@
       "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
       "packet": "docs/development/maintenance-core-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P2-F01",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_policy.py",
+        "tests/semantic/test_canonical_drain.py",
+        "tests/semantic/test_semantic_policy_generation.py"
+      ],
+      "cause": "fact_source omitted from policy fingerprint. A legacy PASS summary/coverage/audit could survive canonical switch and skip required canonical mandatory facts; old frozen intent also passed unchanged policy identity.",
+      "change": "Add non-legacy fact_source to interpretation hash; retain exact historical legacy hash and leave retry budgets outside interpretation identity.",
+      "before_evidence": "policy-regression-before.log: new mandatory-render source-switch case failed on reuse without new summary call.",
+      "after_evidence": "Final828 tests and explicit both-direction old gate/new receipt cases pass.",
+      "compatibility": "No schema, thresholds, model, human approval, endpoint, mode/default or retry allowance change. Old shadow/canonical policy artifacts require normal reevaluation or replay; pending old intents stop at send-time gate.",
+      "notification_handoff": "Parent informed and shared with notify owner; source display/page full adapter proof remains notify-owned.",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P2-F02",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_mcs_semantic.py"
+      ],
+      "cause": "Lock-free revival selected failed payload then UPDATE fenced only failed state, allowing replacement failed generation to be overwritten; unconditional increment also counted zero-row update after another revival.",
+      "change": "CAS on selected failed state, attempts, payload and updated_at; increment actual SQLite rowcount.",
+      "before_evidence": "revive-regression-before.log: 2 deterministic pending/failed interleavings fail.",
+      "after_evidence": "revive-regression-after.log:2pass; final semantic828 pass.",
+      "compatibility": "Same cooldown/per-input/pass bounds and retry receipt mechanism; unchanged public return keys; only truthful revival count and preservation of replacement input.",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-001",
+      "status": "FIXED_LOCAL",
+      "cause": "Deep corrupt JSON receipt aborts both bound restore-consent scans.",
+      "before": "4 failed",
+      "after": "109 passed including watchdog family",
+      "contract": "Only scheduled ops.restore_approve bound to exact report/hash/schema may consent.",
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-002",
+      "status": "FIXED_LOCAL",
+      "cause": "Post-merge timeout kills child but never reaps it before setting returncode.",
+      "before": "2 failed",
+      "after": "170 passed including updater family",
+      "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure.",
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],
@@ -238,6 +294,19 @@
       "integrated_behavior": "c825663",
       "source_hashes_match": true,
       "tests": "541 worker-local checks retained; final I validation pending"
+    },
+    {
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "P": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+      "worker_behavior": "aedf7ac",
+      "integrated_behavior": "9e92cfe",
+      "source_hashes_match": true,
+      "tests": "828 semantic passed, Ruff passed; final I pending"
+    },
+    {
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integrated_behavior": "c97df9f",
+      "tests": "408 lifecycle, 109 watchdog/consent, 170 updater/reaping; 197 unchanged cadence-family checks and 8 changed follow-up pass; final I pending"
     }
   ],
   "independent_review": {

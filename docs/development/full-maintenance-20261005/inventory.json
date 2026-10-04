@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 57,
+      "PARTIAL": 89,
       "EXCLUDED": 2,
-      "UNSEEN": 715,
-      "REVIEWED": 54
+      "UNSEEN": 665,
+      "REVIEWED": 86
     },
-    "candidate_tracked": 826
+    "candidate_tracked": 840
   },
   "files": [
     {
@@ -645,6 +645,19 @@
       ]
     },
     {
+      "path": "changes/20261005-semantic-policy-revival.json",
+      "sha256": "cb07c2d5784952379320d308dfb368d1b8e2ff28bed95e74a32c389df75308ee",
+      "bytes": 1133,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
       "path": "changes/README.md",
       "sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
       "bytes": 1390,
@@ -653,7 +666,7 @@
       "kind": "text_asset",
       "status": "PARTIAL",
       "evidence": [
-        "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -662,7 +675,9 @@
           25
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "owner": "root",
+      "reviewed_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11"
     },
     {
       "path": "changes/archive/1.0.10/fix-slack-plugin-import.json",
@@ -2240,6 +2255,71 @@
       "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
     },
     {
+      "path": "changes/maintenance-ingest-boundaries-20261005.json",
+      "sha256": "124479f709c3cba0ba914629211aa96462999bf349c64fd98f1613d119142d85",
+      "bytes": 1514,
+      "lines": 19,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-ingest-cadence-20261005.json",
+      "sha256": "5cf1cb40a192f0d580a0f8caa968a8cca3dd24ee74724f3dafbfb225f5ac46bb",
+      "bytes": 1308,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-ingest-delay-20261005.json",
+      "sha256": "994676c8141df61ad997056c281e471715f6fe93e18f5a768f2f39ed459d0523",
+      "bytes": 646,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-notify-delivery-20261005.json",
+      "sha256": "92413ecea179318f53b632dcc67e85f24b9cd720be1b542a00aa543a6f9bbaa5",
+      "bytes": 1341,
+      "lines": 16,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-notify-display-20261005.json",
+      "sha256": "18c0a6e0071bf33774ee0779e762dd9e51f9720188e3917ddf3177c8d3278865",
+      "bytes": 1000,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
       "path": "changes/maintenance-notify-legacy-urgency-scope.json",
       "sha256": "1471d291fdb0b1f49b6ffcbec8c733bdab8b0757719ca2746263baa19c3e71e2",
       "bytes": 1322,
@@ -2264,6 +2344,45 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
       ]
+    },
+    {
+      "path": "changes/maintenance-restore-consent-20261005.json",
+      "sha256": "81968f9301996b68a5107ff10ef3011469ac7e230662354458acb633df56d223",
+      "bytes": 1019,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-ten-minute-schedule-20261005.json",
+      "sha256": "666acb5c86bc0e7d176e8f70d4cbc67f9925d8fe195a18e21f309b2e80e0c9a3",
+      "bytes": 1172,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-update-child-reaping-20261005.json",
+      "sha256": "cbd8b198cb2811c99e1d73dfbd3f0e4d69e6a3d42431995fc964af45dd1d13a9",
+      "bytes": 863,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
       "path": "ci/gates-coverage.json",
@@ -2480,9 +2599,20 @@
       "lines": 1276,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "a49fbf761a8cbb66817cded8ca281ef65bc7a701a77966f36a1aac753860597c",
+      "read_ranges": [
+        [
+          1,
+          1276
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "deployment/requirements-standalone.txt",
@@ -2513,9 +2643,20 @@
       "lines": 45,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "deployment/scripts/mcs_deep.sh",
@@ -2535,9 +2676,20 @@
       "lines": 10,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "read_ranges": [
+        [
+          1,
+          10
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "deployment/scripts/mcs_llm_catchup.sh",
@@ -2568,9 +2720,20 @@
       "lines": 12,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "docs/README.md",
@@ -3272,6 +3435,19 @@
       ]
     },
     {
+      "path": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "sha256": "eb4e0e21dd3a495aee29425e251c804f82e3fbb36025ffdc527826e9b0d17485",
+      "bytes": 19010,
+      "lines": 531,
+      "module": "docs/development/full-maintenance-20261005",
+      "kind": "run_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
       "path": "docs/development/maintenance-core-evidence.json",
       "sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
       "bytes": 65098,
@@ -3309,6 +3485,19 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
       ]
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "sha256": "c13aef9fdfcb63bfa758e5168e9278382e44b003efff8301c323287858fc3d19",
+      "bytes": 119817,
+      "lines": 2879,
+      "module": "docs/development",
+      "kind": "run_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
       "path": "docs/development/readme-review.json",
@@ -3392,9 +3581,20 @@
       "lines": 190,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "a7a9845fb12ff72aca54952b5de3b0e13b43b35db5fa2c0057e662ea23c8a6d1",
+      "read_ranges": [
+        [
+          1,
+          190
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "docs/guides/USER_GUIDE.md",
@@ -3896,9 +4096,20 @@
       "lines": 320,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "dd49947018da5af7ef7ff1f5e2fd229e40c70dcd15ac8a7c5425bd99291560e7",
+      "read_ranges": [
+        [
+          1,
+          323
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "docs/specs/official-drug-master.md",
@@ -4204,9 +4415,20 @@
       "lines": 1109,
       "module": "install.sh",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
+      "read_ranges": [
+        [
+          1,
+          1109
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "integration/conftest.py",
@@ -5209,9 +5431,20 @@
       "lines": 107,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "c0dbb341d57008e1c000c7efabfbc667b0d15a4aadf8f25a9e0c09fe62bebfe7",
+      "read_ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "mcs/ops/mcs_operations.py",
@@ -5297,9 +5530,28 @@
       "lines": 3466,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "790cb697cf4b0073f093cf4c4ed484c371bed797d4df07867fd1a0661c0423d3",
+      "read_ranges": [
+        [
+          1,
+          865
+        ],
+        [
+          2378,
+          2435
+        ],
+        [
+          2470,
+          2508
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "mcs/ops/mcs_signals.py",
@@ -5336,9 +5588,20 @@
       "lines": 2733,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "c423e5227c467ef7f16703b30df7aafd7491649f7f241b96c8c7478216dd5296",
+      "read_ranges": [
+        [
+          1,
+          2734
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "mcs/ops/request_loops.py",
@@ -5391,9 +5654,9 @@
       "lines": 411,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
@@ -5403,8 +5666,35 @@
           110
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "owner": "semantic",
+      "read_ranges_P": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          411
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          411
+        ]
+      ],
+      "responsibility": "Deterministic source/quantity checks and bounded Jev support/omission audits; coverage and facts-audit PASS/HOLD/REPAIR/REJECT decision.",
+      "callers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_bench.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_bench.py",
@@ -5435,12 +5725,12 @@
       "lines": 2003,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "857c2ce2efd05a36e485fc25e48f5d0fd9ad3fadbf24c2f22396eab455f291cd",
+      "reviewed_sha256": "d30c80e40a8dc07e4d9b33dcd2ece0d2781bcb9a33ab9377ea66b3aec9d78fcf",
       "read_ranges": [
         [
           530,
@@ -5463,8 +5753,59 @@
           1785
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "owner": "semantic",
+      "read_ranges_P": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          890
+        ],
+        [
+          891,
+          1120
+        ],
+        [
+          1121,
+          1340
+        ],
+        [
+          1341,
+          1570
+        ],
+        [
+          1571,
+          1790
+        ],
+        [
+          1791,
+          2003
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1840,
+          1940
+        ]
+      ],
+      "responsibility": "Generation-bound queue worker; audited extraction/coverage/summary and v4 publication; atomic final artifacts/outbox/job commit; bounded scheduling, retries and failed-job revival.",
+      "callers": [
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/extract/v4/extract_llm.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_evaluation.py",
@@ -5484,9 +5825,9 @@
       "lines": 1525,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "7b526453db005923ea739ea36c3325d5a69c3566a66263c3898cfe506ee6d078",
@@ -5496,8 +5837,75 @@
           735
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "owner": "semantic",
+      "read_ranges_P": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          865
+        ],
+        [
+          866,
+          1075
+        ],
+        [
+          1076,
+          1300
+        ],
+        [
+          1301,
+          1525
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          440
+        ],
+        [
+          441,
+          665
+        ],
+        [
+          666,
+          865
+        ],
+        [
+          866,
+          1075
+        ],
+        [
+          1076,
+          1300
+        ],
+        [
+          1301,
+          1525
+        ]
+      ],
+      "responsibility": "Source atom/chunk manifest; resumable LLM extraction; canonical source/evidence normalization; mandatory coverage obligations and conservative repair.",
+      "callers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_llm.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_v4.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_facts.py",
@@ -5506,9 +5914,51 @@
       "lines": 611,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          611
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          611
+        ]
+      ],
+      "responsibility": "Canonical fact/evidence/relation/coverage contract; stable source identities and exact source binding; enum/reference/range validation.",
+      "callers": [
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_projection.py",
+        "mcs/semantic/semantic_relations.py",
+        "mcs/semantic/semantic_extraction.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_jev.py",
@@ -5605,20 +6055,47 @@
       "lines": 160,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "1d3df6a30680c93c6b3458b0611cc8973d7343897fe64bea4ab887e0c310dffa",
+      "reviewed_sha256": "970e6d932b9a975d96ddc12401264ae8438916067c16ccba7a4e99fdf0b8de14",
       "read_ranges": [
         [
           1,
           160
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "owner": "semantic",
+      "read_ranges_P": [
+        [
+          1,
+          160
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          130,
+          167
+        ]
+      ],
+      "responsibility": "Fail-closed configuration and leaf policy constants; interpretation fingerprint distinguishing canonical/shadow fact sources while retaining historical legacy hash.",
+      "callers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_store.py",
+        "mcs/semantic/semantic_metrics.py",
+        "mcs/semantic/semantic_extraction.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/extract/v4/extract_llm.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_projection.py",
@@ -5627,9 +6104,31 @@
       "lines": 361,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          361
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          361
+        ]
+      ],
+      "responsibility": "Deterministic canonical-to-legacy fact/LLM projections; projection-version/hash compatibility; carry canonical subject/source evidence to existing readers.",
+      "callers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_v4.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_qc.py",
@@ -5732,9 +6231,37 @@
       "lines": 284,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "57fcf812101a5ffcf409a237150896e736fba844437f760be7ccc1e8065e6d20",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          284
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          284
+        ]
+      ],
+      "responsibility": "Current thread/source bundle and guarded artifact reads; stale projection invalidation; durable JST daily Jev usage reads.",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_bench.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_metrics.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_v4.py",
@@ -5901,16 +6428,18 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
           1,
-          180
+          190
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "owner": "root",
+      "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35"
     },
     {
       "path": "mcs_standalone/config.py",
@@ -5919,9 +6448,20 @@
       "lines": 240,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
+      "read_ranges": [
+        [
+          1,
+          240
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "mcs_standalone/discord_runtime.py",
@@ -5954,16 +6494,18 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          140,
-          177
+          1,
+          198
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "owner": "root",
+      "reviewed_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc"
     },
     {
       "path": "mcs_standalone/service.py",
@@ -6406,9 +6948,20 @@
       "lines": 35,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166",
+      "read_ranges": [
+        [
+          1,
+          35
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "scripts/mcs",
@@ -6417,9 +6970,20 @@
       "lines": 22,
       "module": "scripts",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "scripts/mcs_upgrade.py",
@@ -6428,9 +6992,20 @@
       "lines": 113,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
+      "read_ranges": [
+        [
+          1,
+          113
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "scripts/run_tests.sh",
@@ -7466,9 +8041,20 @@
       "lines": 258,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
+      "read_ranges": [
+        [
+          1,
+          258
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-1.sql",
@@ -7543,9 +8129,20 @@
       "lines": 92,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
+      "read_ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/ingest/ingest_testkit.py",
@@ -7826,9 +8423,20 @@
       "lines": 1162,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
+      "read_ranges": [
+        [
+          1,
+          1162
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/meta/test_install_sh_standalone.py",
@@ -7837,9 +8445,20 @@
       "lines": 118,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
+      "read_ranges": [
+        [
+          1,
+          118
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/meta/test_integration_guard_load.py",
@@ -7889,9 +8508,20 @@
       "lines": 1443,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
+      "read_ranges": [
+        [
+          1,
+          1040
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/meta/test_mcs_recover_py39.py",
@@ -8924,9 +9554,20 @@
       "lines": 181,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "de797908293db35c75d5c8521b6c962ed1ca8b305cc4f65aa1023bc308267354",
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/ops/test_agent_label_parity.py",
@@ -9254,9 +9895,20 @@
       "lines": 2233,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
+      "read_ranges": [
+        [
+          720,
+          1195
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/ops/test_mcs_setup_doctor.py",
@@ -9342,9 +9994,20 @@
       "lines": 356,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "9ef79915066d3c23f9a2d9ed7bcfdc7a74c2e7276050c14d35eae5d6d06cc575",
+      "read_ranges": [
+        [
+          1,
+          356
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
     },
     {
       "path": "tests/ops/test_receipt_contract.py",
@@ -9356,6 +10019,19 @@
       "status": "UNSEEN",
       "evidence": [],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+    },
+    {
+      "path": "tests/ops/test_recovery_corrupt_receipts.py",
+      "sha256": "73876d0fcbad4afcd993b7a1ebae35ba4735fb18f91218c0764f1f11eae48f08",
+      "bytes": 1428,
+      "lines": 33,
+      "module": "tests/ops",
+      "kind": "source",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
       "path": "tests/ops/test_runtime_compatibility.py",
@@ -9375,9 +10051,46 @@
       "lines": 411,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "root",
+      "reviewed_sha256": "e8fe3a17e0abeeabe3b1efdd28e66f7d00508ec55e39992a522436d7e1184571",
+      "read_ranges": [
+        [
+          1,
+          411
+        ]
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+    },
+    {
+      "path": "tests/ops/test_ten_minute_collection.py",
+      "sha256": "7af37d19c2a47b89db86dc719f6d9d17924cb0bc22a3d41e7da0da02882b2d2f",
+      "bytes": 2227,
+      "lines": 47,
+      "module": "tests/ops",
+      "kind": "source",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "tests/ops/test_update_child_reaping.py",
+      "sha256": "616663001bcdb906bb8ffbd766b73786ac1c9e952e550efd7f7918f0d92b106c",
+      "bytes": 1282,
+      "lines": 34,
+      "module": "tests/ops",
+      "kind": "source",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored file; packet/source or schema consistency validation tracked separately."
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
       "path": "tests/plugin/test_hermes_plugin_mcs.py",
@@ -9452,9 +10165,9 @@
       "lines": 481,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "1adf7a84a321177d7481da9e13191c3537ee8abc46ef6983235ea8cf9850bc42",
@@ -9464,8 +10177,32 @@
           220
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "owner": "semantic",
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          481
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          481
+        ]
+      ],
+      "responsibility": "Fully synthetic temporary ledger/patient/source fixtures and fake LLM/Jev/audit/delivery result constructors; no real-data fixtures.",
+      "callers": [
+        "All semantic test modules importing semantic_testkit"
+      ]
     },
     {
       "path": "tests/semantic/test_canonical_drain.py",
@@ -9474,9 +10211,34 @@
       "lines": 442,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "173cfcc02b46e012854ef969a042493f40933eb4489b6d9c65d5a9cb59df0672",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          442
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          430,
+          482
+        ]
+      ],
+      "responsibility": "Canonical publication, repair/gate outcomes, resource wait idempotency and fact-source switch mandatory rendering.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_canonical_human_review_assets.py",
@@ -9496,9 +10258,46 @@
       "lines": 864,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "7adcce4ecfc88b58914da43b066707dee8b5101dd596bc235c0178a7ef741a8a",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          285
+        ],
+        [
+          286,
+          575
+        ],
+        [
+          576,
+          864
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          285
+        ],
+        [
+          286,
+          575
+        ],
+        [
+          576,
+          864
+        ]
+      ],
+      "responsibility": "Projection compatibility and canonical mandatory clinical/workflow fields; source/evidence binding and current projection gates.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_canonical_request_evaluation.py",
@@ -9529,9 +10328,30 @@
       "lines": 288,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "4996c182160ace49c0e84e61219075a35d56f26c2a3f5b450c8729105910a65b",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          288
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          288
+        ]
+      ],
+      "responsibility": "Legacy/shadow/canonical configuration and audited canonical-fact authority boundaries.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_jev_value.py",
@@ -9551,9 +10371,30 @@
       "lines": 117,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "5aa19e59730ead7237597d326cf3a38a7334ba9540c746c83c9393badcf3db15",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          117
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          117
+        ]
+      ],
+      "responsibility": "Malformed persisted JSON/meta remains fail-closed across current-reader queries.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_mcs_semantic.py",
@@ -9562,9 +10403,50 @@
       "lines": 1717,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "7a2597f224276ced79cef59f86eb82dc3cb1332408baf2ff93e9201794149ac1",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          600
+        ],
+        [
+          601,
+          900
+        ],
+        [
+          901,
+          1200
+        ],
+        [
+          1201,
+          1470
+        ],
+        [
+          1471,
+          1717
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1700,
+          1756
+        ]
+      ],
+      "responsibility": "Legacy worker state/publication and malformed responses, retry bounds, source/member changes and concurrent failed-job revival.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_request_following_generation.py",
@@ -9584,9 +10466,30 @@
       "lines": 142,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "742c491a8afd422cab90f36b171884e2f177f44781f424f2cfa7d5771be5f462",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          142
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          142
+        ]
+      ],
+      "responsibility": "Prior semantic safety/coverage regressions and artifact/source invalidation.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_acceptance_edges.py",
@@ -9628,9 +10531,30 @@
       "lines": 252,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "278990c48c5ab5b6832092041bee845fdb4590b59bfd30f50beea95b34679015",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          252
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          252
+        ]
+      ],
+      "responsibility": "Source atom boundaries, stable manifest identities, overlapping chunk/evidence ownership.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_attachment_context.py",
@@ -9639,9 +10563,30 @@
       "lines": 102,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "81f9569aaee14b8c07fe978c880e0e2d26f9e4cb663ce4cdd0ba32076521947e",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          102
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          102
+        ]
+      ],
+      "responsibility": "Attachment context/source hashes and source-revision-sensitive bundle invalidation.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_bench.py",
@@ -9738,9 +10683,30 @@
       "lines": 60,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "cfd9873077684d3b2d78bc211cf9b32a24f21d9f57f4863e5ccc52bb1e38a211",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          60
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          60
+        ]
+      ],
+      "responsibility": "Summary quantities must be grounded in bound source/facts.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_cli_contract.py",
@@ -9760,9 +10726,30 @@
       "lines": 53,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "7368cb1f9e6bda21596a875e8a91e601516a495e0a0c1e38eb6916d9042795ea",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          53
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          53
+        ]
+      ],
+      "responsibility": "Incomplete coverage retains degraded notice semantics without an invented PASS summary.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_delivery.py",
@@ -9815,9 +10802,30 @@
       "lines": 167,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "151760860e4fbe2f3dba56b0236cd36a41479252d1e991f43ff6be6c4d542376",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          167
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          167
+        ]
+      ],
+      "responsibility": "Resumable bounded chunks, complete/not-complete receipts, source/generation cache fences.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_fact_contract.py",
@@ -9826,9 +10834,38 @@
       "lines": 316,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "9301ff2ebfa67b17cff3cb93a6dcd6910124d88c981f20e8b4d552d4bfaa4b23",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          316
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          316
+        ]
+      ],
+      "responsibility": "Stable canonical identifiers and contract rejection of invalid references/types/enums/source ranges.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_facts_audit.py",
@@ -9837,9 +10874,30 @@
       "lines": 171,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "e0a60bf20a5496579658c893d625ee2d87e0840c2e2c979acc89a9531fd2915f",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          171
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          171
+        ]
+      ],
+      "responsibility": "Canonical fact support/omission, probability shape, threshold and incomplete-coverage audit gates.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_facts_v2.py",
@@ -9848,9 +10906,38 @@
       "lines": 602,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "80e84470d135c73c0537b951d7c694b9be04e67a19f9cb8660e781326f6de02c",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          602
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          602
+        ]
+      ],
+      "responsibility": "Canonical extraction subjects/evidence, category obligations, caches, normalization and coverage completeness.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_fairness.py",
@@ -9859,9 +10946,30 @@
       "lines": 367,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "ca0bf8e815131308fafbc3a70c39198a73b0be50a4ac1b4df07795ea4938eabc",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          367
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          367
+        ]
+      ],
+      "responsibility": "Bounded fresh/backlog lane scheduling and fairness state persistence.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_feature_modes.py",
@@ -9870,9 +10978,30 @@
       "lines": 63,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "30351cf4ad4a96a16b37ceeaaa3a24bfb9c76d70da589af848652fbf16a5bf45",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          63
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          63
+        ]
+      ],
+      "responsibility": "Off/shadow/enforce configuration and publication-mode compatibility.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_input_contract.py",
@@ -9881,9 +11010,30 @@
       "lines": 98,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "6002d73467ac68778fcd9109a6c8a4ce0ccaf49ab44821165a99d0079f829f6b",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          98
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          98
+        ]
+      ],
+      "responsibility": "Source prelude/context and model input contract; source remains data and source fields remain bound.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_jev_contract.py",
@@ -9958,9 +11108,30 @@
       "lines": 214,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "de2aff83b223ea943b7e78bc6bb2eb7be76f57208ad2c18da4d6ffd5bf21b4dd",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          214
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          214
+        ]
+      ],
+      "responsibility": "Mandatory fact lines/IDs and page provenance survive canonical summary formatting.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_manual_retry.py",
@@ -10035,9 +11206,30 @@
       "lines": 89,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "4d3640a77209103f013eeb4e58214b9620bed63944c14abb69afc15614ea50a3",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          89
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          80,
+          144
+        ]
+      ],
+      "responsibility": "Policy/source generation invalidates old summaries and unsent intents; legacy hash compatibility and both source-switch directions.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_quantities.py",
@@ -10068,9 +11260,30 @@
       "lines": 273,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "35b6f484958d02b47fb61c0d54a483838a6940bbb7fb655527e8ed112090e096",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          273
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          273
+        ]
+      ],
+      "responsibility": "Conservative chunk/category repair, rejection removal and open obligations without silent complete coverage.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_repair_recovery.py",
@@ -10079,9 +11292,30 @@
       "lines": 39,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "e984229783d1f5a57b69898c67175f226099bce0958b6b74bfc69f5707fd9e2f",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          39
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          39
+        ]
+      ],
+      "responsibility": "Retry recovery retains repair receipts without false publication.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_runtime.py",
@@ -10112,9 +11346,30 @@
       "lines": 76,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "706914ea1810f2fd2670a64a4c450405c02622af3688efb16c1940305877489d",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          76
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          76
+        ]
+      ],
+      "responsibility": "Project scope/config edges and semantic reentry eligibility.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_send_gate.py",
@@ -10134,9 +11389,30 @@
       "lines": 23,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          23
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          23
+        ]
+      ],
+      "responsibility": "Import/entry facade compatibility smoke.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_store.py",
@@ -10145,9 +11421,30 @@
       "lines": 93,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full P-content read and exact P/W diff reuse; all changed lines reviewed in worker and parent patch. 20 criteria and local 828-pass checks recorded; final-I and independent review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "owner": "semantic",
+      "reviewed_sha256": "583cc6a09f4c466992e3dbf59f36bb671845932dbbd10634b031b6d8c9cee4c2",
+      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "read_ranges_P": [
+        [
+          1,
+          93
+        ]
+      ],
+      "reconfirmed_ranges_W": [
+        [
+          1,
+          93
+        ]
+      ],
+      "responsibility": "Current artifact identity and source revision/fingerprint contract.",
+      "callers": [
+        "pytest via scripts/run_tests.sh; direct owned-module/facade consumers"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_tick_budget.py",
