@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "通知の送信余白と復元後の配送保留を統一",
+  "summary": "テキスト通知は残り30秒未満で送信やin-flight予約を開始せず、再試行回数を消費しません。復元中は本文通知を止め、照合後も配送済みか確認できない復元テキストを保留するため、DBの巻戻りによる重複再送を防ぎます。",
+  "upgrade": "Hermes pluginの反映は既存のgateway再起動手順に従ってください。復元テキストの保留は自動解除しません。配送先での個別確認とオーナーの復旧方針が必要です。alertの結果不明時の自動再送は従来どおり行わず、カードのscoped receipt・grant・解除経路は変更しません。",
+  "details": [
+    "送信下限は30秒、既存の通信上限180秒を維持。各chunkと添付拒否後のtext-only再試行で再確認する。",
+    "send_budget_insufficientとrestore_pendingをflush結果で区別し、結果不明と復元テキストの安定理由を既存progressに保存する。health.notify.held_reasonsは既知理由の件数だけを返し、不明値や自由文は出力しない。スキーマ変更は行わない。",
+    "restore_text_unverifiedはrestore_reconcile.jsonにも記録し、ops.card_resolveの権限をtextへ拡張しない。",
+    "session_expired・session_recovered・run_failed・update_noticeは復元中も既存経路で配送する。at-least-onceへの変更と既存heldの解除方針は未確定のため採用しない。",
+    "復元時点より後に作られたtext通知は隔離せず、復元照合が完了するまで送信を待機して自動で再開する。",
+    "復元中に待機する本文通知は再試行回数を消費せず60秒ずつ次回取得を後ろへずらし、待機中の本文通知が10件以上あっても後続のalertが取得枠から押し出されないようにする。",
+    "送信開始後に結果が確認できない通知は、種類を問わず本文の再生成前に保留する。元のシグナルや添付が閉じていても、患者がアーカイブ済みでも破棄せず、結果不明の記録を残す。",
+    "コマンド結果ファイル(cmd_results)の定期削除は名前順ではなく古い順に対象を選び、7日を過ぎたファイルが削除されずに残り続けないようにする。"
+  ],
+  "refs": [
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_reconcile.py",
+    "mcs/notify/notify_cards.py"
+  ]
+}

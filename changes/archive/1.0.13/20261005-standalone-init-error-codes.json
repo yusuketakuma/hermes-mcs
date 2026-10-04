@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "独立実行の初期設定・確認で失敗理由のコードを表示するよう修正",
+  "summary": "独立実行のinitでトークンを打ち間違えた場合や、checkでLINE WORKSの鍵権限・送信先の設定に問題がある場合、これまでは『failed ValueError』などの型名だけが表示され原因が分かりませんでした。standalone_credentials_invalidなど、秘密値を含まない固定の理由コードを表示するようにしました。",
+  "upgrade": "追加操作は不要です。終了コードは従来どおり1です。",
+  "details": [
+    "mcs_standalone initのconnector_settings・validate_credentialsと、checkのtransports・LINE WORKS確認が出す固定コードのValueError/ClientErrorだけをConfigErrorに変換して表示する。それ以外の例外は従来どおり型名のみ。",
+    "checkと起動時の確認も接続処理と同じconnector_settingsで操作者・ロールの許可設定を検証する。10進数でないロールIDや前後に空白のあるユーザーIDは、これまで確認をOKで通過して接続後に失敗し再起動を繰り返していたが、確認の段階でstandalone_grants_invalidとして停止する。"
+  ],
+  "refs": [
+    "mcs_standalone/__main__.py"
+  ]
+}

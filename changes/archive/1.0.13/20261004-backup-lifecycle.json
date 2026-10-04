@@ -1,0 +1,25 @@
+{
+  "category": "added",
+  "title": "バックアップ鍵のエスクローと新端末への安全な復元",
+  "summary": "明示した人のエスクロー操作で専用Keychainへ鍵を作成し、既存鍵・既存記録の置換を拒否します。復元は新しい私有ディレクトリだけに行い、DB配置前に人の同意待ちマーカーを保存します。オフサイト・検証・訓練・復元の結果をローカルに永続記録し、秘密値を表示しないstatusで確認できます。",
+  "upgrade": "適用前にdocs/guides/BACKUP.mdで全必須policy、保存許可・媒体、端末外の鍵と独立SHA receipt、保持・RPO・平文scratchの保管/清掃・OS OpenSSLの利用方針を確認してください。私有の--state-dirと0600のpolicyが必要で、定期実行はconfig.json.backup.enabledとpolicyのboolean scheduled=trueの両方を明示した場合だけ有効です。設定・health・定期job所有の合成検証は完了していますが、実機反映・鍵の外部保管・復元訓練・稼働再開の人のreason/receipt/照合は別途必要で、既存の更新/rollback用restore承認を汎用解除に流用しません。",
+  "details": [
+    "backup.enabled=trueはpolicy・snapshotまたはsnapshot_dirのどちらか一方・毎日のschedule（複数時刻可）・verify_interval_s・drill_interval_sを必須とし、保存先・閾値・保持の既定値を補いません。servicesは任意jobをHermes cronへ渡し、独立runtimeは同じjobを単一host内で所有します。既定6jobと共有jobは保持します。",
+    "healthは秘密値やreceiptの私有パスを出さず、バックアップ失敗・復旧点のRPO超過・検証/訓練の証拠欠落と期限超過を表示します。keygenで表示しただけでは端末外の鍵保管を確認したことにはなりません。",
+    "鍵は正確に32バイト、Keychainはmcs-backup serviceで、既存のstdin-only保存とread-back/rollbackを再利用します。.envや環境変数から鍵を取得しません。",
+    "encrypt-then-MAC、別途信頼したSHA-256 receipt、固定OS OpenSSL、私有ディレクトリのidentity pin、容量上限と手動保持方針を維持します。",
+    "backup_state.jsonとdrills/*.jsonは0600で原子的に書き込みます。鍵の作成途中の失敗は秘密値のないpending記録を保持し、再試行で既存鍵を置き換えません。",
+    "定期wrapperは静的な日次バックアップだけを対象とし、更新中は起動せず、鍵・DB内容・子プロセス出力をstdoutへ転記しません。新しい転送サービスや自動削除は追加しません。",
+    "policyのscheduledが文字列・整数・nullなど真偽値以外の場合、offsite --scheduledは無効扱いの正常終了にせずbackup_policy_requiredで失敗します。offsiteの失敗は試行時刻とともに別に記録し、後続のverifyやdrillが成功してもstatusとhealthのバックアップ失敗表示は次のoffsite成功まで残ります。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs_standalone/runtime.py",
+    "deployment/scripts/mcs_offsite.sh",
+    "tests/ops/test_mcs_backup.py",
+    "tests/ops/test_backup_scheduler.py",
+    "docs/guides/BACKUP.md",
+    "SECURITY.md",
+    "docs/specs/lifecycle-spec.md"
+  ]
+}

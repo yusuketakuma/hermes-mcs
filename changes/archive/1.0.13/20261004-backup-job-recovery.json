@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "任意バックアップジョブの復旧時所有権を保護",
+  "summary": "復旧時のcron退役をmanifestのID・Script一致または既知wrapperの正規identityに限定します。mcs_offsite.shを既知ジョブとして扱い、名前だけが似た共有cronを削除しません。",
+  "upgrade": "既定6ジョブは変更しません。任意backupは明示enabledと復旧先wrapper templateがある場合、または復旧snapshotで希望された場合に保持します。退役には所有証拠が必要です。standaloneは既存hostへ委譲し外部schedulerを追加しません。repo外に配備したrecoveryへの反映は別のオーナー作業です。",
+  "details": [
+    "現在のservice_manifestと復旧snapshotのID・Scriptを照合します。別pathへ変更された同名ジョブや、所有根拠のないmcs_接頭辞ジョブは削除しません。未知のbackup意図は診断して所有ジョブを保持します。",
+    "disabledまたは旧復旧先にtemplateがない任意ジョブは、所有根拠がありsnapshotでも希望されていない場合だけ退役します。offsiteを外部calendar agentの既定希望集合へ追加しません。",
+    "暗号化・Keychain・offsite処理は起動しません。既存の更新marker・復旧同意・owner receipt/reasonの契約を保持します。",
+    "合成job一覧・temp manifestだけで検証します。実hostの一覧・停止・cron退役・repo外recoveryの配備と、updater側の同型所有境界の統合は別途確認が必要です。"
+  ],
+  "refs": ["deployment/recovery/mcs_recover.py", "tests/meta/test_mcs_recover.py"]
+}

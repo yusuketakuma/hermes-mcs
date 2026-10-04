@@ -6,7 +6,8 @@ knowledge store — **disabled by default**. No connector, endpoint,
 credential, auto-sync job or cloud dependency is shipped. The only
 implementation is `mcs/ops/ext_contract.py`, which demonstrates the
 contract against `LocalSink`, an in-process fake consumer backed by a
-directory.
+directory, and `HandoffSink`, a local staging directory that never
+acknowledges its own delivery. Both are manual local paths, not connectors.
 
 ## Authorization (`mcs-ext-auth/1`)
 
@@ -70,7 +71,63 @@ Missing values remain unknown, and omitted fields must not be interpreted as
 zero or as evidence of no clinical event. Machine records are complete JSON
 objects of this aggregate projection; they are never byte-sliced.
 
-## Delivery outcomes — honest three-state
+## Explicit C1 envelope (`mcs-ext-export/2`)
+
+`/1` bytes, hashes, IDs, intents, default grants and journals are unchanged.
+`/2` is selected only by `--c1` and an authorization whose `fields` lists
+exactly the seven C1 types (`meta`, `coverage`, `message`, `message_body`,
+`patient_coverage`, `signal`, `signals_truncated`), `patients: "all"`,
+`max_snapshot_age_s <= 3600` and `retention_days <= 30`; a missing `fields`
+refuses with `auth_fields_required`. Human confirmation, reason, expiry and
+revocation are checked as for `/1`, again at send time.
+
+- Canonical JSON (`c1_contract.canonical_json`) sorts keys by code point,
+  writes integral numbers as integers and other floats in fixed notation,
+  and refuses NaN/Infinity, |x| >= 1e21, 0 < |x| < 1e-6 and integers outside
+  the safe range. It is a restricted subset, not arbitrary RFC 8785.
+- `message_body` pairs one `body_state: full` message in the same part:
+  `body_text` (UTF-8 <= 8,192 bytes, truncated on a character boundary with
+  `body_truncated: true`), `body_format: text`, `body_sha256` of the sent
+  bytes and `sender_kind`. Only the root `body_text` of this record is
+  exempt from the forbidden-key scan.
+- `patient_coverage` has one row per source patient: `fetch_state`
+  (`pending`/`complete`/`incomplete`), `coverage_ts` (verified upper bound or
+  null) and `history_floor` (null = no completed walk, 0 = from the start,
+  positive = lower epoch; a window raises it to the window start).
+- Split envelopes carry `part: {index, count, set}`. Records hashes come
+  first, then `set` = hash of the index-ordered records hashes, then the ID.
+  The `/2` ID and intent bind contract version and part, so `[A][B,C]` and
+  `[A][B][C]` never share an identity. Unsplit envelopes omit `part`.
+- Wire bytes are capped at 1,048,576 before parsing.
+
+`sender_kind` stays `unknown` unless `--classify-senders` is given with a
+snapshot. Then: the resolved self sender ID or an explicitly configured
+`signals.self_organizations` match is `self_org`; otherwise a single mapped
+profession is `physician` (医師), `nurse` (看護師) or `care_manager`
+(ケアマネ/ケアマネジャー/介護支援専門員); any other or mixed profession —
+including our own profession at another organization — is
+`other_professional`; no recorded profession is `unknown`. A profession
+alone never yields `self_org`. `patient_family` is reserved: no recorded
+sender attribute grounds it today. Counterpart agreement on this mapping
+is still required before production use.
+
+### C0 golden fixtures
+
+`tests/ops/ext_fixtures.py` regenerates `tests/ops/fixtures/ext_contract_c0/`:
+12 accepted cases (05 is a three-part set), 23 rejected cases, one
+generated-only oversize case (15, never committed), 6 receipts and 4
+withdrawal directives, with expected codes in `index.json`. Every rejected
+envelope has one defect and is rejected with the same code by the producer
+validator, the wire parser and the reference receiver. The pin has three
+layers: in-envelope hashes/IDs, `MANIFEST.sha256` (`shasum -a 256 -c`
+compatible) and the fixture set ID, the SHA-256 of that manifest:
+
+`0366f232e9d8aa1e84ab89ecee7612628589839db989726df902b192f71755e8`
+
+The counterpart repository must record the same ID. That joint agreement,
+real receipt and production acceptance are not established by these tests.
+
+## Delivery outcomes
 
 `GovernedExporter.deliver()` journals per `envelope_id`:
 
@@ -91,7 +148,68 @@ the stored payload's integrity. Corrupt journals refuse delivery.
   sink: a matching stored payload and receipt reconcile to `acked` without
   retransmission; absent or unverified payload/receipt stays held for a human.
 - `refused` — authorization/scope/field violation. Audited, nothing sent.
+- `rejected` — a matching explicit rejection receipt. Terminal; later
+  accepted receipts or another delivery call cannot turn it into success.
 - `withdrawn` / `delete_held` — see below.
+
+## Receipts and manual handoff
+
+`parse_receipt()` validates `mcs-ext-receipt/1` without accepting unknown
+fields. A receive receipt has `status: accepted` or `status: rejected`;
+pending and absent status are not success. Accepted receipts bind the
+envelope id, records hash and count, with per-type counts that sum to the
+total. Rejections carry bounded machine reason codes, not free text.
+Delete receipts explicitly report `deleted: true` or `false`; false
+retains `delete_held`.
+
+`GovernedExporter.import_receipts(path, sink)` accepts a JSON receipt,
+NDJSON bundle or local directory. It validates the whole input before
+import, then checks the journal's sink and intent bindings. `HandoffSink`
+stages a local envelope and returns no self-ack. An independently obtained
+matching receipt can settle it without another send; terminal receipt
+import removes the local staging payload and retains the journal/audit.
+Removal of a staging copy is not evidence of deletion at a real receiver.
+
+The exact historical LocalSink receive/delete shapes remain compatible
+for already bound journals. An unbound old journal is not automatically
+given a new identity, authorization or sink. `/2` journals additionally
+bind the contract, part and per-type counts; a `/2` receipt settles only
+with matching per-type `accepted` counts. The external receiver's
+acceptance remains a separate, unfinished agreement.
+
+## Manual local CLI
+
+The entrypoint is `python3 mcs/ops/ext_contract.py`. Paths are explicit;
+there is no implicit private configuration, endpoint or scheduled send.
+
+| Subcommand | Inputs | Result |
+|---|---|---|
+| `deliver` | `--auth --records --state --sink`; optional `--sink-kind local\|handoff` | The default LocalSink is a fake consumer, not an external upload |
+| `handoff` | `--auth --state --sink` and `--records` or (with `--c1`) `--snapshot`; `/2` options `--only-with-facts --since-days N --max-bytes --classify-senders --dry-run`. No arguments reads the private `ext_export` profile | Writes local staging, returns `held / ack_unknown`, never self-acks |
+| `reconcile` | `--state --sink` and exactly one of `--envelope-id`, `--all`, `--receipts` | Imports independent JSON/NDJSON/directory receipts or checks the existing journal |
+| `withdraw` | `--state --sink` and `--envelope-id` or `--generation`; `--reason` | A handoff stages `withdrawals/<id>.json` and stays `delete_held` until a delete receipt arrives |
+| `health` | `--state`; optional `--auth --sink --max-entries` | Read-only counts, fixed reasons and ages; no actor, payload text or secret values |
+| `receive` | `--receiver-root --source-label`; `--input` with a new `--receipts-out` | Synthetic `/2` reference receiver: writes an NDJSON receipt bundle and reports receiver diagnostics separately |
+| `link-hints` | optional `--snapshot --limit --cursor` | Hermes local terminal only; never a file or wire output |
+
+`reconcile` and `withdraw` default to `--sink-kind handoff`; use `local`
+explicitly for the fake consumer. Successful settlement exits 0; refusal
+or rejection exits 1; unresolved reconciliation, withdrawal or health
+exits 2. Creating handoff staging exits 0 while still reporting `held`;
+exit 0 does not mean that an external receiver accepted it.
+The old four-flag invocation without a subcommand remains supported,
+including its exit 1 for a held LocalSink delivery.
+
+Health defaults to 1,000 journal entries, permits at most 10,000, and
+reads at most 64 KiB per file. Missing, malformed or truncated evidence
+is unknown, not healthy. Optional sink checks establish local payload
+presence only, not the external receiver's integrity or receipt.
+`receive` turns contract refusals into terminal `rejected` receipts (or
+`deleted: false` for a refused directive) and exits 2; receiver storage
+faults write no receipt, so the sender stays held. Its transport tally is
+never a claim that a collection is complete or current; the receiver's own
+diagnostics report that separately. It is a local reference, not the
+counterpart's encrypted staging.
 
 ## Withdrawal and deletion propagation
 
@@ -104,6 +222,16 @@ unknown outcome only reconciles the receipt; it does not send another delete.
 A late deletion receipt can settle `delete_held` to `withdrawn`. Reconciliation
 never turns a withdrawal back into delivery success. Envelope ids are validated
 before any journal, payload or receipt path is constructed.
+
+For a handoff sink the directive is `mcs-ext-withdraw/1`: exactly
+`contract`, `envelope_id`, `auth_id` and a `reason` code
+(`operator_request`, `authorization_revoked`, `content_correction`,
+`generation_set_conflict`), no free text, at most 4,096 bytes, written
+atomically to the outbox. Staging cleanup (`discard`) never creates a
+directive. `withdraw --generation` expands one generation from the durable
+journal, not from the outbox, one directive per envelope (per part). A
+directive arriving first leaves a tombstone that rejects the later
+envelope; withdrawing one part leaves that set partial at the receiver.
 
 ## Audit
 

@@ -97,7 +97,7 @@ HEADは開始時と同じ `830496a0e5d6b33c28276c74311aaa93825590e8`。
 Linuxのネイティブsystemd解析と実サービス稼働も未検証。
 バグが一切ないことをテスト結果から保証するものではない。
 
-更新時は [導入手順](../LINEWORKS.md)に従い、LINE独立プロセスのcheckと再起動を行う。
+更新時は [導入手順](../guides/LINEWORKS.md)に従い、LINE独立プロセスのcheckと再起動を行う。
 Slack/Discord変更は対象Hermes gatewayへ再起動で反映する。
 実サービスを今回再起動したという意味ではない。
 共有記憶は先行作業でTransport closedとなったため、保存成功を主張せずローカル記録を保持する。

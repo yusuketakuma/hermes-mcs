@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "本文を残さない編集・削除の観測履歴",
+  "summary": "保存済みの完全本文から編集・削除を観測したとき、前後のhashと観測時刻だけを記録します。過去の本文を別表へ保持せず、未取得本文や同一内容の再取得は編集とみなしません。",
+  "upgrade": "message_revisions表を既存DBへ追加します。導入以前の編集は復元できず、API上の編集時刻や未観測の変更回数も保証しません。新しい本文保存と履歴は同じトランザクションに含まれます。",
+  "details": [
+    "full/deleted間でhashが変わった場合だけ連番で記録する。",
+    "旧hashがNULLの行は履歴対象外とし、snippetで完全本文を上書きしない。",
+    "snapshotにはhash履歴だけが含まれ、外部messageの論理キーとpayload契約は変更しない。",
+    "連番と直前hashは挿入文の中で最新の履歴行から決め、書込みが重なっても観測した編集を取りこぼさず、同じ編集を二重に記録しない。"
+  ],
+  "refs": ["mcs/core/ledger.py", "tests/core/test_message_revisions.py"]
+}

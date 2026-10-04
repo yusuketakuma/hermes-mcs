@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "/mcs の状況要約が操作カード未起動の環境で失敗する問題を修正",
+  "summary": "Hermes の /mcs コマンドで状況要約（op=summary）を求めたとき、Slack・Discord の操作カードが起動していない環境や起動前の呼び出しでも、operation_failed にならず要約を返します。",
+  "upgrade": "追加操作は不要です。Hermes plugin の反映には gateway 再起動が必要です。",
+  "details": ["plugin がファイル位置から読み込まれた場合も、要約で使う共通 adapter を読み込めるようリポジトリ直下を import 経路へ加える。"],
+  "refs": ["hermes_plugin/__init__.py"]
+}

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "アーカイブ済みの部屋で処方期間のシグナルが残る問題を修正",
+  "summary": "ケアが終了してアーカイブされた部屋でも、期間表現の終了間近・終了後のシグナルが確認一覧や書き出しに表示され続けていました。他のシグナルと同じくアーカイブ済みの部屋を対象外とし、既存の未対応シグナルはアーカイブを理由に解消されます。",
+  "upgrade": "追加操作は不要です。既定値・設定は変わりません。",
+  "details": ["rx_period_expiryとrx_period_lapsedの検出でアーカイブ済みの部屋を除外し、既存のopenはproject_archivedとして解消。med_period_artifactsは統計と共有のため変更なし。"],
+  "refs": ["mcs/ops/mcs_signals.py", "tests/ops/test_mcs_signals.py"]
+}

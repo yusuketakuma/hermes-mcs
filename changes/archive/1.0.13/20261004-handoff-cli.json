@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "集計exportの手渡しとreceipt照合を手動CLIで操作",
+  "summary": "既存の集計exportにdeliver・handoff・reconcile・withdraw・healthのローカル手動コマンドを追加しました。handoffは受領ackを自作せずheldを表示し、単一JSON・NDJSON・ディレクトリのreceiptをreconcileで照合できます。healthは件数・状態・固定理由だけを有界に読取り、本文・actor・秘密値を表示しません。",
+  "upgrade": "旧 --auth --records --state --sink の呼出しとLocalSinkの合成自己ackを維持します。handoffには同じ4入力を明示し、reconcileとwithdrawはstate・sinkを明示します。新しいhandoffの受領待ちは終了コード0とheld表示、reconcile/withdrawの未確認は2、拒否は1です。既存の認可・数値canonical・hash・envelopeを変更せず、実受信側との接続やC0/C1全体の受入を意味しません。",
+  "details": [
+    "reconcileは --envelope-id / --all / --receipts のいずれかを使い、receiptのstrict parserと既存journalへの束縛を維持します。",
+    "healthはwriter・sink constructor・lock・audit更新を使いません。journalの既定上限は1000項目、ファイルは64KiBで、途中打切りや破損は完全な件数として扱いません。",
+    "本文・患者別coverage・分割/profile・数値正規化・link-hints・引数なしconfig導線・撤回指示書wire・実受信側の動作は残る契約・実装前提です。"
+  ],
+  "refs": ["mcs/ops/ext_contract.py", "tests/ops/test_ext_contract_cli.py"]
+}

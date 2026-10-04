@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "グループ相談の取得種別と公開状態を保護",
+  "summary": "相談一覧の取得前と各ページで保存済みgroup種別を確認し、取得中の種別変更は完全取得として保存しません。snapshotの種別と保存scopeが一致する相談メタデータだけを読み、取得上限・snapshot不足のpartial、失敗、古い履歴、完全な空集合、不明を分けます。",
+  "upgrade": "GET・定期取得・公開の既定offは維持します。既存sessionと明示取得、公開には既存publicationオプトインが必要です。旧project-metadata/1のgroup scopeは根拠として維持し、任意の保存project_typeがある場合は矛盾を拒否します。患者への関連付け、臨床完了判定、相談詳細・返信取得、既読化、session更新は追加しません。実APIの受入完了は主張しません。",
+  "details": [
+    "汎用fetch_metadataもconsultationsではproject_type=groupを必須にし、既存fetch_group_consultationsから確認済み種別を渡す。公開クライアント根拠はmcs-api-surveyのgroup条件とstampsの共通GET条件。",
+    "既存page/per_page/include_paginate_totals、server timestamp固定、重複ID・件数・終端検証、上限、no_extend_session=1、no-proxy/no-redirectと最小allowlistを再利用する。",
+    "明示syncは各GET前と保存前にinventoryを再確認し、scope_changedはrowsを残さない失敗として既存artifactへ耐久保存する。partialも途中行を公開せず、直前の完全取得だけをhistoricalとして区別する。",
+    "group readerはsnapshot inventory、artifact scope・任意project_type、bool complete、取得時刻、成功とエラーの矛盾を検証する。患者関連付けは常にunknownで、include_chatの臨床比較経路は変更しない。",
+    "合成adapter→実HTTP worker→偽remote opener→実artifact capture→publish_snapshot→LedgerReader/Viewを検証し、相談本文・返信本文・氏名・写真・連絡先や推測patientを保存・表示しない。",
+    "取得側tests/ingest/test_group_consultations.pyと読取り側tests/views/test_group_consultations_view.pyを別名で保持する。pyproject.tomlの既定prepend modeを変更せず、通常runnerで同名moduleの衝突を避ける。",
+    "実APIのgroup利用数、権限/404の原因、非空/空一覧、更新中完全性、未読保持とsession非延長、患者との安全な関連付けは未確認として維持する。group応答にtype echoや相談詳細・返信経路の保証を仮定しない。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/views/project_metadata_view.py",
+    "tests/ingest/test_group_consultations.py",
+    "tests/views/test_group_consultations_view.py"
+  ]
+}

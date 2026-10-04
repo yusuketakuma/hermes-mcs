@@ -1,0 +1,24 @@
+{
+  "category": "added",
+  "title": "復旧用Pythonを明示して独立配置を維持",
+  "summary": "初回導入の --recovery-python と mcs setup init --recovery-python で、既存の独立したPythonの絶対パスを私有configの recovery_python に保存できます。保存前に選択先のPython 3.9以上とSQLiteのWAL修正を検証し、更新されるチェックアウト内の実行ファイルは拒否します。doctorは希望する設定と実際に配置された復旧ジョブを分けて報告し、設定だけ安全でも未修復のジョブを正常扱いしません。",
+  "upgrade": "未指定時の既定は /usr/bin/python3 のままです。代替実行ファイルの自動選択・インストール・復旧ジョブの自動有効化は行いません。変更する場合は利用者が既存の安全な絶対パスを指定してください。既存ジョブと選択が異なるinstallerは書込み前に停止するため、mcs setup init --yes --recovery-python に絶対パスを付けて希望を保存し、所有権が確認でき、実行中でない状態で mcs setup services を使って修復してください。1.0.12以前からの更新では、config.json に recovery_python を手で追記してから plan を再実行し、reinstall経路は --install-arg=--no-recovery を付けてapplyしてください。所有済みで停止中のjobはmerge後のservicesが置き換えます。実機への適用・Python更新・配備は別途承認が必要です。",
+  "details": [
+    "選択先は現在のrepoとupdaterの更新対象treeの外に限定する。環境変数による復旧用パスの暗黙取得はしない。",
+    "Programが指定されたplistではProgramArgumentsへフォールバックせず、その実行先を検証する。",
+    "servicesの修復は同一利用者の私有復旧ディレクトリ、repo_path、専用Labelと引数を確認し、既知の待機状態とupdate/runの排他ロックを要求する。",
+    "停止中の既存ジョブは停止状態を維持する。稼働状態が不明・実行中・所有権不明ならplistを変更しない。再起動失敗時に古い危険な実行先へ戻さない。",
+    "日本語の公開設定APIは recovery_python、initと初回installerのフラグは --recovery-python。既存のmode保存とatomicな0600 config/plist発行を維持する。",
+    "未指定で配備済みの復旧ジョブが安全でない場合、update planはmerge前にrecovery_runtimeを阻害要因として示し、notesに手順を出す。applyはmergeせずに停止する。",
+    "所有済みで停止中のジョブと明示した安全な選択との不一致はmerge前に止めず、merge後のservicesが修復する。post-mergeの子プロセスは、親が保持するupdate/runロックを、journalのshaと一致するhandshakeで確認した場合だけ受け入れる。",
+    "backupまたはwatchdog_grace_sが不正な設定では、setup check・setup services・update plan/applyがtracebackで落ちず、config: ... を阻害要因として報告する。",
+    "initはrecovery_pythonの検証をKeychainと.envへの書込みより前に行う。wizardで値が変わった場合は再検証し、config.jsonを書かない。",
+    "Python 3.11-3.13が未導入でHomebrewが使える新しいMacでは、install.sh --preflight/--dry-runが復旧用Pythonの確認を阻害要因にせず、stage 6で確認する旨の警告にする。--recovery-python指定時は従来どおり阻害要因とする。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "install.sh",
+    "deployment/launchagents/org.mcs.recovery.plist"
+  ]
+}

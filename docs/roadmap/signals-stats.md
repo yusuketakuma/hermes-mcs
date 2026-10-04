@@ -1,12 +1,26 @@
 # シグナル・統計の詳細計画（#12〜#14・#17〜#19）
 
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+### 2026-10-04追記: #19の内部観測
+
+[mcs_signals](../../mcs/ops/mcs_signals.py)は記録上の解消原因・再open・却下後の
+同一根拠抑制を保持し、[mcs_stats](../../mcs/views/mcs_stats.py)の明示選択
+`signal_feedback`で分母付き内部統計を出します。既存export presetには追加しません。
+これは診療・対応完了や精度・再現率の計測ではなく、人手ラベル・`human>=200`・
+校正・privacyの受入を代替しません。初期調査とD判断は保持します。
+緊急度の後追い通知は統合検証中であり、この追記では受入済みとしません。
+
 [`docs/ROADMAP.md`](../ROADMAP.md) の #12 緊急度エスカレーション、#13 日次 digest、#14 変更エピソードの紐付け、#17 職種間やり取りの構造と応答時間、#18 業務負荷レポート、#19 シグナル精度のフィードバックの詳細計画。
 
 2026-10-03照合: 以下の「現状」・行番号・実測・節番号は2026-09-29の調査記録。
 現在の版割当・公開条件は[ROADMAP](../ROADMAP.md)を正とし、末尾の全体着手順は上書きしない。
 #13の基本日次digestは`notify_digest.build_text/maybe_enqueue`と`run_check._deliver`に実装済み。
 1.0.11は本人反応件数、1.0.12は#25の一覧を既存digestへ追加する。下記の新規digest・cron提案を重複実装しない。
-F-2のルール緊急度問題は1.0.15で是正予定。#17は1.0.13、#14/#18/#19は未割当で未決判断を今回実装しない。
+F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、冒頭の追記参照）は1.0.13、
+#14/#18は未割当で未決判断を今回実装しない。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
 - 表記: 【実行確認】= 合成入力で実行して確認、【未検証】= 実データ・実機・実 API に触れないと分からない点。
@@ -21,7 +35,10 @@ F-2のルール緊急度問題は1.0.15で是正予定。#17は1.0.13、#14/#18/
   2. #13 の「open シグナル」を既定の digest tier のまま出すと、依頼・期限系の 3 型が入り、「期限・予定・依頼は含めない」と矛盾する。
   3. #17 の `text_candidates` を埋めると、export allowlist（`export_schema.py:85`）により brain_export が全体失敗する。
   4. #18 の `comm_concentration` は stat ではなく signal。`doc_burden` / `workload` はどの preset にも入らず、定期出力は皆無。
-  5. #19 は現データでは再 open 率以外を算出できない（却下理由は自由文、採用・解決原因の記録なし、digest カードに却下ボタンなし）。
+  5. ~~#19 は現データでは再 open 率以外を算出できない（却下理由は自由文、採用・解決原因の記録なし、digest カードに却下ボタンなし）。~~
+     2026-10-04訂正: 2026-09-29時点の記述で現状と異なる。却下は任意の`reason_code`を`dismiss_reason_code`として保存し
+     （未指定の旧データは自由文のみのまま）、`signal_feedback`が記録上の解消原因・再open・理由別件数を分母付きで集計する（冒頭の追記と#19「現状」参照）。
+     採用関係・人手ラベル・digestの却下UI（#19-D1）は残件。
 - 推奨順: #19（ラベル基盤）と #12a（表示）を並行 → #13 → #12b（shadow → on）→ #18 → #17 → #14（#11 と #19 のデータ蓄積後）。
 
 ## 1. 共通制約（全項目に効く）
@@ -304,16 +321,19 @@ F-2のルール緊急度問題は1.0.15で是正予定。#17は1.0.13、#14/#18/
 
 **目的**: シグナルの実際の有用性を、内部の人手行動だけで評価し、閾値・文言を人が見直す材料にする。検知条件への自動フィードバックはしない（`mcs_signals.py:14-17`）。外部送信なし、zaitaku-calender への逆流なし（ROADMAP §6）。
 
-**現状**
-- `signal_v1` は append-only。open / superseded / resolved / dismissed が各 1 行（`meta.key`、`created_at`）。open 更新は `mcs_signals.py:887-910`。resolved（条件消失）は :911-926 で、**原因を記録しない**。dismissed は同証跡の間は抑止し、証跡変化で再 open（:888-899）。dismissed も条件消失で resolved になる（:916-926）。再 open 率は行履歴（resolved → open）から導出できる。
-- 人手行動:
-  - (a) 却下 `ops.signal_dismiss`（検証 `mcs_operations.py:124-136`、適用 :488-538）。dismissed 行に `dismissed_by` / `dismiss_reason`（**自由文 ≤2000**）/ `dismiss_command_id`。理由は構造化されていない。モーダルは単一テキスト（`mcs_discord/actions.py:371-376`、Slack `mcs_slack/actions.py:22`、envelope `adapters/common/envelopes.py:198-209`）。
-  - (b) ack / 担当 / 保留（`notify_cards.py:1548-1565, 1656-1700`）。ack は manifest（shown = signal_keys）単位。
-  - (c) 依頼登録 `request.create`。検知器は登録済み依頼を「応答」とみなして自動 resolved にする（`mcs_signals.py:234-239`）が、signal ↔ request の紐付けも resolved 原因も記録しない。
-- **却下ボタンは単一キーの signal カードだけ**（`notify_cards.py:628-630`）。digest カード（既定で 11 型中 8 型: `mcs_signals.py:997-1009`）は「ページ確認」だけ（:597-598）。主要な型は Discord から却下できず CLI だけ。
-- ack / dismiss が発生する前提は `signals.notify:true`（既定 false）かつ interactive カード。本番設定は【未検証】。
-- 既存の集計はない。`mcs_refstats.py` は承認済み stat 基準との回帰差分、`evaluation/` は semantic 要約 G6 用で signal 用ではない。resolved / dismissed は export されない（`brain_export.py:299` は `current_open` だけ）。
-- 旧 ROADMAP の訂正: 「却下理由・採用率・再open率」のうち、現データで算出できるのは再 open 率だけ。
+**現状（2026-10-04のコード照合）**
+- signal_v1はappend-onlyで、dismissedは同証拠の間は抑止し、証拠変化で再openする。
+  resolvedの原因・signal↔requestの採用関係は未記録で、ackは完了/採用の証明ではない。
+- 却下の自由文とは別に任意の`reason_code`が既にある。`_v_signal_dismiss`（mcs_operations.py）が
+  `DISMISS_REASON_CODES`で検査し、signal_dismissが`dismiss_reason_code`として保存する。コード未指定の旧データを理由判明済みとして補完しない。
+- feedback集計（mcs_stats.py `st_signal_feedback`、理由別件数は mcs_signals.py `dismiss_reason_counts`）は
+  open/resolved/dismissedと理由別件数を扱う。
+  「理由が自由文だけ」「集計がない」という旧記述は現状と異なる。
+- 残件は解消原因・採用の根拠・再open率/分母・小標本抑制・actor非出力・検知非干渉。
+  既存コード/集計を再実装せず、以下の追加設計をこの残件へ適用する。
+- digestのページ確認と個別signalの却下を区別する。新しい却下UIの対象は#19-D1で決める。
+  signals.notify/実機の利用状態は今回未検証で、既定設定と稼働設定を混同しない。
+- resolved/dismissedや新しい統計のexportは、既存allowlistの条件を維持してfail-closedとする。
 
 **設計方針**
 - **ラベル（既存データ + 最小追記）**: `adopted`（evidence の message_id 群に対し `requests.created_at ≥ detected_at` の依頼がある。近似。厳密化は将来 `request.create` に任意 `origin_signal_key`）、`acknowledged`（signal / digest カードの ack: `manifest.shown ∋ key`）、`dismissed` + `reason_code`、`auto_resolved` + cause、`open_unactioned`（通知済みで N 日行動なし）、`reopened`（resolved / dismissed → open の回数）。

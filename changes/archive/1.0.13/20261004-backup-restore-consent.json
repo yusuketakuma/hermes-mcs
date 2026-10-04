@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "新端末の復元に専用の同意経路を追加",
+  "summary": "暗号化バックアップから新規配置したDBを、対象を固定した人の理由・receiptを別段階で検証して収集用に採用できます。更新・rollbackの承認は代用できず、採用後も通知と配送照合は全件保留のままです。",
+  "upgrade": "対象はmcs_backup restoreで作った新規の私有配置だけです。サービスを起動せず、mcs_restore.pyのplan・approve・resumeを順に本人が実行し、独立したbundle SHA、actor、reason、custody-ref、hold_allを明示します。実機同意、サービス開始、通知再開、保管・保持方針は別のオーナー判断です。既存の更新・rollback承認経路は変更しません。",
+  "details": [
+    "receiptをDBの平文SHA、source bundle SHA、restore.json、元の同意待ちマーカー、配置先と各ファイルのdevice/inodeに束縛する。",
+    "独立したreceipt SHAと明示的な人確認・actor・reasonをresume時にも照合する。run.lock下で静的DBを再確認し、置換・改変・競合時は保留する。",
+    "原本や復元DBの内容を変更せず、履歴floor拡張、通知再送、臨床上の承認、再暗号化、配送照合、サービス開始を行わない。",
+    "正常採用後のDB更新は許容するが、配置先・DBの置換と復元証拠の変更は再び収集を保留する。既存の不明配送と未検証textは採用で解除しない。",
+    "同じ承認receiptでのresume再実行は冪等に成功し、恒久的な保留を残さない。別のreceiptは書込み前に拒否する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_restore.py",
+    "mcs/notify/notify_cards.py",
+    "tests/ops/test_backup_restore_consent.py"
+  ]
+}

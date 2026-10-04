@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "スタンプ影確認の対象選定が履歴の増加で極端に遅くなる問題を修正",
+  "summary": "metadata_shadowを有効にしている場合、5分ごとの対象選定が投稿とシグナルの蓄積に応じて急激に遅くなり、tickの時間を使い切ることがありました。対象となる投稿の範囲は変えず、選定を短時間で終えるようにしました。",
+  "upgrade": "追加操作は不要です。既定値・設定・対象の範囲は変わりません。",
+  "details": ["metadata_watch_targetsで、各キーの最新signal_v1の根拠投稿を投稿ごとではなく1回だけ集計するよう変更。"],
+  "refs": ["mcs/core/ledger.py", "tests/core/test_metadata_watch.py"]
+}

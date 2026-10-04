@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "対応版ごとの更新経路を再実行可能な合成資産に追加",
+  "summary": "過去26更新経路の版・runtime・根拠を機械可読manifestへ保持し、現行更新処理への13公開版・16構成のplan、適用、巻戻し、起動役、再導入を旧DDLと完全合成の境界で再検証できるようにします。",
+  "upgrade": "実行時の設定変更や配備操作は不要です。v1.0.0〜1.0.2の手動更新条件、standaloneのhost経由条件、schema巻戻しの個別承認を維持します。テストコマンドはtests/fixtures/schema_upgrade/update-paths.jsonに記録しています。",
+  "details": [
+    "26経路はv1.0.0〜1.0.9のHermesから1.0.11/1.0.12へ20経路、1.0.10の両runtimeから両版へ4経路、1.0.11の両runtimeから1.0.12へ2経路です。公開記録とローカルタグのcommit・更新入口・installer差分を根拠にしています。",
+    "Git操作・環境・常駐サービス・インストーラー・通知を合成境界とし、実plan/precheck_tag/apply/postcheck/backup/rollback/復旧同意とSQLite migrationを通します。履歴取得・Git commit・破壊的Git操作・実サービスをテスト実行時に使いません。",
+    "元のupgrade_routes.pyとupgrade-routes-2.logはrepoに資産化されておらず、隔離一時領域の絶対パスも記録されていません。過去の成功申告と今回の現行契約による再分類を区別し、旧target updater全体の再実行とは主張しません。",
+    "schema0〜4/6の原DDL、実Gitの操作成否、サービス協調停止とSDK導入副作用・実機配備は未検証としてmanifestに残します。既存の13版とpre-release schema5の根拠は変更しません。"
+  ],
+  "refs": ["tests/fixtures/schema_upgrade/update-paths.json", "tests/ops/test_supported_update_paths.py"]
+}

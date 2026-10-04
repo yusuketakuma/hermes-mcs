@@ -1,10 +1,23 @@
 # zaitaku-calender 接続（C0〜C4）の hermes-mcs 側の詳細計画
 
-[`docs/ROADMAP.md`](../ROADMAP.md#6-zaitaku-calender接続) の接続フェーズのうち、**hermes-mcs 側の成果物**の詳細計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-10）は両文書で共通。
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+### 2026-10-04追記: ローカルreceipt実装
+
+[ext_contract](../../mcs/ops/ext_contract.py)は`mcs-ext-receipt/1`のaccepted/delete結果を照合し、
+LocalSinkとHandoffSinkの取込・失効・抑制・削除状態を扱います。
+Handoffの自己ackや受領拒否を成功として扱わず、journalと監査を保持します。
+[export allowlist](../../mcs/ops/export_schema.py)の検査はローカル合成の根拠であり、
+外部サービスの同意・接続・削除保証を証明しません。
+元のC0〜C4、CD-1〜CD-10、Q1〜Q12と公開条件は保持し、実送付・配備を受入済みとしません。
+
+[`docs/ROADMAP.md`](../ROADMAP.md#6-zaitaku-calenderとの接続c0c4) の接続フェーズのうち、**hermes-mcs 側の成果物**の詳細計画。相手側（zaitaku-calender）の成果物は、対の文書 `ROADMAP.md` にある。フェーズ ID（C0〜C4）、未決事項の番号（Q1〜Q12。Q11・Q12 は zaitaku-calender 側が起票し本書へ同期した新規）、契約版（`mcs-ext-export/1`・`mcs-ext-auth/1`・`mcs-read-model/1`）、C0 の契約決定（CD-1〜CD-10）は両文書で共通。
 
 2026-10-03照合: 以下の「現状」・行番号・相手側未実装の記述・実測は2026-09-29の調査記録。
 現在の優先順位・版割当は[ROADMAP](../ROADMAP.md)を正とし、合意済みの判断本文は[引継ぎ記録](connector-decisions.md)に保持する。
-C1の1.0.15割当はC0合意後の合成開発だけ。本番は#8-M1→#4の修復実施、#10の必要な独立レビュー・Q6・相手側ゲート後。
+C1の1.0.13割当はC0合意後の合成開発だけ。本番は#8-M1→#4の修復実施、#10の必要な独立レビュー・Q6・相手側ゲート後。
 今回の1.0.11でC0/C1の契約・allowlist・相手repo・外部送付は変更しない。
 
 ### 2026-10-03の訂正提案（未合意・実装しない）
@@ -59,6 +72,47 @@ C1の1.0.15割当はC0合意後の合成開発だけ。本番は#8-M1→#4の修
 **設計方針**
 
 (1) C0 で決める契約事項（CD-1〜CD-10。両文書で同一）:
+
+**2026-10-04の互換設計修正（新export/2への分離をオーナー採用済み）**
+
+旧`export/1`の`_canonical`を置換すると、保存済みrecords hash・ID・intentが変わる。
+旧の認可既定7型・通常aggregate出力・journalを固定し、新しい数値表記と
+本文/coverage/profileは明示した新契約へ分離する。wire名はオーナーが選択した
+`mcs-ext-export/2`で、相手側の契約合意・受入は別途必要。
+下表の「既存`_canonical`へ追加」は旧serializerの全体置換として実装しない。
+
+また、分割`[A][B,C]`と`[A][B][C]`では先頭partのrecordsが同じでも集合が違う。
+下表の「partをID/intentへ含めない」はこの場合を区別できないため、
+新契約では契約版と`part:{index,count,set}`をID・intentへ束縛する。
+先に各records hash、次にset、最後にIDを計算し、hashの循環を作らない。
+旧`/1`の式は変更しない。契約版は選択済みで、hermes側のfixture pinは下記のとおり固定済み。
+相手側の同一pin合意は未完了。
+
+自局判定は職種一致だけでは行わず、sender identityと組織の根拠を別途合意する。
+合意前の新しい本文候補は`sender_kind=unknown`を保持する。世代撤回の列挙は
+受領後に消えるoutboxではなくjournalを使う設計とし、stagingの後始末を
+撤回指示書の生成と混同しない。以下の旧設計文と異なる点はこの修正案で追跡する。
+
+2026-10-04（引継ぎ後）のhermes側ローカル実装: 撤回指示書`mcs-ext-withdraw/1`
+（理由コード4種・4,096 bytes・自由文なし）をhandoff outboxへ生成し、
+`withdraw --generation`はjournalから展開する。合成参照受信側は`receive`
+コマンドで受理・拒否・削除receiptのNDJSONを作り、受領件数と完全集合を分けて
+報告する。`sender_kind`は既定unknownで、`--classify-senders`の明示時だけ
+自局ID・設定済み自組織・職種から分類する（職種だけでは`self_org`にしない）。
+C0 fixture（受理12・拒否23＋生成のみ15・receipt 6・withdraw 4）・
+`MANIFEST.sha256`・fixture set IDを`tests/ops/fixtures/ext_contract_c0/`と
+`docs/specs/external-export-contract.md`に固定した。相手repoとの同一ID合意、
+CD-1〜CD-10の共同合意、実受領・本番受入は未完了。
+
+先行した純粋検証は`mcs/ops/c1_contract.py`に実装済み。`canonical_json`は
+有限値・safe integer・固定小数域・Unicodeを検査する限定canonicalで、
+任意のRFC 8785互換やraw JSONの重複キー解決を保証するものではない。
+`validate_profile`は明示7型・全患者・3600秒以内の鮮度・30日以内の保持を
+検査するが、人承認・失効・送付直前再認可は別工程。
+`validate_record`はbody/full messageのproject/message/generation一致と
+8192 UTF-8 bytes/hash等を検査する。この単位はwireを生成せず、新版のID・part・
+送出経路は別の統合単位で実装する。
+関連279件と独立Bun数値oracle 28,597件の一致を確認し、旧経路は変更していない。
 
 | ID | 決めること | 推奨 |
 |---|---|---|
@@ -223,7 +277,7 @@ F. auth の作成: 最小案は作らないこと（文書のテンプレート�
 **成果物**
 - 上記のコード、tests、`docs/specs/external-export-contract.md` の運用章、`SECURITY.md` の人承認操作一覧への追記、`scripts/development/update_readme.py` の再実行。
 - 新規 `mcs/**/*.py` または `tests/**/test_*.py` の追加は `DEVELOPMENT.md` の件数（`scripts/development/update_readme.py:89-93`）を変える。CI の PR 検査が `git diff --exit-code` で落とすので、必ず再実行する。
-- gate を 2 つ追加する: (1) `ext_contract.py` / `export_schema.py` が network・subprocess 系の module を import しないこと。(2) tick 経路（`mcs/ingest`・`mcs/notify`・`deployment/`）が `ext_*` を参照しないこと。
+- gate を 2 つ追加する: (1) `ext_contract.py` / `export_schema.py` が network・subprocess 系の module を import しないこと。(2) tick 経路（`mcs/ingest`・`mcs/notify`・`deployment/`）が `ext_*` を参照しないこと。（1.0.13 合成開発で実装済み: `ci/gates.py` の `ext_contract_offline`・`tick_no_ext`。対象は `ext_contract`・`export_schema`・`c1_*`、tick 側は `mcs_standalone/` も含む。直接の import・参照だけを検査し、`mcs_util` 経由の `urllib` 読込のような間接 import は対象外。回帰テストは `tests/meta/test_c1_export_gates.py`）
 - コミットグループ案（Devflow の検証済み論理グループ単位）: G1 契約層（`_canonical` 正規化、`part`、profile、サイズ、drift guard。C0 の参照実装と重なる）、G2 選別と分割、G3 receipt・`rejected`・HandoffSink・outbox の後始末、G4 CLI と health（と任意の auth）、G5 golden fixture・文書・README 再生成・gate。
 
 **受入条件とテスト（合成のみ。CLI は現状 0 件なので新設）**

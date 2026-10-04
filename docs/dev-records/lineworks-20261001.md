@@ -22,7 +22,7 @@ hermes-mcs内に公式Bot APIを使うLINE WORKS接続を実装した。Hermes A
 - 初回設定時のrunner-ownedフォルダ/flags準備、秘密値の端末入力・ローカル診断、
   macOS/Linuxサービス候補生成、ユーザー向け・AI向けの導入手順を追加。
 
-公式根拠と導入・障害時の手順は [LINEWORKS.md](../LINEWORKS.md)。
+公式根拠と導入・障害時の手順は [LINEWORKS.md](../guides/LINEWORKS.md)。
 一次資料はLINE WORKS DevelopersのJWT、Bot API、channel/user送信、button/action、
 Callback、添付/upload、rate limitの各公式ページで、リンクを同手順書に保持する。
 コードとテストを正本として、既存の中立配送・Slack/Discord呼出関係を照合した。

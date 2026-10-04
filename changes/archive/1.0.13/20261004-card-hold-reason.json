@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "カード経路と復元照合で保留した通知にも理由を記録",
+  "summary": "カード通知の不正な内容・再送上限・配送設定の不一致・処理例外による保留と、復元後の照合による保留でも理由が記録され、health の held_reasons で not_recorded ではなく理由別に表示されます。",
+  "upgrade": "追加操作は不要です。更新前に保留された通知は理由が記録されていないため、引き続き not_recorded と表示されます。",
+  "details": [
+    "保留理由は notify_outbox の progress.hold_reason に安定コードだけを保存し、既存の受領記録は保持する。",
+    "追加コードは payload_invalid、resend_exhausted、dispatch_failed、restore_hold、restore_unlinked。処理例外は既存の internal_failure を使う。"
+  ],
+  "refs": ["mcs/core/ledger.py", "mcs/notify/notify_cards.py", "mcs/notify/notify_flush.py", "mcs/notify/notify_reconcile.py", "mcs/ingest/run_check.py"]
+}

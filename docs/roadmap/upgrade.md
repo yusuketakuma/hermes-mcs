@@ -1,5 +1,19 @@
 # 過去版からの安全な更新（1.0.11 #30）
 
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+### 2026-10-04追記: #30のrepo内回帰資産
+
+[update-paths.json](../../tests/fixtures/schema_upgrade/update-paths.json)は元26経路の
+版・runtime・根拠と現行13公開版16構成を区別し、
+[合成回帰](../../tests/ops/test_supported_update_paths.py)でplan/apply/rollback/
+bootstrap/reinstall・旧版手動条件・個別復旧同意を検証します。
+テスト実行はGit履歴に依存しません。過去runner/rawログはrepoに保持されておらず、
+旧target updater全体の26経路再実行や原schema0〜4/6の再現とは主張しません。
+実Git・host協調停止・SDK導入・実機配備と、統合中のbackup lifecycleは別ゲートです。
+
 改訂日: 2026-10-03。状態: 実装済み（2026-10-03、計画レビュー・実装再レビュー反映）。
 
 ## 1. 目的と受入

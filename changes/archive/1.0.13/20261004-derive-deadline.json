@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "時間切れの抽出と集計を次回へ継続",
+  "summary": "収集tickの残り時間がなくなった場合、ルール抽出と患者集計を処理単位の間で止めます。完了分は保存し、未処理分は次回へ残して、通知・終了処理の時間を確保します。",
+  "upgrade": "処理単位の期限対応には設定変更は不要です。ルール抽出に45秒、rollupに30秒の終了余白を適用します。CLI直接実行のwatchdogは--watchdog-grace明示時だけ有効です。servicesで再生成する収集・履歴wrapperは既定60秒の猶予を渡します。config.jsonのwatchdog_grace_sで0（無効）〜3600秒を指定できます。60秒は暫定の設定値で、実機実測値や所有者の受入を示しません。実機へのwrapper反映・再起動は未実施です。",
+  "details": ["CLIの期限なし処理は従来どおりです。既存のchunk単位commitを維持します。", "watchdogは固着時に非ゼロ終了し、次回は未完了runをcrashedにします。通常終了時は解除します。個別SQL・抽出一行の中では協調中断しません。", "全体期限を越えたstageの後は追加作業を次回へ残し、終了記録とsnapshot公開を続けます。healthに所要秒数・超過秒数・最も遅いstageを記録し、期限超過をdegradedとして表示します。"],
+  "refs": ["mcs/ingest/run_check.py", "mcs/extract/v1/extract.py", "mcs/extract/rollup.py", "tests/extract/test_derive_deadline.py", "tests/ingest/test_run_watchdog.py", "deployment/scripts/mcs_check.sh", "deployment/scripts/mcs_deep.sh", "mcs/ingest/health_watch.py"]
+}

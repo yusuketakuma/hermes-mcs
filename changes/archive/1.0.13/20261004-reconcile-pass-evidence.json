@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "再照合の完全巡回を記録",
+  "summary": "既存の再照合で全ページの取得と返信保存を確認した場合だけ、巡回完了回数と観測時刻をjobへ残します。途中取得・返信未完了・エラーを完全巡回と数えません。",
+  "upgrade": "既存jobのcursorと再試行間隔を保持します。floorの変更、対象患者の拡張、既読化、通知追加は行いません。この記録はAPI上の全履歴や臨床的完了の保証ではありません。",
+  "details": [],
+  "refs": ["mcs/ingest/job_ops.py", "tests/ingest/test_job_drain.py"]
+}

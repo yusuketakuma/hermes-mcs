@@ -1,5 +1,10 @@
 # MCS セットアップ実行手順書（AIエージェント用）
 
+このガイドは公開済みv1.0.12の実行可能な手順。安定稼働版1.0.13の
+install/update/setup/doctor統一は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
+統一入口（`sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`）はローカル実装済みだが未公開で、実機受入は未確認。
+公開版の導入では、下記のinstall.sh・init・bootstrap・plan/apply・doctorを使用する。
+
 > **この文書は AI エージェント（Devin / Claude Code / Codex 等）が
 > 読み込み、ユーザーと対話しながら MCS を自動セットアップするための
 > 実行手順書です。** 人間向けの設定リファレンス・経路説明は
@@ -324,9 +329,11 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 配置 drift）に並べ、最後に `blockers (N) — fix in this order:` として
 番号付きの要約と `fix:` 行を出す。**1 番から順に直して `check` を
 再実行する**（上位の原因が下位のエラーを引き起こしていることがある）。
-診断・報告には `doctor` を使う — インタプリタ・`hermes` の解決先
-（launchd PATH 含む）・repo・各 launchd agent の `loaded`/`not loaded` を
-出してから `check` を実行する:
+報告用の要約には `doctor` を使う — ローカルの読取りだけで範囲ごとの
+状態と件数を出し、`check` は実行しない。`not_checked` は正常を意味せず、
+終了コードは `blocked` の範囲があるときだけ 1（`check` が FAIL でも 0 に
+なり得る）。`--probe llm` / `--probe services` で明示した範囲だけ追加確認する。
+blocker 一覧と launchd agent の状態は `check` で確認する:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py doctor

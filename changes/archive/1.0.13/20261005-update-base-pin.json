@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "更新承認で現在の版を特定できないときは承認を受け付けないよう修正",
+  "summary": "ops.update_applyの承認時に現在のcommit(HEAD)を確認できなかった場合、承認を記録せずupdate_base_unresolvableで拒否します。これまでは基準commitなしの承認が記録され、承認後にHEADが変わっても更新が進むことがありました。",
+  "upgrade": "追加操作は不要です。拒否された場合はgitの状態を確認してから承認をやり直してください。",
+  "details": ["承認の書込みトランザクション内でgitを再実行せず、事前解決できなかったbase_shaはtarget_shaと同様に拒否する。"],
+  "refs": ["mcs/ops/mcs_operations.py"]
+}

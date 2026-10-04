@@ -1,5 +1,19 @@
 # MCS公開クライアントのAPI調査（#23〜#29の根拠）
 
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+### 2026-10-04追記: metadataのローカル入口
+
+[project_metadata](../../mcs/ingest/project_metadata.py)は対象を明示したケアチーム・
+構造化薬歴/観測値・consultationsの取得/正規化/保存を、
+[cross_lists](../../mcs/ingest/cross_lists.py)はmentions/bookmarks横断取得を提供します。
+いずれもopt-inのCLIと安全な対象・応答分類を持ち、opt-inなしで取得しません。
+入口の存在は実APIの副作用・全対象の契約確認や公開承認の完了を意味しません。
+以下の公開クライアント初期調査と実API確認記録は当時の証拠として保持し、
+#23〜#29のD判断・C1・実API/出典/公開条件を変更しません。
+
 調査日: 2026-10-02。対象: `https://www.medical-care.net/index.html`（SPA入口）が参照する
 公開JavaScript 221本（chunk 218本、`main-SAHZA53Q.js` ほか）。
 2026-10-02の静的調査では認証なしのGETで取得し、実行せずに読んだ。
@@ -143,7 +157,7 @@ HTTP成功・型の確認・空集合の観測を、副作用の不存在や全�
 | projects/status（先行確認） | afterにprojects.paginate.timestampを使い200、projects.updatedはbool | 押下/編集でupdatedが立つ対照は未実証 |
 | 押下者一覧（1.0.13の先行確認） | keep_read_status付きは400。初回timestamp省略で全種類2行・viewed1行が件数整合。per_page=1で全種類2ページ/viewed1ページを各2walkし、固定timestamp・件数・終端・集合不変が整合。追加のempty reactions対照ではall/viewed各2walkとも0行・1ページ終端・件数一致。原49/50/51/100/101件を含む診断/metadata関連の合成191 passed | 空timestampは200空で不整合。初回は省略、継続は有効server timestampだけを使う。行の時刻キーは無し。1人複数種別はサンプルで未観測、更新中完全性は未実証。0行対照もraw読取flag無しで、未読保持の証拠ではない |
 | 返信/自投稿・権限（1.0.11の確認票） | root/返信×自分/他者の4区分でtarget・投稿者ID・parent一致、reactions/mentions同梱、正規化エラー無し。対象ルームはinventoryで既読を確認 | 権限不足の実応答は判定不能。exact投稿flag無しのnorm既定falseやルーム既読を投稿の未読保持と扱わない。特定403や権限変更を追加必須にしない |
-| #26/#27件数（1.0.14の先行調査） | 臨床100ルーム・karte ID重複除外93患者で薬歴/観測項目は各登録0/不明0、両complete=true。相談の公開UIがgroup対象と判明し、調査単位を訂正 | consultationsの患者ルーム100GET404は93患者不明・complete=falseとして維持。group利用数と患者関連付けは未確認、group GETは未実施。患者不明を登録0へ変更しない。ユーザー手動確認待ち |
+| #26/#27件数（1.0.13の先行調査） | 臨床100ルーム・karte ID重複除外93患者で薬歴/観測項目は各登録0/不明0、両complete=true。相談の公開UIがgroup対象と判明し、調査単位を訂正 | consultationsの患者ルーム100GET404は93患者不明・complete=falseとして維持。group利用数と患者関連付けは未確認、group GETは未実施。患者不明を登録0へ変更しない。ユーザー手動確認待ち |
 | POST契約（1.1.0前の別工程） | 業務データPOSTは未実行 | 原1.0.xの禁止範囲を維持。1.0.11のAPI確認として実行しない |
 
 第1層shadowの原受入は、上限内での実更新と状態・鮮度・予算の可視化まで含む。

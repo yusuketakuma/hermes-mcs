@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "C1候補の分割送付形式と不完全な集合の検査を追加",
+  "summary": "明示的なmcs-ext-export/2形式で、本文と対応投稿を分離せずに容量内へ分割し、欠落・混在・改ざんのある集合を完全な受領と誤認しない参照検査を追加しました。既存の/1送付・認可・journalは変更しません。",
+  "upgrade": "追加操作は不要です。この追加だけでは本文送付や外部受信を有効にしません。送付直前の本人認可、CLI・状態機械への接続、相手側受入と共同fixture固定は別工程です。",
+  "details": [
+    "送付形式はmcs-ext-export/2。分割しない場合はpartを省略し、分割時はindex・count・setをIDとintentに束縛する。records hash、集合hash、IDの順に確定する。",
+    "meta・coverage・signals_truncated・患者別coverageを各分割に複製し、投稿と本文を不可分に扱う。同一投影のsignalは件数を減らさず同じpartへまとめる。",
+    "実際のUTF-8 wire bytesをparse前に1048576bytes以下へ制限し、最終のindex・count・集合hashを含む容量で分割する。収まらない共通メタデータや不可分な組を削除・切詰めして合わせない。",
+    "不足した集合はincompleteで完全性の証拠を返さない。同一auth・世代の既存完全集合の証拠が与えられた場合は、別集合を競合として拒否する。currentの保存・選択、撤回wire、送信者の分類は実装しない。"
+  ],
+  "refs": ["mcs/ops/c1_envelopes.py", "tests/ops/test_c1_envelopes.py"]
+}

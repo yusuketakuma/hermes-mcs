@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "認証付き暗号化バックアップと隔離復元訓練を追加",
+  "summary": "明示した保存方針と鍵で、検証済みSQLiteバックアップを暗号化し、改ざんや別世代への差し替えを拒否して隔離先へ復元検証できます。保存先・鍵管理の承認がない場合は実行せず、実機オフサイト保全の完了は主張しません。",
+  "upgrade": "自動有効化・鍵生成・Keychain取得・既存原本の置換はありません。利用前に保存許可を表すpolicy_id、既存保存先とdevice/inode、同期対象外の私有scratch_dir、鍵保管確認、OS OpenSSL利用承認、max_snapshots、deletion=manual、max_rpo_seconds、max_snapshot_bytesを指定し、32バイトの鍵を専用fdまたは注入providerで渡してください。SHA-256 receiptは保存媒体と独立した信頼できる場所へ保管します。保持上限では削除せず停止します。復元訓練は新規隔離ディレクトリのみで、awaiting_consentの配送・writer保留を残します。訓練結果の平文保持・削除、鍵エスクロー、実機訓練と通知照合の方針は別途オーナー判断が必要です。",
+  "details": [
+    "gzip圧縮したDBをOS OpenSSL AES-256-CBC、PBKDF2-SHA256 600000回で暗号化。別ドメインで導出するHMAC-SHA256鍵により、形式ヘッダー・manifest・IVを導出するsalt・暗号文全体を認証する。",
+    "単一の認証済みbundleを0600でtmp、fsync、rename、ディレクトリfsync、read-backの順に公開。復号前に独立receiptとHMACを検証し、部分コピー・誤鍵・切詰め・改ざん・旧世代への差し替えを拒否する。",
+    "既存valid_mcs_db、file_sha256、publish_tmp、restore_pendingを再利用し、integrity_check、foreign_key_check、schema・件数・安全な集計の一致を確認。原本は変更せず、設定・認証情報ファイル・添付本体は収集しない。",
+    "機密性はローカルアカウント・OS・OpenSSL・鍵とreceiptの保管を信頼する。端末侵害、媒体消失、鍵紛失、時計の不正、平文scratchの物理回復や安全消去は保証しない。",
+    "cron・health・実機復元・自動prune・外部サービスはこの機構に含めず、オーナーゲート付きロードマップ#1全体の完了とは区別する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "tests/ops/test_mcs_backup.py"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "category": "added",
+  "title": "C1候補レコードの読み取り専用組立と対保持選択を追加",
+  "summary": "公開snapshotの同じ読み取りtransactionから、既存aggregateのmeta・coverage・message・signalに本文候補と患者別取得範囲を組み立てる単体APIを追加しました。空本文を含む完全取得本文を保持し、選択時にも本文とmessageを分離しません。",
+  "upgrade": "既存CLI・通常aggregate出力・hash・認可既定・wire契約・送付・公開は変更しません。呼出元が検証済みViewのread transactionを所有した状態で明示的に利用するローカル候補APIです。sender_kindはunknown固定で、分類とwire版のオーナー合意、相手側受入、分割・認可・CLI統合は未完了です。",
+  "details": [
+    "assemble_records(db, signal_limit=200)は現在のaggregate read model、current_open、既存project_recordを再利用し、DBを開き直さずBEGIN/COMMIT/ROLLBACKやDMLを発行しない。患者scopeは既存の全patientsを維持し、archivedを含むことと現在の上流fetch filter所属が不明であることを別のローカルscopeで明示する。",
+    "message_bodyはbody_state=fullかつbody_text非NULLのみ生成し、空文字も保持する。UTF-8の8192 bytes上限を文字境界で切り、送信する切詰め後bytesのSHA-256を計算する。完成したc1_contract.validate_recordでproject/message/世代とfullの対応を検証する。氏名・職種・組織属性を送り出さず、自局推定もしない。",
+    "patient_coverageは0-message患者とarchivedを含む全source患者について生成する。検証済み上端はledger.coverage_ts()と同じpatients.coverage_tsであり、最終取得時刻や最新保存投稿へ置き換えない。floorのNULL/0/欠列はnull、-1は0、正値はそのepochへ写像する。現在のC1 enumで表せないfetch_stateはC1ContractErrorで全体を拒否し、患者を除外したりpending/completeへ推測変換したりしない。",
+    "patients_incompleteは新規coverage copyだけへ追加する。元のread modelと旧brain_export JSONL、既存serializer・record allowlistは変更しない。DB NULLのbody_stateはC1 message copyだけunknownへ正規化する。",
+    "select_records(records, allowed, only_with_facts=False, since_days=None)は未許可typeの除去件数とmessage除去・時刻不明件数を返す。facts非空・deleted tombstone・許可された対本文のいずれかを持つmessageを残す。未許可messageや古い世代・異なるproject・orphanの本文は残さない。",
+    "since_days窓はsnapshot generated_atから計算した開始とsnapshot時刻の両端を含む。時刻不明は窓から除き不明件数を明示し、壁時計で補わない。既知floorだけを窓開始へclampし、integer epochのfloorには開始値のceilを使う。不明floorと検証済みcoverage上端は変更しない。selectionの欠落を返信なし・臨床的な不在へ変換しない。",
+    "合成の実Ledger→publish_snapshot→View→組立/選択で、元DBとsnapshotのbytes hash/mtime・書込み数・caller transaction・既存JSONL不変、本文のempty/full/snippet/unknown/deleted/NULLとUTF-8境界、全患者coverage、完成validatorの対検証をテストする。実データ・network・LLM・サービス・新規依存を使用しない。",
+    "残るC0/CD判断はwire契約版・同一性/hash/part集合・sender identity分類・archived/現在の取得対象scopeの外部送付・相手側の完全集合と降格規則・最終fixture pin。本単体の成功をC0合意や実送付・本番・human/G6の受入とはしない。"
+  ],
+  "refs": [
+    "mcs/ops/c1_records.py",
+    "tests/ops/test_c1_records.py"
+  ]
+}

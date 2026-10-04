@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "ケアチームと構造化情報の読取り専用取得を追加",
+  "summary": "明示実行でケアチーム・薬歴・観測項目と値・group相談の最小メタデータを保存し、空・不明・取得失敗・古い観測を区別してローカル閲覧できます。相談はgroup単位で保持し、根拠のない患者への関連付けを行いません。",
+  "upgrade": "新しいGET・定期取得・公開は既定で有効になりません。実行には取得済みinventory、既存session cacheと明示オプトインが必要です。氏名保持と表示はそれぞれ既定offで、オーナーが判断した場合だけcare_teamのsyncに--retain-names、viewに--show-namesを明示します（写真・連絡先は指定に関係なく保存しません）。実APIでの未読保持・session非延長・権限・ページングの受入後にオーナーが本番有効化を判断してください。",
+  "details": [
+    "既存artifact APIを使い、新規migration・既読化・抽出・通知・外部exportを追加しない。",
+    "公開クライアントのGET契約のみ実装し、写真・連絡先・相談本文を保存しない。",
+    "観測値はscalar/max/min/left/rightと観測時刻、確認済み定義の単位を保持。本文との一致は未照合と明示する。",
+    "相談詳細・回答本文、患者関連付け、薬剤用法用量はこのメタデータ契約に含まれない。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "mcs/views/project_metadata_view.py",
+    "mcs/ingest/mcs_adapter.py",
+    "tests/ingest/test_project_metadata.py"
+  ]
+}

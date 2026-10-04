@@ -6,7 +6,7 @@
 **Slack（推奨）**の通知カードから、連絡の確認、担当の記録、タスクの作成までつなげます。
 在宅医療・介護のチームで交わされた相談や経過を、あとからたどるためのローカルシステムです。
 Slack・DiscordはHermes公式接続、[LINE WORKS](docs/guides/LINEWORKS.md)は独立した独自アダプターを使います。
-Hermesを入れない[スタンドアローンモード](docs/guides/STANDALONE.md)でも、Slack・Discordを含む全機能が動きます。
+Hermesを入れない[スタンドアローンモード](docs/guides/STANDALONE.md)では、Slack・Discordの直接接続と共通の操作経路を選べます。接続先SDKと実機運用の受入は別に確認します。
 LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 
 [画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
@@ -15,7 +15,7 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 |---|---|---|
 | 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord / LINE WORKS |
 
-このREADMEはmainの機能を説明します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
+このREADMEはmainの機能を説明します。[1.0.13のローカル支援](#candidate)は既定offで、実機・外部の受入条件は分けて記載します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
 通知を有効にすると患者名・本文・送信対象の添付が設定先へ送られます。[情報の行き先と安全境界](#data)を導入前に確認してください。
 
 <a name="demo"></a>
@@ -136,6 +136,19 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 
 **AIの抽出は候補です。患者サマリーは確定した処方一覧ではなく、カードの確認済み表示もタスク完了を意味しません。**
 
+<a name="candidate"></a>
+
+### 1.0.13のローカル支援（既定off・実機受入は別途）
+
+次はmainで実装された任意の入口です。既定の有効化、外部GET・公開・配備の承認、実機の成功を意味しません。SDK境界、canonicalの品質・昇格、urgencyの通知条件、各経路の統合受入は継続中で、計画の全32項目が受入済みとは扱いません。
+
+| ローカルで確認できる支援 | 入口と適用条件 |
+|---|---|
+| 暗号化offsite・鍵escrow・別配置への復元 | `mcs_backup.py`。保存先・鍵・独立SHA receipt・保持のオーナー承認が必要。定期運用は明示opt-in、新端末の復元は同意待ちで停止。[バックアップ・端末喪失ガイド](docs/guides/BACKUP.md) |
+| 構造化薬歴・観測値とチャット候補の別出典閲覧 | `project_metadata.py`（明示sync）と`mcs_view.py`のsnapshot読取り。表示は`--publication`で明示し、`include_chat`は既定off。同一項目・正本・対応完了を自動判定しません。GETはsession・未読保持・権限の実受入後に承認。[MCS連携データの条件](docs/roadmap/mcs-api-survey.md) |
+| 薬剤の表層名とは独立した成分候補注釈 | 明示した私有辞書の出所・SHA・承認に束縛した候補。別名の服薬行を統合せず、総称や複数候補を成分に確定しません。本番辞書の保管責任・利用条件は未確定。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
+| 導入・更新・ローカル診断の統一入口 | `sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`。診断結果やSDK版の取得は接続・更新後プロセスの受入証明ではありません。[更新時の確認](docs/guides/UPGRADE_AGENT.md) |
+
 <a name="use-cases"></a>
 
 ## 使い方を選ぶ
@@ -209,7 +222,7 @@ cd hermes-mcs
 
 事前チェックのNG行に表示される`fix:`を確認し、`0 blocker(s)`になってから導入します。
 初回の`./install.sh`は、Hermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ねます。`--mode standalone`で直接指定もできます。
-最後の`Installed. Summary:`に表示される`mcs_setup.py init`を、そのままコピーして実行してください。
+最後の`Installed. Summary:`に表示される初回設定コマンドを、そのままコピーして実行してください。
 設定ウィザードが通知先・本体の設定・最終チェックまで案内します。Slack/DiscordではHermesとの同期も行います。
 本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
 既存環境を更新する場合は[更新エージェント手順](docs/guides/UPGRADE_AGENT.md)を使います。移行先版の更新コードで計画・バックアップ・適用を行い、再導入は必要な場合に明示指定します。
@@ -232,6 +245,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | [更新・バックアップ・復旧](docs/specs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |
 
 困ったときは、表示された同じインタープリターで`mcs_setup.py doctor`を実行します。
+1.0.13の統一入口は`mcs doctor`です。既定はローカル診断で、LLM通信やサービス状態のprobeは明示指定します。診断が成功しても、SDKの通信・カード操作や配備済みworkerの反映まで検証したとは扱いません。
 
 <a name="data"></a>
 
@@ -285,7 +299,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 <summary><strong>バックアップがあれば端末故障にも対応できる？</strong></summary>
 
 日次SQLiteバックアップは同じMac上の保存です。端末喪失時の復旧保証にはなりません。
-別媒体への退避と復元手順の確認は運用側で行います。[復旧の限界と手順](docs/specs/lifecycle-spec.md)
+1.0.13の暗号化backup・escrow-key drill・新規配置restoreはローカル支援であり、原本上書きや通知再開の許可ではありません。別媒体・鍵・独立SHA receipt・保持の承認と復元訓練は運用側で行います。[鍵・同意待ちの条件](docs/guides/BACKUP.md)と[復旧の限界](docs/specs/lifecycle-spec.md)を確認してください。
 
 </details>
 
@@ -295,24 +309,175 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 <!-- BEGIN GENERATED:release -->
 
-**v1.0.12 · 2026-10-04** — **全通知先のコマンド操作とスタンプ判定の修正**
+**v1.0.13 · 2026-10-05** — **安定稼働版：バックアップ・復元、導入と更新、取得の信頼性を強化**
 
-Hermesあり・なしのDiscord・Slack・LINE WORKSで閲覧と人承認操作を共通化し、スタンプの取得失敗・取消・差分を正しく扱います。Slackのコマンド登録と更新後の再起動が必要です。
+暗号化バックアップと同意付き復元、統一の導入・更新・診断コマンド、取得失敗理由の保存、緊急度判定の修正などを追加します。新機能は既定offで、macOSでは復旧用Pythonの選択が必要になる場合があります。
+
+> 更新前の確認：次回の更新（mcs_update の適用後に自動実行される services）、復旧（mcs_recover）、`mcs_setup.py services` の実行、または install.sh の再実行で雛形が再描画され、内容が変わった常駐ジョブ（llama-server・抽出worker 2本・cmd/int 取込・独立実行）はそれぞれ1回再起動されて Umask 077 が適用されます。再起動で処理中のLLM抽出が中断され得るため、抽出が空いている時間帯の更新を推奨します。それまで稼働中のジョブは従来の権限のままです。既に作成済みのログ（例: extract_drain_2.log）の権限は変わらないため、必要に応じて所有者のみ（chmod 600）に変更してください。独立実行の定期ジョブ（mcs_setup.py の _cron_plist と mcs_standalone/service.py が生成する plist、data/cron.log・data/standalone.log）にはまだ Umask を設定しておらず、別項目で対応します。
 
 <details>
 <summary>主な変更と更新時の注意を開く</summary>
 
-- **新機能 · Slack・LINE WORKSでも全機能のコマンド操作に対応**
-  Hermesあり・なしのDiscord、Slack、LINE WORKSで共通の閲覧・依頼管理・運用承認を利用できます。QC・統計・シグナル等の閲覧と全13種の運用操作を既存のpreview/confirmとreceipt経路に接続し、送信元・患者権限・参照の再検証を保ちます。
+- **新機能 · バックアップ鍵のエスクローと新端末への安全な復元**
+  明示した人のエスクロー操作で専用Keychainへ鍵を作成し、既存鍵・既存記録の置換を拒否します。復元は新しい私有ディレクトリだけに行い、DB配置前に人の同意待ちマーカーを保存します。オフサイト・検証・訓練・復元の結果をローカルに永続記録し、秘密値を表示しないstatusで確認できます。
 
-- **不具合修正 · スタンプの取消・取得失敗を正しく判定**
-  取得に失敗したスタンプを有効な対応として扱わず、解消済みの依頼も監視期間内は取消を再確認します。公開を無効にしたshadow取得でも押した人を取得でき、件数ゼロの表現違いによる誤差分を抑えます。
+- **改善 · 時間切れの抽出と集計を次回へ継続**
+  収集tickの残り時間がなくなった場合、ルール抽出と患者集計を処理単位の間で止めます。完了分は保存し、未処理分は次回へ残して、通知・終了処理の時間を確保します。
+
+- **不具合修正 · 任意バックアップジョブの復旧時所有権を保護**
+  復旧時のcron退役をmanifestのID・Script一致または既知wrapperの正規identityに限定します。mcs_offsite.shを既知ジョブとして扱い、名前だけが似た共有cronを削除しません。
 
 **更新時の注意**
 
-- メタデータ取得・公開の既定値、取得上限、既読化と人承認の条件は変更しません。変更コードを稼働workerへ反映してください。
+- 既定6ジョブは変更しません。任意backupは明示enabledと復旧先wrapper templateがある場合、または復旧snapshotで希望された場合に保持します。退役には所有証拠が必要です。standaloneは既存hostへ委譲し外部schedulerを追加しません。repo外に配備したrecoveryへの反映は別のオーナー作業です。
 
-- Slackはアプリに /mcs と commands 権限を登録して再インストールしてください。Hermes gateway、独立Slack/DiscordまたはLINE WORKSアダプターの該当プロセスを更新後に再起動してください。LINE WORKSは許可された本人トークで mcs に続けてJSON を使用します。既存の通知・取得・承認条件の既定値は変更しません。
+- 適用前にdocs/guides/BACKUP.mdで全必須policy、保存許可・媒体、端末外の鍵と独立SHA receipt、保持・RPO・平文scratchの保管/清掃・OS OpenSSLの利用方針を確認してください。私有の--state-dirと0600のpolicyが必要で、定期実行はconfig.json.backup.enabledとpolicyのboolean scheduled=trueの両方を明示した場合だけ有効です。設定・health・定期job所有の合成検証は完了していますが、実機反映・鍵の外部保管・復元訓練・稼働再開の人のreason/receipt/照合は別途必要で、既存の更新/rollback用restore承認を汎用解除に流用しません。
+
+- 新しい plan / preflight は明示ポリシーと記録ディレクトリで実行します。鍵の作成・読取り、暗号化、復元、削除、サービス操作は適用しません。既存の scheduled:true の条件、保持・暗号・復元・状態更新の動作は変更しません。未知の容量ピークや認証済み復元は未確認として終了コード2、阻害条件は1で報告します。
+
+- 対象はmcs_backup restoreで作った新規の私有配置だけです。サービスを起動せず、mcs_restore.pyのplan・approve・resumeを順に本人が実行し、独立したbundle SHA、actor、reason、custody-ref、hold_allを明示します。実機同意、サービス開始、通知再開、保管・保持方針は別のオーナー判断です。既存の更新・rollback承認経路は変更しません。
+
+- 定期jobと管理manifestの実機状態は更新前に確認してください。実hostでの停止・退役は未実施です。独立runtimeは従来どおり単一hostが所有します。
+
+- 新方式はbackup.snapshotへ絶対パスを明示し、backup.snapshot_dirと同時指定しません。従来のsnapshot_dirと日次scheduleはそのまま動作します。複数時刻は既存scheduleのhour欄をownerが列挙します。private policyのscheduled:true、max_rpo_seconds=86400、媒体・鍵保管・verify/drill・空き保持枠と、各offsite時刻より前の静的snapshot生成をownerが確認して設定・適用してください。この機能だけで実際のRPO24h達成を保証しません。
+
+- 追加操作は不要です。この追加だけでは本文送付や外部受信を有効にしません。送付直前の本人認可、CLI・状態機械への接続、相手側受入と共同fixture固定は別工程です。
+
+- 自動有効化や実送付は行いません。新版は明示された7型・全患者・3600秒以内のsnapshot鮮度・30日以内の保持が必要です。producer CLI、集合currentと撤回指示書の接続・相手側受入は別工程で、既存の旧CLIを新版へ自動切替しません。
+
+- 新契約を使う場合だけ明示7型を持つ人承認済みauthを用意してください。ext_exportはauth・state_dir・outboxの絶対パスとsince_daysを指定し、既定の公開snapshotを使います。既存の明示フラグ形式は旧契約のままで、新版へ自動切替しません。network・定期送付・設定作成・実機有効化は行いません。
+
+- 追加操作は不要です。本文送付は有効になりません。新しいローカル参照契約はmcs-ext-export/2へ分離する方針を採用済みですが、既存経路への送付接続・相手側受入は別工程です。
+
+- 追加操作は不要です。既存送付経路・CLIは変更しません。これは私有ローカルファイルを使う合成用参照実装で、外部サービスへの接続・本番staging・暗号化保存・相手側の受入を有効にしません。
+
+- 既存CLI・通常aggregate出力・hash・認可既定・wire契約・送付・公開は変更しません。呼出元が検証済みViewのread transactionを所有した状態で明示的に利用するローカル候補APIです。sender_kindはunknown固定で、分類とwire版のオーナー合意、相手側受入、分割・認可・CLI統合は未完了です。
+
+- 既存の/1送付・認可・journal・旧CLI形式は変わりません。sender分類は --classify-senders を指定した場合だけ有効です。私有configの ext_export.since_days は1以上の整数が必要になり、小数や0の設定は拒否されます。受信側コマンドは合成用の参照実装で、外部への送信・本番staging・相手側の受入は行いません。
+
+- 設定変更は不要です。モデル・抽出世代・canonical切替・監査対象・通知経路は変更しません。合成結果は人手200件以上のheld-out評価、G6・calibration、実モデル精度や本番容量の受入を満たしません。
+
+- 既定投影・Loop入力・モデル・抽出世代・公開世代・設定は変更しません。新項目は未確認候補のままで、本番昇格には新項目の監査方針、Loop同一性と世代改版のオーナー判断、人手200件以上のG6およびcalibrationが必要です。承認receipt・昇格tokenは生成しません。
+
+- 製品設定・モデル・抽出・公開・Loop・既存評価schema・G6基準は変更しません。全件pendingかつpromotion_eligible=false、人手検証済みラベルは0件です。220件の作成で人手200件以上・calibration・実capacityの条件を満たしたとは扱いません。検証と評価票の生成はevaluation/request_following_review.pyで明示実行します。
+
+- 追加操作は不要です。更新前に保留された通知は理由が記録されていないため、引き続き not_recorded と表示されます。
+
+- 抽出世代・LLM出力スキーマ・モデル・canonical設定は変更しません。新しい注釈は更新後に処理する抽出結果へ付加され、過去全件の自動再抽出は行いません。常駐抽出workerは更新時に再起動が必要です。この表記正規化だけでは販売名と成分を同一視しません。別機能の成分候補注釈には、辞書の出所・利用条件・承認・管理主体の確認と明示設定が必要です。
+
+- 設定変更は不要です。既存cohortの読取り、推論の既定off、変換上限と公開・payload削除の承認条件を維持します。旧行の削除や修復は行いません。
+
+- 既定では取得・公開とも無効です。cross_lists.pyのCLIは--database・--dataset・--token-cache・--read-only-getの明示が必要で、既存writer lockを取得して保存だけを行います。mcs_view.py cross_lists --datasetと--publicationで閲覧を別途許可します。定期実行には組み込みません。実APIの非空応答、ページ継続、未読true保持、セッション副作用は未確認で、本番有効化前に本人の受入が必要です。
+
+- 処理単位の期限対応には設定変更は不要です。ルール抽出に45秒、rollupに30秒の終了余白を適用します。CLI直接実行のwatchdogは--watchdog-grace明示時だけ有効です。servicesで再生成する収集・履歴wrapperは既定60秒の猶予を渡します。config.jsonのwatchdog_grace_sで0（無効）〜3600秒を指定できます。60秒は暫定の設定値で、実機実測値や所有者の受入を示しません。実機へのwrapper反映・再起動は未実施です。
+
+- 本番適用には辞書の入手・保管責任と利用条件の確認、approved_by、絶対パスの私有ファイルとSHA-256固定が必要です。config.jsonのdrug_mapにpathとsha256を明示するとtickの抽出後に候補を作成します。辞書なし・未承認・無効では注釈を適用せず、既存候補を退役します。LLMの再抽出や既読化・通知・人承認条件の変更はありません。
+
+- 自動有効化・鍵生成・Keychain取得・既存原本の置換はありません。利用前に保存許可を表すpolicy_id、既存保存先とdevice/inode、同期対象外の私有scratch_dir、鍵保管確認、OS OpenSSL利用承認、max_snapshots、deletion=manual、max_rpo_seconds、max_snapshot_bytesを指定し、32バイトの鍵を専用fdまたは注入providerで渡してください。SHA-256 receiptは保存媒体と独立した信頼できる場所へ保管します。保持上限では削除せず停止します。復元訓練は新規隔離ディレクトリのみで、awaiting_consentの配送・writer保留を残します。訓練結果の平文保持・削除、鍵エスクロー、実機訓練と通知照合の方針は別途オーナー判断が必要です。
+
+- 追加操作は不要です。保存形式と既存コードの表示は変わりません。
+
+- GET・定期取得・公開の既定offは維持します。既存sessionと明示取得、公開には既存publicationオプトインが必要です。旧project-metadata/1のgroup scopeは根拠として維持し、任意の保存project_typeがある場合は矛盾を拒否します。患者への関連付け、臨床完了判定、相談詳細・返信取得、既読化、session更新は追加しません。実APIの受入完了は主張しません。
+
+- 旧 --auth --records --state --sink の呼出しとLocalSinkの合成自己ackを維持します。handoffには同じ4入力を明示し、reconcileとwithdrawはstate・sinkを明示します。新しいhandoffの受領待ちは終了コード0とheld表示、reconcile/withdrawの未確認は2、拒否は1です。既存の認可・数値canonical・hash・envelopeを変更せず、実受信側との接続やC0/C1全体の受入を意味しません。
+
+- 追加操作は不要です。延期が発生した実行だけ health.json の run に deferred_stages が追加され、延期がない実行では従来どおり出力されません。
+
+- 追加操作は不要です。新しいフィールドは通常の収集実行で更新されます。last_ok_atは既存のoverall判定がokだった時刻で、全通知の配送確認やデータの完全性を保証する値ではありません。過去の正常判定を確認できない場合はnullです。
+
+- 追加操作は不要です。新しい監視サービスは追加していません。理由の項目を持たない旧形式の health.json や、英小文字・数字・下線以外を含む不正な理由コードは unknown と表示し、理由なしとは扱いません。最終成功時刻が不明な場合も last_ok_at=unknown と表示します。health.json が期限切れ（stale）の場合、記録時点の理由は recorded_state_reasons として残し、警告行の reasons は unknown と表示します。
+
+- 追加操作は不要です。案内の文言だけが変わります。
+
+- 自動公開・定期出力・export・既存presetへの追加はありません。run_statsでstat=interaction_latencyを明示選択し、職種セルを表示する場合だけinteraction_privacy_policyのmin_pairs・min_actors・min_projectsを明示します。これらの値と職種群の粒度はオーナー判断が必要です。ケアチームを補助根拠に使うには、投稿以前に取得された新鮮で完全なproject_metadata_v1が必要です。
+
+- DB schemaを8から9へ更新します。既存の保存データ・再試行回数・cursorは保持し、過去の理由がないjobは不明のまま表示します。旧snapshotも読取り可能です。更新前の旧DBを保持する通常のbackup/rollback手順を使用してください。
+
+- 通常運用の追加操作やスキーマ更新は不要です。監査を行う場合だけ、mcs/core/ledger_audit.pyへ--dbで静的なスナップショットまたはバックアップのパスを指定します。既定のSQLite実行ステップ上限は10000000です。監査は修復・収集・送信を行わず、live WAL台帳は未確認として扱います。
+
+- Ledgerの初期化時に同一書込みトランザクションで関係別の件数監査とガード導入を行います。既存DBは監査件数がゼロでもshadowから自動昇格しません。実DBの監査、観測期間、旧違反の容認・修復と有効化はオーナー確認が必要です。コードの巻戻しではDBのトリガーは消えません。
+
+- 初回はsh scripts/mcs installを実行します。既存環境はinstall.shを再実行して~/.local/bin/mcsを導入し、同ディレクトリをPATHに追加してください。setupは既存設定を保持し秘密入力は端末で行います。update planは取得済みタグだけを使用し、apply・rollbackは既存の停止・バックアップ・承認契約を維持します。standaloneの外部applyは未対応のまま阻害を表示します。doctorの通信・サービス状態確認には--probe llm / --probe servicesを明示してください。サービス用PythonのSQLiteはWAL-reset修正版（3.51.3以降、3.50系は3.50.7以降、3.44系は3.44.6以降）が必要です。ホストruntimeを自動更新しません。
+
+- message_revisions表を既存DBへ追加します。導入以前の編集は復元できず、API上の編集時刻や未観測の変更回数も保証しません。新しい本文保存と履歴は同じトランザクションに含まれます。
+
+- --publicationを付けた明示閲覧だけが保存結果を返します。従来のstatusや外部exportへ自動追加せず、氏名表示は既定無効です。新GETの本番有効化は未読保持・session・権限の実受入後に行ってください。
+
+- Hermes pluginの反映は既存のgateway再起動手順に従ってください。復元テキストの保留は自動解除しません。配送先での個別確認とオーナーの復旧方針が必要です。alertの結果不明時の自動再送は従来どおり行わず、カードのscoped receipt・grant・解除経路は変更しません。
+
+- 通常は件数・理由・hashだけのreport-onlyです。出力は明示したabsoluteの新規destinationと本人所有private directoryが必要で、0600・上書きなしで作成します。network取得・設定有効化・モデル/DB実行は行いません。terms/承認・status方針の実確認はoperatorの別作業であり、値が不明なら保留します。旧mcs-drug-map/1のingredient/class辞書の読取り・既定設定は変更しません。
+
+- 操作は不要です。更新後に恒久系の失敗が起きたjobから適用され、既存のpending jobは次の失敗時に判定されます。新しい取込依頼で従来どおり再開できます。
+
+- 追加操作は不要です。ケアチームの同期と押下者取得（metadata_actors）が既定offのままなら常に不明です。氏名・IDは表示しません。
+
+- 新しいGET・定期取得・公開は既定で有効になりません。実行には取得済みinventory、既存session cacheと明示オプトインが必要です。氏名保持と表示はそれぞれ既定offで、オーナーが判断した場合だけcare_teamのsyncに--retain-names、viewに--show-namesを明示します（写真・連絡先は指定に関係なく保存しません）。実APIでの未読保持・session非延長・権限・ページングの受入後にオーナーが本番有効化を判断してください。
+
+- 本番への手渡し・外部送信・承認の自動生成は行いません。既存の厳密なLocalSink受領票と送付先・内容に束縛済みの旧journalは引き続き照合できます。束縛のない旧journalは自動補完せず確認対象として拒否します。認可・集計範囲・snapshot鮮度・既定preset・公開enumは変更しません。
+
+- 既存jobのcursorと再試行間隔を保持します。floorの変更、対象患者の拡張、既読化、通知追加は行いません。この記録はAPI上の全履歴や臨床的完了の保証ではありません。
+
+- 未指定時の既定は /usr/bin/python3 のままです。代替実行ファイルの自動選択・インストール・復旧ジョブの自動有効化は行いません。変更する場合は利用者が既存の安全な絶対パスを指定してください。既存ジョブと選択が異なるinstallerは書込み前に停止するため、mcs setup init --yes --recovery-python に絶対パスを付けて希望を保存し、所有権が確認でき、実行中でない状態で mcs setup services を使って修復してください。1.0.12以前からの更新では、config.json に recovery_python を手で追記してから plan を再実行し、reinstall経路は --install-arg=--no-recovery を付けてapplyしてください。所有済みで停止中のjobはmerge後のservicesが置き換えます。実機への適用・Python更新・配備は別途承認が必要です。
+
+- 自動適用や既定動作の変更はありません。計画は明示した静的スナップショットを使用します。記録には人の確認・理由・操作者のハッシュ・計画との一致、別デバイス上の実際に検証したバックアップと期待ハッシュ、所有者のみアクセスできる明示ディレクトリが必要です。本番修復、疑わしいfloorの扱い、GET負荷、実施担当は別途オーナー判断と既存の承認・receipt経路が必要です。
+
+- 設定変更・DB移行は不要です。既存のHermes経由・独立実行・LINE WORKSの操作と承認条件は同じです。出力ファイルと基準統計の保存でディスク同期に失敗した場合は、保存処理がエラーとして報告されます。この変更は公開済み1.0.12の後続変更で、稼働中のサービスへの反映は別途必要です。
+
+- 既定の_FACT_V2_PROMPT・モデル・fact source・抽出schema・公開projection・Loop入力と世代は変更しません。候補実行はextract_facts_v2のrequest_following=Trueまたはsemantic_v4.extract_request_followingを明示して呼ぶ必要があります。repairにも同じflagを渡します。人手200件以上のG6、calibration、新項目の監査とLoop同一性・公開世代の判断は引き続き昇格条件です。自動昇格や承認tokenは追加しません。
+
+- 公開は既定offです。mcs_view.py response_observationsで--publicationと--max-age-sを明示して閲覧します。callableの公開offではSQLを実行せず、primary入口も候補行を調べません。鮮度の新しい既定秒数は設けず、未指定はfreshness_policy_unknownを返します。通常収集で値が変わらず観測時刻が保持される場合や、本文更新後の束縛を証明できない場合も、不明として扱います。公開・鮮度条件の所有者判断と実機受入は別途必要です。
+
+- 追加操作は不要です。第1層公開・actor取得の既定offと独立した公開条件は変更しません。本番の有効化・公開は既存の所有者判断と実API受入に従ってください。
+
+- doctorのJSONにruntimes.selectedとruntimes.recoveryを追加します。選択runtimeはPython 3.10以上、独立recoveryはPython 3.9以上を確認し、SQLiteは3.51.3以降または3.50.7・3.44.6系列の修正版を必要とします。servicesは退役・描画・起動前、applyはlock・journal・中断回復前に停止します。macOS installerは復旧用Python（既定/usr/bin/python3）が危険・不明なら書込み前に停止します（Python 3.11以上が未導入の新規Macではstage 6のtool/plist配備前）。macOS標準Pythonは影響版のため、--recovery-pythonで安全な独立Pythonを指定するか--no-recoveryを選ぶまで、更新・services適用も停止します。代替Pythonへの自動切替は行いません。
+
+- 追加設定は不要です。signal_feedback統計はローカルで明示選択した場合だけ利用でき、既存export presetには追加しません。新しい原因と抑制は更新後の観測から記録し、旧行の不明理由は補完しません。20未満の標本では率・区間・所要時間を非表示にします。プライバシー上の最小集団基準は未決事項として出力します。
+
+- include_chatは既定falseで、従来の読取りでは候補データを調べません。mcs_view.py project_metadataの--publicationと--include-chatを両方明示すると、medication_periods・observation_items・observation_valuesの本文候補を別出典として併記します。取得・本番適用・モデル既定・schema・薬剤辞書や単位変換は変更せず、項目の同一性や正本を自動決定しません。
+
+- 追加操作は不要です。既存シグナルカードは次回の更新処理で表示が整合します。定期配信・患者名・公開・semantic採用・新規再通知の有効化条件は変更しません。新規の緊急再通知とシグナルtext経路の警告整合は、親側の別実装・既存オーナー判断に従ってください。更新直後は表示元の指紋が変わるため、送信済みカードが一度ずつ再描画（編集）される場合があります。
+
+- 追加操作は不要です。削除済み返信を含むスレッドがある環境では、状態表示と修復計画の未取得スレッド数が減ることがあります。reply_countの実APIでの意味は未確認のため、この件数は取得完了の証明ではありません。
+
+- 実行時の設定変更や配備操作は不要です。v1.0.0〜1.0.2の手動更新条件、standaloneのhost経由条件、schema巻戻しの個別承認を維持します。テストコマンドはtests/fixtures/schema_upgrade/update-paths.jsonに記録しています。
+
+- 既定はoffのままです。収集tickとinteractive初報の封印へ接続済みで、有効化にはurgency_escalationのmode・明示的なroom_cooldown_min・通知先・応答者識別の設定が必要です。sourceは既存計画どおりLLMのみを扱い、after_min=30、repeat_min=60、max_repeats=2、max_per_day=10を継承します。shadowは送信せず監査だけを残し、有効化・冷却時間・確認者・通知先の実受入は別途必要です。
+
+- ルール抽出世代を6から7へ更新します。旧世代のルールartifactは通常の抽出処理で再生成され、再集約・通知表示へ反映されます。再抽出が完了するまでは旧結果が残り得ます。サービス反映は通常の更新手順で行い、暗黙の時制や臨床的緊急性を判定する機能ではありません。
+
+- Hermes連携でDiscordのカード操作を使っている場合は、プラグインを更新した後にgatewayを再起動してください。設定し直す必要はありません。
+
+- 次回の更新（mcs_update の適用後に自動実行される services）、復旧（mcs_recover）、`mcs_setup.py services` の実行、または install.sh の再実行で雛形が再描画され、内容が変わった常駐ジョブ（llama-server・抽出worker 2本・cmd/int 取込・独立実行）はそれぞれ1回再起動されて Umask 077 が適用されます。再起動で処理中のLLM抽出が中断され得るため、抽出が空いている時間帯の更新を推奨します。それまで稼働中のジョブは従来の権限のままです。既に作成済みのログ（例: extract_drain_2.log）の権限は変わらないため、必要に応じて所有者のみ（chmod 600）に変更してください。独立実行の定期ジョブ（mcs_setup.py の _cron_plist と mcs_standalone/service.py が生成する plist、data/cron.log・data/standalone.log）にはまだ Umask を設定しておらず、別項目で対応します。
+
+- 追加操作は不要です。LINE WORKS独立アダプターの再起動後に有効になります。
+
+- 追加操作は不要です。すでに回数が失われた失敗行は、この更新後の再試行から改めて最大3回まで数えます。
+
+- 追加操作は不要です。既定以外の保管場所で運用していた場合、以前のバックアップとスナップショットが既定の保管場所のdata配下に残っていることがあるため、必要に応じて確認してください。
+
+- 追加操作は不要です。統計の定義版(definition_version)が2026-10-05に上がるため、以前の出力と件数を比べる場合は版の違いに注意してください。
+
+- 追加操作は不要です。既定値・設定・対象の範囲は変わりません。
+
+- 追加操作は不要です。Hermes plugin の反映には gateway 再起動が必要です。
+
+- この不具合で/mcsが使えない場合は、mcs_setup init --plugin-project-ids 1,2 のように設定し直すか、hermes config setでproject_idsを整数の一覧に設定してください。設定済みの値は自動では書き換えません。
+
+- 追加操作は不要です。config.jsonをシンボリックリンクで配置している場合は、通常ファイルに置き換えてください。
+
+- 追加操作は不要です。既定値・設定は変わりません。
+
+- 追加操作は不要です。反映には通知ワーカーの再起動が必要です。
+
+- 追加操作は不要です。standaloneモードの常駐プロセス再起動後に有効になります。Hermesモードとlaunchd運用は変わりません。
+
+- 追加操作は不要です。終了コードは従来どおり1です。
+
+- 追加操作は不要です。拒否された場合はgitの状態を確認してから承認をやり直してください。
+
+- 追加操作は不要です。
+
+- 追加操作は不要です。schema_version_unknownが出た場合はDBファイルの状態を確認してから更新をやり直してください。
 
 </details>
 
@@ -324,12 +489,16 @@ Hermesあり・なしのDiscord・Slack・LINE WORKSで閲覧と人承認操作�
 
 ## ドキュメント
 
+[安定稼働版1.0.13の計画](docs/development/RELEASE_1.0.13.md)は、
+旧1.0.13〜1.0.15・追加提案・バグ修正・4つの統一コマンドを集約しました。
+ローカル実装と合成検証は完了し、実機・実API・人手・相手側の受入条件は同計画の§6で追跡します。
+
 | 読む目的 | 文書 |
 |---|---|
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [配備資産](deployment/README.md) |
+| 更新・バックアップ・復旧 | [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |

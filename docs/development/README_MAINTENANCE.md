@@ -63,6 +63,13 @@ PR・main・リリースのCIは、生成部分の一致、最新CHANGELOG版と
 タグからRelease下書きを作るときはtag・CHANGELOG・READMEの版も照合する。
 見直し記録の版が古ければ失敗する。CIは文章の事実性や医療的妥当性を自動保証しない。
 
+候補版の先行レビューは`readme-review-<version>.json`へ同じschemaで記録し、
+`notes`に候補であること、照合済みの範囲と残る受入条件を記載する。
+候補の記録は公開・全件受入の証明ではない。`readme-review.json`は最新CHANGELOG版と
+一致させ、公開版の`GENERATED:release`を手編集したり、CIを弱めたりしない。
+release build時に候補記録を最終照合して正本へ反映し、
+CHANGELOGとREADME要約の生成・最終一致検査を同じ版で完了する。
+
 ## 参考READMEと採用した考え方
 
 2026-10-01に一次資料を確認し、日本語の利用者向けREADMEへ次の考え方を取り入れた。

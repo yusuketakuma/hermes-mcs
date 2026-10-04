@@ -1,0 +1,21 @@
+{
+  "category": "added",
+  "title": "薬剤の表層名を保った成分候補注釈",
+  "summary": "承認済みの私有辞書と完全一致する薬剤に、出所と辞書版を伴う未確認の成分候補を付けます。別名を同一の服薬行へ統合せず、複数候補・総称・不明を分けて表示します。",
+  "upgrade": "本番適用には辞書の入手・保管責任と利用条件の確認、approved_by、絶対パスの私有ファイルとSHA-256固定が必要です。config.jsonのdrug_mapにpathとsha256を明示するとtickの抽出後に候補を作成します。辞書なし・未承認・無効では注釈を適用せず、既存候補を退役します。LLMの再抽出や既読化・通知・人承認条件の変更はありません。",
+  "details": [
+    "mcs-drug-map/1を標準ライブラリだけで容量・件数制限付きで読み込みます。製品YJ/SSKコードや曖昧な類似名を成分の確定照合には使いません。",
+    "med_refを現行source artifactのID・本文hash・抽出内容hash・辞書ID/SHA・resolver版に束縛し、変更時は旧注釈を置き換えます。",
+    "rollupの再構築版を4に更新し、統計には表層名別の従来値と独立した分母付き成分候補内訳を追加します。外部機械exportのallowlistは変更しません。",
+    "候補注釈の置換・削除はrollupの再構築判定に含め、期限で再構築が後回しになった患者にも古い候補を残しません。初回は既存rollupを一度だけ再構築します。内容が変わらない患者は1回の再構築で再判定対象から外れます。辞書照合が期限で打ち切られた場合は状態をpartialとして返し、実行結果のerrorsにdrug_map: partialを記録します（辞書未使用時はunavailableのまま）。"
+  ],
+  "refs": [
+    "mcs/extract/drug_map.py",
+    "mcs/extract/rollup.py",
+    "mcs/views/mcs_stats.py",
+    "mcs/ops/brain_export.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ops/mcs_setup.py",
+    "tests/ingest/test_drug_map_pipeline.py"
+  ]
+}

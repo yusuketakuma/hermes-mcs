@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Hermes連携の初期設定でproject IDが文字列として保存される問題を修正",
+  "summary": "mcs_setup initで--plugin-project-idsをカンマ区切りで指定、または対話で入力すると、project IDが文字列の一覧として保存されていました。プラグインは整数の一覧だけを受け付けるため、/mcsが plugin_config_incomplete を返し、Discord・Slackのカード操作も動きませんでした。整数の一覧として保存するように修正しました。正の整数でない値は保存せず、未設定として表示します。",
+  "upgrade": "この不具合で/mcsが使えない場合は、mcs_setup init --plugin-project-ids 1,2 のように設定し直すか、hermes config setでproject_idsを整数の一覧に設定してください。設定済みの値は自動では書き換えません。",
+  "details": [
+    "_apply_plugin_integrationのproject_idsはカンマ区切りと一覧リテラルのどちらでも整数の一覧に変換する。数字以外・0以下の値があれば書き込まずに失敗として扱う。ユーザー・チャンネル・ロールIDは従来どおり文字列の一覧。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py"
+  ]
+}

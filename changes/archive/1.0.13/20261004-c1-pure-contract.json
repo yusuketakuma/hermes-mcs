@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "C1候補データの独立したローカル契約検査を追加",
+  "summary": "本文と患者別の取得状態を扱うC1候補データについて、明示された許可範囲、本文の容量・整合性・投稿との対応、不明な取得状態を純粋関数で検査できるようにしました。既存の集約出力や手渡し送付の動作・hash・認可は変更しません。",
+  "upgrade": "追加操作は不要です。本文送付は有効になりません。新しいローカル参照契約はmcs-ext-export/2へ分離する方針を採用済みですが、既存経路への送付接続・相手側受入は別工程です。",
+  "details": [
+    "数値はsafe integerと指定範囲の有限binary64に限定し、固定小数表記・負のゼロの正規化・不正Unicodeの拒否を独立して実装する。任意のJCS入力への対応は保証しない。",
+    "profileはfields・patients・max_snapshot_age_s・retention_daysの4項目を検査する。load_authorization(c1=True)から明示的に呼び、本人承認・失効・期限・理由の既存検査も維持する。旧envelopeは新型のgrantを拒否する。",
+    "message_bodyはtext形式、UTF-8で8192bytes以下、送出本文のhash、同じproject・message・世代のfull本文投稿との対応を必須にする。本文例外は同recordのroot body_textだけで、他のrecord・自由項目・入れ子の禁止キーを許可しない。",
+    "patient_coverageのnullは不明のまま保持し、ledgerのfloor変換や送信者の分類は行わない。分割・wire識別子・envelope IDは追加しない。"
+  ],
+  "refs": ["mcs/ops/c1_contract.py", "mcs/ops/ext_contract.py", "tests/ops/test_c1_contract.py", "tests/ops/test_c1_authorization.py"]
+}

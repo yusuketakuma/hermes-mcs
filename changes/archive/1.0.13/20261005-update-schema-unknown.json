@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "更新前検査でDBの版を読めないときに誤った版変更を報告しないよう修正",
+  "summary": "更新計画・適用の事前検査で稼働中DBの版を読み取れなかった場合、版0からの変更(schema_bump)と誤って報告せず、schema_version_unknownで停止します。版が不明なことと版0を区別します。",
+  "upgrade": "追加操作は不要です。schema_version_unknownが出た場合はDBファイルの状態を確認してから更新をやり直してください。",
+  "details": ["precheck_tagはsqlite3の読取り失敗時にcur_verを0とせずschema_version_unknownを返し、schema_bump判定を行わない。"],
+  "refs": ["mcs/ops/mcs_update.py"]
+}

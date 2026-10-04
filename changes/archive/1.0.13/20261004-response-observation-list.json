@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "本人宛の返信・UI観測不足を読取り専用で一覧",
+  "summary": "公開snapshotのcaptureで明示的な本人宛userメンションを確認でき、返信・本人UI操作のどちらかが未観測または不明の投稿を、scope付きの一覧として取得できます。返信とUI操作を別々の事実として返し、返信があるだけで不明なUI観測を隠しません。本人ID・メンション・鮮度・本文世代を確認できない候補は本人宛とせず、不明の件数と理由を返します。",
+  "upgrade": "公開は既定offです。mcs_view.py response_observationsで--publicationと--max-age-sを明示して閲覧します。callableの公開offではSQLを実行せず、primary入口も候補行を調べません。鮮度の新しい既定秒数は設けず、未指定はfreshness_policy_unknownを返します。通常収集で値が変わらず観測時刻が保持される場合や、本文更新後の束縛を証明できない場合も、不明として扱います。公開・鮮度条件の所有者判断と実機受入は別途必要です。",
+  "details": [
+    "既存のself_sender_id・mentions_self・response_observationを再利用します。役割や押下者の別名を追加しません。helperにはメンション観測時刻と返信の時刻・actor不明コンテキストだけを最小追加します。",
+    "本人UI操作はUIの観測のみです。臨床的な非応答・完了・未読を推定せず、既知の返信時刻・観測時刻を維持します。",
+    "最大200件の候補をページ単位で走査し、cursorをsnapshot世代・project scope・鮮度条件に束縛します。非本人宛・不明候補を飛ばしたページでも走査位置を維持します。",
+    "一覧には氏名・actor ID・本文・自由文・本文hashを含めません。message/project参照と固定machine値だけを返し、元のメタデータ・台帳を変更しません。",
+    "完全合成の公開snapshotで本人宛true/false/unknown、返信併存、未来・時刻不明・actor不明、取消・部分観測、同時刻の本文revision、鮮度、削除・archive・scope・cursorを検証します。新GET・既読化・通知・収集変更・実API・LLM・Jevは実行しません。"
+  ],
+  "refs": ["#25", "mcs/views/response_observation_view.py", "mcs/views/message_metadata.py", "tests/views/test_response_observation_view.py"]
+}

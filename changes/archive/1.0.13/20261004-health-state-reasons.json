@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "稼働状態の理由と直近の正常判定を表示",
+  "summary": "health出力に、取得不完全・通知保留・延期・失敗・ディスク不足等の理由コードと、直近で正常判定した時刻を追加します。既存の滞留件数・最古の経過時間と合わせ、未取得や配送保留の場所を確認できます。",
+  "upgrade": "追加操作は不要です。新しいフィールドは通常の収集実行で更新されます。last_ok_atは既存のoverall判定がokだった時刻で、全通知の配送確認やデータの完全性を保証する値ではありません。過去の正常判定を確認できない場合はnullです。",
+  "details": [
+    "既存のoverall・通知・取得完全性・滞留の判定は変更しない。",
+    "状態理由には固定コードだけを使用し、本文・秘密・actor等を追加しない。",
+    "設定読込み前に実行が失敗した場合、health の backup は disabled ではなく state=unknown・reasons=config_not_loaded とし、state_reasons に backup_not_verified を出す。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_run_check_stages.py"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "canonicalの依頼項目をローカル候補で保持",
+  "summary": "宛先・依頼者・期限原文・条件・依頼種別をvalidatorとnormalizerで保持し、明示した候補投影で利用できます。根拠のない項目だけを不明に落とし、依頼自体は失いません。現在の投稿・threadに束縛したstaging候補を重複なく保存できます。",
+  "upgrade": "既定投影・Loop入力・モデル・抽出世代・公開世代・設定は変更しません。新項目は未確認候補のままで、本番昇格には新項目の監査方針、Loop同一性と世代改版のオーナー判断、人手200件以上のG6およびcalibrationが必要です。承認receipt・昇格tokenは生成しません。",
+  "details": [
+    "request_details=Trueでproject_v2_doc_legacyとproject_v2_factsを呼ぶと、候補のto/from/due_text/kind/conditionとassignee_text/time_textを生成する。既定呼出しは旧出力と保存済みLoop同一性を維持する。",
+    "同一fact IDの重複chunkでは追加項目を保持し、帰属や分類の矛盾は項目単位のunknownにする。片方だけがunknownの場合は未確定として扱い、引用に裏付けられた既知の値を残す。一度矛盾した項目は後続の重複でも復活させない。正式依頼や返信の自動結合・臨床workflowの変更はしない。",
+    "semantic_v4.stage_request_followingは現行thread・投稿revision・本文hash・引用を検証し、既存v4_stageのPENDINGに旧/新doc hashと候補を保存する。canonical_projection・semantic_facts_v4・Loop状態・正式依頼を更新しない。",
+    "追加要件は既定extract-specと別の候補世代として扱います。request_to/request_from/due_text/conditionの原文引用とrequest_kind=request|question|self_plan|unknownを保持し、共有仕様の統合・公開世代の切替・Loop採用は親とオーナーの判断に従います。",
+    "既存readerの旧破損fixtureはg1_artifacts_msg_updだけを一時的に外して不正project行を植え、insert guardと元のreader防御の検証を維持する。"
+  ],
+  "refs": ["mcs/semantic/semantic_facts.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_projection.py", "mcs/semantic/semantic_v4.py", "tests/semantic/test_canonical_request_following.py", "tests/semantic/test_canonical_projection.py"]
+}

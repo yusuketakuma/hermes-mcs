@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "取得状態の理由コードをそのまま表示",
+  "summary": "閲覧CLIのstatusと添付一覧で、親投稿本文の未取得・権限拒否・空の添付・既読化結果不明などの理由が「other_error」にまとめられず、収集側が記録した安定コードのまま表示されます。",
+  "upgrade": "追加操作は不要です。保存形式と既存コードの表示は変わりません。",
+  "details": [
+    "parent_body_incomplete・forbidden・download_empty・disk_full・mark_result_unknown・bad_snapshot_ts・bootstrap_error・response_too_large を表示語彙へ追加しました。",
+    "どこからも記録されない body_incomplete を語彙から外しました。未知の値は従来どおり other_error、未記録は not_recorded です。"
+  ],
+  "refs": ["mcs/views/mcs_view.py", "tests/views/test_status_fetch_reason.py"]
+}

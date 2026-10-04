@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "健康監視の状態ファイルと警告行に非正常の理由を表示",
+  "summary": "独立した健康監視が degraded や failed を報告するとき、状態ファイルと警告行に理由コードと最終成功時刻を含めます。状態ファイルには保留通知の理由別件数と各キューの最古滞留時間も載り、health.json を手で開かずに原因を確認できます。",
+  "upgrade": "追加操作は不要です。新しい監視サービスは追加していません。理由の項目を持たない旧形式の health.json や、英小文字・数字・下線以外を含む不正な理由コードは unknown と表示し、理由なしとは扱いません。最終成功時刻が不明な場合も last_ok_at=unknown と表示します。health.json が期限切れ（stale）の場合、記録時点の理由は recorded_state_reasons として残し、警告行の reasons は unknown と表示します。",
+  "details": [
+    "run_check が記録した state_reasons、last_ok_at、notify.held_reasons、各キューの oldest_age_s を健康監視が状態ファイルへ写す。",
+    "警告行は reasons と last_ok_at を追加し、コードと数値だけを出力する。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "tests/ingest/test_health_watch.py"
+  ]
+}
