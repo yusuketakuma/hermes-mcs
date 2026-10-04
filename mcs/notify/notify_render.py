@@ -128,6 +128,7 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
 
 def _latest_signals(db, keys: list, project_id=None) -> dict:
     """key -> {'artifact_id','content'} of the newest signal_v1 row."""
+    from mcs_signals import _signal_content
     out = {}
     for k in keys:
         if not isinstance(k, str) or not k:
@@ -135,17 +136,14 @@ def _latest_signals(db, keys: list, project_id=None) -> dict:
         row = db.execute(
             """SELECT artifact_id, project_id, content FROM artifacts
                WHERE kind='signal_v1' AND json_valid(meta)
-                 AND json_valid(content)
                  AND json_extract(meta,'$.key')=?
                ORDER BY artifact_id DESC LIMIT 1""", (k,)).fetchone()
         if row is None:
             continue
-        try:
-            content = json.loads(row["content"])
-        except (ValueError, TypeError, RecursionError):
-            continue
-        if (isinstance(content, dict) and positive(content.get("project_id"))
-                and row["project_id"] in (None, content["project_id"])
+        # The newest row is authoritative even when unreadable: do not
+        # revive an older open signal after a malformed terminal transition.
+        content = _signal_content(row["content"], row["project_id"])
+        if (content is not None
                 and (project_id is None or content["project_id"] == project_id)):
             out[k] = {"artifact_id": row["artifact_id"],
                       "content": content}

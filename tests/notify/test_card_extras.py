@@ -138,6 +138,22 @@ def test_unacked_leaves_out_old_cards(led):
     assert _click(led, spec, "unacked")["list"]["items"] == []
 
 
+@pytest.mark.parametrize("transport", ["discord", "slack", "lineworks"])
+def test_unacked_observes_new_content_before_a_card_refresh(led, transport):
+    spec = _delivered_card(led)
+    _click(led, spec, "ack")
+    _deliver(led)
+    led.db.execute("UPDATE notification_cards SET transport=?", (transport,))
+    led.db.commit()
+    assert notify_views.unacked_view(led.db, transport, NOW, [1])["items"] == []
+    _msg(led, 102, parent=100, body="合成の未確認返信")
+    # No sweep or click on this card has persisted a new source generation.
+    view = notify_views.unacked_view(led.db, transport, NOW, [1])
+    assert view["head"][0] == "未確認 1件（うち担当者あり 0件）"
+    assert [item["project_id"] for item in view["items"]] == [1]
+    assert notify_views.unacked_view(led.db, transport, NOW, [2])["items"] == []
+
+
 def test_search_opens_modal_then_answers_hits(led):
     spec = _delivered_card(led)
     for mid, body in ((102, "昨日から 発熱 あり。解熱剤を使用"),

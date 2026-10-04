@@ -16,6 +16,55 @@ from notify_testkit import (
 __all__ = ["led"]  # shared isolated-ledger fixture
 
 
+@pytest.mark.parametrize("transport", ["discord", "slack", "lineworks"])
+@pytest.mark.parametrize("corruption", ["json", "state", "type", "evidence"])
+def test_latest_invalid_signal_never_revives_old_display_or_actions(
+        led, transport, corruption):
+    import copy
+    import mcs_signals
+
+    cfg = copy.deepcopy(CFG)
+    cfg["notify"]["interactive"] = transport
+    scope = dict(cfg["notify"]["discord"])
+    if transport != "discord":
+        scope.pop("guild_id")
+        scope["team_id"] = "synthetic-team"
+    cfg["notify"][transport] = scope
+    _patient(led)
+    _msg(led, 100)
+    key = "synthetic-invalid-latest"
+    _signal_row(led, key, mids=[100])
+    _dispatch(led, _intent(led, "signal", payload={
+        "signal_keys": [key], "project_id": 1}), cfg)
+    card = _card(led)
+    old_fp = notify_render._source_fp(led.db, card)
+    _signal_row(led, key, state="resolved", mids=[100])
+    latest = led.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind='signal_v1' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    content = json.loads(latest["content"])
+    content["note"] = "INVALID-LATEST-CANARY"
+    if corruption == "json":
+        raw = "{invalid synthetic json"
+    else:
+        content[corruption] = {"state": "invalid", "type": None,
+                               "evidence": []}[corruption]
+        raw = json.dumps(content)
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                       (raw, latest["artifact_id"]))
+    assert mcs_signals._latest_signal_states(led.db)[key] is None
+    assert notify_render._latest_signals(led.db, [key], 1) == {}
+    assert notify_render._source_fp(led.db, card) != old_fp
+    model = notify_render._card_content(led.db, card)
+    assert model["shown"] == []
+    assert "note " + key not in notify_render.display_text(model)
+    assert "INVALID-LATEST-CANARY" not in notify_render.display_text(model)
+    assert notify_cards._render_context(led.db, card) == {}
+    assert "note " + key not in notify_render._card_body_text(
+        led.db, card, {"shown": json.dumps([key])})[1]
+
+
 def test_signal_evidence_cannot_read_another_patient(led):
     _patient(led, 1)
     _patient(led, 2, name="合成患者B")

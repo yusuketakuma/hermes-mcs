@@ -263,7 +263,7 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
             and not any(r.get("phase") == "started" for r in rows):
         return _apply_hold(db, aid, delivery_id,
                            "journal_corrupt:pre_http", dirs, now)
-    if part["state"] in _RESULT_VALUES + ("held",):
+    if part["state"] in ("delivered", "not_sent", "held"):
         if result_row is None:
             return {"attempt_id": aid, "delivery_id": delivery_id,
                     "verdict": "consistent",

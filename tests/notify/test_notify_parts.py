@@ -336,6 +336,69 @@ def test_unknown_part_state_settles_without_resend(led):
         (did,)).fetchone()["parts_state"] == "incomplete"
 
 
+@pytest.mark.parametrize("result", ["delivered", "not_sent"])
+def test_unknown_part_accepts_a_late_factual_receipt(led, result):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    assert _part_receipt(led, render, "body:0001", result="unknown",
+                         remote_id=None, n=360)["applied"]
+    remote_id = "synthetic-known-post" if result == "delivered" else None
+    out = _part_receipt(led, render, "body:0001", result=result,
+                        remote_id=remote_id,
+                        error_code="synthetic-rejected" if result == "not_sent" else None,
+                        n=361)
+    assert out["applied"]
+    row = _part(led, render["delivery_id"], "body:0001")
+    assert (row["state"], row["remote_id"]) == (result, remote_id)
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+
+
+def test_unknown_body_keeps_update_waiting_until_the_post_identity_is_known(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    assert _part_receipt(led, render, "thread", remote_id="synthetic-thread", n=362)["applied"]
+    assert _part_receipt(led, render, "body:0001", result="unknown",
+                         remote_id=None, n=363)["applied"]
+    assert _part_receipt(led, render, "body:0002",
+                         remote_id="synthetic-reply", n=364)["applied"]
+    _msg(led, 300, parent=100, body="合成の追加返信")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+    assert _part_receipt(led, render, "body:0001",
+                         remote_id="synthetic-root", n=365)["applied"]
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    update = _latest_render(led)
+    assert update["op"] == "update"
+    assert update["delivery_id"] != render["delivery_id"]
+    assert _prior_ids(update)["body:0001"] == "synthetic-root"
+
+
+def test_unknown_thread_waits_for_its_identity_before_replanning(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    _begin_and_deliver_card(led, render)
+    assert _part_receipt(led, render, "thread", result="unknown",
+                         remote_id=None, n=366)["applied"]
+    assert _part(led, render["delivery_id"], "body:0001")["state"] == "held"
+    _msg(led, 300, parent=100, body="合成の追加返信")
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+    assert _part_receipt(led, render, "thread",
+                         remote_id="synthetic-known-thread", n=367)["applied"]
+    notify_cards.sweep(led, CFG, now=NOW + 2)
+    update = _latest_render(led)
+    assert update["delivery_id"] != render["delivery_id"]
+    assert _spec(update)["delivery"]["thread_id"] == "synthetic-known-thread"
+    assert _spec(update)["op"] == "update"
+    assert _card(led)["thread_state"] == "created"
+
+
 def _begin_and_deliver_card(led, render, message_id="m-9"):
     grant = _begin(led, render)
     _receipt(led, render, grant["attempt_id"], message_id=message_id)

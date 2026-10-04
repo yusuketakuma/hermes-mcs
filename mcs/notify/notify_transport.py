@@ -488,8 +488,7 @@ def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
             receipt = {"applied": False, "error": error,
                        "delivery_id": req["delivery_id"],
                        "part_id": req["part_id"]}
-        elif part["state"] in ("delivered", "not_sent", "unknown",
-                               "held"):
+        elif part["state"] in ("delivered", "not_sent", "held"):
             # terminal already: same fact is idempotent, a different
             # fact is a conflict — never silently overwrite
             prior = part["state"]
@@ -738,6 +737,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                     card = cards._card_row(db, hold["card_id"]) \
                         if hold["card_id"] is not None else None
                     error = _rebind_check(hold, card, req)
+                    if error is None:
+                        error = _journal_contradiction(ledger, req)
         if error is None and hold is not None:
             _rebind_apply(db, req, hold, card, now)
             cards.release_holds(db, delivery_id=req["delivery_id"],
@@ -795,6 +796,8 @@ def _rebind_check(hold, card, req) -> str | None:
     """Verify an attempt-lost resolve against the scope reconcile
     captured when it held the scope — the render row is gone, so the
     hold record is the identity witness."""
+    if hold["attempt_id"] != req["attempt_id"]:
+        return "attempt_mismatch"
     try:
         scope = json.loads(hold["scope_json"] or "{}")
     except (json.JSONDecodeError, TypeError):
@@ -819,6 +822,15 @@ def _rebind_apply(db, req, hold, card, now) -> None:
     remote message (never resends); mark_not_sent proves the remote is
     absent and returns the card/events to the sendable queue."""
     delivered = req["result"] == "mark_delivered"
+    render = _render_for(db, req["delivery_id"])
+    if render is not None:
+        # A surviving render still owns the part plan and fan-out coverage.
+        # The operator proves this card's result, never its sibling cards.
+        _settle_attempt(db, {"attempt_id": req["attempt_id"]}, render,
+                        "delivered" if delivered else "not_sent", now,
+                        message_id=req.get("message_id") if delivered else None,
+                        error_code=f"resolve:{req['result']}")
+        return
     if card is not None:
         if delivered:
             db.execute(
