@@ -133,6 +133,84 @@
       "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance.",
       "packet": "docs/development/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-001",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_save_message_metadata",
+      "evidence": "Pでloads_dict(nonobject/不正/deep JSON)→Noneを.content.updateへ渡し、20合成caseすべてAttributeError。capture再収集のsource transactionやshadow記録が停止。",
+      "fix": "parse failureを{}へ正規化し、新規observed fieldsとerror状態を既存transactionで保存。",
+      "contract": "有効な既存field/unchanged observed_at、capture vs shadow、unknown≠emptyは保持。",
+      "regression": [
+        "test_corrupt_optional_metadata_does_not_block_recapture"
+      ],
+      "before_cases": 20,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-002",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/local_llm.py:admitted_chat,admitted_probe_format,_validate_chat_args",
+      "evidence": "Pで不正deadline/endpoint/timeoutがpermit後に判定され、transport/unknown又は不正callback sendへ到達。11合成case fail。",
+      "fix": "deadline型/finite共通検証、probe endpoint/timeoutもpermit取得前に検証。",
+      "contract": "正当なdeadline/loopback/route/class/signature/response shapeは保持、未送信argument errorでpermitゼロ。",
+      "regression": [
+        "test_invalid_deadline_rejected_before_admission",
+        "test_invalid_probe_args_rejected_before_admission"
+      ],
+      "before_cases": 11,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-003",
+      "classification": "confirmed",
+      "priority": "P1",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_init,_migrate,_backfill_v3",
+      "evidence": "P相当_migrateはversion commit後にbackfillしbackfill自身もcommit。旧version2は失敗しても9になり、current9の初回FTSも空tableが残るため次openで補完をskip。途中/全更新後中断×2schema条件の4case fail。",
+      "fix": "FTS作成からmigration/derived fill/version保存まで同じBEGIN IMMEDIATEでcommit/rollback、backfill内部commit除去。",
+      "contract": "SCHEMA_VERSION=9/DDL/保存形式/正常時派生内容は維持、歴史DDL改変なし。_backfill_v3の実callerは_migrateのみ確認。",
+      "regression": [
+        "test_interrupted_derived_backfill_retries_without_advancing_version",
+        "test_backfill_exception_after_all_updates_rolls_back_the_batch"
+      ],
+      "before_cases": 4,
+      "before_log": "migration-before-expanded.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-004",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:metadata_watch_targets,reaction_actor_targets",
+      "evidence": "P相当SQLはjson_eachのstring valueをjson_extractへ直接渡すため、通常文字列/{broken要素でmalformed JSON。watch/actorの4caseが停止。",
+      "fix": "json_each.type=objectのvalueだけCASEでJSON operandへ渡す。",
+      "contract": "既存priority/latest/project/time/cap/backoff維持。取得selectorだけ修正し、display consumerのinvalid配列をvalid扱いしない。",
+      "regression": [
+        "test_invalid_reaction_element_does_not_abort_metadata_selectors"
+      ],
+      "before_cases": 4,
+      "before_log": "reaction-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],
@@ -152,6 +230,14 @@
       "integrated_behavior": "882ae43",
       "source_hashes_match": true,
       "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
+    },
+    {
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "12a7dabc",
+      "integrated_behavior": "c825663",
+      "source_hashes_match": true,
+      "tests": "541 worker-local checks retained; final I validation pending"
     }
   ],
   "independent_review": {

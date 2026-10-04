@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 60,
-      "UNSEEN": 736,
-      "REVIEWED": 28,
-      "EXCLUDED": 2
+      "PARTIAL": 57,
+      "EXCLUDED": 2,
+      "UNSEEN": 715,
+      "REVIEWED": 54
     },
-    "candidate_tracked": 824
+    "candidate_tracked": 826
   },
   "files": [
     {
@@ -2227,6 +2227,19 @@
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
     },
     {
+      "path": "changes/maintenance-core-preflight-20261005.json",
+      "sha256": "4a825b2b91b2d2a0468f364fc586f8715761d40622c56ccc103b702188b03501",
+      "bytes": 1908,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored record; schema/consistency validation pending final integration."
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
+    },
+    {
       "path": "changes/maintenance-notify-legacy-urgency-scope.json",
       "sha256": "1471d291fdb0b1f49b6ffcbec8c733bdab8b0757719ca2746263baa19c3e71e2",
       "bytes": 1322,
@@ -3257,6 +3270,19 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
       ]
+    },
+    {
+      "path": "docs/development/maintenance-core-evidence.json",
+      "sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "bytes": 65098,
+      "lines": 1576,
+      "module": "docs/development",
+      "kind": "run_record",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task-authored record; schema/consistency validation pending final integration."
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
     },
     {
       "path": "docs/development/maintenance-notify-evidence.json",
@@ -4386,10 +4412,26 @@
       "lines": 244,
       "module": "mcs/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "read_ranges": [
+        [
+          1,
+          244
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "stdin-only HTTP worker、宛先/認証情報境界、byte上限、deadline kill/reap。",
+      "callers": [
+        "mcs/core/local_llm.py",
+        "mcs/semantic/semantic_jev.py",
+        "mcs/ops/mcs_setup.py"
+      ]
     },
     {
       "path": "mcs/core/ledger.py",
@@ -4398,19 +4440,59 @@
       "lines": 2651,
       "module": "mcs/core",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core",
+      "owner": "core",
       "read_ranges": [
         [
-          2306,
-          2395
+          1,
+          350
+        ],
+        [
+          351,
+          720
+        ],
+        [
+          721,
+          1080
+        ],
+        [
+          1081,
+          1430
+        ],
+        [
+          1431,
+          1790
+        ],
+        [
+          1791,
+          2150
+        ],
+        [
+          2151,
+          2490
+        ],
+        [
+          2491,
+          2651
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "reviewed_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "responsibility": "SQLite source/archive、移行、FTS、世代・通知意図・メタデータ・queue・snapshotとreadonly writer/reader契約。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/init_data.py",
+        "mcs/ingest/job_ops.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/ops/mcs_backup.py"
+      ]
     },
     {
       "path": "mcs/core/ledger_audit.py",
@@ -4419,10 +4501,27 @@
       "lines": 233,
       "module": "mcs/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "read_ranges": [
+        [
+          1,
+          233
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "明示した静的SQLiteだけをreadonly transactionとVM予算で件数監査するCLI、relation guardの状態表示。",
+      "callers": [
+        "mcs/ops/mcs_repair.py",
+        "mcs/ingest/run_check.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_backup.py"
+      ]
     },
     {
       "path": "mcs/core/llm_admission.py",
@@ -4431,10 +4530,29 @@
       "lines": 537,
       "module": "mcs/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "read_ranges": [
+        [
+          1,
+          270
+        ],
+        [
+          271,
+          537
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "独立SQLite storeとlifetime flockによりepoch/route/classを束縛し、予約からterminalまでRTとBACKLOGを排他制御。",
+      "callers": [
+        "mcs/core/local_llm.py",
+        "mcs/ops/mcs_setup.py"
+      ]
     },
     {
       "path": "mcs/core/local_llm.py",
@@ -4443,28 +4561,31 @@
       "lines": 535,
       "module": "mcs/core",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "semantic",
-      "reviewed_sha256": "b9a354b28244d7bdf5fc85f3569a7404a72c6260e487ec3120eb326d921d4d68",
+      "owner": "core",
+      "reviewed_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
       "read_ranges": [
         [
           1,
-          65
+          260
         ],
         [
-          80,
-          200
-        ],
-        [
-          280,
+          261,
           535
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json"
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "loopback推論、固定slot、opt-in admission、出力制限とJSON/finish_reason/usage/timings、format probe。",
+      "callers": [
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ingest/run_check.py"
+      ]
     },
     {
       "path": "mcs/core/maintenance.py",
@@ -4473,20 +4594,27 @@
       "lines": 269,
       "module": "mcs/core",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "semantic",
+      "owner": "core",
       "reviewed_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
       "read_ranges": [
         [
           1,
-          90
+          269
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json"
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "verified daily/preupdate backup、参照による保持、copytruncate、配送journal保護付き添付retention、snapshot公開。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/health_watch.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/semantic/semantic.py"
+      ]
     },
     {
       "path": "mcs/core/mcs_queries.py",
@@ -4495,23 +4623,33 @@
       "lines": 494,
       "module": "mcs/core",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core",
+      "owner": "core",
       "read_ranges": [
         [
-          65,
-          95
+          1,
+          250
         ],
         [
-          150,
-          225
+          251,
+          494
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "reviewed_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "responsibility": "current artifact/hash/project/generation predicateをstats/signals/viewsへ共有し、医療事実を未確認値と区別。",
+      "callers": [
+        "mcs/views/mcs_stats.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_urgent.py",
+        "mcs/ops/mcs_requests.py"
+      ]
     },
     {
       "path": "mcs/core/mcs_runtime.py",
@@ -4520,10 +4658,29 @@
       "lines": 38,
       "module": "mcs/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "明示runtime_modeを検証し、standalone rootまたはHermesのPython/scripts/homeを解決。",
+      "callers": [
+        "mcs_standalone/runtime.py",
+        "mcs_standalone/config.py",
+        "mcs_standalone/service.py",
+        "mcs/notify/notify_flush.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_update.py"
+      ]
     },
     {
       "path": "mcs/core/mcs_util.py",
@@ -4532,24 +4689,31 @@
       "lines": 399,
       "module": "mcs/core",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "semantic",
+      "owner": "core",
       "reviewed_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
       "read_ranges": [
         [
           1,
-          125
-        ],
-        [
-          234,
-          339
+          399
         ]
       ],
-      "packet": "docs/development/maintenance-semantic-evidence.json"
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "副作用のない共有config/text/JSON/pathとno-proxy/no-redirect、fsync atomic publish、run lock、LLM breaker/disk floor、launchd helper。",
+      "callers": [
+        "mcs/core/ledger.py",
+        "mcs/core/maintenance.py",
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_update.py"
+      ]
     },
     {
       "path": "mcs/extract/clinical_values.py",
@@ -6588,10 +6752,25 @@
       "lines": 168,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "read_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "不正artifact JSONとjoin planner変化でもstats/signals/QCの境界を保持。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_core_misc.py",
@@ -6600,10 +6779,37 @@
       "lines": 1216,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          630
+        ],
+        [
+          631,
+          960
+        ],
+        [
+          961,
+          1216
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "save/通知冪等性、患者スコープ、source hash、migration/FTS、backup/retention、既存metadataの合成回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_job_reasons.py",
@@ -6612,10 +6818,25 @@
       "lines": 265,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "read_ranges": [
+        [
+          1,
+          265
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "取得理由の持続とretry/fail-fast/成功時消去、statusで不在を業務未対応へ読み替えない。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_ledger_audit.py",
@@ -6624,10 +6845,29 @@
       "lines": 306,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          306
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "静的DBの不変hash、legacy/future schema、budget、破損/違反件数、readonly CLI。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_ledger_candidate_validation.py",
@@ -6636,10 +6876,25 @@
       "lines": 114,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "read_ranges": [
+        [
+          1,
+          114
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "全対応versionとv1形状、破損/重複/欠損source/中断候補の非破壊拒否。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_ledger_guards.py",
@@ -6648,10 +6903,25 @@
       "lines": 223,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "read_ranges": [
+        [
+          1,
+          223
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "raw SQL接続でも関連制約、dirty relation shadow保持、NULL契約、snapshot/health表示。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_ledger_recovery_contract.py",
@@ -6660,10 +6930,29 @@
       "lines": 374,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          374
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "backup中断・disk floor・marker・rotation・独立restore/FTS/添付hash・異なるHOMEからのreadonly CLI。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_ledger_reply_recovery.py",
@@ -6672,10 +6961,25 @@
       "lines": 84,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "read_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "legacy NULL返信のjob予約、snippet sibling試行回数と失敗保持、再openの不要更新防止。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_llm_admission.py",
@@ -6684,10 +6988,29 @@
       "lines": 724,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "read_ranges": [
+        [
+          1,
+          370
+        ],
+        [
+          371,
+          724
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "route/class排他、実SQLite競合、epoch再開、待機/cancel/unknown保持、共有callerの送信前引数回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_local_llm.py",
@@ -6696,10 +7019,25 @@
       "lines": 327,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "read_ranges": [
+        [
+          1,
+          327
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "canonical/legacyの出力契約、format制約、slot、usage/timings、loopback拒否、深いJSON。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_local_llm_deadline.py",
@@ -6708,10 +7046,25 @@
       "lines": 149,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "read_ranges": [
+        [
+          1,
+          149
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "worker機構のdeadline/kill/reap、connection refused識別、実interpreterの合成slow-read中断。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_maintenance_root.py",
@@ -6720,10 +7073,25 @@
       "lines": 27,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "read_ranges": [
+        [
+          1,
+          27
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "standalone明示rootがmaintenance/admission pathへ反映。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_mcs_util.py",
@@ -6732,10 +7100,25 @@
       "lines": 77,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "read_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "atomic fsync/cleanup・壊れたbreaker・disk floor・quote span・chunk size・deep JSON。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_message_revisions.py",
@@ -6744,10 +7127,25 @@
       "lines": 175,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "read_ranges": [
+        [
+          1,
+          175
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "terminal hash履歴だけを保持、batch rollback、snapshot、重複と競合revision。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_metadata_watch.py",
@@ -6756,10 +7154,25 @@
       "lines": 111,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "read_ranges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "独立correlated referenceとのpriority同値、時刻/project境界、配列文字列要素のselector回帰。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_supported_schema_upgrade.py",
@@ -6768,10 +7181,25 @@
       "lines": 359,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "read_ranges": [
+        [
+          1,
+          359
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "repo内historical DDL+完全合成seedの全released/pre-release shapeからupgrade/backup/restore/consent rollback。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/core/test_thread_reply_pairs.py",
@@ -6780,10 +7208,25 @@
       "lines": 65,
       "module": "tests/core",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
+      "status": "REVIEWED",
+      "evidence": [
+        "Worker full-content/source-consumer/20-criteria audit and local checks recorded; parent inspected patch and verified final file hash. Final fixed-I checks and independent review remain pending."
+      ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "owner": "maintenance_core"
+      "owner": "core",
+      "reviewed_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "packet": "docs/development/maintenance-core-evidence.json",
+      "responsibility": "half-open root cohort、観測horizon、unknown time、future/deleted/foreign-project返信とtie break。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ]
     },
     {
       "path": "tests/extract/extract_testkit.py",
