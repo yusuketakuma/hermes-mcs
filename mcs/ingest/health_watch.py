@@ -8,7 +8,7 @@ presence, parseability, freshness — so 'missing', 'stale' and 'corrupt'
 are detectable even when every run "succeeded".
 
 Freshness deadline comes from config (health.tick_interval_s, default
-300 — the deployed 5-minute tick — and health.max_missed_runs, default
+600 — the deployed 10-minute tick — and health.max_missed_runs, default
 2). Collection runs at the same interval around the clock.
 
 Output contract: alert content is status codes/counters only — never
@@ -35,7 +35,7 @@ HEALTH_REL = os.path.join("data", "health.json")
 STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
 
-DEFAULT_TICK_S = 300        # deployed cron cadence: */5 * * * *
+DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
 RUN_GRACE_S = 480           # run_check's whole-run deadline
 REALERT_S = 3600            # unchanged bad state re-alerts hourly
@@ -176,7 +176,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     evidence_at is the unread-collection age or health_at, whichever
     made it stale — and the status alone otherwise: a fresh file
     carries a new health_at every tick, so keying on it would re-alert
-    a persistent 'degraded' every 5 minutes. An unchanged verdict
+    a persistent 'degraded' every 10 minutes. An unchanged verdict
     never re-alerts. ok->ok never alerts even when the file is fresh —
     a healthy producer keeping cadence is not an event. Alerts fire
     on: first non-ok observation, every transition INTO a non-ok

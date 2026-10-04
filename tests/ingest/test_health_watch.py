@@ -192,13 +192,42 @@ def test_deadline_derives_from_config_not_hardcode():
     assert health_watch.freshness_deadline(cfg) == 300 * 3
     cfg = {"health": {"tick_interval_s": 60, "max_missed_runs": 4}}
     assert health_watch.freshness_deadline(cfg) == 60 * 5
-    # malformed/absent config -> documented defaults (300*3)
-    assert health_watch.freshness_deadline({}) == 900
+    # malformed/absent config -> documented defaults (600*3)
+    assert health_watch.freshness_deadline({}) == 1800
     assert health_watch.freshness_deadline(
-        {"health": {"tick_interval_s": "x", "max_missed_runs": -1}}) == 900
+        {"health": {"tick_interval_s": "x", "max_missed_runs": -1}}) == 1800
     assert health_watch.freshness_deadline(
         {"health": {"tick_interval_s": float("inf"),
-                    "max_missed_runs": 2}}) == 900
+                    "max_missed_runs": 2}}) == 1800
+
+
+@pytest.mark.parametrize("cfg", [{}, {"health": None},
+                                 {"health": {"tick_interval_s": True}},
+                                 {"health": {"tick_interval_s": 0}}])
+def test_default_ten_minute_cadence_preserves_missed_run_window(tmp_path, cfg):
+    _health_file(tmp_path, {"overall": "ok", "at": 1000})
+    # Two missed ten-minute runs remain within the grace window; the
+    # next expected run is the boundary, and only its absence is stale.
+    for now in (1600, 2200, 2800):
+        r = health_watch.evaluate(str(tmp_path), now=now, cfg=cfg)
+        assert r["status"] == "ok" and not r["alert"]
+        assert r["deadline_s"] == 1800
+    r = health_watch.evaluate(str(tmp_path), now=2801, cfg=cfg)
+    assert r["status"] == "stale" and r["alert"]
+
+
+def test_default_ten_minute_cadence_deep_health_cannot_mask_stopped_unread(tmp_path):
+    _health_file(tmp_path, {"overall": "ok", "at": 2800,
+                            "unread_at": 1000})
+    r = health_watch.evaluate(str(tmp_path), now=2800, cfg={})
+    assert r["status"] == "ok" and not r["alert"]
+    r = health_watch.evaluate(str(tmp_path), now=2801, cfg={})
+    assert r["status"] == "stale" and r["evidence_at"] == 1000
+    # A deep-only heartbeat cannot reset the unread freshness window.
+    _health_file(tmp_path, {"overall": "ok", "at": 2900,
+                            "unread_at": 1000})
+    r = health_watch.evaluate(str(tmp_path), now=2900, cfg={})
+    assert r["status"] == "stale" and not r["alert"]
 
 
 def _eval(home, now):
@@ -350,12 +379,12 @@ def test_main_prints_only_on_alert(tmp_path, capsys):
     last = _local_time(27, 12, 0)
     _health_file(tmp_path, {"overall": "ok", "at": last})
     rc = health_watch.main(["--home", str(tmp_path), "--now",
-                            str(_local_time(27, 12, 30))])
+                            str(_local_time(27, 12, 31))])
     assert rc == 0
     out = capsys.readouterr().out
     assert "stale" in out
     rc = health_watch.main(["--home", str(tmp_path), "--now",
-                            str(_local_time(27, 12, 31))])
+                            str(_local_time(27, 12, 32))])
     assert rc == 0
     assert capsys.readouterr().out == ""     # deduped: silent
 
