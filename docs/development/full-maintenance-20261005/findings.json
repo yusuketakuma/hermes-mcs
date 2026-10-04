@@ -1,8 +1,159 @@
 {
   "schema_version": 1,
-  "findings": [],
+  "findings": [
+    {
+      "id": "SEM-P1-F01",
+      "class": "confirmed-defect",
+      "priority": "P2",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic.py"
+      ],
+      "cause": "Remaining budget was floored to 0.5s and omitted cache I/O, allowing model dispatch after format preflight/rejection consumed the absolute deadline.",
+      "change": "One monotonic absolute deadline includes probe/cache I/O/fallback/length state; no dispatch once exhausted; deadline forwarded to shared transport.",
+      "before_evidence": "regression-before.log: 8 deadline cases failed",
+      "after_evidence": "packet-final.log and semantic-family-final.log pass",
+      "compatibility": "No route, model, timeout default, token ceiling, request limit or not-sent retry policy widened.",
+      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P1-F02",
+      "class": "confirmed-defect",
+      "priority": "P2",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_llm.py"
+      ],
+      "cause": "Malformed limitations were iterated/coerced or raised, while malformed claims were silently dropped into an empty candidate.",
+      "change": "Non-object/empty-text claims and non-list/non-string limitations fail with model outcome; missing/null limitations remain the compatible empty case.",
+      "before_evidence": "regression-before.log: five limitations failures; claims-regression-before.log: five silent-drop failures",
+      "after_evidence": "packet-final.log: malformed limitations9/claims5 and deadline8 cases pass; semantic-family-final.log: 822 pass",
+      "compatibility": "Valid Claim shape, evidence references, audit/repair routes, oversize stub and call signatures remain.",
+      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "F01",
+      "classification": "confirmed",
+      "priority": "P2/security",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_flush.py:912",
+      "root_cause": "JSON sender handles both independent packages but stored sha256 pins were enabled only for LINE WORKS. Standalone could reseal replaced/untracked bytes under their new hash.",
+      "fix": "use existing _hermes_free(cfg,target) for stored attachment pins; no dependencies/API/schema change",
+      "regression_before": {
+        "exit": 1,
+        "failed": 6,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/regression-before.log"
+      },
+      "regression_after": "six cases included in final 224-pass Junit (both Slack/Discord; before/after fingerprint and untracked attachment)",
+      "change_record": "changes/maintenance-notify-standalone-attachment-pins.json",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "F02",
+      "classification": "confirmed",
+      "priority": "P2/correctness-compatibility",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_urgent.py:83,297",
+      "root_cause": "explicit artifact project equality in JOIN excluded legacy project=NULL LLM rows that current_fact_pred and urgency display intentionally permit by unique message/hash.",
+      "fix": "join by message_id; retain the shared current_fact_pred project/hash/current-generation restriction",
+      "regression_before": {
+        "exit": 1,
+        "failed": 1,
+        "passed": 2,
+        "deselected": 55,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-before.log"
+      },
+      "regression_after": "legacy NULL and scoped LLM both enqueue/check_delivery/send; incompatible project mutation is rejected by g1 and rolled back; all in final PASS",
+      "change_record": "changes/maintenance-notify-legacy-urgency-scope.json",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D01",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "top-level interactive accepted could escalate a suppressed/uncovered member",
+      "evidence": "_base requires intersection of frozen message_ids and delivered ic.coverage; test_partial_interactive_acceptance_is_not_delivery_of_suppressed_member and sealed E2 PASS",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D02",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "text initial delivery could create unconfirmable E2",
+      "evidence": "_stage stops text after E1, _base text excludes sealed batch; text E2 enqueue/send-time cancellation tests PASS",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D03",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "old generation or hidden page acknowledgement could silence urgency",
+      "evidence": "_confirmed matches current source_generation/source_fp and shown integer member; page/old-generation regressions PASS",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D04",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "digest built outside write lock could enqueue twice",
+      "evidence": "latest event id compared after BEGIN IMMEDIATE; test_body_is_built_outside_the_write_lock proves competing insert wins",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D05",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "hold could rescue an already/uncertain delivered event and duplicate it",
+      "evidence": "_hold_event reloads current receipt; holds disable rescue for unknown outcome, corrupt receipt retains invalid_progress; current-receipt/crash tests PASS",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D06",
+      "classification": "disproved_for_current_entry_paths",
+      "status": "NO_CHANGE",
+      "hypothesis": "_fail_event old ev.progress could suppress/park after a newly accepted chunk on StaleSend/DeferredSend",
+      "evidence": "semantic_gate/render_gate convert changes in_progress into FreezeSend (unconditional hold); current urgent fixed short text is below1900, and retry entry ev already has previous progress. No current production path was found; no speculative fix introduced.",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "L01",
+      "classification": "deferred",
+      "status": "PARENT_SCOPE",
+      "topic": "all caller auth/transport/schema and fresh independent fixed-I review",
+      "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance.",
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    }
+  ],
   "deferred": [],
-  "integration": [],
+  "integration": [
+    {
+      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "acc15e946f3a7a4e8a2f1e282a9d5af227bf6e43",
+      "integrated_behavior": "cb118fd",
+      "source_hashes_match": true,
+      "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
+    },
+    {
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "bd62135162a5ff556c4129e6d25312fe821b7c13",
+      "integrated_behavior": "882ae43",
+      "source_hashes_match": true,
+      "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
+    }
+  ],
   "independent_review": {
     "status": "not_started",
     "reason": "Requires fixed I after all packets"
