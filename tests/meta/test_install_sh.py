@@ -237,6 +237,10 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
         del stubs["brew"]
     if path_hermes:        # a hermes on PATH that is not our venv
         stubs["hermes"] = '#!/bin/sh\necho "path-hermes $*" >> "$STUB_LOG"\n'
+    # find_py prefers python3.13/3.12/3.11 before python3; shadow them so a
+    # host Python (e.g. /usr/bin/python3.12 on Linux CI) never replaces the stub.
+    for version in ("python3.13", "python3.12", "python3.11"):
+        stubs.setdefault(version, "#!/bin/sh\nexit 1\n")
     for name, body in stubs.items():
         p = bin_dir / name
         p.write_text(body)
