@@ -15,7 +15,7 @@ from mcs_requests import payload_hash
 from semantic_policy import (KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS_V2,
                              KIND_SUMMARY)
 from semantic_testkit import (_canonical_cfg, _drain, _FakeJev, _ledger,
-                              _llm_v2, _med_fact, _message, NO_FACTS, _patient,
+                              _cfg, _llm_v2, _med_fact, _message, NO_FACTS, _patient,
                               _preflight_jev, _seeded_two)
 
 
@@ -438,5 +438,45 @@ def test_resource_wait_does_not_grow_artifacts(tmp_path):
         assert counts[1]["v4_stage"] >= counts[0]["v4_stage"]
         assert counts[1] == counts[2] == counts[3], counts
         assert counts[-1]["semantic_facts_audit"] == 1
+    finally:
+        db.close()
+
+
+def test_canonical_switch_reaudits_summary_and_renders_new_facts(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        p = _patient(db)
+        p.messages = [_message(1, body="合成記録を希望します。")]
+        db.save_patient(p, notify={"source": "unread"}, semantic=True)
+        def empty(_prompt):
+            return '{"facts":[],"claims":[],"limitations":[]}'
+        semantic.run_due(db, _cfg("enforce", loop_mode="off"), {"errors": []},
+                         time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=empty)
+        old = _artifacts(db, KIND_SUMMARY, 1)[-1]
+        assert _meta(old)["audit_status"] == "PASS"
+        db.semantic_seed(1, [1], {"source": "replay"})
+        calls = []
+
+        def canonical_llm(prompt):
+            calls.append(prompt)
+            if "要約器" in prompt:
+                return '{"claims":[],"limitations":[]}'
+            return json.dumps({"facts": [{
+                "kind": "preference", "statement": "合成記録を希望",
+                "subject_role": "patient", "polarity": "affirmed",
+                "epistemic": "asserted", "workflow_status": "reported",
+                "evidence_quote": "合成記録を希望"}],
+                "category_presence": dict(NO_FACTS, preference="one")})
+
+        choices = {f"has_{c}": "absent" for c in sf.MANDATORY_CATEGORIES}
+        choices["has_preference"] = "present"
+        out = _drain(db, llm=canonical_llm, jev=_FakeJev(choice_map=choices))
+        assert out["done"] == 1
+        current = _artifacts(db, KIND_SUMMARY, 1)[-1]
+        assert any("要約器" in prompt for prompt in calls)
+        assert _meta(current)["policy_fingerprint"] != _meta(old)["policy_fingerprint"]
+        summary = json.loads(current["content"])
+        assert any("合成記録を希望" in line for line in summary["mandatory_facts"])
+        assert summary["mandatory_fact_ids"]
     finally:
         db.close()

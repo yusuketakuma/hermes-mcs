@@ -1866,7 +1866,7 @@ def revive_failed(ledger, now: float | None = None) -> dict:
               "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
     where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
     rows = ledger.db.execute(
-        "SELECT job_id,attempts,payload FROM fetch_jobs " + where
+        "SELECT job_id,attempts,payload,updated_at FROM fetch_jobs " + where
         + capped + "<? ORDER BY updated_at LIMIT ?",
         (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT,
          REVIVE_MAX * 4)).fetchall()
@@ -1894,12 +1894,14 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             attempts + 1, runtime.attempt_limit(pl))
         pl["retry_command_id"] = f"auto-{int(now)}-{row['job_id']}"
         with ledger.db:
-            ledger.db.execute(
+            changed = ledger.db.execute(
                 "UPDATE fetch_jobs SET state='pending',payload=?,next_try=?,"
-                "updated_at=? WHERE job_id=? AND state='failed'",
+                "updated_at=? WHERE job_id=? AND state='failed' "
+                "AND attempts IS ? AND payload IS ? AND updated_at IS ?",
                 (json.dumps(pl, ensure_ascii=False, sort_keys=True),
-                 now, now, row["job_id"]))
-        out["revived"] += 1
+                 now, now, row["job_id"], row["attempts"], row["payload"],
+                 row["updated_at"])).rowcount
+        out["revived"] += changed
     return out
 
 
@@ -1920,7 +1922,7 @@ def main() -> int:
         if not args.revive_failed:
             ap.error("--drain or --revive-failed required")
         # Bookkeeping only: revive_failed's per-row conditional UPDATE is
-        # a CAS on state='failed', so it needs no run lock — taking one
+        # a CAS on the selected failed input, so it needs no run lock — taking one
         # made the 6-hourly maintenance report failure whenever a tick or
         # drain held the lock at that moment (2026-10).
         from ledger import Ledger
