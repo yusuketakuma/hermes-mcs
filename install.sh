@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
                       RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
                       case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' 'invalid --mode' >&2; exit 2 ;; esac ;;
         --no-brew)     SKIP_BREW=1 ;;
-        --recovery-python) [ $# -ge 2 ] && [ -n "$2" ] || { printf '%s\n' '--recovery-python needs an absolute path' >&2; exit 2; }
+        --recovery-python) if [ $# -lt 2 ] || [ -z "$2" ]; then printf '%s\n' '--recovery-python needs an absolute path' >&2; exit 2; fi
                       RECOVERY_OPTION="$2"; shift ;;
         --no-llm)      SKIP_LLM=1 ;;
         --no-plugin)   SKIP_PLUGIN=1 ;;
