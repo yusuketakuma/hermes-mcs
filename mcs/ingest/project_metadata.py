@@ -69,7 +69,11 @@ def _string(value) -> str | None:
 def _number(value) -> int | float | None:
     if value is None:
         return None
-    if type(value) not in (int, float) or not math.isfinite(value):
+    try:
+        valid = type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid:
         raise SchemaError("project metadata: number invalid")
     return value
 

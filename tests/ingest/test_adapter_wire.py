@@ -437,6 +437,20 @@ def test_ws_handshake_rejects_wrong_accept():
         conn._handshake("127.0.0.1", 9222, "/x")
 
 
+@pytest.mark.parametrize("length", [17, 65537])
+def test_ws_header_terminator_cannot_bypass_header_limit(length):
+    # A terminator in the final read must not certify an oversized header.
+    conn = _ws_conn(b"x" * (length - 4) + b"\r\n\r\n")
+    cap = 16 if length == 17 else 65536
+    with pytest.raises(mcs_adapter.BootstrapError, match="cdp_ws_too_large"):
+        conn._read_until(b"\r\n\r\n", cap)
+    # Bytes after a valid header belong to frames, not to the header budget.
+    header = b"x" * (cap - 4) + b"\r\n\r\n"
+    conn = _ws_conn(header + b"synthetic-frame")
+    assert conn._read_until(b"\r\n\r\n", cap) == header
+    assert conn._read_exact(len(b"synthetic-frame")) == b"synthetic-frame"
+
+
 def test_ws_constructor_closes_socket_after_failed_handshake(monkeypatch):
     sock = _FakeSock(b"HTTP/1.1 403 Forbidden\r\n\r\n")
     monkeypatch.setattr(mcs_adapter.socket, "create_connection",

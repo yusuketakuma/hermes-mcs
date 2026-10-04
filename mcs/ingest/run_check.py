@@ -102,7 +102,7 @@ def _prev_health() -> dict:
     try:
         with open(HEALTH_FILE, encoding="utf-8") as f:
             prev = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return prev if isinstance(prev, dict) else {}
 
@@ -1848,7 +1848,7 @@ def _main() -> int:
 
         # -- derived data ----------------------------------------------
         # jobs-only runs skip fetch entirely, so the LLM extract slice
-        # can be wider than the 15-min tick's — still capped well under
+        # can be wider than the 10-min tick's — still capped well under
         # RUN_DEADLINE_S so history/trickle stages keep their share.
         if not _code_changed(result):
             _run_stage(result, "derive", deadline, stage_derive,

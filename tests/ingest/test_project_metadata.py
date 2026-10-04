@@ -296,3 +296,27 @@ def test_cli_name_opt_ins_are_explicit_and_care_team_only(store, tmp_path, capsy
         with pytest.raises(SystemExit) as raised:
             main(bad)
         assert raised.value.code == 2
+
+
+@pytest.mark.parametrize("dataset,key,valid,bad,item_id", [
+    ("observation_items", "observation_items", LAB,
+     {**LAB, "upper_reference_limit_scalar": 10**400}, None),
+    ("observation_values", "observation_values", {"scalar": 12},
+     {"scalar": 10**400}, 55),
+])
+def test_out_of_range_number_records_failure_without_losing_complete_artifact(
+        store, dataset, key, valid, bad, item_id):
+    client, calls = adapter([page(key, [valid]), page(key, [bad])])
+    result = sync_metadata(store, client, 1, dataset, enabled=True, item_id=item_id, now=100)
+    assert result["state"] == "complete"
+    complete_id = result["artifact_id"]
+    result = sync_metadata(store, client, 1, dataset, enabled=True, item_id=item_id, now=200)
+    assert result["state"] == "failed" and result["reason"] == "schema_error"
+    artifacts = store.artifacts(ARTIFACT_KIND, project_id=1)
+    assert len(calls) == 2 and len(artifacts) == 2
+    previous = next(a for a in artifacts if a["artifact_id"] == complete_id)
+    assert json.loads(previous["content"])["complete"] is True
+    failed = next(a for a in artifacts if a["artifact_id"] == result["artifact_id"])
+    payload = json.loads(failed["content"])
+    assert payload["rows"] == [] and payload["definition"] is None
+    assert not payload["complete"]

@@ -188,6 +188,8 @@ class _WSConn:
                 raise BootstrapError("cdp_ws_too_large")
             self._fill()
         idx = self._buf.index(marker) + len(marker)
+        if idx > cap:
+            raise BootstrapError("cdp_ws_too_large")
         out = bytes(self._buf[:idx])
         del self._buf[:idx]
         return out
@@ -658,6 +660,9 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
                   is_unread: bool | None = None) -> Message:
     if not isinstance(m, dict):
         raise SchemaError("message: object invalid")
+    if "project_id" in m and (
+            not _valid_id(m["project_id"]) or m["project_id"] != project_id):
+        raise SchemaError("message: project mismatch")
     u = m.get("user") or {}
     if not isinstance(u, dict):
         raise SchemaError("message: user invalid")
