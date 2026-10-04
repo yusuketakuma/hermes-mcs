@@ -449,6 +449,7 @@ def test_owned_recovery_repair_rejects_unknown_or_active_before_writes(
 
 def test_doctor_and_updater_do_not_mask_deployed_drift(
         updater, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")  # launchd watchdog scenario
     path, old = _owned_recovery(monkeypatch, tmp_path)
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired, "mcs_login_id": "synthetic", "notify_target": "local"}
