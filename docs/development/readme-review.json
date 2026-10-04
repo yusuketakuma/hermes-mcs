@@ -1,89 +1,70 @@
 {
-  "version": "1.0.13",
+  "version": "1.0.12",
   "sections": {
     "features": {
-      "notes": "1.0.13候補の先行レビュー。既存の収集・暫定集約・人承認を維持し、新しいローカル支援を候補欄へ分離した。mcs_cliのinstall/setup/update/doctor引数転送、backupのpolicy・専用鍵・同意待ち復元、metadataのpublicationとinclude_chat既定off、med_refの辞書承認・hash束縛をソースと変更記録で照合した。standaloneの全機能保証を削除し、SDK版metadataだけでは実機接続・worker反映の受入にならないと明記した。canonicalの人手held-out 200件以上/G6/calibration・昇格、urgencyのcaller/応答者/通知先/room冷却、有効化と統合は未受入として残す。この記録は公開版や全32項目の受入を宣言しない。 2026-10-05の最終照合: 1.0.13 build後、候補・未公開の表現を1.0.13のローカル支援（既定off・実機受入は別途）へ改め、構造化データの入口を実在するproject_metadata.pyへ訂正した。C1の撤回指示書・合成参照受信側・明示opt-inのsender分類、ケアチーム医師の見ました未観測人数はREADMEに追加せずCHANGELOGと仕様書へ置く。外部条件は計画§6で追跡する。",
+      "notes": "Slack /mcsとLINE WORKS本人トークのmcs JSONをDiscordの共通コマンドへ接続したソースと照合し、READMEの入口を更新した。全18閲覧kind・status・全13運用actionを合成経路テストで確認済み。正常なメタデータ公開、取消監視、押下者取得、ゼロ件比較の修正を照合した。取得・公開・本人スタンプ応答判定の既定offと正式タスク完了との区別を保持する。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "changes/archive/1.0.13/20261004-canonical-evaluation.json",
-        "changes/archive/1.0.13/20261004-canonical-following.json",
-        "changes/archive/1.0.13/20261004-runtime-compatibility.json",
-        "changes/archive/1.0.13/20261004-urgency-followup.json",
-        "mcs/extract/drug_map.py",
-        "mcs/notify/notify_urgent.py",
-        "mcs/ops/mcs_backup.py",
-        "mcs/ops/mcs_cli.py",
-        "mcs/ops/mcs_setup.py",
-        "mcs/semantic/semantic_facts.py",
-        "mcs/views/mcs_view.py",
-        "mcs/views/project_metadata_view.py"
+        "adapters/common/commands.py",
+        "adapters/slack/actions.py",
+        "adapters/lineworks/actions.py",
+        "hermes_plugin/__init__.py",
+        "mcs/core/ledger.py",
+        "mcs/views/message_metadata.py",
+        "mcs/ops/mcs_signals.py",
+        "tests/adapters/standalone/test_native_commands.py"
       ]
     },
     "demos": {
-      "notes": "Slackを先頭に保ち、7枚のPNGを直接確認した。01の本文/添付スレッド、02の確認・担当と本人スタンプの観測日時の分離、03の状態依存メニュー、04の入力、05の本人向けpreview/確定、06の本人向けタスク状態操作、07の取得範囲・暫定薬・原本確認を対応表と実装に照合した。生成器の--checkは成功し、7組のSVG/PNGとhash記録は整合した。既存の説明例に対するstaleな表示変更は見つからず画像は変更不要。backup・辞書候補・構造化併記・urgencyの新しい画面やSDK実機受入をこの図で証明しない。候補の表示変更が確定した場合は親が生成器の該当例を更新し、SVG/PNG/assets.jsonを再生成・再確認する。実データ・実投稿の匿名化例は追加しない。 2026-10-05の最終照合: 生成器の--checkで7組のSVG/PNGとhashが一致した。今回の修正は表示例の画面要素を変えないため画像は変更不要。",
+      "notes": "Slack先頭の7画面とLINE WORKS2画面は既存のカード・フォーム・本人確認の説明図で、新しいJSONコマンドを描いていないため画像変更は不要。ギャラリーのSlack /mcs未実装という古い説明だけを訂正した。配送と本人向け表示、人承認条件をソースに照合し、両生成スクリプトのcheckが成功。架空データの説明図と実画面確認を区別し、新コマンドの実画面は未確認。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "adapters/common/text.py",
-        "adapters/slack/actions.py",
-        "adapters/slack/cards.py",
-        "changes/archive/1.0.13/20261004-summary-rendering.json",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/slack-gallery/assets.json",
-        "mcs/notify/notify_views.py",
-        "mcs/views/message_metadata.py",
-        "scripts/development/generate_slack_gallery.py"
+        "docs/screenshots/lineworks-gallery/README.md",
+        "adapters/slack/actions.py",
+        "adapters/lineworks/actions.py",
+        "scripts/development/generate_slack_gallery.py",
+        "scripts/development/generate_lineworks_gallery.py"
       ]
     },
     "quickstart": {
-      "notes": "install.shの既存preflight・Hermes/standalone分岐を維持し、scripts/mcsの初回installとmcs_cliの4入口を照合した。Installed. Summaryの初回設定コマンドを利用する説明へ直し、旧mcs_setup.py init固定の文言を除いた。候補のmcs doctorは選択runtimeを診断し、LLM/サービスprobeは明示指定することを追記した。INSTALLATION・STANDALONE・UPGRADE_AGENTの導線、固定standalone SDKと実機受入が別であることを確認した。インストール・通信・サービス起動・更新・実機反映は実行しておらず、standaloneの外部apply阻害や実runtime/SDKの受入を解消したとは扱わない。 2026-10-05の最終照合: 新規Macでinstall.shが理由なく終了する不具合の修正、--recovery-pythonの要否、1.0.12からの更新で復旧用Pythonの選択が必要になる点をINSTALLATION・UPGRADE_AGENTとCHANGELOGの更新時の注意で照合した。",
+      "notes": "既存install・preflight・更新入口と固定SDK構成に変更はない。導入ガイドのSlack /mcs登録、commands scope、再インストール、snapshot/inbox、許可ユーザーと固定チャンネルを照合した。Hermes gatewayまたは独立アダプター再起動が必要。LINE WORKSは両runtimeで独立接続を維持し本人1:1入力を使う。実機への反映は未実施。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "changes/archive/1.0.13/20261004-lifecycle-cli.json",
-        "changes/archive/1.0.13/20261004-runtime-compatibility.json",
-        "deployment/requirements-standalone.txt",
+        "install.sh",
         "docs/guides/INSTALLATION.md",
+        "docs/guides/LINEWORKS.md",
         "docs/guides/STANDALONE.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "install.sh",
-        "mcs/ops/mcs_cli.py",
-        "mcs/ops/mcs_setup.py",
-        "scripts/mcs"
+        "deployment/requirements-standalone.txt",
+        "hermes_plugin/card_workers.py"
       ]
     },
     "safety": {
-      "notes": "外部通知に患者名・本文・送信対象添付が出ること、AI候補・確認記録と処方/対応完了の区別、未取得を不存在にしない注意を維持した。backup FAQを同一端末の日次保存と候補offsite支援に分け、鍵・独立SHA receipt・保持・平文scratchの承認、外部escrow drill、新規私有配置、復元後holdと別途reason/receiptの停止点をBACKUP/SECURITYと照合した。辞書のcustody/license/approved_by、構造化GETのsession・未読保持・権限受入、氏名非表示とpublication/include_chatの別gateを確認した。暗号化や合成テスト成功をDB監査、実データ復旧、臨床的正しさや配送履歴の完全性の保証にはしない。 2026-10-05の最終照合: テストから実Hermes・launchctlへ到達しないガード、復元後の新着text待機、受理済みenvelopeへの後着拒否の保留を確認した。外部送付・実データ復旧・本番有効化を宣言しない。",
+      "notes": "既存の外部送信、保存完了後の既読化、preview/confirmとreceiptを維持。新コマンドは患者権限と現在参照を照合し、全体集計を全患者権限に限定する。Slackは本人専用応答、LINE WORKSは本人1:1トーク。別transport・route epoch・applicationからの確定を拒否する。本文のスタンプ公開説明を任意設定に整合させ、既定off・未読保持未実証・正式タスク完了との区別を明記した。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
         "SECURITY.md",
-        "changes/archive/1.0.13/20261004-backup-lifecycle.json",
-        "changes/archive/1.0.13/20261004-metadata-view-entry.json",
-        "changes/archive/1.0.13/20261004-structured-comparison.json",
-        "docs/guides/BACKUP.md",
-        "docs/roadmap/mcs-api-survey.md",
-        "docs/specs/lifecycle-spec.md",
-        "mcs/extract/drug_map.py",
-        "mcs/ops/mcs_backup.py",
+        "adapters/common/commands.py",
+        "hermes_plugin/__init__.py",
         "mcs/views/mcs_view.py",
-        "mcs/views/project_metadata_view.py"
+        "mcs/views/metadata_report.py",
+        "mcs/ops/mcs_signals.py",
+        "docs/development/ACCEPTANCE_1.0.12.md"
       ]
     },
     "docs": {
-      "notes": "候補入口からBACKUP・MCS API調査・抽出条件・更新ガイドへ案内し、長いpolicy/承認一覧はREADMEに複製しない。文書表のバックアップ欄にも端末喪失ガイドを追加した。旧『レビュー・文書整合だけ』の段階表現をSDK/canonical/urgency/統合受入継続へ修正した。GENERATED:releaseの公開済みv1.0.12要約は保持し、CHANGELOG・生成表・release計画・他文書は編集しない。既存schemaで候補versionを記録するため、最新CHANGELOG版との最終一致は親の同版release build後に検証する。候補記録の構造・参照・READMEリンク検査と、最終公開の技術受入を区別する。 2026-10-05の最終照合: GENERATED:releaseを1.0.13へ同期し、ドキュメント節の計画説明を完了状態と§6の外部条件へ更新した。候補記録readme-review-1.0.13.jsonは本記録へ統合した。",
+      "notes": "READMEの機能・安全・最新変更・導入導線を今回の変更に照合した。plugin手順と接続ガイドは全通知先の共通操作形式に整合済み。生成ブロックは既存生成器で1.0.12へ同期する。旧版CHANGELOGを保持し、原1.0.11の未達実機受入は新版でも未完了条件として参照する。公開・配備・CI未確認をローカル成功と同一視しない。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/development/RELEASE_NOTES.md",
-        "docs/guides/BACKUP.md",
-        "docs/guides/UPGRADE_AGENT.md",
-        "docs/roadmap/extraction.md",
-        "docs/roadmap/mcs-api-survey.md",
-        "docs/specs/lifecycle-spec.md",
-        "scripts/development/readme_release.py"
+        "CHANGELOG.md",
+        "hermes_plugin/README.md",
+        "adapters/README.md",
+        "docs/guides/INSTALLATION.md",
+        "docs/guides/LINEWORKS.md",
+        "docs/development/DEVELOPMENT.md",
+        "docs/development/ACCEPTANCE_1.0.12.md",
+        "docs/dev-records/native-routes-review-fixes-20261004.md"
       ]
     }
   }
