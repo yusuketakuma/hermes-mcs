@@ -192,6 +192,37 @@ def test_only_current_llm_generation_can_escalate(world, kind, level, meta, rule
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == expected
 
 
+@pytest.mark.parametrize("artifact_project", [None, 1])
+def test_legacy_llm_project_scope_matches_the_current_urgency_display(
+        world, artifact_project):
+    import structured_view
+
+    store, cfg, _, calls = world
+    _base(store)
+    aid = _fact(store)
+    with store.db:
+        store.db.execute("UPDATE artifacts SET project_id=? WHERE artifact_id=?",
+                         (artifact_project, aid))
+    # Both legacy and scoped LLM artifacts stay bound by the unique
+    # message and its current hash, just like the urgency display.
+    assert structured_view.message_urgency(store.db, 100) == "llm"
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+    assert notify_urgent.check_delivery(store, cfg, _events(store)[0])["ok"]
+    assert notify_flush.flush(store)["sent"] == 1 and len(calls) == 1
+
+
+def test_conflicting_llm_project_is_rejected_before_notification(world):
+    store, cfg, _, _ = world
+    _base(store)
+    aid = _fact(store)
+    with pytest.raises(sqlite3.IntegrityError, match="artifacts message relation"):
+        with store.db:
+            store.db.execute("UPDATE artifacts SET project_id=2 WHERE artifact_id=?", (aid,))
+    assert store.db.execute("SELECT project_id FROM artifacts WHERE artifact_id=?",
+                            (aid,)).fetchone()[0] == 1
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+
+
 @pytest.mark.parametrize("state", ["pending", "failed", "suppressed"])
 def test_initial_delivery_must_be_proven(world, state):
     store, cfg, _, _ = world
