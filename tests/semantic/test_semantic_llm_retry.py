@@ -733,3 +733,83 @@ def test_format_mark_retention_is_bounded(monkeypatch, tmp_path):
     assert len(kept) == 500
     assert "synthetic-0" not in kept
     assert semantic._format_key("http://127.0.0.1:1", "synthetic-model") in kept
+
+
+@pytest.mark.parametrize("stage", ["probe", "long_marks"])
+def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stage):
+    import local_llm
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    calls = []
+
+    def probe(*args):
+        if stage == "probe":
+            clock[0] += 4.0
+        return "plain"
+
+    def marks():
+        if stage == "long_marks":
+            clock[0] += 4.0
+        return {}
+
+    monkeypatch.setattr(semantic, "_probe_format", probe)
+    monkeypatch.setattr(semantic, "_long_marks", marks)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: calls.append(kw) or {
+        "status": 200, "text": "{}", "finish_reason": "stop"})
+    assert semantic.llm_chat("synthetic expired preflight", timeout=4) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("status", [400, 404, 422])
+@pytest.mark.parametrize("stage", ["response", "persistence"])
+def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status, stage):
+    import local_llm
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a: "object")
+    monkeypatch.setattr(semantic, "_long_marks", lambda: {})
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            clock[0] += 4.0 if stage == "response" else 3.0
+            return {"status": status}
+        return {"status": 200, "text": "{}", "finish_reason": "stop"}
+
+    def remember(*args):
+        if stage == "persistence":
+            clock[0] += 1.0
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    monkeypatch.setattr(semantic, "_remember_plain", remember)
+    assert semantic.llm_chat("synthetic expired format retry", timeout=4) is None
+    assert len(calls) == 1
+    assert calls[0]["deadline"] == 1004.0
+
+
+@pytest.mark.parametrize("limitations", [0, 1, False, True, "", "synthetic limitation",
+                                         {}, {"synthetic": "limitation"}, ["valid", 1]])
+def test_summarize_rejects_malformed_limitations(tmp_path, limitations):
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        response = json.dumps({"claims": [], "limitations": limitations})
+        assert semantic.summarize(lambda _prompt: response, bundle, 1, [], {},
+                                  return_reason=True) == (None, "model")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("claim", [None, {}, {"text": ""}, {"text": " "}, {"text": 1}])
+def test_summarize_rejects_malformed_claims_without_silent_drop(tmp_path, claim):
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        response = json.dumps({"claims": [claim], "limitations": []})
+        assert semantic.summarize(lambda _prompt: response, bundle, 1, [], {},
+                                  return_reason=True) == (None, "model")
+    finally:
+        db.close()
