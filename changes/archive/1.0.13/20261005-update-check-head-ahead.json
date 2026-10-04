@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "最新タグより先の版で更新通知が誤って届く問題を修正",
+  "summary": "更新確認(update.modeがnotifyまたはauto)で、現在の版が最新タグをすでに含んでいる場合に「新しいバージョンを検出」や自動更新の「中止」通知が届かないようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["cmd_checkは取得後にgit merge-base --is-ancestorでタグがHEADに含まれるか確認し、終了コード0のときだけ通知と自動適用を省く。判定できない場合は従来どおり。"],
+  "refs": ["mcs/ops/mcs_update.py"]
+}

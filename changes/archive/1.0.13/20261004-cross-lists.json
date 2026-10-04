@@ -1,0 +1,23 @@
+{
+  "category": "added",
+  "title": "本人宛メンションとしおりの横断読取りを追加",
+  "summary": "明示的に呼び出した場合だけ横断一覧を取得し、完全取得・空・不明・失敗・古い観測を区別してローカルで参照できます。通常の本文収集、未読の取得範囲、通知、依頼完了、抽出結果は変更しません。",
+  "upgrade": "既定では取得・公開とも無効です。cross_lists.pyのCLIは--database・--dataset・--token-cache・--read-only-getの明示が必要で、既存writer lockを取得して保存だけを行います。mcs_view.py cross_lists --datasetと--publicationで閲覧を別途許可します。定期実行には組み込みません。実APIの非空応答、ページ継続、未読true保持、セッション副作用は未確認で、本番有効化前に本人の受入が必要です。",
+  "details": [
+    "MCSAdapter.fetch_cross_list(dataset) は mentioned/bookmarked のみを扱い、正規化済みMessageと未読flagの有無を分離したCrossListEntryを返します。未返却の未読flagはNoneで、Messageの既定falseを未読保持の証拠にしません。",
+    "既定は5ページ・20行/ページ・合計100行・25秒。許容上限は10ページ・20行/ページ・200行・120秒。継続には同じ正のserver timestampが必要です。終端の初回1ページだけtimestamp未返却を許容します。",
+    "公開クライアントOLVJNCFG・FUWQG6Z4・KBHQOTFVと既存正規化器を根拠にしています。no_extend_session=1を送り、increment_countは送りません。keep_read_statusはしおりの1件再取得でのみ根拠があり、横断一覧には推測で付けません。GET成功は既読・セッション非変更の実証ではありません。",
+    "mentionedはunread_onlyの明示boolで取得集合を分離します。bookmarkedに未確認のunread filterは送れません。401はsession_expired、403等は分類用probeを行わずHTTP状態付きのhttp_errorとし、再試行やsleepはしません。",
+    "project.idを正本として投稿IDと組み合わせ、project_id・parent_message・parent_idの矛盾と既存保存投稿のscope矛盾を拒否します。失敗時は作業中の部分集合を破棄し、以前の完全取得artifactを保持します。",
+    "cross_list_v1 artifactには正規化ID、本文取得状態、投稿時刻、未読flagまたはNone、既存normalizerで抽出したmetadataだけを保存します。本文・氏名・添付URLは保持せず、message_metadataのcapture/shadow、本文hash、semantic current、未読snapshot/floorsへ書き込みません。",
+    "閲覧は取得ゲートと独立した明示公開ゲートが必要です。失敗後と期限超過は以前の完全集合を過去の観測として返し、現在の未読・未対応・正式完了を断定しません。",
+    "合成HTTP開封境界で実adapter・worker実行・JSON解析・成果物保存・snapshot読取りを検証します。認証済みMCS、実データ、秘密値、LLM、Jevは使用しません。"
+  ],
+  "refs": [
+    "mcs/ingest/cross_lists.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/views/cross_lists_view.py",
+    "tests/ingest/test_cross_lists.py",
+    "tests/views/test_cross_lists_view.py"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "新契約のsnapshot手渡しと変更なしの確認を追加",
+  "summary": "明示したexport/2で公開snapshotを読取り、本文と投稿を対にした選別・分割・私有outboxへの手渡しができます。引数なしhandoffは設定済みext_exportの4項目を使い、dry-runは送付・出力ファイルなしで件数と容量を確認します。",
+  "upgrade": "新契約を使う場合だけ明示7型を持つ人承認済みauthを用意してください。ext_exportはauth・state_dir・outboxの絶対パスとsince_daysを指定し、既定の公開snapshotを使います。既存の明示フラグ形式は旧契約のままで、新版へ自動切替しません。network・定期送付・設定作成・実機有効化は行いません。",
+  "details": [
+    "deliver/handoffの--c1と--snapshot、--only-with-facts、--since-days、--max-bytes、--dry-runを追加する。全partを先に検証し、各送付の直前にも失効・鮮度を再検査する。",
+    "handoffだけの実行はprivate configのext_exportから明示したprofileを読む。無設定・不正profileは拒否し、旧authの省略fieldsを新しい本文grantへ補完しない。",
+    "新版の既存state/outboxは所有者・私有mode・symlinkを検査し、共有directoryのmodeを自動変更しない。",
+    "要約はenvelope ID・part・件数・bytes・statusだけで本文を出さない。messages_kept=0は警告に留め、業務対応の不在や完了を推定しない。",
+    "link-hintsはHermesのlocal TTYでだけ患者名・project_id・最終投稿日を表示する。redirectとstandaloneは読取り前に拒否し、snapshot世代に束縛したページングを使う。氏名のfile出力・wire送付・自動患者リンクは行わない。"
+  ],
+  "refs": [
+    "mcs/ops/ext_contract.py",
+    "mcs/ops/c1_records.py",
+    "mcs/ops/c1_envelopes.py",
+    "tests/ops/test_c1_cli.py"
+  ]
+}

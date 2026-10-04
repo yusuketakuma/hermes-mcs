@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "更新巻戻しで共有cronを保持",
+  "summary": "バックアップを含むcronの退役は、管理manifestのIDとScriptの一致、または既知wrapperの正規パスを必要とします。同じbasenameだけの共有jobを巻戻し時に削除しません。",
+  "upgrade": "定期jobと管理manifestの実機状態は更新前に確認してください。実hostでの停止・退役は未実施です。独立runtimeは従来どおり単一hostが所有します。",
+  "details": [],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_mcs_update.py"]
+}

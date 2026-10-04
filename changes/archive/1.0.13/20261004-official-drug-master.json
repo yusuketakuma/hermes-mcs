@@ -1,0 +1,23 @@
+{
+  "category": "added",
+  "title": "公式医薬品マスターのオフライン変換を追加",
+  "summary": "厚生労働省の現行医薬品マスターを選択した方針に合わせ、明示したローカルZIP/CSVとSHA-256 pinから私有辞書候補を作るconverterを追加しました。一般名コードと標準処方記載が揃う場合だけ一般名処方identityを使い、それ以外は製品identityとし、成分同一性は推定しません。",
+  "upgrade": "通常は件数・理由・hashだけのreport-onlyです。出力は明示したabsoluteの新規destinationと本人所有private directoryが必要で、0600・上書きなしで作成します。network取得・設定有効化・モデル/DB実行は行いません。terms/承認・status方針の実確認はoperatorの別作業であり、値が不明なら保留します。旧mcs-drug-map/1のingredient/class辞書の読取り・既定設定は変更しません。",
+  "details": [
+    "指定された公式menuとR08rec3.pdfの222/223頁を読み取り、42列・cp932・numeric前ゼロ省略・列ごとの文字/byte幅を照合した。現行downloadMenu/yFileと2026-03-31までのR07_y.zipを混同しない。初版converterはレビュー済みlayout R08rec3-medicine-42とedition 20260930だけを受け付け、未確認の将来版は拒否する。",
+    "pin schemaはmcs-official-drug-master-pin/1。schema/layout/edition/member/as_of/SHA-256を照合し、source上限32MiB、CSV上限32MiB、100000 rows、単一CSV memberのZIPを扱う。展開せず読み、別member・path traversal・暗号化・symlink member・未知圧縮・不正cp932・42列外・型/幅/有効桁数違反を拒否する。",
+    "指定PDFは変更区分と0/99999999等の意味を説明しないため、status_policyのcandidate_change_values/absent_date_values/confirmed_byをoperator宣言として保持する。未確認change/date値・期限終了/境界・将来日・不明medicine identityを件数で報告し、機械がactiveや廃止なしを推測しない。",
+    "薬価12桁をYJ成分同一性へ変換せず、medicine/drug_price/general_nameの原値をsource_codesに保持する。一般名コード/textの整合が壊れたsourceは拒否し、別コードの同一aliasは複数候補のままにする。かなが最大20文字なら切詰めの可能性があるためaliasから外す。",
+    "新しいmcs-drug-map/2はproduct/general_name identityとraw source codesを表し、旧/1のingredient/classと区別する。既存clinical_values/drug_mapのfoldを再利用し、/2は名前・基本名・支持される完全かなのexact matchingだけとする。stemから製品/一般名処方を推定しない。候補表示も成分と誤称しない。",
+    "terms_checked_onと実確認のterms_recordがない場合はoutputを保留し、approved_byは明示された場合だけ保持する。承認省略の辞書は既存loaderでunapprovedのまま。辞書entry/alias/byte上限を超えた場合は黙って縮小せず、medicine_codesによる明示curationが必要であることをreportする。",
+    "private stagingを0600で作り、既存loaderとoutput hashを照合してからhard linkで新規destinationへ公開する。既存ファイル・symlink・共有/他owner directoryは上書きせず、失敗時の一時ファイルを除く。dry-runはaliases/rowsを表示せず、原本・config・DBを変更しない。",
+    "fixturesは全て創作した42列cp932データであり、実マスターの行や匿名化行を使わない。実CLI、ZIP/CSV pin、旧/未来版拒否、unknown/ended identity、Unicode・衝突・kana上限、loader/annotation、0600/owner/umask/no overwrite、failure不変を検証する。",
+    "残るoperator判断は実source file/hashの確認、利用条件・転送/保存許可・承認record、変更/番兵値の根拠、採用するmedicine_codes subsetと辞書上限内のcuration。実マスター全件の変換・権利確認・本番有効化の受入とはしない。"
+  ],
+  "refs": [
+    "mcs/ops/import_drug_master.py",
+    "mcs/extract/drug_map.py",
+    "tests/ops/test_import_drug_master.py",
+    "tests/extract/test_drug_map.py"
+  ]
+}

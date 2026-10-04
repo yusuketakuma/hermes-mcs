@@ -7,6 +7,24 @@ request. Successful runs write one aggregate JSON report and nothing to
 stdout. Validation errors contain only a line/field code; source text is never
 printed.
 
+## Pending request-following review assets (1.0.13)
+
+The [source-first review protocol](../../evaluation/request_following_review_protocol.md)
+and [fixed manifest](../../evaluation/request_following_review_manifest.json)
+provide 220 wholly fictional office/coordination conversations. Sources and
+synthetic proposals are separate, and all cases are pending with
+`promotion_eligible: false`. There are zero human-verified labels.
+
+`python3 evaluation/request_following_review.py validate` checks the fixed
+queue. `export` produces source-only worksheets; `export-proposals` produces
+a separate comparison file. The tool does not generate human signatures,
+receipts, model outputs or completed labels. This queue is not an
+`evaluation_candidate` or a G6 report. Its nonmedical cases alone do not
+provide denominators for every required medication/clinical metric.
+Real candidate outputs, human labels, calibration, lifecycle and capacity
+measurements still enter the existing evaluation workflow below; the
+200-label canonical gate and its criteria are unchanged.
+
 Run it with explicit versions and acceptance criteria:
 
 ```sh

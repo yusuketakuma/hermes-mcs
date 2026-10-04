@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "インストーラーがLINE WORKSの導入手順を案内",
+  "summary": "install.shの完了案内とdry-runで、LINE WORKSはHermesのpluginとgatewayを使わず、lineworks_adapterのinit・check・serviceで設定・常駐させることを示します。--no-pluginの案内も、pluginが必要なのはSlackとDiscordだけと正しく表示します。秘密値は表示しません。",
+  "upgrade": "追加操作は不要です。案内の文言だけが変わります。",
+  "details": ["standalone形態では独立hostがLINE WORKSアダプターを起動するため、別の常駐サービスを併用しないよう案内する。"],
+  "refs": ["install.sh"]
+}

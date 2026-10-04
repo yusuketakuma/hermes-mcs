@@ -8,9 +8,9 @@
 ## 導入改善
 
 - 通常の初回導入は `install.sh` → `mcs_setup.py init`。既存のinitが設定・gateway同期・最終チェックを行うため、重複したservices/checkを初回必須の案内から外した。
-- [README](../../README.md)にAIへの依頼文を追加。[AI手順](../SETUP_AGENT.md)は現在のcheckout・既存回答と承認を再利用し、未決事項だけをまとめて確認する。
+- [README](../../README.md)にAIへの依頼文を追加。[AI手順](../guides/SETUP_AGENT.md)は現在のcheckout・既存回答と承認を再利用し、未決事項だけをまとめて確認する。
 - ChromeのCDP準備を依存導入後・収集前へ移した。秘密情報をコマンド例へ直書きせず、端末で入力する経路を示した。
-- [通常ガイド](../INSTALLATION.md)の通知なし構成に、既存の抽出worker2件の配置手順を補った。文書中のレンダラーは完全合成のパス・HOMEで検証した。
+- [通常ガイド](../guides/INSTALLATION.md)の通知なし構成に、既存の抽出worker2件の配置手順を補った。文書中のレンダラーは完全合成のパス・HOMEで検証した。
 - 導入診断のローカルLLM確認を既存の上限付き通信へ統一し、壊れたmanifestやgateway同期失敗を適切に報告する。
 
 ## 安定性改善

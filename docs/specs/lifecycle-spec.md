@@ -202,6 +202,7 @@ supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾�
 | 対象 | 方式 | 保持 | 状態 |
 |---|---|---|---|
 | ledger.db（日次） | `daily_backup`: sqlite `.backup`→tmp→`valid_mcs_db` 検証→atomic rename | 7件（`BACKUP_KEEP`） | ✅ |
+| ledger.db（暗号化 offsite） | `mcs_backup.py offsite`: 静的日次 DB→gzip→固定 OS OpenSSL→encrypt-then-MAC→復号検証→公開・SHA照合 | 承認済み `max_snapshots` の容量上限。自動 prune なし | CLI・設定/health接続実装（親側検証中）。定期登録・実機反映は未完了 |
 | ledger.db（更新前） | `preupdate-<ts>.db` 同パターン・別 prefix で日次ローテーションと分離 | **参照ベース**（actionable rollback 点が参照する限り保持） | 📋 |
 | snapshot | `publish_snapshot`: backup→tmp→DELETE journal→verify→atomic rename。plugin/CCO の読取専用コピー | 単一 latest | ✅ |
 | 添付ファイル | `prune_attachments` が古い実体を削除（行は state='pruned' で name/bytes/sha256/url 残留→再DL可） | 週ポリシー | ✅ |
@@ -211,6 +212,19 @@ supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾�
 原則: バックアップは**検証しないと publish しない**（broken file は
 fresh backup を塞がない・Oracle B24）。原本への復元上書きは人手のみ
 （新しい原文を失う復旧は禁止）。
+
+暗号化 offsite の入力 policy、全必須フィールド、鍵と独立 SHA receipt の
+保管、端末喪失手順は [バックアップ・復元ガイド](../guides/BACKUP.md)を正本とする。
+ローカル日次 DB と offsite の保持・外部保存承認は別であり、予定時刻や
+grace をこの仕様から補わない。`status` は私有ローカル記録を読むだけで、
+バックアップ成功を DB 整合監査・取得完全性・医療上の対応の証明にしない。
+
+`mcs_backup.py verify` は Keychain の鍵による検証、`drill` は人が外部 escrow
+から鍵を回復して検証する運用に分ける。訓練の保持コピーは平文・同意待ちであり、
+終了後の cleanup とクラッシュ残留の処理はオーナーの承認方針に従う。
+添付の DB 行・保存済み hash は含むが、添付実体・config/.env・Keychain・
+配送 journal は bundle に含めない。件数・hash・時刻・所要時間以外の
+患者情報や秘密値を共有証拠へ入れない。
 
 ## 7. 復旧仕様（故障クラス別）
 
@@ -225,9 +239,20 @@ fresh backup を塞がない・Oracle B24）。原本への復元上書きは人
 | apply 中断📋 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → reset+外科削除 / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
 | apply 不合格・検証不能📋 | 事後差分 check / `unverifiable` | 自動 rollback（reset+外科削除+（schema_bump 時）DB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
 | DB 破損 | `valid_mcs_db` 失敗 | backups/ から人が復元（原本上書き禁止・別配置で検証後） | 人手のみ |
+| 端末喪失・暗号化 offsite からの回復 | 独立 SHA receipt・MAC・schema/件数・鮮度の検証 | 外部 escrow 鍵を明示 FD で入力→`drill`→`restore`。新規私有配置限定、DBより先に `awaiting_consent` を保持 | 人手。配置後も稼働再開しない |
 | schema_bump 更新📋 | 事前互換判定 | auto 中止。notify 承認時のみ適用し、rollback は DB 復元（消失を明示） | 人手 |
 | updater 自身の破損📋 | watchdog 定期検出（launchd `org.mcs.recovery`）/ repo import probe 失敗 | `~/.mcs-recovery/mcs_recover.py` が git 復旧+manifest snapshot reconcile+旧コード services を実行 | ✅ |
 | quiesce 中 crash📋 | `applying` 残存（停止操作前に記録済み） | recover が判定表で復帰 — drainer 恒久停止を防ぐ | ✅ |
+
+上表の `.env` fallback は既存ログイン認証の経路であり、backup の専用
+`mcs-backup` service には適用しない。新端末 restore は
+サービス起動・配送照合・通知・原本置換を実行しない。
+`awaiting_consent` は通常の reconcile でも解除しない。
+既存 `ops.restore_approve` の人承認・reason・receipt は更新/rollback の
+損失報告に束縛され、offsite の配置後 hold の汎用解除ではない。
+新端末の採用・承認・照合は別の確定した契約が必要で、
+[ガイドの停止点](../guides/BACKUP.md#consent)までは hold を維持する。
+失われた journal の配送証拠を暗号化 DB で補えたとは主張しない。
 
 ## 8. エラー時自動メンテナンス仕様
 

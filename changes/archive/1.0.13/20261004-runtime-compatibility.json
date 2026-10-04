@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "実際の起動対象PythonとSQLiteの診断を補完",
+  "summary": "doctorは選択されたHermesまたはstandaloneのPython・SQLite版を実際に取得し、診断コマンド自身の版と区別して表示します。servicesと更新前検査も、選択runtimeまたは配備済みrecoveryが影響版・metadata不明なら変更を開始しません。installerはrecovery templateの実行対象を配備前に検査します。",
+  "upgrade": "doctorのJSONにruntimes.selectedとruntimes.recoveryを追加します。選択runtimeはPython 3.10以上、独立recoveryはPython 3.9以上を確認し、SQLiteは3.51.3以降または3.50.7・3.44.6系列の修正版を必要とします。servicesは退役・描画・起動前、applyはlock・journal・中断回復前に停止します。macOS installerは復旧用Python（既定/usr/bin/python3）が危険・不明なら書込み前に停止します（Python 3.11以上が未導入の新規Macではstage 6のtool/plist配備前）。macOS標準Pythonは影響版のため、--recovery-pythonで安全な独立Pythonを指定するか--no-recoveryを選ぶまで、更新・services適用も停止します。代替Pythonへの自動切替は行いません。",
+  "details": [
+    "選択runtimeを-I付きのbounded stdlib subprocessで検査します。SDKクライアントをimportせず、discord.py・slack-bolt・slack-sdkの配布metadataだけを取得します。metadataの版表示はSDK接続・機能互換の実機受入ではありません。",
+    "recoveryはProgramまたはProgramArgumentsの実行対象を読み、診断コマンドや固定のsystem Pythonと同じだと仮定しません。未配備はnot_checked、不正plist・metadata不明・影響版はblockedです。",
+    "サービスの起動・再起動、DB・秘密・Keychainへのアクセスをdoctorの既定診断に追加しません。",
+    "recovery未配備は従来どおり未確認・警告の扱いであり、任意watchdogを暗黙に選択しません。配備済みplistが存在するが不正・壊れたリンク・metadata不明なら変更を拒否します。installerの既存--no-recoveryによる明示skipは維持します。",
+    "対話式installerではEOFと同時に届いた入力を空へ戻さず、入力済みのstandalone選択を保持します。selectorでpromptを待つ既存テストを変更せず検証します。",
+    "実際の常駐プロセス、配備機械のSDK版・通信・SQLiteベンダーバックポートは合成テストでは未検証です。#9全体の実機受入は未完了です。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_update.py",
+    "install.sh",
+    "tests/ops/test_runtime_compatibility.py"
+  ]
+}

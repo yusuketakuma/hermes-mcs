@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "依頼と返信のcanonical追従を合成評価で確認",
+  "summary": "架空ケースから旧・新canonicalの実際の投影を比較し、依頼項目の欠落、重複候補、誤った完了、依頼と返信の混同を件数・分母・混同行列で確認できるようになりました。",
+  "upgrade": "設定変更は不要です。モデル・抽出世代・canonical切替・監査対象・通知経路は変更しません。合成結果は人手200件以上のheld-out評価、G6・calibration、実モデル精度や本番容量の受入を満たしません。",
+  "details": [
+    "evaluation/canonical_request_eval.pyは既存のcanonical validator・legacy projection・G6評価器を実行するオフライン支援で、旧仕様の項目欠落を成功扱いしない。",
+    "容量の14日間・日平均6.5時間・job LLM時間p90 900秒・週slot_busy 1回以下を架空入力で検査し、観測不足は不明とする。計測する実時間はローカルの合成検証・投影・採点だけ。",
+    "canonicalへの依頼詳細追加はLoop同一性、監査対象と世代改版の判断が必要なまま。人承認のreceiptや昇格tokenは生成しない。"
+  ],
+  "refs": ["evaluation/canonical_request_eval.py", "evaluation/canonical_request_cases.json", "tests/semantic/test_canonical_request_evaluation.py"]
+}

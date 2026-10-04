@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "新契約の予約と手渡し受領を既存の安全経路へ接続",
+  "summary": "export/2のローカル参照送付でも、送付直前の人承認・失効・鮮度・許可範囲を検査し、予約後の結果不明を自動再送しません。本文を含む新版は型別件数が一致する独立受領票で照合し、旧契約のhash・ID・認可既定は維持します。",
+  "upgrade": "自動有効化や実送付は行いません。新版は明示された7型・全患者・3600秒以内のsnapshot鮮度・30日以内の保持が必要です。producer CLI、集合currentと撤回指示書の接続・相手側受入は別工程で、既存の旧CLIを新版へ自動切替しません。",
+  "details": [
+    "LocalSink.receive_wireはparse前のwire byte上限と新版の厳密な検査を行い、保存payloadだけに新版canonicalを使う。journal・監査・receiptの旧serializerは維持する。",
+    "GovernedExporterは契約版とpart・型別件数をjournalに束縛し、予約後のheld・拒否・撤回を終端として扱う。HandoffSinkは自己ackを出さない。",
+    "新版は型別件数が一致しない受領票や旧略式ackで本文送付を成功へ変えない。旧の束縛済みjournalと略式ackは互換を維持する。",
+    "集合の輸送受理を臨床完了や完全集合のcurrent証拠とは扱わない。本文例外はmessage_bodyのroot body_textだけで、他の禁止項目を解放しない。",
+    "health --authは新版の7型認可を新版として検査し正常と報告する。scope省略の新版認可はaggregate扱いで例外にならず、受領票束はすべてのjournal束縛を先に確認し、一部だけ適用してから拒否することはない。"
+  ],
+  "refs": [
+    "mcs/ops/ext_contract.py",
+    "mcs/ops/c1_envelopes.py",
+    "tests/ops/test_c1_delivery.py",
+    "tests/ops/test_c1_authorization.py"
+  ]
+}

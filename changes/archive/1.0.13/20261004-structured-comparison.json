@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "構造化薬歴・観測値とチャット候補の任意併記",
+  "summary": "構造化データの期間・項目ID・単位・取得状態を保持したまま、同じsnapshotの現行抽出世代に束縛されたチャット候補を別の出典として読めます。同名や値の違いから同一項目・正本・対応完了を自動判定せず、不一致は未確認として扱います。",
+  "upgrade": "include_chatは既定falseで、従来の読取りでは候補データを調べません。mcs_view.py project_metadataの--publicationと--include-chatを両方明示すると、medication_periods・observation_items・observation_valuesの本文候補を別出典として併記します。取得・本番適用・モデル既定・schema・薬剤辞書や単位変換は変更せず、項目の同一性や正本を自動決定しません。",
+  "details": [
+    "構造化側の最新試行と最後のcomplete artifact、チャット側のmessage ID・content hash・選択artifact ID/kind・投稿時刻を別々に示します。",
+    "chat_comparison=side_by_side_unconfirmedでもmaster item IDとチャット表層名を結び付けません。care_team・group相談の表示と氏名の保存/表示条件を維持します。",
+    "欠落・古い取得・失敗・途中取得・不正shape・表示上限を正常な不存在へ置き換えず、absence_confirmed=falseを保持します。候補の測定日と投稿日時、構造化値の時点・単位を混ぜません。"
+  ],
+  "refs": [
+    "mcs/views/project_metadata_view.py",
+    "tests/views/test_project_metadata_comparison.py"
+  ]
+}

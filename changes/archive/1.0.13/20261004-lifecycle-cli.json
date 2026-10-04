@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "導入・更新・初期設定・診断を共通コマンドに集約",
+  "summary": "mcs install / update / setup / doctorで既存の導入・更新・設定処理を利用できます。doctorは既定で通信・秘密取得・DBアクセスを行わず、未検査を正常と区別した共有用結果を返します。",
+  "upgrade": "初回はsh scripts/mcs installを実行します。既存環境はinstall.shを再実行して~/.local/bin/mcsを導入し、同ディレクトリをPATHに追加してください。setupは既存設定を保持し秘密入力は端末で行います。update planは取得済みタグだけを使用し、apply・rollbackは既存の停止・バックアップ・承認契約を維持します。standaloneの外部applyは未対応のまま阻害を表示します。doctorの通信・サービス状態確認には--probe llm / --probe servicesを明示してください。サービス用PythonのSQLiteはWAL-reset修正版（3.51.3以降、3.50系は3.50.7以降、3.44系は3.44.6以降）が必要です。ホストruntimeを自動更新しません。",
+  "details": [
+    "PATH上のPythonではなく導入時の実際のinterpreterとcheckoutをlauncherに固定する。",
+    "~/.local/bin/mcsに別ツールや別checkoutのlauncherがある場合、preflight・--dry-runで阻害として表示し、installは段階1より前に停止する。",
+    "更新bootstrapを再利用し、planではfetchせず、阻害時は終了コード1を返す。",
+    "doctorの共有出力は分類・件数・runtime種別・バージョンに限定し、秘密・本文・ID・生応答を除外する。",
+    "mcs setup checkで阻害要因と修正手順を表示し、doctorの案内もこのコマンドを示す。"
+  ],
+  "refs": [
+    "install.sh",
+    "scripts/mcs",
+    "mcs/ops/mcs_cli.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

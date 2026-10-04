@@ -1,5 +1,24 @@
 # MCS 更新実行手順書（AIエージェント用）
 
+このガイドは公開済みv1.0.12の実行可能な手順。安定稼働版1.0.13の
+install/update/setup/doctor統一は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
+
+### 2026-10-04追記: 現在の更新入口と回帰資産
+
+[共通CLI](../../mcs/ops/mcs_cli.py)の`mcs update plan`は取得済みタグだけを対象にし、
+fetchせずに既存bootstrapへ委譲します。阻害時は非ゼロ終了であり、表示できたことを
+適用可能と扱いません。既存の`mcs_upgrade.py`・`mcs_update.py`による手順は残ります。
+v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻害されるためhost経由の
+既存手順を使います。apply・rollbackには従来の停止・バックアップ・承認契約が適用され、
+schema巻戻しの個別復旧同意を更新承認で代用できません。
+
+[更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
+現行13公開版・16構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
+実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
+launcherの選択runtime追随とbackup lifecycleは統合検証中であり、
+ローカルCLI提供を1.0.13の実機受入・公開完了と読み替えません。
+
 > **この文書は AI エージェント（Claude Code / Codex / Devin 等）が読み込み、
 > 既存の MCS 導入を過去版（v1.0.0〜）から新しい版へ、データ移行を含めて
 > 更新するための実行手順書です。** 新規導入は [SETUP_AGENT.md](SETUP_AGENT.md)、
@@ -53,6 +72,16 @@ git -C "$REPO" show "$TAG:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
 | `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
 | `notes` | 現在版より新しく移行先までの各版の「更新時の注意」（CHANGELOG） |
+
+1.0.13以降、macOS 標準 `/usr/bin/python3` の SQLite は WAL-reset 影響版のため、
+`update apply`・`services` は復旧 watchdog の実行 Python が安全と確認できるまで停止する
+（`plan` は merge 前に `recovery_runtime:` を blockers に出し、手順を `notes` に示す）。
+オーナー承認のうえ、checkout 外にある既存の安全な独立 Python の絶対パスを `recovery_python` として保存する。
+1.0.13 以降が入っていれば `mcs setup init --yes --recovery-python <path>` と `mcs setup services` で反映する。
+1.0.12 以前から更新する場合は init にこのオプションが無いため、`~/.mcs/config.json` に
+`"recovery_python": "<path>"` を手で追記してから `plan` を再実行する。所有済みで停止中の watchdog は
+merge 後の `services` が置き換える。`reinstall` 経路では `--install-arg=--no-recovery` を付けて apply する
+（install.sh は不一致の watchdog を置き換えずに停止するため）。自動で別 Python へは切り替えない。
 
 `$TAG:scripts/mcs_upgrade.py` が無い（v1.0.10 以前を移行先にした）場合は、その版へはこの手順で更新できない。
 

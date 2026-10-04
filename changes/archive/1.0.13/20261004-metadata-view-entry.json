@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "新しい読取データをsnapshotから明示閲覧",
+  "summary": "project_metadataとcross_listsを既存mcs_viewの読取り専用入口へ接続します。ケアチーム・構造化値・group一覧と、横断メンション・しおりを、取得とは独立した明示選択で閲覧できます。",
+  "upgrade": "--publicationを付けた明示閲覧だけが保存結果を返します。従来のstatusや外部exportへ自動追加せず、氏名表示は既定無効です。新GETの本番有効化は未読保持・session・権限の実受入後に行ってください。",
+  "details": ["観測値には--item-idが必要です。group相談の患者関連付けや臨床的完了は推定しません。"],
+  "refs": ["mcs/views/mcs_view.py", "tests/views/test_project_metadata_view.py"]
+}

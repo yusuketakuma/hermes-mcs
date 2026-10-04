@@ -1,0 +1,24 @@
+{
+  "category": "added",
+  "title": "緊急度の独立した再確認候補を記録・通知",
+  "summary": "初回通常表示の記録後に現在のLLM抽出でhighが判明した場合のE1と、設定時間を過ぎても現在の表示世代の確認・自施設の後続投稿・依頼登録を観測しない場合のE2を、独立した通知intentとして記録します。本文hashと段階ごとに重複を防ぎ、送信直前にも現在世代と停止条件を再検査します。シグナルtextの緊急度表示も保存済みurgentフラグではなく現在の抽出へ統一します。",
+  "upgrade": "既定はoffのままです。収集tickとinteractive初報の封印へ接続済みで、有効化にはurgency_escalationのmode・明示的なroom_cooldown_min・通知先・応答者識別の設定が必要です。sourceは既存計画どおりLLMのみを扱い、after_min=30、repeat_min=60、max_repeats=2、max_per_day=10を継承します。shadowは送信せず監査だけを残し、有効化・冷却時間・確認者・通知先の実受入は別途必要です。",
+  "details": [
+    "新しいledger列は追加せず、既存artifact・outbox・初回通知の配送証拠・世代付き確認記録を使います。初回通常表示の記録がない旧通知から通常表示を推定しません。",
+    "初回text表示の判定元はopt-in時だけ既存artifactへ記録します。interactive初報のE1判定には、親が初回intent封印時の同じtransactionからcapture_initialを呼ぶ接続が必要です。配送証拠のない部分受理を初回完了として扱いません。",
+    "結果不明・部分送信は既存保持経路で扱い、取消で送信証拠を消したり自動再送したりしません。復元保留と下限送信予算を維持し、日をまたぐ結果不明の試行も現在日の上限へ算入します。",
+    "カードで担当中、または期限内の保留にされた投稿は再通知せず、送信直前にも同じ条件で取り消します。期限切れの保留は停止条件にしません。",
+    "本人スタンプは停止条件に加えません。記録不足を臨床的な未対応・完了と同一視せず、本人ID不明を否定証拠にしません。",
+    "完全合成のDB・送信stubでE1/E2、現在LLM高・routine・失効・本文hash不一致・ルール併存、重複・取消・ページ確認・結果不明・復元・予算を検証します。実サービス・LLM・Jev・SDK接続・MCSへのPOSTは行いません。",
+    "mcs_setup.py checkがurgency_escalationを既知の設定として扱い、modeがon/shadowなのにroom_cooldown_min未指定や型不正で無効になる設定をエラーとして報告します。既定・判定・送信の挙動は変わりません。"
+  ],
+  "refs": [
+    "#12",
+    "mcs/notify/notify_urgent.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/ingest/run_check.py",
+    "tests/notify/test_notify_urgent.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

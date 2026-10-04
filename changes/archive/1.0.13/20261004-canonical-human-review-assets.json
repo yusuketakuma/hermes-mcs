@@ -1,0 +1,24 @@
+{
+  "category": "added",
+  "title": "依頼追従の人手レビュー待ち合成集合を追加",
+  "summary": "完全に創作した複数投稿会話220件をheld-out test集合として準備しました。依頼・質問・自己予定・返信・受領・誤完了・条件・依存・時点・宛先不明・依頼者不明の11領域を各20件持ち、原文・合成提案・空の人手ラベルを分けて確認できます。",
+  "upgrade": "製品設定・モデル・抽出・公開・Loop・既存評価schema・G6基準は変更しません。全件pendingかつpromotion_eligible=false、人手検証済みラベルは0件です。220件の作成で人手200件以上・calibration・実capacityの条件を満たしたとは扱いません。検証と評価票の生成はevaluation/request_following_review.pyで明示実行します。",
+  "details": [
+    "既存の抽出46件・completeness12件・canonical例示12件・練習1件を調べ、200件以上の関連人手キューがないため独立したpending形式を作成した。既存資産と既存schemaは編集しない。",
+    "sourcesとsynthetic_proposalを別ファイルに保持し、manifestのSHA-256で固定する。case_idと架空account/project/thread、split=testとsource fingerprintをexport時にも維持する。",
+    "ASCII数字・話者名・空白による差を除いて原文の重複を検出し、220原文と220対象文の独立性を検証する。意味的な多様性や合成宣言の真正性を機械判定だけで保証しない。",
+    "完全一致引用で支持された提案値は宛先20・依頼者23・期限原文22・条件49件。false_doneリスク65件、文脈側も引用する提案12件を含む。これらはAIの合成提案であり人手goldではない。",
+    "exportは原文優先の固定混合順JSONLを全件出力し、focus・提案・署名・モデル出力を付けない。human_verified_labelsとhuman_receipt、model_outputs、telemetryは空のままにする。export-proposalsは別の合成提案ファイルとして出力する。",
+    "本人レビュー後のreceipt、方式別実候補出力・盲検比較・fact/claim/Loop対応・lifecycle・要求/token/latency・calibration・capacityは別工程で必要。非医療の創作会話だけで既存G6全指標の分母が揃うとは主張しない。"
+  ],
+  "refs": [
+    "evaluation/request_following_heldout_sources_a.json",
+    "evaluation/request_following_heldout_sources_b.json",
+    "evaluation/request_following_heldout_proposals_a.json",
+    "evaluation/request_following_heldout_proposals_b.json",
+    "evaluation/request_following_review_manifest.json",
+    "evaluation/request_following_review.py",
+    "evaluation/request_following_review_protocol.md",
+    "tests/semantic/test_canonical_human_review_assets.py"
+  ]
+}

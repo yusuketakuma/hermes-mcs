@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "削除済み返信を含むスレッドが未取得のまま表示され続ける問題を修正",
+  "summary": "削除済み（tombstone）の返信を含むスレッドで、返信取得ジョブが完了しても状態表示と修復計画が返信未取得として数え続けていました。状態表示・修復計画の未取得スレッド数を、返信取得ジョブと同じく本文取得済みまたは削除済みの返信で判定します。",
+  "upgrade": "追加操作は不要です。削除済み返信を含むスレッドがある環境では、状態表示と修復計画の未取得スレッド数が減ることがあります。reply_countの実APIでの意味は未確認のため、この件数は取得完了の証明ではありません。",
+  "details": [
+    "mcs_queries.incomplete_reply_rootsとmcs_repairのREPLY_GAPの判定をbody_stateがfullまたはdeletedの返信件数に揃えました。",
+    "バックアップ点検のincomplete_reply_roots指標も修復計画と同じREPLY_GAPの判定を使い、削除済み返信を取得済みとして数えます。"
+  ],
+  "refs": ["mcs/core/mcs_queries.py", "mcs/ops/mcs_repair.py", "tests/ingest/test_thread_tombstone_gap.py", "mcs/ops/mcs_backup.py", "tests/ops/test_backup_reply_gap.py"]
+}

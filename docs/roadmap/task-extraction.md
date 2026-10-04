@@ -1,5 +1,25 @@
 # #20 チャットからのタスク候補抽出・v4 能力強化
 
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+## 1.0.13のローカル実装状況（2026-10-04）
+
+20-Dの依頼項目はvalidator・正規化・投影と、明示指定の別prompt/cache世代へ
+接続した。旧prompt・既定抽出・公開/Loopの契約は維持し、候補はPENDING stagingに
+留める。既定canonicalへの昇格や実shadow一致率・実モデル容量の成功ではない。
+
+20-Eの[人手レビュー待ち手順](../../evaluation/request_following_review_protocol.md)と
+[固定manifest](../../evaluation/request_following_review_manifest.json)は、
+完全創作の事務・調整会話220件を収録する。原文と合成提案を分け、
+全件pending・人手検証済み0件・promotion_eligible=falseを維持する。
+関連92件が成功したが、非医療会話だけでは薬剤など既存G6の全分母が揃わない。
+本人200件以上の注釈、実候補比較、校正・G6・lifecycle、実capacityと昇格判断は未完了。
+
+以下の設定・実測・worktree名と設計案は当時の記録であり、この作業で実機設定・
+Jev送信・ローカルLLM・実患者snapshotを使った評価を実施した意味ではない。
+
 作成日: 2026-09-30。状態: 順序 1〜6 を `wip/roadmap20-ultracode` に実装済み（20-D/E は未着手、設定変更は無し）。ユーザー要望は「チャット文面からタスク化する能力を、構造化データ・LLM 処理の強化を前提に引き上げる」。実データ・実 LLM による現状精度や性能は未計測。
 
 2026-10-03照合: 20-A〜Cの依頼種別・条件・返信種別・rollupの`reply_state`はv1.0.10基準のコードに存在する。
@@ -124,6 +144,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 - 前提（着手前に決める）: (1) `semantic_loops._candidate_identity` は `assignee_text`/`due_text` を identity に含むため、投影で値が入ると同じ open item が別候補として重複する — identity の扱いを先に直す。(2) `semantic_audit._fact_audit_target` は statement + kind/polarity/epistemic/workflow/event_time/subject（medication_event は action）だけを監査文にする — 新項目を監査対象に含めるか（Jev への送信文が変わる）含めないか（監査されない項目になる）を決める。(3) 20-A の基準測定と 20-B/C の本番 1 週間で kind enum を実データで確かめてから。
 - 監査 S0〜S8・repair 一世代一回・PASS-only 公開は変えない。Jev への state.context に新項目は送らない。
 - **完了条件**: shadow 比較で extract_llm と canonical の requests 項目一致率を報告し、退行がないことを 20-E3 の切替条件に入れる。
+- 集計器（ローカル実装済み）: `python3 evaluation/canonical_request_eval.py --shadow-db LEDGER` が台帳を読取り専用で開き、同じ投稿の最新 `request_following_candidate` と現行 `extract_llm` の requests を比較する。依頼の対応付けは action 文字列ではなく根拠引用（候補 fact の evidence quote と extract_llm の `evidence` の包含）で行い、対応数（`matched`/`unmatched_legacy`/`unmatched_candidate`）と、対応した組だけを分母にした項目別一致率（to/from/kind/condition/due/due_text）を出す。extract_llm 行が無い・`requests` が配列でない投稿は `legacy_unknown`（不在扱いにしない）、`_items_dropped` のある行は `legacy_partial`、source revision 不一致・削除済み・候補JSON不正は `stale_or_invalid` として比較から除外する。`requests` キーの無い行は抽出プロンプトが空キーを省略する仕様のため「依頼0件」として比較する。`production_ready=false` 固定。実 shadow データでの報告は実LLM抽出が必要なため未実施（外部）。
 
 ### 20-E3 人手ラベル → G6 → canonical（オーナー作業 + 設定）
 

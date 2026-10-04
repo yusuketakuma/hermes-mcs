@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "取得不能な返信・履歴jobを初回で失敗扱いに",
+  "summary": "返信・履歴取得でHTTP 4xx（408・425・429を除く）や応答の構造不整合が返った場合、8回再試行せず初回でfailedにして状態画面の検証未完了へ表示します。一時障害は従来どおり8回まで再試行します。",
+  "upgrade": "操作は不要です。更新後に恒久系の失敗が起きたjobから適用され、既存のpending jobは次の失敗時に判定されます。新しい取込依頼で従来どおり再開できます。",
+  "details": [
+    "job_retryが理由コードの分類（unavailable・structural）を見て即時failedにする。",
+    "認証失敗はattemptを消費しない従来動作を維持する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "tests/core/test_job_reasons.py"
+  ]
+}

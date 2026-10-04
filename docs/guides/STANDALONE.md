@@ -4,6 +4,20 @@
 人承認・定期実行・監視・更新・復旧をhermes-mcsだけで動かします。
 既存の設定はモード未指定なら`hermes`を維持します。
 
+## 2026-10-04追記: 共通入口と未確認の境界
+
+[共通CLI](../../mcs/ops/mcs_cli.py)は導入前の`sh scripts/mcs install --mode standalone`、
+導入後の`mcs setup`・`mcs doctor --json`・`mcs update plan`を提供します。
+下記の`install.sh --mode standalone`、独立venvの`mcs_setup.py`、
+`python -m mcs_standalone`による既存手順は保持します。
+standaloneの外部bootstrap applyはhostの協調停止を駆動できず阻害されるため、
+共通入口の提供を外部apply対応の完了と扱いません。
+
+doctorの選択Python/SQLite・recovery・SDK配布metadataは
+[ローカル診断](../../mcs/ops/mcs_setup.py)の結果であり、実SDK認証・接続・
+常駐プロセスへの反映とは別です。launcherの選択runtime追随、backup lifecycle、
+緊急度の後追い通知の統合証拠は確認中です。実機適用と配備の受入条件は変更しません。
+
 ## 導入
 
 macOSの前提条件は[インストールガイド](INSTALLATION.md#1-共通の前提条件)を参照します。

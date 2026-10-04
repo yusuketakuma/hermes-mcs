@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "明示した静的snapshotと複数時刻でoffsiteを予約",
+  "summary": "opt-in backup設定は従来の日次snapshot_dirに加え、ownerが明示した静的snapshotファイルを選べます。scheduleは同じminuteと1〜24個の重複しないhourを指定でき、Hermesとstandaloneで共通parserを利用します。新しい既定時刻・保存先や自動有効化は追加しません。",
+  "upgrade": "新方式はbackup.snapshotへ絶対パスを明示し、backup.snapshot_dirと同時指定しません。従来のsnapshot_dirと日次scheduleはそのまま動作します。複数時刻は既存scheduleのhour欄をownerが列挙します。private policyのscheduled:true、max_rpo_seconds=86400、媒体・鍵保管・verify/drill・空き保持枠と、各offsite時刻より前の静的snapshot生成をownerが確認して設定・適用してください。この機能だけで実際のRPO24h達成を保証しません。",
+  "details": [
+    "renderされたwrapperはsnapshotなら既存--snapshot、snapshot_dirなら従来--snapshot-dirを渡し、live DBへの切替や新しい収集tickを起動しません。",
+    "未設定時の6基本ジョブ、明示opt-in、scheduledのliteral true条件、既存の所有権付き退役・手動削除・source世代への束縛は維持します。",
+    "完全合成の静的ledger-snapshot.dbと実render wrapperで新鮮・86400秒超過・時刻不明を検証します。古い/不明なsourceは成功・healthyとして扱いません。実機のNAS mount、実行時刻、snapshot生成間隔、起動停止・遅延、receipt・鍵・訓練は未検証です。"
+  ],
+  "refs": ["mcs/ops/mcs_setup.py", "deployment/scripts/mcs_offsite.sh", "tests/ops/test_backup_integration.py", "tests/ops/test_backup_scheduler.py"]
+}

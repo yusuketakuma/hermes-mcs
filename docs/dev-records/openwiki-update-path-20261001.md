@@ -51,7 +51,7 @@ PR 作成はその承認に含まれない。ソース送信の対象、provider
 
 1. 今回のソース変更と共有 brief を含むレビュー対象 revision を決める。
    既存の未commit差分を消したり、HEAD のみに戻して生成したりしない。
-2. [開発資料](../DEVELOPMENT.md)に従い、実データ・認証情報を持たない別 worktree
+2. [開発資料](../development/DEVELOPMENT.md)に従い、実データ・認証情報を持たない別 worktree
    で実行する。読ませる対象を確認し、患者データ・`config.json`・`.env`・token・
    エクスポート・非公開ログを持ち込まない。必要な未commit変更は確認済みの
    ソース/資料だけを移し、元の checkout を保護する。

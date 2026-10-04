@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "依頼追従の抽出を独立した候補世代で実行",
+  "summary": "明示したrequest_following候補だけに宛先・依頼者・期限原文・条件・種別の抽出案内を追加し、既存抽出と別のprompt hash世代でキャッシュします。専用APIは実抽出と既存のsource束縛stagingを接続し、PENDING候補だけを保存します。",
+  "upgrade": "既定の_FACT_V2_PROMPT・モデル・fact source・抽出schema・公開projection・Loop入力と世代は変更しません。候補実行はextract_facts_v2のrequest_following=Trueまたはsemantic_v4.extract_request_followingを明示して呼ぶ必要があります。repairにも同じflagを渡します。人手200件以上のG6、calibration、新項目の監査とLoop同一性・公開世代の判断は引き続き昇格条件です。自動昇格や承認tokenは追加しません。",
+  "details": [
+    "既存_chunk_generation(model, prompt)とcached chunksの厳密な世代一致を再利用する。旧と候補のキャッシュを双方向に混用せず、coverage retryの既存schema分離も維持する。",
+    "候補promptと同じbase promptをtargeted repairに使い、修復成功・未実行・失敗でも候補generationを返す。従来repairの戻り値とpromptは既定flagでは維持する。repairは既存の明示呼出しであり、新しい自動repairや監査承認の権限は追加しない。",
+    "extract_request_followingは現行threadから投稿を選び、既存transportへ注入callbackを渡す。抽出途中のprefixは同じ候補世代から再利用し、全chunk取得後だけ既存stage_request_followingを呼ぶ。抽出世代とdoc hashは既存v4_stage/PENDINGにも記録する。",
+    "current/public fact artifact・Loop・正式依頼・収集状態・設定を更新しない。投稿revision・本文hash・引用・現行threadの既存staging検証と親のcohort/receipt変更を保持する。",
+    "実モデル/API/Jev/private dataは使用せず、完全合成callbackからvalidation・cache・repair・stagingまでを検証する。syntheticの成功をモデル品質・人手G6・calibration・本番受入と扱わない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_llm.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_v4.py",
+    "tests/semantic/test_request_following_generation.py"
+  ]
+}

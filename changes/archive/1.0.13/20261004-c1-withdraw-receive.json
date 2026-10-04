@@ -1,0 +1,27 @@
+{
+  "category": "added",
+  "title": "手渡し送付に撤回指示書・合成受信側コマンド・C0固定fixtureを追加",
+  "summary": "明示の/2手渡しで送付を撤回すると、outboxへ自由文を含まない撤回指示書を作成し、受信側の削除receiptを取り込むまでdelete_heldを維持します。世代単位の撤回はjournalから全envelopeへ展開します。合成の参照受信側をreceiveコマンドで実行でき、受理・拒否・削除のreceipt bundleを作り、受領件数と完全集合の判定を分けて表示します。本文のsender_kindは既定でunknownのままで、明示した場合だけ自局ID・設定した自組織・職種から分類し、職種だけで自局とは判定しません。",
+  "upgrade": "既存の/1送付・認可・journal・旧CLI形式は変わりません。sender分類は --classify-senders を指定した場合だけ有効です。私有configの ext_export.since_days は1以上の整数が必要になり、小数や0の設定は拒否されます。受信側コマンドは合成用の参照実装で、外部への送信・本番staging・相手側の受入は行いません。",
+  "details": [
+    "撤回指示書 mcs-ext-withdraw/1 は contract・envelope_id・auth_id・理由コードだけで4,096 bytes以下。staging後始末は指示書を作らない。",
+    "受信側は指示書が原本より先に届けばtombstoneで後着を拒否し、part単位の撤回は集合をpartialとして扱う。到着済みenvelopeのauth_idと一致しない撤回は deleted:false を返す。",
+    "receiveは契約違反を終端のrejected receiptにし、受信側の保存障害ではreceiptを作らず送信側をheldのまま残す。既存のreceipt出力ファイルは上書きしない。",
+    "/2の検証でも禁止キーを forbidden_field と該当キー名 として報告し、stat等の非対象型は record_type_not_accepted と型名、負のhistory_floorは patient_coverage_floor_invalid とする。",
+    "受理12・拒否23（生成のみ1件を除く）・receipt 6・撤回4のC0 fixtureとMANIFEST.sha256、fixture set IDを固定し、送信側・wire parser・参照受信側の判定一致を検証する。",
+    "CLIの --since-days は整数として受け付ける。",
+    "receiveは同じoutbox内のreceipt等を入力とせずskipと数え、受理済みのenvelopeに後から届いた拒否receiptは上書きせず保留する。reconcile --allはjournalの一時ファイルを無視する。",
+    "世代単位の撤回と reconcile --all はjournalの件数上限（health診断用の1,000件既定）で止まらず、1,000件を超えるjournalでも全envelopeへ撤回を展開する。"
+  ],
+  "refs": [
+    "mcs/ops/ext_contract.py",
+    "mcs/ops/c1_envelopes.py",
+    "mcs/ops/c1_receiver.py",
+    "mcs/ops/c1_records.py",
+    "mcs/ops/c1_contract.py",
+    "mcs/ops/export_schema.py",
+    "tests/ops/ext_fixtures.py",
+    "tests/ops/test_ext_contract_c0.py",
+    "tests/ops/test_c1_withdraw_receive.py"
+  ]
+}

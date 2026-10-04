@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "数字だけのDiscord IDを設定するとカード操作が動かない問題を修正",
+  "summary": "hermes config setで設定したDiscordのチャンネル・サーバー・アプリケーションIDは、数字だけの値だと整数として保存されます。この場合、Discordのカード操作が起動しないか接続時に失敗し、操作の受付記録やカード操作が scope_mismatch で拒否されていました。整数として保存されたIDも文字列のIDと同じように扱うように修正しました。",
+  "upgrade": "Hermes連携でDiscordのカード操作を使っている場合は、プラグインを更新した後にgatewayを再起動してください。設定し直す必要はありません。",
+  "details": [
+    "hermes_pluginの_settingsと_interactive_settingsは、application_id・guild_id・channel_idを既存の_id_textで正規化する。0以上の整数と空でない文字列を受け付け、boolは受け付けない。"
+  ],
+  "refs": [
+    "hermes_plugin/__init__.py",
+    "hermes_plugin/card_workers.py"
+  ]
+}

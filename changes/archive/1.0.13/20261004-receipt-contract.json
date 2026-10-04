@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "外部集計受領結果の誤認と重複送付を防止",
+  "summary": "合成の手渡し検証で受領成功・受領拒否・削除結果を区別し、拒否された送付は終端として再送しません。受領票の未知項目・不正な件数・理由・ハッシュを拒否し、結果不明は保留を維持します。",
+  "upgrade": "本番への手渡し・外部送信・承認の自動生成は行いません。既存の厳密なLocalSink受領票と送付先・内容に束縛済みの旧journalは引き続き照合できます。束縛のない旧journalは自動補完せず確認対象として拒否します。認可・集計範囲・snapshot鮮度・既定preset・公開enumは変更しません。",
+  "details": [
+    "参照LocalSinkはmcs-ext-receipt/1のacceptedとdelete結果を発行し、受領拒否を成功ackとして扱わない。",
+    "HandoffSinkは自己ackを発行せず、JSON・NDJSON・ディレクトリからの手動receipt取込で照合する。終端ではローカルのstagingコピーを除去し、journalと監査を保持する。",
+    "semantic・検知器・統計presetとexport allowlistの整合を合成テストで検証し、本文・氏名・未知の臨床項目を送付しない。"
+  ],
+  "refs": ["mcs/ops/ext_contract.py", "mcs/ops/export_schema.py", "tests/ops/test_receipt_contract.py"]
+}

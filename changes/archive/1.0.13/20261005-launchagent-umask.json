@@ -1,0 +1,13 @@
+{
+  "category": "security",
+  "title": "常駐ジョブのログを所有者だけが読める権限で作成",
+  "summary": "常駐ジョブの雛形に作成ファイルの権限制限を追加し、新しく作られるログが所有者だけ読める状態になります。収集・抽出・通知の動作は変わりません。",
+  "upgrade": "次回の更新（mcs_update の適用後に自動実行される services）、復旧（mcs_recover）、`mcs_setup.py services` の実行、または install.sh の再実行で雛形が再描画され、内容が変わった常駐ジョブ（llama-server・抽出worker 2本・cmd/int 取込・独立実行）はそれぞれ1回再起動されて Umask 077 が適用されます。再起動で処理中のLLM抽出が中断され得るため、抽出が空いている時間帯の更新を推奨します。それまで稼働中のジョブは従来の権限のままです。既に作成済みのログ（例: extract_drain_2.log）の権限は変わらないため、必要に応じて所有者のみ（chmod 600）に変更してください。独立実行の定期ジョブ（mcs_setup.py の _cron_plist と mcs_standalone/service.py が生成する plist、data/cron.log・data/standalone.log）にはまだ Umask を設定しておらず、別項目で対応します。",
+  "details": [
+    "deployment/launchagents の全雛形に Umask 077 を追加した。",
+    "未対応: _cron_plist（mcs/ops/mcs_setup.py）と mcs_standalone/service.py の生成 plist。"
+  ],
+  "refs": [
+    "deployment/launchagents/"
+  ]
+}

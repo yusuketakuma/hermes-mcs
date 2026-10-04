@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "時間切れで次回へ延期した処理をhealthに記録",
+  "summary": "1.0.13で追加した時間切れの段延期について、次回へ回した処理（通知配送・意味抽出・定期整理など）の名前をhealth.jsonとstatus表示の実行情報にも表示します。どの処理が延期されたかを状態確認で説明できます。",
+  "upgrade": "追加操作は不要です。延期が発生した実行だけ health.json の run に deferred_stages が追加され、延期がない実行では従来どおり出力されません。",
+  "details": [
+    "run_check の health 生成で result の deferred_stages を run.deferred_stages へ複写する。health_watch は run を既存どおりそのまま表示する。",
+    "時間切れで延期した段は errors に延期した段名をまとめた1件 deadline_deferred:段名,段名 を追加し、runs.status を partial として記録する。延期のあった実行がバックアップの source_last_successful_run で成功扱いにならない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py"
+  ]
+}

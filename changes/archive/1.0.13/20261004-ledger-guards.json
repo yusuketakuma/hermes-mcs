@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "派生データと添付の投稿参照をDBで保護",
+  "summary": "投稿が存在しない派生データ・添付や、投稿とプロジェクトが異なる派生データの保存をDBでも検査します。新規DBは関係別の監査件数がゼロの場合に保存を拒否するガードを有効化し、既存DBへの初回導入は保存を止めず件数を記録するshadowから始めます。",
+  "upgrade": "Ledgerの初期化時に同一書込みトランザクションで関係別の件数監査とガード導入を行います。既存DBは監査件数がゼロでもshadowから自動昇格しません。実DBの監査、観測期間、旧違反の容認・修復と有効化はオーナー確認が必要です。コードの巻戻しではDBのトリガーは消えません。",
+  "details": [
+    "healthとsnapshotのstatusは関係別のmode・初期化時existing_count・累積shadow_countを表示します。記録済みの違反件数があればhealthをdegradedにし、新たな完全性監査の結果と混同しません。旧snapshotで表が無ければ不明です。",
+    "ledger_relation_guardsに関係別のmode・初期化時existing_count・累積shadow_countだけを保持します。shadow_countはコミットされた不正INSERT・参照列UPDATEの件数であり、ロールバックされた書込みは含みません。",
+    "artifactsのmessage_idがNULLなら免除し、project_idがNULLなら投稿の存在だけを検査します。attachmentsのmessage_idはNULLも不存在として検査します。",
+    "foreign_keys=OFFの接続にも作用します。既存行の削除・修復・表再構築、スキーマ版、AUTOINCREMENT高水位、FTS、その他の外部キー契約は変更しません。",
+    "実機の監査・観測期間・負荷は未検証です。enforce済みの関係も既存違反件数またはshadow観測件数があれば再初期化時にshadowへ戻します。ゼロ件のshadow観測は観測期間の完了を証明しません。"
+  ],
+  "refs": ["mcs/core/ledger.py", "tests/core/test_ledger_guards.py"]
+}

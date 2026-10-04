@@ -1,11 +1,24 @@
 # 取得・アーカイブの詳細計画（#1〜#6）
 
+2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
+成果物・CLI・受入の正本は[1.0.13開発計画](../development/RELEASE_1.0.13.md)。
+当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
+
+### 2026-10-04追記: #3と修復診断の現状
+
+[ledgerの理由コード](../../mcs/core/ledger.py)は取得・job失敗の分類を保持し、
+旧行の不明理由を推定補完しません。[repair plan](../../mcs/ops/mcs_repair.py)は
+`plan --snapshot`で静的snapshotの件数と阻害条件を読み、取得不能・欠落・
+履歴floorの不確実性を区別します。planの出力だけで実データを修復したり、
+「記録がない」を「対応がなかった」と判断したりしません。
+以下の初期調査・D判断は当時の根拠として保持し、実API・再照合・修復後観測の受入は別です。
+
 [`docs/ROADMAP.md`](../ROADMAP.md) の #1〜#6 の詳細計画。
 
 2026-10-03照合: 以下の「現状」・行番号・端末実測・節番号は2026-09-29の調査記録。
 現在の優先順位・版割当・公開条件は[ROADMAP](../ROADMAP.md)を正とし、本書の実施順は項目内の依存順として読む。
 1.0.11の#2は投稿メタの完全合成契約を先行する。従来取得契約のfixture化全体、#1・#3〜#6は後続。
-#4は1.0.15ではplanまでで、本番修復・C1本番投入は実施記録と未決判断が揃うまで行わない。
+#4は1.0.13ではplanまでで、本番修復・C1本番投入は実施記録と未決判断が揃うまで行わない。
 新定期ジョブを設計する際は、Hermesのcronと独立hostの所有を分け、standaloneへHermes cronやworkerを重複登録しない。
 
 - 基準: v1.0.6 のコード（2026-09-29 調査）。行番号はこの時点のもの。
@@ -162,24 +175,24 @@
   - `fetch_jobs` に nullable な `error TEXT` を加法 migration で追加する（前例 `_migrate_body` の `ledger.py:349-355`、`attachments.error`）。SCHEMA_VERSION は 7 のまま。
   - `job_retry` / `job_fail` / `job_defer` の呼び出し側（`job_ops.py:361,378-392,417-419,428` ほか）で、分類済みの理由を書く。`job_done` と revive（`_job_add_tx`）で消す。payload の JSON キーは `job_add` の ON CONFLICT（`ledger.py:1218-1220`）で消えるため不採用。
 - 閉じた語彙（安定トークン）を定義する。
-  - 一時: `network_error`・`deadline_exceeded`・`http_5xx`・`http_429`・`session_expired`。
+  - 一時: `network_error`・`deadline_exceeded`・`http_5xx`・`http_408`・`http_425`・`http_429`・`session_expired`。
   - 恒久: `forbidden`・`http_4xx`・`schema_error`。
   - 構造: `thread_incomplete`・`replies_missing`・`window_stalled`。
   - 状態: `deleted`（tombstone。失敗ではない）。
   - 既定: `not_recorded`（旧行）。
 - 恒久系は即 `failed` にする（`attachment_failed` と同じ）。`SessionExpired` は従来どおり attempt を消費しない。
-- view: `mcs_view.py:210-211` の固定値をやめ、`GROUP BY kind,state,error` で出す。`REASONS` に不足分を足し、未使用の `body_incomplete` を整理する。`incomplete_reply_roots` の tombstone の扱いを `merge_full_replies` と統一する（実 API の確認とセット）。`mcs_view` は旧 snapshot（列がない）でも読めるよう `PRAGMA table_info` で存在確認する。
+- view: `mcs_view.py:210-211` の固定値をやめ、`GROUP BY kind,state,error` で出す。`REASONS` に不足分を足し、未使用の `body_incomplete` を整理する。（1.0.13 対応済み: `parent_body_incomplete`・`forbidden`・`download_empty`・`disk_full`・`mark_result_unknown` ほかを追加し `body_incomplete` を削除。`tests/views/test_status_fetch_reason.py`）`incomplete_reply_roots` の tombstone の扱いを `merge_full_replies` と統一する（実 API の確認とセット）。`mcs_view` は旧 snapshot（列がない）でも読めるよう `PRAGMA table_info` で存在確認する。
 - floor との関係（#3-D1）: 恒久欠落があっても floor を確定させるが、status に `known_gaps` 件数を併記し、C1 の coverage では「不明」として扱う。厳しくすると floor が永久に付かず、deep import が止まる。
 
 **成果物**
 - 変更: `mcs/core/ledger.py`（migration、`job_retry` 系、`job_add` 系）、`mcs/ingest/job_ops.py`（分類の書込）、`mcs/views/mcs_view.py`（status）、`docs/development/DEVELOPMENT.md:273`。新規ファイルなし（テストは既存ファイルへ追加）。
 
 **受入条件とテスト（合成のみ）**
-- `tests/ingest/test_job_drain.py` の流儀（偽 adapter が `MCSError(kind, status=...)` を投げる）で確認する。各 kind が `fetch_jobs.error` に記録される。恒久系は 1 回で `failed`、一時系は 8 回で `failed`。`SessionExpired` は attempt 非消費。成功時と revive 時に `error` が消える。
+- `tests/ingest/test_job_drain.py` の流儀（偽 adapter が `MCSError(kind, status=...)` を投げる）で確認する。各 kind が `fetch_jobs.error` に記録される。恒久系は 1 回で `failed`、一時系は 8 回で `failed`。`SessionExpired` は attempt 非消費。成功時と revive 時に `error` が消える。（1.0.13 対応済み: 単発 `fetch_thread`・thread window の失敗・全走査後の `replies_missing`・history の例外と途中中断・`window_stalled`・`waiting_replies` を偽 adapter で `reason_code` まで検証。`tests/core/test_job_reasons.py`）
 - 列のない v7 DB を `Ledger` で開くと migration で列が追加される（`test_interrupted_v7_migration_reruns_backfill`: `tests/ingest/test_job_drain.py:1055` の型）。
 - 列のない旧 snapshot を `mcs_view` が読め、status に理由が出る。
 - tombstone 入りスレッドで、view の `incomplete_reply_roots` と job 側の完了判定が一致する。
-- 恒久欠落で floor は付くが `known_gaps>0` が併記される。
+- 恒久欠落で floor は付くが `known_gaps>0` が併記される。（1.0.13 対応済み: `test_permanent_gap_keeps_floor_and_reports_known_gaps` が cutoff・終端の両 floor で `history_record` と `known_gaps` の併記、`gapless_verified=false` を検証。`tests/core/test_job_reasons.py`）
 
 **依存・順序**: #2（tombstone と `reply_count` の意味）の後が望ましい。#4 の前に入れる（修復の判定に理由が要る）。
 
@@ -292,6 +305,13 @@
 
 **目的**: 通知の配送で、送信が受理された直後のクラッシュが重複投稿や原因不明の送信保留を生まないようにする。結果不明は照合に回す。
 
+**1.0.13のローカル実装状況（2026-10-04）**
+- text経路にも30秒の送信開始下限と復元ゲートを実装した。結果不明は自動再送せず、既存の`progress`内へ安定した`hold_reason`を保存する。新しい列やmigrationは追加していない。
+- 通常の復元マーカーでは本文を保留し、既存の運用alertだけを通す。NASバックアップから新端末へ復元する専用同意経路は別で、収集再開後も`hold_all`によって全配送を保留する。
+- 復元照合では配送を検証できないtextを`restore_text_unverified`として保持する。card専用のresolve権限をtextへ拡張せず、既存heldの一括解除・自動再送は行わない。
+- 合成のクラッシュ窓・予算境界・復元・receipt失敗の回帰は実装済み。全体回帰はその時点の差分で5,849件成功。後続差分の最終検証は別に行う。
+- #6-D1/D2は質問の回答期限後に「best judgmentで作業継続」の指示を受け、実装方針として自動再送なし・既存heldは個別確認を選択した。回答による明示承認や本番heldの確認済みという意味ではない。以下のat-least-once案とtext resolverは採用しない。実際のheldが判明した場合の解除操作は別の人承認・証拠・receiptを要求する。
+
 **現状**
 - **旧 ROADMAP の「重複」は text 経路では既に対策済みで、記述が陳腐化していた**。`outbox_progress(sending=)` の write-ahead マーカー（`mcs/core/ledger.py:1713-1727`）が、送信前に `sending=i+1` を書き（`notify_flush.py:684-696`）、次回に `sending > next` を見つけたら再送せず hold する（:805-812）。導入は 392f030（2026-09-23、F19）で、旧 ROADMAP の元の残件メモ（2026-09-19）より後。テストは `tests/notify/test_notify_flush.py:110-138`、`tests/notify/test_notify_flush_paths.py:334-380`。
 - card 経路（`INTERACTIVE_KINDS = {new_messages, signal}`: `mcs/notify/notify_cards.py:53`）は journal 方式。`started` を HTTP 前に fsync し、`result` を応答直後に fsync してから receipt を出す（`adapters/common/journal.py:1-25`、`worker.py:1-21`）。`started` 後に途絶えたら `unknown` になり再送しない。運用者は `ops.card_resolve`（`mcs/notify/notify_transport.py:602-790`）で解決する。テストは `tests/adapters/discord/test_mcs_discord.py:735-812`、`tests/notify/test_notify_reconcile.py`。
@@ -309,6 +329,7 @@
 2. `flush()` が `restore_pending` を見て、content 系（`new_messages`・`signal`・`attachment_followup`・`semantic_notice`）の送信を保留する。alert 系だけ通す（card 経路と同じ姿勢: `notify_transport.py:183-188`）。
 3. 種別ごとの配送方針表を持つ。既定は at-most-once（現状）。alert 系は at-least-once（不確実でも hold せず、バックオフで再送）。どの種別を at-least-once にするかは #6-D1。
 4. hold の理由を残す（`notify_outbox` に nullable な `hold_reason` を加法追加。前例 `progress`）。
+   - 実装（1.0.13）: 列は追加せず `progress.hold_reason` に安定コードだけを保存する。text 経路の `_hold_event` に加え、card/interactive 経路の隔離（`payload_invalid`・`resend_exhausted`・`dispatch_failed`・`internal_failure`）と restore 照合の hold（`restore_hold`・`restore_unlinked`）も同じ欄へ書き、health の `held_reasons` に内訳が出る。既存の受領記録は保持し、解析不能な記録は `invalid_progress` に退避する。
 5. hold 一覧を出す（本文なし: event_id・kind・age・progress・reason）。text 経路の解決コマンド（`ops.card_resolve` の型を踏襲）は、実需が確認できた後に段階導入する。`mark_delivered` は次の chunk へ進める、`mark_not_sent` は保留された chunk から再開する、と定義する。
 6. 故障注入テストを網羅する（下記）。
 

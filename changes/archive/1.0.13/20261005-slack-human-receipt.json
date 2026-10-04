@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "Slackで確定した操作の結果が届かないことがある不具合を修正",
+  "summary": "Slackで確認して確定した操作は、カードが更新されると『受け付けました』のあとに『反映しました』や却下理由が届かないことがありました。カード更新後も、現在の権限を確認したうえで本人に結果を届けるようにしました。",
+  "upgrade": "追加操作は不要です。反映には通知ワーカーの再起動が必要です。",
+  "details": [
+    "Slackの確定操作の結果通知は旧カードのボタンtokenに依存せず、送信元scope・許可ユーザー・操作者・project_id・route_epoch・interactive/transportフラグを送付時に再確認する（LINE WORKSと同じ判定）。",
+    "更新前に保存された確定待ち（project_id・route_epochなし）は従来どおりボタンtokenで判定し、再起動時点の結果通知を失わない。"
+  ],
+  "refs": [
+    "adapters/slack/actions.py"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "変換cohortの投稿参照を整合",
+  "summary": "全体の変換cohortは投稿参照を持たず、項目のreceiptは実投稿のプロジェクトへ束縛します。投稿が無くなった項目の診断も対象IDを内容に保持し、不存在の投稿への参照を作りません。",
+  "upgrade": "設定変更は不要です。既存cohortの読取り、推論の既定off、変換上限と公開・payload削除の承認条件を維持します。旧行の削除や修復は行いません。",
+  "details": [],
+  "refs": ["mcs/semantic/semantic_v4.py", "tests/semantic/test_semantic_v4.py"]
+}

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "薬の変更件数から「〜は出来ない」という可否の記述を除外",
+  "summary": "薬の変更負荷とフォローアップ記録なしの統計が、「自己注射は出来ない」のような可否の記述を中止などの変更として数えていた問題を直しました。シグナル一覧と同じ基準になり、変更件数の水増しや誤った「フォローアップ記録なし」の行が出なくなります。",
+  "upgrade": "追加操作は不要です。統計の定義版(definition_version)が2026-10-05に上がるため、以前の出力と件数を比べる場合は版の違いに注意してください。",
+  "details": ["st_med_change_burdenとst_med_change_followupでmed_capability_evidenceに該当する薬剤言及を変更から除外し、DEFINITION_VERSIONを2026-10-05に更新。"],
+  "refs": ["mcs/views/mcs_stats.py"]
+}
