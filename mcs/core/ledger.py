@@ -276,6 +276,9 @@ class Ledger:
         had_fts = self.db.execute(
             "SELECT 1 FROM sqlite_master WHERE name='messages_fts'"
         ).fetchone() is not None
+        # A newly created FTS table and its backfill must commit together.
+        # Otherwise a failed backfill looks already initialized on reopen.
+        self.db.execute("BEGIN IMMEDIATE")
         try:
             self.db.execute("""
               CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
@@ -401,16 +404,17 @@ class Ledger:
         # old writer would keep writing a DB whose one-time backfills
         # already ran (Oracle F03)
         old_version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        self.db.execute("BEGIN IMMEDIATE")
+        if not self.db.in_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             self._migrate_body(cols, old_version)
+            if old_version < SCHEMA_VERSION or fts_created:
+                self._backfill_v3()
             self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self.db.commit()
         except Exception:
             self.db.rollback()
             raise
-        if old_version < SCHEMA_VERSION or fts_created:
-            self._backfill_v3()
 
     def _migrate_body(self, cols, old_version: int):
         self.db.execute("""
@@ -665,7 +669,6 @@ class Ledger:
               SELECT message_id, body_text, sender_name FROM messages
               WHERE body_text IS NOT NULL AND message_id NOT IN
                 (SELECT rowid FROM messages_fts)""")
-        self.db.commit()
 
     # ---------- runs ----------
 
@@ -1395,7 +1398,7 @@ class Ledger:
         row = self.db.execute(
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
-        content = loads_dict(row["content"]) if row else {}
+        content = (loads_dict(row["content"]) or {}) if row else {}
         # observed_at marks when this value was first seen: unread posts
         # are re-captured every tick, and refreshing an unchanged value
         # would re-render cards and recount digests each time.
@@ -1462,7 +1465,8 @@ class Ledger:
             AND (f.last_error IS NULL OR f.checked_at<=?)
             AND (CASE WHEN f.complete_at IS NULL THEN EXISTS(
                    SELECT 1 FROM json_each(md.content,'$.reactions.value') r
-                   WHERE json_extract(r.value,'$.count')>0)
+                   WHERE json_extract(CASE WHEN r.type='object' THEN r.value END,
+                                      '$.count')>0)
                  ELSE json_extract(md.content,'$.reactions.observed_at')>f.complete_at
                    OR f.complete_at<=? END)
           ORDER BY COALESCE(f.complete_at,0),m.message_id LIMIT ?
@@ -1554,8 +1558,10 @@ class Ledger:
                   CASE WHEN json_valid(cap.content) THEN cap.content ELSE '{{}}' END,
                   '$.reactions.value') r
                   WHERE cap.message_id=sm.message_id AND cap.source='capture'
-                    AND json_extract(r.value,'$.self_reacted')=1
-                    AND json_extract(r.value,'$.type') IN ('accepted','completed')))),
+                    AND json_extract(CASE WHEN r.type='object' THEN r.value END,
+                                     '$.self_reacted')=1
+                    AND json_extract(CASE WHEN r.type='object' THEN r.value END,
+                                     '$.type') IN ('accepted','completed')))),
           act AS (
             SELECT project_id, COALESCE(parent_id,message_id) AS root,
                    MAX(posted_at_ts) AS last FROM messages

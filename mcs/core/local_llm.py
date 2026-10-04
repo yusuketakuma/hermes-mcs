@@ -168,7 +168,7 @@ def admitted_chat(client_route: str, prompt: str, *,
     # as a backend-uncertain ``unknown`` permit that holds a slot
     _validate_chat_args(prompt, kw.get("endpoint", ENDPOINT),
                         kw.get("timeout", TIMEOUT),
-                        kw.get("max_tokens", MAX_TOKENS))
+                        kw.get("max_tokens", MAX_TOKENS), deadline)
     acq = broker.acquire(client_route, cls)
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \
@@ -263,6 +263,8 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     cls = broker.routes.get(client_route)
     if cls is None:
         return "plain"
+    _validate_chat_args('Reply with {"ok": true}', endpoint,
+                        kw.get("timeout", 10), 20, kw.get("deadline"))
     acq = broker.acquire(client_route, cls)
     if not acq.get("admitted"):
         if acq.get("reason") == "waiting" and acq.get("permit_id") is not None:
@@ -339,7 +341,8 @@ def _timings_dict(timings) -> dict | None:
     return out or None
 
 
-def _validate_chat_args(prompt, endpoint, timeout, max_tokens) -> None:
+def _validate_chat_args(prompt, endpoint, timeout, max_tokens,
+                        deadline=None) -> None:
     """Pre-send argument checks shared by ``chat`` and ``admitted_chat``
     — a request rejected here provably never reached the backend."""
     if not isinstance(prompt, str) or not prompt:
@@ -352,6 +355,10 @@ def _validate_chat_args(prompt, endpoint, timeout, max_tokens) -> None:
     if max_tokens is not None and (type(max_tokens) is not int
                                  or max_tokens <= 0):
         raise ValueError("max_tokens_invalid")
+    if deadline is not None and (
+            isinstance(deadline, bool) or not isinstance(deadline, int | float)
+            or not math.isfinite(deadline)):
+        raise ValueError("deadline_invalid")
 
 
 def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
@@ -372,7 +379,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     (never started / down), which callers may treat as free-of-cost
     unlike a timeout that consumed real server work.
     """
-    _validate_chat_args(prompt, endpoint, timeout, max_tokens)
+    _validate_chat_args(prompt, endpoint, timeout, max_tokens, deadline)
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
