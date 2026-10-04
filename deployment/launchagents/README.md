@@ -17,9 +17,9 @@ services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わ�
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
-| 未読チェック `run_check.py --json --download-files --mark-read` | `*/5 * * * *`（24時間） | hermes cron (`mcs_check.sh`) |
+| 未読チェック `run_check.py --json --download-files --mark-read` | `*/10 * * * *`（24時間） | hermes cron (`mcs_check.sh`) |
 | ヘルス監視 `health_watch.py` | `*/5 * * * *` | hermes cron (`mcs_health.sh`) |
-| durable-job drain `run_check.py --json --jobs-only` | `7,37 * * * *` | hermes cron (`mcs_deep.sh`) |
+| durable-job drain `run_check.py --json --jobs-only` | `10,40 * * * *` | hermes cron (`mcs_deep.sh`) |
 | 失敗ジョブの bounded retry 登録 | `0 */6 * * *`（解析は常駐worker） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
 | 更新チェック `mcs_update.py check` | `10 5 * * *` | hermes cron (`mcs_update.sh`) |
@@ -126,7 +126,7 @@ Hermes のローカル custom provider も `extra_body.id_slot=1` に固定す�
 1件は中断しない。log に `elastic_hold`/`elastic_resume`）。抽出は既存のclaim lease、semantic/QC はジョブ別flockで
 重複実行を防ぐ。DB更新時は run.lock を保持し、LLM・Jev の実際の通信中
 だけ解放する。通信後はロックを再取得し、既存の世代・source・config
-ゲートで結果を照合する。長い推論中も5分取込みが進む。
+ゲートで結果を照合する。長い推論中も10分取込みが進む。
 
 新着取込みは slot 1 に固定し、今回取り込んだ投稿の抽出とarrival-seeded
 semantic jobを新しい順に処理する。HermesがRT枠を使用中なら新着解析は

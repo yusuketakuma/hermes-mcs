@@ -82,8 +82,11 @@ Keychain 'mcs-adapter'               MCS パスワード
 常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
 `ai.mcs.extract-drainer{,-2}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
 `org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
-定期: cron `mcs_check`（5分）・`mcs_deep`（durable drain）・
+定期: cron `mcs_check`（10分）・`mcs_deep`（毎時10分・40分のdurable drain）・
 `mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
+
+MCSサーバーの負荷対策として、自動取得を5分から10分間隔へ変更する。
+履歴の定期取得も10分の区切りにそろえる。
 
 ## 4. 初期インストール仕様 ✅
 
@@ -259,7 +262,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 `health.json` がサブシステム状態を公開（`collection`/`notify`/
 `semantic`/`extract_qc`/`cards`…）。各状態の自動応答:
 
-`health_watch.py` は24時間同じ `health.tick_interval_s`（既定300秒）と
+`health_watch.py` は24時間同じ `health.tick_interval_s`（既定600秒）と
 `health.max_missed_runs`（既定2回）から古い `health.json` を判定する。
 判定基準時刻は未読収集が最後に完了した
 `unread_at`（無い旧形式では `at`）で、未読収集をしない `--jobs-only` の deep

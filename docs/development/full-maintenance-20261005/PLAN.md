@@ -41,7 +41,7 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 
 ## 追加された受入条件
 
-1. MCS定期アクセスを5分から10分へ変更。取得jobとhealth欠測判定・Hermes/standalone登録を整合させ、LLM timeout等の無関係な300秒は維持する。
+1. MCSサーバーの負荷対策として、MCS定期アクセスを5分から10分へ変更。変更理由を利用者向けガイド・仕様・変更記録に明記する。取得jobとhealth欠測判定・Hermes/standalone登録を整合させ、LLM timeout等の無関係な300秒は維持する。
 2. install/update/recoveryの1.0.13実経路を修復・検証する。旧版からの移行、途中失敗・再試行、service ownership、独立Python/SQLite検査を維持し、合成・隔離fixtureで証明する。
 3. Slack/Discord/LINE WORKSの表示を全件追跡。長文/分割、添付、ボタン、metadata、escaping、権限scope、stale/更新/receiptを合成で検証する。実サービス表示や実機配備を未実施のまま成功扱いしない。
 

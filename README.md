@@ -13,7 +13,9 @@ LINE WORKSでは同じ要約・原文・添付をトークルームの連続投�
 
 | 収集 | 保存・整理 | 通知・操作 |
 |---|---|---|
-| 24時間・既定5分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord / LINE WORKS |
+| 24時間・既定10分間隔 | Mac上のSQLite + ローカルLLM | Slack（推奨） / Discord / LINE WORKS |
+
+MCSサーバーの負荷対策として、自動取得の間隔を5分から10分へ変更しています。
 
 このREADMEはmainの機能を説明します。[1.0.13のローカル支援](#candidate)は既定offで、実機・外部の受入条件は分けて記載します。導入する版の変更・更新手順は[CHANGELOG](CHANGELOG.md)と[Releases](https://github.com/yusuketakuma/hermes-mcs/releases)で確認してください。
 通知を有効にすると患者名・本文・送信対象の添付が設定先へ送られます。[情報の行き先と安全境界](#data)を導入前に確認してください。

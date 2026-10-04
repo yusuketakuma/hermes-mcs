@@ -36,19 +36,20 @@ def test_jobs_quiesce_and_restart_after_the_updater_finishes(tmp_path, monkeypat
     now = datetime(2026, 10, 2, 5, 10, tzinfo=timezone.utc).timestamp()
     assert len(host.schedules) == 6
     host.tick(now)
-    assert set(host.children) == {"extract-0", "extract-2", "mcs_check", "mcs_health", "update"}
+    assert set(host.children) == {"extract-0", "extract-2", "mcs_check", "mcs_deep", "mcs_health", "update"}
     assert all(kw["env"]["MCS_ROOT"] == str(tmp_path) for _, kw, _ in launched)
     assert host.argv["extract-0"][-2:] == ["0", "--semantic"]
     assert host.argv["extract-2"][-2:] == ["2", "--semantic"]
     host.tick(now + 0.5)
-    assert len(launched) == 5  # one instance per job and scheduled minute
+    assert len(launched) == 6  # one instance per job and scheduled minute
 
     marker = data / UPDATE_MARKER_NAME
     marker.write_text("synthetic")
     host.tick(now + 1)
     assert all(not host.children[job]["process"].terminated
-               for job in ("mcs_check", "mcs_health", "update"))
+               for job in ("mcs_check", "mcs_deep", "mcs_health", "update"))
     host.children["mcs_check"]["process"].code = 0
+    host.children["mcs_deep"]["process"].code = 0
     host.children["mcs_health"]["process"].code = 0
     host.tick(now + 2)
     snapshot = json.loads((data / service.STATUS_FILE).read_text())

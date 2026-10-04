@@ -2386,9 +2386,9 @@ G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
                                 "g6-criteria-v1.json")
 
 CRON_JOBS = [
-    ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
+    ("MCS unread check", "*/10 * * * *", "mcs_check.sh"),
     ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
-    ("MCS durable drain", "7,37 * * * *", "mcs_deep.sh"),
+    ("MCS durable drain", "10,40 * * * *", "mcs_deep.sh"),
     ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),

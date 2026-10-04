@@ -1,0 +1,531 @@
+{
+  "schema_version": 1,
+  "packet": "parent-lifecycle-progress",
+  "status": "PARTIAL",
+  "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "P": "d68591e",
+  "I": "audit/full-maintenance-20261005; fixed commit pending",
+  "owner": "root",
+  "scope": "install/update/recovery/setup/deployment scheduling; source/test/doc audit ongoing",
+  "read_inventory": [
+    {
+      "path": "install.sh",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1109
+        ]
+      ],
+      "reviewed_sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
+      "lines": 1109,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "scripts/mcs",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "reviewed_sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
+      "lines": 22,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "scripts/mcs_upgrade.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          113
+        ]
+      ],
+      "reviewed_sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
+      "lines": 113,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "scripts/keychain_to_env.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          35
+        ]
+      ],
+      "reviewed_sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166",
+      "lines": 35,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs/ops/mcs_cli.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "reviewed_sha256": "c0dbb341d57008e1c000c7efabfbc667b0d15a4aadf8f25a9e0c09fe62bebfe7",
+      "lines": 107,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs/ops/mcs_update.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          2734
+        ]
+      ],
+      "reviewed_sha256": "c423e5227c467ef7f16703b30df7aafd7491649f7f241b96c8c7478216dd5296",
+      "lines": 2734,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1276
+        ]
+      ],
+      "reviewed_sha256": "a49fbf761a8cbb66817cded8ca281ef65bc7a701a77966f36a1aac753860597c",
+      "lines": 1276,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "deployment/scripts/mcs_check.sh",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "reviewed_sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
+      "lines": 45,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "deployment/scripts/mcs_health.sh",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          10
+        ]
+      ],
+      "reviewed_sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "lines": 10,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "deployment/scripts/mcs_update.sh",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "reviewed_sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
+      "lines": 12,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/ops_testkit.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "reviewed_sha256": "de797908293db35c75d5c8521b6c962ed1ca8b305cc4f65aa1023bc308267354",
+      "lines": 181,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_mcs_upgrade.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          356
+        ]
+      ],
+      "reviewed_sha256": "9ef79915066d3c23f9a2d9ed7bcfdc7a74c2e7276050c14d35eae5d6d06cc575",
+      "lines": 356,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_supported_update_paths.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          411
+        ]
+      ],
+      "reviewed_sha256": "e8fe3a17e0abeeabe3b1efdd28e66f7d00508ec55e39992a522436d7e1184571",
+      "lines": 411,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/meta/test_install_sh.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1162
+        ]
+      ],
+      "reviewed_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
+      "lines": 1162,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/meta/test_install_sh_standalone.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          118
+        ]
+      ],
+      "reviewed_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
+      "lines": 118,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/update-paths.json",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "reviewed_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
+      "lines": 92,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/origins.json",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          258
+        ]
+      ],
+      "reviewed_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
+      "lines": 258,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "docs/guides/UPGRADE_AGENT.md",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          190
+        ]
+      ],
+      "reviewed_sha256": "a7a9845fb12ff72aca54952b5de3b0e13b43b35db5fa2c0057e662ea23c8a6d1",
+      "lines": 190,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "docs/specs/lifecycle-spec.md",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          323
+        ]
+      ],
+      "reviewed_sha256": "dd49947018da5af7ef7ff1f5e2fd229e40c70dcd15ac8a7c5425bd99291560e7",
+      "lines": 323,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "changes/README.md",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "reviewed_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "lines": 25,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_recovery_corrupt_receipts.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          33
+        ]
+      ],
+      "reviewed_sha256": "73876d0fcbad4afcd993b7a1ebae35ba4735fb18f91218c0764f1f11eae48f08",
+      "lines": 33,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_ten_minute_collection.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "reviewed_sha256": "7af37d19c2a47b89db86dc719f6d9d17924cb0bc22a3d41e7da0da02882b2d2f",
+      "lines": 47,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_update_child_reaping.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "reviewed_sha256": "616663001bcdb906bb8ffbd766b73786ac1c9e952e550efd7f7918f0d92b106c",
+      "lines": 34,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "status": "PARTIAL",
+      "full_content_read": false,
+      "read_ranges": [
+        [
+          1,
+          865
+        ],
+        [
+          2378,
+          2435
+        ],
+        [
+          2470,
+          2508
+        ]
+      ],
+      "reviewed_sha256": "790cb697cf4b0073f093cf4c4ed484c371bed797d4df07867fd1a0661c0423d3",
+      "lines": 3466,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/meta/test_mcs_recover.py",
+      "status": "PARTIAL",
+      "full_content_read": false,
+      "read_ranges": [
+        [
+          1,
+          1040
+        ]
+      ],
+      "reviewed_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
+      "lines": 1443,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_mcs_setup.py",
+      "status": "PARTIAL",
+      "full_content_read": false,
+      "read_ranges": [
+        [
+          720,
+          1195
+        ]
+      ],
+      "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
+      "lines": 2233,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs_standalone/runtime.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          198
+        ]
+      ],
+      "reviewed_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
+      "lines": 198,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs_standalone/config.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          240
+        ]
+      ],
+      "reviewed_sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
+      "lines": 240,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "mcs_standalone/__main__.py",
+      "status": "PARTIAL",
+      "full_content_read": false,
+      "read_ranges": [
+        [
+          1,
+          190
+        ]
+      ],
+      "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
+      "lines": 271,
+      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    }
+  ],
+  "confirmed_fixes": [
+    {
+      "id": "PARENT-LIFECYCLE-001",
+      "status": "FIXED_LOCAL",
+      "cause": "Deep corrupt JSON receipt aborts both bound restore-consent scans.",
+      "before": "4 failed",
+      "after": "109 passed including watchdog family",
+      "contract": "Only scheduled ops.restore_approve bound to exact report/hash/schema may consent."
+    },
+    {
+      "id": "PARENT-LIFECYCLE-002",
+      "status": "FIXED_LOCAL",
+      "cause": "Post-merge timeout kills child but never reaps it before setting returncode.",
+      "before": "2 failed",
+      "after": "170 passed including updater family",
+      "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure."
+    }
+  ],
+  "requested_change": {
+    "reason": "MCSサーバーの負荷対策",
+    "unread_schedule": "*/10 * * * *",
+    "deep_schedule": "10,40 * * * *",
+    "health_watch_schedule": "*/5 * * * *",
+    "legacy_explicit_health_tick": "Retained; guide instructs 300→600 explicitly. Core health-default packet pending integration.",
+    "verification": "Existing Hermes jobs preserve IDs, no repeated cron mutation; standalone hour has only six unread and two aligned deep slots."
+  },
+  "verification": [
+    {
+      "path": "/tmp/mcs-maintenance-recovery-corrupt-before-20261005.log",
+      "sha256": "2bb7beca674eb934f0370c235e6d8ced1b27319a78e7ccbfbb3cffa5248f3e11",
+      "tail": [
+        "FAILED tests/ops/test_recovery_corrupt_receipts.py::test_deep_corrupt_receipt_preserves_bound_consent[True-watchdog]",
+        "4 failed in 0.29s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-recovery-corrupt-after-20261005.log",
+      "sha256": "bb3339de2dc58266485e7d77571c715555db3275bb69e062ff77952bbd54b949",
+      "tail": [
+        ".....................................                                    [100%]",
+        "109 passed in 11.64s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-update-reap-before-20261005.log",
+      "sha256": "1805c206cf12ec5f37e0757953a57adf9e043eff15827ba02c297cec66e0cdd4",
+      "tail": [
+        "FAILED tests/ops/test_update_child_reaping.py::test_post_merge_timeout_reaps_child_before_reading_done[True]",
+        "2 failed in 0.16s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-update-reap-after-20261005.log",
+      "sha256": "67aec4275f2b080acee2c1e7ea0a0293a66e1caf647ac27415a6acdc6ee16962",
+      "tail": [
+        "..........................                                               [100%]",
+        "170 passed in 169.71s (0:02:49)"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ten-minute-before-20261005.log",
+      "sha256": "ac21ef9798559501907b96f4565f5e931ff5aa3fe3be13a3d2cb001b53bb516b",
+      "tail": [
+        "FAILED tests/ops/test_ten_minute_collection.py::test_standalone_fetches_only_on_ten_minute_grid",
+        "2 failed in 0.96s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ten-minute-after-20261005.log",
+      "sha256": "ebec54710b8414029e9f3ef6fd5bfd415c5d97251e4386d72bd2bb800613b56b",
+      "tail": [
+        "FAILED tests/adapters/standalone/test_runtime.py::test_jobs_quiesce_and_restart_after_the_updater_finishes",
+        "1 failed, 197 passed in 9.76s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ten-minute-followup-20261005.log",
+      "sha256": "1f0824b64c1f114930cbe6e3c627b590b6062ba0ee77df832457d1d486d17222",
+      "tail": [
+        "........                                                                 [100%]",
+        "8 passed in 0.85s"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-lifecycle-checks-20261005.log",
+      "sha256": "eb06844331f7e86f95e0ce47128f418090eb9d3d3db6f064e12638a10e924139",
+      "result": "408 passed in 485.61s; installer/upgrade/current v1.0.13 matrix/lifecycle fixtures; no skips"
+    }
+  ],
+  "criteria_status": "C01-C12/X01-X08 module review remains PARTIAL; prerequisite reads/test runs are not complete coverage.",
+  "disproved_candidates": [
+    {
+      "candidate": "Release build partial-write rollback omitted",
+      "reason": "RELEASE_NOTES.md explicitly requires restoring all changed release files from Git diff after partial failure, then rerunning; no unsupported atomic multi-file contract introduced."
+    }
+  ],
+  "limitations": [
+    "No live MCS, patient DB, credentials, services, LLM, Jev, SDK installation or machine deployment accessed.",
+    "Final whole-I, pinned SDK, isolated distribution and independent reviewer remain pending."
+  ],
+  "checks": {
+    "ruff": "0.16.10 all 8 changed Python paths passed",
+    "readme_generation": "Regenerated and --check passed",
+    "diff_check": "Passed"
+  }
+}

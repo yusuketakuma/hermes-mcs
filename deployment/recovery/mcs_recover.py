@@ -826,7 +826,7 @@ def _consent_for(report):
     for cid, rj in rows:
         try:
             rec = json.loads(rj)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, RecursionError):
             continue
         if not isinstance(rec, dict):
             continue
