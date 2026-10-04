@@ -722,3 +722,42 @@ def test_admitted_probe_rt_deferral_releases_waiting_flag(admitted_env):
     broker.terminal(backlog["permit_id"], "done")
     assert broker.status()["rt_waiting"] == 0
     assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]
+
+
+@pytest.mark.parametrize("entry", ["chat", "probe"])
+@pytest.mark.parametrize("deadline", [True, "invalid", float("nan"), float("inf")],
+                         ids=["bool", "string", "nan", "infinity"])
+def test_invalid_deadline_rejected_before_admission(admitted_env, entry, deadline):
+    import local_llm
+
+    calls = []
+    with pytest.raises(ValueError, match="deadline_invalid"):
+        if entry == "chat":
+            local_llm.admitted_chat("mcs.extract", "synthetic", deadline=deadline,
+                                    request_fn=lambda *args: calls.append(args))
+        else:
+            local_llm.admitted_probe_format(
+                "mcs.extract", local_llm.ENDPOINT, "synthetic", None,
+                deadline=deadline, request_fn=lambda *args: calls.append(args))
+    assert calls == []
+    assert _live_broker(admitted_env).db.execute(
+        "SELECT COUNT(*) FROM permits").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("args,reason", [
+    ({"endpoint": "https://example.invalid/v1"}, "local_endpoint_not_allowed"),
+    ({"timeout": 0}, "timeout_invalid"),
+    ({"timeout": float("inf")}, "timeout_invalid"),
+])
+def test_invalid_probe_args_rejected_before_admission(admitted_env, args, reason):
+    import local_llm
+
+    calls = []
+    with pytest.raises(ValueError, match=reason):
+        local_llm.admitted_probe_format(
+            "mcs.extract", args.get("endpoint", local_llm.ENDPOINT),
+            "synthetic", None, timeout=args.get("timeout", 10),
+            request_fn=lambda *parts: calls.append(parts))
+    assert calls == []
+    assert _live_broker(admitted_env).db.execute(
+        "SELECT COUNT(*) FROM permits").fetchone()[0] == 0

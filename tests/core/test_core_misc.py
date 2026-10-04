@@ -1099,6 +1099,60 @@ def test_current_version_open_fills_newly_created_fts(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize(("version", "drop_fts"), [(2, False), (ledger.SCHEMA_VERSION, True)])
+def test_interrupted_derived_backfill_retries_without_advancing_version(
+        tmp_path, monkeypatch, version, drop_fts):
+    _pre_v3_rows(tmp_path, version, drop_fts=drop_fts)
+    path = str(tmp_path / "ledger.db")
+
+    def interrupted(db):
+        db.db.execute("UPDATE messages SET body_text='synthetic partial' WHERE message_id=1")
+        raise sqlite3.OperationalError("synthetic backfill interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
+        with pytest.raises(sqlite3.OperationalError, match="synthetic backfill interruption"):
+            ledger.Ledger(path)
+    with sqlite3.connect(path) as failed:
+        assert failed.execute("PRAGMA user_version").fetchone()[0] == version
+        assert failed.execute("SELECT body_text FROM messages").fetchone()[0] is None
+        if drop_fts:
+            assert failed.execute("SELECT 1 FROM sqlite_master WHERE name='messages_fts'"
+                                  ).fetchone() is None
+    recovered = ledger.Ledger(path)
+    try:
+        assert recovered.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
+        row = recovered.db.execute("SELECT posted_at_ts,body_text FROM messages").fetchone()
+        assert row["posted_at_ts"] > 0 and row["body_text"] == "synthetic phrase"
+        assert [r["message_id"] for r in recovered.search('"synthetic phrase"')] == [1]
+    finally:
+        recovered.close()
+
+
+@pytest.mark.parametrize(("version", "drop_fts"), [(2, False), (ledger.SCHEMA_VERSION, True)])
+def test_backfill_exception_after_all_updates_rolls_back_the_batch(
+        tmp_path, monkeypatch, version, drop_fts):
+    _pre_v3_rows(tmp_path, version, drop_fts=drop_fts)
+    path = str(tmp_path / "ledger.db")
+    original = ledger.Ledger._backfill_v3
+
+    def interrupted(db):
+        original(db)
+        raise sqlite3.OperationalError("synthetic post-backfill interruption")
+
+    monkeypatch.setattr(ledger.Ledger, "_backfill_v3", interrupted)
+    with pytest.raises(sqlite3.OperationalError, match="synthetic post-backfill interruption"):
+        ledger.Ledger(path)
+    with sqlite3.connect(path) as failed:
+        assert failed.execute("PRAGMA user_version").fetchone()[0] == version
+        assert failed.execute("SELECT body_text FROM messages").fetchone()[0] is None
+        if drop_fts:
+            assert failed.execute("SELECT 1 FROM sqlite_master WHERE name='messages_fts'"
+                                  ).fetchone() is None
+        else:
+            assert failed.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0] == 0
+
+
 # ---------- 連携サマリー: patients.karte_id + karte_summary artifacts ----------
 
 def _karte_patient(pid, karte_id):
@@ -1214,3 +1268,47 @@ def test_karte_summary_due_flag_is_durable_until_stored(tmp_path):
     db.karte_summary_mark_due(2, due=False)                      # non-retryable failure path
     assert db.karte_summary_due() == []
     db.close()
+
+
+@pytest.mark.parametrize("raw", ["{broken", "[]", "null", '"synthetic"',
+                                  '{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}'],
+                         ids=["malformed", "array", "null", "string", "deep"])
+@pytest.mark.parametrize(("source", "entry"), [
+    ("capture", "recapture"), ("shadow", "shadow"),
+    ("capture", "publish"), ("shadow", "failure"),
+])
+def test_corrupt_optional_metadata_does_not_block_recapture(tmp_path, raw, source, entry):
+    from message_metadata import get_message_metadata, get_metadata_shadow_status
+
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(body="synthetic old")])
+        with db.db:
+            db.db.execute(
+                "INSERT INTO message_metadata(message_id,source,content,checked_at) "
+                "VALUES(1,?,?,1)", (source, raw))
+        refreshed = _message(body="synthetic current")
+        refreshed.metadata = {"reactions": []}
+        if entry == "recapture":
+            db.save_messages([refreshed])
+            assert db.db.execute("SELECT body_html FROM messages WHERE message_id=1"
+                                 ).fetchone()[0] == "synthetic current"
+        else:
+            db.save_metadata_shadow(refreshed, publish=entry == "publish",
+                                    error="fetch_error" if entry == "failure" else None)
+        stored = db.db.execute(
+            "SELECT content,last_error FROM message_metadata WHERE message_id=1 AND source=?",
+            (source,)).fetchone()
+        if entry == "failure":
+            assert json.loads(stored["content"]) == {}
+            assert stored["last_error"] == "fetch_error"
+            assert get_metadata_shadow_status(db.db, 1)["state"] == "failed"
+        else:
+            content = json.loads(stored["content"])
+            assert content["reactions"]["value"] == []
+            assert content["reactions"]["observed_at"] > 1
+            assert stored["last_error"] is None
+            if source == "capture":
+                assert get_message_metadata(db.db, 1)["reactions_status"] == "observed"
+    finally:
+        db.close()

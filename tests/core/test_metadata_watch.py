@@ -109,3 +109,26 @@ def test_signal_branch_matches_correlated_reference(led):
     got = [r["message_id"] for r in led.metadata_watch_targets(limit=-1, now=NOW)]
     assert got == expected
     assert got == [1, 2, 3, 7, 8, 9, 11, 12, 13]
+
+
+@pytest.mark.parametrize("element", ["synthetic", "{broken"])
+@pytest.mark.parametrize("selector", ["watch", "actors"])
+def test_invalid_reaction_element_does_not_abort_metadata_selectors(led, element, selector):
+    from message_metadata import get_message_metadata
+
+    db = led.db
+    db.execute("INSERT INTO patients(project_id,is_archived) VALUES(1,0)")
+    _msg(db, 1, ts=NOW - 5 * DAY)
+    _sig(db, "synthetic", "resolved", [1])
+    raw = json.dumps({"reactions": {"value": [element, {
+        "type": "accepted", "count": 1, "self_reacted": True}], "observed_at": NOW}})
+    db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) "
+               "VALUES(1,'capture',?,?)", (raw, NOW))
+    db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) "
+               "VALUES(1,'shadow','{}',?)", (NOW - 1800,))
+    db.commit()
+    # This is only a fetch selector; malformed metadata stays invalid in display.
+    assert get_message_metadata(db, 1)["reactions_status"] == "invalid"
+    targets = (led.metadata_watch_targets(now=NOW) if selector == "watch"
+               else led.reaction_actor_targets(now=NOW))
+    assert [r["message_id"] for r in targets] == [1]
