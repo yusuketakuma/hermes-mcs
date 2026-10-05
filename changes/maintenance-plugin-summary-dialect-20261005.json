@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "サマリーのJSONコマンド表示を通知先に合わせる",
+  "summary": "Slack・LINE WORKSのJSONコマンドでサマリーを開いたとき、見出しと注記を各チャネルの表示形式に合わせます。LINE WORKSにはDiscord用の見出しや脚注記号を表示しません。",
+  "upgrade": "1.0.13への更新で適用します。Hermes接続ではgatewayを、独立接続では使用するアダプターを更新後に再起動してください。今回の作業では実機の再起動は行っていません。",
+  "details": ["認証済みのtransportから表示形式を選び、許可プロジェクトと患者名非表示の制約を維持する。"],
+  "refs": ["hermes_plugin/__init__.py", "tests/plugin/test_hermes_plugin_signal_staleness.py"]
+}

@@ -1021,9 +1021,11 @@ def _dispatch_op(data: dict, settings: dict[str, Any],
         if error:
             return _deny(error)
         from adapters.common import summary
+        dialect = {"slack": "slack", "lineworks": "plain"}.get(
+            identity.get("transport"), "discord")
         got = summary.answer(settings["snapshot"], data.get("scope", ""),
                              allowed=projects.summary_scope(settings),
-                             dialect="discord", names=False)
+                             dialect=dialect, names=False)
         return got.get("text") or got["error"]
     return _deny("unknown_operation")
 
