@@ -1,0 +1,16 @@
+{
+  "category": "security",
+  "title": "旧Slack・Discord互換APIの接続と再送制約を統一",
+  "summary": "旧互換APIでも認証付き通信を公式接続先に限定し、環境のproxyやredirect、意図しないSlack OAuthを使いません。Discordの個別回答で成否が不明な送信を自動で繰り返さないようにします。",
+  "upgrade": "独立Slack・Discordの旧互換APIを利用するプロセスは更新後に再起動して適用します。呼出APIの引数・戻り値は維持します。Slack Socket Modeと環境のOAuth設定を同時に使う構成は拒否されるため、独立アダプターではOAuth環境変数を除いて起動してください。",
+  "details": [
+    "新しい独立アダプターの公式URL・no-proxy・no-redirect・終了済みsessionの拒否を再利用します。",
+    "SlackのWeb APIとSocket Mode双方のsessionを制約し、接続終了時に確実に閉じます。",
+    "Discordは既存のHTTP境界とsingle_postを利用し、500応答後の個別回答を再POSTしません。",
+    "実SDKのResponse.content.iter_chunkedとSession.trust_envに合わせて完全合成の統合スタブを整合しました。判定・assertionは維持しています。"
+  ],
+  "refs": [
+    "adapters/slack/runtime_compat.py",
+    "adapters/discord/runtime_compat.py"
+  ]
+}
