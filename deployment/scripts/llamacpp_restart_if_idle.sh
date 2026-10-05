@@ -16,7 +16,7 @@ mkdir -p "$(dirname "$LOG")"
 ts() { date -u +%FT%TZ; }
 
 busy_slots() {
-  /usr/bin/curl -s -m 5 http://127.0.0.1:8080/slots 2>/dev/null \
+  /usr/bin/curl --noproxy '*' -s -m 5 http://127.0.0.1:8080/slots 2>/dev/null \
     | /usr/bin/python3 -c "import json,sys; print(sum(1 for s in json.load(sys.stdin) if s.get('is_processing')))" 2>/dev/null
 }
 

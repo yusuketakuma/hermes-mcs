@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "定期再起動の状態確認をローカル接続に固定",
+  "summary": "ローカルLLMの定期再起動スクリプトが、環境のプロキシ設定を使わずにスロットの状態を確認します。最大15分の待機と再起動条件は維持します。",
+  "upgrade": "配備済みのスクリプトへ反映する場合は、通常の更新手順またはmcs setup servicesでwrapperを再生成してください。今回のローカル修正だけでは稼働中の配置へ反映されません。",
+  "details": ["curlの--noproxy '*'で固定されたlocalhost宛の状態確認を直接接続にする。", "合成プロキシ環境とcurl・launchctlスタブで回帰を検証する。"],
+  "refs": ["deployment/scripts/llamacpp_restart_if_idle.sh", "tests/meta/test_deployment_scripts.py"]
+}

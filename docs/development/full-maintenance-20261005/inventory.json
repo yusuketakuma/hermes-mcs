@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 89,
+      "PARTIAL": 59,
       "EXCLUDED": 2,
-      "UNSEEN": 580,
-      "REVIEWED": 176
+      "UNSEEN": 551,
+      "REVIEWED": 236
     },
-    "candidate_tracked": 845
+    "candidate_tracked": 846
   },
   "files": [
     {
@@ -645,6 +645,18 @@
       ]
     },
     {
+      "path": "changes/20261005-semantic-evidence-corpus.json",
+      "sha256": "fdb5c9e633f5766e34f41a7f955c79536cbbe3ab94118c1abf5ef670e280546b",
+      "bytes": 1590,
+      "lines": 12,
+      "module": "changes",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
+      ]
+    },
+    {
       "path": "changes/20261005-semantic-policy-revival.json",
       "sha256": "cb07c2d5784952379320d308dfb368d1b8e2ff28bed95e74a32c389df75308ee",
       "bytes": 1133,
@@ -664,9 +676,9 @@
       "lines": 25,
       "module": "changes",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -677,7 +689,9 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "owner": "root",
-      "reviewed_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11"
+      "reviewed_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "changes/archive/1.0.10/fix-slack-plugin-import.json",
@@ -2294,6 +2308,27 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "changes/maintenance-local-slot-proxy-20261005.json",
+      "sha256": "907c08fea75af00f99c92ab3f1bd8183b655142e9b732af4cd16e9149f9e989d",
+      "bytes": 861,
+      "lines": 8,
+      "module": "lifecycle",
+      "kind": "source",
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "reviewed_sha256": "907c08fea75af00f99c92ab3f1bd8183b655142e9b732af4cd16e9149f9e989d",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
+    },
+    {
       "path": "changes/maintenance-notify-delivery-20261005.json",
       "sha256": "92413ecea179318f53b632dcc67e85f24b9cd720be1b542a00aa543a6f9bbaa5",
       "bytes": 1341,
@@ -2343,6 +2378,18 @@
       "origin": "new maintenance record",
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+      ]
+    },
+    {
+      "path": "changes/maintenance-recovery-plist-20261005.json",
+      "sha256": "0ac83974ba88889d82d0a95dc39c1b18770027d199e25e2c9068c95ff090f1eb",
+      "bytes": 942,
+      "lines": 8,
+      "module": "changes",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
       ]
     },
     {
@@ -2511,9 +2558,20 @@
       "lines": 168,
       "module": "deployment",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/ai.mcs.extract-drainer-2.plist",
@@ -2522,9 +2580,20 @@
       "lines": 22,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
@@ -2533,9 +2602,20 @@
       "lines": 22,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
@@ -2544,9 +2624,20 @@
       "lines": 31,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/ai.mcs.standalone.plist",
@@ -2555,9 +2646,20 @@
       "lines": 20,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
+      "read_ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/local.mcs-cmd.plist",
@@ -2566,9 +2668,20 @@
       "lines": 22,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/local.mcs-int.plist",
@@ -2577,9 +2690,20 @@
       "lines": 21,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/launchagents/org.mcs.recovery.plist",
@@ -2588,9 +2712,20 @@
       "lines": 18,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
+      "read_ranges": [
+        [
+          1,
+          18
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/recovery/mcs_recover.py",
@@ -2599,9 +2734,9 @@
       "lines": 1276,
       "module": "deployment",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2612,7 +2747,9 @@
           1276
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "deployment/requirements-standalone.txt",
@@ -2632,9 +2769,20 @@
       "lines": 64,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
+      "read_ranges": [
+        [
+          1,
+          64
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_check.sh",
@@ -2643,9 +2791,9 @@
       "lines": 45,
       "module": "deployment",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2656,7 +2804,9 @@
           45
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_deep.sh",
@@ -2665,9 +2815,20 @@
       "lines": 21,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_health.sh",
@@ -2676,9 +2837,9 @@
       "lines": 10,
       "module": "deployment",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2689,7 +2850,9 @@
           10
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_llm_catchup.sh",
@@ -2698,9 +2861,20 @@
       "lines": 17,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
+      "read_ranges": [
+        [
+          1,
+          17
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_offsite.sh",
@@ -2709,9 +2883,20 @@
       "lines": 40,
       "module": "deployment",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
+      "read_ranges": [
+        [
+          1,
+          40
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_update.sh",
@@ -2720,9 +2905,9 @@
       "lines": 12,
       "module": "deployment",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2733,7 +2918,9 @@
           12
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "docs/README.md",
@@ -3461,6 +3648,18 @@
       "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
     },
     {
+      "path": "docs/development/maintenance-core-packet2-evidence.json",
+      "sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "bytes": 129113,
+      "lines": 3435,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task artifact; exact whole-candidate reconciliation and final review pending"
+      ]
+    },
+    {
       "path": "docs/development/maintenance-notify-evidence.json",
       "sha256": "27495aa7d8e2a2381d14f92290a85ccce653752af6b0b25163a3a927b082d56f",
       "bytes": 53972,
@@ -3471,6 +3670,18 @@
       "origin": "new maintenance record",
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+      ]
+    },
+    {
+      "path": "docs/development/maintenance-notify-packet2-evidence.json",
+      "sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+      "bytes": 119606,
+      "lines": 2634,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task artifact; exact whole-candidate reconciliation and final review pending"
       ]
     },
     {
@@ -3498,6 +3709,18 @@
         "New task-authored file; packet/source or schema consistency validation tracked separately."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "sha256": "24d178acee619d74bb321cb602fe3010b4b36d4bfc429cbca2317b7bac5657c7",
+      "bytes": 168190,
+      "lines": 3774,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
+      ]
     },
     {
       "path": "docs/development/readme-review.json",
@@ -3581,9 +3804,9 @@
       "lines": 190,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -3594,7 +3817,9 @@
           190
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "docs/guides/USER_GUIDE.md",
@@ -4096,9 +4321,9 @@
       "lines": 320,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -4109,7 +4334,9 @@
           323
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "docs/specs/official-drug-master.md",
@@ -4415,9 +4642,9 @@
       "lines": 1109,
       "module": "install.sh",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -4428,7 +4655,9 @@
           1109
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "integration/conftest.py",
@@ -5797,9 +6026,9 @@
       "lines": 107,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -5810,7 +6039,9 @@
           107
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/mcs_operations.py",
@@ -5896,20 +6127,22 @@
       "lines": 3466,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full content read; module-wide criteria in progress"
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
-      "reviewed_sha256": "790cb697cf4b0073f093cf4c4ed484c371bed797d4df07867fd1a0661c0423d3",
+      "reviewed_sha256": "ae1d9a64d4faf82459a90eddf4e34106f3db4688c19eff36d78a85fe5a468e98",
       "read_ranges": [
         [
           1,
-          3466
+          3468
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/mcs_signals.py",
@@ -5946,9 +6179,9 @@
       "lines": 2733,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -5959,7 +6192,9 @@
           2734
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/request_loops.py",
@@ -7120,9 +7355,20 @@
       "lines": 9,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
+      "read_ranges": [
+        [
+          1,
+          9
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/__main__.py",
@@ -7131,20 +7377,22 @@
       "lines": 271,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
           1,
-          190
+          271
         ]
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "owner": "root",
-      "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35"
+      "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/config.py",
@@ -7153,9 +7401,9 @@
       "lines": 240,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7166,7 +7414,9 @@
           240
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/discord_runtime.py",
@@ -7175,9 +7425,20 @@
       "lines": 6,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "read_ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/host.py",
@@ -7186,9 +7447,20 @@
       "lines": 76,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "3415d702cca37f3ebedcb0ba9d1b2ed0667a1ad96723a49f84b070cd7d9ded34",
+      "read_ranges": [
+        [
+          1,
+          76
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/runtime.py",
@@ -7197,9 +7469,9 @@
       "lines": 198,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -7210,7 +7482,9 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "owner": "root",
-      "reviewed_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc"
+      "reviewed_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/service.py",
@@ -7219,9 +7493,20 @@
       "lines": 88,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "7e309d128e12ac77d2774caa3c7baa2b6f2794172ecc2549a42db43d9692a35a",
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/slack_runtime.py",
@@ -7230,9 +7515,20 @@
       "lines": 6,
       "module": "mcs_standalone",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "read_ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "openwiki/.claims/architecture/extraction-and-semantic.json",
@@ -7653,9 +7949,9 @@
       "lines": 35,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7666,7 +7962,9 @@
           35
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/mcs",
@@ -7675,9 +7973,9 @@
       "lines": 22,
       "module": "scripts",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7688,7 +7986,9 @@
           22
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/mcs_upgrade.py",
@@ -7697,9 +7997,9 @@
       "lines": 113,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7710,7 +8010,9 @@
           113
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/run_tests.sh",
@@ -7969,9 +8271,20 @@
       "lines": 264,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "23d5a0ef38aec6c9a7837e20900f2a86a84453547cb3c4806df84ea04e32aa70",
+      "read_ranges": [
+        [
+          1,
+          264
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "tests/adapters/standalone/test_runtime.py",
@@ -7980,9 +8293,20 @@
       "lines": 248,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "411daf3226354989b54ac03d07620b944b7dfab690830aef9b582e768c19c7c3",
+      "read_ranges": [
+        [
+          1,
+          249
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "tests/adapters/standalone/test_standalone_error_codes.py",
@@ -7991,9 +8315,20 @@
       "lines": 28,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "848b2f0ff3ed19c5b22791e875f27684f3de5e0d8ff2afeae1e3e035a192cae6",
+      "read_ranges": [
+        [
+          1,
+          28
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "tests/adapters/standalone/test_standalone_runtime.py",
@@ -8002,9 +8337,20 @@
       "lines": 257,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "728a3d26b09451e94440b61a6df15387e04b36c2611787947869949b0d6b5d28",
+      "read_ranges": [
+        [
+          1,
+          257
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "standalone"
     },
     {
       "path": "tests/conftest.py",
@@ -8746,9 +9092,9 @@
       "lines": 258,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -8759,7 +9105,9 @@
           258
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-1.sql",
@@ -8834,9 +9182,9 @@
       "lines": 92,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -8847,7 +9195,9 @@
           92
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ingest/ingest_testkit.py",
@@ -9541,9 +9891,20 @@
       "lines": 119,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "tests/meta/test_install_sh.py",
@@ -9552,9 +9913,9 @@
       "lines": 1162,
       "module": "tests/meta",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9565,7 +9926,9 @@
           1162
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_install_sh_standalone.py",
@@ -9574,9 +9937,9 @@
       "lines": 118,
       "module": "tests/meta",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9587,7 +9950,9 @@
           118
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_integration_guard_load.py",
@@ -9615,9 +9980,20 @@
       "lines": 13,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "deployment"
     },
     {
       "path": "tests/meta/test_lineworks_service.py",
@@ -9637,9 +10013,9 @@
       "lines": 1443,
       "module": "tests/meta",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9647,10 +10023,12 @@
       "read_ranges": [
         [
           1,
-          1040
+          1443
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_mcs_recover_py39.py",
@@ -11031,9 +11409,9 @@
       "lines": 181,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11044,7 +11422,9 @@
           181
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_agent_label_parity.py",
@@ -11262,9 +11642,20 @@
       "lines": 109,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "2c68ad8f82e8dde4452c8c3b631826450578843a1a36bf30c043b0119e004d0c",
+      "read_ranges": [
+        [
+          1,
+          109
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_backup.py",
@@ -11372,20 +11763,22 @@
       "lines": 2233,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
       "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
       "read_ranges": [
         [
-          720,
-          1195
+          1,
+          2233
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_doctor.py",
@@ -11394,9 +11787,20 @@
       "lines": 116,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "53b6a99456ae7bcc4139a31ed84fc0980e1afd03ca5976041f409f736d0b4d2b",
+      "read_ranges": [
+        [
+          1,
+          116
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_lineworks.py",
@@ -11405,9 +11809,20 @@
       "lines": 148,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "16e24f4fbdf9ecdf22aacf82cb8a4af1f201ae553a71c56b55635b74d1d954af",
+      "read_ranges": [
+        [
+          1,
+          148
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_standalone.py",
@@ -11416,9 +11831,20 @@
       "lines": 326,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "88f9a33d50e1f78b298ead57c40ecabd1c05967bf6a6cb2b8aeb068336e523f2",
+      "read_ranges": [
+        [
+          1,
+          326
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_urgency.py",
@@ -11427,9 +11853,20 @@
       "lines": 24,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "9acf10f45b9aeda9e17738ff13d7b42559e8199c4af196212a5dfc73bca58b6b",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_signal_feedback.py",
@@ -11460,9 +11897,20 @@
       "lines": 2313,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "e1cbb7bc1692a3eff2a4e5bc9280b7259cb04750f728af7d751c736514db0257",
+      "read_ranges": [
+        [
+          1,
+          2313
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_upgrade.py",
@@ -11471,9 +11919,9 @@
       "lines": 356,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11484,7 +11932,9 @@
           356
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_receipt_contract.py",
@@ -11504,11 +11954,20 @@
       "lines": 33,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored file; packet/source or schema consistency validation tracked separately."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "73876d0fcbad4afcd993b7a1ebae35ba4735fb18f91218c0764f1f11eae48f08",
+      "read_ranges": [
+        [
+          1,
+          33
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_runtime_compatibility.py",
@@ -11517,18 +11976,20 @@
       "lines": 537,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full content read; module-wide criteria in progress"
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
           1,
-          537
+          556
         ]
       ],
-      "reviewed_sha256": "81f181a0fa24e96a8086e22758584d1f1e97797090fed025b29c00759e4f752a"
+      "reviewed_sha256": "c554729bc75c432e737b810dccc3ad813c5d6a96bc5043ec4b82c17cb97a70bd",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_supported_update_paths.py",
@@ -11537,9 +11998,9 @@
       "lines": 411,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11550,7 +12011,9 @@
           411
         ]
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_ten_minute_collection.py",
@@ -11559,11 +12022,20 @@
       "lines": 47,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored file; packet/source or schema consistency validation tracked separately."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "7af37d19c2a47b89db86dc719f6d9d17924cb0bc22a3d41e7da0da02882b2d2f",
+      "read_ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_update_child_reaping.py",
@@ -11572,11 +12044,20 @@
       "lines": 34,
       "module": "tests/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored file; packet/source or schema consistency validation tracked separately."
+        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "616663001bcdb906bb8ffbd766b73786ac1c9e952e550efd7f7918f0d92b106c",
+      "read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/plugin/test_hermes_plugin_mcs.py",
@@ -13675,66 +14156,6 @@
       "status": "UNSEEN",
       "evidence": [],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
-    },
-    {
-      "path": "docs/development/maintenance-core-packet2-evidence.json",
-      "sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
-      "bytes": 129113,
-      "lines": 3435,
-      "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
-      "evidence": [
-        "New task artifact; exact whole-candidate reconciliation and final review pending"
-      ]
-    },
-    {
-      "path": "docs/development/maintenance-notify-packet2-evidence.json",
-      "sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
-      "bytes": 119606,
-      "lines": 2634,
-      "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
-      "evidence": [
-        "New task artifact; exact whole-candidate reconciliation and final review pending"
-      ]
-    },
-    {
-      "path": "changes/20261005-semantic-evidence-corpus.json",
-      "sha256": "fdb5c9e633f5766e34f41a7f955c79536cbbe3ab94118c1abf5ef670e280546b",
-      "bytes": 1590,
-      "lines": 12,
-      "module": "changes",
-      "kind": "task-created",
-      "status": "PARTIAL",
-      "evidence": [
-        "Final candidate artifact reconciliation pending"
-      ]
-    },
-    {
-      "path": "changes/maintenance-recovery-plist-20261005.json",
-      "sha256": "0ac83974ba88889d82d0a95dc39c1b18770027d199e25e2c9068c95ff090f1eb",
-      "bytes": 942,
-      "lines": 8,
-      "module": "changes",
-      "kind": "task-created",
-      "status": "PARTIAL",
-      "evidence": [
-        "Final candidate artifact reconciliation pending"
-      ]
-    },
-    {
-      "path": "docs/development/maintenance-semantic-packet3-evidence.json",
-      "sha256": "24d178acee619d74bb321cb602fe3010b4b36d4bfc429cbca2317b7bac5657c7",
-      "bytes": 168190,
-      "lines": 3774,
-      "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
-      "evidence": [
-        "Final candidate artifact reconciliation pending"
-      ]
     }
   ],
   "protected_or_derived_groups": [

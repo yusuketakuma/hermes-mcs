@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "packet": "parent-lifecycle-progress",
-  "status": "PARTIAL",
+  "status": "REVIEWED_LOCAL_SOURCE",
   "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
   "P": "d68591e",
-  "I": "audit/full-maintenance-20261005; fixed commit pending",
+  "I": "0199ba5 plus local slot-proxy regression and guide correction; final fixed I pending",
   "owner": "root",
   "scope": "install/update/recovery/setup/deployment scheduling; source/test/doc audit ongoing",
   "read_inventory": [
     {
       "path": "install.sh",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -20,11 +20,12 @@
       ],
       "reviewed_sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
       "lines": 1109,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/mcs",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -34,11 +35,12 @@
       ],
       "reviewed_sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
       "lines": 22,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/mcs_upgrade.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -48,11 +50,12 @@
       ],
       "reviewed_sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
       "lines": 113,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "scripts/keychain_to_env.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -62,11 +65,12 @@
       ],
       "reviewed_sha256": "1afefafc1475ea150caade7bcdbe6004a1e9718841c86d77b46348f79ce8f166",
       "lines": 35,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/mcs_cli.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -76,11 +80,12 @@
       ],
       "reviewed_sha256": "c0dbb341d57008e1c000c7efabfbc667b0d15a4aadf8f25a9e0c09fe62bebfe7",
       "lines": 107,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/mcs_update.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -90,11 +95,12 @@
       ],
       "reviewed_sha256": "c423e5227c467ef7f16703b30df7aafd7491649f7f241b96c8c7478216dd5296",
       "lines": 2734,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "deployment/recovery/mcs_recover.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -104,11 +110,12 @@
       ],
       "reviewed_sha256": "a49fbf761a8cbb66817cded8ca281ef65bc7a701a77966f36a1aac753860597c",
       "lines": 1276,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "deployment/scripts/mcs_check.sh",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -118,11 +125,12 @@
       ],
       "reviewed_sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
       "lines": 45,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_health.sh",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -132,11 +140,12 @@
       ],
       "reviewed_sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
       "lines": 10,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
     },
     {
       "path": "deployment/scripts/mcs_update.sh",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -146,11 +155,12 @@
       ],
       "reviewed_sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
       "lines": 12,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
     },
     {
       "path": "tests/ops/ops_testkit.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -160,11 +170,12 @@
       ],
       "reviewed_sha256": "de797908293db35c75d5c8521b6c962ed1ca8b305cc4f65aa1023bc308267354",
       "lines": 181,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_upgrade.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -174,11 +185,12 @@
       ],
       "reviewed_sha256": "9ef79915066d3c23f9a2d9ed7bcfdc7a74c2e7276050c14d35eae5d6d06cc575",
       "lines": 356,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_supported_update_paths.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -188,11 +200,12 @@
       ],
       "reviewed_sha256": "e8fe3a17e0abeeabe3b1efdd28e66f7d00508ec55e39992a522436d7e1184571",
       "lines": 411,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_install_sh.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -202,11 +215,12 @@
       ],
       "reviewed_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
       "lines": 1162,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_install_sh_standalone.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -216,11 +230,12 @@
       ],
       "reviewed_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
       "lines": 118,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/fixtures/schema_upgrade/update-paths.json",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -230,11 +245,12 @@
       ],
       "reviewed_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
       "lines": 92,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/fixtures/schema_upgrade/origins.json",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -244,11 +260,12 @@
       ],
       "reviewed_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
       "lines": 258,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "docs/guides/UPGRADE_AGENT.md",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -258,11 +275,12 @@
       ],
       "reviewed_sha256": "a7a9845fb12ff72aca54952b5de3b0e13b43b35db5fa2c0057e662ea23c8a6d1",
       "lines": 190,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "docs/specs/lifecycle-spec.md",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -272,11 +290,12 @@
       ],
       "reviewed_sha256": "dd49947018da5af7ef7ff1f5e2fd229e40c70dcd15ac8a7c5425bd99291560e7",
       "lines": 323,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "changes/README.md",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -286,11 +305,12 @@
       ],
       "reviewed_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
       "lines": 25,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_recovery_corrupt_receipts.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -300,11 +320,12 @@
       ],
       "reviewed_sha256": "73876d0fcbad4afcd993b7a1ebae35ba4735fb18f91218c0764f1f11eae48f08",
       "lines": 33,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_ten_minute_collection.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -314,11 +335,12 @@
       ],
       "reviewed_sha256": "7af37d19c2a47b89db86dc719f6d9d17924cb0bc22a3d41e7da0da02882b2d2f",
       "lines": 47,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_update_child_reaping.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -328,11 +350,12 @@
       ],
       "reviewed_sha256": "616663001bcdb906bb8ffbd766b73786ac1c9e952e550efd7f7918f0d92b106c",
       "lines": 34,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs/ops/mcs_setup.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -342,11 +365,12 @@
       ],
       "reviewed_sha256": "ae1d9a64d4faf82459a90eddf4e34106f3db4688c19eff36d78a85fe5a468e98",
       "lines": 3468,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/meta/test_mcs_recover.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -356,11 +380,12 @@
       ],
       "reviewed_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
       "lines": 1443,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -370,11 +395,12 @@
       ],
       "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
       "lines": 2233,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs_standalone/runtime.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -384,11 +410,12 @@
       ],
       "reviewed_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
       "lines": 198,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/config.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -398,11 +425,12 @@
       ],
       "reviewed_sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
       "lines": 240,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
     },
     {
       "path": "mcs_standalone/__main__.py",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -412,12 +440,13 @@
       ],
       "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
       "lines": 271,
-      "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
     },
     {
       "path": "tests/ops/test_runtime_compatibility.py",
-      "status": "PARTIAL",
-      "review_note": "Full content read; caller and criterion review in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -426,12 +455,13 @@
         ]
       ],
       "reviewed_sha256": "c554729bc75c432e737b810dccc3ad813c5d6a96bc5043ec4b82c17cb97a70bd",
-      "lines": 556
+      "lines": 556,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_update.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -440,12 +470,13 @@
         ]
       ],
       "reviewed_sha256": "e1cbb7bc1692a3eff2a4e5bc9280b7259cb04750f728af7d751c736514db0257",
-      "lines": 2313
+      "lines": 2313,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_standalone.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -454,12 +485,13 @@
         ]
       ],
       "reviewed_sha256": "88f9a33d50e1f78b298ead57c40ecabd1c05967bf6a6cb2b8aeb068336e523f2",
-      "lines": 326
+      "lines": 326,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_lineworks.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -468,12 +500,13 @@
         ]
       ],
       "reviewed_sha256": "16e24f4fbdf9ecdf22aacf82cb8a4af1f201ae553a71c56b55635b74d1d954af",
-      "lines": 148
+      "lines": 148,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_urgency.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -482,12 +515,13 @@
         ]
       ],
       "reviewed_sha256": "9acf10f45b9aeda9e17738ff13d7b42559e8199c4af196212a5dfc73bca58b6b",
-      "lines": 24
+      "lines": 24,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_mcs_setup_doctor.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -496,12 +530,13 @@
         ]
       ],
       "reviewed_sha256": "53b6a99456ae7bcc4139a31ed84fc0980e1afd03ca5976041f409f736d0b4d2b",
-      "lines": 116
+      "lines": 116,
+      "review_module": "lifecycle"
     },
     {
       "path": "tests/ops/test_lifecycle_standalone.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -510,12 +545,13 @@
         ]
       ],
       "reviewed_sha256": "2c68ad8f82e8dde4452c8c3b631826450578843a1a36bf30c043b0119e004d0c",
-      "lines": 109
+      "lines": 109,
+      "review_module": "lifecycle"
     },
     {
       "path": "mcs_standalone/service.py",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -524,12 +560,13 @@
         ]
       ],
       "reviewed_sha256": "7e309d128e12ac77d2774caa3c7baa2b6f2794172ecc2549a42db43d9692a35a",
-      "lines": 88
+      "lines": 88,
+      "review_module": "standalone"
     },
     {
       "path": "deployment/launchagents/org.mcs.recovery.plist",
-      "status": "PARTIAL",
-      "review_note": "Full text read; module criteria/caller verification in progress",
+      "status": "REVIEWED",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "full_content_read": true,
       "read_ranges": [
         [
@@ -538,7 +575,338 @@
         ]
       ],
       "reviewed_sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
-      "lines": 18
+      "lines": 18,
+      "review_module": "deployment"
+    },
+    {
+      "path": "mcs_standalone/host.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 76,
+      "read_ranges": [
+        [
+          1,
+          76
+        ]
+      ],
+      "reviewed_sha256": "3415d702cca37f3ebedcb0ba9d1b2ed0667a1ad96723a49f84b070cd7d9ded34",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "mcs_standalone/__init__.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 9,
+      "read_ranges": [
+        [
+          1,
+          9
+        ]
+      ],
+      "reviewed_sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "mcs_standalone/slack_runtime.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 6,
+      "read_ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "reviewed_sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "mcs_standalone/discord_runtime.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 6,
+      "read_ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "reviewed_sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "tests/adapters/standalone/test_native_commands.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 264,
+      "read_ranges": [
+        [
+          1,
+          264
+        ]
+      ],
+      "reviewed_sha256": "23d5a0ef38aec6c9a7837e20900f2a86a84453547cb3c4806df84ea04e32aa70",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "tests/adapters/standalone/test_runtime.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 249,
+      "read_ranges": [
+        [
+          1,
+          249
+        ]
+      ],
+      "reviewed_sha256": "411daf3226354989b54ac03d07620b944b7dfab690830aef9b582e768c19c7c3",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "tests/adapters/standalone/test_standalone_error_codes.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 28,
+      "read_ranges": [
+        [
+          1,
+          28
+        ]
+      ],
+      "reviewed_sha256": "848b2f0ff3ed19c5b22791e875f27684f3de5e0d8ff2afeae1e3e035a192cae6",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "tests/adapters/standalone/test_standalone_runtime.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 257,
+      "read_ranges": [
+        [
+          1,
+          257
+        ]
+      ],
+      "reviewed_sha256": "728a3d26b09451e94440b61a6df15387e04b36c2611787947869949b0d6b5d28",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "standalone"
+    },
+    {
+      "path": "tests/meta/test_deployment_scripts.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 133,
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "reviewed_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "tests/meta/test_launchagent_templates.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 13,
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "reviewed_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/README.md",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 181,
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "reviewed_sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "changes/maintenance-local-slot-proxy-20261005.json",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "reviewed_sha256": "907c08fea75af00f99c92ab3f1bd8183b655142e9b732af4cd16e9149f9e989d",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "lifecycle"
+    },
+    {
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 64,
+      "read_ranges": [
+        [
+          1,
+          64
+        ]
+      ],
+      "reviewed_sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/scripts/mcs_deep.sh",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 21,
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "reviewed_sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/scripts/mcs_llm_catchup.sh",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 17,
+      "read_ranges": [
+        [
+          1,
+          17
+        ]
+      ],
+      "reviewed_sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/scripts/mcs_offsite.sh",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 40,
+      "read_ranges": [
+        [
+          1,
+          40
+        ]
+      ],
+      "reviewed_sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer-2.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 22,
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "reviewed_sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 22,
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "reviewed_sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 31,
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "reviewed_sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.standalone.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 20,
+      "read_ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "reviewed_sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-cmd.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 22,
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "reviewed_sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-int.plist",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 21,
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "reviewed_sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
+      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "review_module": "deployment"
     }
   ],
   "confirmed_fixes": [
@@ -565,6 +933,14 @@
       "before": "3 synthetic invalid plist cases failed before the source repair",
       "after": "Five related setup/runtime families exited 0; 342 pass dots, no skip/failure",
       "contract": "Unverifiable ownership remains a blocker; no files or service state modified."
+    },
+    {
+      "id": "PARENT-DEPLOYMENT-001",
+      "status": "FIXED_LOCAL",
+      "cause": "curl localhost slot probe inherited configured proxies",
+      "before": "1 failed, 5 deselected; stub captured curl argv without --noproxy",
+      "after": "69 passed including deployment and standalone families",
+      "contract": "fixed localhost URL, no redirect following and existing 5s request / 15min restart window retained"
     }
   ],
   "requested_change": {
@@ -572,7 +948,7 @@
     "unread_schedule": "*/10 * * * *",
     "deep_schedule": "10,40 * * * *",
     "health_watch_schedule": "*/5 * * * *",
-    "legacy_explicit_health_tick": "Retained; guide instructs 300→600 explicitly. Core health-default packet pending integration.",
+    "legacy_explicit_health_tick": "Core packet2 integrated: default 600; explicit legacy 300 preserved; upgrade guide instructs explicit 600 selection.",
     "verification": "Existing Hermes jobs preserve IDs, no repeated cron mutation; standalone hour has only six unread and two aligned deep slots."
   },
   "verification": [
@@ -660,13 +1036,33 @@
         "........................................................................ [ 84%]",
         "......................................................                   [100%]"
       ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-slot-proxy-before-20261005.log",
+      "sha256": "ff184b7459e0611f5901e2d8b965cbd6cb493403be54a25a99d513f272c66d60",
+      "exit_code": 1,
+      "result": "1 failed, 5 deselected"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-deployment-after-20261005.log",
+      "sha256": "53967b53f385a3088e5090bde85cbdd455e6fa9cd5dad79acb889d25a5dff0a4",
+      "exit_code": 0,
+      "result": "69 passed in 7.32s"
     }
   ],
-  "criteria_status": "C01-C12/X01-X08 module review remains PARTIAL; prerequisite reads/test runs are not complete coverage.",
+  "criteria_status": "各領域の20観点をソース・呼出元・合成検証と照合済み。全リポジトリと最終配布物・固定SDK・独立レビューの完了を意味しない。",
   "disproved_candidates": [
     {
       "candidate": "Release build partial-write rollback omitted",
       "reason": "RELEASE_NOTES.md explicitly requires restoring all changed release files from Git diff after partial failure, then rerunning; no unsupported atomic multi-file contract introduced."
+    },
+    {
+      "candidate": "Unused standalone plist requires runtime repair",
+      "reason": "setup._sync_standalone_service uses mcs_standalone.service.render; no source reads the static template for installation. Recovery bootstraps the deployed path. Retain compatibility asset without speculative deletion."
+    },
+    {
+      "candidate": "LLM daily restart must adopt update helper marker",
+      "reason": "quiesce contract explicitly silences drainer-spawning helpers; the LLM is separately owned and restart has explicit bounded fallback. No proven failure/authorization to change that contract; no extra guard added."
     }
   ],
   "limitations": [
@@ -676,6 +1072,315 @@
   "checks": {
     "ruff": "0.16.10 all 8 changed Python paths passed",
     "readme_generation": "Regenerated and --check passed",
-    "diff_check": "Passed"
+    "diff_check": "Passed",
+    "deployment_ruff": "ruff 0.16.10 changed Python path passed; git diff --check passed"
+  },
+  "module_criteria": {
+    "lifecycle": [
+      {
+        "criterion": "C01",
+        "status": "REVIEWED",
+        "evidence": "scripts/mcs→mcs_cli→setup/updateとinstall.shのstage呼出を照合。watchdogはrepo外のコピーで動作し、サービス描画はsetupを正本とする。"
+      },
+      {
+        "criterion": "C02",
+        "status": "REVIEWED",
+        "evidence": "install checkpoint/update applying/post_merge/doneの遷移と復旧条件を対応テストへ照合。timeoutでもdurable doneを優先し、未完了は成功にしない。"
+      },
+      {
+        "criterion": "C03",
+        "status": "REVIEWED",
+        "evidence": "update.lock/run.lock、WAL backup、原子的journal/manifest書込み、owned-only service reconcileを確認。停止・所有を証明できない場合は変更を拒否する。"
+      },
+      {
+        "criterion": "C04",
+        "status": "REVIEWED",
+        "evidence": "supported_update_pathsの13起点・16設定/26経路とorigins fixtureを全文照合。現行コードの合成移行検証であり、各歴史版バイナリの再実行を主張しない。"
+      },
+      {
+        "criterion": "C05",
+        "status": "REVIEWED",
+        "evidence": "tag sha/base sha/保護パス/foreign state/SQLite runtimeの事前検証、独立recovery Pythonと正確なplist argvの所有証拠を確認。非object plist拒否を追加。"
+      },
+      {
+        "criterion": "C06",
+        "status": "REVIEWED",
+        "evidence": "tokenはstdin/private config、doctorは状態・件数/版情報だけを返す。fixtureは完全合成、一時HOME/DB/command stubsで秘密値・実患者情報を使わない。"
+      },
+      {
+        "criterion": "C07",
+        "status": "REVIEWED",
+        "evidence": "CLI confirm-human/reasonとreceipt経路、パスXML/shell escaping、restore report/hash/schema結合を確認。深い壊れたJSONを飛ばして正しい承認だけを採用する回帰を追加。"
+      },
+      {
+        "criterion": "C08",
+        "status": "REVIEWED",
+        "evidence": "dry-run、doctorのnot_checked、update preview/confirm、復旧時の消失説明と不明状態の拒否を確認。サービスprobeの文書を実際の明示オプションに修正。"
+      },
+      {
+        "criterion": "C09",
+        "status": "REVIEWED",
+        "evidence": "receipt/file容量上限、容量preflight、段階的backup、停止/再起動の期限を確認。推測で予算を増やさず、timeout後child reapだけを修正。"
+      },
+      {
+        "criterion": "C10",
+        "status": "REVIEWED",
+        "evidence": "quiesce markerを停止前に永続化、stray停止不能でfail closed。post-merge kill後communicateで回収し、再試行・中断の状態を保持する。"
+      },
+      {
+        "criterion": "C11",
+        "status": "REVIEWED",
+        "evidence": "installer/updater/watchdog/setupの全文テストを照合。新規9失敗を修正前に再現し、109/170/342関連検証と408件lifecycle matrixを記録。"
+      },
+      {
+        "criterion": "C12",
+        "status": "REVIEWED",
+        "evidence": "Python/SQLite/SDK runtime gate、固定依存と1.0.13文書/スクリプト例を照合。最終Iの固定SDKと独立配布コピー検証は未実施。"
+      },
+      {
+        "criterion": "X01",
+        "status": "REVIEWED",
+        "evidence": "install.sh段階再開→setup services→update新コードpost_merge→rollback/watchdogの実呼出順を確認。実機へのインストールや再起動は実施していない。"
+      },
+      {
+        "criterion": "X02",
+        "status": "REVIEWED",
+        "evidence": "remote tag一致、保護ファイル・symlink/gitlink拒否、配布依存固定とGitHub workflow境界を照合。署名済みreleaseを新たに保証する変更は加えない。"
+      },
+      {
+        "criterion": "X03",
+        "status": "REVIEWED",
+        "evidence": "backup manifest/hash/schema、code-only rollback制約、human-bound restore consent、foreign/private recovery所有ゲートを照合。原本DB・既存backupは操作しない。"
+      },
+      {
+        "criterion": "X04",
+        "status": "REVIEWED",
+        "evidence": "remote ls-remote/GitHub release取得はスタブ、対象shaとローカルreceiptの束縛を確認。共有gateway/通知APIの実接続は未確認。"
+      },
+      {
+        "criterion": "X05",
+        "status": "REVIEWED",
+        "evidence": "Python最低版/安全なSQLite系統/独立runtime選択とOS別service分岐を確認。実macOS launchd・Linux systemd状態は合成の代替で成功扱いしない。"
+      },
+      {
+        "criterion": "X06",
+        "status": "REVIEWED",
+        "evidence": "LLM/Jev値評価は本領域から明示起動するCLI、fact-source canonicalはhuman gate evidence必須。通常install/doctorはモデル推論を起動しない。"
+      },
+      {
+        "criterion": "X07",
+        "status": "REVIEWED",
+        "evidence": "復旧による記録消失の人承認とsource/hash/schema条件を保持。医療的判断や対応実施の有無を診断結果から推定しない。"
+      },
+      {
+        "criterion": "X08",
+        "status": "REVIEWED",
+        "evidence": "release/公開は承認範囲外で実行しない。運用文書リンクと1.0.13選択手順を照合し、静的ローカル変更だけを実施。"
+      }
+    ],
+    "standalone": [
+      {
+        "criterion": "C01",
+        "status": "REVIEWED",
+        "evidence": "__main__→config/Host/Runtimeとplatform adapter、互換import2本、service rendererの責務を照合。single hostが定期6job・cmd2・worker2を所有する。"
+      },
+      {
+        "criterion": "C02",
+        "status": "REVIEWED",
+        "evidence": "host generation/status TTL/restart request、runtime closing/update marker/quiesce状態を確認。異常task終了はraise_endedで監督へ伝える。"
+      },
+      {
+        "criterion": "C03",
+        "status": "REVIEWED",
+        "evidence": "host flock・private status/restart atomic_write、generation-bound requestとupdateロック協調を確認。共有gatewayやmanifest外serviceは停止しない。"
+      },
+      {
+        "criterion": "C04",
+        "status": "REVIEWED",
+        "evidence": "旧Slack/Discord module identity互換入口とmode切替/復旧のcallerを確認。保存形式の破壊変更は追加していない。"
+      },
+      {
+        "criterion": "C05",
+        "status": "REVIEWED",
+        "evidence": "private root config/env bytes、認可済みchannel/userとSDK delayed import、起動時proxy除去を確認。public env自動読込でsecretを増やさない。"
+      },
+      {
+        "criterion": "C06",
+        "status": "REVIEWED",
+        "evidence": "host logは固定event/件数、実本文/secretをdiagnosticへ返さない。全テストはsynthetic認証文字列とstub runtimeのみ。"
+      },
+      {
+        "criterion": "C07",
+        "status": "REVIEWED",
+        "evidence": "check/run/root CLI、native command parserからhuman receipt経路、status timestamp finite/TTL/PIDを確認。通常CLIの引数とcwdをサービス描画へ対応。"
+      },
+      {
+        "criterion": "C08",
+        "status": "REVIEWED",
+        "evidence": "各platform native commandのpreview/confirm/refusalを合成で検証。Discord専用fixture一部は固定SDK試験で別途確認が必要なことを明記。"
+      },
+      {
+        "criterion": "C09",
+        "status": "REVIEWED",
+        "evidence": "host child一覧・poll・lease・calendar分判定を確認。長いworker処理中もfetchを並行でき、shutdown猶予3660秒を維持する。"
+      },
+      {
+        "criterion": "C10",
+        "status": "REVIEWED",
+        "evidence": "cancel/unload callback/async task回収、世代一致restart、quiesceで新child起動抑止を確認。10分gridへ期待値を変更し同時刻deepも停止/再開検証。"
+      },
+      {
+        "criterion": "C11",
+        "status": "REVIEWED",
+        "evidence": "standalone4試験とsetup/lifecycle対応試験の全文を確認。deployment併合69件pass、固定SDK別試験は親最終Iでまだ未実施。"
+      },
+      {
+        "criterion": "C12",
+        "status": "REVIEWED",
+        "evidence": "stdlib coreとadapters内だけの固定SDK、単一native service、service rendering OS分岐を確認。実接続やeditable installを試験成功から推測しない。"
+      },
+      {
+        "criterion": "X01",
+        "status": "REVIEWED",
+        "evidence": "service.renderが実配置正本。静的ai.mcs.standalone.plistは実installerが読まず、不要削除/動作変更はしない。restartは処理完了後にhostが協調する。"
+      },
+      {
+        "criterion": "X02",
+        "status": "REVIEWED",
+        "evidence": "requirements-standalone固定依存をsetup契約と照合。user requestのないSDK追加/更新やroot外instruction変更はしない。"
+      },
+      {
+        "criterion": "X03",
+        "status": "REVIEWED",
+        "evidence": "mode切替で旧manifest所有物だけを退役、停止検証できなければ新serviceを開始しない。患者データ/backupをmode切替で削除しない。"
+      },
+      {
+        "criterion": "X04",
+        "status": "REVIEWED",
+        "evidence": "platform adapterの接続/authは子担当、Hostは提供された独立connectorを所有。ネットワーク/実tokenを使わずnative要求の認可を確認。"
+      },
+      {
+        "criterion": "X05",
+        "status": "REVIEWED",
+        "evidence": "launchd/systemd描画のquoting/% escaping、OS未対応拒否、PID存在/TTLを照合。実service manager状態は未実行。"
+      },
+      {
+        "criterion": "X06",
+        "status": "REVIEWED",
+        "evidence": "背景2workerとRT slot1契約はshared engineへ渡す。独立hostに新しいモデル設定/ツール権限/プロバイダを追加しない。"
+      },
+      {
+        "criterion": "X07",
+        "status": "REVIEWED",
+        "evidence": "native human操作はconfirm/reason/receiptによる既存承認を通す。受信した任意chatを人承認の代理にしない。"
+      },
+      {
+        "criterion": "X08",
+        "status": "REVIEWED",
+        "evidence": "callback/公開設定は各adapterの所有でHostから公開しない。ローカルstart/check/importの境界を確認。"
+      }
+    ],
+    "deployment": [
+      {
+        "criterion": "C01",
+        "status": "REVIEWED",
+        "evidence": "deployment/scriptsとplistをsetup renderer/install.sh/Runtime calendarのcallersへ対応。描画済み実機wrapperを直接編集せず正本を修正。"
+      },
+      {
+        "criterion": "C02",
+        "status": "REVIEWED",
+        "evidence": "日次LLM restartのidle/unreachable/15分busy→restartとloaded label選択を確認。仕様どおりのfallbackを維持し、未搭載なら正常skipする。"
+      },
+      {
+        "criterion": "C03",
+        "status": "REVIEWED",
+        "evidence": "drainer起動wrapperのupdate markerとtick run.lock、owned manifest reconcileを確認。LLM restartには新しい所有・予算契約を追加しない。"
+      },
+      {
+        "criterion": "C04",
+        "status": "REVIEWED",
+        "evidence": "旧agentのretire対象とtemplate置換規則を確認。recovery/llamaserverの初回install所有と限定repairの文書を更新。"
+      },
+      {
+        "criterion": "C05",
+        "status": "REVIEWED",
+        "evidence": "固定localhost curlでもproxyを継承する欠陥を修正前に再現し--noproxyを追加。redirect追従オプションは使わずtimeout5秒を維持。"
+      },
+      {
+        "criterion": "C06",
+        "status": "REVIEWED",
+        "evidence": "wrapper logはhealth集計/固定失敗情報、slot probeはlocalに固定。実LLM応答・credential・患者情報はテストへ含めない。"
+      },
+      {
+        "criterion": "C07",
+        "status": "REVIEWED",
+        "evidence": "shell/XML placeholder substitution、launchctl exit codeとcurl JSON parse結果の扱いを照合。kickstart失敗を成功logにしない既存回帰を維持。"
+      },
+      {
+        "criterion": "C08",
+        "status": "REVIEWED",
+        "evidence": "運用READMEで診断のnot_checkedと明示service probe、復旧用Python指定の手順を確認。画面UIを持たない領域。"
+      },
+      {
+        "criterion": "C09",
+        "status": "REVIEWED",
+        "evidence": "shell poll最大900秒/10秒間隔/curl5秒、logディレクトリ生成を確認。性能数値や新しい待機予算は追加していない。"
+      },
+      {
+        "criterion": "C10",
+        "status": "REVIEWED",
+        "evidence": "helper marker guardとstderr/log/exit status伝播を確認。親updateとのLLM restart衝突は所有契約の根拠が足りず新挙動にせず記録。"
+      },
+      {
+        "criterion": "C11",
+        "status": "REVIEWED",
+        "evidence": "全script/plist/対応2metatestを全文読取。proxy合成1before fail、関連69after pass。curl/launchctlはtmpスタブで外部/実機操作なし。"
+      },
+      {
+        "criterion": "C12",
+        "status": "REVIEWED",
+        "evidence": "MCS未読*/10・deep10,40・local health*/5、3slot/2worker argv、watchdog independent Pythonを現行コードへ照合。"
+      },
+      {
+        "criterion": "X01",
+        "status": "REVIEWED",
+        "evidence": "6calendar jobとHermes/standalone各サービス所有の配置経路を確認。今回の修正は配備候補だけ、servicesを実機へ適用しない。"
+      },
+      {
+        "criterion": "X02",
+        "status": "REVIEWED",
+        "evidence": "templates/scriptのみで依存追加なし。llama-server binary/model入手はinstall側の明示stage、実ダウンロードは今回未実施。"
+      },
+      {
+        "criterion": "X03",
+        "status": "REVIEWED",
+        "evidence": "recovery templateの独立Python/tool/repo pointer/private mode契約を確認。servicesは欠落watchdogを有効化せずowned idle driftだけ修復。"
+      },
+      {
+        "criterion": "X04",
+        "status": "REVIEWED",
+        "evidence": "curl/launchctlをスタブに置換してwrapper実行。ローカルslot以外の通信先や通知先をスクリプトに追加しない。"
+      },
+      {
+        "criterion": "X05",
+        "status": "REVIEWED",
+        "evidence": "launchd plistのOS固有項目とstandalone Linux renderを照合。Mac/systemd実ロードは試験で代用したと明記。"
+      },
+      {
+        "criterion": "X06",
+        "status": "REVIEWED",
+        "evidence": "LLMのRT1/background0,2、elastic holdとretry上限の説明をsource/callerへ照合。共有LLMを勝手に再起動しない。"
+      },
+      {
+        "criterion": "X07",
+        "status": "REVIEWED",
+        "evidence": "MCSサーバーの負荷対策という10分変更理由を明記。healthの5分は保管済み情報の確認で、医療対応の判定ではない。"
+      },
+      {
+        "criterion": "X08",
+        "status": "REVIEWED",
+        "evidence": "公開callback/送信/deployは本scopeで行わない。運用guideリンクとplaceholder tableを修正し、web公開は未実施。"
+      }
+    ]
   }
 }

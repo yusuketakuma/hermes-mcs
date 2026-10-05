@@ -670,6 +670,17 @@
       "operational_change": "旧corpus再利用不可、同CLIで合成資産から再作成。asset欠落時fail closed。日本語upgrade記録あり。",
       "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-DEPLOYMENT-001",
+      "cause": "curl localhost slot probe inherited configured proxies",
+      "before": "1 failed, 5 deselected; stub captured curl argv without --noproxy",
+      "after": "69 passed including deployment and standalone families",
+      "contract": "fixed localhost URL, no redirect following and existing 5s request / 15min restart window retained",
+      "state": "CONFIRMED_FIXED",
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local repair; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],
