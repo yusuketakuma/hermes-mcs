@@ -1,4 +1,5 @@
 """CI must use the immutable-source and nonempty-collection SDK guards."""
+import builtins
 import importlib.util
 from pathlib import Path
 import re
@@ -35,3 +36,18 @@ def test_sdk_guard_rejects_zero_collected_tests(lane):
         config=SimpleNamespace(getoption=lambda _name: lane), items=[])
     with pytest.raises(pytest.UsageError, match="required SDK tests not collected"):
         module.pytest_collection_finish(session)
+
+
+def test_optional_sdk_module_can_collect_without_python311_tomllib(monkeypatch):
+    original = builtins.__import__
+
+    def unavailable(name, *args, **kwargs):
+        if name == "tomllib":
+            raise ModuleNotFoundError("synthetic Python 3.10 lacks tomllib")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable)
+    spec = importlib.util.spec_from_file_location(
+        "sdk_optional_lane", ROOT / "integration/test_pinned_sdk_versions.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)

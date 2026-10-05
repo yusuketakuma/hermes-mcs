@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 import tarfile
-import tomllib
 
 import pytest
 
@@ -47,6 +46,8 @@ def test_actual_distribution_versions_match_lane(lane, request):
             requirements.append(requirement.strip())
         requirements.append("pytest==9.1.1")
     else:
+        import tomllib
+
         project = request.config.getoption("--hermes-project")
         assert project, "explicit immutable Hermes source archive is required"
         data = tomllib.loads(Path(project).read_text())
