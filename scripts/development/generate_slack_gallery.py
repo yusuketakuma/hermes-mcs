@@ -304,6 +304,9 @@ def verify_png(path, svg):
     raw = decoder.decompress(b"".join(compressed), raw_size + 1)
     if len(raw) != raw_size or not decoder.eof or decoder.unused_data:
         raise ValueError(f"invalid PNG image data: {path.name}")
+    stride = 1 + width * (3 if color == 2 else 4)
+    if any(raw[offset] > 4 for offset in range(0, raw_size, stride)):
+        raise ValueError(f"invalid PNG image data: {path.name}")
 
 
 def asset_hashes():
