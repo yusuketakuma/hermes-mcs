@@ -1324,6 +1324,66 @@
       "change": "parse/IO/schema不正を理由codeへ。既知ValueError tokens/caseid/field codesは保持し、raw parser/OS exception textをqueue_input_invalidにする。stdout export0、existing queue_manifest_invalid互換保持。",
       "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-01",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/brain_export.py"
+      ],
+      "cause": "--out下のgenerated child symlink、preflight後の差替え、_write parentcheck後open前swap、FDopen後replace前/unlink前swap、stale p999.md symlink; Pではforeigndirectoryへ書込み/regularasset削除/foreignlink削除、または途中FileNotFoundError。生成dirname確認だけでは狭いTOCTOUを覆わない。",
+      "change": "_directory_fdがroot/childを保持、childO_NOFOLLOW; _write/GC/retentionはdir_fdで原inodeへ操作。newchild0700/staging600、regular生成名に限定。明示selectedrootaliasは既存契約を保持。",
+      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-02",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/brain_export.py"
+      ],
+      "cause": "hostTZ UTC/NY、UTC2026-01-01 15:30でJST2026-01-02 00:30; PのJSTbannerがUTC/NY値を表示、humanfacts/signals/dailyfilenameもホスト日付、retention日付interpretationもホストTZ。",
+      "change": "datetime fixedUTC+09 _jst、日付名・保持日解釈もJST。",
+      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-03",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "receive precheck後のexpire hookが receipts_out regularfile/symlink を作成; Pは新規receiptpath契約なのにatomicreplaceで競合内容/linkを上書き。receiverは既に保存済みなので失敗後再送推論不可。",
+      "change": "600完成tmp→fsync→exclusive os.link publish、競合receipts_out_exists/no clobber、receiverpayload証拠保持。",
+      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-04",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "receive --input explicit FIFO/symlinkfileまたはsymlink-to-directory root; P FIFO nativeopenは期限2sでhang、file/rootlinkは通常inputとして処理される。",
+      "change": "explicit rootis_symlink拒否、各leafos.openNOFOLLOW|NONBLOCK+fstatREG、normaldirectorybulkAPIは維持。",
+      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-05",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "10000nested JSON inmanualauth、lostackの保存ack/payload/journal; PはRecursionErrorが既存安全拒否・hold分類を中断。unknown送達・削除結果を成功/未送信と扱わない。",
+      "change": "対象4catchへRecursionError追加、authunreadable/journalunreadableまたはNone/False→hold、savedbytesを変更せず。delete receiptは既にsafeで変更不要。",
+      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
     }
   ],
   "deferred": [],

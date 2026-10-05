@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 55,
+      "PARTIAL": 56,
       "EXCLUDED": 25,
-      "UNSEEN": 344,
-      "REVIEWED": 468
+      "UNSEEN": 287,
+      "REVIEWED": 528
     },
-    "candidate_tracked": 886
+    "candidate_tracked": 894
   },
   "files": [
     {
@@ -1079,6 +1079,16 @@
       ],
       "full_content_read": true,
       "read_ranges": null
+    },
+    {
+      "path": "changes/20261005-development-offline-validation.json",
+      "sha256": "1c9d9038c9dfaa4e922d7b0be2baa23c9d2fc9359bcb168e41b63dd39813d39e",
+      "bytes": 1734,
+      "lines": 21,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": []
     },
     {
       "path": "changes/20261005-extraction-snapshot-evidence.json",
@@ -2812,6 +2822,16 @@
       ]
     },
     {
+      "path": "changes/maintenance-core-packet5-ci-test-definitions.json",
+      "sha256": "16b17950e4b451d5073bab172ff3baebe46c511c485adee39b64a9ec7223df94",
+      "bytes": 966,
+      "lines": 8,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": []
+    },
+    {
       "path": "changes/maintenance-core-packet5-rule-repair.json",
       "sha256": "221174b382091ce1edae0dc3cbea6bd2d889cecbdd505c221f87c4a181904cb7",
       "bytes": 1173,
@@ -2837,27 +2857,47 @@
     },
     {
       "path": "changes/maintenance-export-boundaries-20261005.json",
-      "sha256": null,
-      "bytes": 1387,
-      "lines": 12,
+      "sha256": "2e443a344a3d154c5995445737f5d2c5f0a432740e9e899eb1325bf9cf611f03",
+      "bytes": 1769,
+      "lines": 13,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
+      "status": "REVIEWED",
       "evidence": [
-        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
-      ]
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet.",
+        "Parent exact full fragment read and packet1.0.13 runtime/upgrade schema evidence; docs6 will audit all fragment canonical refs."
+      ],
+      "reviewed_sha256": "2e443a344a3d154c5995445737f5d2c5f0a432740e9e899eb1325bf9cf611f03",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json"
     },
     {
       "path": "changes/maintenance-export-jst-20261005.json",
-      "sha256": null,
+      "sha256": "d4a348a93c1b38b1d1f0bd240c0bf745f8124bb94714681823a49ae6a9ab5916",
       "bytes": 879,
       "lines": 8,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
+      "status": "REVIEWED",
       "evidence": [
-        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
-      ]
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet.",
+        "Parent exact full fragment read and packet1.0.13 runtime/upgrade schema evidence; docs6 will audit all fragment canonical refs."
+      ],
+      "reviewed_sha256": "d4a348a93c1b38b1d1f0bd240c0bf745f8124bb94714681823a49ae6a9ab5916",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json"
     },
     {
       "path": "changes/maintenance-ingest-boundaries-20261005.json",
@@ -4611,6 +4651,19 @@
       "review_packet": "docs/development/maintenance-notify-packet4-evidence.json"
     },
     {
+      "path": "docs/development/maintenance-notify-packet5-evidence.json",
+      "sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
+      "reviewed_sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
+      "bytes": 171641,
+      "lines": 4233,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "Whole JSON/schema/source W SHA, all200 localcriteria, fivefixes and before/replay/constraints reviewed. Readonlydoc candidate remains PARTIAL until nextowner repair; no globalcompletion inferred."
+      ]
+    },
+    {
       "path": "docs/development/maintenance-semantic-evidence.json",
       "sha256": "acfe08be227f6a9ab8ce2efcebb303d81f8cd57a034838ea4c7b69400acb828b",
       "bytes": 61803,
@@ -5263,9 +5316,28 @@
       "lines": 272,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "4a3bb600e13a390e5b8fed40b4c30744cb0ee9150769f0b034d2cd9435a75dcb",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          145
+        ],
+        [
+          146,
+          272
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "doc:external-export-contract",
+      "responsibility": "provider-neutral draft /1・C0・明示C1・合成referenceの契約説明",
+      "callers": "test_ext_contract_c0.test_fixture_set_id_is_recorded_in_the_contract_spec; parentinventory/docpacket",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "docs/specs/lifecycle-spec.md",
@@ -7787,14 +7859,33 @@
     },
     {
       "path": "mcs/ops/brain_export.py",
-      "sha256": "866db123ba557c6f5f921c86e14c294154b7a154f776139290a5627899e0fc31",
-      "bytes": 16981,
-      "lines": 373,
+      "sha256": "b79d17fc401b63cfa1670cbc4e35fa992b77330e29cd19641c9214e052bc0a81",
+      "bytes": 19490,
+      "lines": 436,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "b79d17fc401b63cfa1670cbc4e35fa992b77330e29cd19641c9214e052bc0a81",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          373
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "mcs/ops/brain_export.py",
+      "responsibility": "公開snapshotからローカルMarkdownとclosed typed JSONLを出力し生成頁/日別export保持を管理",
+      "callers": "main direct CLI→run; tests/ops/test_brain_export.py、test_ext_contract.py、test_ext_contract_cli.py、test_receipt_contract.py、test_c1_records.py、integration/test_mcs_recovery_narrative.py（caller検索のみ、integration全文レビューではない）",
+      "W_review_basis": "W全文非切断chunks"
     },
     {
       "path": "mcs/ops/c1_contract.py",
@@ -7924,20 +8015,78 @@
       "lines": 214,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          214
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "mcs/ops/export_schema.py",
+      "responsibility": "aggregate machine recordsの共有closed nested allowlist・projection・validator",
+      "callers": "brain_export.project_record、ext_contract.validate_record、c1_records、c1_contract（core owned/read-only）; tests/ops/test_receipt_contract.py",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "mcs/ops/ext_contract.py",
-      "sha256": "672245d3b4059473a56d21178aec3d050541a5db7950ae66d9b819a2dcf68455",
-      "bytes": 70333,
-      "lines": 1407,
+      "sha256": "6370fd071f0485678e07a281d650415756439bdd8d5670c5787aa2773453416b",
+      "bytes": 71644,
+      "lines": 1440,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "6370fd071f0485678e07a281d650415756439bdd8d5670c5787aa2773453416b",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          360
+        ],
+        [
+          361,
+          540
+        ],
+        [
+          541,
+          720
+        ],
+        [
+          721,
+          900
+        ],
+        [
+          901,
+          1080
+        ],
+        [
+          1081,
+          1260
+        ],
+        [
+          1261,
+          1407
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "mcs/ops/ext_contract.py",
+      "responsibility": "明示人許可とgeneration/scopeを拘束するlocal/handoff export、durablejournal/receipt/withdraw、manualreference受信CLI",
+      "callers": "main direct CLI; tests/ops/test_ext_contract{,_cli,_c0}.py、test_receipt_contract.py、test_c1_{contract,envelopes,cli,receiver,withdraw_receive,delivery,authorization}.py、integration/test_mcs_recovery_narrative.py（最後3callerは検索のみ）",
+      "W_review_basis": "W全文非切断chunks"
     },
     {
       "path": "mcs/ops/import_drug_master.py",
@@ -13290,6 +13439,16 @@
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
     },
     {
+      "path": "tests/meta/test_maintenance_development_regressions.py",
+      "sha256": "1683a52d75a640467b2bf98b5bdb964c5b99e6bb88d6b6c248805bb453a616dc",
+      "bytes": 10607,
+      "lines": 230,
+      "module": "tests/meta",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": []
+    },
+    {
       "path": "tests/meta/test_mcs_recover.py",
       "sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
       "bytes": 60735,
@@ -14142,9 +14301,28 @@
       "lines": 320,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "b82c719defd6e8f39e655eff4ca08a2ce6e24173db8eb71c1a2a430f57421cd1",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          165
+        ],
+        [
+          166,
+          320
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "tests/ops/ext_fixtures.py",
+      "responsibility": "C0の全48JSON/index/MANIFESTをinventedseedから再生成するtest-onlyhelper",
+      "callers": "test_ext_contract_c0.py、test_ext_contract_cli.py、readonlyC1receiver/envelopeconsumer fixtures",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/MANIFEST.sha256",
@@ -14153,9 +14331,24 @@
       "lines": 48,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "0366f232e9d8aa1e84ab89ecee7612628589839db989726df902b192f71755e8",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "index含む全48既存JSONのrawsha256固定、generate再現とfixture_set_idの基礎",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/01-basic.json",
@@ -14164,9 +14357,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "45a5dbb27ce80c701474f10462abacd10e10dabcbb2b6ef2457eb5d784876fa4",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/02-signals-truncated.json",
@@ -14175,9 +14383,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "0483fa7b2bdd3177faa1300602d1d17669cbf13d0788bf7d107b80937f0aa30f",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/03-heartbeat.json",
@@ -14186,9 +14409,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "1d08f6ee3ddf822e5f8b2282c454bfbee6d6def653742a1af00dd774c0adeb08",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/04-no-facts.json",
@@ -14197,9 +14435,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "cb26a9a215197442d3382baa6f6e677d28f2c73a47e18789bdf1acd54aa53792",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-1of3.json",
@@ -14208,9 +14461,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "9656e9527c2dc73e7d920529d0ab844ba5ad6fd21e5357f2136d0adb3cee172a",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-2of3.json",
@@ -14219,9 +14487,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "e2571f64615bcfa2ee90f5cbf2deb95b2c9d73a0f945d38f8728ce770b6a1ed9",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-3of3.json",
@@ -14230,9 +14513,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "8366be7d2e7ce3481918b62b52f9dd2c236b3de7e46c56bab65d81dc2dc7be1a",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/06-int-valued-float.json",
@@ -14241,9 +14539,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "fbecbe26739b9e90f0b6031cbcce9ec36d4f441195e41f558adbef05a78a5e71",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/07-message-body.json",
@@ -14252,9 +14565,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "b46f02cd45a4c8ed19fb88db2d882147fb5c2aebf7a575cd2929e27ad40a1533",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/08-body-truncated.json",
@@ -14263,9 +14591,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "45054c31b5a46ff6485a64a6e31151b5402206eaf99382052bebb59700bda61d",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/09-no-body-states.json",
@@ -14274,9 +14617,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "ae51c02b10b411199bb04ed37fa698e79a65b0e0fda080de998fea128af0753b",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/10-patient-coverage.json",
@@ -14285,9 +14643,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "abd48b7012672326e1f83cb2a3a2d71a9b4885e3be56aec912f8abb4961b4341",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/11-history-floor.json",
@@ -14296,9 +14669,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "0d2d0977fc5a49536639a6864c0b1b7197de0b97f843409dc4f1b9833af982b1",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/accepted/12-fixed-point-float.json",
@@ -14307,9 +14695,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "ff20061e5acfab2fb227acf9960fb673e1ee5428a268960c7830e75306904c48",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/index.json",
@@ -14318,9 +14721,24 @@
       "lines": 308,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "9b27f6a8019e87e100b3d136617dc58da04e5a801d4b6bd5e6f75e2686c820f3",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          308
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "全48case（generated_only oversize 1case含む）のprofile/expectedcode/journalを列挙するC0index",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/bad-unknown-field.json",
@@ -14329,9 +14747,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "74c840f5f6e69771067752030cae37473d47c71085edbae54aa72bf74a464baa",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/delete-deleted.json",
@@ -14340,9 +14773,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "1f794b97c6cc5cca287370d3c1247a6fd57bf8d2aa5295dc498331288bf5ee94",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/delete-failed.json",
@@ -14351,9 +14799,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "82a59f9169b11783aa9b60c36968dae9743f5407939ae4cf534a4b275a32c06b",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-accepted.json",
@@ -14362,9 +14825,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "ecec36eb2285c7a50f63e521d5684ecd3a834d2f58c750373daab7bcb9d039fc",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-mismatch-sha.json",
@@ -14373,9 +14851,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "1275243938a286e498ea343756c656c0552e9ae484adb2f8b52363c7bc9a7f5c",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-rejected.json",
@@ -14384,9 +14877,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "295806f27bb54f1c67747dd41e4ac0bd6613e6706831281789eae18bbc1c5ef1",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/01-forbidden-statement.json",
@@ -14395,9 +14903,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "c15728b23765fa3eb186f063de321e8204dc71b4e071d86ca8f1f9e0d345a09e",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/02-forbidden-sender.json",
@@ -14406,9 +14929,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "4a87c386e8a55365082d269684f4d05635c050af1e790854f34347e601a1fd39",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/03-fact-not-exportable.json",
@@ -14417,9 +14955,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "7da9db8f2e323b99a007750edaf25e7d8f9bcdd1523aeb7b28336963e2d14050",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/04-message-not-exportable.json",
@@ -14428,9 +14981,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "37e2b335eaba159be31547c6f792c5c9220323e28784b734f13e795477bcdd93",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/05-integrity-sha.json",
@@ -14439,9 +15007,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "b1b13cd4f9bb025b3bfaaa2bde0b3a86f950285a2c514c0495e7f8ac1812731e",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/06-integrity-count.json",
@@ -14450,9 +15033,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "e71aaeff3b1c653f5a0c4cf8469959b32e4d3abc504a2f4cfabacba89f5df3e5",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/07-integrity-id.json",
@@ -14461,9 +15059,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "d4db3a57ac8418a18c93c1353a6085494fa4b6488aae390b04a581e5e134f696",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/08-generation-mixed.json",
@@ -14472,9 +15085,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "445f3d474e08d85bc52ae2dfb6c391ff045bbcd413777c03d61f4ed8f171bde4",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/09-scope-not-aggregate.json",
@@ -14483,9 +15111,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "8dd62aea9087be49f9072ed5cd02ea2d531c92fe0d58d4b36c05ca02fdc3de6f",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/10-envelope-fields.json",
@@ -14494,9 +15137,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "d349441e7a704634ffb849b87764c62f99f8ae72e8f3e953b32d3ae0f3ec7d6b",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/11-envelope-id-format.json",
@@ -14505,9 +15163,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "3be11f0b681c2759e1c5cca7e2de3487de75bf20d7715086343eab760140306e",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/12-type-stat.json",
@@ -14516,9 +15189,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "75ce003e48f6d1af547617344076623cc81fd218332e31b101a1b4907f3db428",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/13-coverage-missing.json",
@@ -14527,9 +15215,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "112bd5c640bc5c93c7748dbdad3e2499974051f84464d22b904fa6afe89ed31c",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/14-meta-missing.json",
@@ -14538,9 +15241,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "893155d9bfde451918d7de4aeabcf1be5520b28bd6e0ee4aa93ce3c4301879c4",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/16-body-sender-name.json",
@@ -14549,9 +15267,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "4aa6bbe8e6fe72f38a496cd7bf3fe26441aa09431a297f59463f047bb9b25607",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/17-body-hash-mismatch.json",
@@ -14560,9 +15293,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "b289f54fec6ab3505fc69ae0ace5e6f43c8bf08112cca7e46255f28bd5bb91ec",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/18-body-over-8kib.json",
@@ -14571,9 +15319,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "f7f6a3a8d96f47cd62f36b9b810262ca80fddfe7433d01a95c1159140c61fbaf",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/19-fetch-state-enum.json",
@@ -14582,9 +15345,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "86740288894b45d5dd694cfdb24e06781ae46c6c7a1d9dcd5767f323faa8d8c0",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/20-body-format-html.json",
@@ -14593,9 +15371,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "ba05d1409a8810a5e0e7c05d62c07638c356f15d2d0708f961f38433726455c8",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/21-history-floor-negative.json",
@@ -14604,9 +15397,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "297f93c7bbcb6495c94c25d7745d8ed96e1608f787f16f9aa8bf2aeb1c50ab34",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/22-body-state-null.json",
@@ -14615,9 +15423,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "459e90d8da578f789803b4fd2bdceb8728d516f9623f6f14a5b1d51b56ef139a",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/23-body-orphan.json",
@@ -14626,9 +15449,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "e7dab0609c48b76b7d38819c716b91245b1547e33415e4edd04dd301c4040e60",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/rejected/24-part-invalid.json",
@@ -14637,9 +15475,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "ccdc75ca4eac5ff15f337b7d02e418dd0765d3a3c53a001672ea0b2d6c7c871b",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/withdraw/01-basic.json",
@@ -14648,9 +15501,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "a87b793e2dddea2e8e09fd79c4e57db8b6c19862da4ac069365d6138e9ad84d6",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/withdraw/02-reason-enum.json",
@@ -14659,9 +15527,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "508cc6c0e29a2e54df40d015a8e1d6d83de5b3b7e39de17de788177863e748ac",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/withdraw/03-free-text.json",
@@ -14670,9 +15553,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "3f564b156a2a29f8506047961506c4a99ee0d0139e29f384c8d58ce1dc65cd47",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/fixtures/ext_contract_c0/withdraw/04-over-4kib.json",
@@ -14681,9 +15579,24 @@
       "lines": 1,
       "module": "tests/ops",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "19f4f97815c556647772dded3e8cbd893042489e2b160b91ada1264393317c17",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "callers": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/ops_testkit.py",
@@ -14911,14 +15824,37 @@
     },
     {
       "path": "tests/ops/test_brain_export.py",
-      "sha256": "4cd5989596a004cd6ad160660cf8927719958898ef074ca6e0e0bcd65bd5725c",
-      "bytes": 22844,
-      "lines": 548,
+      "sha256": "295e3338539c7fad970e15a3dcfb53974eaf60b65710fcfa5ee00f2e0c9dd25a",
+      "bytes": 30515,
+      "lines": 728,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "295e3338539c7fad970e15a3dcfb53974eaf60b65710fcfa5ee00f2e0c9dd25a",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          380
+        ],
+        [
+          381,
+          548
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "tests/ops/test_brain_export.py",
+      "responsibility": "完全合成snapshotでbrain_exportのlocal output/read-only/privacy/timezone/race/retention/clinical候補表示を検証",
+      "callers": "scripts/run_tests.sh→pytest; ext/CLI/receiptconsumer syntheticfamily",
+      "W_review_basis": "W全文非切断chunks"
     },
     {
       "path": "tests/ops/test_c1_authorization.py",
@@ -15150,14 +16086,37 @@
     },
     {
       "path": "tests/ops/test_ext_contract.py",
-      "sha256": "1212ad2455cc4d9bfe4c1a24493567db0b7e05734e2b24fd882ae482b02325f4",
-      "bytes": 20693,
-      "lines": 476,
+      "sha256": "351c6f4ae185b22d7e8ebca20c8436df11902bc74e25e6426df13abd409549eb",
+      "bytes": 22743,
+      "lines": 522,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "351c6f4ae185b22d7e8ebca20c8436df11902bc74e25e6426df13abd409549eb",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          340
+        ],
+        [
+          341,
+          476
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "tests/ops/test_ext_contract.py",
+      "responsibility": "LocalSink/GovernedExporterのauthorization/state/idempotence/withdraw/unknownrace/parseguard合成回帰",
+      "callers": "scripts/run_tests.sh→pytest; CLI/receipt/C1testsが_auth/_records/NOWをconsume",
+      "W_review_basis": "W全文非切断chunks"
     },
     {
       "path": "tests/ops/test_ext_contract_c0.py",
@@ -15166,20 +16125,54 @@
       "lines": 151,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "347c0b1eaac67fcc6da4cb51d6e9574fdbfa7b1205b45457163a83b7eaeb1c42",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          151
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "tests/ops/test_ext_contract_c0.py",
+      "responsibility": "C0golden全assetと独立canonical oracleでproducer/receiver/receipt/withdrawを照合",
+      "callers": "scripts/run_tests.sh→pytest; ext_fixtures.generateとfixtureindex/MANIFESTをconsume",
+      "W_review_basis": "P全文read + P/W SHA/bytes等値"
     },
     {
       "path": "tests/ops/test_ext_contract_cli.py",
-      "sha256": "a87f5cf5dacdd0b57a18979e97644e5d520b5f131fc82bb4876a7cc1a0eea05c",
-      "bytes": 17663,
-      "lines": 391,
+      "sha256": "0f216654505127b7c0388a7dfcc87d45874c99803c17c2f265c88d099e6e2a22",
+      "bytes": 22051,
+      "lines": 489,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "All complete P ranges + owned W patch/consumer and200criterion decisions reviewed, I SHA matches. Doc C1 PHI wording has explicit pending docs6 dependency; worker617PASS is local, final I pending."
+      ],
+      "review_input": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "reviewed_sha256": "0f216654505127b7c0388a7dfcc87d45874c99803c17c2f265c88d099e6e2a22",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          391
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "criteria_ref": "tests/ops/test_ext_contract_cli.py",
+      "responsibility": "actualmanualCLI・guardedlocalprocess・参照receiver/receipt race・legacyhash・redacted healthを検証",
+      "callers": "scripts/run_tests.sh→pytest; ext.main/directscript; sharedC1ReferenceReceiverはread-only",
+      "W_review_basis": "W全文非切断chunks"
     },
     {
       "path": "tests/ops/test_import_drug_master.py",
@@ -18647,5 +19640,14 @@
       "H03": "final fixed-I validation/reviewer pending",
       "H04": "authorized synthetic/local scope safety boundary"
     }
+  },
+  "last_notify5_import": {
+    "report": "docs/development/maintenance-notify-packet5-evidence.json",
+    "record_sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
+    "matched_reviewed_files": 57,
+    "partial_doc": [
+      "docs/specs/external-export-contract.md"
+    ],
+    "source_W": "2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69"
   }
 }
