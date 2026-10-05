@@ -205,7 +205,14 @@ def audit_db(path: str | Path, *, max_steps: int = 10_000_000) -> AuditReport:
         code = getattr(error, "sqlite_errorcode", None)
         if remaining < 0:
             record("audit_budget_exceeded", None)
-        elif code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+        # Python 3.10 has no code metadata: only its undifferentiated
+        # DatabaseError is unreadable; operational/subclass errors stay unknown.
+        elif (code is None and type(error) is sqlite3.DatabaseError) or (
+            code is not None and code in (
+                getattr(sqlite3, "SQLITE_CORRUPT", None),
+                getattr(sqlite3, "SQLITE_NOTADB", None),
+            )
+        ):
             record("sqlite_unreadable", 1)
         else:
             record("sqlite_query_unavailable", None)
