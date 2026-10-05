@@ -3,9 +3,11 @@ boundary, rollup rendering, facts fence, signals, idempotency, and
 stale-page GC. No live DB, network, or real patient data — every
 fixture is invented for this file."""
 import json
+import os
 import stat
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -155,7 +157,7 @@ def test_layout_and_content(env):
     for rel in ("meta.md", "health.md", "stats/latest.md",
                 "signals/latest.md", "patients/p1.md"):
         assert (out / rel).exists(), rel
-    today = time.strftime("%Y-%m-%d")
+    today = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
     assert (out / "stats" / f"{today}.md").exists()
     patient = (out / "patients" / "p1.md").read_text()
     assert PATIENT_NAME in patient          # real-name field renders
@@ -169,6 +171,102 @@ def test_no_raw_bodies(env):
     snap, out = env
     brain_export.run(out, snap)
     assert SECRET_BODY not in _all_text(out)
+
+
+@pytest.mark.parametrize("subdir", ["patients", "stats", "signals"])
+def test_export_refuses_linked_generated_directory_before_writes(
+        env, tmp_path, subdir, capsys):
+    snap, out = env
+    # A missing rollup exercises the patient cleanup path, not just writes.
+    with sqlite3.connect(snap) as conn:
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    asset = foreign / "p999.md"
+    asset.write_text("SYNTHETIC unrelated asset")
+    out.mkdir()
+    (out / subdir).symlink_to(foreign, target_is_directory=True)
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "export_directory_unsafe"
+    assert asset.read_text() == "SYNTHETIC unrelated asset"
+    assert sorted(p.name for p in foreign.iterdir()) == ["p999.md"]
+    assert sorted(p.name for p in out.iterdir()) == [subdir]
+
+
+def test_patient_cleanup_preserves_symbolic_link(env, tmp_path):
+    snap, out = env
+    brain_export.run(out, snap)
+    foreign = tmp_path / "foreign.md"
+    foreign.write_text("SYNTHETIC unrelated asset")
+    link = out / "patients/p999.md"
+    link.symlink_to(foreign)
+    brain_export.run(out, snap)
+    assert link.is_symlink()
+    assert foreign.read_text() == "SYNTHETIC unrelated asset"
+
+
+@pytest.mark.parametrize("subdir", ["patients", "stats"])
+def test_export_rechecks_directories_after_processing_starts(
+        env, tmp_path, monkeypatch, subdir, capsys):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    asset = foreign / "p999.md"
+    asset.write_text("SYNTHETIC unrelated asset")
+    run_stats = brain_export.mcs_stats.run_stats
+
+    def changed_directory(*args, **kwargs):
+        link = out / subdir
+        if not link.is_symlink():
+            link.symlink_to(foreign, target_is_directory=True)
+        return run_stats(*args, **kwargs)
+
+    monkeypatch.setattr(brain_export.mcs_stats, "run_stats", changed_directory)
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "export_directory_unsafe"
+    assert asset.read_text() == "SYNTHETIC unrelated asset"
+    assert sorted(p.name for p in foreign.iterdir()) == ["p999.md"]
+
+
+@pytest.mark.parametrize("host_tz", ["UTC", "America/New_York", "Asia/Tokyo"])
+def test_export_uses_jst_independently_of_host_timezone(
+        env, monkeypatch, host_tz):
+    snap, out = env
+    # The UTC/JST midnight boundary is clinically significant for dates.
+    instant = datetime(2026, 1, 1, 15, 30, tzinfo=timezone.utc).timestamp()
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE snapshot_meta SET generated_at=?", (instant,))
+        conn.execute("UPDATE runs SET finished_at=?", (instant,))
+        row = conn.execute("SELECT artifact_id,content FROM artifacts WHERE kind='signal_v1'").fetchone()
+        signal = json.loads(row[1])
+        signal["detected_at"] = instant
+        conn.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                     (json.dumps(signal), row[0]))
+    previous_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", host_tz)
+        time.tzset()
+        monkeypatch.setattr(brain_export.time, "time", lambda: instant)
+        strftime = time.strftime
+        monkeypatch.setattr(time, "strftime", lambda fmt, value=None: strftime(
+            fmt, time.localtime(instant) if value is None else value))
+        brain_export.run(out, snap)
+    finally:
+        if previous_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous_tz
+        time.tzset()
+    meta = (out / "meta.md").read_text()
+    assert "at 2026-01-02 00:30 JST" in meta
+    assert "2026-01-02T00:30:00+0900" in meta
+    assert "01-02 00:30" in (out / "health.md").read_text()
+    assert "2026-01-02" in (out / "stats/latest.md").read_text()
+    assert "2026-01-02" in (out / "signals/latest.md").read_text()
+    assert (out / "stats/2026-01-02.md").is_file()
+    assert (out / "export-2026-01-02.jsonl").is_file()
 
 
 def test_stats_facts_and_honesty(env):
