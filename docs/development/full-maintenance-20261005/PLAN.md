@@ -10,9 +10,9 @@ B=main 4167697（既存未追跡8/recoverは調査後、明示された条件付
 | owner | 専用worktree/branch | 現packet | 次packet候補 |
 |---|---|---|---|
 | root | full-maintenance-20261005 / audit/full-maintenance-20261005 | 共有台帳・親統合・文書境界 | 固定Iの全体/SDK/隔離配布物検証 → fresh-context独立レビュー |
-| maintenance_core | maintenance-drug-json-20261005 / audit/maintenance-drug-json-20261005 | 薬剤辞書・保存結果の深いJSONによる停止の最小修復と回帰を受入済み | 担当完了 |
+| maintenance_core | maintenance-hermes-fixture-20261005 / audit/maintenance-ledger-audit-20261005 | 薬剤JSONとledger監査のPython3.10互換性修復・正式証拠を受入済み | 担当完了 |
 | maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet6-20261005 | 文書259件の正式受入済み | 固定Iの実SDK・配布物の隔離起動検証 |
-| maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | スタンプ実装・20基準と両Python各385件を受入済み | 固定IのPython3.10全体検証 |
+| maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | スタンプ実装・20基準と両Python各385件を受入済み | 担当完了（thread上限により最終全件は親が両runtimeを担当） |
 
 ユーザー指定はGPT-6.1-sol ultra。実効モデル名は子のAPI応答から確認できないため、要求設定と実測を混同しない。再帰spawnなし、1 worktree/1 writer。共有ledger/schemaはcore owner。
 親は必要境界をreadonlyで照合し、検証済みcommit/patchを順次直列統合。
@@ -35,7 +35,7 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 
 ## 現状
 
-初期inventory: tracked 814 + original untracked 2。2026-10-05の親受入時点はtracked 909、台帳911件（削除2件を含む）、REVIEWED886・EXCLUDED25・UNSEEN/PARTIAL0。薬剤JSON修復と正式証拠の受入を完了し、固定Iの必須検証・独立レビューは未完。
+初期inventory: tracked 814 + original untracked 2。最新の正式ledger証拠受入後はtracked 911、台帳913件（削除2件を含む）、REVIEWED888・EXCLUDED25・UNSEEN/PARTIAL0。固定runtime I=1cf0505で3.10全件7391成功、3.13全件7390成功/性能1失敗のあと既存100/1000件単独control2成功（30秒基準不変・1000件6.5117秒）、短い必須チェック9件成功。3.13全量exit1は保存し、未変更の成功caseを再利用したaggregate受入とする。最終record HEADでのSDK・隔離配布物・B→H全byte/mode再現・fresh-context最終レビューの実結果は、下記の外部受入正本へ保存してから完了とする。
 8/recoverは本文を外部出力せず確認し、見出しだけの残留作業出力と判断。2件33 bytesの削除と復元元は私有 receipt に記録。
 各source packet、文書259件、歴史20文書、旧run記録9件、スタンプ氏名表示を親の専用Iへ統合した。旧PASS/途中状態は原文に保持し、現在の全域受入へ転用しない。開始後にmainへ外部追加されたc26a009（テスト時Gateway実操作の拒否）は、元checkoutを変更せず専用Iへ取り込んだ。詳細はoriginal-state-preservation.json。
 
@@ -48,3 +48,9 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 5. ponytailの最新版への更新は公式の管理経路で4.11.0へ完了。private receiptを保存済み。現在のskill catalogは旧版のため、作業中のCodexを中断せず完了後の再起動で反映する。
 
 親は共有台帳・直列統合・README/ガイド・説明図の正本と生成を所有する。sourceの修復は受入済みpacketを再利用し、追加stampの変更と依存だけ再確認する。全件の正式受入と固定Iの全体検証・実SDK検証・配布物の隔離起動・fresh-context独立レビューは引き続き必須。
+
+## 最終受入の正本
+
+runtime source I=1cf0505eb5c9155d19afa3e3ba218f2640096d20。後続commitは正式証拠と台帳だけで、実行source/test/tool/configの全byte/mode不変を外部manifestで拘束する。旧全件のFAILとpacket-localのpending/PASSは履歴として保持し、最終Iの成功へ書き換えない。
+
+最終受入receipt: `/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json`。source/record一致: 同directoryの`final-source-record-equivalence.json`。全ログ・JUnit・SDK・archive50・完全B→H patch/replay・非実装fresh reviewは実行後にSHA/bytesとcommitで結ぶ。最終receiptを読む前にCOMPLETEとは扱わない。元main/実設定/サービス・患者情報を使用した検証や配備は範囲外。

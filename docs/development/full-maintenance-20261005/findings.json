@@ -2313,6 +2313,213 @@
       "fix": "Explicit criteria_source_packet preserves base criterion packet; review_packet remains current delta packet.",
       "validation": "7300 directly resolved plus all220 affected pointers actual base-SHA/current-path-SHA resolved.",
       "evidence": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
+    },
+    {
+      "id": "FINAL-LEDGER-310-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "cause": "PがSQLite_CORRUPT/NOTADBを無条件に参照。Python3.10 native exceptionにsqlite_errorcodeがなくmodule constantsもない。",
+      "fix": "code=Noneかつtype(error) is sqlite3.DatabaseErrorのみ一般unreadable。code付きはgetattrでmodern既存code判定。OperationalError/IntegrityError/unknown subclassはunknown、予算優先。",
+      "meaning_limit": "legacy exact DatabaseErrorは一般読取不能のfailclosed分類であり、厳密な破損code判定の証明ではない。",
+      "packet": "docs/development/maintenance-ledger-audit-evidence.json",
+      "before": {
+        "native310": {
+          "fail": 1
+        },
+        "native313": {
+          "control_pass": 1
+        },
+        "added_each_runtime": {
+          "fail": 4,
+          "control_pass": 6
+        }
+      },
+      "after_each_runtime": {
+        "pass": 96,
+        "skip": 0
+      },
+      "current_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+      "parent_full_suite_results": [
+        {
+          "acceptance_basis": "7390 whole-run successes + unchanged-source single failed performance node accepted by standalone control; whole-run exit1 preserved",
+          "effective_unique_successful_cases": 7391,
+          "performance_control": {
+            "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+            "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+            "tests": 2,
+            "exit": 0,
+            "n100_p95_wall_seconds": 0.6416,
+            "n1000_p95_wall_seconds": 6.5117,
+            "budget_seconds": 30,
+            "code_tests_budget_unchanged": true,
+            "all1000_delivered_exactly_once_and_message_id_bound": true,
+            "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+          },
+          "lane": "313",
+          "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+          "exit": 1,
+          "runtime": "3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]\n3.50.4",
+          "runtime_executable": "/Users/yusuke/.mcs/.venv/bin/python",
+          "runtime_binary_sha256": "b2c50fdcd4f1d79413218f91bb67b16a70a987cbf109a1dbc239dcb9c4ec96cb",
+          "pytest_terminal_counts": {
+            "passed": 7390,
+            "failed": 1,
+            "skipped": 8,
+            "subtests_passed": 26
+          },
+          "JUnit": {
+            "tests": 7425,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 8
+          },
+          "skips": [
+            {
+              "case": ".tests.adapters.discord.test_discord_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.discord.test_discord_sdk_real",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.slack.test_slack_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+            },
+            {
+              "case": ".integration.test_standalone_discord",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_slack_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            }
+          ],
+          "receipt": "/tmp/mcs-final-I-313-rerun-20261005-1cf0505/receipt.json",
+          "receipt_sha256": "a3fe268e2ae53c39b5e6dcdbd8d97871c6e371cd49c1968f428da9f48d1fafbc",
+          "fixed_input_unchanged": true,
+          "tracked_files": 910,
+          "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+        },
+        {
+          "acceptance_basis": "Actual whole-run exit0; no failure",
+          "effective_unique_successful_cases": 7391,
+          "performance_control": null,
+          "lane": "310",
+          "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+          "exit": 0,
+          "runtime": "3.10.22 (main, Oct  3 2026, 00:53:54) [Clang 22.1.3 ]\n3.53.1",
+          "runtime_executable": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+          "runtime_binary_sha256": "e14b1554e3e5ca8e6784d69072d0fea4d5a8dab1f26efd7bca6275a517517888",
+          "pytest_terminal_counts": {
+            "passed": 7391,
+            "failed": 0,
+            "skipped": 8,
+            "subtests_passed": 26
+          },
+          "JUnit": {
+            "tests": 7425,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 8
+          },
+          "skips": [
+            {
+              "case": ".tests.adapters.discord.test_discord_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.discord.test_discord_sdk_real",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.slack.test_slack_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+            },
+            {
+              "case": ".integration.test_standalone_discord",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_slack_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            }
+          ],
+          "receipt": "/tmp/mcs-final-I-310-rerun-20261005-1cf0505/receipt.json",
+          "receipt_sha256": "269d0c9beb1d8789025279b27971b1274eb435cb2f15c8e9f62f3d7811c573b0",
+          "fixed_input_unchanged": true,
+          "tracked_files": 910,
+          "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+        }
+      ]
+    },
+    {
+      "id": "FINAL-PERF-CONDITION-01",
+      "status": "RESOLVED_VERIFICATION_CONDITION",
+      "priority": "P2",
+      "cause": "Fixed-I Python3.13 whole run while two suites competed recorded non-contended delivery wall p95=36.9443>30s, CPU5.7866s; all1000 deliveries/IDs still succeeded. Product defect and sole-cause contention were not established.",
+      "resolution": "Same code/tests/runtime and30s budget, no root-owned competing jobs: existing100/1000 cases bothpass,1000 p95wall6.5117s. Other7390 unchanged whole-run successes reused; full exit1 retained.",
+      "control": {
+        "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+        "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+        "tests": 2,
+        "exit": 0,
+        "n100_p95_wall_seconds": 0.6416,
+        "n1000_p95_wall_seconds": 6.5117,
+        "budget_seconds": 30,
+        "code_tests_budget_unchanged": true,
+        "all1000_delivered_exactly_once_and_message_id_bound": true,
+        "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+      },
+      "need_product_fix": false
+    },
+    {
+      "id": "FINAL-HARNESS-TMP-01",
+      "status": "DISPROVED_PRODUCT_FIX_NEEDED",
+      "cause": "External full-suite harness --basetemp placed the synthetic Hermes stub outside the canonical temporary HOME/TMP allowed by the existing sandbox.",
+      "resolution": "Only external harness removes --basetemp. Product, test fixture, tests/conftest guard and runner remain unchanged. Canonical controls each5pass and corresponding gateway nodes pass in both final full attempts.",
+      "evidence_packet": "docs/development/maintenance-ledger-audit-evidence.json",
+      "external_helper_sha256": "5f302c2ab57a9d435f6fc21b549e2fd683d451a393269c31e4c14507ab58bbef"
     }
   ],
   "deferred": [],
@@ -2378,8 +2585,393 @@
     }
   ],
   "independent_review": {
-    "status": "not_started",
-    "reason": "Requires fixed I after all packets"
+    "status": "SOURCE_AND_FORMAL_PACKET_REVIEWED",
+    "reviewer": "/root/final_fresh_review",
+    "fresh_context": true,
+    "implementation_role": false,
+    "runtime_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+    "final_bound_result_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json",
+    "report_directory": "/tmp/mcs-formalreview-fa9385c-5l06576f",
+    "note": "Historical packet-level pending states remain historical. Final record HEAD review and actual SDK/archive/replay acceptance are bound externally after their execution."
   },
-  "coverage_current": "All current applicable paths reviewed; no UNSEEN/PARTIAL source or owned metadata. Final fixed-I whole tests/SDK/archive/fresh independent review remain required."
+  "coverage_current": "All applicable current source and owned records REVIEWED; current source-I 3.10 whole exit0,3.13 whole7390pass/one wall-performancefail resolved by unchanged standalone100/1000 control, and nine short checks passed. Actual313 whole exit1 is preserved. Final record HEAD path/criteria/equivalence/SDK/archive/replay/fresh-review acceptance is bound to the external current_final_acceptance.final_result_authority.",
+  "current_final_acceptance": {
+    "schema": 1,
+    "runtime_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+    "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+    "candidate_branch": "audit/full-maintenance-20261005",
+    "full_suites": [
+      {
+        "acceptance_basis": "7390 whole-run successes + unchanged-source single failed performance node accepted by standalone control; whole-run exit1 preserved",
+        "effective_unique_successful_cases": 7391,
+        "performance_control": {
+          "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+          "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+          "tests": 2,
+          "exit": 0,
+          "n100_p95_wall_seconds": 0.6416,
+          "n1000_p95_wall_seconds": 6.5117,
+          "budget_seconds": 30,
+          "code_tests_budget_unchanged": true,
+          "all1000_delivered_exactly_once_and_message_id_bound": true,
+          "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+        },
+        "lane": "313",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "exit": 1,
+        "runtime": "3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]\n3.50.4",
+        "runtime_executable": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runtime_binary_sha256": "b2c50fdcd4f1d79413218f91bb67b16a70a987cbf109a1dbc239dcb9c4ec96cb",
+        "pytest_terminal_counts": {
+          "passed": 7390,
+          "failed": 1,
+          "skipped": 8,
+          "subtests_passed": 26
+        },
+        "JUnit": {
+          "tests": 7425,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 8
+        },
+        "skips": [
+          {
+            "case": ".tests.adapters.discord.test_discord_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.discord.test_discord_sdk_real",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.slack.test_slack_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+          },
+          {
+            "case": ".integration.test_standalone_discord",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_slack_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          }
+        ],
+        "receipt": "/tmp/mcs-final-I-313-rerun-20261005-1cf0505/receipt.json",
+        "receipt_sha256": "a3fe268e2ae53c39b5e6dcdbd8d97871c6e371cd49c1968f428da9f48d1fafbc",
+        "fixed_input_unchanged": true,
+        "tracked_files": 910,
+        "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+      },
+      {
+        "acceptance_basis": "Actual whole-run exit0; no failure",
+        "effective_unique_successful_cases": 7391,
+        "performance_control": null,
+        "lane": "310",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "exit": 0,
+        "runtime": "3.10.22 (main, Oct  3 2026, 00:53:54) [Clang 22.1.3 ]\n3.53.1",
+        "runtime_executable": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runtime_binary_sha256": "e14b1554e3e5ca8e6784d69072d0fea4d5a8dab1f26efd7bca6275a517517888",
+        "pytest_terminal_counts": {
+          "passed": 7391,
+          "failed": 0,
+          "skipped": 8,
+          "subtests_passed": 26
+        },
+        "JUnit": {
+          "tests": 7425,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 8
+        },
+        "skips": [
+          {
+            "case": ".tests.adapters.discord.test_discord_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.discord.test_discord_sdk_real",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.slack.test_slack_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+          },
+          {
+            "case": ".integration.test_standalone_discord",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_slack_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          }
+        ],
+        "receipt": "/tmp/mcs-final-I-310-rerun-20261005-1cf0505/receipt.json",
+        "receipt_sha256": "269d0c9beb1d8789025279b27971b1274eb435cb2f15c8e9f62f3d7811c573b0",
+        "fixed_input_unchanged": true,
+        "tracked_files": 910,
+        "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+      }
+    ],
+    "short_checks": [
+      {
+        "name": "diff-whitespace",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "git",
+          "diff",
+          "--check",
+          "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "1cf0505eb5c9155d19afa3e3ba218f2640096d20"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 3.3588790000067092,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/diff-whitespace.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "gates",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "ci/gates.py"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 13.009261999977753,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/gates.log",
+        "bytes": 230,
+        "sha256": "6d3e27382794f6b740cc62e0f2c74a2b4a2f33de32aab94287063b63b53befab",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "generated-readme",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/update_readme.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 2.884446540963836,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/generated-readme.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "lineworks-gallery",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/generate_lineworks_gallery.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 0.8420095840119757,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/lineworks-gallery.log",
+        "bytes": 46,
+        "sha256": "6e6fb86018912449ddf024f5d10619d1aa70704e5ea74100cfe6eef07deabbcc",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "mine",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "ci/mine_gates.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 4.882289708999451,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/mine.log",
+        "bytes": 6961,
+        "sha256": "e9ad907742a002a8c7b823f4fd224ccb23b01f45f52bc31a3013b295c70da208",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "readme-release",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/readme_release.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 1.0832286670338362,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/readme-release.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "release-fragments",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/release_notes.py",
+          "check",
+          "--base",
+          "4167697cf19a11a2b8cac3d076907450a5ff8654"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 1.661831917008385,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/release-fragments.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "ruff",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.local/bin/uv",
+          "tool",
+          "run",
+          "--offline",
+          "--from",
+          "ruff==0.16.10",
+          "ruff",
+          "check",
+          "mcs/",
+          "tests/",
+          "hermes_plugin/",
+          "adapters/",
+          "lineworks_adapter/",
+          "mcs_standalone/",
+          "integration/",
+          "ci/",
+          "scripts/",
+          "deployment/",
+          "conftest.py"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 2.2834557500318624,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/ruff.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "slack-gallery",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/generate_slack_gallery.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 0.7666980000212789,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/slack-gallery.log",
+        "bytes": 41,
+        "sha256": "3532aa19eada25bd385b9a2f71454bcc8ef9d7d555a6b200ed22ddaeada2e9a2",
+        "fixed_head_and_clean": true
+      }
+    ],
+    "performance_control": {
+      "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+      "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+      "tests": 2,
+      "exit": 0,
+      "n100_p95_wall_seconds": 0.6416,
+      "n1000_p95_wall_seconds": 6.5117,
+      "budget_seconds": 30,
+      "code_tests_budget_unchanged": true,
+      "all1000_delivered_exactly_once_and_message_id_bound": true,
+      "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+    },
+    "ledger_formal_packet": "docs/development/maintenance-ledger-audit-evidence.json",
+    "ledger_evidence_W": "6ee0866aedd52fd63d773840068a5536ebbcf26d",
+    "historical_failure_preservation": "Initial fa9385c full 3.13=7376pass/5fail/8skip;3.10=7375pass/6fail/8skip, not overwritten. Five shared failures caused by external basetemp incompatibility; one extra3.10 failure is fixed ledger exception compatibility. No fixture/assertion/guard weakening.",
+    "final_result_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json",
+    "equivalence_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-source-record-equivalence.json",
+    "final_sdk_archive_and_independent_review": "Final record HEAD checks are recorded only in the external authoritative receipt after execution, never inferred from packet or old SDK pass.",
+    "protected_original": "main c26a009e2bfe17d57779d7028eb3ac8601ddf503 remains outside this candidate; no push/deploy or real-service test."
+  }
 }
