@@ -182,6 +182,8 @@ Linuxは `systemctl --user restart hermes-mcs-lineworks.service` を使います
 Slack の同じ情報を LINE WORKS の本文・ボタン・添付へ変換します。
 テキストは公式の 2,000 文字上限に合わせて分割します。送信内容は
 トークルームの連続投稿となり、Slack のスレッドやモーダルとは異なります。
+本文・ボタン本文中のLINE WORKSネイティブメンション（`<m ...>`）は
+読み取れる文字へ変換し、記録内容から意図しないメンション通知を発生させません。
 [公式テキスト仕様](https://developers.worksmobile.com/jp/docs/bot-send-text)
 
 Bot API には送信済みメッセージの編集・削除・履歴照合・スレッド指定が
