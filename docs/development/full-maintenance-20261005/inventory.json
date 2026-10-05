@@ -26,10 +26,10 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 57,
+      "PARTIAL": 56,
       "EXCLUDED": 25,
       "UNSEEN": 344,
-      "REVIEWED": 463
+      "REVIEWED": 466
     },
     "candidate_tracked": 886
   },
@@ -3175,6 +3175,26 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "changes/maintenance-test-sandbox-lifecycle-20261005.json",
+      "sha256": "a7551b342bbfcd25755f623952bb518233634eb8a4d5aa6cddaeec1853d91bc8",
+      "reviewed_sha256": "a7551b342bbfcd25755f623952bb518233634eb8a4d5aa6cddaeec1853d91bc8",
+      "bytes": 928,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "evidence": [
+        "Parent authored Japanese summary/upgrade/source refs for external safety fix; normal operation and no-live-service scope explicitly retained."
+      ]
+    },
+    {
       "path": "changes/maintenance-update-child-reaping-20261005.json",
       "sha256": "cbd8b198cb2811c99e1d73dfbd3f0e4d69e6a3d42431995fc964af45dd1d13a9",
       "bytes": 863,
@@ -4357,15 +4377,16 @@
     },
     {
       "path": "docs/development/full-maintenance-20261005/PLAN.md",
-      "sha256": "3d42ec197677c45a1f6fc2f4eecc661cb1b17b6424f53e17d2f4121a4b4b6cdf",
+      "sha256": null,
       "bytes": 3464,
       "lines": 40,
       "module": "docs",
-      "kind": "run_record",
-      "status": "PARTIAL",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Complete54line checkpoint read and ownership/snapshot/currentrequested-versus-actual-model assertions updated; constraints preserved."
       ]
     },
     {
@@ -4404,6 +4425,16 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
+      ]
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/original-state-preservation.json",
+      "sha256": null,
+      "module": "docs/development/full-maintenance-20261005",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent structured original-state preservation record; no self-referentialSHA claim."
       ]
     },
     {
@@ -8239,18 +8270,19 @@
     },
     {
       "path": "mcs/ops/mcs_setup.py",
-      "sha256": "54460eac4ba970a675519bd6d5e0212150a148dabe01f572851d1d1a14bb3998",
-      "bytes": 160372,
-      "lines": 3466,
+      "sha256": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "bytes": 162217,
+      "lines": 3499,
       "module": "mcs/ops",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Prior complete lifecycle source/test and all20criteria reused, exact external c26a patch fully read, private fixedP+newsynthetic test5FAIL→setupfamily161PASS; original-state-preservation.json."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
-      "reviewed_sha256": "6c8602a8b1abfcdc79da35b5cf9eb7605a1438304a42438ef762cb7b0e369b9f",
+      "reviewed_sha256": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
       "read_ranges": [
         [
           1,
@@ -15512,18 +15544,19 @@
     },
     {
       "path": "tests/ops/test_mcs_setup.py",
-      "sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
-      "bytes": 100873,
-      "lines": 2233,
+      "sha256": "efbdd88dc4d6a874a5c3a6532f89ea9a1268a5e6a1d08ea2091af3e193e732f7",
+      "bytes": 101737,
+      "lines": 2250,
       "module": "tests/ops",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Prior complete lifecycle source/test and all20criteria reused, exact external c26a patch fully read, private fixedP+newsynthetic test5FAIL→setupfamily161PASS; original-state-preservation.json."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
-      "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
+      "reviewed_sha256": "efbdd88dc4d6a874a5c3a6532f89ea9a1268a5e6a1d08ea2091af3e193e732f7",
       "read_ranges": [
         [
           1,
@@ -18549,8 +18582,8 @@
     },
     {
       "path_group": ".agent/, .codex/, .omo/, .senpi/, .debug-journal.md, *.log, uv.lock ignored",
-      "status": "PARTIAL",
-      "reason": "Local agent/runtime/run state; safety/provenance classification incomplete. Do not read secret-bearing state or execute hooks."
+      "status": "EXCLUDED",
+      "reason": "Original-checkout agent/runtime/run state is outside canonical application source; may contain prior private prompts/commands or credentials. Metadata only confirmed .agent1/.codex1/.omo7/.senpi0 top-level entries and .debug-journal regularfile; contents neither read nor executed. Current task uses tracked canonical files and dedicated worktrees. Preserve all original state; no speculative secret scan or hook execution."
     }
   ],
   "last_packet_imports": [

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "original_main_at_start": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "original_main_observed": "c26a009e2bfe17d57779d7028eb3ac8601ddf503",
+  "external_change": {
+    "paths": [
+      "mcs/ops/mcs_setup.py",
+      "tests/ops/test_mcs_setup.py"
+    ],
+    "purpose": "External test-sandbox nativeHermes gateway-lifecycle refusal; complete28line patch inspected and local dedicatedI cherry-pick62cc500, no protectedmain mutation."
+  },
+  "main_tracked_dirty_count": 0,
+  "main_index_dirty_count": 0,
+  "private_runtime_group": "Metadata-only classification; no content or secrets read",
+  "existing_parent_runrecords": [
+    {
+      "path": "docs/development/full-maintenance-20261005/PLAN.md",
+      "sha256": "7ad5d0d66bce1df9483e9bfb1f8d9d42487a30b6654ab6499907ec6b070c3f0e",
+      "bytes": 4488,
+      "kind": "task-run-record"
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-ci-evidence.json",
+      "sha256": "8d76772bd12fd5fb56c825cc43cc5da27260604ed6f14b5caea41c14d18f3e2a",
+      "bytes": 10687,
+      "kind": "task-run-record"
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "sha256": "e84ddc191582fd0f6aa3bc412af4c7554e9a1e29c8443ad6bdcf97cd99c929bc",
+      "bytes": 59405,
+      "kind": "task-run-record"
+    }
+  ],
+  "constraints": [
+    "No actual Hermes process/gateway lifecycle, real configuration or protectedmain edits are authorized",
+    "Final fixed-I validation and independent reviewer still pending"
+  ],
+  "regression": {
+    "P": "097807b89423a8d7ddf428bba3239f45df7aa705",
+    "stage": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-parent-sandbox-before-20261005-khhh1e9n/repo",
+    "new_regression_sha256": "efbdd88dc4d6a874a5c3a6532f89ea9a1268a5e6a1d08ea2091af3e193e732f7",
+    "command": [
+      "sh",
+      "scripts/run_tests.sh",
+      "tests/ops/test_mcs_setup.py",
+      "-k",
+      "gateway_lifecycle_refused_in_test_sandbox"
+    ],
+    "log": "/tmp/mcs-maintenance-parent-main-sandbox-before-20261005.log",
+    "exit_code": 1,
+    "scope": "synthetic executable only; no realHermes or services",
+    "after_full_setup_log": "/tmp/mcs-maintenance-parent-main-sandbox-guard-20261005.log",
+    "after_setup_passed": 161,
+    "after_skipped": 0,
+    "before_failed": 5,
+    "before_deselected": 156,
+    "after_runtime": "CPython3.13.12"
+  }
+}

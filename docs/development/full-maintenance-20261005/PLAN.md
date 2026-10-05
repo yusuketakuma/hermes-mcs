@@ -9,12 +9,12 @@ P=各writerとも4167697のclean worktree。Iはaudit/full-maintenance-20261005�
 
 | owner | 専用worktree/branch | 現packet | 次packet候補 |
 |---|---|---|---|
-| root | full-maintenance-20261005 / audit/full-maintenance-20261005 | CI・検証入口・台帳・親統合 | script/配布物 → 残docs/records/非機密dot state |
-| maintenance_core | maintenance-core-20261005 / audit/maintenance-core-20261005 | mcs/core + tests/core全文 | ingest + tests/ingest → ops取得/ledger消費境界 |
-| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-20261005 | urgent/flush/digest + 直接tests全文 | cards/render/transport/views → adapters/standalone/plugin |
-| maintenance_semantic | maintenance-semantic-20261005 / audit/maintenance-semantic-20261005 | semantic/llm/runtime + 直接12tests全文 | remaining semantic → extract/evaluation/clinical contracts |
+| root | full-maintenance-20261005 / audit/full-maintenance-20261005 | 共有台帳・親統合・文書境界 | 固定Iの全体/SDK/隔離配布物検証 → fresh-context独立レビュー |
+| maintenance_core | maintenance-core-20261005 / audit/maintenance-core-packet5-20261005 | CI・隔離runner・schema fixture・v1抽出の残確認 | root文書・CHANGELOGの全文と契約照合 |
+| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet5-20261005 | ローカルexport・参照受信と全fixture | 残guides/specs/roadmap/履歴記録/changes文書 |
+| maintenance_semantic | maintenance-semantic-20261005 / audit/maintenance-semantic-packet6-20261005 | 開発script・release検証・説明画像/生成元 | 最終Iの生成整合依存を親へ引継ぎ |
 
-子はGPT-6.1-sol ultra、再帰spawnなし、1 worktree/1 writer。共有ledger/schemaはcore owner。
+ユーザー指定はGPT-6.1-sol ultra。実効モデル名は子のAPI応答から確認できないため、要求設定と実測を混同しない。再帰spawnなし、1 worktree/1 writer。共有ledger/schemaはcore owner。
 親は必要境界をreadonlyで照合し、検証済みcommit/patchを順次直列統合。
 担当外の実装は根拠と依存を返してから所有を更新。成功testの再実行は変更/失敗/必須検証に限る。
 
@@ -37,7 +37,7 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 
 初期inventory: tracked 814 + original untracked 2。全確認は未完。
 8/recoverは本文を外部出力せず確認し、見出しだけの残留作業出力と判断。2件33 bytesの削除と復元元は私有 receipt に記録。
-親のCI consumer監査、子3packetの確認・再現・最小修正を継続中。
+親の統合と子3packetの確認・再現・最小修正を継続中。開始後にmainへ外部追加されたc26a009（テスト時Gateway実操作の拒否）は、元checkoutを変更せず専用Iへ取り込んだ。詳細はoriginal-state-preservation.json。
 
 ## 追加された受入条件
 

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "テスト環境から実在するGatewayの起動・停止を拒否",
+  "summary": "テスト用の隔離環境では、実在するHermes実行ファイルによるGatewayの導入・削除・再起動・起動・停止を拒否します。合成テストが本来の常駐サービスを変更する経路を防ぎます。",
+  "upgrade": "通常の導入・更新・復旧に追加操作はありません。MCS_TEST_SANDBOX=1を設定したテスト環境だけが対象です。通常運用のGateway管理手順は変更しません。",
+  "details": ["元のmainに追加された安全対策を専用の監査ブランチへ取り込み、完全合成の実行ファイルで修正前の5件の失敗と修正後のsetup全161件成功を確認しました。実Gatewayへの操作は実施していません。"],
+  "refs": ["mcs/ops/mcs_setup.py", "tests/ops/test_mcs_setup.py"]
+}
